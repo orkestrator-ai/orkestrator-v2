@@ -33,10 +33,7 @@ import {
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { CommandContext } from "./commands-context.js";
 import type { KanbanTask } from "./storage-shared.js";
-import {
-  buildPipelineInputWithDefaults,
-  savedLaunchSettings,
-} from "./coordinator-launch-defaults.js";
+import { buildPipelineInputWithDefaults, savedLaunchSettings } from "./coordinator/index.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

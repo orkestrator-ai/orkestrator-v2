@@ -200,7 +200,7 @@ async function qualifyPhase(
   enter("backend tier");
   // The backend runs in its own Bun process, with no test preload or bridge mocks.
   const providers = fileURLToPath(
-    new URL("../../../apps/backend/src/core/coordinator-providers.ts", import.meta.url),
+    new URL("../../../apps/backend/src/core/coordinator/providers.ts", import.meta.url),
   );
   const backend = spawnSync(
     process.execPath,

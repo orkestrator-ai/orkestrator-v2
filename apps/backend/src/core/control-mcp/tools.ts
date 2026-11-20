@@ -35,7 +35,7 @@ import { registerOperatorWorkflowTools } from "./operator-workflow-tools.js";
 import { createNodeTargets, NODE_TOOL_CAPABILITIES, type NodeTarget } from "./nodes.js";
 import { NODE_FILE_TOOL_CAPABILITIES } from "./node-files.js";
 import { COORDINATOR_ENVIRONMENT_ACTIONS } from "./coordinator-environment-scope.js";
-import { coordinatorEnvironmentRefusals } from "../coordinator-environment-refusals.js";
+import { coordinatorEnvironmentRefusals } from "../coordinator/index.js";
 import { COORDINATOR_SURFACE_TOOL_CAPABILITIES } from "./coordinator-surfaces.js";
 import { COORDINATOR_WORKER_TOOL_CAPABILITIES } from "./coordinator-worker-tools.js";
 import { WORKER_TURN_TOOL_CAPABILITIES } from "./coordinator-worker-turns.js";
@@ -388,7 +388,7 @@ export async function createControlMcp(
   /**
    * A coordinator's ticket tool with a `nodeId`: the backend acts on this
    * board, which that node syncs, or on the node's own board for tickets made
-   * only there (`coordinator-node-tickets.ts`). `null` for this node.
+   * only there (`coordinator/node-tickets.ts`). `null` for this node.
    */
   const nodeTickets = async (
     nodeId: string | undefined,

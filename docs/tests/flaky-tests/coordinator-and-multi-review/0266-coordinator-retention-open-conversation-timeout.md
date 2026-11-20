@@ -2,7 +2,7 @@
 
 - **ID:** 0266
 - **Test:** `project coordinator > retention never removes an open conversation`
-  (`apps/backend/src/core/coordinator-service.test.ts:136`)
+  (`apps/backend/src/core/coordinator/service.test.ts:136`)
 - **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Original command:** GitHub Actions run 38893136380 (`pull_request`,
@@ -22,7 +22,7 @@
 - **Earlier observation:** the same case timed out locally at 5196.81 ms during
   coordinator launch-defaults validation, recorded with other backend fixtures
   in [0255](../aggregate-validation-runs/0255-backend-fixtures-launch-defaults-validation.md).
-- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts -t "retention never removes" --rerun-each 5`
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator/service.test.ts -t "retention never removes" --rerun-each 5`
   (from `apps/backend`) → passed unchanged, 1.53–1.69 s per run (JUnit
   timings).
 - **Root cause:** a test-cost issue, not a retention bug. To reach the
@@ -45,7 +45,7 @@
 - **Verification:**
   - Alone: `--rerun-each 5` before 1.53–1.69 s per run; after, 0.19–0.20 s
     per run. Ran `--rerun-each 10` after the change: 10 pass.
-  - Full owning file: `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --rerun-each 2`
+  - Full owning file: `bun test --preload ../../tests/setup-node.ts ./src/core/coordinator/service.test.ts --rerun-each 2`
     passed three times (96 pass, 34–40 s). One earlier run reported
     `1 fail, 1 error` while other agents were testing in parallel on the host.
     Its output was not captured, and the next three runs passed.

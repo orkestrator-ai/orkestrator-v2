@@ -104,7 +104,12 @@ import {
   COORDINATOR_EXECUTION_POLICY,
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
+import {
+  coordinatorRuntimeUnavailableMessage,
+  defaultCoordinatorHostCapabilities,
+  resolveCoordinatorRuntime,
+  sanitizeCoordinatorError,
+} from "./coordinator/index.js";
 
 const environmentLog = createLogger("environment");
 
@@ -128,11 +133,6 @@ import {
   recordOpenCodeHostServer,
   type PreparedOpenCodeHostLaunch,
 } from "./opencode2/index.js";
-import { sanitizeCoordinatorError } from "./coordinator-service.js";
-import {
-  coordinatorRuntimeUnavailableMessage,
-  resolveCoordinatorRuntime,
-} from "./coordinator-runtime.js";
 import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
 import { withEnvironmentIsolation, localEnvironmentIsolationEnv } from "./environment-isolation.js";
 import {

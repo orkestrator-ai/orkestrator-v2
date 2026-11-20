@@ -9,7 +9,7 @@ import { readAnnotations, toolResult, type JsonRecord } from "./tool-support.js"
 /**
  * The main coordinator's controls over one worker tab's turn: stop the
  * running turn, list the tab's slash commands, run one. Each calls one
- * `*_coordinator_*` backend command (`coordinator-worker-turn-actions.ts`)
+ * `*_coordinator_*` backend command (`coordinator/worker-turn-actions.ts`)
  * with the authenticated scope, which revalidates it and refuses the project
  * home. All three take `nodeId` for a worker on a connected node.
  */

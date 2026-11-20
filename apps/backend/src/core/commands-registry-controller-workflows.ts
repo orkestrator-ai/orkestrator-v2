@@ -40,13 +40,13 @@ import {
   multiReviewInputWithDefaults,
   readLaunchModelCatalog,
   savedLaunchSettings,
-} from "./coordinator-launch-defaults.js";
+} from "./coordinator/index.js";
+import { launchWorkerPr, launchWorkerResolve } from "./coordinator/pr.js";
 import {
   multiReviewButtonStart,
   runMultiReviewSurface,
   startMultiReviewAt,
-} from "./coordinator-review-actions.js";
-import { launchWorkerPr, launchWorkerResolve } from "./coordinator-pr.js";
+} from "./coordinator/review-actions.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { openMultiReviewTab } from "./workflow-tab-actions.js";
 import {

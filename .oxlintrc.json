@@ -446,6 +446,28 @@
                   "!@orkestrator/protocol/contract/domains/git/*"
                 ],
                 "message": "Import the git domain through git/index.js."
+              },
+              {
+                "group": [
+                  "**/coordinator/*",
+                  "!**/coordinator/index.js",
+                  "!**/coordinator/fork-worker.js",
+                  "!**/coordinator/goal-actions.js",
+                  "!**/coordinator/mail-attachments.js",
+                  "!**/coordinator/node-coordinator-mail.js",
+                  "!**/coordinator/node-tickets.js",
+                  "!**/coordinator/pipeline-step-actions.js",
+                  "!**/coordinator/pr.js",
+                  "!**/coordinator/review-actions.js",
+                  "!**/coordinator/subork-actions.js",
+                  "!**/coordinator/surface-actions.js",
+                  "!**/coordinator/usage-limit-account-routing.js",
+                  "!**/coordinator/worker-changes.js",
+                  "!**/coordinator/worker-mail.js",
+                  "!**/coordinator/worker-turn-actions.js",
+                  "!@orkestrator/protocol/contract/domains/coordinator/*"
+                ],
+                "message": "Import the coordinator domain through coordinator/index.js."
               }
             ]
           }
@@ -594,6 +616,13 @@
               {
                 "group": ["**/backend/src/core/git/*", "!**/backend/src/core/git/index.js"],
                 "message": "Import the git domain through git/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/coordinator/*",
+                  "!**/backend/src/core/coordinator/index.js"
+                ],
+                "message": "Import the coordinator domain through coordinator/index.js."
               }
             ]
           }
@@ -604,7 +633,7 @@
       "files": [
         "apps/backend/src/core/bridge-session-close.ts",
         "apps/backend/src/core/control-mcp/server.ts",
-        "apps/backend/src/core/coordinator-service.ts",
+        "apps/backend/src/core/coordinator/service.ts",
         "apps/backend/src/core/extension-discovery.ts",
         "apps/backend/src/core/http-bridge/claude-runtime.ts",
         "apps/backend/src/core/http-bridge/interactions.ts",

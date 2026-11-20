@@ -14,7 +14,7 @@ import {
   type CoordinatorConversation,
 } from "@orkestrator/protocol/coordinator";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
-import { registerCoordinatorSuborkActions } from "./coordinator-subork-actions.js";
+import { registerCoordinatorSuborkActions } from "./coordinator/subork-actions.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { suborkWorld, type SuborkWorld } from "./native-agent-suborks-test-support.js";
 

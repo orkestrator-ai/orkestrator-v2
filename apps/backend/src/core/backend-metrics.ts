@@ -2,7 +2,7 @@ import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { boundedConsoleStats } from "../bounded-console.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { coordinatorEnvironmentRefusals } from "./coordinator-environment-refusals.js";
+import { coordinatorEnvironmentRefusals } from "./coordinator/index.js";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
 
 /**

@@ -11,7 +11,7 @@ import {
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { withCoordinatorDelegationPresentation } from "./coordinator-delegation-authority.js";
+import { withCoordinatorDelegationPresentation } from "./coordinator/delegation-authority.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import { NativeAgentService } from "./native-agent-service.js";

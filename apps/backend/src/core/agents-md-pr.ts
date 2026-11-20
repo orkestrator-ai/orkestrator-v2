@@ -14,7 +14,7 @@ import {
 } from "@orkestrator/protocol/agents-md-orkestrator";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { validateGitRefName } from "./commands-agent-support.js";
-import type { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
+import { type CoordinatorRequestFlights } from "./coordinator/index.js";
 import {
   gitHubCli,
   type GitHubCliConfigSource,

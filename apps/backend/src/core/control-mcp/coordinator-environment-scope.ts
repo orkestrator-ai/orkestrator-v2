@@ -2,7 +2,7 @@ import type { JsonRecord } from "./tool-support.js";
 
 /**
  * How each coordinator tool that names an environment or workflow stands with the origin
- * check (`coordinator-environment-scope.ts`). A test fails on a tool taking an
+ * check (`coordinator/environment-scope.ts`). A test fails on a tool taking an
  * environment that is in none of these lists, so a new one has to choose.
  */
 

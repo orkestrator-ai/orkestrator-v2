@@ -13,7 +13,7 @@ import type { BuildPipeline, StartBuildPipelineInput } from "@orkestrator/protoc
 import {
   buildPipelineInputWithDefaults,
   savedLaunchSettings,
-} from "./coordinator-launch-defaults.js";
+} from "./coordinator/launch-defaults.js";
 import { resolveCodexDefaultModel } from "./session-held-model.js";
 import type { StorageService } from "./storage.js";
 import type { BuildPipelineService } from "./build-pipeline-service.js";

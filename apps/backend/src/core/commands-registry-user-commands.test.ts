@@ -10,7 +10,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import { runCommand } from "./shell.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
-import { CoordinatorService } from "./coordinator-service.js";
+import { CoordinatorService } from "./coordinator/service.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";

@@ -1,4 +1,26 @@
-import { coordinatorMultiReviewLaunchHash } from "./coordinator-action-scope.js";
+import {
+  actionHash,
+  assertCoordinatorMayActOnEnvironment,
+  assertCoordinatorMayControlWorkflow,
+  coordinatorCallerTurnOrigin,
+  coordinatorDelegationNotOpenedNote,
+  coordinatorLaunchIdentity,
+  coordinatorMultiReviewLaunchHash,
+  coordinatorRequestMatch,
+  launchDelegationRequest,
+  requireCoordinatorConversation,
+  withCoordinatorReceipt,
+} from "./coordinator/index.js";
+import {
+  attachmentReferences,
+  pushCallerAttachmentsToNode,
+  readCallerAttachments,
+} from "./coordinator/mail-attachments.js";
+import {
+  nodeCoordinatorMailbox,
+  sendToNodeCoordinator,
+} from "./coordinator/node-coordinator-mail.js";
+import { prepareRemoteBuildTicket } from "./coordinator/node-tickets.js";
 import {
   assertCoordinatorEnvironmentScopeCommand,
   noteCoordinatorNodeUnavailableCommand,
@@ -15,10 +37,6 @@ import {
   transferCoordinatorAttachmentsCommand,
 } from "@orkestrator/protocol/contract/domains/coordinator";
 import { createLogger } from "@orkestrator/protocol/logger";
-import {
-  coordinatorDelegationNotOpenedNote,
-  coordinatorRequestMatch,
-} from "./coordinator-workflow-retention.js";
 import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
 import { offlineLaunchMessage } from "@orkestrator/protocol/ticket-sync";
 import { createHash, randomUUID } from "node:crypto";
@@ -33,7 +51,6 @@ import {
   normalizeCoordinatorDelegationRequest,
   type CoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
-import { launchDelegationRequest } from "./coordinator-delegation-request.js";
 import {
   isLaunchMultiReviewActionInput,
   isMultiReviewModelSelection,
@@ -61,35 +78,14 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 
 import {
-  attachmentReferences,
-  pushCallerAttachmentsToNode,
-  readCallerAttachments,
-} from "./coordinator-mail-attachments.js";
-import { prepareRemoteBuildTicket } from "./coordinator-node-tickets.js";
-import {
   mailAttachmentBatchId,
   mailAttachmentFiles,
   removeMailAttachmentBatch,
   stageMailAttachments,
 } from "./mail-attachments.js";
-import {
-  nodeCoordinatorMailbox,
-  sendToNodeCoordinator,
-} from "./coordinator-node-coordinator-mail.js";
 import type { CommandContext } from "./commands-context.js";
-import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import { asNonBlankString } from "./commands-helpers.js";
-import {
-  assertCoordinatorMayActOnEnvironment,
-  assertCoordinatorMayControlWorkflow,
-} from "./coordinator-environment-scope.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import {
-  actionHash,
-  coordinatorLaunchIdentity,
-  requireCoordinatorConversation,
-  withCoordinatorReceipt,
-} from "./coordinator-action-scope.js";
 
 /**
  * A command node's coordinator acting on a node it controls, with the same
@@ -148,7 +144,7 @@ export interface CoordinatorNodeTarget {
 /** Register before checking the live link: the offline summary may already be stale. */
 async function noteUnavailable(
   context: CommandContext,
-  attempt: import("./coordinator-node-reconnect-wakes.js").CoordinatorNodeAttempt,
+  attempt: import("./coordinator/index.js").CoordinatorNodeAttempt,
 ): Promise<void> {
   context.coordinators?.noteNodeUnavailable(attempt);
   if (isBackendId(attempt.nodeId) && context.nodes?.link(attempt.nodeId)?.connected) {
@@ -630,7 +626,7 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
     });
     return { noted: true };
   });
-  // The origin check for a coordinator tool; see `coordinator-environment-scope.ts`.
+  // The origin check for a coordinator tool; see `coordinator/environment-scope.ts`.
   register(assertCoordinatorEnvironmentScopeCommand, async (args, context) => {
     const caller = await identity(args.scope, context);
     const named = record(args.target) ? args.target : {};

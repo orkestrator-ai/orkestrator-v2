@@ -8,7 +8,7 @@
   branch changes `apps/web/src/components/environments/EnvironmentNetworkPolicyStatus*`,
   one line of `ServiceBrowserTab.test.tsx`, a daemon unit test and docs; it
   does not touch the backend or this test.
-- **File:** `apps/backend/src/core/coordinator-node-reconnect-wakes.test.ts:390`
+- **File:** `apps/backend/src/core/coordinator/node-reconnect-wakes.test.ts:390`
 - **Test:** `NodeCoordination.onNodeConnected > listeners hear each node that connects or reconnects, once per transition`
 - **Failure:** `expect(world.received(main)).toHaveLength(1)`, Expected
   length 1, Received length 0, after `await world.deliver()` (140.27 ms). The
@@ -95,6 +95,6 @@ the send itself rather than adding microtask rounds.
 
 - **Class:** test waited a fixed amount instead of on the completion signal (B).
 - **Root cause:** `CoordinatorNodeReconnectWakes.nodeConnected` awaits the node-name lookup, `mainAddress` and `storage.sendAgentMail` (real SQLite) before the mail exists. The test's `settle()` yielded five microtasks and then called `world.deliver()`, so on a loaded host the send had not been enqueued yet and the mailbox held nothing. The `node-reconnect.notice-failed` line in one recurrence fits the same gap: after the assertion failed, `finally` closed the world under the still-running send.
-- **Fix:** `apps/backend/src/core/coordinator-node-reconnect-wakes.test.ts` wraps the production `nodeConnected` passed to `connectCoordinatorNodeWakes`, keeps each notice's promise and awaits them all before `world.deliver()`. The listener assertions and the exactly-one-mail assertion are unchanged. No product change.
+- **Fix:** `apps/backend/src/core/coordinator/node-reconnect-wakes.test.ts` wraps the production `nodeConnected` passed to `connectCoordinatorNodeWakes`, keeps each notice's promise and awaits them all before `world.deliver()`. The listener assertions and the exactly-one-mail assertion are unchanged. No product change.
 - **Reproduced:** yes. A temporary `await Bun.sleep(30)` at the top of `tell` (production file restored afterwards) made the unchanged test fail with the recorded `Expected length: 1, Received length: 0`; the fixed test passed with the same delay in place.
-- **Stress:** `mise run test:logged -- --name c9962 -- bun scripts/test-under-contention.ts --core 12 --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-node-reconnect-wakes.test.ts --rerun-each=10` passed (29.1 s).
+- **Stress:** `mise run test:logged -- --name c9962 -- bun scripts/test-under-contention.ts --core 12 --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator/node-reconnect-wakes.test.ts --rerun-each=10` passed (29.1 s).

@@ -49,7 +49,7 @@ file's normal preload, with `--parallel=1 --only-failures`:
 | --- | --- | --- |
 | `merge-desktop-bundle-owner` | `bun test --cwd apps/desktop --preload ../../tests/setup-node.ts ./scripts/electron-bundle.test.ts --parallel=1 --only-failures` | Passed, 0.2 s |
 | `merge-claude-interactions-owner` | `bun test --cwd bridges/claude-bridge --preload ../../tests/setup-node.ts ./src/services/session-manager-interactions.test.ts --parallel=1 --only-failures` | Passed unchanged, 0.5 s |
-| `merge-coordinator-owner` | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` | Passed unchanged, 12.3 s |
+| `merge-coordinator-owner` | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator/service.test.ts --parallel=1 --only-failures` | Passed unchanged, 12.3 s |
 | `merge-deletion-owner` | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures` | Passed unchanged, 18.2 s |
 | `merge-pi-vendor-owner` | `bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --only-failures` | Three passed, one timed out at 30000.38 ms; exit 1, 31.2 s |
 

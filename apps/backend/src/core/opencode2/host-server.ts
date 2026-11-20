@@ -29,7 +29,7 @@
  * for the launch, held beside the process and attached per session.
  */
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
-import { loadCoordinatorResearch } from "../coordinator-research-context.js";
+import { loadCoordinatorResearch } from "../coordinator/index.js";
 import { openCode2CoordinatorSignature, writeOpenCode2CoordinatorConfig } from "./coordinator.js";
 import type { OpenCode2ServerConnection } from "./environment-provider.js";
 import { openCode2ServerKey, type OpenCode2HostServerRecord } from "./host-server-state.js";

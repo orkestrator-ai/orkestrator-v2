@@ -116,7 +116,7 @@ the rest in one place:
 | CLI `build launch`, coordinator | `build.launch`, `start_coordinator_build_pipeline` / `start_controller_build_pipeline` | Their request; a coordinator build must name a ticket in the project and is linked to it (`source: kanban`, [coordinator](coordinator.md#launch-defaults)) |
 
 All of them apply `buildPipelineInputWithDefaults`
-(`coordinator-launch-defaults.ts`), which is documented at the top of
+(`coordinator/launch-defaults.ts`), which is documented at the top of
 `build-pipeline-launch.ts`: an explicit step replaces the saved one, a step with
 no agent keeps the saved selection, and the review step is always the first
 reviewer. A saved row pins only a model its action or saved reviewer names

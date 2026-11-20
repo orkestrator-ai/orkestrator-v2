@@ -47,7 +47,7 @@ import { StorageService } from "./storage.js";
 import { FakeOpenCode2Server } from "./opencode2/fake-server.test-support.js";
 import { OpenCode2Provider } from "./opencode2/provider.js";
 import { createEnvironment, createProject } from "./storage.js";
-import { coordinatorDelegationAvailable } from "./coordinator-context-reads.js";
+import { coordinatorDelegationAvailable } from "./coordinator/context-reads.js";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,

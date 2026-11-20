@@ -8,7 +8,7 @@ import { MailWorld } from "./agent-mail-world-test-support.js";
 import {
   COORDINATOR_STATUS_COALESCE_MS,
   type CoordinatorStatusWakeTimers,
-} from "./coordinator-status-wakes.js";
+} from "./coordinator/status-wakes.js";
 import { humanActivation, humanRun } from "./graph-node-human-test-support.js";
 import {
   graphRunCoordinatorStatus,

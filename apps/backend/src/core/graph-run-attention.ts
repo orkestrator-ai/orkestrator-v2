@@ -18,7 +18,7 @@
  * - **Hook.** {@link GraphRunAttention.onWaitOpened} tells listeners about
  *   each wait the first time it is recorded (run id, environment and the
  *   pending interactions that are new). The coordinator's status wake reads
- *   the stored run itself (`coordinator-status-wakes.ts`, `graph-run`
+ *   the stored run itself (`coordinator/status-wakes.ts`, `graph-run`
  *   associations), so a listener is a convenience, never the authority.
  *
  * Everything is derived from the stored run record (`graphRunPendingInteractions`)

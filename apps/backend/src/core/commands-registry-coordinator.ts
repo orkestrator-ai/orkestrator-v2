@@ -39,10 +39,33 @@ import {
   coordinatorRuntimeId,
   normalizeCoordinatorDelegationRequest,
 } from "@orkestrator/protocol/coordinator";
-import { launchDelegationRequest } from "./coordinator-delegation-request.js";
+import {
+  actionHash,
+  buildPipelineInputWithDefaults,
+  coordinatorCallerTurnOrigin,
+  coordinatorLaunchIdentity,
+  CoordinatorViewRevisions,
+  findCoordinatorCheckoutTurn,
+  launchDelegationRequest,
+  MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+  multiReviewInputWithDefaults,
+  readLaunchModelCatalog,
+  registerCoordinatorGraphActions,
+  requireCoordinatorConversation,
+  savedLaunchSettings,
+} from "./coordinator/index.js";
+import { registerCoordinatorGoalActions } from "./coordinator/goal-actions.js";
+import { registerCoordinatorPipelineStepActions } from "./coordinator/pipeline-step-actions.js";
+import { registerCoordinatorReviewActions } from "./coordinator/review-actions.js";
+import { registerCoordinatorSuborkActions } from "./coordinator/subork-actions.js";
+import { registerCoordinatorSurfaceActions } from "./coordinator/surface-actions.js";
+import {
+  openWorkerDelegation,
+  registerCoordinatorWorkerMailCommands,
+} from "./coordinator/worker-mail.js";
+import { registerCoordinatorWorkerTurnActions } from "./coordinator/worker-turn-actions.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { CommandContext } from "./commands-context.js";
-import { coordinatorCallerTurnOrigin } from "./coordinator-turn-origin.js";
 import type { Environment } from "./models.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
@@ -70,34 +93,9 @@ import {
   isStartMultiReviewInput,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
 import { runCommand } from "./shell.js";
-import { registerCoordinatorReviewActions } from "./coordinator-review-actions.js";
-import { registerCoordinatorSurfaceActions } from "./coordinator-surface-actions.js";
-import { registerCoordinatorWorkerTurnActions } from "./coordinator-worker-turn-actions.js";
-import { registerCoordinatorPipelineStepActions } from "./coordinator-pipeline-step-actions.js";
-import { registerCoordinatorGoalActions } from "./coordinator-goal-actions.js";
-import { registerCoordinatorSuborkActions } from "./coordinator-subork-actions.js";
-import { registerCoordinatorGraphActions } from "./coordinator-graph-actions.js";
 import { registerAgentsMdCommands } from "./agents-md-commands.js";
 import { registerWorkerQuestionRelayCommands } from "./worker-question-relay.js";
-import {
-  openWorkerDelegation,
-  registerCoordinatorWorkerMailCommands,
-} from "./coordinator-worker-mail.js";
-import {
-  buildPipelineInputWithDefaults,
-  multiReviewInputWithDefaults,
-  readLaunchModelCatalog,
-  savedLaunchSettings,
-} from "./coordinator-launch-defaults.js";
-import { CoordinatorViewRevisions } from "./coordinator-view-revisions.js";
-import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator-workflow-retention.js";
-import {
-  actionHash,
-  coordinatorLaunchIdentity,
-  requireCoordinatorConversation,
-} from "./coordinator-action-scope.js";
 import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
@@ -204,7 +202,7 @@ export function registerCoordinatorCommands(
     return context.coordinators.get(asNonBlankString(projectId, "projectId"));
   });
   // A coordinator conversation rendered or opened a pull request link: watch
-  // it for status changes while it is open (`coordinator-pr-watches.ts`).
+  // it for status changes while it is open (`coordinator/pr-watches.ts`).
   // Pull requests of other repositories are answered `watched: false`.
   register(watchCoordinatorPullRequestCommand, async (args, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
@@ -223,7 +221,7 @@ export function registerCoordinatorCommands(
   });
   // Conditional read for the coordinator panel: `{ projectId, knownGeneration,
   // knownRevision }` answers `unchanged` without a body while the snapshot the
-  // client holds is still current. See `coordinator-view-revisions.ts`.
+  // client holds is still current. See `coordinator/view-revisions.ts`.
   const coordinatorViews = new CoordinatorViewRevisions();
   register(getProjectCoordinatorViewCommand, async (args, context) => {
     const coordinators = context.coordinators;

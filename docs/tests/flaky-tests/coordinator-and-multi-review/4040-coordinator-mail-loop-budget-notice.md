@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-11-03
 - **Test:** `command node coordinator ↔ leaf coordinator > budgets stop two coordinators from waking each other endlessly`
-- **Owning file:** `apps/backend/src/core/coordinator-node-coordinator-mail.test.ts:613`
+- **Owning file:** `apps/backend/src/core/coordinator/node-coordinator-mail.test.ts:613`
 
 ## Observation
 
@@ -28,7 +28,7 @@ inner failure artifacts: `/tmp/orkestrator-test-run.KvJd3i`.
 
 ## Isolated rerun
 
-`mise run test:logged -- --name merge-coordinator-mail-owner -- bun test --cwd apps/backend ./src/core/coordinator-node-coordinator-mail.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name merge-coordinator-mail-owner -- bun test --cwd apps/backend ./src/core/coordinator/node-coordinator-mail.test.ts --parallel=1 --only-failures`
 passed the complete unchanged owning file (exit 0, 2.7 s).
 
 ## Interpretation

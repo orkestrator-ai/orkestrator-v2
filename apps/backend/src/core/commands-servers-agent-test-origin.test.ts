@@ -14,7 +14,7 @@ import type { CommandContext } from "./commands-context.js";
 import * as commandFiles from "./commands-files.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
-import { CoordinatorService } from "./coordinator-service.js";
+import { CoordinatorService } from "./coordinator/service.js";
 import { runCommand } from "./shell.js";
 import { createEnvironment, createProject, StorageService } from "./storage.js";
 

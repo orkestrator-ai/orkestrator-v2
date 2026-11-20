@@ -46,8 +46,8 @@ between `d6040915c` and `b0dcf1660`.
 
 The five-file focused image-mail suite, `mise run test:logged -- --name
 image-mail-fixes -- bun --cwd=apps/backend test
-./src/core/mail-attachments.test.ts ./src/core/coordinator-worker-mail.test.ts
-./src/core/coordinator-mail-attachments.test.ts ./src/core/nodes/node-files.test.ts
+./src/core/mail-attachments.test.ts ./src/core/coordinator/worker-mail.test.ts
+./src/core/coordinator/mail-attachments.test.ts ./src/core/nodes/node-files.test.ts
 ./src/core/nodes/node-coordination.test.ts --parallel=2 --only-failures`,
 observed the same expected `pending-inject`, received `injected` assertion
 at 100.32 ms (95 pass, 2 fail; the other failure was a new test assertion

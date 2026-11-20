@@ -32,7 +32,7 @@ export interface WatchedPullRequestReading {
   review: (typeof WATCHED_PULL_REQUEST_REVIEWS)[number];
 }
 
-/** One pull request a project's coordinator watches; see `coordinator-pr-watches.ts`. */
+/** One pull request a project's coordinator watches; see `coordinator/pr-watches.ts`. */
 export interface WatchedPullRequest {
   /** `owner/repo#number`, lower-case owner and repository. */
   key: string;

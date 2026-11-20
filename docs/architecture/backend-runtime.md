@@ -12,7 +12,7 @@ Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `container-log-service.ts`,
 `docker-cleanup-grants.ts`, `integration-locks.ts`, `features/build-tasks.ts`,
 `public-api/reconciliations.ts`, `keyed-single-flight.ts`,
-`coordinator-request-flights.ts`,
+`coordinator/request-flights.ts`,
 `git/github-cli-binary.ts`, `host-catalog-seeds.ts`.
 
 One backend instance owns its process state through one `BackendRuntime`.

@@ -587,7 +587,7 @@ executing at once per backend.
   only the owner changing an action, the self-timer limit on a new action),
   and a timer carrying the account-switch permission retimed only in a user
   turn.
-- `apps/backend/src/core/coordinator-timers-and-accounts.test.ts`: self-timers
+- `apps/backend/src/core/coordinator/timers-and-accounts.test.ts`: self-timers
   over the real Control MCP endpoint (relative and absolute times and the
   zone reported, delivery to the main or side conversation, cancelling, a
   restart, the delay and pending limits, a permission refused in a mail

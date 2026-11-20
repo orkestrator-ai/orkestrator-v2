@@ -93,7 +93,7 @@ export function useControlMcpServerHarness() {
       let result: unknown;
       switch (command) {
         case "assert_coordinator_environment_scope":
-          // The origin check runs for real in `coordinator-environment-scope.test.ts`.
+          // The origin check runs for real in `coordinator/environment-scope.test.ts`.
           result = { allowed: true };
           break;
         case "get_projects":

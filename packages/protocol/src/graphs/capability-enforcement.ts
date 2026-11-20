@@ -4,7 +4,7 @@
  * profile), provider and host.
  *
  * This is the one place that judgement is made. The coordinator's provider
- * qualification (`apps/backend/src/core/coordinator-providers.ts`) asks it
+ * qualification (`apps/backend/src/core/coordinator/providers.ts`) asks it
  * about the coordinator policy, the graph compiler asks it about each node's
  * compiled profile, and the designer shows the same matrix, so the three
  * cannot drift apart. The tiers mean what they mean for the coordinator

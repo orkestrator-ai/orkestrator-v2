@@ -12,7 +12,7 @@
   passed 6 of 6 on macOS.
 - **Reproduction:** on macOS, running it with four neighbours failed 5 of 5 (`Expected: 18`,
   `Received: 10`):
-  `bun test src/standalone-logging.test.ts src/core/shell.test.ts src/core/coordinator-node-coordinator-mail.test.ts src/core/public-api/public-api-schedules.test.ts src/core/commands-state-sync.test.ts --parallel=2`
+  `bun test src/standalone-logging.test.ts src/core/shell.test.ts src/core/coordinator/node-coordinator-mail.test.ts src/core/public-api/public-api-schedules.test.ts src/core/commands-state-sync.test.ts --parallel=2`
   from `apps/backend`. The same set without `commands-state-sync.test.ts` passed 6 of 6.
 
 ## Root cause

@@ -563,7 +563,7 @@ export class AgentMailRepository {
     const requestId = input.requestId.trim();
     const notice = sender.kind === "system" ? normalizeAgentMailNotice(options.notice) : null;
     // Only a coordinator's backend copies files for a message; see
-    // `coordinator-mail-attachments.ts`.
+    // `coordinator/mail-attachments.ts`.
     const attachments =
       sender.kind === "coordinator" || sender.kind === "node"
         ? normalizeAgentMailAttachments(input.attachments)

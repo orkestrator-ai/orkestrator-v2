@@ -80,7 +80,7 @@ appears and disappears) before changing the fixture.
 
 - **Observing base:** `498b68766` (`main`), with the uncommitted renderer error ring changes of branch `renderer-error-ring-e3a48fce2746-r1` (no checkout-template or coordinator code changed). `mise run flaky:recurrence 9936 --base 498b68766` answered open.
 - **Command:** `ORKESTRATOR_TEST_SKIP_GUARDS=1 mise run test:changed` on mini (macOS arm64, Bun 1.4.4), load average about 24 to 32 from other worktrees.
-- **Failures:** `ENOENT: no such file or directory, lstat '…/ork-checkout-template-…/.git/objects/maintenance.lock'` in `tickets on a leaf > a ticket created for a leaf is on the board and on the leaf under one id, and its build runs there` (`apps/backend/src/core/coordinator-node-tickets.test.ts`, 260.58 ms) and in a test not listed above, `on the real coordinator > a refused conversation is woken with one message when the node reconnects` (`apps/backend/src/core/coordinator-node-reconnect-wakes.test.ts`, 432.83 ms).
+- **Failures:** `ENOENT: no such file or directory, lstat '…/ork-checkout-template-…/.git/objects/maintenance.lock'` in `tickets on a leaf > a ticket created for a leaf is on the board and on the leaf under one id, and its build runs there` (`apps/backend/src/core/coordinator/node-tickets.test.ts`, 260.58 ms) and in a test not listed above, `on the real coordinator > a refused conversation is woken with one message when the node reconnects` (`apps/backend/src/core/coordinator/node-reconnect-wakes.test.ts`, 432.83 ms).
 - **Owning-file reruns:** the runner's isolated reruns passed unchanged: `coordinator-node-tickets.test.ts` in 1.4 s, `coordinator-node-reconnect-wakes.test.ts` in 1.0 s.
 - **Evidence:** `orkestrator-test-run.PS6O8Y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` under the host temporary directory. The same run's CLI timeout is [9944](9944-cli-bash-completion-aggregate-timeout.md).
 
@@ -107,7 +107,7 @@ The fix proposed under Hypothesis still applies; it was not attempted here.
   `maintenance.lock` error inside `MailWorld.create()` (28 pass, 1 fail),
   then passed alone twice: `mise run test:logged -- --name
   deliver-now-rerun-N -- mise exec -- bun --cwd=apps/backend test --preload
-  ../../tests/setup-node.ts src/core/coordinator-deliver-now.test.ts
+  ../../tests/setup-node.ts src/core/coordinator/deliver-now.test.ts
   --parallel=1` (11.9 s each). Failing alone under load fits the hypothesis
   (the race is with Git's detached maintenance, not with sibling test files).
 - **Evidence:** `orkestrator-test-run.tVTJUs/` under the host temporary

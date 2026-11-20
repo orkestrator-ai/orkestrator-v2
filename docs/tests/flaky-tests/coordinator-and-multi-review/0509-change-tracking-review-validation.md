@@ -109,11 +109,11 @@ passed, and web, desktop, public web, CLI, toolchain, protocol, Pi, Cursor,
 Codex and ACP package suites passed. The only remaining failures were:
 
 - Backend: `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches`
-  (`apps/backend/src/core/coordinator-service.test.ts:623`), 5,189.58 ms, past
+  (`apps/backend/src/core/coordinator/service.test.ts:623`), 5,189.58 ms, past
   its five-second deadline. Backend totals: 9,710 passed, 67 skipped, one
   failed across 550 files. This is a 0165 recurrence. The unchanged owning
   file passed in 11.1 seconds with
-  `mise run test:logged -- --name coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`.
+  `mise run test:logged -- --name coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator/service.test.ts --parallel=1 --only-failures`.
 - Claude: the 0385 fixture race recorded above (1,600 passed, five skipped,
   one failed); its unchanged owning file passed separately in 0.3 seconds.
 

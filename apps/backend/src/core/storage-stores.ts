@@ -154,7 +154,7 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "coordinator-action-marks": { kind: "record", owner: ownerField("projectId") },
   // Setup commands the user approved, one row per project (`setup-approval.ts`).
   "setup-approvals": { kind: "record", owner: ownerField("projectId") },
-  // Pull requests a coordinator watches, one row per project (`coordinator-pr-watches.ts`).
+  // Pull requests a coordinator watches, one row per project (`coordinator/pr-watches.ts`).
   "coordinator-watched-pull-requests": { kind: "record", owner: ownerField("projectId") },
   // This machine's load history, one row (`storage-machine-load-history.ts`).
   "machine-load-history": { kind: "record" },

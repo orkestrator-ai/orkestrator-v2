@@ -873,7 +873,7 @@ export async function getGitHubPullRequest(
   });
 }
 
-/** The few facts a watched pull request is compared on; see `coordinator-pr-watches.ts`. */
+/** The few facts a watched pull request is compared on; see `coordinator/pr-watches.ts`. */
 export type GitHubPullRequestStatus = {
   title: string;
   htmlUrl: string;

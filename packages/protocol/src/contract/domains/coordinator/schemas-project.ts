@@ -137,7 +137,7 @@ export const CoordinatorCheckoutTurnSchema = Schema.NullOr(
   openRecord({ kind: Schema.String, conversationId: optionalString }),
 );
 
-/** `WatchPullRequestOutcome` (`coordinator-pr-watches.ts`). */
+/** `WatchPullRequestOutcome` (`coordinator/pr-watches.ts`). */
 export const CoordinatorPullRequestWatchSchema = openRecord({
   watched: Schema.Boolean,
   added: optionalBoolean,

@@ -7,7 +7,7 @@ import {
   type ControlMcpInvoker,
 } from "./server.js";
 import { coordinatorRoleCapabilities } from "./tools.js";
-import { coordinatorDelegationPresentationFrom } from "../coordinator-delegation-authority.js";
+import { coordinatorDelegationPresentationFrom } from "../coordinator/delegation-authority.js";
 import {
   COORDINATOR_CONTROL_TOOL_NAMES,
   COORDINATOR_WORKFLOW_STATUS_WAKE,

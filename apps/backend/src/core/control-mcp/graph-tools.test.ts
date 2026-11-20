@@ -21,8 +21,8 @@ import type {
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "../commands-context.js";
-import { registerCoordinatorGraphActions } from "../coordinator-graph-actions.js";
-import { CoordinatorService } from "../coordinator-service.js";
+import { registerCoordinatorGraphActions } from "../coordinator/graph-actions.js";
+import { CoordinatorService } from "../coordinator/service.js";
 import { rpc } from "./test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "./server.js";
 import { coordinatorRoleCapabilities } from "./tools.js";

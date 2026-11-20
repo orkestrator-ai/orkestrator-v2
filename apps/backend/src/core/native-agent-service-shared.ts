@@ -521,7 +521,7 @@ export interface NativeAgentServiceOptions {
   waitForMergeSync?: (projectId: string) => Promise<void>;
   /**
    * Runs before agent mail is injected as a new turn
-   * (`coordinator-mail-upstream.ts`): fast-forwards the main coordinator's
+   * (`coordinator/mail-upstream.ts`): fast-forwards the main coordinator's
    * checkout to its upstream when Git can do it cleanly, so the mail is
    * answered from current code. Bounded, and never throws.
    */
@@ -530,7 +530,7 @@ export interface NativeAgentServiceOptions {
    * The commits and paths between two commits of a project's checkout
    * (`ProjectGitService.checkoutChanges`), for the checkout-update notice a
    * coordinator conversation gets on its first turn after the checkout moved
-   * (`coordinator-checkout-update.ts`). Without it the notice names the
+   * (`coordinator/checkout-update.ts`). Without it the notice names the
    * commits only.
    */
   coordinatorCheckoutChanges?: (

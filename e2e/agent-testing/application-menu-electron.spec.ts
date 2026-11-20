@@ -24,7 +24,8 @@ import { electronSpecEnvironment } from "./electron-spec-environment";
 
 /**
  * Runs on macOS too, where the first test skips: there Help comes from the
- * `help` role with an empty submenu until a renderer turns debug logging on.
+ * `help` role, holding only Release Notes until a renderer turns debug
+ * logging on.
  * The whole-app path through Settings is log-controls-packaged-electron.spec.ts.
  */
 test("Help offers Open Developer Tools only while a renderer has debug logging on", async () => {

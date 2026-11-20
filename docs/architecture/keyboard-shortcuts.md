@@ -223,6 +223,7 @@ therefore get their conventional layout:
 | macOS | Windows and Linux |
 | --- | --- |
 | App menu: About, Check for Updates…, Settings…, Hide, Hide Others, Show All, Quit | No app menu. Settings… then Quit (Windows: Exit) end File. Help holds Check for Updates… and About |
+| Help › Release Notes, beside the system's Help search | Help › Release Notes |
 | File › Close Tab `Command+W` | File › Close Tab with no accelerator |
 | Window › Minimize, Zoom, open windows | Window › Minimize, open windows |
 

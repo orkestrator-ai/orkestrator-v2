@@ -81,10 +81,7 @@ import type {
 } from "@orkestrator/protocol/graphs/run-rewind";
 import type { Environment } from "./models.js";
 import type { EnvironmentGit } from "./workspace-code-rewind.js";
-import {
-  reviewFanoutConcurrency,
-  type ReviewFanoutConcurrency,
-} from "./review-fanout-scheduler.js";
+import { reviewFanoutConcurrency, type ReviewFanoutConcurrency } from "./review/index.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import {

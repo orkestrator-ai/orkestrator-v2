@@ -13,7 +13,7 @@ import {
   type AgentBranchRecord,
   AGENT_BRANCH_LOG_OWNER,
 } from "./agent-branch-types.js";
-import type { EfficiencyEvent } from "./multi-review-efficiency.js";
+import type { EfficiencyEvent } from "./review/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-branch");

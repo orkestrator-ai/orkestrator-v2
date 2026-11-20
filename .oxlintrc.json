@@ -490,6 +490,21 @@
                   "!**/workflows/result-final-text.js"
                 ],
                 "message": "Import the workflows domain through workflows/index.js."
+              },
+              {
+                "group": [
+                  "**/review/*",
+                  "!**/review/index.js",
+                  "!**/review/address-findings-dispatch.js",
+                  "!**/review/consolidation-scope.js",
+                  "!**/review/fanout.js",
+                  "!**/review/graph-engine.js",
+                  "!**/review/retired-looped-review-cleanup.js",
+                  "!**/review/service.js",
+                  "!**/review/validation-prompts.js",
+                  "!**/review/validation-service.js"
+                ],
+                "message": "Import the review domain through review/index.js."
               }
             ]
           }
@@ -659,6 +674,14 @@
                   "!**/backend/src/core/workflows/index.js"
                 ],
                 "message": "Import the workflows domain through workflows/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/review/*",
+                  "!**/backend/src/core/review/index.js",
+                  "!**/backend/src/core/review/validation-prompts.js"
+                ],
+                "message": "Import the review domain through review/index.js."
               }
             ]
           }

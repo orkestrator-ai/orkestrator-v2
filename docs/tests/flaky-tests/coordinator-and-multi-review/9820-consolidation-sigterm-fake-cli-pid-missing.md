@@ -7,7 +7,7 @@
 Tests: `subprocess bounds > a claude CLI that ignores SIGTERM times out, is
 killed and leaves no directory` and `subprocess bounds > a codex CLI that
 ignores SIGTERM times out, is killed and leaves no directory` in
-`apps/backend/src/core/multi-review-evaluation-drivers.test.ts`.
+`apps/backend/src/core/review/evaluation-drivers.test.ts`.
 
 Observed on `static-html-reports-776fd527af5f-r1` at `c9c14eef6` (a merge of
 `origin/main` at `b6044774c` into the branch), merge base `b6044774c`. The
@@ -44,11 +44,11 @@ host temporary directory.
   `origin/main` confirmed the case was open.
 - **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`,
   with backend package tests using two isolated Bun workers.
-- **Failure:** the Codex case in `apps/backend/src/core/multi-review-evaluation-drivers.test.ts`
+- **Failure:** the Codex case in `apps/backend/src/core/review/evaluation-drivers.test.ts`
   failed at 404.10 ms with `ENOENT` reading the fake CLI's `pid` file.
   Backend reported 19,725 passed, 212 skipped and four failed across 1,400 files.
 - **Complete owner rerun:** from `apps/backend`,
-  `bun test ./src/core/multi-review-evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
+  `bun test ./src/core/review/evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
   passed 22 tests (2.6 s logged). The fake process's start-up timing remains
   a possible cause.
 - **Evidence:** `orkestrator-test-run.HiqeYP` in the host temporary directory,

@@ -49,10 +49,10 @@ import {
   prependReviewHandoff,
 } from "./build-pipeline-handoff.js";
 import {
+  createDiscoveryPrompt,
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-  createDiscoveryPrompt,
-} from "./review-prompts.js";
+} from "./review/index.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import { verificationAddressFindingsReport } from "./build-pipeline-address-findings-report.js";
 import { usesPackagePreparationSession } from "./build-pipeline-stages.js";

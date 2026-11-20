@@ -18,7 +18,7 @@ Complete owner reruns used the repository's logged runner and `--parallel=1`:
 | Owner | Preparation failure | Focused rerun |
 | --- | --- | --- |
 | `apps/backend/src/core/storage-writer-guards.test.ts` | Raw-writer scan exceeded 5 s (reported 10,026.54 ms). | Passed with the other two backend owners in 14.4 s. Existing [1309](../backend-services-and-tooling/1309-storage-writer-guard-raw-scan-timeout.md). |
-| `apps/backend/src/core/multi-review-graph-evaluation.test.ts` | An unnamed test exceeded 5 s. | Passed in the same backend run. |
+| `apps/backend/src/core/review/graph-evaluation.test.ts` | An unnamed test exceeded 5 s. | Passed in the same backend run. |
 | `apps/backend/src/core/commands-registry-coordinator.test.ts` | Concurrent build starts rejected with `Associated build pipeline was not found`. | Passed in the same backend run. Recurrence of [1307](1307-temp-directory-cleanup-0247-review-validation.md). |
 | `apps/web/src/App.test.tsx` | Failed while retaining a healthy Docker snapshot after an outage-confirmation request failed. | Complete unchanged owner passed separately in 11.8 s. |
 | `apps/web/src/lib/chat/rich-markdown/incremental-parse.test.tsx` | Long streamed answer parse exceeded 5 s. | Passed in the 22.9 s web-owner run. Recurrence of [1307](1307-temp-directory-cleanup-0247-review-validation.md). |
@@ -28,7 +28,7 @@ Complete owner reruns used the repository's logged runner and `--parallel=1`:
 The logged commands were:
 
 ```sh
-mise run test:logged -- --name fsmonitor-preparation-backend-owners -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts ./src/core/multi-review-graph-evaluation.test.ts ./src/core/commands-registry-coordinator.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name fsmonitor-preparation-backend-owners -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts ./src/core/review/graph-evaluation.test.ts ./src/core/commands-registry-coordinator.test.ts --parallel=1 --only-failures
 mise run test:logged -- --name fsmonitor-preparation-web-owners -- bun test --cwd apps/web ./src/App.docker-availability.test.tsx ./src/lib/chat/rich-markdown/incremental-parse.test.tsx ./src/components/native-agent/AgentNativeTab.commands.test.tsx ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures
 mise run test:logged -- --name fsmonitor-preparation-app-owner -- bun test --cwd apps/web ./src/App.test.tsx --parallel=1 --only-failures
 ```

@@ -896,7 +896,7 @@ facts under the run's lock.
 reviewer fan-out: session creation, the dispatch journal, proof-based
 recovery, observation, repair, the result reminder, continuation and
 metering. Multi Review's and the Build Pipeline's reviewer fan-outs
-(`review-fanout.ts`) and "Describe a graph" run on the same runner. What the
+(`review/fanout.ts`) and "Describe a graph" run on the same runner. What the
 graph executor adds:
 
 - **Policy first.** The node's capabilities are compiled against the
@@ -1653,7 +1653,7 @@ what the graph runtime gained for it.
   sources are classed `issue` and `coverage-gap`, and its `review-report@1`
   output is checked with `REVIEW_CONSOLIDATION_PROVENANCE` (each finding cites
   at least one source of its own kind, `reviewModels` left to the backend) and
-  the bespoke wording (`review-consolidation-provenance.ts`). The port's own
+  the bespoke wording (`review/consolidation-provenance.ts`). The port's own
   mode is kept, so `accountForAll` is still stricter. Failed reviewers stay
   out of the evidence, as in the bespoke prompt.
 - **A consolidation keeps every source finding.** Its `review-report@1`

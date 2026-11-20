@@ -16,7 +16,7 @@ import {
   startInput as fanoutStartInput,
   withPipeline,
 } from "./build-pipeline-review-fanout-test-support.js";
-import { reviewerPanelSection } from "./multi-review-prompts.js";
+import { reviewerPanelSection } from "./review/multi-review-prompts.js";
 import { TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
 
 /**

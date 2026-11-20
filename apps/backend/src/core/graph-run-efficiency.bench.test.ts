@@ -8,7 +8,7 @@
  * temporary store and a manual clock: no provider, no wall-clock wait, no
  * timing assertion, so it fits the default suite.
  *
- * Structure follows `multi-review-efficiency.bench.test.ts`: the default run
+ * Structure follows `review/efficiency.bench.test.ts`: the default run
  * asserts structural gates; `GRAPH_RUN_BENCH_REPORT_ONLY=1` only measures
  * (to compare an older build); `GRAPH_RUN_BENCH_OUT=<file>` writes the
  * content-free result table as JSON. Reproduce with:
@@ -47,7 +47,7 @@ import {
 } from "./graph-run-executor-test-support.js";
 import { GraphNodeExecutorRegistry, type GraphNodeExecutor } from "./graph-run-executors.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
-import { multiReviewGraphEngineTemplate } from "./multi-review-graph-template.js";
+import { multiReviewGraphEngineTemplate } from "./review/graph-template.js";
 import { ManualTime } from "./recurring-test-support.js";
 import { runCommand } from "./shell.js";
 import { storageDatabase } from "./storage-test-support.js";

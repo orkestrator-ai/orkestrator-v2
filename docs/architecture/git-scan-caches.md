@@ -13,7 +13,7 @@ are relative to `apps/backend/src/core/`.
 | `local-git-scan-caches.ts` | Per-worktree untracked line counts and the exclude-file memo |
 | `worktrees/watcher.ts`, `worktrees/watch-plan.ts` | The hints that start a scan, and which subtrees they leave out |
 | `git/fsmonitor.ts` | Daemon stop, removal of the legacy setting, timeout fallback |
-| `review-validation-worker.ts`, `review-worktree-fingerprint.ts` | Environment-side status reads with their own fallback |
+| `review/validation-worker.ts`, `review/worktree-fingerprint.ts` | Environment-side status reads with their own fallback |
 
 ## What is enabled
 
@@ -500,7 +500,7 @@ daemon call rescans the tree and the two times come out the same.
 ## The review worktree probe
 
 `get_environment_uncommitted_paths` runs `REVIEW_WORKTREE_FINGERPRINT_SCRIPT`
-(`review-worktree-fingerprint.ts`) in the environment to read HEAD and the
+(`review/worktree-fingerprint.ts`) in the environment to read HEAD and the
 uncommitted paths: the build pipeline's guards, stage starts and review fan-out
 all use it. On 2026-11-05 on arktech-mini it piled up during a `bun install` in
 a worktree on the external volume: the disk stalled, every `git status` ran
@@ -526,7 +526,7 @@ The probe now:
   doubled the walk, and a worktree-configured fsmonitor hook is a program the
   host must not run.
 
-The validation worker's drift check (`review-validation-worker.ts`) also runs
+The validation worker's drift check (`review/validation-worker.ts`) also runs
 with `GIT_OPTIONAL_LOCKS=0`, because it runs between validation commands such
 as installs.
 
@@ -670,7 +670,7 @@ cases run wherever `git version --build-options` reports
 
 The Windows branch of the fingerprint probe (the bounded `taskkill /t /f`
 cleanup) has never run, and the blocking-hook regression in
-`review-worktree-fingerprint.test.ts` is skipped on Windows: it intercepts Git
+`review/worktree-fingerprint.test.ts` is skipped on Windows: it intercepts Git
 with a POSIX `sh` script named `git` first on `PATH`, which Node's
 `spawn("git")` on Windows does not resolve (it finds only `git.exe`/`.cmd`). A
 Windows variant needs another way to observe the calls (for example

@@ -38,7 +38,7 @@ old cadence.
 | Hub: per-connection sets, coalescing map, throttle, bounds, metrics | `apps/backend/src/core/push/push-hub.ts` |
 | `native-session` topic: one observer per subscribed session | `apps/backend/src/core/push/native-session-push-topic.ts` |
 | `workflow` topic: run summaries woken by their record's `resource-changed`; Auto-pipeline offers and drafts woken by the service | `apps/backend/src/core/push/workflow-push-topic.ts`, `workflow-push-summary.ts`, `onAutoPipelineChange` in `apps/backend/src/core/auto-pipeline.ts` |
-| `review-transcript` topic: reviewer and step transcripts, woken by record saves and the reviewer bridge's hints | `apps/backend/src/core/push/review-transcript-push-topic.ts`, `apps/backend/src/core/multi-review-transcript-push.ts` |
+| `review-transcript` topic: reviewer and step transcripts, woken by record saves and the reviewer bridge's hints | `apps/backend/src/core/push/review-transcript-push-topic.ts`, `apps/backend/src/core/review/transcript-push.ts` |
 | `environment` topic: lifecycle and attention digests per subscribed environment | `apps/backend/src/core/push/environment-push-topic.ts` |
 | `tool-output` topic: one tool call's output, riding its session's observer | `apps/backend/src/core/push/tool-output-push-topic.ts` |
 | Bounded tool output read (`get_native_agent_tool_output`): slicing, anchors, bounds | `packages/protocol/src/native-agent-tool-output.ts`, `apps/backend/src/core/native-agent-tool-output-reads.ts` |
@@ -325,7 +325,7 @@ stores re-read on `resource-changed`, C03) and have no poll to retire.
 
 A Multi Review reviewer's transcript, or a preparation, consolidation or Fix
 step's (`apps/backend/src/core/push/review-transcript-push-topic.ts`, targets
-in `apps/backend/src/core/multi-review-transcript-push.ts`).
+in `apps/backend/src/core/review/transcript-push.ts`).
 
 | Key | Parts | Reads it announces |
 | --- | --- | --- |

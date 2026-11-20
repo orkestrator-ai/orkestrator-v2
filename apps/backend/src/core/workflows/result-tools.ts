@@ -24,7 +24,7 @@ import {
 import {
   CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
   CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
-} from "../review-consolidation-scope.js";
+} from "../review/consolidation-scope.js";
 // Registers the built-in kinds the registry functions below look up.
 import "./result-contracts.js";
 import { graphOutputContext } from "./result-graph-output.js";
@@ -36,10 +36,7 @@ import {
   type WorkflowResultSlotView,
 } from "./result-registry.js";
 import type { WorkflowResultCallerScope, WorkflowResultService } from "./result-service.js";
-import type {
-  ProvisionalFindingSink,
-  ReportFindingResult,
-} from "../review-provisional-findings.js";
+import type { ProvisionalFindingSink, ReportFindingResult } from "../review/index.js";
 
 export interface WorkflowResultToolScope extends WorkflowResultCallerScope {
   workflowResultKey: string;

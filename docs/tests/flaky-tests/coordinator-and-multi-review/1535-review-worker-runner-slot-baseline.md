@@ -30,8 +30,8 @@ message and the worker's `state.json`.
 
 ## Resolution (2026-11-15)
 
-- **Class:** silent wall-clock deadlines (B). The test now lives in `apps/backend/src/core/review-validation-worker.cooperative.test.ts`.
+- **Class:** silent wall-clock deadlines (B). The test now lives in `apps/backend/src/core/review/validation-worker.cooperative.test.ts`.
 - **Root cause (from the code, as the 2026-11-06 investigation found):** the first loop gave up silently after 8 s and accepted any `queued`, including the local report the worker makes before the child exists; the second gave up silently after 5 s waiting for the independent command's marker. Either could fall through on a slow host and leave the following assertions reading an intermediate state.
 - **Fix:** both loops are replaced by `observeUntil` on the worker's state: first until the cooperative command is `queued` with a `queueReason` (only the child's host admission sets one), then until the independent command is `passed`. The final assertion checks the same host-queued predicate. The file's `setDefaultTimeout` goes from 30 s to 60 s and the test's 30 s third argument is removed, so the `observeUntil` bounds are hang watchdogs only.
 - **Reproduced:** no; the original message was never captured, and the earlier delay injections passed.
-- **Stress:** `mise run test:logged -- --name c1535 -- bun scripts/test-under-contention.ts --core 11 --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.cooperative.test.ts --rerun-each=3` passed (66.5 s).
+- **Stress:** `mise run test:logged -- --name c1535 -- bun scripts/test-under-contention.ts --core 11 --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/validation-worker.cooperative.test.ts --rerun-each=3` passed (66.5 s).

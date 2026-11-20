@@ -6,7 +6,7 @@ import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { ReviewIssue } from "@orkestrator/protocol/structured-review";
 import { REPORT_FINDING_TOOL_NAME } from "@orkestrator/protocol/workflow-results";
 import { AgentToolsServer } from "./agent-tools.js";
-import { ProvisionalFindingInbox } from "./review-provisional-findings.js";
+import { ProvisionalFindingInbox } from "./review/provisional-findings.js";
 import { StorageService } from "./storage.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 

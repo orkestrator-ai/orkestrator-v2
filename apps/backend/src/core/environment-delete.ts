@@ -25,7 +25,7 @@ import { removeProjectHomeMailAttachments } from "./mail-attachments.js";
 import { seedFilesDir } from "./nodes/index.js";
 import { removeOpenCodeCommandChangeJournals } from "./change-tracking/index.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
-import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { stopEnvironmentReviewValidation } from "./review/validation-service.js";
 import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux.js";
 import { transcriptMediaPins } from "./transcript-media-pins.js";
 import { environmentDeletionSteps } from "./environment-deletion-steps.js";

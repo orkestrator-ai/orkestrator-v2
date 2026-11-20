@@ -1,7 +1,7 @@
 import { taskSnapshotCriteria } from "@orkestrator/protocol/build-pipeline";
 import { usesPackagePreparationSession } from "./build-pipeline-stages.js";
 import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
-import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
+import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review/validation-prompts.js";
 import { createHash } from "node:crypto";
 import type {
   BuildPipeline,
@@ -20,7 +20,7 @@ import {
   buildReviewBody,
   buildStructuredReviewOutputGuide,
 } from "@orkestrator/protocol/review-workflow";
-import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review/consolidation-scope.js";
 import {
   ADDRESS_FINDINGS_RESULT_FRAME_CLOSE,
   ADDRESS_FINDINGS_RESULT_FRAME_INSTRUCTION,

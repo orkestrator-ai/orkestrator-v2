@@ -1,6 +1,6 @@
 import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import { describe, expect, spyOn, test } from "bun:test";
-import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
+import { RecordingEfficiencyObserver } from "./review/efficiency.js";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import {
   MAX_BUILD_PIPELINE_REVIEWERS,
@@ -20,7 +20,7 @@ import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,
   deriveConsolidatedProvenance,
   parseStructuredReportResult,
-} from "./review-fanout.js";
+} from "./review/fanout.js";
 import {
   HEAD,
   advanceUntil,

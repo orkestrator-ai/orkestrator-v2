@@ -1,4 +1,4 @@
-import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./review/address-findings-identity.js";
 import { describe, expect, test } from "bun:test";
 import { workflowSummary } from "./control-workflow-summary.js";
 

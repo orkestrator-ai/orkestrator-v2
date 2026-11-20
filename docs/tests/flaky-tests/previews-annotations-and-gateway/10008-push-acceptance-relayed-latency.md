@@ -6,7 +6,7 @@
   `5e9835d0a6981a8d2c217d8941e2e065abbe3008`, after reviewed commit `f255a06da`.
 - **Test:** `push acceptance budgets > two relayed nodes share bridge reads across windows and meet the latency budget`
 - **File:** `apps/backend/tests/push-acceptance.test.ts`
-- **Original command:** `mise run test:logged -- --name findings-backend -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/http-bridge/state-revision.test.ts src/core/push/native-session-push-topic.test.ts src/core/push/review-transcript-push-topic.test.ts src/core/native-agent-tool-output-reads.test.ts src/core/nodes/node-push-subscriptions.test.ts src/core/multi-review-transcript-push.test.ts src/core/multi-review-service-part-4.test.ts tests/push-acceptance.test.ts --parallel=4 --only-failures`.
+- **Original command:** `mise run test:logged -- --name findings-backend -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/http-bridge/state-revision.test.ts src/core/push/native-session-push-topic.test.ts src/core/push/review-transcript-push-topic.test.ts src/core/native-agent-tool-output-reads.test.ts src/core/nodes/node-push-subscriptions.test.ts src/core/review/transcript-push.test.ts src/core/review/service-part-4.test.ts tests/push-acceptance.test.ts --parallel=4 --only-failures`.
 - **Failure:** observed p95 of 300 ms against the 250 ms virtual-time limit.
   The case ran for 1.66 seconds. The run reported 136 passed and 3 failed
   across eight files. The two other failures were fixture setup mistakes in new
@@ -46,3 +46,19 @@
   Evidence: `/tmp/orkestrator-test-run.QhGIbq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name refresh-main-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
   passed the owning file in 10.7 seconds.
+
+## Isolated failures on 2026-11-20
+
+- **Observed:** on the `review` domain move of to-do 0012, based on
+  `05f3db2d8`. `mise run flaky:recurrence -- 10008 --base 05f3db2d8`
+  reported the case open.
+- **Command:** `NODE_ENV=test bun scripts/run-logged.ts --name review-importer-tests -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts <33 test files> --parallel=4 --only-failures`,
+  where it measured virtual p95 of 300 ms against its 250 ms budget; the
+  other 32 files passed (789 of 790 tests).
+- **Isolated reruns:** the owning file alone
+  (`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts`)
+  failed three times out of three with p95 300 ms (8 passed, 1 failed), on
+  the branch and on an untouched checkout of `05f3db2d8`. Unlike the earlier
+  observations it did not pass alone, so on this host (macOS, Apple Silicon)
+  it now fails deterministically on `main`. The move does not touch the push
+  layer; only the test's import path changed.

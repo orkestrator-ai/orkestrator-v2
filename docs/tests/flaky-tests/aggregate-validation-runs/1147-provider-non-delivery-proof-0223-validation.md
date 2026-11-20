@@ -83,7 +83,7 @@ result only for an id in its accepted-id set; all 34 owning-file tests passed.
 The combined pipeline/fan-out run also passed after this correction:
 
 ```sh
-mise run test:logged -- --name pipeline-and-fanout -- bun test --cwd apps/backend ./src/core/build-pipeline-steps.test.ts ./src/core/build-pipeline-service-recovery.test.ts ./src/core/build-pipeline-result-reminder.test.ts ./src/core/review-fanout-dispatch.test.ts ./src/core/review-fanout-interleaving.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=4 --only-failures
+mise run test:logged -- --name pipeline-and-fanout -- bun test --cwd apps/backend ./src/core/build-pipeline-steps.test.ts ./src/core/build-pipeline-service-recovery.test.ts ./src/core/build-pipeline-result-reminder.test.ts ./src/core/review/fanout-dispatch.test.ts ./src/core/review/fanout-interleaving.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=4 --only-failures
 ```
 
 Remaining failures match the previously recorded base failures above:

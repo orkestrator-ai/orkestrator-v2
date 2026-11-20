@@ -4,10 +4,10 @@
 - **Status:** resolved
 - **Date observed:** 2026-09-28
 - **Test:** `Multi Review control-plane benchmark > one slow reviewer does not serialize the rest of the panel`
-- **File:** `apps/backend/src/core/multi-review-efficiency.bench.test.ts:444`
+- **File:** `apps/backend/src/core/review/efficiency.bench.test.ts:444`
 - **Original command:** `mise run test`, while other worktrees were also testing on the host.
 - **Failure:** `result.admissionMs` was 330 ms; the assertion required less than 310 ms.
-- **Isolated rerun:** `mise run test:logged -- --name backend-multi-review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures` passed.
+- **Isolated rerun:** `mise run test:logged -- --name backend-multi-review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/efficiency.bench.test.ts --parallel=1 --only-failures` passed.
 - **Second aggregate run:** `mise run test` passed all four groups, including the workspace group.
 
 ## Current assessment
@@ -26,7 +26,7 @@ also had unrelated host/tooling failures.
 The owning file passed unchanged when rerun with:
 
 ```bash
-mise run test:logged -- --name backend-multi-review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name backend-multi-review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/efficiency.bench.test.ts --parallel=1 --only-failures
 ```
 
 The isolated run completed in 2.3 seconds. Aggregate failure evidence is in
@@ -52,7 +52,7 @@ with 24 skipped; the bridge and protocol groups passed.
 The benchmark owning file passed unchanged when rerun alone:
 
 ```bash
-mise run test:logged -- --name review-benchmark-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name review-benchmark-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/efficiency.bench.test.ts --parallel=1 --only-failures
 ```
 
 The logged rerun completed in 2.9 seconds. Aggregate failure evidence is in
@@ -67,7 +67,7 @@ or backend behavior was changed.
 - **Worker configuration:** workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated Bun workers.
 - **Aggregate counts:** backend reported 7,731 passed, 39 skipped and 3 failed across 424 files; the root, bridge and protocol groups passed. The shutdown cleanup failure also reproduced alone and is not classified as a flake.
 - **Evidence:** `/tmp/orkestrator-test-run.yeOzQY/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
-- **Isolated rerun:** `mise run test:logged -- --name merge-review-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 2.1 seconds.
+- **Isolated rerun:** `mise run test:logged -- --name merge-review-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/efficiency.bench.test.ts --parallel=1 --only-failures` passed unchanged (exit 0) in 2.1 seconds.
 - **Assessment:** consistent with the existing host-contention hypothesis; no timing assertion or backend code was changed during conflict resolution.
 
 ## Recurrence on GitHub Actions (2026-10-15)
@@ -93,7 +93,7 @@ The provider records how many turns were dispatched when that setup returned
 from older builds stay comparable. No production code or budget changed.
 
 Evidence: the owning file passed in 2.1 seconds with
-`mise run test:logged -- --name review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-efficiency.bench.test.ts --parallel=1`.
+`mise run test:logged -- --name review-bench -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/efficiency.bench.test.ts --parallel=1`.
 A temporary copy that forced serial admission
 (`reviewFanoutConcurrency: { admission: 1, provider: 1 }`) failed with
 `Expected: 3, Received: 0` after the 5 s limit, so the case still catches the

@@ -19,7 +19,7 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressFindingsReportPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
 import { withUnattendedPolicy } from "../../apps/backend/src/core/build-pipeline-service-helpers";
-import { reviewValidationDiscoveryPrompt } from "../../apps/backend/src/core/review-validation-prompts";
+import { reviewValidationDiscoveryPrompt } from "../../apps/backend/src/core/review/validation-prompts.js";
 import {
   buildReviewHandoffPrompt,
   prependReviewHandoff,
@@ -29,7 +29,7 @@ import {
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   multiReviewCustomAddressFindingsPrompt,
 } from "@orkestrator/protocol/multi-review";
-import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
+import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/review/index.js";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
 import {
   userPromptDisplayText,

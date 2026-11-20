@@ -78,13 +78,13 @@ import {
   type ProviderPrepareDispatchOptions,
 } from "./build-pipeline-provider.js";
 import {
-  efficiencyPlatform,
-  recordEfficiency,
   type EfficiencyEvent,
-} from "./multi-review-efficiency.js";
+  efficiencyPlatform,
+  PassTranscriptReader,
+  recordEfficiency,
+} from "./review/index.js";
 import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { retainProvider } from "./provider-retirement.js";
-import { PassTranscriptReader } from "./review-fanout-transcript.js";
 import {
   beginWorkflowArtifactTurn,
   LAST_ASSISTANT_TEXT_READ_LIMIT,

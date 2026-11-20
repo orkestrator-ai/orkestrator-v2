@@ -2,12 +2,20 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { FederationProvider } from "@/components/federation/FederationProvider";
 import {
   pickHostPath,
   useHostPathPickerStore,
   type HostPathPickerOptions,
 } from "@/lib/host-path-picker";
 import { WindowScope } from "@/lib/node-scope/window-scope";
+import {
+  connectionList,
+  installDesktopFake,
+  remoteConnection,
+  SELF_NODE_ID,
+  uninstallDesktopFake,
+} from "@/test/federation-desktop-fake";
 import {
   cleanupNodeScopes,
   FAKE_NODE_ID,
@@ -116,6 +124,7 @@ afterEach(() => {
   act(() => useHostPathPickerStore.getState().settle(null));
   cleanup();
   cleanupNodeScopes();
+  uninstallDesktopFake();
 });
 
 function submitPath(path: string) {
@@ -593,17 +602,25 @@ describe("HostPathPickerDialog", () => {
     expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(false);
   });
 
-  test("browses the host of the node that asked, not the command node's", async () => {
+  test("browses and names the host of the node that asked", async () => {
     const windowScope = new WindowScope();
-    const commandClient = hostClient();
-    const leafClient = hostClient("bk_leaf-b" as BackendId);
-    renderInNodeScope(<HostPathPickerDialog />, { client: commandClient, windowScope });
+    const commandClient = hostClient(SELF_NODE_ID);
+    const leaf = remoteConnection("leaf-b", "MacBook", "teal");
+    installDesktopFake({ list: connectionList([leaf]), datasets: {} });
+    const leafClient = hostClient(leaf.backendId!);
+    renderInNodeScope(
+      <FederationProvider>
+        <HostPathPickerDialog />
+      </FederationProvider>,
+      { client: commandClient, windowScope },
+    );
     windowScope.open({ role: "leaf", client: leafClient });
     let result!: Promise<string | null>;
     act(() => {
       result = pickHostPath({ mode: "directory", nodeId: leafClient.nodeId });
     });
 
+    await screen.findByText("Browsing files on MacBook.");
     fireEvent.click(await screen.findByRole("button", { name: "repo" }));
     await waitFor(() =>
       expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),

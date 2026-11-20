@@ -1430,7 +1430,7 @@ describe("RepositorySettings", () => {
           find_project_icons: [],
           read_host_image_file: (args: Readonly<Record<string, unknown>>) =>
             hostImage(String(args.path)),
-          get_cached_opencode_model_catalog: null,
+          get_opencode_model_catalog_cache: null,
         },
       });
       const onUpdateProject = mock(async (project: Project) => project);
@@ -1454,13 +1454,39 @@ describe("RepositorySettings", () => {
       expect(mockToastError).not.toHaveBeenCalled();
     });
 
+    test("discovers and previews an icon from that node without opening the picker", async () => {
+      const candidate = `${ROOT}/public/favicon.png`;
+      const client = new FakeNodeClient({
+        nodeId: LEAF_ID,
+        invoke: {
+          find_project_icons: [candidate],
+          read_host_image_file: hostImage(candidate),
+          get_opencode_model_catalog_cache: null,
+        },
+      });
+      renderOnLeaf(client);
+
+      fireEvent.click(screen.getByRole("button", { name: "Icon" }));
+      await waitFor(() =>
+        expect(screen.getByTestId("project-icon").getAttribute("src")).toBe(PICKED_ICON),
+      );
+
+      expect(client.calls("find_project_icons").map((call) => call.args)).toEqual([{ root: ROOT }]);
+      expect(client.calls("read_host_image_file").map((call) => call.args)).toEqual([
+        { path: candidate },
+      ]);
+      expect(mockFindProjectIcons).not.toHaveBeenCalled();
+      expect(mockReadHostImageFile).not.toHaveBeenCalled();
+      expect(mockOpenDialog).not.toHaveBeenCalled();
+    });
+
     test("reads the origin remote and saves settings on that node", async () => {
       const client = new FakeNodeClient({
         nodeId: LEAF_ID,
         invoke: {
           get_git_remote_url: "git@github.com:me/vulkanglass.git",
           patch_repository_settings: () => makeConfig(),
-          get_cached_opencode_model_catalog: null,
+          get_opencode_model_catalog_cache: null,
         },
       });
       const onUpdateProject = mock(async (project: Project) => project);

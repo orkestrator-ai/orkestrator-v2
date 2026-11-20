@@ -6,8 +6,8 @@
  *     [--port 1495] [--label change] [--dist output/tmp/project-search-perf-dist]
  *
  * The `e2e/fixture` app is built with `apps/web`'s Vite config (production
- * React) into a temporary directory (or `--dist`, reused when it already
- * holds a build: delete it after changing web code) and served by `vite
+ * React) into a temporary directory (or an empty or new `--dist` directory)
+ * and served by `vite
  * preview`. Each environment count gets a fresh headless Chromium (Playwright's
  * own build) at `/project-search-scale-perf`
  * (`e2e/fixture/ProjectSearchScalePerfFixture.tsx`): one machine with
@@ -17,9 +17,9 @@
  *  - closed update: `--updates` environment-list replacements with the palette
  *    closed, each timed from `setState` to the end of React's synchronous
  *    render and commit (`flushSync`);
- *  - first open: `--opens` presses of the search button, each timed to the
- *    first result row in the DOM (`rendered`) and to the end of the next
- *    animation frame (`frame`), then closed with Escape and left to settle;
+ *  - first open and warm reopen: `--opens` pairs, each starting with a fresh
+ *    fixture load. Each press is timed to the first result row in the DOM
+ *    (`rendered`) and to the end of the next animation frame (`frame`);
  *  - open update: the same replacements with the palette open.
  *
  * Output is numbers only. A JSON report is written to
@@ -28,7 +28,8 @@
  * time, not a reference figure.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium, type Page } from "@playwright/test";
@@ -105,7 +106,10 @@ function distribution(values: number[]): Distribution {
 function build(outDir: string): string {
   const webDir = path.join(repositoryRoot, "apps/web");
   const vite = path.join(webDir, "node_modules/vite/bin/vite.js");
-  if (existsSync(path.join(outDir, "index.html"))) return vite;
+  const existing = lstatSync(outDir, { throwIfNoEntry: false });
+  if (existing && (!existing.isDirectory() || readdirSync(outDir).length > 0)) {
+    throw new Error(`Fixture output directory must be empty or new: ${outDir}`);
+  }
   const result = spawnSync(
     process.execPath,
     [
@@ -116,16 +120,14 @@ function build(outDir: string): string {
       "vite.config.ts",
       "--outDir",
       outDir,
-      "--emptyOutDir",
+      "--no-emptyOutDir",
       "--logLevel",
       "warn",
     ],
     { cwd: webDir, encoding: "utf8" },
   );
   if (result.status !== 0) {
-    const log = path.join(path.dirname(outDir), "project-search-perf-build.log");
-    writeFileSync(log, `${result.stdout}\n${result.stderr}`);
-    throw new Error(`Fixture build failed; log: ${log}`);
+    throw new Error(`Fixture build failed: ${result.error ?? result.stderr ?? result.stdout}`);
   }
   return vite;
 }
@@ -183,36 +185,33 @@ async function measure(url: string, options: Options, environments: number) {
   const browser = await chromium.launch({ headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await page.goto(
-      `${url}/project-search-scale-perf?projects=${options.projects}&environments=${environments}`,
-    );
-    await page.waitForFunction(() => window.__projectSearchPerf?.ready === true);
-    // Warm the code paths once (JIT, lazy chunks) before any sample.
-    await updates(page, 3);
-    await openOnce(page);
-    await closeSearch(page);
-
-    const closedUpdate = await updates(page, options.updates);
-    const rendered: number[] = [];
-    const frame: number[] = [];
-    let rows = 0;
+    const fixtureUrl = `${url}/project-search-scale-perf?projects=${options.projects}&environments=${environments}`;
+    const firstOpens: Awaited<ReturnType<typeof openOnce>>[] = [];
+    const warmReopens: Awaited<ReturnType<typeof openOnce>>[] = [];
     for (let i = 0; i < options.opens; i++) {
-      const sample = await openOnce(page);
-      rendered.push(sample.renderedMs);
-      frame.push(sample.frameMs);
-      rows = sample.rows;
+      await page.goto(fixtureUrl);
+      await page.waitForFunction(() => window.__projectSearchPerf?.ready === true);
+      firstOpens.push(await openOnce(page));
+      await closeSearch(page);
+      warmReopens.push(await openOnce(page));
       await closeSearch(page);
     }
+
+    // Warm the update path before collecting update samples.
+    await updates(page, 3);
+    const closedUpdate = await updates(page, options.updates);
     await openOnce(page);
     const openUpdate = await updates(page, options.updates);
     await closeSearch(page);
     return {
       environments,
       projects: options.projects,
-      rowsShown: rows,
+      rowsShown: firstOpens[0]!.rows,
       closedUpdate: distribution(closedUpdate),
-      firstOpenRendered: distribution(rendered),
-      firstOpenFrame: distribution(frame),
+      firstOpenRendered: distribution(firstOpens.map((sample) => sample.renderedMs)),
+      firstOpenFrame: distribution(firstOpens.map((sample) => sample.frameMs)),
+      warmReopenRendered: distribution(warmReopens.map((sample) => sample.renderedMs)),
+      warmReopenFrame: distribution(warmReopens.map((sample) => sample.frameMs)),
       openUpdate: distribution(openUpdate),
     };
   } finally {
@@ -224,9 +223,8 @@ async function main() {
   const options = parseOptions(process.argv.slice(2));
   const workDir = mkdtempSync(path.join(tmpdir(), "project-search-perf-"));
   const outDir = options.dist ?? path.join(workDir, "dist");
-  const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${options.label}`;
+  const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
   const outputDir = path.join(repositoryRoot, "output/benchmarks/project-search");
-  mkdirSync(outputDir, { recursive: true });
   let preview: Awaited<ReturnType<typeof startOwnedPreview>> | undefined;
   try {
     console.log("[project-search] building the fixture");
@@ -267,9 +265,10 @@ async function main() {
       label: options.label,
       browserVersion,
       environment: { platform: process.platform, arch: process.arch },
-      options: { ...options, dist: options.dist ? "reused" : null },
+      options: { ...options, dist: options.dist ? "explicit" : null },
       results,
     };
+    mkdirSync(outputDir, { recursive: true });
     const reportFile = path.join(outputDir, `${runId}.json`);
     writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`);
     console.log(`[project-search] Chromium ${browserVersion}`);

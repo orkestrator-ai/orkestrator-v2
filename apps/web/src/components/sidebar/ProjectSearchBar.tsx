@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ComponentProps, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { FolderGit2, ListFilter, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -295,6 +295,32 @@ function ProjectSearchRow({
       </span>
       <HitMachineLabel hit={hit} />
     </button>
+  );
+}
+
+// Presence may retain the dialog for an exit animation. Keep the committed
+// content in that dialog instance as the live search clears its inputs.
+const SearchDialogBody = memo(
+  function SearchDialogBody({ children }: { open: boolean; children: ReactNode }) {
+    return children;
+  },
+  (_previous, next) => !next.open,
+);
+
+function SearchDialogContent({
+  open,
+  children,
+  ...props
+}: ComponentProps<typeof DialogContent> & { open: boolean }) {
+  return (
+    <DialogContent
+      {...props}
+      inert={!open}
+      onKeyDownCapture={open ? undefined : (event) => event.stopPropagation()}
+      onClickCapture={open ? undefined : (event) => event.stopPropagation()}
+    >
+      <SearchDialogBody open={open}>{children}</SearchDialogBody>
+    </DialogContent>
   );
 }
 
@@ -896,7 +922,8 @@ export function ProjectSearchBar({
       </button>
 
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent
+        <SearchDialogContent
+          open={open}
           showCloseButton={false}
           data-testid="project-search-dialog"
           size="2xl"
@@ -1153,7 +1180,7 @@ export function ProjectSearchBar({
               </>
             )}
           </div>
-        </DialogContent>
+        </SearchDialogContent>
       </Dialog>
     </div>
   );

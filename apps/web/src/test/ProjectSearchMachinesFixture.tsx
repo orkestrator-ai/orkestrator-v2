@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
@@ -10,6 +10,7 @@ import { useRevealMachineProject } from "@/components/federation/useRevealMachin
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import { FederatedActivityList } from "@/components/federation/FederatedSidebarSections";
 import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
+import { onAppShortcut } from "@/lib/app-shortcuts";
 import { isMachineShown } from "@/lib/federation/sidebar-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -163,9 +164,17 @@ function SearchContent() {
   const ordering = useMachineViewStore((state) => state.environmentOrdering);
   const sort = useUIChromeStore((state) => state.environmentSortMode);
   const [selected, setSelected] = useState<string | null>(null);
+  const [shortcutsOpened, setShortcutsOpened] = useState(0);
+  useEffect(
+    () => onAppShortcut("show-shortcuts", () => setShortcutsOpened((count) => count + 1)),
+    [],
+  );
   const opened = useRemoteWorkspaceStore((state) => state.active);
   return (
     <main className="max-w-sm">
+      <output hidden data-testid="shortcuts-opened">
+        {shortcutsOpened}
+      </output>
       <output data-testid="selected">{selected}</output>
       <output data-testid="opened">{opened?.nodeId}</output>
       <output data-testid="opened-selection">{JSON.stringify(opened)}</output>

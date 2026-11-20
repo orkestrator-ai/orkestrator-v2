@@ -221,3 +221,66 @@ test("environment selection preserves activity view and highlights the opened en
   );
   await expect(sidebar.locator('[data-revealed="true"]')).toHaveCount(0);
 });
+
+test("dismissal holds the palette layout and blocks activation until it detaches", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const input = await openSearch(page);
+  // Run a command once so the closed-state reset would fall back to it.
+  await input.fill("keyboard shortcuts");
+  await page.getByRole("option", { name: /Show keyboard shortcuts/ }).click();
+  const shortcutsOpened = page.getByTestId("shortcuts-opened");
+  await expect(shortcutsOpened).toHaveText("1");
+  const dialog = page.getByTestId("project-search-dialog");
+  await expect(dialog).toHaveCount(0);
+
+  const trigger = page.getByTestId("project-search-trigger");
+  await trigger.click();
+  await input.fill("orkestrator");
+  const rows = dialog.locator('[role="option"]');
+  await expect(rows.first()).toBeVisible();
+  await expect(page.getByTestId("federated-search-incomplete")).toBeVisible();
+  const openRows = await rows.allTextContents();
+  const openHeight = await dialog.evaluate((element) => (element as HTMLElement).offsetHeight);
+
+  // The shared dialog declares exit utility classes without shipped keyframes.
+  // Supply paused ones here to exercise Radix Presence's retained DOM deterministically.
+  const pause = await page.addStyleTag({
+    content: `
+      @keyframes project-search-test-exit { to { opacity: 0; scale: 0.95; } }
+      [data-testid="project-search-dialog"][data-state="closed"] {
+        animation: project-search-test-exit 200ms linear paused;
+      }
+    `,
+  });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveAttribute("data-state", "closed");
+  await expect(dialog).toHaveAttribute("inert", "");
+  await page.keyboard.press("Enter");
+  // Exercise stale event delivery to the still-mounted input and row as well.
+  await dialog.locator("input").dispatchEvent("keydown", { key: "Enter", bubbles: true });
+  await rows.first().dispatchEvent("click");
+  for (const time of [25, 110, 175]) {
+    const height = await dialog.evaluate((element, time) => {
+      const [exit] = element.getAnimations();
+      if (!exit) throw new Error("Expected the dialog's exit animation");
+      exit.currentTime = time;
+      return (element as HTMLElement).offsetHeight;
+    }, time);
+    expect(height).toBe(openHeight);
+    expect(await rows.allTextContents()).toEqual(openRows);
+    await expect(page.getByTestId("federated-search-incomplete")).toHaveCount(1);
+  }
+  await expect(shortcutsOpened).toHaveText("1");
+  await expect(page.getByTestId("selected")).toBeEmpty();
+  await expect(page.getByTestId("opened")).toBeEmpty();
+
+  await dialog.evaluate((element) => element.getAnimations()[0]!.finish());
+  await expect(dialog).toHaveCount(0);
+  await pause.evaluate((element) => element.parentNode?.removeChild(element));
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await expect(input).toHaveValue("");
+  await expect(page.getByRole("option", { name: /Show keyboard shortcuts/ })).toBeVisible();
+});

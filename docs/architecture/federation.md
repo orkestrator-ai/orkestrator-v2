@@ -1201,6 +1201,23 @@ history (open tabs, loaded messages, past sessions) around these results ([comma
   environment opens as from the sidebar. While a machine
   in scope is unavailable, loading or truncated the dialog (including empty-query
   recents) says "Results may be incomplete".
+- **Only while open.** `useProjectSearchResults`
+  (`apps/web/src/components/sidebar/useProjectSearchResults.ts`) prepares the
+  sources, the recent keys and the ranking only while the dialog is open.
+  The closed hook returns no rows and reads none of its inputs. If the dialog
+  stays mounted for exit motion, it keeps its last rendered content inert
+  until it detaches. Reopening ranks the current inputs.
+  `e2e/perf/project-search-open-perf.ts` measures closed updates, first opens
+  after fresh fixture loads, warm reopens and open updates (from to-do 8311,
+  retired 2026-11-20). In the original comparison on beelink (Intel Core Ultra
+  9 285H, headless Chromium 158, production React, 50 projects), the median
+  closed update went from 0.8 to 0.2 ms at 500 environments and from 2.1 to
+  0.2 ms at 2,000. The original warm-reopen figures, from button press to
+  the first row, were 7.7 to 7.0 ms at 500 and 6.4 to 7.9 ms at 2,000.
+  A later run on the same CPU and Chromium version measured ten fresh loads
+  per size. Median first open to the first row was 9.00 ms at 500 environments
+  and 10.80 ms at 2,000. Median first open to the next frame was 16.20 ms and
+  17.10 ms respectively. This run measured the updated palette only.
 
 ## Storage namespacing
 

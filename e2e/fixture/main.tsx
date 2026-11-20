@@ -213,6 +213,10 @@ const StaticHtmlArtifactFixture = lazy(async () => ({
   default: (await import("./StaticHtmlArtifactFixture")).StaticHtmlArtifactFixture,
 }));
 
+const ProjectSearchScalePerfFixture = lazy(async () => ({
+  default: (await import("./ProjectSearchScalePerfFixture")).ProjectSearchScalePerfFixture,
+}));
+
 const DesignLibraryPerfFixture = lazy(async () => ({
   default: (await import("./DesignLibraryPerfFixture")).DesignLibraryPerfFixture,
 }));
@@ -2418,6 +2422,12 @@ function fixtureForPath() {
     return (
       <Suspense fallback={null}>
         <StaticHtmlArtifactFixture />
+      </Suspense>
+    );
+  if (window.location.pathname === "/project-search-scale-perf")
+    return (
+      <Suspense fallback={null}>
+        <ProjectSearchScalePerfFixture />
       </Suspense>
     );
   if (window.location.pathname === "/design-library-perf")

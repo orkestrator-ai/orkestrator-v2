@@ -3,9 +3,9 @@
  * node. It moves the run's ticket to a column, comments on it, or records
  * the acceptance criteria results of a `verification-verdict@1` — or makes
  * one of the pipeline's own updates (`lifecycle`), read from the same table
- * the pipeline uses (`build-pipeline-kanban-lifecycle.ts`).
+ * the pipeline uses (`build-pipeline/kanban-lifecycle.ts`).
  *
- * Like `updateKanbanLifecycle` in `build-pipeline-service-recovery.ts`, it
+ * Like `updateKanbanLifecycle` in `build-pipeline/service-recovery.ts`, it
  * compares before it writes: a column or pull request link is set only when
  * it differs, a comment is added only when the ticket does not already have
  * that exact text, and criteria results are set (never appended) on the
@@ -26,7 +26,7 @@ import type { GraphTicketV1 } from "@orkestrator/protocol/graphs/types";
 import {
   buildPipelineKanbanUpdate,
   type BuildPipelineKanbanUpdate,
-} from "./build-pipeline-kanban-lifecycle.js";
+} from "./build-pipeline/index.js";
 import {
   GraphSystemActionError,
   type GraphSystemActionContext,

@@ -7,7 +7,21 @@ import {
   BACKEND_HELLO_PATH,
   parseBackendHello,
 } from "@orkestrator/protocol/backend-profile";
-import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
+import path from "node:path";
+import { buildInvokeEnvelope } from "@orkestrator/protocol/contract/command";
+import {
+  collectSelfImprovementConversationsCommand,
+  collectSelfImprovementDiagnosticsCommand,
+} from "@orkestrator/protocol/contract/domains/system";
+import { unknownCommand } from "@orkestrator/protocol/contract/errors";
+import { CONTROLLER_HEADER, type NodeRecord } from "@orkestrator/protocol/command-nodes";
+import type { CommandContext } from "../src/core/commands-context.js";
+import { createCommandRegistry } from "../src/core/commands-registry.js";
+import { selfImprovementFleet } from "../src/core/commands-registry-self-improvement.js";
+import { ClientGrantService } from "../src/core/nodes/client-grants.js";
+import { NodeLink } from "../src/core/nodes/node-link.js";
+import { readBundleArchive } from "../src/core/self-improvement/bundle.js";
+import { withTemporaryStorage } from "../src/core/storage-test-support.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
@@ -31,6 +45,120 @@ function hooks(allowed: string[]) {
     noteControllerContact: mock((_id: string) => undefined),
   };
 }
+
+test("self-improvement collectors negotiate over a node link and refuse a workspace grant", async () => {
+  await withTemporaryStorage(async (storage, dataDir) => {
+    const controllerId = "bk_command" as NodeRecord["nodeId"];
+    const nodeId = identity.installationId as NodeRecord["nodeId"];
+    const controllers: Array<{ controllerId: string }> = [];
+    const context = {
+      storage,
+      runtime: {},
+      nodes: {
+        attachController: (args: { controllerId: string }) => {
+          controllers.push({ controllerId: args.controllerId });
+          return { nodeId, mode: "leaf" };
+        },
+        listControllers: () => controllers,
+      },
+    } as unknown as CommandContext;
+    const registry = createCommandRegistry();
+    const seen: Array<[string, number | undefined]> = [];
+    const grants = new ClientGrantService();
+    const grant = grants.issue({ controllerId, label: "self-improvement test", ttlMs: 60_000 });
+    const { info } = await startGateway({
+      backendHello: async () => ({ ...identity, domains: registry.helloDomains() }),
+      nodeHooks: {
+        ...hooks([]),
+        authenticateGrant: (token) => grants.authenticate(token)?.expiresAt ?? null,
+      },
+      backend: {
+        hasCommand: (command) => registry.has(command),
+        commandAccess: (command) => registry.contracts.get(command)?.access,
+        invoke: (command, args, invocation) => {
+          seen.push([command, invocation?.version]);
+          const handler = registry.get(command);
+          if (!handler) throw unknownCommand(command);
+          return handler(args, context, invocation);
+        },
+      },
+    });
+
+    const route = {
+      id: "route" as NodeRecord["routeOrder"][number],
+      kind: "https",
+      enabled: true,
+      origin: info.url,
+    } as const;
+    const record: NodeRecord = {
+      nodeId,
+      enabled: true,
+      fallbackName: "Leaf",
+      routes: [route],
+      routeOrder: [route.id],
+      credential: { token: info.token },
+      addedAt: "",
+      attachment: { status: "pending" },
+      source: "portal",
+    };
+    const link = new NodeLink(record, {
+      selfId: controllerId,
+      ssh: null,
+      onChange: () => {},
+      onVerified: () => {},
+      attachInfo: async () => ({ displayName: "Command", portalOrigins: [] }),
+    });
+
+    const originalClaude = process.env.CLAUDE_CONFIG_DIR;
+    const originalCodex = process.env.CODEX_HOME;
+    process.env.CLAUDE_CONFIG_DIR = path.join(dataDir, "claude");
+    process.env.CODEX_HOME = path.join(dataDir, "codex");
+    try {
+      await link.start();
+      expect(link.connected).toBe(true);
+      const fleet = await selfImprovementFleet({
+        nodes: {
+          mode: () => "command",
+          selfIdentity: async () => controllerId,
+          selfProfile: async () => ({ displayName: "Command" }),
+          listNodes: async () => ({ nodes: [{ ...record, connection: link.view }] }),
+          link: () => link,
+        },
+      } as unknown as CommandContext);
+      const leaf = fleet!.leaves[0]!;
+      expect((await readBundleArchive(await leaf.diagnostics())).manifest.platform).toBe(
+        process.platform,
+      );
+      expect(
+        await leaf.conversations({
+          cursor: { schemaVersion: 1, conversations: {} },
+          maxSegments: 0,
+        }),
+      ).toEqual({ segments: [], skipped: [], waiting: 0 });
+
+      const expected = [
+        collectSelfImprovementDiagnosticsCommand,
+        collectSelfImprovementConversationsCommand,
+      ];
+      expect(seen.slice(-2)).toEqual(expected.map((definition) => [definition.name, 2]));
+      for (const definition of expected) {
+        const response = await requestUrl(new URL("/__orkestrator/invoke", info.url).toString(), {
+          method: "POST",
+          headers: { authorization: `Bearer ${grant.token}`, "content-type": "application/json" },
+          body: JSON.stringify(buildInvokeEnvelope(definition, { controllerId }, 2)),
+        });
+        expect(response.status).toBe(403);
+      }
+      expect(seen.slice(-2)).toEqual(expected.map((definition) => [definition.name, 2]));
+    } finally {
+      link.stop();
+      if (originalClaude === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = originalClaude;
+      if (originalCodex === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodex;
+    }
+  });
+});
 
 describe("AT-05 hello for command nodes", () => {
   test("advertises node attachment and the node's mode", async () => {

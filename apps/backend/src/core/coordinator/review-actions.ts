@@ -28,7 +28,7 @@ import type { CommandContext } from "../commands-context.js";
 import { conciseError } from "../commands-error-text.js";
 import { asNonBlankString, stripWorkflowSnapshotSecrets } from "../commands-helpers.js";
 import { requireCoordinatorConversation, withCoordinatorReceipt } from "./action-scope.js";
-import { openMultiReviewTab } from "../workflow-tab-actions.js";
+import { openMultiReviewTab } from "../review/index.js";
 import {
   multiReviewAutomation,
   multiReviewDefaultRows,

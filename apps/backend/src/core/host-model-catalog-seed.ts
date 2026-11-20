@@ -2,7 +2,7 @@ import { normalizeAgentPlatforms, type AgentPlatform } from "@orkestrator/protoc
 import type { CommandContext } from "./commands-context.js";
 import { asCachedCodexModels } from "./commands-validation.js";
 import type { AgentModelCatalogCache, CodexModelCatalogEntry } from "./models.js";
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import { AGENT_MODEL_CATALOG_MAX_AGE_MS } from "./storage-shared.js";
 import type {
   HostCatalog,

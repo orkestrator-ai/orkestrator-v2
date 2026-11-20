@@ -14,15 +14,15 @@ import { AgentToolsServer } from "./agent-tools.js";
 import {
   authenticatePipelineWorkerMailCapability,
   pipelineWorkerMailCapability,
-} from "./pipeline-worker-identity.js";
+} from "./build-pipeline/pipeline-worker-identity.js";
 import { fixture } from "./agent-mail-storage-test-support.js";
 import {
   PIPELINE_ID,
   pipelineSnapshot,
   stageSession,
-} from "./pipeline-worker-mail-test-support.js";
+} from "./build-pipeline/pipeline-worker-mail-test-support.js";
 import type { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 type RpcBody = {
   result?: {

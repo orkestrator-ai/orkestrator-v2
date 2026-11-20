@@ -143,6 +143,11 @@ import { InteractionDeadline } from "@orkestrator/protocol/agent-interaction-dea
 import { applyCommandInventory } from "./acp-commands.js";
 import { applyJournaledCommandChanges, trackCommandChangeWindow } from "./acp-command-changes.js";
 import { recordAcpToolApproval, recordAcpToolEvidence } from "./change-evidence.js";
+import {
+  markSessionChanged,
+  markStateChanged,
+  markTranscriptChanged,
+} from "./acp-state-revision.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -288,6 +293,7 @@ async function replaceSessionPolicy(
   state.child = null;
   clearApprovals(state);
   state.policy = policy;
+  markStateChanged(state);
   await previous?.close();
 }
 
@@ -407,6 +413,7 @@ export async function resumeSessionReserved(
     }
     state.status = "idle";
     state.error = undefined;
+    markSessionChanged(state);
     if (patch) await applyComposerPatch(state, patch, signal);
     state.dispatching = false;
     await persistState();
@@ -714,7 +721,7 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
     state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
     state.status = "idle";
     state.error = undefined;
-    state.revision += 1;
+    markSessionChanged(state);
     await persistState();
     return child;
   } catch (error) {
@@ -1129,7 +1136,7 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
     // The agent is gone, so nothing will ever complete the tools it had open.
     reconcileStaleToolParts(state, true);
     state.wakeRetryWait?.();
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
   };
 }
@@ -1207,6 +1214,7 @@ export async function setSessionReadOnly(state: SessionState, readOnly: boolean)
   state.child = null;
   clearApprovals(state);
   state.readOnly = readOnly;
+  markStateChanged(state);
   await previous?.close();
 }
 
@@ -1284,7 +1292,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
     state.status = "idle";
     state.error = undefined;
-    state.revision += 1;
+    markSessionChanged(state);
     await persistState();
     return child;
   } catch (error) {
@@ -1299,9 +1307,11 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
 }
 
 export function clearApprovals(state: SessionState): void {
+  const parked = state.approvals.size > 0;
   for (const approval of state.approvals.values()) approval.deadline.settle();
   state.approvals.clear();
   clearInteractions(state);
+  if (parked) markStateChanged(state);
 }
 
 export function clearInteractions(state: SessionState): void {
@@ -1312,8 +1322,10 @@ export function clearInteractions(state: SessionState): void {
       interaction.deadline.settle();
     }
   }
+  const parked = state.interactions.size > 0;
   state.interactions.clear();
   syncPromptTurnClock(state);
+  if (parked) markStateChanged(state);
 }
 
 export { GROK_QUESTION_DEFAULT_TIMEOUT_MS } from "./acp-question-timeout.js";
@@ -1406,7 +1418,7 @@ export function parkGrokInteraction(
     state.interactions.delete(toolCallId);
     syncPromptTurnClock(state);
     child.respond(requestId, result);
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
   };
   const expire = () => {
@@ -1496,7 +1508,7 @@ export function parkGrokInteraction(
       ),
     });
   }
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 
@@ -1552,7 +1564,7 @@ export function parkGrokElicitation(
       severity: "warning",
       message: `${serverName} asked for input this tab cannot collect, so it was declined.`,
     });
-    state.revision += 1;
+    markSessionChanged(state);
     child.respond(requestId, { outcome: "decline" });
     return;
   }
@@ -1567,7 +1579,7 @@ export function parkGrokElicitation(
     state.interactions.delete(toolCallId);
     syncPromptTurnClock(state);
     child.respond(requestId, result);
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
   };
   const expire = () => {
@@ -1601,7 +1613,7 @@ export function parkGrokElicitation(
           deadline,
         },
   );
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 
@@ -1632,7 +1644,7 @@ function withdrawResolvedElicitation(state: SessionState, params: JsonObject): v
   parked.deadline.settle();
   state.interactions.delete(parked.id);
   syncPromptTurnClock(state);
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 
@@ -1804,7 +1816,7 @@ export function parkPermission(
     } else {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
     }
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
   };
   const expire = () => {
@@ -1835,7 +1847,7 @@ export function parkPermission(
     deadline: parkedDeadline(state, requestedAt, () => turnHoldLimit(state), expire),
   });
   recordAcpToolApproval(state, toolCallId, "awaiting");
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 
@@ -1876,7 +1888,7 @@ function appendNonTextContent(
     createdAt: new Date().toISOString(),
     ...(modelId ? { modelId } : {}),
   });
-  state.revision += 1;
+  markTranscriptChanged(state);
   state.uncheckedTranscriptBytes += parts.reduce(
     // The data URL, not just the caption: an image's bytes are what the
     // transcript budget is protecting against.
@@ -1906,6 +1918,7 @@ function recordAcpNotice(state: SessionState, update: JsonObject): void {
     message: title,
     ...(description ? { detail: description } : {}),
   });
+  markStateChanged(state);
 }
 
 /**
@@ -1920,7 +1933,7 @@ function applySessionInfoUpdate(state: SessionState, update: JsonObject): void {
   if (title === state.title) return;
   if (title) state.title = title;
   else delete state.title;
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 
@@ -1969,7 +1982,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   if (kind === "config_option_update") {
     state.sessionConfig = applyConfigOptionUpdate(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
     return;
   }
@@ -1978,7 +1991,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // and rows restored from disk are dropped rather than merged back.
     if (Array.isArray(update.availableCommands)) {
       applyCommandInventory(state, update.availableCommands);
-      state.revision += 1;
+      markSessionChanged(state);
       schedulePersist();
     }
     return;
@@ -1992,7 +2005,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
           : "";
     if (modeId) {
       state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId);
-      state.revision += 1;
+      markSessionChanged(state);
       schedulePersist();
     }
     return;
@@ -2038,6 +2051,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
     // Names only — an update's payload carries prompts, file contents and
     // terminal output, and this reaches the renderer and the logs.
     state.health.recordUnknown(kind || "(unnamed)");
+    markStateChanged(state);
     return;
   }
   // User content is authored by `/session/prompt`, which pushes the
@@ -2169,7 +2183,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
   }
   // A provider message id can address a row a newer one already follows.
   noteMessageMutation(state, message);
-  state.revision += 1;
+  markTranscriptChanged(state);
   state.uncheckedTranscriptBytes += Buffer.byteLength(text) * (partType === "text" ? 2 : 1);
   const transcriptTruncated =
     state.messages.length > MAX_MESSAGES ||
@@ -2257,7 +2271,7 @@ export async function applyComposerPatch(
   // the selection for its first spawn instead of starting one now.
   if (!state.acpSessionId && !state.child && !state.attaching) {
     state.sessionConfig = withRequestedSelection(state.sessionConfig, patch);
-    state.revision += 1;
+    markSessionChanged(state);
     await persistState();
     return;
   }
@@ -2292,7 +2306,7 @@ async function applyComposerCalls(
     }
   }
   rememberCatalog(state.sessionConfig.composer);
-  state.revision += 1;
+  markSessionChanged(state);
   await persistState();
 }
 
@@ -2331,7 +2345,7 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
         createdAt: new Date().toISOString(),
       });
     }
-    state.revision += 1;
+    markTranscriptChanged(state);
     schedulePersist();
     return;
   }
@@ -2348,14 +2362,14 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
   if (method.endsWith("/models/update") || kind === "models_update") {
     state.sessionConfig = applyGrokCatalogUpdate(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
     return;
   }
   if (kind === "model_changed") {
     state.sessionConfig = applyGrokModelChange(provider, state.sessionConfig, update);
     rememberCatalog(state.sessionConfig.composer);
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
     return;
   }
@@ -2381,6 +2395,7 @@ export function applyVendorUpdate(state: SessionState, method: string, params: J
       message:
         "Late provider usage could not be correlated with a turn; vendor-only usage updates are disabled until this agent process restarts.",
     });
+    markStateChanged(state);
     return;
   }
   if (kind === "turn_completed" || provider !== "grok") {
@@ -2488,7 +2503,7 @@ export function recordTurnUsage(
     ...(durationMs === undefined ? {} : { durationMs }),
     updatedAt: new Date().toISOString(),
   };
-  state.revision += 1;
+  markSessionChanged(state);
   schedulePersist();
 }
 

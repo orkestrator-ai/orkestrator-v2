@@ -46,11 +46,8 @@ import { callToolInProcess } from "./mcp-in-process.js";
 import { REVIEW_HANDLERS } from "./public-api/actions-reviews.js";
 import { ScheduledJobExecutor } from "./scheduled-jobs/executor.js";
 import { graphAgentResultKey } from "./graph-agent-state.js";
-import {
-  MULTI_REVIEW_GRAPH_NODES,
-  projectMultiReviewGraphRun,
-} from "./multi-review-graph-projection.js";
-import { multiReviewGraphEngineTemplate } from "./multi-review-graph-template.js";
+import { MULTI_REVIEW_GRAPH_NODES, projectMultiReviewGraphRun } from "./review/graph-projection.js";
+import { multiReviewGraphEngineTemplate } from "./review/graph-template.js";
 import { StorageDatabase } from "./storage-database.js";
 import {
   GRAPH_VOCABULARY_UPGRADE_VERSION,
@@ -63,7 +60,7 @@ import {
 } from "./storage-graph-vocabulary-upgrade.js";
 import { openBackendDatabase, STORAGE_MIGRATIONS, storeLayout } from "./storage-stores.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 const directories: string[] = [];
 const closers: Array<() => void> = [];

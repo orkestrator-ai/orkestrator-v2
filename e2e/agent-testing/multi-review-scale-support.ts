@@ -154,7 +154,7 @@ export interface FanoutStats {
 /**
  * The fan-out caps a profile runs with: `DEFAULT_REVIEW_ADMISSION_CONCURRENCY`
  * and `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` in
- * `apps/backend/src/core/review-fanout-scheduler.ts`. Copied for the same
+ * `apps/backend/src/core/review/fanout-scheduler.ts`. Copied for the same
  * reason as the fixture paths; the support test pins them equal.
  */
 export const SCALE_ADMISSION_CAP = 4;

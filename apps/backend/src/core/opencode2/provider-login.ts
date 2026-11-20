@@ -18,7 +18,7 @@ import {
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
-import { pushedLoginHostFile } from "../agent-accounts-containers.js";
+import { pushedLoginHostFile } from "../agent-accounts/index.js";
 import type { CommandContext } from "../commands-context.js";
 import type { OpenCodeLoginOperation } from "./provider-login-slot.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";

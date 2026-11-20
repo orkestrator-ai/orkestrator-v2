@@ -12,7 +12,7 @@ import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { fixture } from "./agent-mail-storage-test-support.js";
 import { AgentToolsServer } from "./agent-tools.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   fakeAgentTools,
   FakeAgentProvider,
@@ -26,7 +26,7 @@ import {
   type NativeAgentSuborkServiceOptions,
 } from "./native-agent-suborks.js";
 import type { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 export const CATALOG: AgentModel[] = [
   { platform: "claude", id: "opus", label: "Opus", resolvedModel: "claude-opus-5-5" },

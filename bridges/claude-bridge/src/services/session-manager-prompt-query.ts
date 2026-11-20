@@ -597,6 +597,9 @@ export function claudeQueryOptions(
                       // Where the sandbox cannot run, a reviewer still checks the
                       // reviewed commit with hardened Git; a coordinator does not.
                       gitWithoutSandbox: readOnlyTurnRole === "read-only" ? "harden" : "refuse",
+                      // `cd` and `git -C` may move only within the checkout,
+                      // wherever an earlier `cd` left the shell.
+                      workspaceRoot: cwd,
                     }),
                     session.id,
                   ),

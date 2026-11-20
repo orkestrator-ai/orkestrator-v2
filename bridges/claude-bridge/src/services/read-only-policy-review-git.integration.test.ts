@@ -1,5 +1,13 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isReadOnlyShellCommand } from "./read-only-policy.js";
@@ -182,6 +190,42 @@ describe("hardened reviewer Git against a hostile checkout", () => {
     expect(run(repos.helpers, diff, turnEnv()).stdout).toContain("+two");
     const submodule = run(repos.parent, diff, turnEnv()).stdout;
     expect(submodule).toContain("Subproject commit");
+  });
+
+  test("Git directory changes stay with the checkout repository", () => {
+    const cwd = realpathSync(repos.parent);
+    git(cwd, "init", "-q", "--bare", "bare");
+    git(cwd, "init", "-q", "nested");
+    mkdirSync(join(cwd, "nested", "deep"));
+    mkdirSync(join(cwd, "ordinary", "deep"), { recursive: true });
+
+    const checkoutGitDir = git(cwd, "rev-parse", "--absolute-git-dir");
+    for (const target of ["bare", "nested/deep", "sub"]) {
+      // Verify discovery using only inert repositories, then check both entry paths.
+      expect(git(cwd, "-C", target, "rev-parse", "--absolute-git-dir")).not.toBe(checkoutGitDir);
+      for (const options of [hardened, { commandSandbox: "required" } as const]) {
+        for (const command of [`git -C ${target} status`, `cd ${target} && git status`]) {
+          expect(isReadOnlyShellCommand(command, { ...options, cwd }).allowed).toBe(false);
+        }
+        expect(
+          isReadOnlyShellCommand("git status", {
+            ...options,
+            cwd: join(cwd, target),
+            workspaceRoot: cwd,
+          }).allowed,
+        ).toBe(false);
+      }
+    }
+
+    const command = "cd ordinary && git -C deep rev-parse --show-toplevel";
+    const verdict = isReadOnlyShellCommand(command, { ...hardened, cwd });
+    expect(verdict.allowed).toBe(true);
+    const run = Bun.spawnSync(["bash", "--norc", "--noprofile", "-c", verdict.command!], {
+      cwd,
+      env: turnEnv(),
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.toString().trim()).toBe(cwd);
   });
 
   test("the forms no flag can harden are refused, and would have run the helper", () => {

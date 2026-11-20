@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { AgentAccountLoginHandle } from "../agent-accounts-login.js";
+import type { AgentAccountLoginHandle } from "../agent-accounts/index.js";
 
 export type GitHubCliOperationState = "idle" | "pending" | "succeeded" | "failed";
 

@@ -76,25 +76,23 @@ import {
   readProviderStatus,
   type BuildPipelineProvider,
   type ProviderPrepareDispatchOptions,
-} from "./build-pipeline-provider.js";
+} from "./build-pipeline/provider.js";
 import {
-  efficiencyPlatform,
-  recordEfficiency,
   type EfficiencyEvent,
-} from "./multi-review-efficiency.js";
+  efficiencyPlatform,
+  PassTranscriptReader,
+  recordEfficiency,
+} from "./review/index.js";
 import { recoveredDispatchAcceptance } from "./provider-dispatch-recovery.js";
 import { retainProvider } from "./provider-retirement.js";
-import { PassTranscriptReader } from "./review-fanout-transcript.js";
 import {
   beginWorkflowArtifactTurn,
-  settleArtifactDispatchTurn,
-  type WorkflowArtifactTurnOptions,
-} from "./workflow-artifact-turns.js";
-import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
-} from "./workflow-result-missing.js";
+  settleArtifactDispatchTurn,
+  type WorkflowArtifactTurnOptions,
+} from "./workflows/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-branch");

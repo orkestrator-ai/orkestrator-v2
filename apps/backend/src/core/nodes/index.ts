@@ -20,7 +20,7 @@ export {
   type ContractEnvelope,
   type NodeLink,
 } from "./node-link.js";
-export { routedDomainApi } from "./node-domain-clients.js";
+export { linkDomainApi, routedDomainApi } from "./node-domain-clients.js";
 export { NodeUsageSync } from "./node-usage-sync.js";
 export { NodePortal } from "./node-portal.js";
 export {

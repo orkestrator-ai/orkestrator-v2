@@ -2,7 +2,7 @@ import type { PipelineTranscriptReference } from "@orkestrator/protocol/build-pi
 import type { SuborkDeliveryState, SuborkReadOnlyTier } from "@orkestrator/protocol/suborks";
 import type { WorkspaceGitBaseline } from "@orkestrator/protocol/workspace-guard";
 import type { AgentBranchRecord } from "./agent-branch-types.js";
-import type { TranscriptRead, TranscriptReadWindow } from "./build-pipeline-transcript-store.js";
+import type { TranscriptRead, TranscriptReadWindow } from "./build-pipeline/index.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 import { isRecord, nowIso } from "./storage-shared.js";

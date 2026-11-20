@@ -77,18 +77,21 @@ import {
   addressFindingsValidationGuidance,
   buildPipelineReviewPackageContext,
   buildTaskPrompt,
-  reworkTaskPrompt,
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,
+  reworkTaskPrompt,
   verificationTaskPrompt,
-} from "./build-pipeline-prompts.js";
-import { createMultiReviewConsolidationPrompt, reviewerPanelTail } from "./multi-review-prompts.js";
-import { createDiscoveryPrompt } from "./review-prompts.js";
-import { ConsolidationBudgetError } from "./review-consolidation-evidence.js";
+} from "./build-pipeline/index.js";
+import {
+  ConsolidationBudgetError,
+  createDiscoveryPrompt,
+  createMultiReviewConsolidationPrompt,
+  reviewerPanelTail,
+} from "./review/index.js";
 import {
   IMPLEMENTATION_VALIDATION_HANDOFF,
   reviewValidationDiscoveryPrompt,
-} from "./review-validation-prompts.js";
+} from "./review/validation-prompts.js";
 
 export interface GraphBuiltInPromptInputValue {
   /** The node's input port name. */
@@ -482,7 +485,7 @@ function verifyText(inputs: BuiltInInputs, notes: string, target: string): strin
 /**
  * The feedback a pipeline Fix reads, from a verdict: the rationale, then the
  * failed criteria by id. The Build Pipeline's `feedbackWithUnmetCriteria`
- * (build-pipeline-service-recovery.ts) writes the same text.
+ * (build-pipeline/service-recovery.ts) writes the same text.
  */
 function verificationFeedback(
   verdict: VerificationVerdict,

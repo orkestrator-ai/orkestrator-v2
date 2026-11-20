@@ -1137,7 +1137,7 @@ describe("C22 live host-service reply", () => {
     async () => {
       const { StorageService } = await import("../src/core/storage");
       const { AgentToolsServer } = await import("../src/core/agent-tools");
-      const { WorkflowResultService } = await import("../src/core/workflow-result-service");
+      const { WorkflowResultService } = await import("../src/core/workflows/result-service");
       const {
         CONTAINER_HOST_PROBE_SCRIPT,
         ContainerHostReachabilityService,

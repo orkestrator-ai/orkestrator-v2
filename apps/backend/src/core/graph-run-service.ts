@@ -81,14 +81,10 @@ import type {
 } from "@orkestrator/protocol/graphs/run-rewind";
 import type { Environment } from "./models.js";
 import type { EnvironmentGit } from "./workspace-code-rewind.js";
-import {
-  reviewFanoutConcurrency,
-  type ReviewFanoutConcurrency,
-} from "./review-fanout-scheduler.js";
+import { reviewFanoutConcurrency, type ReviewFanoutConcurrency } from "./review/index.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import type { GraphCardExpectation } from "./rich-interactions/product-commands.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
-import type { WorkflowResultAcceptance } from "./workflow-result-service.js";
 import {
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
@@ -96,9 +92,10 @@ import {
   type KeyedWorkflowSupervisor,
   type WorkflowPass,
   type WorkflowReconcileReport,
+  type WorkflowResultAcceptance,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+} from "./workflows/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("graph");

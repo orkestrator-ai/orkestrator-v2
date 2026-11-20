@@ -10,8 +10,8 @@ import {
   applyActiveAgentAccountEnvironment,
   resolveActiveAgentAccount,
   type ResolvedAgentAccount,
-} from "./agent-accounts-active.js";
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+} from "./agent-accounts/index.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   resolveBunBinary,

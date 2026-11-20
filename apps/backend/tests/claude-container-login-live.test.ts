@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
-import { readAddedClaudeCredentials } from "../src/core/agent-accounts-active.js";
-import { syncContainerClaudeLogin } from "../src/core/agent-accounts-containers.js";
+import { readAddedClaudeCredentials } from "../src/core/agent-accounts/active.js";
+import { syncContainerClaudeLogin } from "../src/core/agent-accounts/containers.js";
 import {
   ContainerClaudeLoginKeeper,
   CLAUDE_HOST_REFRESH_LEAD_MS,

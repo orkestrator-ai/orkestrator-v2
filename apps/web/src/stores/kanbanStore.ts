@@ -20,6 +20,17 @@ const log = createLogger("web.kanban");
 
 export type { KanbanTask, KanbanStatus, KanbanComment, KanbanImage, ProjectNotes };
 
+function showHeldTicketMove(): void {
+  toast.info("This ticket is still being built", {
+    description: "Its column follows the build until the build ends.",
+  });
+}
+
+function wasRestoredByRemoteBuild(previous: KanbanTask, current: KanbanTask) {
+  const revision = current.sync?.rejectedStatusRevision;
+  return revision !== undefined && previous.sync?.revs.status === revision;
+}
+
 /**
  * Find the kanban task ID associated with an environment of `scope`'s node.
  * Checks the kanban store first, then falls back to the build pipeline store.
@@ -133,6 +144,9 @@ function kanbanApi(scope: NodeScope) {
 export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (set, get) => {
   /** Read per call, so a suite's module mock installed later is seen. */
   const api = () => kanbanApi(scope);
+  // Keep one candidate per visible ticket until a later status revision
+  // settles it. Other viewers of the board did not attempt this move.
+  const requestedStatusRevisions = new Map<string, number>();
   return {
     tasks: [],
     isLoading: false,
@@ -148,11 +162,24 @@ export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (
     clearOpenTicketRequest: () => set({ openTicketRequest: null }),
 
     loadTasks: async (projectId) => {
+      if (get().currentProjectId !== projectId) requestedStatusRevisions.clear();
       set({ isLoading: true, currentProjectId: projectId });
       try {
         const tasks = await api().getKanbanTasks(projectId);
         // Guard: only update if the user hasn't navigated to a different project
         if (get().currentProjectId === projectId) {
+          if (requestedStatusRevisions.size > 0) {
+            const byId = new Map(tasks.map((task) => [task.id, task]));
+            let restored = false;
+            for (const [id, revision] of Array.from(requestedStatusRevisions)) {
+              const current = byId.get(id);
+              if (!current || (current.sync?.revs.status ?? 0) > revision) {
+                requestedStatusRevisions.delete(id);
+                restored ||= current?.sync?.rejectedStatusRevision === revision;
+              }
+            }
+            if (restored) showHeldTicketMove();
+          }
           set({ tasks, isLoading: false });
         }
       } catch (error) {
@@ -254,9 +281,22 @@ export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (
           undefined,
           newStatus,
         );
-        set((state) => ({
-          tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
-        }));
+        const current = get().tasks.find((t) => t.id === taskId);
+        // The correction can arrive through the board refresh before the
+        // mutation response. Keep the newer snapshot in that case.
+        if (!current) return;
+        const newer = (current.sync?.seq ?? 0) > (updated.sync?.seq ?? 0);
+        if (!newer) {
+          set((state) => ({
+            tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+          }));
+        }
+        const revision = updated.sync?.revs.status;
+        if (updated.status !== newStatus || (newer && wasRestoredByRemoteBuild(updated, current))) {
+          showHeldTicketMove();
+        } else if (revision !== undefined && (current.sync?.revs.status ?? 0) <= revision) {
+          requestedStatusRevisions.set(taskId, revision);
+        }
       } catch (error) {
         log.error("task.move-failed", { taskId, error: formatLogError(error) });
         // Rollback on failure

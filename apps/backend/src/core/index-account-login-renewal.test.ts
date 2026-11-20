@@ -6,7 +6,7 @@ import path from "node:path";
 import * as credentials from "./claude-host-credentials.js";
 import * as shell from "./shell.js";
 import { CLAUDE_HOST_REFRESH_MODEL } from "./claude-host-login-refresh.js";
-import type { AgentAccountAutoSwitcherDeps } from "./agent-accounts-auto-switch.js";
+import type { AgentAccountAutoSwitcherDeps } from "./agent-accounts/auto-switch.js";
 import type { CommandContext } from "./commands-context.js";
 import { OrkestratorBackend } from "./index.js";
 

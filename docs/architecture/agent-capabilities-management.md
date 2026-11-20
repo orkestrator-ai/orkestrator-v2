@@ -333,7 +333,7 @@ review), whose boundary admits no skill frontmatter hooks or tool grants.
 
 **Added accounts.** Added Claude and Codex accounts link their `skills`,
 `commands`, `agents` (Claude) and `skills`, `prompts` (Codex) directories to
-the host's (`agent-accounts-homes.ts`), so one copy serves every account. A CLI
+the host's (`agent-accounts/homes.ts`), so one copy serves every account. A CLI
 that saved one of them by atomic rename leaves a private directory instead;
 `scoped-delivery.ts` checks each entry (linked, private, missing, or a link
 elsewhere, which is never written through) and gives a private directory its

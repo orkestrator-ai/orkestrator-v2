@@ -15,7 +15,7 @@ import {
 import {
   activeAgentAccountShellEnvironment,
   stripInheritedAgentCredentials,
-} from "./agent-accounts-active.js";
+} from "./agent-accounts/index.js";
 import { envWithManagedBinaries } from "./commands-agent-support.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 import type { CommandContext } from "./commands-context.js";

@@ -57,29 +57,29 @@ import {
 } from "./mcp-in-process.js";
 import type { ScheduledJobService } from "./scheduled-jobs/index.js";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   registerWorkflowResultBrokerTools,
   registerWorkflowResultSlotTools,
   registerWorkflowResultTools,
-} from "./workflow-result-tools.js";
+  type WorkflowResultService,
+} from "./workflows/index.js";
 import type { GraphActivationToolHost } from "./graph-agent-tools.js";
-import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
-import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
+import {
+  authenticatePipelineWorkerMailCapability,
+  type BuildPipelineKeyInformationHost,
+  pipelineWorkerTabForResultKey,
+} from "./build-pipeline/index.js";
+import { registerKeyInformationTools } from "./build-pipeline/key-information-tools.js";
 import {
   registerAutoPipelineTool,
   type AutoPipelineToolHost,
 } from "./agent-tools-auto-pipeline.js";
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import type { ProvisionalFindingSink } from "./review/index.js";
 import {
   registerSuborkRefusalTool,
   registerSuborkTools,
   type SuborkToolHost,
 } from "./agent-tools-suborks.js";
-import {
-  authenticatePipelineWorkerMailCapability,
-  pipelineWorkerTabForResultKey,
-} from "./pipeline-worker-identity.js";
 import type { WebAnnotationToolHost } from "./web-annotations/index.js";
 import { registerWebAnnotationTools, WebAnnotationToolLimiter } from "./web-annotations/tools.js";
 import {
@@ -830,7 +830,7 @@ async function createAgentToolServer(
     if (!binding) throw new Error("Workflow result capability is unavailable");
     // A build pipeline worker's turn runs on this server alone, so it also
     // carries that worker's own mail tools, bound to the worker the backend's
-    // record says owns this attempt (`pipeline-worker-identity.ts`).
+    // record says owns this attempt (`build-pipeline/pipeline-worker-identity.ts`).
     const workerTabId =
       binding.kind !== "graph-output" &&
       (await storage.loadConfig()).global.agentMessaging?.enabled === true

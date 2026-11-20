@@ -46,17 +46,17 @@ import type {
 import type { AgentBranchParsedResult } from "./agent-branch-types.js";
 import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 import { graphAgentResultKey } from "./graph-agent-state.js";
-import { reviewConsolidationProvenanceFields } from "./review-consolidation-provenance.js";
+import { reviewConsolidationProvenanceFields } from "./review/index.js";
 import {
   graphOutputCombinedSchema,
   graphOutputPortIssues,
   graphOutputSlotInput,
-  splitGraphOutputCombined,
   type GraphOutputStructuredPort,
-} from "./workflow-result-graph-output.js";
-import { workflowResultRefusals } from "./workflow-result-missing.js";
-import { validateRegisteredWorkflowResult } from "./workflow-result-registry.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
+  splitGraphOutputCombined,
+  validateRegisteredWorkflowResult,
+  workflowResultRefusals,
+  type WorkflowResultService,
+} from "./workflows/index.js";
 
 const CONTRACT_CODES: ReadonlySet<string> = new Set([
   "invalid_type",

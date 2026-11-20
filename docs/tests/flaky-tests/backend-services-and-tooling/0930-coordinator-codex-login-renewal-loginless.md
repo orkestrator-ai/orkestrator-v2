@@ -1,5 +1,7 @@
 # Coordinator Codex login renewal reads loginless in the aggregate
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/active.test.ts`.
+
 - **ID:** 0930
 - **Status:** resolved
 - **Date observed:** 2026-10-25 (first seen inside aggregate case

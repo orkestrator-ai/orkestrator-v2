@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { AutoPipelineSource } from "@orkestrator/protocol/build-pipeline";
 import { PipeIcon } from "@/components/icons/PipeIcon";
@@ -7,13 +7,21 @@ import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { readCoordinatorFor } from "@/lib/read-coordinator";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
+import {
+  PUSH_RECOVERY_POLL_MS,
+  WORKFLOW_PUSH_TOPIC,
+  formatAutoPipelinePushId,
+  formatWorkflowPushKey,
+} from "@orkestrator/protocol/push-events";
 import type { CreateTabOptions } from "@/contexts/TerminalContext";
 import { getAllLeaves, usePaneLayoutStore } from "@/stores";
 
 /**
  * How often the active tab's eligibility is re-read while the window is
- * visible and connected. The read is backend storage and in-memory activity
- * only: it never starts or contacts a bridge (`AutoPipelineService.sources`).
+ * visible and connected and the node offers no healthy push subscription for
+ * it. The read is backend storage and in-memory activity only: it never
+ * starts or contacts a bridge (`AutoPipelineService.sources`).
  */
 const POLL_MS = 2000;
 
@@ -31,26 +39,46 @@ function useActiveTabId(environmentId: string): string | null {
 
 /**
  * The source the backend offers for `tabId`, or null while the tab is not an
- * open interactive agent tab of a prompt environment. Reads through the node's
- * read coordinator only while a tab is active, so polling pauses while the
- * window is hidden or the node's connection is down, catches up once when
- * either returns, and stops when unmounted.
+ * open interactive agent tab of a prompt environment. Reads on each push
+ * change and through the node's read coordinator only while a tab is active,
+ * so polling pauses while the window is hidden or the node's connection is
+ * down, catches up once when either returns, and stops when unmounted.
  */
 function useAutoPipelineSource(environmentId: string, tabId: string | null) {
   const backend = useScopeBackend();
+  const { scope } = useScopesWithCommandFallback();
   // This node's own coordinator: its transport is the one whose outage pauses it.
-  const coordinator = readCoordinatorFor(useScopesWithCommandFallback().scope);
+  const coordinator = readCoordinatorFor(scope);
+  /*
+   * Push (docs/architecture/push-events.md): the node announces each change
+   * of the environment's offer (the `auto-pipeline` workflow key: a tab's turn
+   * starting or ending, tabs opening or closing, drafting), and the button
+   * reads then. While that subscription is healthy the poll falls to the
+   * recovery cadence; otherwise it keeps its old one.
+   */
+  const invalidateRef = useRef<() => void>(() => undefined);
+  const pushState = usePushSubscription(
+    scope,
+    WORKFLOW_PUSH_TOPIC,
+    formatWorkflowPushKey({
+      kind: "auto-pipeline",
+      id: formatAutoPipelinePushId({ environmentId }),
+    }),
+    tabId !== null,
+    () => invalidateRef.current(),
+  );
+  const pushHealthy = pushState === "healthy";
   // Keyed by tab so a read for the previous tab is never shown for this one.
   const [found, setFound] = useState<{
     tabId: string;
     source: AutoPipelineSource | null;
   } | null>(null);
-  useCoordinatedRead({
+  const { invalidate } = useCoordinatedRead({
     key: { resource: "auto-pipeline-sources", target: environmentId, view: tabId ?? "" },
     enabled: tabId !== null,
     retainOnDispose: false,
     coordinator,
-    demand: { intervalMs: POLL_MS, priority: "auxiliary" },
+    demand: { intervalMs: pushHealthy ? PUSH_RECOVERY_POLL_MS : POLL_MS, priority: "auxiliary" },
     read: () => backend.autoPipelineSources(environmentId),
     onState: (state) => {
       if (!tabId) return;
@@ -66,6 +94,15 @@ function useAutoPipelineSource(environmentId: string, tabId: string | null) {
       }
     },
   });
+  useEffect(() => {
+    invalidateRef.current = invalidate;
+  }, [invalidate]);
+  // Frames may have been lost while the subscription went unhealthy: read now.
+  const wasHealthy = useRef(pushHealthy);
+  useEffect(() => {
+    if (wasHealthy.current && !pushHealthy) invalidate();
+    wasHealthy.current = pushHealthy;
+  }, [invalidate, pushHealthy]);
   return tabId && found?.tabId === tabId ? found.source : null;
 }
 

@@ -303,15 +303,18 @@ export class KanbanRepository {
     options: {
       notifyDeliveryPolicyChange?: boolean;
       /**
-       * A build lifecycle write (`build-pipeline-kanban-lifecycle.ts`): it
+       * A build lifecycle write (`build-pipeline/kanban-lifecycle.ts`): it
        * never moves a done ticket, and a status it writes is recorded as the
-       * ticket's `lifecycleStatus`. `preserveDoneStatus` is its older name.
+       * ticket's `lifecycleStatus`.
        */
       lifecycle?: boolean;
+      /** Compatibility guard for callers that ask to leave a Done ticket alone. */
       preserveDoneStatus?: boolean;
+      /** Recheck the reservation under the board lease before an admission write. */
+      canMoveOnAdmission?: () => Promise<boolean>;
     } = {},
   ): Promise<KanbanTask> {
-    const lifecycle = options.lifecycle === true || options.preserveDoneStatus === true;
+    const lifecycle = options.lifecycle === true;
     if (
       updates.status !== undefined &&
       !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
@@ -328,10 +331,24 @@ export class KanbanRepository {
         throw new Error(`Kanban task not found: ${taskId}`);
       }
 
+      if (options.canMoveOnAdmission && !(await options.canMoveOnAdmission())) {
+        return normalizeKanbanTask(task);
+      }
       // Terminal writers may have read before the monitor closed this ticket.
       // Check under the same lease as the write; user edits remain unconditional.
-      if (lifecycle && task.status === "done") {
+      if ((lifecycle || options.preserveDoneStatus) && task.status === "done") {
         const { status: _status, ...remaining } = updates;
+        updates = remaining;
+      }
+      // An unfinished build owns the column (`build-pipeline/ticket-hold.ts`):
+      // only its lifecycle moves the ticket. The rest of the edit applies.
+      if (
+        !lifecycle &&
+        updates.status !== undefined &&
+        updates.status !== task.status &&
+        (await this.board.ticketsHeldByBuilds()).has(task.id)
+      ) {
+        const { status: _held, ...remaining } = updates;
         updates = remaining;
       }
       // The markers are the lifecycle's and the closure's alone, whatever a
@@ -511,16 +528,27 @@ export class KanbanRepository {
    * monitor or the build, never moves it again. Returns whether it moved.
    */
   async returnKanbanTaskForClosedPullRequest(taskId: string, prUrl: string): Promise<boolean> {
+    return (await this.reconcileKanbanTaskForClosedPullRequest(taskId, prUrl)) === "moved";
+  }
+
+  async reconcileKanbanTaskForClosedPullRequest(
+    taskId: string,
+    prUrl: string,
+  ): Promise<"moved" | "settled" | "deferred"> {
     return this.board.enqueue(async () => {
       const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
-      if (!task || task.prClosedReturnUrl === prUrl) return false;
+      if (!task || task.prClosedReturnUrl === prUrl) return "settled";
+      // Left undecided while an unfinished build holds the column: the build
+      // reads its own pull request's state when it ends, and the monitor's
+      // next replay decides it then.
+      if ((await this.board.ticketsHeldByBuilds()).has(task.id)) return "deferred";
       const before = normalizeKanbanTask(structuredClone(task));
       const returns = kanbanTaskReturnsForClosedPullRequest(task, prUrl);
       task.prClosedReturnUrl = prUrl;
       if (!returns) {
         await this.board.commit(tasks, [{ before, stored: task }]);
-        return false;
+        return "settled";
       }
       task.order =
         Math.max(
@@ -539,7 +567,7 @@ export class KanbanRepository {
       if (task.sync?.replica) task.lifecycleEcho = true;
       await this.board.commit(tasks, [{ before, stored: task }]);
       this.context.changes.announce("kanban", task.projectId);
-      return true;
+      return "moved";
     });
   }
 
@@ -1539,6 +1567,7 @@ export type KanbanStorage = Pick<
   | "recordKanbanCriteriaChecks"
   | "closeKanbanTasksForMergedPullRequests"
   | "returnKanbanTaskForClosedPullRequest"
+  | "reconcileKanbanTaskForClosedPullRequest"
   | "setKanbanTaskLabel"
   | "getKanbanLabels"
   | "createKanbanLabel"

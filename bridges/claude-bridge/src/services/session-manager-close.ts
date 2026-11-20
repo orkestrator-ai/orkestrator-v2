@@ -17,6 +17,7 @@ import {
 import { takeQueryControls } from "./session-manager-background-tasks.js";
 import { clearTurnInFlightMarkForClose } from "./session-manager-turn-interruption.js";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { eventEmitter } from "./event-emitter.js";
 
 const log = createLogger("bridge.claude");
 
@@ -81,6 +82,7 @@ export function closeSessionRetainingHistory(
   stalledCloses.delete(session);
   session.deleting = true;
   session.status = "running";
+  eventEmitter.announceState(sessionId);
   claimedPromptDispatches.delete(sessionId);
   session.abortController?.abort();
   session.abortController = undefined;

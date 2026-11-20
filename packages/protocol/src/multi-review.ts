@@ -392,7 +392,7 @@ export interface MultiReviewAutoPrLaunch {
 /**
  * Which runtime runs a Multi Review (item 301, plan Phase 3, D5).
  *
- * `bespoke`: `multi-review-service.ts` runs every step itself (the default).
+ * `bespoke`: `review/service.ts` runs every step itself (the default).
  * `graph`: the service launches a graph run of the built-in Multi Review
  * template and projects that run onto this record, so every surface that reads
  * the record (the review-pass tab, the CLI, the coordinator) keeps working.

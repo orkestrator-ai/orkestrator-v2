@@ -190,6 +190,19 @@ export function useManualOrderSupported(): boolean {
   return useStore(store, (state) => state.loaded && state.layout.manualOrderSupported === true);
 }
 
+/**
+ * Whether the command node keeps a Manual environment order. An unsupported
+ * backend has completed the capability check. A failed check can be retried.
+ */
+export type ManualOrderAvailability = "loading" | "supported" | "unsupported" | "error";
+
+export function useManualOrderAvailability(): ManualOrderAvailability {
+  return useStore(store, (state) => {
+    if (!state.loaded) return state.error ? "error" : "loading";
+    return state.layout.manualOrderSupported === true ? "supported" : "unsupported";
+  });
+}
+
 export function usePortalLayout(): PortalLayout {
   useEffect(() => startPortalLayout(), []);
   return useStore(store, (state) => state.layout);

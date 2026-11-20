@@ -1,5 +1,7 @@
 # Reviewer stale-progress cleanup exceeds the aggregate deadline
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/review-fanout.test.ts`.
+
 - **ID:** 0947
 - **Status:** resolved
 - **Date observed:** 2026-10-26

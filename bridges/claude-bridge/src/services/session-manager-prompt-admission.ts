@@ -144,6 +144,7 @@ export function admitPrompt(
   session.completionBlockedByBackgroundTasks = false;
   // Preserve the original user-turn clock across bridge-internal re-prompts.
   session.turnStartedAt ??= new Date().toISOString();
+  eventEmitter.announceState(sessionId);
   return {
     session,
     sessionId,

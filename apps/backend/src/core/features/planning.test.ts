@@ -6,8 +6,8 @@ import type { FeaturePlanningRecord } from "@orkestrator/protocol/feature-planni
 import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
 import { StorageService } from "../storage.js";
 import { FeaturePlanningService } from "./planning.js";
-import { WorkflowResultService } from "../workflow-result-service.js";
-import { WorkflowResultRollout } from "../workflow-result-rollout.js";
+import { WorkflowResultService } from "../workflows/result-service.js";
+import { WorkflowResultRollout } from "../workflows/result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,
@@ -16,7 +16,7 @@ import {
   type ProviderCreateSessionOptions,
   type ProviderSendOptions,
   type ProviderStatus,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 
 const PLANNER_REPLY = [
   "Here is what I understand so far.",

@@ -32,6 +32,15 @@ import {
   type NativeAgentProjectionContext,
 } from "./native-agent-projection-context.js";
 
+/** How long a push-observed session's settled read answers equivalent reads. */
+export const OBSERVED_SETTLED_SHARE_MS = 750;
+const MAX_OBSERVED_SETTLED = 2_048;
+const MAX_OBSERVED_SETTLED_BYTES = 16 * 1024 * 1024;
+const MAX_PROGRESSIVE_SOURCE_READS = 8;
+const MAX_OBSERVER_SOURCE_READS = 6;
+const MAX_QUEUED_OBSERVER_READS = 1024;
+const DISCOVERY_KEY_PREFIX = "\0progressive-v1\0discovery:";
+
 /**
  * How the progressive transcript, session-state and discovery reads run:
  * equivalent source work is joined (`progressiveRead`), a read the session
@@ -57,12 +66,17 @@ export class NativeAgentProgressiveReads {
       progressiveTrailing: this.progressiveTrailing,
       progressiveMetrics: this.progressiveMetrics,
       progressiveReadWaiterCount: () => this.progressiveReadWaiterCount,
+      setObservedShareClock: (now: () => number) => {
+        this.observedShareNow = now;
+      },
     };
   }
 
   /** Key counts of the read state, for `native-projection` diagnostics. */
   cacheGauges(): Record<string, number> {
     return {
+      observedSessions: this.observedSessions.size,
+      observedSettled: this.observedSettled.size,
       progressiveReads: this.progressiveReads.size,
       progressiveReadWaiters: this.progressiveReadWaiters.size,
       progressiveReadEpochs: this.progressiveReadEpochs.size,
@@ -78,8 +92,172 @@ export class NativeAgentProgressiveReads {
     await Promise.allSettled(this.progressiveTrailing.values());
   }
 
+  /**
+   * The push layer observes this session (`core/push/native-session-push-topic.ts`):
+   * one observer reads it at a viewer's cadence and announces each change, and
+   * every viewer then reads once. While it is observed, a transcript or state
+   * read that settled within {@link OBSERVED_SETTLED_SHARE_MS} answers the
+   * next equivalent read of the same epoch instead of a second provider read,
+   * so N viewers cost one provider read per change. Forced and fresh-source
+   * reads never take it, a running read is joined in preference to it, and an
+   * epoch change or a wake (activity announcement, invalidation) drops it. A
+   * bridge hint does not ({@link noteObservationHint}).
+   * Returns the stop.
+   */
+  observeSession(sessionKey: string): () => void {
+    if (!this.observedSessions.has(sessionKey)) {
+      this.observationGenerations.set(sessionKey, {});
+      this.hintGenerations.set(sessionKey, {});
+    }
+    this.observedSessions.set(sessionKey, (this.observedSessions.get(sessionKey) ?? 0) + 1);
+    let stopped = false;
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      const remaining = (this.observedSessions.get(sessionKey) ?? 1) - 1;
+      if (remaining > 0) {
+        this.observedSessions.set(sessionKey, remaining);
+        return;
+      }
+      this.observedSessions.delete(sessionKey);
+      this.observationGenerations.delete(sessionKey);
+      this.hintGenerations.delete(sessionKey);
+      this.forgetObservedSettled(sessionKey);
+      for (const [key, queued] of Array.from(this.observerQueue)) {
+        if (queued.sessionKey !== sessionKey) continue;
+        this.observerQueue.delete(key);
+        queued.cancel();
+      }
+    };
+  }
+
+  /** Something says the session moved: the next read goes to the provider. */
+  forgetObservedSettled(sessionKey: string): void {
+    if (this.observedSessions.has(sessionKey)) this.observationGenerations.set(sessionKey, {});
+    const prefix = `${sessionKey}\0progressive-v1\0`;
+    for (const key of Array.from(this.observedSettled.keys())) {
+      if (key.startsWith(prefix)) this.removeObservedSettled(key);
+    }
+  }
+
+  /**
+   * A bridge hint says the session moved (to-do 8102 task 2). The observer's
+   * next read must not join provider work that started before the hint, but
+   * the settled answer stays shared: viewers read only after the frame the
+   * observer's own read announces, so the share they take is that answer.
+   * Dropping it on every hint sent each viewer's post-frame read to the
+   * provider while a turn streamed.
+   */
+  noteObservationHint(sessionKey: string): void {
+    if (this.observedSessions.has(sessionKey)) this.hintGenerations.set(sessionKey, {});
+  }
+
+  private observedShareNow: () => number = () => monotonicMs();
+  private readonly observationGenerations = new Map<string, object>();
+  private readonly sourceObservationGenerations = new Map<string, object>();
+  /** Bumped by {@link noteObservationHint}; only the observer's join consults it. */
+  private readonly hintGenerations = new Map<string, object>();
+  private readonly sourceHintGenerations = new Map<string, object>();
+  private readonly observerQueue = new Map<
+    string,
+    {
+      sessionKey: string;
+      promise: Promise<unknown>;
+      start(): void;
+      cancel(): void;
+    }
+  >();
+  private observedShareBytes = 0;
+  private observedShareTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly observedSessions = new Map<string, number>();
+  private readonly observedSettled = new Map<
+    string,
+    { value: unknown; epoch: number; expiresAt: number; bytes: number }
+  >();
+
+  private takeObservedSettled<T>(key: string, sessionKey: string, epoch: number): T | undefined {
+    const entry = this.observedSettled.get(key);
+    if (!entry) return undefined;
+    if (
+      !this.observedSessions.has(sessionKey) ||
+      entry.epoch !== epoch ||
+      entry.expiresAt <= this.observedShareNow()
+    ) {
+      this.removeObservedSettled(key);
+      return undefined;
+    }
+    return entry.value as T;
+  }
+
+  private removeObservedSettled(key: string): void {
+    const entry = this.observedSettled.get(key);
+    if (!entry) return;
+    this.observedShareBytes -= entry.bytes;
+    this.observedSettled.delete(key);
+    if (this.observedSettled.size === 0) {
+      clearTimeout(this.observedShareTimer);
+      this.observedShareTimer = undefined;
+    }
+  }
+
+  private scheduleObservedExpiry(): void {
+    if (this.observedShareTimer) return;
+    const oldest = this.observedSettled.values().next().value;
+    if (!oldest) return;
+    this.observedShareTimer = setTimeout(
+      () => {
+        this.observedShareTimer = undefined;
+        const now = this.observedShareNow();
+        for (const [key, entry] of Array.from(this.observedSettled)) {
+          if (entry.expiresAt > now) break;
+          this.removeObservedSettled(key);
+        }
+        this.scheduleObservedExpiry();
+      },
+      Math.max(1, oldest.expiresAt - this.observedShareNow()),
+    );
+    this.observedShareTimer.unref();
+  }
+
+  private recordObservedSettled(key: string, epoch: number, value: unknown): void {
+    if (
+      this.observedSettled.get(key)?.value === value &&
+      this.observedSettled.get(key)?.epoch === epoch
+    )
+      return;
+    // Charge UTF-16 storage for the serialized projection and its cache key.
+    const bytes = 2 * (key.length + (JSON.stringify(value)?.length ?? 0));
+    this.removeObservedSettled(key);
+    if (bytes > MAX_OBSERVED_SETTLED_BYTES) return;
+    this.observedSettled.set(key, {
+      value,
+      epoch,
+      bytes,
+      expiresAt: this.observedShareNow() + OBSERVED_SETTLED_SHARE_MS,
+    });
+    this.observedShareBytes += bytes;
+    while (
+      this.observedSettled.size > MAX_OBSERVED_SETTLED ||
+      this.observedShareBytes > MAX_OBSERVED_SETTLED_BYTES
+    ) {
+      this.removeObservedSettled(this.observedSettled.keys().next().value!);
+    }
+    this.scheduleObservedExpiry();
+  }
+
   /** Drop all read state; run after `settle`. */
   clear(): void {
+    clearTimeout(this.observedShareTimer);
+    this.observedShareTimer = undefined;
+    this.observedShareBytes = 0;
+    this.observedSettled.clear();
+    this.observationGenerations.clear();
+    this.sourceObservationGenerations.clear();
+    this.hintGenerations.clear();
+    this.sourceHintGenerations.clear();
+    for (const queued of this.observerQueue.values()) queued.cancel();
+    this.observerQueue.clear();
+    this.observedSessions.clear();
     this.progressiveReads.clear();
     this.progressiveReadWaiters.clear();
     this.progressiveReadWaiterCount = 0;
@@ -96,6 +274,7 @@ export class NativeAgentProgressiveReads {
    * each runs one trailing re-read.
    */
   forgetSession(sessionKey: string, epoch: number): void {
+    this.forgetObservedSettled(sessionKey);
     const progressivePrefix = `${sessionKey}\0progressive-v1\0`;
     for (const candidate of Array.from(this.interactiveSnapshotShares.keys())) {
       if (candidate.startsWith(`${sessionKey}\0`)) this.interactiveSnapshotShares.delete(candidate);
@@ -213,14 +392,19 @@ export class NativeAgentProgressiveReads {
         this.progressiveReadWaiterCount = Math.max(0, this.progressiveReadWaiterCount - 1);
       });
     }
-    const sourceReads = Array.from(this.progressiveReads.keys()).filter(
-      (candidate) => !candidate.includes("\0progressive-v1\0discovery:"),
-    ).length;
-    if (!key.includes("\0progressive-v1\0discovery:") && sourceReads >= 8) {
+    if (
+      !key.includes(DISCOVERY_KEY_PREFIX) &&
+      this.sourceReadCount() >= MAX_PROGRESSIVE_SOURCE_READS
+    ) {
       return Promise.reject(new ProviderUnavailableError("Native agent read is overloaded"));
     }
     if (sessionKey)
       this.progressiveReadEpochs.set(key, this.context.projectionEpochs.get(sessionKey) ?? 0);
+    const observed =
+      sessionKey === undefined ? undefined : this.observationGenerations.get(sessionKey);
+    if (observed) this.sourceObservationGenerations.set(key, observed);
+    const hinted = sessionKey === undefined ? undefined : this.hintGenerations.get(sessionKey);
+    if (hinted) this.sourceHintGenerations.set(key, hinted);
     const operation = read();
     const tracked = operation.finally(() => {
       if (this.progressiveReads.get(key) !== tracked) return;
@@ -230,10 +414,48 @@ export class NativeAgentProgressiveReads {
       // and keeping it grew the map by one key per session ever read (todo
       // 7100 task 3).
       this.progressiveReadEpochs.delete(key);
+      this.sourceObservationGenerations.delete(key);
+      this.sourceHintGenerations.delete(key);
       if (sessionKey) this.releaseSettledSnapshotShares(sessionKey);
+      this.drainObserverQueue();
     });
     this.progressiveReads.set(key, tracked);
     return tracked;
+  }
+
+  private sourceReadCount(): number {
+    let count = 0;
+    for (const key of this.progressiveReads.keys()) {
+      if (!key.includes(DISCOVERY_KEY_PREFIX)) count += 1;
+    }
+    return count;
+  }
+
+  private drainObserverQueue(): void {
+    for (const [key, queued] of this.observerQueue) {
+      if (this.sourceReadCount() >= MAX_OBSERVER_SOURCE_READS) break;
+      this.observerQueue.delete(key);
+      queued.start();
+    }
+  }
+
+  private queueObservation<T>(key: string, sessionKey: string, read: () => Promise<T>): Promise<T> {
+    const queued = this.observerQueue.get(key);
+    if (queued) return queued.promise as Promise<T>;
+    if (this.observerQueue.size >= MAX_QUEUED_OBSERVER_READS) {
+      return Promise.reject(new ProviderUnavailableError("Native agent observation is overloaded"));
+    }
+    const deferred = Promise.withResolvers<T>();
+    this.observerQueue.set(key, {
+      sessionKey,
+      promise: deferred.promise,
+      start: () => {
+        void read().then(deferred.resolve, deferred.reject);
+      },
+      cancel: () =>
+        deferred.reject(new ProviderUnavailableError("Native agent observation stopped")),
+    });
+    return deferred.promise;
   }
 
   /**
@@ -248,18 +470,57 @@ export class NativeAgentProgressiveReads {
     force: boolean,
     read: () => Promise<T>,
     freshSource = false,
+    pushObservation = false,
   ): Promise<T> {
     const pending = this.progressiveReads.get(key) as Promise<T> | undefined;
     const startedEpoch = this.progressiveReadEpochs.get(key);
+    const startedObservation = this.sourceObservationGenerations.get(key);
+    const startedHint = this.sourceHintGenerations.get(key);
     if (
       pending &&
-      (freshSource || (force && startedEpoch !== undefined && startedEpoch < requestedEpoch))
+      (freshSource ||
+        (pushObservation &&
+          (startedObservation !== this.observationGenerations.get(sessionKey) ||
+            startedHint !== this.hintGenerations.get(sessionKey))) ||
+        (force && startedEpoch !== undefined && startedEpoch < requestedEpoch))
     ) {
       await pending.catch(() => undefined);
     }
-    const value = await this.progressiveRead(key, read, sessionKey);
+    if (
+      pushObservation &&
+      !this.progressiveReads.has(key) &&
+      this.sourceReadCount() >= MAX_OBSERVER_SOURCE_READS
+    ) {
+      return this.queueObservation(key, sessionKey, () =>
+        this.progressiveReadCovering(
+          key,
+          sessionKey,
+          requestedEpoch,
+          force,
+          read,
+          freshSource,
+          true,
+        ),
+      );
+    }
+    if (!pending && !force && !freshSource && !pushObservation) {
+      const shared = this.takeObservedSettled<T>(key, sessionKey, requestedEpoch);
+      if (shared !== undefined) return shared;
+    }
+    const source = this.progressiveRead(key, read, sessionKey);
+    const generation = this.sourceObservationGenerations.get(key);
+    const value = await source;
     const latest = this.context.projectionEpochs.get(sessionKey) ?? 0;
-    if (latest <= requestedEpoch && (!force || latest >= requestedEpoch)) return value;
+    if (latest <= requestedEpoch && (!force || latest >= requestedEpoch)) {
+      if (
+        latest === requestedEpoch &&
+        generation &&
+        generation === this.observationGenerations.get(sessionKey)
+      ) {
+        this.recordObservedSettled(key, latest, value);
+      }
+      return value;
+    }
     this.progressiveDirtyFollowUps.set(
       key,
       Math.max(this.progressiveDirtyFollowUps.get(key) ?? 0, latest),

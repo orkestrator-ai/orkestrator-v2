@@ -1,4 +1,5 @@
 import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-database";
+import { Buffer } from "node:buffer";
 import type { RowUpdate, StoreLayout, StoreRowEntry } from "./storage-database.js";
 
 /**
@@ -7,8 +8,19 @@ import type { RowUpdate, StoreLayout, StoreRowEntry } from "./storage-database.j
  * an array held whole. Nothing here touches SQLite.
  */
 
-/** One serialized row of a store held as rows. */
-export type StoreRow = { collection: string; key: string; position: number; value: string };
+/**
+ * One serialized row of a store held as rows. `owner` is the row's indexed
+ * owner column when the producer knows it (`null` for none); `undefined`
+ * means unknown, so an owner-scoped read of a cache holding the row asks
+ * the database instead (`StorageDatabase.readStoreRowsByOwner`).
+ */
+export type StoreRow = {
+  collection: string;
+  key: string;
+  position: number;
+  value: string;
+  owner?: string | null;
+};
 
 /** A value split by its layout: rows plus the envelope (or whole) document. */
 export type DecomposedStore = {
@@ -186,4 +198,36 @@ export function decompose(layout: StoreLayout, value: unknown): DecomposedStore 
     }
   }
   return { mode: "rows", document: JSON.stringify(envelope), rows };
+}
+
+/** Bun binds SQLite TEXT as UTF-8, replacing unpaired UTF-16 surrogates. */
+export function normalizeSqliteText(value: string): string {
+  // With the Unicode flag, a paired surrogate is one code point outside this range.
+  return value.replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
+}
+
+/**
+ * The serialized values of a cached store's rows owned by `owner`, in the
+ * order `SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY
+ * position, key` returns them. `null` when any cached row's owner is unknown
+ * (`StoreRow.owner` undefined), so the caller asks the database instead of
+ * guessing.
+ */
+export function ownedCachedValues(
+  rows: ReadonlyMap<string, StoreRow>,
+  owner: string,
+): string[] | null {
+  const boundOwner = normalizeSqliteText(owner);
+  const owned: StoreRow[] = [];
+  for (const row of rows.values()) {
+    if (row.owner === undefined) return null;
+    if (row.owner === boundOwner) owned.push(row);
+  }
+  // SQLite's BINARY collation compares UTF-8 bytes. Encode keys only for ties.
+  owned.sort(
+    (left, right) =>
+      left.position - right.position ||
+      Buffer.compare(Buffer.from(left.key), Buffer.from(right.key)),
+  );
+  return owned.map((row) => row.value);
 }

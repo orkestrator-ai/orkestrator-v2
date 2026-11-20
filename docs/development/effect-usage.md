@@ -54,7 +54,7 @@ Effect somewhere new or proposing to remove it.
   bugs are rare enough that branding about 3,300 id fields is not worth the
   churn.
 - **`Effect.cached` for single-flight `init()`.** It keeps failures. Clear the
-  memoised promise on rejection instead, as `build-pipeline-transcript-store.ts`
+  memoised promise on rejection instead, as `build-pipeline/transcript-store.ts`
   does.
 
 Follow-ups that may extend this (a Cursor parked-cancel pilot, and a

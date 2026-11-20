@@ -1,16 +1,14 @@
 import type { CommandContext } from "./commands-context.js";
 import {
   activeClaudeCredentials,
-  syncContainerClaudeLogin,
   type ClaudeLoginHandover,
   type ClaudeLoginPassSnapshot,
-} from "./agent-accounts-containers.js";
-import {
-  TOKEN_REPLACEMENT_LEAD_MS,
   readAddedClaudeCredentials,
   resolveActiveAgentAccount,
   type ResolvedAgentAccount,
-} from "./agent-accounts-active.js";
+  syncContainerClaudeLogin,
+  TOKEN_REPLACEMENT_LEAD_MS,
+} from "./agent-accounts/index.js";
 import { readRuntimeHostClaudeCredentials } from "./commands-files.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

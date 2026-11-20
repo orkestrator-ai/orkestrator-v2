@@ -92,7 +92,7 @@ import type { CheckoutChanges } from "./project-git-service.js";
 import type { DirectHistoryPageCacheLimits } from "./native-agent-direct-history.js";
 import type { ProjectedMessageCacheLimits } from "./native-agent-projection-entries.js";
 import type { ArtifactLedgerReader } from "./native-agent-service-projection-artifacts.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import type { ArtifactTurnDispatch } from "./workflows/index.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
@@ -284,6 +284,8 @@ export interface NativeAgentProgressiveInput {
   forceSnapshot?: boolean;
   /** Confirm a rendered unread result using source work started after this request. */
   freshSource?: boolean;
+  /** Internal push observer source read. */
+  pushObservation?: boolean;
 }
 
 export interface NativeAgentTranscriptUpdateInput extends NativeAgentProgressiveInput {
@@ -302,6 +304,8 @@ export interface NativeAgentLiveUpdateInput {
   stateToken?: string;
   /** Part-level message patches the client can apply (step 14); absent: none. */
   patchVersion?: 2;
+  /** Internal push observer source read. */
+  pushObservation?: boolean;
 }
 
 export interface NativeAgentDiscoveryUpdateInput extends NativeAgentProgressiveInput {
@@ -433,6 +437,12 @@ export function isAgentTurnEndTransition(
 }
 
 export interface NativeAgentServiceOptions {
+  onPushObservationHint?: (
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    providerSessionId?: string,
+    parts?: readonly ("state" | "transcript")[],
+  ) => void;
   onConversationRetired?: (
     environmentId: string,
     logicalSessionKey: string,

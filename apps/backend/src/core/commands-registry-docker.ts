@@ -108,7 +108,7 @@ import {
 import {
   startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
-} from "./agent-accounts-containers.js";
+} from "./agent-accounts/index.js";
 
 const lastDockerAvailabilityDiagnosticByLogger = new WeakMap<DockerAvailabilityReporter, string>();
 

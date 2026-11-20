@@ -100,6 +100,33 @@ is Grok-only. The rules in [`bridges/AGENTS.md`](../AGENTS.md) and the root
   moment the handle exists; answering it as `cancelled` would tell the user a
   turn stopped while it carried on.
 
+## Change signal: state and transcript revisions
+
+`src/state-revision.ts` holds the process's `BridgeStateRevisions` and the
+`GET /event/subscribe?observe=1` hub (to-do 8102 task 2, D7).
+
+- **State revision.** One per session, covering everything the backend's state
+  read gets: the `/status` body (composer, policy, readiness, context usage,
+  runtime summary, `closing`) and the `/approvals` and `/interactions` bodies.
+  Their `revision` field is left out (`stateReadContent`): it is
+  `state.revision`, the transcript token, so a consumer of an `unchanged`
+  answer must take the transcript token from the transcript read, not from a
+  cached `/status`. `/status` answers `{ unchanged: true, stateRevision }` to a
+  still-current `?knownStateRevision=`; without the query it answers today's
+  body plus `stateRevision`.
+- **Transcript revision.** Built from `state.revision` (with the transcript
+  epoch and dropped-row count), so it moves whenever the transcript routes'
+  token does.
+- **Every mutation bumps and publishes** through `transcriptChanged`,
+  `stateChanged` or `sessionChanged` (both); never `state.revision += 1` on its
+  own. They are synchronous and safe in SDK listeners; frames are coalesced per
+  microtask. A state change with no transcript effect (attach/detach, policy,
+  read-only, todos, drift, notices, run id, account windows, sign-in) still
+  needs `stateChanged`. When unsure, use `sessionChanged`: an extra move costs
+  one read, a missing one costs push latency. `state-revision.test.ts` drives
+  each mutation path through `expectStateRevisionMoves` and fails a change that
+  did not move the revision; add new paths there.
+
 ## Compaction
 
 `POST /session/:id/compact` runs `agent.summarize()` as a turn: it holds the

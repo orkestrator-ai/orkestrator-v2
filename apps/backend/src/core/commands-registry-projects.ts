@@ -1,4 +1,4 @@
-import { readActiveAgentAccountUsage } from "./agent-accounts.js";
+import { readActiveAgentAccountUsage } from "./agent-accounts/accounts.js";
 import { boundSummaryIcons } from "./nodes/index.js";
 import nodePath from "node:path";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";

@@ -9,12 +9,14 @@ import {
 } from "lucide-react";
 import {
   hasKeyInformation,
+  keyInformationCheckStatus,
   type BuildPipelineKeyInformation,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
+  KEY_INFORMATION_CHECK_STATUS as CHECK_STATUS,
   KEY_INFORMATION_ISSUE_STATUS as ISSUE_STATUS,
   KEY_INFORMATION_TEST_RESULT as TEST_RESULT,
   keyInformationUpdatedLine,
@@ -483,31 +485,34 @@ function panelSections(info: BuildPipelineKeyInformation): PanelSection[] {
               ) : null}
               {verification.checks.length > 0 ? (
                 <ul className="mt-1.5 flex flex-col gap-1">
-                  {verification.checks.map((check, index) => (
-                    <li key={index} className="flex items-start gap-2">
-                      {check.passed ? (
-                        <CheckCircle2
-                          className="mt-0.5 size-4 shrink-0 text-success"
-                          aria-label="Passed"
+                  {verification.checks.map((check, index) => {
+                    const status = keyInformationCheckStatus(check);
+                    const outcome = CHECK_STATUS[status];
+                    const Icon = outcome.icon;
+                    return (
+                      <li key={index} className="flex items-start gap-2">
+                        <Icon
+                          className={cn("mt-0.5 size-4 shrink-0", outcome.className)}
+                          aria-label={outcome.label}
                         />
-                      ) : (
-                        <XCircle
-                          className="mt-0.5 size-4 shrink-0 text-failure"
-                          aria-label="Failed"
-                        />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="break-words">
-                          <KeyInformationText text={check.check} />
-                        </div>
-                        {check.details ? (
-                          <div className="break-words text-muted-foreground">
-                            <KeyInformationText text={check.details} />
+                        <div className="min-w-0 flex-1">
+                          <div className="break-words">
+                            <KeyInformationText text={check.check} />
                           </div>
-                        ) : null}
-                      </div>
-                    </li>
-                  ))}
+                          {status === "not-checked" || check.details ? (
+                            <div className="break-words text-muted-foreground">
+                              {status === "not-checked" ? (
+                                <span className="font-medium">
+                                  Not checked{check.details ? ": " : ""}
+                                </span>
+                              ) : null}
+                              {check.details ? <KeyInformationText text={check.details} /> : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : null}
             </li>

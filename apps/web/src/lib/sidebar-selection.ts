@@ -63,9 +63,9 @@ export function resolveSidebarSelection(
  * rather than rebuilding their order means a range follows the screen in every
  * grouping, sort and filter, and skips whatever is collapsed.
  */
-export function sidebarRowSelectionIds(): string[] {
+export function sidebarRowSelectionIds(scope: ParentNode = document): string[] {
   return Array.from(
-    document.querySelectorAll("[data-sidebar-scroll] [data-environment-selection-id]"),
+    scope.querySelectorAll("[data-sidebar-scroll] [data-environment-selection-id]"),
     (row) => row.getAttribute("data-environment-selection-id")!,
   );
 }
@@ -91,11 +91,18 @@ export function applySidebarModifierSelection(
   if (!modifiers.shiftKey && !modifiers.metaKey) return false;
   // The sidebar's multi-selection is kept by this window's own node.
   const ui = appCommandScope().store(uiStore).getState();
+  const compact = document.querySelector("[data-compact-popover-rows][data-sidebar-scroll]");
+  const orderedIds = sidebarRowSelectionIds(compact ?? document);
+  const shownId = shownRowSelectionId();
+  // In the compact rail, an explicit check anchors ranges within this repository.
+  const anchor = compact
+    ? (ui.selectedEnvironmentIds[0] ?? (shownId && orderedIds.includes(shownId) ? shownId : null))
+    : shownId;
   const selection = resolveSidebarSelection(
     selectionId,
     modifiers,
-    sidebarRowSelectionIds(),
-    shownRowSelectionId(),
+    orderedIds,
+    anchor,
     ui.selectedEnvironmentIds,
   );
   if (selection.type === "range") ui.setMultiSelection(selection.ids);

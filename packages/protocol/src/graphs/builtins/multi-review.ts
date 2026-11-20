@@ -1,7 +1,7 @@
 /**
  * Multi Review described as a template (plan P1.8, D5, report §2.2, §9.1).
  *
- * The template describes what `multi-review-service.ts` runs after Phase 0;
+ * The template describes what `review/service.ts` runs after Phase 0;
  * the flow keeps running there (`engine: "multi-review"`). Duplicating it gives
  * a user template for the graph runtime. Where the graph model cannot say what
  * the engine does, the template says the nearest thing and the difference is
@@ -20,7 +20,7 @@ import {
   target,
 } from "./support.js";
 
-/** The engine stage each node describes (`multi-review-steps.ts` in the backend). */
+/** The engine stage each node describes (`review/steps.ts` in the backend). */
 export const MULTI_REVIEW_TEMPLATE_STAGES = Object.freeze({
   plan: "prepare",
   package: "validation",

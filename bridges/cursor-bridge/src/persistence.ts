@@ -35,6 +35,7 @@ import {
   type SessionState,
 } from "./state.js";
 import { newSessionState } from "./session-factory.js";
+import { sessionChanged, stateChanged } from "./state-revision.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.cursor");
@@ -480,7 +481,7 @@ function noteFailure(error: unknown): PersistenceError {
     });
     // Error notices are rendered as transcript advisories, which a client
     // only re-reads when the revision moves.
-    state.revision += 1;
+    sessionChanged(state);
   }
   return typed;
 }
@@ -498,12 +499,16 @@ function noteSuccess(shed: readonly string[]): void {
   if (newlyShed.length === 0) return;
   log.warn("state.transcripts-shortened", { sessions: newlyShed.length });
   for (const id of newlyShed) {
-    sessions.get(id)?.health.recordNotice({
+    const state = sessions.get(id);
+    if (!state) continue;
+    state.health.recordNotice({
       message:
         "The saved copy of this transcript keeps only its newest messages, to keep bridge state within its size limit. The conversation itself is kept; a bridge restart shows the transcript as truncated.",
       method: "persistence",
       severity: "info",
     });
+    // `/status` lists runtime notices.
+    stateChanged(state);
   }
 }
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { PR_MONITOR_CHANGED_EVENT } from "@orkestrator/protocol/pr-monitor";
-import type { BuildPipelineProvider, ProviderStatus } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider, ProviderStatus } from "../build-pipeline/provider.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";
 import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";

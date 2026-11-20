@@ -72,6 +72,8 @@ export const STORAGE_LOG_AREAS = defineLogAreas({
         "A held lease's heartbeat failed, which shortens the lease; the next one retries.",
       "scrub.checkpoint-failed":
         "Deleted content could not be scrubbed from the WAL yet because the truncating checkpoint failed or a reader held an older snapshot; it is retried without waiting until it succeeds.",
+      "checkpoint.background-failed":
+        "The worker thread that checkpoints a database's WAL off the event loop could not start or failed (`database`, and `reason`: `worker-unavailable`, `worker-error`, `open-failed`, `checkpoint-failed`, with SQLite's `code`); that connection checkpoints in its own commits again until the backend restarts.",
       "upkeep.vacuum-failed": "Periodic page reclamation failed; the next upkeep pass retries.",
       "upkeep.finished":
         "One periodic upkeep pass ended: `optimizeMs` is how long refreshing planner statistics held the event loop, `released` and `left` the free pages returned and still free, `releaseMs` the release child's run and `stop` why it ended (`done`, `budget`, `busy`, `no-progress`, `slow-step`, `not-incremental`, `no-free-pages`, `failed`).",

@@ -808,3 +808,22 @@ assertion, timeout or skip was changed for validation.
   The timeout recurred with the larger budget when the Git-heavy case ran
   alongside other suites. No code, assertion, or timeout was changed for it.
 
+
+## Recurrence — 2026-11-20, build-pipeline domain move (0012)
+
+- Base `11fca66ca` contains both fixes cited above.
+  `mise run flaky:recurrence -- 0165 --base 11fca66ca --registry-ref origin/main`
+  returned "open; record the failure as a recurrence".
+- A targeted backend run of five folders and ten root test files used
+  `NODE_ENV=test mise run test:logged -- --name bp-neighbours -- bun test --cwd apps/backend src/core/review src/core/features src/core/workflows src/core/coordinator src/core/control-mcp … --parallel=8 --only-failures`.
+  It reported 3,361 passes and two failures. In
+  `apps/backend/src/core/coordinator/service.test.ts`,
+  `project coordinator > discards an unborn HEAD and a dirty remote-tracking switch`
+  (30,926.78 ms) and
+  `project coordinator > a dirty submodule needs enhanced confirmation before a discarding switch`
+  (35,004.01 ms) exceeded their 30-second budget. The failed log was kept as
+  `orkestrator-test-run.TT8g24/bp-neighbours.log.gz`.
+- The complete owning file passed alone in 192.4 seconds with
+  `NODE_ENV=test mise run test:logged -- --name coord-service -- bun test --cwd apps/backend src/core/coordinator/service.test.ts`.
+  The change under test moves build-pipeline files and changes no coordinator
+  code. No code, assertion or timeout was changed for this failure.

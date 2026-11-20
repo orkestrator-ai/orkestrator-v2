@@ -8,6 +8,11 @@ import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@orkestrator/protocol/gateway-event-stream";
 import {
+  PUSH_CHANGED_EVENT,
+  PUSH_RESYNC_EVENT,
+  type PushStreamOffer,
+} from "@orkestrator/protocol/push-events";
+import {
   isNodeEventWatchId,
   isRelayableEvent,
   MAX_NODE_EVENT_WATCHES,
@@ -37,6 +42,30 @@ import type { ReadModelLink } from "./node-read-model.js";
  * `resync` frame: the client re-reads what it shows from that node. Portal
  * prefixes share a stable superset; other prefix additions may replace the stream. Removing prefixes filters locally without reconnecting.
  */
+
+/**
+ * Where the relay hands a node stream's push traffic: the command node's
+ * subscription controller (design D10, `node-push-subscriptions.ts`). The
+ * relay's stream to a node is shared by every window, so its push connection
+ * is the controller's, never a window's.
+ */
+export interface RelayPushSink {
+  /** A `gateway.connected` on the node's stream, with its push offer (or none). */
+  upstreamConnected(nodeId: BackendId, offer: PushStreamOffer | null): void;
+  /** The node's stream ended or was stopped; its push connection is gone. */
+  upstreamClosed(nodeId: BackendId): void;
+  /** A `push.changed` or `push.resync` frame from the node's stream. */
+  upstreamFrame(nodeId: BackendId, event: string, payload: unknown): void;
+  /** The node could not replay a gap (the relay's `resync` hint). */
+  upstreamResync(nodeId: BackendId): void;
+}
+
+/**
+ * The prefix a push hold asks the node's stream for. No event has it: push
+ * frames are written to every connection whatever its filter, so a held
+ * stream carries only them (and its connected and keepalive frames).
+ */
+export const PUSH_HOLD_EVENT_PREFIX = "push.";
 
 export interface RelayNodes {
   link(nodeId: BackendId): ReadModelLink | null;
@@ -71,6 +100,9 @@ const SWEEP_INTERVAL_MS = 15_000;
 export class NodeEventRelay {
   private readonly watches = new Map<string, Watch>();
   private readonly relays = new Map<BackendId, Relay>();
+  /** Nodes the push controller needs a stream to, counted (design D10). */
+  private readonly pushHolds = new Map<BackendId, number>();
+  private push: RelayPushSink | null = null;
   private unsubscribe: (() => void) | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
@@ -96,6 +128,36 @@ export class NodeEventRelay {
     this.unsubscribe = null;
     this.watches.clear();
     this.sync();
+  }
+
+  /** The subscription controller that takes the node streams' push traffic. */
+  attachPush(sink: RelayPushSink | null): void {
+    this.push = sink;
+  }
+
+  /**
+   * Keep a stream to `nodeId` while the push controller holds keys there,
+   * even if no client watches it. The returned release is idempotent.
+   */
+  holdForPush(nodeId: BackendId): () => void {
+    this.pushHolds.set(nodeId, (this.pushHolds.get(nodeId) ?? 0) + 1);
+    this.sync();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (this.pushHolds.get(nodeId) ?? 1) - 1;
+      if (count > 0) this.pushHolds.set(nodeId, count);
+      else this.pushHolds.delete(nodeId);
+      this.sync();
+    };
+  }
+
+  /** The node's link while the relay may use it, for the push controller's calls. */
+  link(nodeId: BackendId): ReadModelLink | null {
+    if (!this.started || this.options.nodes.isLeaf()) return null;
+    const link = this.options.nodes.link(nodeId);
+    return link?.connected ? link : null;
   }
 
   /** Recovery hints only apply while a live lease still watches this node. */
@@ -171,6 +233,11 @@ export class NodeEventRelay {
         for (const prefix of watch.prefixes) prefixes.add(prefix);
         wanted.set(watch.nodeId, prefixes);
       }
+      for (const nodeId of this.pushHolds.keys()) {
+        const prefixes = wanted.get(nodeId) ?? new Set<string>();
+        prefixes.add(PUSH_HOLD_EVENT_PREFIX);
+        wanted.set(nodeId, prefixes);
+      }
     }
     for (const [nodeId, relay] of this.relays) {
       if (!wanted.has(nodeId)) this.stopRelay(nodeId, relay);
@@ -231,10 +298,22 @@ export class NodeEventRelay {
         onOpen: () => {
           if (this.relays.get(nodeId) === relay) this.relayResync(nodeId);
         },
+        onConnected: (info) => {
+          if (this.relays.get(nodeId) === relay) this.push?.upstreamConnected(nodeId, info.push);
+        },
+        onClosed: () => {
+          if (this.relays.get(nodeId) === relay) this.push?.upstreamClosed(nodeId);
+        },
         onEvent: (event, payload) => {
           if (this.relays.get(nodeId) !== relay) return;
           if (event === NATIVE_EVENT_STREAM_CONNECTED_EVENT) {
             this.relayResync(nodeId);
+            this.push?.upstreamResync(nodeId);
+            return;
+          }
+          // This stream's push connection is the controller's (design D10).
+          if (event === PUSH_CHANGED_EVENT || event === PUSH_RESYNC_EVENT) {
+            this.push?.upstreamFrame(nodeId, event, payload);
             return;
           }
           // The node filters by prefix too; this keeps the relay's promise
@@ -256,7 +335,9 @@ export class NodeEventRelay {
 
   private stopRelay(nodeId: BackendId, relay: Relay): void {
     relay.stream.stop();
-    if (this.relays.get(nodeId) === relay) this.relays.delete(nodeId);
+    if (this.relays.get(nodeId) !== relay) return;
+    this.relays.delete(nodeId);
+    this.push?.upstreamClosed(nodeId);
   }
 
   private relayResync(nodeId: BackendId): void {

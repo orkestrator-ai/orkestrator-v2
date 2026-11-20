@@ -39,7 +39,7 @@ import {
   resolveConflictsPrompt,
   VERIFICATION_OUTPUT_CONTRACT,
   verificationPrompt,
-} from "./build-pipeline-prompts.js";
+} from "./build-pipeline/prompts.js";
 import {
   GraphBuiltInPromptError,
   graphBuiltInPromptText,
@@ -50,9 +50,9 @@ import {
   createMultiReviewConsolidationPrompt,
   createPackagedMultiReviewerPrompt,
   reviewerPanelTail,
-} from "./multi-review-prompts.js";
-import { createDiscoveryPrompt } from "./review-prompts.js";
-import { reviewValidationDiscoveryPrompt } from "./review-validation-prompts.js";
+} from "./review/multi-review-prompts.js";
+import { createDiscoveryPrompt } from "./review/prompts.js";
+import { reviewValidationDiscoveryPrompt } from "./review/validation-prompts.js";
 
 /** A recognisable phrase of each built-in's bound builder. */
 const BUILDER_PHRASES: Record<GraphBuiltInPromptId, string> = {

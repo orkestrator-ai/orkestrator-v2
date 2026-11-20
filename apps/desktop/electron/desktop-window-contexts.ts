@@ -1,3 +1,4 @@
+import { PUSH_STREAM_STATE_EVENT } from "@orkestrator/protocol/push-events";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import {
   isPerNodeRelayedEvent,
@@ -44,7 +45,8 @@ export type DesktopWindowConnections = Pick<
   | "release"
   | "setRelayedEvents"
   | "relayedEventReady"
->;
+> &
+  Partial<Pick<ConnectionManager, "pushStreamClient">>;
 
 type IpcSender = { sender?: { id: number } };
 
@@ -87,6 +89,15 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
   readonly windows: ReadonlyMap<number, T> = this.contexts;
   /** The per-node relayed events each window listens to, by its renderer's ID. */
   private readonly relayedListens = new Map<number, Set<string>>();
+  /** One push stream belongs to each IPC renderer that listens to its offer. */
+  private readonly pushStreams = new Map<
+    number,
+    {
+      connectionId: string;
+      client: ReturnType<ConnectionManager["pushStreamClient"]>;
+      stop: () => void;
+    }
+  >();
   /** What each connection's filtered stream was last told to carry. */
   private readonly appliedRelayedEvents = new Map<string, string>();
   /** Node scope connections: whose `orkestrator:node-event` each one feeds. */
@@ -190,7 +201,10 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
    */
   addRelayedListen(event: IpcSender | undefined, name: unknown): Promise<void> {
     const context = this.forEvent(event);
-    if (typeof name !== "string" || !relayedNodeEventNodeId(name))
+    if (
+      typeof name !== "string" ||
+      (name !== PUSH_STREAM_STATE_EVENT && !relayedNodeEventNodeId(name))
+    )
       throw new Error("Expected a per-node relayed event");
     let listens = this.relayedListens.get(context.contents.id);
     if (!listens) {
@@ -202,7 +216,7 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
     listens.add(name);
     this.syncRelayedEvents();
     const connectionId = this.relayConnection(context);
-    return connectionId === null
+    return connectionId === null || name === PUSH_STREAM_STATE_EVENT
       ? Promise.resolve()
       : (this.options.connections()?.relayedEventReady(connectionId, name) ?? Promise.resolve());
   }
@@ -236,6 +250,21 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
   syncRelayedEvents(): void {
     const connections = this.options.connections();
     if (!connections) return;
+    for (const [id, stream] of Array.from(this.pushStreams)) {
+      const context = this.contexts.get(id);
+      const connectionId = context && this.relayConnection(context);
+      const client = connectionId ? connections.pushStreamClient?.(connectionId) : null;
+      if (
+        connectionId === stream.connectionId &&
+        client === stream.client &&
+        this.relayedListens.get(id)?.has(PUSH_STREAM_STATE_EVENT)
+      )
+        continue;
+      stream.stop();
+      this.pushStreams.delete(id);
+      if (context)
+        emitToContents(context.contents, PUSH_STREAM_STATE_EVENT, { state: "disconnected" });
+    }
     const wanted = new Map<string, Set<string>>();
     for (const context of this.renderers()) {
       const listens = this.relayedListens.get(context.contents.id);
@@ -243,8 +272,20 @@ export class DesktopWindowContexts<T extends DesktopWindowContextRecord> {
       const connectionId = this.relayConnection(context);
       if (connectionId === null) continue;
       const events = wanted.get(connectionId) ?? new Set<string>();
-      wanted.set(connectionId, events);
-      for (const name of listens) events.add(name);
+      for (const name of listens) {
+        if (name !== PUSH_STREAM_STATE_EVENT) events.add(name);
+      }
+      if (events.size > 0) wanted.set(connectionId, events);
+      const id = context.contents.id;
+      if (listens.has(PUSH_STREAM_STATE_EVENT) && !this.pushStreams.has(id)) {
+        const client = connections.pushStreamClient?.(connectionId);
+        if (client) {
+          const stop = client.listenPush((event, payload) =>
+            emitToContents(context.contents, event, payload),
+          );
+          this.pushStreams.set(id, { connectionId, client, stop });
+        }
+      }
     }
     for (const connectionId of Array.from(this.appliedRelayedEvents.keys())) {
       if (wanted.has(connectionId)) continue;

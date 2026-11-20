@@ -1,5 +1,5 @@
 import type { UsageLimitStop } from "@orkestrator/protocol/coordinator-notices";
-import type { UsageLimitStopReport } from "./agent-accounts-auto-switch.js";
+import type { UsageLimitStopReport } from "./agent-accounts/index.js";
 import type { StorageContext } from "./storage-context.js";
 
 /**

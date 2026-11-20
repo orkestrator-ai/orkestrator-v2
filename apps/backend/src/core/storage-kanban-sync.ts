@@ -532,6 +532,7 @@ export function stampTicketChange(
     for (const field of ["title", "content", "status"] as const) {
       if (!diff[field]) continue;
       meta.revs[field] = seq;
+      if (field === "status") delete meta.rejectedStatusRevision;
       delete revBy[field];
     }
     if (Object.keys(revBy).length) meta.revBy = revBy;
@@ -558,7 +559,11 @@ export function stampTicketChange(
       kind: "set-status",
       value: after.status,
       baseRev: replica.revs.status ?? 0,
-      ...(after.prMergeDoneUrl ? { prMergeDoneUrl: after.prMergeDoneUrl } : {}),
+      // A reopen carries the merge it observed, even if both ops travel together.
+      ...(after.prMergeDoneUrl &&
+      (after.status !== "done" || after.prMergeDoneUrl !== before.prMergeDoneUrl)
+        ? { prMergeDoneUrl: after.prMergeDoneUrl }
+        : {}),
     });
   }
   for (const comment of diff.addedComments) {
@@ -711,6 +716,9 @@ export function ticketSnapshot(task: KanbanTask, selfId?: string): TicketSnapsho
     revs: task.sync?.revs ?? {},
     title: task.title,
     status: task.status,
+    ...(task.sync?.rejectedStatusRevision !== undefined
+      ? { rejectedStatusRevision: task.sync.rejectedStatusRevision }
+      : {}),
     ...(task.prMergeDoneUrl ? { prMergeDoneUrl: task.prMergeDoneUrl } : {}),
     comments: task.comments.map(({ id, text, createdAt }) => ({ id, text, createdAt })),
     ...(selfId ? { images: snapshotImages(task, selfId) } : {}),

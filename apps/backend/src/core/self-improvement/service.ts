@@ -18,6 +18,7 @@ import {
   type ResolvedSelfImprovementSettings,
   SELF_IMPROVEMENT_LIMITS,
   SELF_IMPROVEMENT_MODELS,
+  type SelfImprovementMachineResult,
   type SelfImprovementRunStart,
   type SelfImprovementRunSummary,
   type SelfImprovementRunTrigger,
@@ -34,6 +35,8 @@ import {
   type ModelRunner,
 } from "./insights/model.js";
 import { defaultSources, type TranscriptSources } from "./insights/transcripts.js";
+import { extractSignals } from "./signals.js";
+import { type LeafBundle, leafFailure, type LeafNode } from "./leaves.js";
 import { loadLedger, writeAtomic } from "./ledger.js";
 import { type Board, runLoop } from "./loop.js";
 import { RunProgress } from "./progress.js";
@@ -67,6 +70,12 @@ export interface SelfImprovementDeps {
   /** A diagnostics bundle archive of this backend, as `buildDiagnosticsBundle` builds it. */
   exportBundle(): Promise<Buffer>;
   board(projectId: string): Board;
+  /**
+   * On a command node: this machine and its connected leaf nodes, whose
+   * diagnostics and conversations a run reads too. Null, or no leaves, on any
+   * other node. Read once per run.
+   */
+  fleet?(): Promise<{ self: { nodeId: string; name: string }; leaves: LeafNode[] } | null>;
   /**
    * Whether this backend holds the data directory's writer lease. A backend
    * that does not never starts a run, daily or manual. Absent means it does.
@@ -307,6 +316,7 @@ export class SelfImprovementService {
     let summary: SelfImprovementRunSummary;
     try {
       const data: BundleData = await readBundleArchive(await this.deps.exportBundle());
+      const fleet = await this.readFleet(running);
       let insights: Parameters<typeof runLoop>[0]["insights"] = false;
       if (settings.conversationReview) {
         const launch = await this.deps.claudeLaunch();
@@ -320,9 +330,17 @@ export class SelfImprovementService {
           ),
           sources: this.deps.transcriptSources?.() ?? defaultSources(this.deps.dataDir),
           excludeDirs: [path.resolve(this.stateDir), path.resolve(this.deps.dataDir)],
+          leaves: fleet.leaves.map((leaf) => ({
+            nodeId: leaf.nodeId,
+            conversations: async (request) => {
+              const selection = await leaf.conversations(request);
+              running.progress.leafAnswered();
+              return selection;
+            },
+          })),
         };
       }
-      const result = await runLoop({
+      const { conversationLeaves, ...result } = await runLoop({
         stateDir: this.ensureStateDir(),
         data,
         board: this.deps.board(projectId),
@@ -332,9 +350,19 @@ export class SelfImprovementService {
         onStep,
         insightProgress: running.progress,
         insights,
+        ...(fleet.self ? { fleet: { self: fleet.self, bundles: fleet.bundles } } : {}),
+      });
+      const machines = fleet.results.map((machine): SelfImprovementMachineResult => {
+        const review = conversationLeaves?.[machine.nodeId];
+        return {
+          ...machine,
+          conversations: settings.conversationReview ? (review?.state ?? "failed") : "off",
+          conversationParts: review?.parts ?? 0,
+        };
       });
       summary = {
         ...result,
+        ...(machines.length > 0 ? { machines } : {}),
         trigger: running.trigger,
         startedAt: running.startedAt,
         finishedAt: this.now().toISOString(),
@@ -345,6 +373,8 @@ export class SelfImprovementService {
         verified: result.verified.length,
         fixFailed: result.fixFailed.length,
         parts: result.conversations.read,
+        leaves: machines.length,
+        leavesRead: machines.filter((machine) => machine.diagnostics === "read").length,
       });
     } catch (error) {
       // Content-free: a message can quote a path, a ticket id or provider text.
@@ -365,6 +395,59 @@ export class SelfImprovementService {
         `${JSON.stringify({ startedAt: running.startedAt })}\n`,
       );
     }
+  }
+
+  /**
+   * The connected leaves and their diagnostics, read at once while the run
+   * is exporting. A leaf that fails, or predates the command, is left out and
+   * reported; the run goes on with the others.
+   */
+  private async readFleet(running: Running): Promise<{
+    self: { nodeId: string; name: string } | null;
+    leaves: LeafNode[];
+    bundles: LeafBundle[];
+    results: Array<Omit<SelfImprovementMachineResult, "conversations" | "conversationParts">>;
+  }> {
+    let fleet: Awaited<ReturnType<NonNullable<SelfImprovementDeps["fleet"]>>> = null;
+    try {
+      fleet = (await this.deps.fleet?.()) ?? null;
+    } catch (error) {
+      log.warn("leaves.list-failed", { error: formatLogError(error, { message: false }) });
+    }
+    if (!fleet) {
+      return { self: null, leaves: [], bundles: [], results: [] };
+    }
+    const read = await Promise.all(
+      fleet.leaves.map(async (leaf) => {
+        try {
+          const data = await readBundleArchive(await leaf.diagnostics());
+          const extracted = extractSignals(data);
+          running.progress.leafAnswered();
+          return { leaf, data, extracted, state: "read" as const };
+        } catch (error) {
+          const state = leafFailure(error);
+          // Content-free: the node id is an identity, not content; the message can quote a path.
+          log.warn("leaf.diagnostics-failed", {
+            state,
+            error: formatLogError(error, { message: false }),
+          });
+          return { leaf, data: null, extracted: null, state };
+        }
+      }),
+    );
+    return {
+      self: fleet.self,
+      leaves: fleet.leaves,
+      bundles: read.flatMap(({ leaf, data, extracted }) =>
+        data && extracted ? [{ nodeId: leaf.nodeId, name: leaf.name, data, extracted }] : [],
+      ),
+      results: read.map(({ leaf, data, state }) => ({
+        nodeId: leaf.nodeId,
+        name: leaf.name,
+        diagnostics: state,
+        ...(data ? { appVersion: data.manifest.appVersion } : {}),
+      })),
+    };
   }
 
   /** The state directory, created owner-only; Claude Code runs in it. */

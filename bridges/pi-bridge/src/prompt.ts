@@ -54,6 +54,7 @@ import {
   type PromptJournalEntry,
   type SessionState,
 } from "./state.js";
+import { revisionChanged } from "./observation.js";
 
 const log = createLogger("bridge.pi");
 
@@ -456,7 +457,7 @@ function abandonStartup(
   // handed to Pi but not yet running", and every busy check in the bridge —
   // config, compaction, command reloads, MCP rebuilds, history navigation —
   // already refuses to disturb that state.
-  state.revision += 1;
+  revisionChanged(state);
   schedulePersist();
   if (claim !== undefined) {
     // An approval hook a late run reaches is refused, never parked.
@@ -497,7 +498,7 @@ function abandonStartup(
       if (ran) recordTurnEnded(state, evidenceTurnId, "failed");
       else forgetEvidenceTurn(state, evidenceTurnId);
       releasePromptClaim(state, claim);
-      state.revision += 1;
+      revisionChanged(state);
       boundTranscript(state);
       schedulePersist();
       afterTurnSettled(state);
@@ -615,7 +616,7 @@ function finishTurn(state: SessionState, session: AgentSession, input: DispatchI
   if (cancelled) recordInterruptedOutput(state, input, "The Pi turn was cancelled");
   else recordStructuredOutput(state, session, input, true);
   journal(state, input.requestId, "completed");
-  state.revision += 1;
+  revisionChanged(state);
   boundTranscript(state);
   schedulePersist();
   afterTurnSettled(state);
@@ -643,7 +644,7 @@ export function settleCancelledBeforeSend(
   recordInterruptedOutput(state, input, "The turn was cancelled before it was sent to Pi");
   journal(state, input.requestId, "completed");
   releasePromptClaim(state, claim);
-  state.revision += 1;
+  revisionChanged(state);
   boundTranscript(state);
   schedulePersist();
   afterTurnSettled(state);
@@ -686,7 +687,7 @@ function failTurn(
   recordUsage(state, input);
   recordStructuredOutput(state, session, input, false);
   journal(state, input.requestId, "failed");
-  state.revision += 1;
+  revisionChanged(state);
   boundTranscript(state);
   schedulePersist();
   afterTurnSettled(state);

@@ -8,42 +8,74 @@ import { unrefTimers, type IntervalTimers } from "@orkestrator/protocol/timers";
 import { abortableSleep } from "../abortable-timing.js";
 import type { BridgeConnection } from "../agent-provider-contract.js";
 import { bridgeEventStreamFetch } from "./transport.js";
+import {
+  bridgeObservationRevisionVersion,
+  parseBridgeObservationFrame,
+} from "@orkestrator/protocol/bridge-state-revision";
 
 /**
- * The backend's subscription to an HTTP bridge's own event stream, as the
- * idle wakeup for the activity observer (0049 code item 1).
+ * The backend's subscription to an HTTP bridge's own event stream: the idle
+ * wakeup for the activity observer (0049 code item 1) and the change signal
+ * of the push layer's `native-session` observer (to-do 8102 task 2, D7).
  *
- * The activity sweep reads every HTTP-bridge group every 2 s. A stably idle
- * group may read less often only while something reports work started by
- * anyone else (`NativeAgentObservationCapabilities.idleBackoffWakeup`). The
- * Claude and Codex bridges already publish every session change on
- * `GET /event/subscribe`, with a cursor, so this subscribes once per bridge
- * connection and turns frames into content-free hints. Hints only make a group due; they are never applied as activity, and
- * the sweep's no-touch read stays the only source of truth.
+ * Every managed bridge (Claude, Codex, Cursor, Pi, ACP/Grok) publishes its
+ * session changes on `GET /event/subscribe?observe=1`, with a cursor, so this
+ * subscribes once per bridge connection and turns frames into content-free,
+ * per-session hints. Hints only make a read due; they are never applied as
+ * activity or state, and the reads stay the only source of truth.
  *
+ * - **Revisions.** A bridge that advertises `"revisions": 1` in its
+ *   `connected` frame carries `stateRevision` and `transcriptRevision` on each
+ *   frame (`@orkestrator/protocol/bridge-state-revision`). The hint names the
+ *   parts that moved since the last frame for that session, and a frame that
+ *   moved neither is dropped. Only such a stream is {@link revisionsLive}: the
+ *   push observer then stops polling a subscribed session on a timer and reads
+ *   it on these hints (with a backstop). An older bridge's frames still hint,
+ *   without parts.
  * - **Live** only between a `connected` frame and the next gap, and only while
  *   some frame (a keepalive at worst) arrived within
  *   {@link BRIDGE_OBSERVATION_STREAM_SILENCE_MS}. A half-open connection
- *   therefore stops qualifying the group for backoff and is reconnected.
+ *   therefore stops qualifying and is reconnected.
  * - **Gaps.** Reconnects send the last frame id (`?since=`). The bridges keep
  *   no replay, so a cursor that is not current gets a `replay.required`
- *   (Claude) or a `session.reconcile-required` without a session (Codex).
- *   That, and every connect, hint every session: whatever was missed is
- *   re-read by the next sweep. A bridge restart ends the stream and reads the
- *   same way.
+ *   (Claude, Cursor, Pi, ACP) or a `session.reconcile-required` without a
+ *   session (Codex). That, and every connect, hint every session: whatever was
+ *   missed is re-read. A bridge restart ends the stream and reads the same way.
+ * - **Older bridges.** A Cursor, Pi or ACP bridge that predates the stream
+ *   answers 404 (or 405): the stream stops for this connection, and its
+ *   sessions keep their full cadence. A bridge restart is a new connection.
  * - **Observation mode.** The stream is opened with `?observe=1`: the bridge
- *   sends each event's type, cursor and session id, never its payload, and
- *   refuses a subscription without it.
+ *   sends each event's type, cursor, session id and revisions, never its
+ *   payload, and refuses a subscription without it.
  * - **Bounds.** One connection per bridge, frames bounded by the shared SSE
- *   decoder, reconnects backed off with jitter, and only a session id read
- *   from each frame's prefix: no payload is parsed or retained.
- *
- * Cursor, Pi and Grok bridges publish no event stream; their groups keep the
- * full sweep cadence.
+ *   decoder, reconnects backed off with jitter, only a bounded prefix of each
+ *   frame parsed, and the last revisions of at most
+ *   {@link BRIDGE_OBSERVATION_STREAM_MAX_SESSIONS} sessions kept.
  */
-
 /** Bridges whose `/event/subscribe` this backend consumes. */
-export const BRIDGE_OBSERVATION_STREAM_AGENTS: ReadonlySet<string> = new Set(["claude", "codex"]);
+export const BRIDGE_OBSERVATION_STREAM_AGENTS: ReadonlySet<string> = new Set([
+  "claude",
+  "codex",
+  "cursor",
+  "pi",
+  "grok",
+]);
+
+/** Sessions whose last frame revisions the stream remembers, to drop repeats. */
+export const BRIDGE_OBSERVATION_STREAM_MAX_SESSIONS = 4_096;
+
+/** The parts of a session a frame says moved. */
+export type BridgeObservationPart = "state" | "transcript";
+
+/**
+ * A session (`sessionId`) or every session (`undefined`) may have changed.
+ * `parts` names what moved, from a bridge that carries revisions; absent
+ * means unknown (any part may have).
+ */
+export type BridgeObservationHint = (
+  sessionId: string | undefined,
+  parts?: readonly BridgeObservationPart[],
+) => void;
 
 /**
  * Longest silence a live stream may have. Both bridges send a keepalive
@@ -57,15 +89,10 @@ const TRANSPORT_EVENTS: ReadonlySet<string> = new Set(["keepalive", "bridge.curs
 /** Frames that mean the stream lost continuity for every session. */
 const GAP_EVENTS: ReadonlySet<string> = new Set(["replay.required"]);
 
-/** Bytes of a frame's data searched for its session id. */
-const SESSION_ID_PREFIX_BYTES = 2_048;
-const SESSION_ID_PREFIX = /^\{"sessionId":"((?:[^"\\]|\\.){1,1024})"/;
-
 export interface HttpBridgeObservationStreamOptions {
   connection: BridgeConnection;
   fetchImpl?: typeof fetch;
-  /** A session (`sessionId`) or every session (`undefined`) may have changed. */
-  hint?: (sessionId: string | undefined) => void;
+  hint?: BridgeObservationHint;
   now?: () => number;
   random?: () => number;
   /** Reconnect ladder; the defaults match the backend's other stream clients. */
@@ -96,6 +123,15 @@ export class HttpBridgeObservationStream {
   private readonly silenceMs: number;
   private connects = 0;
   private gaps = 0;
+  private dropped = 0;
+  /** The connected frame advertised revisions on every frame. */
+  private revisions = false;
+  /** A bridge that predates the stream: stop asking. */
+  private unsupported = false;
+  private readonly lastRevisions = new Map<
+    string,
+    { stateRevision?: string; transcriptRevision?: string }
+  >();
 
   constructor(private readonly options: HttpBridgeObservationStreamOptions) {
     this.now = options.now ?? Date.now;
@@ -116,9 +152,31 @@ export class HttpBridgeObservationStream {
     return this.live && !this.closed && this.now() - this.lastFrameAt <= this.silenceMs;
   }
 
+  /** Live, and every frame carries the session's state and transcript revisions. */
+  get revisionsLive(): boolean {
+    return this.revisions && this.isLive;
+  }
+
+  /** The bridge answered that it serves no observe stream. */
+  get isUnsupported(): boolean {
+    return this.unsupported;
+  }
+
   /** Content-free counters for tests and diagnostics. */
-  stats(): { connects: number; gaps: number; cursor: string | null } {
-    return { connects: this.connects, gaps: this.gaps, cursor: this.cursor };
+  stats(): {
+    connects: number;
+    gaps: number;
+    cursor: string | null;
+    revisions: boolean;
+    dropped: number;
+  } {
+    return {
+      connects: this.connects,
+      gaps: this.gaps,
+      cursor: this.cursor,
+      revisions: this.revisions,
+      dropped: this.dropped,
+    };
   }
 
   /** Start the subscription once; later calls are no-ops. */
@@ -159,6 +217,11 @@ export class HttpBridgeObservationStream {
         );
         if (!response.ok || !response.body) {
           await response.body?.cancel().catch(() => undefined);
+          if (response.status === 404 || response.status === 405) {
+            // An older bridge without the route: its sessions keep the cadence.
+            this.unsupported = true;
+            return;
+          }
           throw new Error(`bridge event stream answered HTTP ${response.status}`);
         }
         this.lastFrameAt = this.now();
@@ -171,7 +234,7 @@ export class HttpBridgeObservationStream {
       }
       if (this.connection === connection) this.connection = null;
       this.lost();
-      if (this.closed) return;
+      if (this.closed || this.unsupported) return;
       await abortableSleep(this.backoff.nextDelayMs(), this.stopping.signal);
     }
   }
@@ -184,24 +247,71 @@ export class HttpBridgeObservationStream {
     if (event === "connected") {
       this.live = true;
       this.connects += 1;
+      this.revisions = bridgeObservationRevisionVersion(frame.data) >= 1;
+      this.lastRevisions.clear();
       this.backoff.connected();
       // Whatever happened while disconnected is re-read once.
       this.notify(undefined);
       return;
     }
     if (TRANSPORT_EVENTS.has(event)) return;
-    const sessionId = frameSessionId(frame.data);
+    const parsed = parseBridgeObservationFrame(frame.data);
+    const sessionId = parsed.sessionId;
     if (GAP_EVENTS.has(event) || (event === "session.reconcile-required" && !sessionId)) {
       this.gaps += 1;
+      this.lastRevisions.clear();
       this.notify(undefined);
       return;
     }
-    this.notify(sessionId);
+    if (sessionId === undefined || !this.revisions) {
+      this.notify(sessionId);
+      return;
+    }
+    const parts = this.movedParts(sessionId, parsed);
+    if (parts && parts.length === 0) {
+      this.dropped += 1;
+      return;
+    }
+    this.notify(sessionId, parts);
+  }
+
+  /**
+   * The parts a frame moved against the last frame for its session; `[]` when
+   * neither revision moved, `undefined` when the frame carries none to compare.
+   */
+  private movedParts(
+    sessionId: string,
+    frame: { stateRevision?: string; transcriptRevision?: string },
+  ): BridgeObservationPart[] | undefined {
+    if (frame.stateRevision === undefined && frame.transcriptRevision === undefined) {
+      this.lastRevisions.delete(sessionId);
+      return undefined;
+    }
+    const last = this.lastRevisions.get(sessionId);
+    this.lastRevisions.delete(sessionId);
+    this.lastRevisions.set(sessionId, {
+      ...(frame.stateRevision === undefined ? {} : { stateRevision: frame.stateRevision }),
+      ...(frame.transcriptRevision === undefined
+        ? {}
+        : { transcriptRevision: frame.transcriptRevision }),
+    });
+    while (this.lastRevisions.size > BRIDGE_OBSERVATION_STREAM_MAX_SESSIONS) {
+      const oldest = this.lastRevisions.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.lastRevisions.delete(oldest);
+    }
+    if (!last) return undefined;
+    const parts: BridgeObservationPart[] = [];
+    if (frame.stateRevision !== last.stateRevision) parts.push("state");
+    if (frame.transcriptRevision !== last.transcriptRevision) parts.push("transcript");
+    return parts;
   }
 
   private lost(): void {
     const wasLive = this.live;
     this.live = false;
+    this.revisions = false;
+    this.lastRevisions.clear();
     this.stopWatchdog();
     if (wasLive && !this.closed) this.notify(undefined);
   }
@@ -227,10 +337,11 @@ export class HttpBridgeObservationStream {
     this.watchdog = null;
   }
 
-  private notify(sessionId: string | undefined): void {
+  private notify(sessionId: string | undefined, parts?: readonly BridgeObservationPart[]): void {
     if (this.closed || !this.options.hint) return;
     try {
-      this.options.hint(sessionId);
+      if (parts) this.options.hint(sessionId, parts);
+      else this.options.hint(sessionId);
     } catch {
       // A failed hint only costs latency; the sweep still runs.
     }
@@ -238,11 +349,11 @@ export class HttpBridgeObservationStream {
 }
 
 /**
- * One HTTP bridge provider's idle wakeup. The stream opens on the activity
- * observer's first ask, so only a provider the sweep reads holds a
- * subscription, and never after the provider was disposed (a sweep may still
- * hold a retired provider). Only Claude and Codex bridges, and only with a
- * hint sink to report to.
+ * One HTTP bridge provider's observe stream. It opens on the first ask (the
+ * activity observer's, or the push observer's), so only a provider something
+ * reads holds a subscription, and never after the provider was disposed (a
+ * sweep may still hold a retired provider). Only with a hint sink to report
+ * to.
  */
 export class HttpBridgeObservationWakeup {
   private stream: HttpBridgeObservationStream | null = null;
@@ -251,13 +362,27 @@ export class HttpBridgeObservationWakeup {
   constructor(
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
-    private readonly hint?: (sessionId: string | undefined) => void,
+    private readonly hint?: BridgeObservationHint,
   ) {}
 
-  /** Whether the group may back off now; opens the stream on first ask. */
+  /** Whether the stream is live (the activity sweep's idle backoff); opens it on first ask. */
   live(): boolean {
+    return this.open()?.isLive === true;
+  }
+
+  /** Whether the stream is live and carries revisions (the push observer's signal). */
+  revisionsLive(): boolean {
+    return this.open()?.revisionsLive === true;
+  }
+
+  close(): void {
+    this.closed = true;
+    this.stream?.close();
+  }
+
+  private open(): HttpBridgeObservationStream | null {
     if (this.closed || !this.hint || !BRIDGE_OBSERVATION_STREAM_AGENTS.has(this.connection.agent)) {
-      return false;
+      return null;
     }
     if (!this.stream) {
       this.stream = new HttpBridgeObservationStream({
@@ -267,27 +392,15 @@ export class HttpBridgeObservationWakeup {
       });
       this.stream.start();
     }
-    return this.stream.isLive;
-  }
-
-  close(): void {
-    this.closed = true;
-    this.stream?.close();
+    return this.stream;
   }
 }
 
 /**
- * The session a frame names. Both bridges serialize `sessionId` first, so
+ * The session a frame names. Every bridge serializes `sessionId` first, so
  * only a bounded prefix is searched; a frame without one (or a larger,
  * differently shaped one) hints every session instead of being parsed.
  */
 export function frameSessionId(data: string | null): string | undefined {
-  if (!data) return undefined;
-  const match = SESSION_ID_PREFIX.exec(data.slice(0, SESSION_ID_PREFIX_BYTES));
-  if (!match) return undefined;
-  try {
-    return JSON.parse(`"${match[1]}"`) as string;
-  } catch {
-    return undefined;
-  }
+  return parseBridgeObservationFrame(data).sessionId;
 }

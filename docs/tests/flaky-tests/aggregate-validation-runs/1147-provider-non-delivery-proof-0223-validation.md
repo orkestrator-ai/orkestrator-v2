@@ -1,5 +1,16 @@
 # Provider non-delivery proof (todo 0223) branch validation
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/review/fanout-dispatch.test.ts`
+- `apps/backend/src/core/review/fanout-interleaving.test.ts`
+- `apps/backend/src/core/build-pipeline/result-reminder.test.ts`
+- `apps/backend/src/core/build-pipeline/review-fanout.test.ts`
+- `apps/backend/src/core/build-pipeline/service-recovery.test.ts`
+- `apps/backend/src/core/build-pipeline/steps.test.ts`
+
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/active.test.ts`.
+
 - **ID:** 1147
 - **Status:** open
 - **Date observed:** 2026-10-27

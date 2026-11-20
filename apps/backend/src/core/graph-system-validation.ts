@@ -43,8 +43,8 @@ import {
 } from "./graph-system-action.js";
 import type { GraphWorkspaceValue } from "./graph-system-push.js";
 import type { Environment } from "./models.js";
-import { parseReviewPackageReference } from "./review-package.js";
-import { validationPreparation } from "./review-validation-service.js";
+import { parseReviewPackageReference } from "./review/index.js";
+import { validationPreparation } from "./review/validation-service.js";
 
 /** How often a validation job reads the worker's state while commands run. */
 export const GRAPH_VALIDATION_POLL_MS = 3_000;

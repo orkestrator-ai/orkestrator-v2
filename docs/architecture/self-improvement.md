@@ -3,9 +3,11 @@
 Status: Living. Experimental and **off by default**. Turn it on in
 Settings → Experimental → Self-improvement.
 
-Self-improvement finds what to fix or improve from how this machine actually
-behaves, files it as tickets on a project's board, and checks each fix on
-the app versions that carry it. It looks in two places:
+Self-improvement finds what to fix or improve from how your machines actually
+behave, files it as tickets on a project's board, and checks each fix on
+the app versions that carry it. It looks in two places, on this machine and,
+on a command node, on every connected leaf node too
+([Leaf nodes](#leaf-nodes)):
 
 - **The app's own diagnostics.** The
   [essential event log](logging.md#the-essential-event-log), the
@@ -84,11 +86,15 @@ service around it is in `service.ts`. Its steps are those the page shows
 (see [Progress](#progress)):
 
 1. **Exporting.** Builds this backend's diagnostics bundle in memory
-   (`buildDiagnosticsBundle`, redaction included) and reads it.
+   (`buildDiagnosticsBundle`, redaction included, without debug logs, which a
+   run never reads) and reads it. On a command node it also asks every
+   connected leaf for its bundle, all at once ([Leaf nodes](#leaf-nodes)).
 2. **Board.** For each tracked problem with a ticket, reads the ticket on
    the project it was filed on (the ledger entry's `projectId`) and applies
    the table above. Done records "fixed in any version newer than the one
-   running now" (`fixedAfter`).
+   running now" (`fixedAfter`): on a command node, the newest version running
+   on any machine whose diagnostics were read, including the last known
+   versions of unavailable leaves that contributed to the fault's baseline.
 3. **Reading conversations** and **grouping themes**, when the review is on
    (see [Conversation review](#conversation-review)).
 4. **Digesting.** Ranks every signal from the bundle and the themes, and
@@ -113,7 +119,68 @@ retry posts it once.
 
 One run happens at a time. A run that fails records a fixed reason for the
 step it was on ("Could not export this machine's diagnostics."), never the
-error text.
+error text. A leaf that fails does not fail the run: the run goes on without
+it and lists it in its summary.
+
+## Leaf nodes
+
+On a command node ([command-nodes.md](command-nodes.md)) a run reads every
+leaf node that is connected when it starts, as well as this machine. A
+standalone node or a leaf reads only itself. Nothing is set on the leaf: it
+needs neither the experimental switch nor Claude Code. Its user's projects
+and settings are not involved; the tickets go to the command node's chosen
+project.
+
+- **How.** Two commands in the `system` domain, sent over the command node's
+  own link with its `controllerId`, like shared usage readings
+  ([command-nodes.md](command-nodes.md#self-improvement-across-nodes)):
+  `collect_self_improvement_diagnostics` answers the leaf's bundle (without
+  debug logs, base64, at most 16 MiB), and
+  `collect_self_improvement_conversations` answers the leaf's unread
+  conversation parts. Both are `internal`, refused to anything but an
+  attached command node (`attachedController`), and never routed, granted or
+  relayed (`NODE_ROUTING_EXCLUDED_COMMANDS`). Both only read.
+- **Diagnostics are merged by signature** (`fleet.ts`), so the same problem on
+  two machines is one signal, one ticket and one verdict, and ledger entries
+  saved before leaves were read keep matching. A signal's evidence names the
+  machines it was seen on (`machines=Desk, VPS`).
+  - Fleet rates use occurrences per machine-day of observed source exposure.
+    Uncovered machines contribute no hours. For crashes, each machine uses the
+    health summary or the essential-log fallback that supplied its counts.
+  - Fix verdicts compare the machines that saw the baseline fault. If an
+    affected leaf is unavailable when a ticket moves to Done, its last known
+    version also contributes to the inferred fix boundary. Each machine must
+    supply at least 24 hours on fix-carrying versions. For rates, each
+    contributor has equal weight in both measurements. An older fleet
+    baseline without recoverable contributors remains awaiting evidence.
+  - A gauge is the worst value on any machine.
+  - The score ranks by the fleet's total rate, so a problem on every machine
+    outranks the same problem on one.
+  - With no leaf read, signals are this machine's alone, exactly as before.
+- **Conversations.** The leaf selects and renders its parts as this machine
+  does (settled, its own data directory left out, redacted, capped); the
+  command node redacts them again, runs the model and keeps the notes and
+  themes. Read positions for each leaf are kept on the command node
+  (`insights/nodes/<hash of node id>/cursor.json`), so the leaf keeps no
+  record and a run that fails before saving them reads the same parts again.
+  A leaf's conversation ids carry its node id (`@<nodeId>/claude:<session>`),
+  so two machines never share one. The run reserves at least one of its 30
+  slots for local review. It rotates the remaining slots across large fleets
+  using a saved position, and the local node takes any unused slots. The app
+  version resolved for a reviewed leaf part stays with the cursor and notes
+  across runs. With no version evidence at review time, the part counts as
+  unknown and cannot serve as fix-carrying evidence.
+- **Summary.** `lastRun.machines` lists each leaf asked: its name, app
+  version, and whether its diagnostics and conversations were `read`,
+  `failed` or `needs-update` (it predates the commands), or `off` (the review
+  is off), with the parts read from it. The page lists them under the last
+  run; the digest's Markdown names every machine in it.
+- **Digest.** Its `bundle` is this machine's; `machines` lists every bundle
+  in it, and its id is made from all of them.
+
+A leaf that also runs self-improvement itself reviews its own conversations
+separately, with its own positions: a conversation can then be read once by
+each.
 
 ## Progress
 
@@ -158,6 +225,8 @@ backend sends no `progress`, and the page then shows only the status line.
      each Orkestrator-managed Claude account's `projects/` under the data
      directory.
    - Codex: `${CODEX_HOME:-~/.codex}/sessions`.
+   - On a command node, the same places on each connected leaf, read there
+     and sent back ([Leaf nodes](#leaf-nodes)).
 
    Every project is read. A conversation is read once it has been quiet for
    an hour, and only its new part, so nothing is analysed twice. Where the
@@ -269,10 +338,11 @@ fix, the run waits for the next release before judging it.
 | Commands `get_self_improvement_status`, `run_self_improvement` | `system` domain (`access: admin`), `packages/protocol/src/contract/domains/system/commands.ts`; handlers in `apps/backend/src/core/commands-registry-self-improvement.ts` |
 | Public actions `self-improvement.status`, `self-improvement.run` | `apps/backend/src/core/public-api/actions-self-improvement.ts`; CLI in `packages/cli/src/client/commands/self-improvement.ts` |
 | Service and run | `apps/backend/src/core/self-improvement/` (`service.ts`, `loop.ts`, `signals.ts`, `ledger.ts`, `bundle.ts`, `report.ts`, `insights/`) |
+| Leaf nodes | `leaves.ts` (both sides' answers and parsing) and `fleet.ts` (merging signals); the commands `collect_self_improvement_diagnostics` and `collect_self_improvement_conversations` (`system` domain, `access: internal`), and the command node's list of leaves (`selfImprovementFleet`) in `commands-registry-self-improvement.ts` |
 | Settings page | `apps/web/src/components/settings/SelfImprovementSettings.tsx`, `SelfImprovementLists.tsx` |
 | Run progress | `apps/backend/src/core/self-improvement/progress.ts`; the stage list and its window in `apps/web/src/components/settings/SelfImprovementProgress.tsx`, with the wording and liveness rules in `apps/web/src/lib/self-improvement-progress.ts` |
 | Config | `global.experimentalSelfImprovement`, `global.selfImprovement` (`projectId`, `conversationReview`, `dailyRun`) |
-| State | `<data dir>/self-improvement/`, owner-only: `ledger.json`, `digests/` (newest 120, as `.json` and `.md`), `last-run.json`, `last-counted-run.json`, and `insights/` (notes for 90 days, at most 3,000; themes; read positions) |
+| State | `<data dir>/self-improvement/`, owner-only: `ledger.json`, `digests/` (newest 120, as `.json` and `.md`), `last-run.json`, `last-counted-run.json`, and `insights/` (notes for 90 days, at most 3,000; themes; read positions, and each leaf's under `insights/nodes/`) |
 
 ## Rules
 
@@ -320,8 +390,11 @@ fix, the run waits for the next release before judging it.
   ticket.
 - **Only Claude Code and Codex conversations** are read. OpenCode, Cursor,
   Grok and Pi keep theirs in other formats.
-- **This machine only.** It runs on the machine the window runs on and reads
-  that machine's diagnostics and conversations.
+- **This machine and its connected leaves.** It runs on the machine the
+  window runs on and reads that machine's diagnostics and conversations,
+  and, on a command node, those of every leaf connected when the run starts.
+  A leaf that is offline is not waited for; its diagnostics are missing from
+  that run, and its conversations are read on a later one.
 
 ## Changing it
 
@@ -335,7 +408,10 @@ fix, the run waits for the next release before judging it.
   `commands-registry-self-improvement.test.ts` covers the board over real
   Kanban storage, `public-api/public-api-self-improvement.test.ts` the public
   actions and `packages/cli/tests/self-improvement-command.test.ts` the CLI's
-  `--wait`.
+  `--wait`. `fleet.test.ts` covers merging machines' signals and whole runs
+  with leaves (a leaf's problem filed, conversations from two machines with
+  the same session id), `leaves.test.ts` the leaf's answers and every bound
+  the command node checks.
 - When you change a prompt or schema in `insights/analyze.ts`, also run one
   real call: real models can refuse a schema a fake accepts.
 - A signature format change orphans existing ledger entries. Avoid it, or

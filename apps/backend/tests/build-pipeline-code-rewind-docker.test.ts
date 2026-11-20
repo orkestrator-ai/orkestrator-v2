@@ -22,12 +22,12 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import type { BuildPipelineService } from "../src/core/build-pipeline-service";
+import type { BuildPipelineService } from "../src/core/build-pipeline/service";
 import {
   codeRewindBackupRef,
   resetWorktreeToCommit,
   type EnvironmentGit,
-} from "../src/core/build-pipeline-code-rewind";
+} from "../src/core/build-pipeline/code-rewind";
 import { EnvironmentUnavailableError } from "../src/core/workspace-code-rewind";
 import {
   mutateStored,
@@ -35,7 +35,7 @@ import {
   startInput,
   withService,
   type FakeProvider,
-} from "../src/core/build-pipeline-service-test-support";
+} from "../src/core/build-pipeline/service-test-support";
 import {
   createGitEnvironmentCommandRunner,
   createPipelineEnvironmentGit,
@@ -47,7 +47,7 @@ import { EnvironmentMutationFence } from "../src/core/environment-replacement-fe
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
-} from "../src/core/review-worktree-fingerprint";
+} from "../src/core/review/worktree-fingerprint";
 import { runCommand } from "../src/core/shell";
 import type { StorageService } from "../src/core/storage";
 import { removeLabelledResources } from "./container-live-cleanup";

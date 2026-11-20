@@ -4,7 +4,7 @@
  *
  * Two producers write it — the interactive "Continue in…" transfer
  * (`agent-handoff.ts`) and the build pipeline's review → address-issues
- * handoff (`apps/backend/src/core/build-pipeline-handoff.ts`) — and two readers
+ * handoff (`apps/backend/src/core/build-pipeline/handoff.ts`) — and two readers
  * recognise it: the destination tab, which strips the carrier back out of the
  * first user message, and the pipeline transcript view, which hides it. Before
  * this module each kept its own copy of the tags, the escaping and the budget

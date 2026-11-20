@@ -1,5 +1,5 @@
 import type { CommandContext } from "./commands-context.js";
-import { resolveActiveAgentAccount } from "./agent-accounts-active.js";
+import { resolveActiveAgentAccount } from "./agent-accounts/index.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
 
 /**

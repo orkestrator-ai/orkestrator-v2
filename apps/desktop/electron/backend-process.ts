@@ -1,3 +1,8 @@
+import {
+  PUSH_CHANGED_EVENT,
+  PUSH_RESYNC_EVENT,
+  PUSH_STREAM_STATE_EVENT,
+} from "@orkestrator/protocol/push-events";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
 import { fromCodedWire } from "@orkestrator/protocol/contract/errors";
@@ -532,6 +537,10 @@ export class RequestNotSentError extends Error {
 const TERMINAL_SEND_CREDENTIAL_RETRIES = 3;
 
 export class BackendHttpClient {
+  private readonly pushListeners = new Map<
+    (event: string, payload: unknown) => void,
+    AbortController
+  >();
   private abortEvents: AbortController | null = null;
   private listener: {
     onEvent: (event: string, payload: unknown) => void;
@@ -576,6 +585,10 @@ export class BackendHttpClient {
     this.suspended = true;
     this.abortEvents?.abort();
     this.relayedEvents.dropConnection();
+    for (const [listener, controller] of this.pushListeners) {
+      controller.abort();
+      listener(PUSH_STREAM_STATE_EVENT, { state: "disconnected" });
+    }
   }
 
   private endpoint(endpoint: string): URL {
@@ -732,6 +745,7 @@ export class BackendHttpClient {
     if (this.listener) this.listen(this.listener.onEvent, this.listener.options);
     this.relayedEvents.dropConnection();
     this.relayedEvents.retryWaiting();
+    for (const listener of Array.from(this.pushListeners.keys())) this.startPushStream(listener);
     for (const wake of Array.from(this.credentialWaiters)) wake();
   }
 
@@ -917,7 +931,32 @@ export class BackendHttpClient {
     void this.consumeEvents(controller.signal, onEvent, options);
   }
 
+  /** A filtered, connection-owned push stream for one IPC renderer. */
+  listenPush(listener: (event: string, payload: unknown) => void): () => void {
+    this.startPushStream(listener);
+    return () => {
+      this.pushListeners.get(listener)?.abort();
+      this.pushListeners.delete(listener);
+    };
+  }
+
+  private startPushStream(listener: (event: string, payload: unknown) => void): void {
+    const previous = this.pushListeners.get(listener);
+    if (previous) {
+      previous.abort();
+      listener(PUSH_STREAM_STATE_EVENT, { state: "disconnected" });
+    }
+    const controller = new AbortController();
+    this.pushListeners.set(listener, controller);
+    if (!this.suspended) void this.consumeEvents(controller.signal, listener, {}, true);
+  }
+
   stopListening(): void {
+    for (const [listener, controller] of this.pushListeners) {
+      controller.abort();
+      listener(PUSH_STREAM_STATE_EVENT, { state: "disconnected" });
+    }
+    this.pushListeners.clear();
     this.abortEvents?.abort();
     this.abortEvents = null;
     this.listener = null;
@@ -990,8 +1029,9 @@ export class BackendHttpClient {
     signal: AbortSignal,
     onEvent: (event: string, payload: unknown) => void,
     options: BackendListenOptions = {},
+    pushOnly = false,
   ): Promise<void> {
-    const stream = this.eventStream;
+    const stream = pushOnly ? new GatewayEventStreamState() : this.eventStream;
     const now = options.streamNow ?? Date.now;
     const backoff = new ReconnectBackoff(
       {
@@ -1013,7 +1053,8 @@ export class BackendHttpClient {
           GATEWAY_RELAYED_EVENTS_PARAM,
           "per-node" satisfies GatewayRelayedEventsMode,
         );
-        if (!this.relayTerminalOutput) {
+        if (pushOnly) url.searchParams.set("includeEvents", "push.");
+        if (!this.relayTerminalOutput && !pushOnly) {
           url.searchParams.set("excludeEvents", TERMINAL_OUTPUT_EVENT_PREFIX);
         }
         const response = await fetch(url, {
@@ -1032,14 +1073,26 @@ export class BackendHttpClient {
         options.onStreamState?.("open");
         // Terminal output is excluded from authoritative replay. Even a quiet
         // caught-up reconnect must trigger exact snapshot recovery.
-        onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
+        if (!pushOnly) onEvent(TERMINAL_EVENT_STREAM_CONNECTED_EVENT, undefined);
         await readSseStream(
           response.body,
           watch.signal,
           (frame) => {
-            if (!frame.data) return;
+            if (!frame.data || signal.aborted) return;
             const message = stream.accept(frame.data, frame.id);
-            if (message.kind === "event") onEvent(message.event, message.payload);
+            if (pushOnly) {
+              if ("connected" in message && message.connected) {
+                onEvent(PUSH_STREAM_STATE_EVENT, {
+                  state: "connected",
+                  offer: message.connected.push,
+                });
+              } else if (
+                message.kind === "event" &&
+                (message.event === PUSH_CHANGED_EVENT || message.event === PUSH_RESYNC_EVENT)
+              ) {
+                onEvent(message.event, message.payload);
+              }
+            } else if (message.kind === "event") onEvent(message.event, message.payload);
             else if (message.kind === "resync")
               onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
             else if (message.kind === "malformed") {
@@ -1058,6 +1111,7 @@ export class BackendHttpClient {
       if (signal.aborted) return;
       // A refused credential proves the backend is reachable. Keep reads enabled
       // so command responses can expose the authentication failure to the user.
+      if (pushOnly) onEvent(PUSH_STREAM_STATE_EVENT, { state: "disconnected" });
       options.onStreamState?.(credentialRejected ? "unauthorized" : "closed");
       // A stream that ends cleanly is retried with the same backoff as a failed
       // one, so a peer that accepts and immediately closes cannot spin this loop.

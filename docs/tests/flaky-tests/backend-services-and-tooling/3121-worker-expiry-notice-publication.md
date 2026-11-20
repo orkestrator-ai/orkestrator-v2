@@ -1,5 +1,14 @@
 # Pipeline worker expiry notice asserted before publication finished
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/build-pipeline/pipeline-worker-mail.test.ts`
+- `apps/backend/src/core/build-pipeline/review-fanout-worker-mail.test.ts`
+- `apps/backend/src/core/build-pipeline/review-fanout.test.ts`
+- `apps/backend/src/core/build-pipeline/service-base.test.ts`
+- `apps/backend/src/core/build-pipeline/validation-history.test.ts`
+- `apps/backend/src/core/build-pipeline/worker-mail.test.ts`
+
 - **ID:** 3121
 - **Status:** resolved
 - **Date observed:** 2026-11-03

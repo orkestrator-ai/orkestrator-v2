@@ -54,7 +54,7 @@ references to files the work deletes, moves or renames, or descriptions (a
 status scheme, a layout example) the work makes untrue. The sections guidance
 in the ticket tools tells ticket writers to say so, and every build, rework
 and address prompt tells the worker to repair such references and
-descriptions anyway (`REFERENCE_UPDATE_RULE` in `build-pipeline-prompts.ts`;
+descriptions anyway (`REFERENCE_UPDATE_RULE` in `build-pipeline/prompts.ts`;
 root `AGENTS.md`, "Keep references current"). Edit bans had left `AGENTS.md`
 naming deleted to-dos and an outdated status rule, with the work reported
 incomplete.
@@ -317,12 +317,13 @@ stays with that pipeline, and its completion comment says how it was delivered.
 
 A ticket linked to a build pipeline moves through the board on its own. The
 events and their columns are one table,
-`apps/backend/src/core/build-pipeline-kanban-lifecycle.ts`, read by the
-pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
+`apps/backend/src/core/build-pipeline/kanban-lifecycle.ts`, read by the
+pipeline (`build-pipeline/service-supervisor.ts`, `-recovery.ts`) and the graph
 `update-ticket` node (`graph-system-ticket.ts`):
 
 | Event | Column | Writer |
 | --- | --- | --- |
+| The build is admitted (the Build button, a coordinator or the public API) | In progress | `BuildPipelineRecovery.moveTicketOnAdmission`, before its environment is created |
 | Build starts, including a restart | In progress | `startStage("build")`; the supervisor's reactivation after a restart |
 | A rework (fix) round | unchanged (In progress) | none |
 | Ship finds the pull request open | Review, PR linked | `persistPullRequest` (`pr-raised`) |
@@ -330,23 +331,43 @@ pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
 | The build completes with Notes (open PR, `commit-only` or `push-no-pr`) | Review | `reconcileTerminalState` (`complete`) |
 | The build fails or is cancelled | Backlog | `reconcileTerminalState` (`failed`) |
 | The pull request merges | Done | PR monitor, a build ending, startup sweep (below) |
-| The pull request closes without merging | Backlog, unless moved by hand since the build or a newer build owns the ticket | PR monitor, or `persistPullRequest` when the build finds it closed (below) |
+| The pull request closes without merging | Backlog, unless moved by hand since the build or a newer build owns the ticket; while the build still runs, when it ends | PR monitor, or `reconcileTerminalState` when the build found it closed (below) |
 | The build ends after its pull request closed | Backlog | `reconcileTerminalState` |
-| The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline-kanban-environment-deleted.ts` |
+| The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline/kanban-environment-deleted.ts` |
 | The build's environment is deleted after its PR merged | Done | the same |
 
-A ticket in Done is never moved by any lifecycle event, a new build or a
-restart included: every lifecycle write passes `preserveDoneStatus` (storage
-option `lifecycle`), checked under the same mutation lease as the write, so a
-writer that read before the monitor closed the ticket cannot reopen it. A move
-by the user is kept until the next lifecycle event, which moves the ticket
-again. Each lifecycle move records its column on the ticket
-(`lifecycleStatus`, local to the machine that wrote it), and any other status
-change clears it: a move by hand on this machine, a command node's snapshot
-that changes the column, and one that keeps the column under a newer status
-revision (moved away and back between two pulls). A leaf's own lifecycle move
-coming back from the command node is told apart by `lifecycleEcho`. So a
-ticket moved away and back is still one the user placed, which is what a
+**The build holds the column.** From admission until the build ends
+(`complete` or `failed`; a paused build has not ended), only these lifecycle
+events move the ticket (`build-pipeline/ticket-hold.ts`). Any other status
+change is left out of the write while the rest of it applies, so the ticket
+can still be edited, commented on and labelled: a drag on the board (which
+snaps back with a toast), an agent's `update_ticket`, the public API,
+self-improvement and a graph's hand-set status. A closed pull request stays
+undecided until the hold ends. The PR monitor retries the column move separately
+from the comment and metadata, even if the build's terminal write fails.
+
+A leaf building the ticket restores its column when a command-board edit
+attempts to move it. The command board uses the revision of the rejected move
+to explain the restoration to the user who made it. If the command node also
+has an active build for that ticket, its column takes precedence. A newly
+confirmed merge takes effect with its merge marker in either direction, even
+during a hold.
+
+The reservation records the pending In progress write. The supervisor retries
+it while the build is active, including before review of an adopted Build, and
+checks the reservation under the board lease before writing. Lifecycle
+authority comes from the build's in-process command context. The legacy
+`preserveDoneStatus` argument on a workspace command can protect a Done ticket
+but cannot bypass a hold. Once the build has ended, a move by the user is kept
+until the next lifecycle event (a new build or a restart).
+
+Each lifecycle move records its column on the ticket (`lifecycleStatus`, local
+to the machine that wrote it). A hand move or an accepted remote move clears
+that ownership. While a leaf holds its column, a corrective echo or an
+away-and-back command revision preserves ownership. After the hold ends, a
+newer revision for the same column clears ownership unless it acknowledges
+the leaf's lifecycle write or its specific corrective revision. A ticket
+moved away and back after release is still one the user placed, which is what a
 closed pull request respects. A ticket's PR state, checks and conflicts are not
 columns: they are shown on the ticket's Notes tab.
 
@@ -400,7 +421,7 @@ every writer applies it through one storage method,
 | PR monitor (`git/pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
 | Build pipeline (`updateKanbanLifecycle`, terminal events) | The build completes, fails, is cancelled or deleted after its Ship opened a pull request that has since merged. Without this the `complete` and `failed` events would move the ticket back to review or backlog. |
 | Build pipeline (`persistPullRequest`) | Ship or conflict resolution finds the pull request already merged. |
-| Environment deletion (`build-pipeline-kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
+| Environment deletion (`build-pipeline/kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
 | Startup sweep (`git/pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
 
 A merge is recorded when the ticket links a pull request in state `merged`;

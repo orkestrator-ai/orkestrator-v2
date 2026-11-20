@@ -993,7 +993,7 @@ branch on platform. The environment provider holds the server connection
 per server generation; a replaced server (new port or password) gets a new
 one. Observers (activity, catalogue and interaction reads) never start the
 server, and a session whose server is not running reads idle.
-`apps/backend/src/core/build-pipeline-provider.ts` re-exports a deliberately
+`apps/backend/src/core/build-pipeline/provider.ts` re-exports a deliberately
 smaller slice of the contract for pipeline code.
 
 ### Why OpenCode has no bridge
@@ -1879,7 +1879,7 @@ the first submission the normal path:
   which field. `jsonSchemaField` reports the contract walker's issues instead:
   each path, the fields allowed beside an unknown one, and the type received.
 - The consolidation prompt carries a complete shape template of the report
-  (`review-consolidation-example.ts`), checked against the contract by its
+  (`review/consolidation-example.ts`), checked against the contract by its
   test, and names the misses that most often cost a resend.
 - A pipeline session's result turn runs its Claude CLI with fine-grained tool
   streaming off (`CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=0`,
@@ -1894,7 +1894,7 @@ the first submission the normal path:
 - A consolidation over the result tool does not retype the reviewers' scope
   lists. Its slot context carries `scope`, the union of the reviewers'
   `filesReviewed`, `filesSkipped`, `filesLeftUncommitted`, `commandsRun` and
-  `commandsNotRun` (`review-consolidation-scope.ts`). The model writes the full
+  `commandsNotRun` (`review/consolidation-scope.ts`). The model writes the full
   scope when the union exceeds a report list limit or 32 KiB, or contains text
   the result tool would reject. Otherwise initial and repair prompts and the
   published per-slot tool schema omit the five lists. The backend still accepts
@@ -1939,11 +1939,11 @@ throws lets the result through, and the owner still compares the worktree when
 it reads the result.
 
 **Result kind registry.** Every kind maps to one definition in
-`workflow-result-registry.ts`: its schema, the schema a provider sees, its
+`workflows/result-registry.ts`: its schema, the schema a provider sees, its
 submission and validation tools, and the validators that run at submit time
 (structure, domain checks, final-content placeholder checks, the trusted-context
 check, and an optional environment check). Built-in kinds register themselves
-in `workflow-result-contracts.ts`; `workflowResultJsonSchema` and
+in `workflows/result-contracts.ts`; `workflowResultJsonSchema` and
 `validateWorkflowResult` delegate to the registry. Acceptance checks and the
 environment hook live on a `WorkflowResultRegistry` instance that each service
 owns. Multi Review consolidation's citation check runs through the generic
@@ -1960,7 +1960,7 @@ schema, domain validator), the placeholder check of the result kind a built-in
 type maps to, and, for consolidating ports, provenance against the node's input
 items (`cite`, `accountForAll`). Values whose type needs the environment are
 also checked there through the environment hook the backend installs
-(`workflow-result-environment-validator.ts`): a `workspace@1` commit must exist
+(`workflows/result-environment-validator.ts`): a `workspace@1` commit must exist
 and be reachable from its branch, `file-list@1` paths must resolve inside the
 worktree, a `validation-plan@2` must name the workspace HEAD it validates, and a
 `review-package@2` reference must still match its sealed package
@@ -2008,7 +2008,7 @@ report, with one stray `}` closing the root early). The published schema still
 asks for an object, but every result tool (`submit_*`, `validate_*`, the
 broker's `validate_workflow_result`) lets a string through its input check
 (`jsonSchemaField(..., { jsonText: true })`) and decodes it in the handler
-(`workflow-result-json-text.ts`):
+(`workflows/result-json-text.ts`):
 
 - Text that parses to an object is used as if the object had been sent, after
   the same acceptance check the input schema gives an object. Text encoded twice
@@ -2040,7 +2040,7 @@ port and report it for the required port named in the diagnostic.
 **Follow-up turns.** A Multi Review reviewer, and the preparation,
 consolidation and Fix steps, each get two bounded follow-up turns in the same
 session, under a fresh request id and result slot
-(`workflow-result-missing.ts`):
+(`workflows/result-missing.ts`):
 
 - **Result reminder.** A tool-mode turn that went idle with no accepted result
   gets one `workflowResultReminderPrompt` after the idle-poll bound, then fails
@@ -2107,7 +2107,7 @@ confident in it, and says the submitted report must still list every one.
 
 - **Who may call it.** The tool is listed only on a `review-report` attempt the
   backend is following as a running tool-mode reviewer of a review in
-  progress (`ProvisionalFindingInbox`, `review-provisional-findings.ts`, fed
+  progress (`ProvisionalFindingInbox`, `review/provisional-findings.ts`, fed
   from every Multi Review save and load). Each call must name the capability's
   own result key, and the slot must still be `open`: a finished, superseded or
   cancelled attempt is refused (`attempt_closed`), and so is any attempt the
@@ -2181,8 +2181,8 @@ workflow-result turn runs for: the prompt body carries `workflowResultTool` and
 (preparation, consolidation and Fix, and their reminder and restart turns) and
 Build Pipeline consolidation declare the pair, with the key set to the turn's
 request id, which is also the result key. Build Pipeline stage sends
-(`build-pipeline-service-supervisor.ts`) and their durable re-sends
-(`build-pipeline-prompt-dispatch.ts`) declare it too; before they did, a
+(`build-pipeline/service-supervisor.ts`) and their durable re-sends
+(`build-pipeline/prompt-dispatch.ts`) declare it too; before they did, a
 single Pi reviewer's read-only Review in a pipeline could never submit its
 report (found by the Auto-pipeline fake-model run, to-do 7547 task 4). Feature
 Planning (`features/planning.ts`) still omits `workflowResultKey`; declaring its

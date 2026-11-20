@@ -1,5 +1,7 @@
 # Git fsmonitor follow-ups (0735) review validation
 
+The relocated test in the recorded commands now lives at `apps/backend/src/core/review/graph-evaluation.test.ts`.
+
 - **ID:** 1322
 - **Status:** resolved
 - **Date observed:** 2026-10-30

@@ -17,7 +17,7 @@ import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-
 import { drainContainerProcesses } from "./container-readiness.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
-import { settleTicketsOfDeletedEnvironment } from "./build-pipeline-kanban-environment-deleted.js";
+import { settleTicketsOfDeletedEnvironment } from "./build-pipeline/index.js";
 import { scheduleEnvironmentCleanupReconcile } from "./environment-cleanup-reconciler.js";
 import { removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
 import { removeEnvironmentGraphBranchWorktrees } from "./graph-branch-worktrees.js";
@@ -25,7 +25,7 @@ import { removeProjectHomeMailAttachments } from "./mail-attachments.js";
 import { seedFilesDir } from "./nodes/index.js";
 import { removeOpenCodeCommandChangeJournals } from "./change-tracking/index.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
-import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { stopEnvironmentReviewValidation } from "./review/validation-service.js";
 import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux.js";
 import { transcriptMediaPins } from "./transcript-media-pins.js";
 import { environmentDeletionSteps } from "./environment-deletion-steps.js";

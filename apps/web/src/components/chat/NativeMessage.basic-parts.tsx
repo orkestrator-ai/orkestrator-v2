@@ -14,6 +14,8 @@ import {
   FileClock,
   Timer,
 } from "lucide-react";
+import type { ToolOutputTailView } from "@/lib/chat/tool-output-tail";
+import { formatBytes } from "@/lib/chat/rich-markdown/media-types";
 import { cn } from "@/lib/utils";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
@@ -423,6 +425,35 @@ export function ToolDurationLabel({ label }: { label?: string }) {
   );
 }
 
+/**
+ * The marker above a bounded output tail: how much earlier output this row
+ * does not hold, and a control that reads the next range before it.
+ */
+function ToolOutputTruncation({ tail }: { tail: ToolOutputTailView }) {
+  return (
+    <div
+      className="flex items-center gap-2 px-3 pt-2 text-[11px] text-muted-foreground"
+      data-testid="tool-output-truncation"
+    >
+      <span>{formatBytes(tail.earlierBytes)} of earlier output not shown</span>
+      {tail.canLoadEarlier ? (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-[11px]"
+          disabled={tail.loadingEarlier}
+          onClick={tail.loadEarlier}
+        >
+          {tail.loadingEarlier ? "Loading…" : "Load earlier"}
+        </Button>
+      ) : (
+        <span>(display limit reached)</span>
+      )}
+    </div>
+  );
+}
+
 export function ToolPart({
   expansionKey,
   callId,
@@ -441,6 +472,7 @@ export function ToolPart({
   deferredDetails = false,
   mcpServerName,
   leftRunning = false,
+  outputTail,
 }: {
   expansionKey: string;
   /** Provider call id; keys the backend's change presentation for this row. */
@@ -480,6 +512,11 @@ export function ToolPart({
   mcpServerName?: string;
   /** Still running when its turn ended, with no end to come (`toolLeftRunning`). */
   leftRunning?: boolean;
+  /**
+   * `toolOutput` is a bounded tail of the call's output (an expanded running
+   * call): say how much came before it, and offer to load earlier output.
+   */
+  outputTail?: ToolOutputTailView;
 }) {
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   const changeScope = useNativeChangeScope();
@@ -735,6 +772,7 @@ export function ToolPart({
             )}
 
             {/* Output section */}
+            {outputTail?.truncatedBefore && <ToolOutputTruncation tail={outputTail} />}
             {showToolOutput && (
               <div className="px-3 py-2 max-h-64 overflow-auto">
                 <pre className="text-xs font-mono text-foreground/80 whitespace-pre-wrap break-all">

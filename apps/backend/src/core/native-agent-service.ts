@@ -149,7 +149,7 @@ import {
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
 import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/index.js";
-import { DEFAULT_WORKFLOW_DISCOVERY_MS } from "./workflow-supervisor.js";
+import { DEFAULT_WORKFLOW_DISCOVERY_MS, settleArtifactDispatchTurn } from "./workflows/index.js";
 import {
   PromptRejectedError,
   type ProviderMcpConfigEvidenceRead,
@@ -176,7 +176,6 @@ import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { NativeAgentHandoffs } from "./native-agent-handoffs.js";
 import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
 import { SettledTurnUsage } from "./native-agent-settled-turn-usage.js";
-import { settleArtifactDispatchTurn } from "./workflow-artifact-turns.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import {
   sessionHeldDispatchModelUpdate,
@@ -581,7 +580,15 @@ export class NativeAgentService {
         this.observeBridgeConnection(agent, environment),
       createProvider: (connection, environmentId, cacheKey) =>
         createNativeAgentProvider(connection, {
-          onObservationHint: () => this.observations.wakeGroup(cacheKey, "provider-event"),
+          onObservationHint: (providerSessionId, parts) => {
+            this.observations.wakeGroup(cacheKey, "provider-event");
+            options.onPushObservationHint?.(
+              environmentId,
+              connection.agent,
+              providerSessionId,
+              parts,
+            );
+          },
           stageImages: (images) => this.stageImages(environmentId, images),
           environment: this.providerEnvironment(environmentId),
           planUsage: options.planUsage,
@@ -2668,6 +2675,72 @@ export class NativeAgentService {
   }
 
   /** The last progressive reads per domain, for diagnostics. Memory only. */
+  /**
+   * The push layer observes one session: shares its settled reads between the
+   * observer and the viewers it announces changes to. Returns the stop.
+   */
+  observePushSession(environmentId: string, agent: string, logicalSessionKey: string) {
+    return this.projections.observePushSession(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /**
+   * How the push layer's observer of a session of this provider may be woken
+   * by the bridge's observe stream (to-do 8102 task 2): `revisions` when the
+   * stream is live and announces every state and transcript change, so the
+   * observer reads on its hints with a backstop, running or idle; `hints`
+   * when it is live without revisions (an older Claude or Codex bridge), which
+   * qualifies only a quiet idle session; `none` keeps the cadence.
+   */
+  canWakePushObserverFromBridge(
+    environmentId: string,
+    agent: string,
+  ): "revisions" | "hints" | "none" {
+    const provider = this.providerRegistry.cached(
+      providerCacheKey(environmentId, agent as BuildPipelineAgent),
+    );
+    if (!provider) return "none";
+    if (provider.observationStreamRevisions?.() === true) return "revisions";
+    return provider.observationStreamLive?.() === true ? "hints" : "none";
+  }
+
+  forgetPushSettled(environmentId: string, agent: string, logicalSessionKey: string): void {
+    this.projections.forgetPushSettled(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /** A bridge hint woke the push observer: its next read starts fresh work, shares stay. */
+  notePushHint(environmentId: string, agent: string, logicalSessionKey: string): void {
+    this.projections.notePushHint(
+      nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
+    );
+  }
+
+  /**
+   * What the session's cached live view says about one tool call, for the
+   * `tool-output` push topic. In memory only: never reads a provider.
+   */
+  toolOutputSource(
+    environmentId: string,
+    agent: string,
+    logicalSessionKey: string,
+    toolUseId: string,
+    messageId?: string,
+  ) {
+    return this.projections.toolOutputSource(
+      { environmentId, agent: agent as BuildPipelineAgent, logicalSessionKey },
+      toolUseId,
+      messageId,
+    );
+  }
+
+  /** One bounded slice of a tool call's output (`get_native_agent_tool_output`). */
+  readToolOutput(input: Parameters<NativeAgentTranscriptProjection["readToolOutput"]>[0]) {
+    return this.projections.readToolOutput(input);
+  }
+
   progressiveReadSamples() {
     return this.projections.progressiveReadSamples();
   }

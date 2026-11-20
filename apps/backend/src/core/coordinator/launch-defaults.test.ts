@@ -1,5 +1,5 @@
 import { launchSelectionReport, platformLaunchDefault } from "../control-shared-actions.js";
-import { normalizeReviewers } from "../build-pipeline-service-helpers.js";
+import { normalizeReviewers } from "../build-pipeline/service-helpers.js";
 import {
   isStartBuildPipelineInput,
   type BuildStepConfig,

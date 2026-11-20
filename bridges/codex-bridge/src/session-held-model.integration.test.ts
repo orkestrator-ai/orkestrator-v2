@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { harness } from "./app-server-runtime-test-harness.js";
-import { createBuildPipelineProvider } from "../../../apps/backend/src/core/build-pipeline-provider.js";
+import { createBuildPipelineProvider } from "../../../apps/backend/src/core/build-pipeline/provider.js";
 
 // Real bridge runtime + JSON-RPC child + backend resolution/session creation.
 // The fake HTTP boundary preserves the production /global/models wire shape.

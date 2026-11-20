@@ -1017,10 +1017,11 @@ What each enforced platform actually does:
   no plugin or skill hook and no skill inline shell (see [Skills](#skills)),
   and a bridge-owned `PreToolUse` hook. The hook is the real boundary for
   shell: it allows a fixed
-  list of reading commands (also as the stages of a plain pipe, each checked
-  on its own) and refuses redirection, substitution and
-  chaining, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
-  gawk's in-place and program options), path-qualified programs and the
+  list of reading commands (also as the commands of a `;`, `&&`, `||` list or
+  plain pipe, quoted or not, each checked on its own and run as the words
+  checked) and refuses redirection, substitution, globs, `cd` or `git -C`
+  outside the checkout, Git reads from nested repositories, writing arguments
+  (`uniq in out`, `sort -o`, `git diff --output`), path-qualified programs and the
   network-only `gh`, `curl` and `git ls-remote`. The SDK sandbox's default lets
   a command write its working directory, so the coordinator sandbox denies
   writes to the checkout (`filesystem.denyWrite`); before that, `uniq in.txt
@@ -1445,7 +1446,7 @@ against real Git in a checkout configured with each helper. The residual is a fi
 config names, which can run when a command reads worktree files; only the
 environment's own writers can have configured one. A coordinator keeps
 refusing Git, so its tier is unchanged. The backend still seals the reviewed diff as a file
-beside the package when it builds it (`review-diff-artifact.ts`): it runs
+beside the package when it builds it (`review/diff-artifact.ts`): it runs
 the same `git diff --no-color --no-ext-diff --no-textconv --no-renames
 <base>...<head>` the package names, writes it read-only and Git-excluded as
 `review-diff-<sha256>.patch` in the round's artifact directory, records
@@ -2729,7 +2730,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   status (`running`, `idle`, `finished`, `failed`, `cancelled`).
   `list_mailboxes` with `environmentId` lists them (with `nodeId` too, on a
   leaf), and `get_build_pipeline` carries the same list as `workers`
-  (`control-workflow-summary.ts`), so a command node reading a leaf's pipeline
+  (`build-pipeline/control-workflow-summary.ts`), so a command node reading a leaf's pipeline
   lists the same workers. A worker gets its mailbox the moment its session
   starts: a send checks the pipeline's workers before it resolves the address
   (`ensureAgentMailDirectoryFresh`), and the mail service resynchronizes when a
@@ -2746,7 +2747,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   like any mail. While the worker's turn runs, mail waits. When the turn ends,
   the supervisor hands everything queued for that worker to it as one turn,
   before the pipeline advances (`dispatchWorkerMailTurn`,
-  `build-pipeline-worker-mail.ts`), journaled as the pending prompt attempt
+  `build-pipeline/worker-mail.ts`), journaled as the pending prompt attempt
   like a queued user message, so it is delivered at most once; the attempt's
   request id is kept on the session (`mailDeliveries`) so a claim interrupted
   by a restart is reconciled against it. `deliverNow` steers into the running
@@ -2759,7 +2760,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   and archives that validation run before writable work resumes; preparation
   and validation must then certify the new state.
 - **Identity.** A worker sends, replies, acks and checks its inbox as its own
-  mailbox, on every agent and every turn (`pipeline-worker-identity.ts`):
+  mailbox, on every agent and every turn (`build-pipeline/pipeline-worker-identity.ts`):
   - A tool-mode stage turn's workflow-result capability carries the mail
     tools of the worker the backend's record says owns that attempt. On
     OpenCode the persistent workflow-result broker authenticates each mail
@@ -2810,7 +2811,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
 - **Multi Review reviewers.** Each reviewer of a Multi Review has the same kind
   of mailbox while its review is in its reviewers' stage, under the same address
   scheme, so `list_mailboxes`, `send_message` and `get_tab_transcript` treat it
-  alike (`multiReviewWorkers`, `multi-review-worker-mail.ts`). Queued mail becomes
+  alike (`multiReviewWorkers`, `review/worker-mail.ts`). Queued mail becomes
   its next turn before its result is accepted, and `deliverNow` steers under the
   workflow lock. A restart rotates the session key, so it is a new address and
   mail never follows. Preparation, consolidation and Address Findings keep their
@@ -2959,7 +2960,7 @@ Decisions:
 that stopped for a passing reason (a usage limit, an unreachable agent)
 without the user. It is the UI's step Restart, and with `selection` its
 "Restart in…", through `BuildPipelineService.restartForCoordinator`
-(`build-pipeline-restart-targets.ts` resolves the step inside the pipeline
+(`build-pipeline/restart-targets.ts` resolves the step inside the pipeline
 lock).
 
 - **Which step.** Omit `stepId` to restart the step a failed pipeline failed
@@ -3197,7 +3198,7 @@ the acceptance criteria and on which commit: a tally ("Acceptance criteria:
 not-checked criterion's id and text, within the eight-line detail cap and
 before the delivery line, with a closing line naming how many more did not
 pass. Passed criteria are only counted. The facts come from the pipeline's own
-Verify session (`build-pipeline-criteria-report.ts`), not the ticket, so a
+Verify session (`build-pipeline/criteria-report.ts`), not the ticket, so a
 Linear or GitHub build reports them too; a criterion Verify reported nothing
 for counts as not checked, and a session without a recorded baseline says
 "commit not recorded". `get_build_pipeline` returns the same report in full as
@@ -3534,7 +3535,7 @@ reach the ticket. A `taskId` that is not a ticket in the project is refused
 with an error telling the coordinator to create it with `create_ticket` first;
 the build is never started unlinked. The check and the link are made by the
 backend that runs the build (`coordinatorBuildTicketSource` in
-`build-pipeline-launch.ts`, called by `start_coordinator_build_pipeline` and,
+`build-pipeline/launch.ts`, called by `start_coordinator_build_pipeline` and,
 for a build on a connected node, by that node's
 `start_controller_build_pipeline` against its own copy of the project). The
 command node also sends the source with a node build, so a node too old to
@@ -3802,8 +3803,8 @@ node and only the approved answer crosses the link
 | `run_worker_command` | Picks one row of that menu: `session.command`'s resolution and every refusal it has (missing, ambiguous, unavailable, changed since listed, wrong arguments, busy tab, parked dispatch), dispatched as a selection, never as prompt text. `/steer` is refused. A command that starts a provider turn opens a delegation, as `send_prompt_to_tab` does, and is refused while one is open on that tab; one that answers without a turn (`bridge-local`, an Orkestrator session action such as `/compact`) opens none and says to read its output with `get_tab_transcript`. | Replays the receipt; the dispatch request ID derives from it, so a retry after a lost answer replays on the node that owns the worker. | The command runs in the tab as if the user picked it. |
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
 | `custom_address_multi_review` | The review tab's custom Address Findings prompt: an Address Findings run with the caller's instruction and, optionally, another model (`addressFindingsModel`; `MultiReviewService.customAddressFindings`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Address Findings tab, as for `address_multi_review`; a custom Address Findings never starts an automatic PR. Status wakes follow as for a default one. |
-| `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
-| `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else its default branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator/pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus; an open Resolve tab, or a finished pipeline's Resolve Conflicts session, is reused instead of opening another ([Resolve launches](github-pull-requests.md#resolve-launches)). One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
+| `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `review/auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
+| `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else its default branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator/pr.ts`, `launchResolveConflictsAgent` in `review/auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus; an open Resolve tab, or a finished pipeline's Resolve Conflicts session, is reused instead of opening another ([Resolve launches](github-pull-requests.md#resolve-launches)). One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. A `feature-plan` association, written before planning starts: status wakes when the reply is ready and when planning fails ([Status wakes](#status-wakes)); `list_workflows` lists it. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). Takes `nodeId` for a worker on a connected node. | Replays the same approval request. | An approval dialog listing the checkout's changed files, naming the worker's node when it is another one. |
 | `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
@@ -4255,7 +4256,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
   `coordinator/surface-actions.test.ts`
 - `restart_build_pipeline_step`: step resolution, kept rounds, selection and
-  refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
+  refusals at the service (`build-pipeline/service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
   (`coordinator/pipeline-step-actions.test.ts`); the fake model's script
@@ -4271,14 +4272,14 @@ guarantee, not by one end-to-end scenario replayed per platform:
   discovery, delivery at turn end, `deliverNow`, the environment-only and
   ended-worker refusals, expiry and its notice, worker replies, leaf-side node
   delivery, transcripts, result-key identity, restart):
-  `pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
+  `build-pipeline/pipeline-worker-mail.test.ts`; the coordinator tools for them, here and on a
   leaf: `control-mcp/pipeline-workers.test.ts`; worker derivation and carrier
   framing: `packages/protocol/src/pipeline-worker-mail.test.ts`; each worker's
   own mail identity (result server, OpenCode broker, and the environment-wide
   connection with `mailCapability`: send, reply, ack, forged, foreign and
   ended-worker refusals, restart): `agent-tools-pipeline-worker-mail.test.ts`;
-  stage turns carrying it (`build-pipeline-worker-mail.test.ts`), each
-  reviewer and the consolidation (`build-pipeline-review-fanout-worker-mail.test.ts`)
+  stage turns carrying it (`build-pipeline/worker-mail.test.ts`), each
+  reviewer and the consolidation (`build-pipeline/review-fanout-worker-mail.test.ts`)
   and OpenCode's per-turn worker connection (`opencode2/turn-connections.test.ts`)
 - tool contract and poll guard: `control-mcp/server-reads.test.ts` and
   `control-mcp/server-messaging.test.ts`
@@ -4328,7 +4329,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   causes (`session-manager-coordinator-skills.test.ts`), the hook refusing
   granted tools and skill scripts (`read-only-policy.test.ts`), all in
   claude-bridge; the launcher naming the account's skills directory
-  (`agent-accounts-active.test.ts`, `commands-servers-coordinator.test.ts`)
+  (`agent-accounts/active.test.ts`, `commands-servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
   test:agent:coordinator` runs its scenarios per platform in a disposable

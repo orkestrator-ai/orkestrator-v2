@@ -21,7 +21,7 @@ import {
   type CoordinatorStatusWakeTimers,
 } from "./status-wakes.js";
 import type { StorageService } from "../storage.js";
-import { multiReviewAddressFindingsIdentity } from "../multi-review-address-findings-identity.js";
+import { multiReviewAddressFindingsIdentity } from "../review/address-findings-identity.js";
 import type { Environment } from "../models.js";
 
 class ManualTimers implements CoordinatorStatusWakeTimers {

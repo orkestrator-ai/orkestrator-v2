@@ -32,10 +32,7 @@ import {
   coordinatorDelegationPresentationFrom,
   restoreCoordinatorDelegationPresentation,
 } from "./coordinator/index.js";
-import {
-  createAgentModelCatalogReader,
-  resolveFastMode,
-} from "./build-pipeline-service-helpers.js";
+import { createAgentModelCatalogReader, resolveFastMode } from "./build-pipeline/index.js";
 import { assertValidPromptAttachments } from "./prompt-attachments.js";
 import {
   isNativeAgentJobTabReuse,

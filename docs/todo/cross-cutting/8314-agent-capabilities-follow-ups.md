@@ -39,7 +39,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 **Problem.** A selection that should reach only one agent (for example Claude only) cannot be enforced where other providers read the same directory; the UI reports `cannot-enforce-without-isolated-home` instead.
 
-**Context.** `planCapabilityLocations` and the shared-location table; Claude and Codex account homes already link shared directories (`agent-accounts-homes.ts`).
+**Context.** `planCapabilityLocations` and the shared-location table; Claude and Codex account homes already link shared directories (`agent-accounts/homes.ts`).
 
 **Investigation.** A per-session overlay home (a temporary `CLAUDE_CONFIG_DIR` or `CODEX_HOME` with only the selected skills linked) would make exclusion real, but changes the credential and account-home rules and must preserve the OAuth refresh safeguards.
 
@@ -494,7 +494,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 - **Options.**
   - **Per-session overlay homes (a temporary `CLAUDE_CONFIG_DIR` or `CODEX_HOME` with only the selected skills linked).**
     - Pros: one mechanism shape for Claude and Codex.
-    - Cons: the bridge is one process per environment, so a home is per process, not per session; an overlay home also moves the login, `.claude.json` and the OAuth refresh safeguards (`agent-accounts-homes.ts`) for every session in that environment.
+    - Cons: the bridge is one process per environment, so a home is per process, not per session; an overlay home also moves the login, `.claude.json` and the OAuth refresh safeguards (`agent-accounts/homes.ts`) for every session in that environment.
   - **An Orkestrator-owned inline plugin per session, passed on that session's turns (chosen, Claude).**
     - Pros: the SDK already takes inline plugins per query (the coordinator skill mirrors use the same channel); no home, login or account rule changes; skills are namespaced (`orkestrator-session:<name>`), so nothing shadows them; content-addressed and recorded at launch, so a running session's set never changes; the pinned binary lists it only when passed (live conformance).
     - Cons: Claude only; a skill appears under the plugin's namespace rather than its bare name; read-only turns do not load it.

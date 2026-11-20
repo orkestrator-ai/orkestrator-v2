@@ -47,8 +47,8 @@ import type {
 } from "./agent-branch-types.js";
 import { readProviderStatus } from "./agent-provider-contract.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import { structuredReportRepairPrompt } from "./build-pipeline/index.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   GraphAgentGuardError,
   mergeGraphGuardResults,
@@ -73,8 +73,8 @@ import {
 } from "./graph-agent-state.js";
 import type { GraphActivationReport, GraphExecutorContext } from "./graph-run-executors.js";
 import type { Environment } from "./models.js";
-import { multiReviewWorkflowIdOfRun } from "./multi-review-graph-engine.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import { multiReviewWorkflowIdOfRun } from "./review/graph-engine.js";
+import { MultiReviewProgressTracker } from "./review/index.js";
 
 import type { GraphAgentExecutorDependencies } from "./graph-node-agent.js";
 

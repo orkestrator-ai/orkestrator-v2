@@ -5,7 +5,7 @@ import path from "node:path";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import { StorageService } from "../storage.js";
 import { startFeaturePlanBuild } from "./plan-build.js";
-import { launchBuildPipeline } from "../build-pipeline-launch.js";
+import { launchBuildPipeline } from "../build-pipeline/launch.js";
 import type { Project } from "../models.js";
 import {
   FEATURE_PLANNING_RECORD_VERSION,

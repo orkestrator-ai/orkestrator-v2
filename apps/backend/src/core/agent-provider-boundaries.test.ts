@@ -37,7 +37,7 @@ describe("agent provider module boundaries", () => {
   });
 
   test("keeps OpenCode implementation details out of the pipeline adapter", async () => {
-    const pipelineAdapter = await source("build-pipeline-provider.ts");
+    const pipelineAdapter = await source("build-pipeline/provider.ts");
 
     expect(pipelineAdapter).not.toMatch(/@opencode-ai|\.\/opencode(?:-|2\/)|OpenCodeProvider/);
     expect(pipelineAdapter).not.toContain("interactiveSnapshot");

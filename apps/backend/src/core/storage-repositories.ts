@@ -123,7 +123,10 @@ export class StorageRepositories {
     this.agentMailboxes = new AgentMailboxDirectory(context, this, mailStore);
     this.agentMailInjects = new AgentMailInjects(context, this, mailStore);
     this.agentMailBudgets = new AgentMailBudgets(context, this, mailStore);
-    const kanbanBoard = new KanbanBoardStore(context, files);
+    const buildPipelines = this.buildPipelines;
+    const kanbanBoard = new KanbanBoardStore(context, files, () =>
+      buildPipelines.ticketsHeldByBuilds(),
+    );
     this.kanban = new KanbanRepository(context, files, kanbanBoard);
     this.ticketSync = new KanbanSyncRepository(context, files, kanbanBoard);
     this.linear = new LinearRepository(context);

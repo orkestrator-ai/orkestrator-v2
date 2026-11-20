@@ -124,6 +124,29 @@ export interface SelfImprovementProgress {
 
 export type SelfImprovementRunTrigger = "manual" | "daily" | "dry-run";
 
+/**
+ * What a run on a command node read from one of its connected leaf nodes
+ * (docs/architecture/self-improvement.md, "Leaf nodes"). Content-free:
+ * states and counts only.
+ *
+ * - `read`: the leaf answered and its part was used.
+ * - `failed`: the call failed or its answer could not be read; the run went on without it.
+ * - `needs-update`: the leaf predates the command and takes no part until it is updated.
+ * - `off`: the conversation review is off, so no conversations were asked for.
+ */
+export type SelfImprovementMachineState = "read" | "failed" | "needs-update" | "off";
+
+export interface SelfImprovementMachineResult {
+  nodeId: string;
+  name: string;
+  diagnostics: Exclude<SelfImprovementMachineState, "off">;
+  /** The leaf's app version, when its diagnostics were read. */
+  appVersion?: string;
+  conversations: SelfImprovementMachineState;
+  /** Conversation parts read from the leaf this run (in a preview: that would be read). */
+  conversationParts: number;
+}
+
 export interface SelfImprovementRunSummary {
   digestId: string;
   trigger: SelfImprovementRunTrigger;
@@ -143,6 +166,12 @@ export interface SelfImprovementRunSummary {
   wouldCreate: Array<{ signature: string; title: string }>;
   heldForTomorrow: number;
   belowBar: number;
+  /**
+   * The connected leaf nodes a run on a command node also read. Absent on a
+   * standalone or leaf node, from an older backend, and when no leaf was
+   * connected.
+   */
+  machines?: SelfImprovementMachineResult[];
   conversations: {
     enabled: boolean;
     read: number;

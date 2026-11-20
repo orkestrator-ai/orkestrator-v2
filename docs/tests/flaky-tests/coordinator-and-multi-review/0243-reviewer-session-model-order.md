@@ -1,5 +1,7 @@
 # Reviewer session models arrive in a different order
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/review-fanout.test.ts`.
+
 - **ID:** 0243
 - **Status:** resolved
 - **Date observed:** 2026-10-15

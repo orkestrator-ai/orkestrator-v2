@@ -70,6 +70,11 @@ export class RunProgress implements InsightProgress {
     this.lastActivityAt = this.stamp();
   }
 
+  /** A leaf node answered (its diagnostics or its conversation parts): the run is moving. */
+  leafAnswered(): void {
+    this.touch();
+  }
+
   /**
    * The run moved on to `step`: whatever was running is done, and a stage the
    * run passed without doing (grouping, when no saved notes needed it) is

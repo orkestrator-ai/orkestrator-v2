@@ -110,11 +110,11 @@ import {
   stopContainerBridgeProcess,
 } from "./container-bridge-credential.js";
 import {
+  type ContainerBridgeControl,
   reconcileContainerAgentAccount,
   syncContainerClaudeLoginUnlocked,
   syncContainerLoginUnlocked,
-  type ContainerBridgeControl,
-} from "./agent-accounts-containers.js";
+} from "./agent-accounts/index.js";
 
 /**
  * Health and stop for one in-container bridge, as the account reconciliation

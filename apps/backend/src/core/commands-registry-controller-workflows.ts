@@ -32,7 +32,7 @@ import type { ResultOf } from "@orkestrator/protocol/contract/command";
 import type { CommandContext } from "./commands-context.js";
 import { conciseError } from "./commands-error-text.js";
 import { asNonBlankString, stripWorkflowSnapshotSecrets } from "./commands-helpers.js";
-import { coordinatorBuildTicketSource } from "./build-pipeline-launch.js";
+import { coordinatorBuildTicketSource } from "./build-pipeline/launch.js";
 import { assertContainerDelegationCommitPublished } from "./commands-registry-coordinator.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
@@ -48,7 +48,7 @@ import {
   startMultiReviewAt,
 } from "./coordinator/review-actions.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-import { openMultiReviewTab } from "./workflow-tab-actions.js";
+import { openMultiReviewTab } from "./review/index.js";
 import {
   editWorkerTabWithTeardown,
   launchWorkerTerminal,

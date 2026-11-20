@@ -4,11 +4,11 @@ import type {
   StateSignalCredential,
   WorktreeSignalReason,
 } from "./agent-tools.js";
-import type { BuildPipelineService } from "./build-pipeline-service.js";
+import type { BuildPipelineService } from "./build-pipeline/service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { JsonRecord, StorageService } from "./storage.js";
-import type { MultiReviewService } from "./multi-review-service.js";
+import type { MultiReviewService } from "./review/service.js";
 import type { NativeAgentSuborkService } from "./native-agent-suborks.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { FeaturePlanningService } from "./features/index.js";
@@ -88,18 +88,22 @@ export type CommandContext = {
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
+  /** Set only by the build supervisor's in-process Kanban invoker. */
+  buildKanbanWrite?: { admissionPipelineId?: string };
   nativeAgents?: NativeAgentService;
+  /** The push event layer (`core/push/`): its metrics; the subscribe command is the gateway's. */
+  push?: import("./push/index.js").BackendPush;
   suborks?: NativeAgentSuborkService;
   multiReviews?: MultiReviewService;
   /** Auto-merge of ready pull requests (`git/pr-auto-merge.ts`); absent in fixtures. */
   prAutoMerge?: import("./git/pr-auto-merge.js").PrAutoMergeController;
   featurePlanning?: FeaturePlanningService;
-  workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
+  workflowResults?: import("./workflows/index.js").WorkflowResultService;
   /** Remote-initiated Orkestrator updates of this host. */
   hostMaintenance?: import("./host-maintenance.js").HostMaintenanceService;
   /** Environment deletion: drops the environment's workflow result slots. */
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
-  workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
+  workflowResultRollout?: import("./workflows/index.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
   /** Agent credentials: connections, requests, grants and their uses (credentials/). */
   credentials?: import("./credentials/index.js").CredentialService;
@@ -119,8 +123,8 @@ export type CommandContext = {
   nodeCoordination?: import("./nodes/index.js").NodeCoordination;
   /** Shared usage readings with the nodes this one controls; see `nodes/node-usage-sync.ts`. */
   usageSync?: { noteLocalChange(): void };
-  /** Automatic account switching; see `agent-accounts-auto-switch.ts`. */
-  accountAutoSwitch?: import("./agent-accounts-auto-switch.js").AgentAccountAutoSwitcher;
+  /** Automatic account switching; see `agent-accounts/auto-switch.ts`. */
+  accountAutoSwitch?: import("./agent-accounts/index.js").AgentAccountAutoSwitcher;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;

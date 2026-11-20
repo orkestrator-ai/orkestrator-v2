@@ -1,4 +1,13 @@
-import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { toast } from "sonner";
 import {
   Container,
@@ -478,6 +487,9 @@ export interface EnvironmentRowProps {
   deleteNotice?: (open: boolean) => ReactNode;
 }
 
+/** An enclosing surface can dismiss itself when a row opens its environment. */
+export const EnvironmentRowActivationContext = createContext<(() => void) | null>(null);
+
 /**
  * One environment row, for this window's machine and every other machine
  * alike. Everything it shows comes from `environmentRowModel(facts)`; the
@@ -500,6 +512,7 @@ export function EnvironmentRow({
   onOpenAttention,
   deleteNotice,
 }: EnvironmentRowProps) {
+  const onOpened = useContext(EnvironmentRowActivationContext);
   const pending = useSidebarActionStore((state) =>
     state.pending.has(multiSelect?.id ?? facts.environmentId),
   );
@@ -527,7 +540,19 @@ export function EnvironmentRow({
     .filter(Boolean)
     .join(". ");
   const multiSelectActive = multiSelect?.active === true;
-  const menuItems = environmentRowMenuItems(model, actions, () => setDeleteOpen(true));
+  const menuItems = environmentRowMenuItems(
+    model,
+    actions.open && onOpened
+      ? {
+          ...actions,
+          open: () => {
+            actions.open?.();
+            onOpened();
+          },
+        }
+      : actions,
+    () => setDeleteOpen(true),
+  );
 
   // A multi-selection has its own bulk delete, so the chord never deletes just this row.
   const canRequestDelete = !model.menu.deleteDisabled && !multiSelectActive;
@@ -548,10 +573,11 @@ export function EnvironmentRow({
     if (!model.selectable && modified) return;
     onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
     disarmDeleteShortcut();
+    if (!modified) onOpened?.();
     // The environment's terminal or composer takes focus next, so the chord
     // is caught briefly at the window until the user does anything else.
     // Normal activation clears multi-select; use the resulting single-row eligibility.
-    if (!model.menu.deleteDisabled && !modified) {
+    if (!model.menu.deleteDisabled && !modified && !onOpened) {
       disarmDeleteShortcutRef.current = armRowDeleteShortcut(() => setDeleteOpen(true));
     }
   };
@@ -752,7 +778,10 @@ export function EnvironmentRow({
               environmentId={model.environmentId}
               attention={model.attention}
               source={facts.live ? attentionSource : null}
-              onOpen={onOpenAttention}
+              onOpen={(tabId, interactionId) => {
+                onOpenAttention(tabId, interactionId);
+                onOpened?.();
+              }}
               describedBy={nameId}
             />
           )}

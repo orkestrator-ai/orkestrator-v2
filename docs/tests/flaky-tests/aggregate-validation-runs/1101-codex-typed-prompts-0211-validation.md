@@ -1,5 +1,7 @@
 # Codex typed prompts (todo 0211) branch validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 1101
 - **Status:** open
 - **Date observed:** 2026-10-26

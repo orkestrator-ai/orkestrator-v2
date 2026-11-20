@@ -14,7 +14,7 @@
 
 import path from "node:path";
 
-import { hostClaudeJsonPath, syncClaudeAccountSettings } from "../agent-accounts-homes.js";
+import { hostClaudeJsonPath, syncClaudeAccountSettings } from "../agent-accounts/homes.js";
 import type { SourceSpec } from "./types.js";
 
 export const CLAUDE_ACCOUNT_COPY_NOTE =

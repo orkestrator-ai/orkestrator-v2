@@ -53,7 +53,7 @@ import { isAgentBranchFenceError } from "./agent-branch-commits.js";
 import { AgentBranchRunner } from "./agent-branch-runner.js";
 import type { AgentBranchPollGate, AgentBranchRecord } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import type { EnvironmentGit } from "./build-pipeline/index.js";
 import { defaultCoordinatorHostCapabilities } from "./coordinator/index.js";
 import {
   GraphAgentGuardError,
@@ -79,9 +79,8 @@ import {
   type GraphNodeExecutor,
 } from "./graph-run-executors.js";
 import type { Environment } from "./models.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
+import { MultiReviewProgressTracker } from "./review/index.js";
+import type { ArtifactTurnDispatch, WorkflowResultService } from "./workflows/index.js";
 import type { WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
 import {
   GraphAgentBranchHost,

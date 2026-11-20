@@ -12,6 +12,10 @@ import path from "node:path";
 import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
 import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture";
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
+import type {
+  PushSetSubscriptionsResult,
+  PushStreamState,
+} from "@orkestrator/protocol/push-events";
 import { relayedNodeEventName } from "@orkestrator/protocol/node-events";
 import { recordElectronDiagnostics, recordProcessOutput } from "./electron-diagnostics";
 import { startLeaf } from "./electron-leaf-backend";
@@ -39,9 +43,10 @@ type Project = { id: string; name: string };
 type Frame = { nodeId?: string; kind?: string; event?: string };
 type RendererGlobals = typeof globalThis & {
   __relayed?: Frame[];
+  __pushProbe?: { streamId?: string; status?: string; stop(): Promise<void> };
   orkestrator: {
     invoke<R>(command: string, args?: Record<string, unknown>): Promise<R>;
-    listen(event: string, callback: (payload: Frame) => void): () => void;
+    listen<T = Frame>(event: string, callback: (payload: T) => void): () => void;
     eventStreamReady(event: string): Promise<void>;
     connections: {
       connect(input: { address: string; token: string }): Promise<unknown>;
@@ -52,6 +57,7 @@ type RendererGlobals = typeof globalThis & {
 };
 type MainGlobals = typeof globalThis & {
   __relayedStreams?: string[];
+  __pushDrops?: Set<AbortController>;
   __activeRelayedStreams?: Array<{ origin: string; filter: string; aborted: boolean }>;
 };
 
@@ -165,10 +171,22 @@ test("main takes a node's relayed events only for the windows listening", async 
       const main = globalThis as MainGlobals;
       main.__relayedStreams = [];
       main.__activeRelayedStreams = [];
+      main.__pushDrops = new Set();
       const originalFetch = globalThis.fetch;
       globalThis.fetch = ((input, init) => {
         const url = new URL(String(input));
         const filter = url.searchParams.get("includeEvents");
+        if (url.pathname === "/__orkestrator/events" && filter === "push." && init?.signal) {
+          const forceDrop = new AbortController();
+          main.__pushDrops?.add(forceDrop);
+          const retire = () => main.__pushDrops?.delete(forceDrop);
+          init.signal.addEventListener("abort", retire, { once: true });
+          forceDrop.signal.addEventListener("abort", retire, { once: true });
+          return originalFetch(input, {
+            ...init,
+            signal: AbortSignal.any([init.signal, forceDrop.signal]),
+          });
+        }
         if (url.pathname === "/__orkestrator/events" && filter) {
           main.__relayedStreams?.push(filter);
           const stream = { origin: url.origin, filter, aborted: false };
@@ -183,7 +201,7 @@ test("main takes a node's relayed events only for the windows listening", async 
     const relayedStreams = () =>
       electronApp.evaluate(() => (globalThis as MainGlobals).__relayedStreams ?? []);
 
-    await invoke<Project>("add_project", {
+    const project = await invoke<Project>("add_project", {
       gitUrl: path.join(profile.fixtureDir, "origin.git"),
       localPath: projectPath,
     });
@@ -282,6 +300,86 @@ test("main takes a node's relayed events only for the windows listening", async 
     await expect
       .poll(async () => hasEventFrame(await framesIn(second)), { timeout: 30_000 })
       .toBe(true);
+
+    const localEnvironment = await invoke<{ id: string }>("create_environment", {
+      projectId: project.id,
+      name: "ipc-push",
+      environmentType: "local",
+    });
+    const startPushProbe = (page: Page) =>
+      page.evaluate((environmentId) => {
+        const renderer = globalThis as RendererGlobals;
+        let revision = Date.now();
+        const set = (streamId: string, subscriptions: Array<{ topic: string; key: string }>) =>
+          renderer.orkestrator.invoke<PushSetSubscriptionsResult>("push_set_subscriptions", {
+            streamId,
+            setRevision: ++revision,
+            subscriptions,
+          });
+        const probe: NonNullable<RendererGlobals["__pushProbe"]> = {
+          async stop() {
+            unlisten();
+            if (probe.streamId) await set(probe.streamId, []);
+          },
+        };
+        renderer.__pushProbe = probe;
+        const unlisten = renderer.orkestrator.listen<PushStreamState>(
+          "push-stream-state",
+          (state) => {
+            probe.status = undefined;
+            probe.streamId = state.state === "connected" ? state.offer?.streamId : undefined;
+            const streamId = probe.streamId;
+            if (!streamId) return;
+            void set(streamId, [{ topic: "environment", key: environmentId }])
+              .then((answer) => {
+                if (probe.streamId === streamId) {
+                  probe.status =
+                    answer.status === "applied" ? answer.subscriptions[0]?.status : answer.status;
+                }
+              })
+              .catch(() => undefined);
+          },
+        );
+      }, localEnvironment.id);
+    const pushState = (page: Page) =>
+      page.evaluate(() => {
+        const probe = (globalThis as RendererGlobals).__pushProbe;
+        return { streamId: probe?.streamId, status: probe?.status };
+      });
+    await startPushProbe(window);
+    await startPushProbe(second);
+    await expect
+      .poll(async () =>
+        (await Promise.all([window, second].map(pushState))).map(({ status }) => status),
+      )
+      .toEqual(["ok", "ok"]);
+    const initial = await Promise.all([window, second].map(pushState));
+    expect(initial[0]?.streamId).not.toBe(initial[1]?.streamId);
+    const metrics = () =>
+      invoke<{
+        subscriptionsByTopic: Record<string, number>;
+        observedKeysByTopic: Record<string, number>;
+      }>("get_push_metrics");
+    expect(await metrics()).toMatchObject({
+      subscriptionsByTopic: { environment: 2 },
+      observedKeysByTopic: { environment: 1 },
+    });
+    await electronApp.evaluate(() => {
+      (globalThis as MainGlobals).__pushDrops?.values().next().value?.abort();
+    });
+    await expect
+      .poll(async () => {
+        const recovered = await Promise.all([window, second].map(pushState));
+        return (
+          recovered.every(({ status }) => status === "ok") &&
+          recovered.filter(({ streamId }, index) => streamId !== initial[index]?.streamId)
+            .length === 1
+        );
+      })
+      .toBe(true);
+    expect(await metrics()).toMatchObject({ observedKeysByTopic: { environment: 1 } });
+    await window.evaluate(() => (globalThis as RendererGlobals).__pushProbe?.stop());
+    await second.evaluate(() => (globalThis as RendererGlobals).__pushProbe?.stop());
 
     // Give only the second window a second name, so closing it must narrow
     // main's stream even while the first keeps its original subscription.

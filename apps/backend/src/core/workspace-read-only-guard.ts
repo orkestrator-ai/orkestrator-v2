@@ -36,12 +36,9 @@ import {
   type WorkspaceGitBaseline,
 } from "@orkestrator/protocol/workspace-guard";
 import type { WorkflowResultError } from "@orkestrator/protocol/workflow-results";
-import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
-import { probeReviewWorktree, type ReviewWorktreeProbeInvoker } from "./review-worktree-probe.js";
-import type {
-  WorkflowResultAcceptanceCheck,
-  WorkflowResultAttempt,
-} from "./workflow-result-service.js";
+import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline/index.js";
+import { probeReviewWorktree, type ReviewWorktreeProbeInvoker } from "./review/index.js";
+import type { WorkflowResultAcceptanceCheck, WorkflowResultAttempt } from "./workflows/index.js";
 
 /** Observes one environment's worktree. Retries, if any, are the probe's own. */
 export type WorkspaceSnapshotProbe = (environmentId: string) => Promise<ReviewWorktreeSnapshot>;

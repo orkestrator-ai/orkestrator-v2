@@ -11,6 +11,7 @@ import { LOGGING_LOG_AREAS } from "./logging.js";
 import { MODEL_LOG_AREAS } from "./models.js";
 import { NATIVE_AGENT_LOG_AREAS } from "./native-agent.js";
 import { PREVIEW_LOG_AREAS } from "./preview.js";
+import { PUSH_LOG_AREAS } from "./push.js";
 import { RUNTIME_LOG_AREAS } from "./runtime.js";
 import { TERMINAL_LOG_AREAS } from "./terminal.js";
 import { TMUX_LOG_AREAS } from "./tmux.js";
@@ -76,6 +77,7 @@ export const LOG_VOCABULARY = {
   ...DESKTOP_LOG_AREAS,
   ...ENVIRONMENT_LOG_AREAS,
   ...GATEWAY_LOG_AREAS,
+  ...PUSH_LOG_AREAS,
   ...LOCAL_SERVER_LOG_AREAS,
   ...GIT_LOG_AREAS,
   ...LOGGING_LOG_AREAS,

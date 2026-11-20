@@ -1,5 +1,7 @@
 # Agent accounts and sign-in (0003) validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/homes.ts`.
+
 - **ID:** 0740
 - **Status:** environmental
 - **Date observed:** 2026-10-24, node mbp3

@@ -3,7 +3,7 @@
  * a send to one worker on this node and on a leaf (`nodeId`), the workers in
  * `get_build_pipeline`, and a worker's own transcript through
  * `get_tab_transcript`. Which backend command each call reaches; the mail
- * store's side is `pipeline-worker-mail.test.ts`.
+ * store's side is `build-pipeline/pipeline-worker-mail.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";

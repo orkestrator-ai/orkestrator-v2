@@ -435,3 +435,20 @@ goal loop runs in the backend on every provider
 goal plan, `git show 2b876486b:plans/goals.md`).
 Codex's own loop starts turns with no `turn/start`, which the runtime drops
 because it handles only the turn it dispatched.
+
+## State revision and the observe stream
+
+`GET /session/:id/status` carries a per-session `stateRevision` covering the
+status body (not `messageRevision` or `contentEpoch`, the transcript's own),
+`/config` (not `durable`), `/approvals` and `/interactions`, and answers a
+current `?knownStateRevision=` with `{ unchanged: true, stateRevision }`
+([State revisions](../AGENTS.md#state-revisions), `src/state-revision.ts`).
+
+- `emit` bumps it (`noteEmittedEvent`) for every session event except
+  `message.updated`/`message.patched`, before the fan-out; observe frames
+  take their `stateRevision` and `transcriptRevision` when the event is
+  emitted, even while buffered during a handshake.
+- A change to any of those four reads must emit a session event: a config
+  update and a hold do (`session.updated`). `src/state-revision.test.ts` drives
+  each path through the runtime and fails on a change without a move; add a
+  new path there.

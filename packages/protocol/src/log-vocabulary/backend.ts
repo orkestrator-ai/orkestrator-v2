@@ -35,6 +35,8 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "instance.republish-failed":
         "The instance descriptor could not be republished; a later pass retries.",
       "parent.exited": "The parent process exited, so local servers are shutting down.",
+      "push.observe-event-failed":
+        "The push layer threw while looking at an emitted event; the event was already delivered.",
       "startup.step-failed":
         "One part of startup failed and the backend carried on; `step` says which.",
       "startup.failed":

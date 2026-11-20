@@ -116,7 +116,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     ],
     profiles: ["builder"],
     backend:
-      "createMultiReviewPreparationPrompt (multi-review-prompts.ts); reviewValidationDiscoveryPrompt (review-validation-prompts.ts) in the Build Pipeline",
+      "createMultiReviewPreparationPrompt (review/multi-review-prompts.ts); reviewValidationDiscoveryPrompt (review/validation-prompts.ts) in the Build Pipeline",
     textMaxBytes: 16 * KIB,
   },
   {
@@ -156,7 +156,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     ],
     profiles: ["reviewer", "observer"],
     backend:
-      "createPackagedMultiReviewerPrompt (multi-review-prompts.ts); reviewPrompt (build-pipeline-prompts.ts) in the Build Pipeline",
+      "createPackagedMultiReviewerPrompt (review/multi-review-prompts.ts); reviewPrompt (build-pipeline/prompts.ts) in the Build Pipeline",
     textMaxBytes: 32 * KIB,
   },
   {
@@ -193,7 +193,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     // Today's consolidation is a read-only turn that may make targeted reads.
     profiles: ["observer", "reviewer"],
     backend:
-      "createMultiReviewConsolidationPrompt (multi-review-prompts.ts), with buildConsolidationEvidence",
+      "createMultiReviewConsolidationPrompt (review/multi-review-prompts.ts), with buildConsolidationEvidence",
     textMaxBytes: 16 * KIB,
   },
   {
@@ -215,7 +215,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     outputs: [addressFindingsResultOutput(true), workspaceOutput(false)],
     profiles: ["builder"],
     backend:
-      "addressFindingsReportPrompt (build-pipeline-prompts.ts) as Multi Review's Address Findings sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
+      "addressFindingsReportPrompt (build-pipeline/prompts.ts) as Multi Review's Address Findings sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
     textMaxBytes: 8 * KIB,
   },
   {
@@ -237,7 +237,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     outputs: [workspaceOutput(false), addressFindingsResultOutput(true)],
     profiles: ["builder"],
     backend:
-      "addressFindingsReportPrompt with addressFindingsValidationInstruction (build-pipeline-prompts.ts, build-pipeline-service-supervisor.ts)",
+      "addressFindingsReportPrompt with addressFindingsValidationInstruction (build-pipeline/prompts.ts, build-pipeline/service-supervisor.ts)",
     textMaxBytes: 8 * KIB,
   },
   {
@@ -250,7 +250,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     // the package preparation instead).
     outputs: [workspaceOutput(false), addressFindingsResultOutput(false)],
     profiles: ["builder"],
-    backend: "buildPrompt (build-pipeline-prompts.ts)",
+    backend: "buildPrompt (build-pipeline/prompts.ts)",
     textMaxBytes: 16 * KIB,
   },
   {
@@ -272,7 +272,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     // Optional, as for Build: today's Rework turn submits no Address Findings result.
     outputs: [workspaceOutput(false), addressFindingsResultOutput(false)],
     profiles: ["builder"],
-    backend: "reworkPrompt (build-pipeline-prompts.ts)",
+    backend: "reworkPrompt (build-pipeline/prompts.ts)",
     textMaxBytes: 16 * KIB,
   },
   {
@@ -302,7 +302,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
       workspaceOutput(false),
     ],
     profiles: ["verifier"],
-    backend: "verificationPrompt (build-pipeline-prompts.ts)",
+    backend: "verificationPrompt (build-pipeline/prompts.ts)",
     textMaxBytes: 32 * KIB,
   },
   {
@@ -321,7 +321,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     ],
     profiles: ["observer", "reviewer"],
     backend:
-      "pullRequestDescriptionPrompt (build-pipeline-prompts.ts): prPrompt's description guidance without pushing or touching the pull request (D12)",
+      "pullRequestDescriptionPrompt (build-pipeline/prompts.ts): prPrompt's description guidance without pushing or touching the pull request (D12)",
     textMaxBytes: 8 * KIB,
   },
   {
@@ -333,7 +333,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     outputs: [workspaceOutput(true)],
     profiles: ["builder"],
     backend:
-      "resolveConflictsLocallyPrompt (build-pipeline-prompts.ts): resolveConflictsPrompt committing locally, without pushing (D12)",
+      "resolveConflictsLocallyPrompt (build-pipeline/prompts.ts): resolveConflictsPrompt committing locally, without pushing (D12)",
     textMaxBytes: 8 * KIB,
   },
 ];

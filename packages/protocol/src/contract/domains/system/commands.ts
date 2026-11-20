@@ -20,7 +20,9 @@
  * recurring-work, progressive-read and artifact metrics, the scheduling
  * reconciliation). Everything a workspace window reads or runs (usage and
  * load, host status, bug reports, schedules, disk usage, resource manifests)
- * is `workspace`. `read` equals `isNodeReadCommand(name)`.
+ * is `workspace`. The leaf side of a command node's self-improvement run,
+ * reached over the node link only, is `internal`. `read` equals
+ * `isNodeReadCommand(name)`.
  *
  * Browser-safe.
  */
@@ -33,6 +35,7 @@ import { MACHINE_LOAD_COMMAND } from "../../../machine-load.js";
 import { RECORD_RENDERER_ERRORS_COMMAND } from "../../../renderer-errors.js";
 import { systemDomain } from "./domain.js";
 import { getFleetUpdatePolicyCommand, setFleetUpdatePolicyCommand } from "./fleet-update-policy.js";
+import { getPushMetricsCommand, pushSetSubscriptionsCommand } from "./push-subscriptions.js";
 import {
   ArtifactMetricsSchema,
   BugReportFileResultSchema,
@@ -68,6 +71,7 @@ import {
 
 export { recordDomainAdapterUsageCommand } from "../../client-usage.js";
 export * from "./fleet-update-policy.js";
+export * from "./push-subscriptions.js";
 export * from "./schemas.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
@@ -721,11 +725,60 @@ export const runSelfImprovementCommand = defineCommand({
   critical: ["dryRun"],
 });
 
+/**
+ * Leaf side of a fleet self-improvement run (docs/architecture/self-improvement.md,
+ * "Leaf nodes"), called by an attached command node over its link only: never
+ * routed, granted or relayed (`node-routing.ts`). This machine's diagnostics
+ * bundle, without debug logs, as base64. The caller reads it with the same
+ * bounded reader as its own. A machine that predates the command answers
+ * `unknown-command` and takes no part.
+ */
+export const collectSelfImprovementDiagnosticsCommand = defineCommand({
+  domain: systemDomain,
+  name: "collect_self_improvement_diagnostics",
+  since: 2,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({ controllerId: optionalUnknown }),
+  result: Schema.Struct({ archive: Schema.optionalKey(Schema.String) }),
+  critical: [],
+});
+
+/**
+ * Leaf side, as above: the unread parts of this machine's settled Claude Code
+ * and Codex conversations after the read positions the command node keeps for
+ * it (`cursor`), rendered and redacted as the command node renders its own, up
+ * to `maxSegments`. Read-only: the leaf keeps no record of what it sent, so a
+ * run that fails before saving its positions reads the same parts next time.
+ * Parts and positions are parsed by the caller.
+ */
+export const collectSelfImprovementConversationsCommand = defineCommand({
+  domain: systemDomain,
+  name: "collect_self_improvement_conversations",
+  since: 2,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    controllerId: optionalUnknown,
+    cursor: optionalUnknown,
+    maxSegments: optionalUnknown,
+  }),
+  result: Schema.Struct({
+    segments: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+    skipped: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+    waiting: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    filesChecked: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  }),
+  critical: [],
+});
+
 /** Every defined `system` command. */
 export const SYSTEM_COMMANDS = [
   recordDomainAdapterUsageCommand,
   getSelfImprovementStatusCommand,
   runSelfImprovementCommand,
+  collectSelfImprovementDiagnosticsCommand,
+  collectSelfImprovementConversationsCommand,
   getFleetUpdatePolicyCommand,
   setFleetUpdatePolicyCommand,
   getAppVersionCommand,
@@ -775,4 +828,6 @@ export const SYSTEM_COMMANDS = [
   updateWorktreeLocationsCommand,
   getScopedResourceRevisionManifestCommand,
   getScopedResourceSnapshotsCommand,
+  pushSetSubscriptionsCommand,
+  getPushMetricsCommand,
 ] as const;

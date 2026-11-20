@@ -1,4 +1,4 @@
-# Fingerprint budget fires before the blocking fake process writes its pid file (apps/backend/src/core/review-worktree-fingerprint.test.ts)
+# Fingerprint budget fires before the blocking fake process writes its pid file (apps/backend/src/core/review/worktree-fingerprint.test.ts)
 
 - **ID:** 1491
 - **Status:** resolved

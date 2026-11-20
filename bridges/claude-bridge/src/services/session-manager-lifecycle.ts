@@ -435,6 +435,7 @@ export async function claimPromptDispatch(
   session.status = "running";
   session.turnStartedAt ??= new Date().toISOString();
   claimedPromptDispatches.set(sessionId, requestId);
+  eventEmitter.announceState(sessionId);
 
   const outcome = (async () => {
     await testHooks?.beforePersistence?.();
@@ -482,6 +483,7 @@ export async function claimPromptDispatch(
       if (!session.deleting) {
         session.status = previousStatus;
         session.turnStartedAt = previousTurnStartedAt;
+        eventEmitter.announceState(sessionId);
       }
       retainedRequestIds.delete(requestId);
       try {
@@ -506,6 +508,7 @@ export async function claimPromptDispatch(
     if (!session.deleting) {
       session.status = previousStatus;
       session.turnStartedAt = previousTurnStartedAt;
+      eventEmitter.announceState(sessionId);
     }
     retainedRequestIds.delete(requestId);
     throw error;
@@ -693,6 +696,7 @@ export function abortSession(sessionId: string): boolean {
     // iterator may never reach the frame that would have cleared it.
     session.activity = undefined;
     session.thinkingTokens = undefined;
+    eventEmitter.announceState(session.id);
     releaseQueryControl(session);
     syncTurnInFlightMark(session, { stopped: true });
 

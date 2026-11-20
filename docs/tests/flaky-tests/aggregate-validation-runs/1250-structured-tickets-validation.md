@@ -1,5 +1,7 @@
 # Structured tickets (todo 0742) branch validation
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/service-rewind-follow-ups.test.ts`.
+
 - **ID:** 1250
 - **Status:** open
 - **Date observed:** 2026-10-28

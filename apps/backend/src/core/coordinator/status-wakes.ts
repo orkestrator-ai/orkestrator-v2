@@ -41,7 +41,7 @@ import {
   updateResolve,
 } from "./pr-attempt.js";
 import { CoordinatorNoticeRouter } from "./notice-router.js";
-import { multiReviewAddressFindingsIdentity } from "../multi-review-address-findings-identity.js";
+import { multiReviewAddressFindingsIdentity } from "../review/index.js";
 import {
   agentMailStatusBudgetKey,
   normalizeAgentMessagingSettings,

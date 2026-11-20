@@ -2288,9 +2288,15 @@ describe("session routes", () => {
       expect(after.status).toBe("idle");
       expect(Object.hasOwn(after, "revision")).toBe(false);
       expect(Object.hasOwn(after, "messageRevision")).toBe(false);
-      // Apart from the additive key, the snapshot an old backend reads is unchanged.
-      const { commandRevision: _beforeRevision, ...beforeLegacy } = before;
-      const { commandRevision: _afterRevision, ...afterLegacy } = after;
+      // Apart from the additive keys, the snapshot an old backend reads is
+      // unchanged. The state revision moves with the command revision.
+      expect(after.stateRevision).not.toBe(before.stateRevision);
+      const {
+        commandRevision: _beforeRevision,
+        stateRevision: _beforeState,
+        ...beforeLegacy
+      } = before;
+      const { commandRevision: _afterRevision, stateRevision: _afterState, ...afterLegacy } = after;
       expect(afterLegacy).toEqual(beforeLegacy);
     });
 

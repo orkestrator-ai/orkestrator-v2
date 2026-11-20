@@ -51,36 +51,36 @@ import {
   usesPackagePreparationSession,
   type BuildPipelineStage,
   type BuildPipelineStageKey,
-} from "./build-pipeline-stages.js";
-import { readsReviewPackage } from "./build-pipeline-prompt-dispatch.js";
+} from "./build-pipeline/stages.js";
+import { readsReviewPackage } from "./build-pipeline/prompt-dispatch.js";
 import {
   executionModeOverrideForPhase,
   pullRequestNeedsConflictResolution,
   PULL_REQUEST_DETECTION_STATES,
   stageAfterReview,
   verificationPassed,
-} from "./build-pipeline-service-helpers.js";
+} from "./build-pipeline/service-helpers.js";
 import { multiReviewDefaultRows } from "./coordinator/launch-defaults.js";
 import {
   addressFindingsResultCompletes,
   multiReviewAutoAddressFindingsDue,
   queueAutoPr,
   queueCleanReviewAutoPr,
-} from "./multi-review-auto-pr.js";
+} from "./review/auto-pr.js";
 import {
   MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS,
   MULTI_REVIEW_REVIEWER_RESULT_KIND,
   MULTI_REVIEW_STAGE_KEYS,
   MULTI_REVIEW_STEP_TURNS,
-} from "./multi-review-steps.js";
-import { REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA } from "./review-prompts.js";
-import { REVIEW_FANOUT_FAN_IN, reviewFanoutReviewerMode } from "./review-fanout.js";
+} from "./review/steps.js";
+import { REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA } from "./review/prompts.js";
+import { REVIEW_FANOUT_FAN_IN, reviewFanoutReviewerMode } from "./review/fanout.js";
 import { RETIRED_LEGACY_STORES, retireLoopedReviewsMigration } from "./storage-retired-features.js";
 import { STORAGE_MIGRATIONS } from "./storage-stores.js";
 import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   workflowResultJsonSchema,
-} from "./workflow-result-contracts.js";
+} from "./workflows/result-contracts.js";
 
 // ------------------------------------------------------------------ support
 

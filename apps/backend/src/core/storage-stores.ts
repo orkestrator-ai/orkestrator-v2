@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS } from "./build-pipeline-transcript-layout.js";
+import { BUILD_PIPELINE_TRANSCRIPT_STORE_LAYOUTS } from "./build-pipeline/index.js";
 import { NATIVE_AGENT_DISPLAY_TAIL_STORE_LAYOUTS } from "./native-agent-display-tail-layout.js";
 import {
   changeLedgerMigration,
@@ -53,6 +53,7 @@ import {
   type StoreLayout,
 } from "./storage-database.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backgroundCheckpointsByDefault } from "./storage-checkpointer.js";
 
 const log = createLogger("storage");
 
@@ -760,9 +761,14 @@ const RECURRING_STORAGE_OBSERVERS: Required<
  */
 export function openBackendDatabase(
   dataDir: string,
-  options: Pick<StorageDatabaseOptions, "observe" | "observeFetch" | "cacheGaugeRegistry"> = {},
+  options: Pick<
+    StorageDatabaseOptions,
+    "observe" | "observeFetch" | "cacheGaugeRegistry" | "backgroundCheckpoint"
+  > = {},
 ): StorageDatabase {
   const database = new StorageDatabase(dataDir, {
+    // Checkpoints off the event loop (`storage-checkpointer.ts`).
+    backgroundCheckpoint: backgroundCheckpointsByDefault(),
     layoutFor: storeLayout,
     migrations: STORAGE_MIGRATIONS,
     unownedRowIndexes: [NATIVE_AGENT_SESSIONS_STORE],

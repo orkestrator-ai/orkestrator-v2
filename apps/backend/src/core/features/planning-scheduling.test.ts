@@ -6,7 +6,7 @@ import {
   FEATURE_PLANNING_RECORD_VERSION,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { FeaturePlanningService } from "./planning.js";
 import { discoverFeaturePlanning, featurePlanningObligation } from "./planning-scheduling.js";
 import {

@@ -16,4 +16,4 @@
  */
 import { defineDomain } from "../../domain.js";
 
-export const nativeSessionsDomain = defineDomain({ name: "native-sessions", version: 5, min: 1 });
+export const nativeSessionsDomain = defineDomain({ name: "native-sessions", version: 6, min: 1 });

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
-import { BUILD_ENVIRONMENT_DELETED_COMMENT } from "./build-pipeline-kanban-environment-deleted.js";
-import { lifecycleMachine, PR_URL } from "./build-pipeline-kanban-transitions-test-support.js";
+import { BUILD_ENVIRONMENT_DELETED_COMMENT } from "./build-pipeline/kanban-environment-deleted.js";
+import { lifecycleMachine, PR_URL } from "./build-pipeline/kanban-transitions-test-support.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -15,7 +15,7 @@ import { StorageService } from "./storage.js";
  * `delete_environment` settles the tickets of the environment's builds before
  * it deletes their pipeline records (`environment-delete.ts`, the "records"
  * step): the ending a deleted build can no longer give its ticket. The rules
- * themselves are in `build-pipeline-kanban-transitions.test.ts`; this drives
+ * themselves are in `build-pipeline/kanban-transitions.test.ts`; this drives
  * the real command over a real storage service.
  */
 

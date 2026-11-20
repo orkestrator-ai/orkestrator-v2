@@ -29,7 +29,7 @@ export const BUILD_PIPELINE_TEMPLATE_ROUNDS = 3;
 
 /**
  * The engine stage each node describes (`BUILD_PIPELINE_STAGES` in the
- * backend's `build-pipeline-stages.ts`). Gates name the engine decision they
+ * backend's `build-pipeline/stages.ts`). Gates name the engine decision they
  * stand for.
  */
 export const BUILD_PIPELINE_TEMPLATE_STAGES = Object.freeze({
@@ -54,7 +54,7 @@ export const BUILD_PIPELINE_TEMPLATE_STAGES = Object.freeze({
 
 /**
  * What the pipeline learns about its pull request after Ship
- * (`PullRequestDetection` in `build-pipeline-service-recovery.ts`). The
+ * (`PullRequestDetection` in `build-pipeline/service-recovery.ts`). The
  * `open-pull-request` node reports it so a gate can route merge conflicts.
  */
 export function pullRequestStateType(): ArtifactTypeDef {

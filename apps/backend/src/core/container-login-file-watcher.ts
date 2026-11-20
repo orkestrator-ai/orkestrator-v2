@@ -4,9 +4,9 @@ import type { CommandContext } from "./commands-context.js";
 import {
   PUSHED_LOGIN_PROVIDERS,
   pushedLoginHostFile,
-  syncContainerLogin,
   type PushedLoginProvider,
-} from "./agent-accounts-containers.js";
+  syncContainerLogin,
+} from "./agent-accounts/index.js";
 import { providerCredentialsAllowed } from "./portable-input-status.js";
 import {
   exportOpenCode2Refreshes,

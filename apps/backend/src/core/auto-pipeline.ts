@@ -1,4 +1,4 @@
-import { connectionDefaultsFor } from "./build-pipeline-service-helpers.js";
+import { type CompletedBuildAttempt, connectionDefaultsFor } from "./build-pipeline/index.js";
 /** Manual-only promotion. The tab's own agent drafts; the user confirms. */
 import { randomUUID, createHash } from "node:crypto";
 import {
@@ -13,7 +13,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import type { CommandContext } from "./commands-context.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   assertNoOtherWorkflowWriting,
   withWorkspaceCodeRewindReservation,
@@ -22,10 +22,9 @@ import {
 import { multiReviewWorkspaceUse } from "./workspace-writers.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
-import { buildPipelineStartWithSavedDefaults } from "./build-pipeline-launch.js";
+import { buildPipelineStartWithSavedDefaults } from "./build-pipeline/launch.js";
 import { boundAdoptedTranscript } from "./auto-pipeline-transcript.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
-import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 
 export interface AutoPipelinePorts {
   provider(
@@ -87,6 +86,50 @@ interface AutoPipelineOutcomes {
   confirmErrors: Map<string, string>;
 }
 const outcomesByStorage = new WeakMap<CommandContext["storage"], AutoPipelineOutcomes>();
+
+/**
+ * Who hears that an environment's Auto-pipeline state may have moved: the
+ * push layer's `workflow` topic (`auto-pipeline` keys), which then re-reads
+ * `sources` and `state` and announces a change to the views that show them.
+ * Keyed by storage like the outcomes, because the command registry and the
+ * agent tools server each build their own service over the same records.
+ * Content-free: a listener learns only the environment id.
+ */
+const changeListenersByStorage = new WeakMap<
+  CommandContext["storage"],
+  Set<(environmentId: string) => void>
+>();
+
+/** Hear every Auto-pipeline change over `storage`; returns the unsubscribe. */
+export function onAutoPipelineChange(
+  storage: CommandContext["storage"],
+  listener: (environmentId: string) => void,
+): () => void {
+  let listeners = changeListenersByStorage.get(storage);
+  if (!listeners) {
+    listeners = new Set();
+    changeListenersByStorage.set(storage, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    changeListenersByStorage.get(storage)?.delete(listener);
+  };
+}
+
+function announceAutoPipelineChange(
+  storage: CommandContext["storage"],
+  environmentId: string,
+): void {
+  const listeners = changeListenersByStorage.get(storage);
+  if (!listeners) return;
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener(environmentId);
+    } catch {
+      // A listener only costs a view its prompt update; its recovery read remains.
+    }
+  }
+}
 const MAX_OUTCOMES = 256;
 /** Drafting sessions one backend runs at once, across every environment. */
 export const MAX_ACTIVE_DRAFTS = 32;
@@ -111,6 +154,14 @@ export class AutoPipelineService {
     private readonly pollMs = 1_000,
   ) {}
 
+  /** The environment's Auto-pipeline offer or one of its drafts may have moved. */
+  private changed(environmentId: string): void {
+    announceAutoPipelineChange(this.context.storage, environmentId);
+  }
+  private putDraft(record: AutoPipelineDraftRecord): void {
+    this.context.storage.putAutoPipelineDraft(record);
+    this.changed(record.environmentId);
+  }
   private outcomes(): AutoPipelineOutcomes {
     let outcomes = outcomesByStorage.get(this.context.storage);
     if (!outcomes) {
@@ -167,7 +218,7 @@ export class AutoPipelineService {
       description: edits.description,
       acceptanceCriteria: [...edits.acceptanceCriteria],
     };
-    this.context.storage.putAutoPipelineDraft(record);
+    this.putDraft(record);
   }
   private async environment(id: string): Promise<Environment> {
     const environment = await this.context.storage.getEnvironment(id);
@@ -294,18 +345,21 @@ export class AutoPipelineService {
       // Refused before the tab is asked anything; record it so the tab can say why.
       const error = new Error("Too many drafting requests are running. Retry when one finishes");
       remember(outcomes.failures, key, error.message);
+      this.changed(environmentId);
       return Promise.reject(error);
     }
     const controller = new AbortController();
     outcomes.failures.delete(key);
     const operation = this.requestDraft(environmentId, tabId, controller.signal);
     active.set(key, { operation, controller });
+    this.changed(environmentId);
     operation.catch((error: unknown) => {
       // A cancelled draft is a deliberate stop, not a failure to show.
       if (!controller.signal.aborted) remember(outcomes.failures, key, errorText(error));
     });
     return operation.finally(() => {
       if (active.get(key)?.operation === operation) active.delete(key);
+      this.changed(environmentId);
     });
   }
   cancelDraft(environmentId: string, tabId: string): void {
@@ -480,7 +534,7 @@ export class AutoPipelineService {
         uncommittedFiles: state.status.split("\n").filter(Boolean),
       };
       const key = `${environmentId}:${tabId}`;
-      this.context.storage.putAutoPipelineDraft({
+      this.putDraft({
         environmentId,
         environment,
         source,
@@ -504,6 +558,7 @@ export class AutoPipelineService {
       });
       // A draft now exists, so an earlier failure or timeout no longer describes the tab.
       this.outcomes().failures.delete(key);
+      this.changed(environmentId);
       return { draftId: draft.id };
     } finally {
       ports.release();
@@ -518,6 +573,7 @@ export class AutoPipelineService {
     const outcomes = this.outcomes();
     outcomes.promoting.set(id, (outcomes.promoting.get(id) ?? 0) + 1);
     outcomes.confirmErrors.delete(id);
+    this.changed(record.environmentId);
     return this.context.storage
       .withAutoPipelinePromotion(record.environment.id, () =>
         this.confirmSerialized(record, ticket),
@@ -530,6 +586,7 @@ export class AutoPipelineService {
         const remaining = (outcomes.promoting.get(id) ?? 1) - 1;
         if (remaining > 0) outcomes.promoting.set(id, remaining);
         else outcomes.promoting.delete(id);
+        this.changed(record.environmentId);
       });
   }
   private async confirmSerialized(
@@ -676,7 +733,7 @@ export class AutoPipelineService {
     // stay closed; the fingerprint read below sees anything they wrote first.
     await this.closeTerminals(environment);
     record.reviewed = ticket;
-    this.context.storage.putAutoPipelineDraft(record);
+    this.putDraft(record);
     if (
       (await this.fingerprint(ports, environment)).fingerprint !== state.fingerprint ||
       (await provider.status(source.providerSessionId)) !== "idle" ||
@@ -698,7 +755,7 @@ export class AutoPipelineService {
     );
     record.attempt.commit = (await ports.git(environment.id, ["rev-parse", "HEAD"])).trim();
     record.fingerprint = (await this.fingerprint(ports, environment)).fingerprint;
-    this.context.storage.putAutoPipelineDraft(record);
+    this.putDraft(record);
     const task =
       (await this.context.storage.kanban.findKanbanTaskByRequestId(
         environment.projectId,
@@ -738,7 +795,7 @@ export class AutoPipelineService {
         throw error;
       });
     record.pipelineId = pipeline.id;
-    this.context.storage.putAutoPipelineDraft(record);
+    this.putDraft(record);
     return this.context.storage.getBuildPipeline(pipeline.id);
   }
 }

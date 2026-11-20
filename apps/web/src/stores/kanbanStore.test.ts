@@ -5,7 +5,7 @@ import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { appCommandScope } from "@/lib/node-scope-slots";
 // The shared sonner replacement lives in tests/setup.ts; a competing local
 // mock.module for it would leak through Bun's global module cache.
-import { mockToastError, mockToastWarning } from "../../../../tests/mocks/sonner";
+import { mockToastError, mockToastInfo, mockToastWarning } from "../../../../tests/mocks/sonner";
 import { buildPipelineStore } from "./buildPipelineStore";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -449,6 +449,50 @@ describe("kanbanStore task actions", () => {
     await appCommandStore(kanbanStore).getState().moveTask("task-1", "done");
     expect(updateKanbanTaskMock).toHaveBeenCalledTimes(calls);
   });
+
+  test("explains a move the backend kept back because the ticket is still being built", async () => {
+    appCommandStore(kanbanStore).setState({ tasks: [task({ status: "in-progress" })] });
+    mockToastInfo.mockClear();
+    updateKanbanTaskMock.mockResolvedValueOnce(task({ status: "in-progress" }));
+    await appCommandStore(kanbanStore).getState().moveTask("task-1", "backlog");
+    expect(appCommandStore(kanbanStore).getState().tasks[0]?.status).toBe("in-progress");
+    expect(mockToastInfo.mock.calls[0]?.[0]).toBe("This ticket is still being built");
+
+    mockToastInfo.mockClear();
+    updateKanbanTaskMock.mockResolvedValueOnce(task({ status: "review" }));
+    await appCommandStore(kanbanStore).getState().moveTask("task-1", "review");
+    expect(mockToastInfo).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])(
+    "explains a remote correction even if the refresh arrives first: %s",
+    async (refreshFirst) => {
+      const board = appCommandStore(kanbanStore);
+      board.setState({
+        currentProjectId: "project-1",
+        tasks: [task({ status: "in-progress", sync: { seq: 1, revs: { status: 1 } } })],
+      });
+      mockToastInfo.mockClear();
+      const response = deferred<KanbanTask>();
+      updateKanbanTaskMock.mockReturnValueOnce(response.promise);
+      const move = board.getState().moveTask("task-1", "backlog");
+      const restored = task({
+        status: "in-progress",
+        sync: { seq: 3, revs: { status: 3 }, rejectedStatusRevision: 2 },
+      });
+      const refresh = async () => {
+        getKanbanTasksMock.mockResolvedValueOnce([restored]);
+        await board.getState().loadTasks("project-1");
+      };
+      if (refreshFirst) await refresh();
+      response.resolve(task({ status: "backlog", sync: { seq: 2, revs: { status: 2 } } }));
+      await move;
+      await refresh();
+      expect(board.getState().tasks[0]?.status).toBe("in-progress");
+      expect(mockToastInfo).toHaveBeenCalledTimes(1);
+      expect(mockToastInfo.mock.calls[0]?.[0]).toBe("This ticket is still being built");
+    },
+  );
 
   test("applies comment and image mutations", async () => {
     appCommandStore(kanbanStore).setState({ tasks: [task()] });

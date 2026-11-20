@@ -3,8 +3,8 @@ import {
   type ControlledTimeout,
   installControlledTimeout,
 } from "../../../tests/helpers/controlled-timeout";
-import * as containerAccounts from "../src/core/agent-accounts-containers";
-import type { AgentAccountStore } from "../src/core/agent-accounts-store";
+import * as containerAccounts from "../src/core/agent-accounts/containers";
+import type { AgentAccountStore } from "../src/core/agent-accounts/store";
 import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminal-runtime";
 import { CONTAINER_INTERACTIVE_SHELL_COMMAND } from "../src/core/container-scripts";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";

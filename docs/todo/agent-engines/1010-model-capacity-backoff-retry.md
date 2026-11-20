@@ -23,8 +23,8 @@ Analysed 2026-10-30 against `main` at `361dc0a6e`.
 - **What app-server already retries.** It retries stream disconnects and 5xx/transport errors itself (`stream_max_retries`, `request_max_retries`; it reports those as a standalone `error` notification with `willRetry: true`). It does not retry `ServerOverloaded`; the observed failures are exactly that turn ending. Codex's own Python SDK documents `retry_on_overload(...)` with exponential backoff and jitter as the caller's job.
 - **No way to retry or resume a turn.** The pinned protocol has `turn/start`, `turn/steer` and `turn/interrupt`, and no turn retry or resume. `thread/resume` reattaches a thread and starts nothing. `turn/start` rejects an empty `input` ("input must not be empty" in the 0.164.0 binary), so continuing needs some input.
 - **How the backend reads a failure.** It never sees the code. Every unattended workflow polls `readProviderStatus` and fails on the first read of `status: "error"` that is not a restart interruption:
-  - Multi Review steps: `multi-review-service.ts:4311`, and reviewers through `agent-branch-runner.ts:704`;
-  - build stages: `build-pipeline-service-supervisor.ts:690`.
+  - Multi Review steps: `review/service.ts:4311`, and reviewers through `agent-branch-runner.ts:704`;
+  - build stages: `build-pipeline/service-supervisor.ts:690`.
 
   Only the message text crosses the bridge (`throwExplainedTurnFailure`, `http-bridge-transport.ts:282`). A brief `failed` → `running` flip would fail the step if any poll landed in the gap.
 - **Result credit.** A workflow result is keyed by the dispatch request id (`workflowResults.prepare({ resultKey: requestId })`). The submit tool checks only that key. Structured output is matched by `session.structuredOutputRequestId === turn.requestId` (`app-server-runtime-lifecycle.ts`, `finalizeTurn`).
@@ -205,7 +205,7 @@ Read from the 2.1.314 bundle, not run:
 - **Jitter:** "equal jitter", so each wait falls between half and all of its nominal length. At most 80 s in total.
 - **Why:**
   - Long enough to ride out a short incident.
-  - Far below Multi Review's 45-minute stall abandon (`multi-review-progress.ts:57`).
+  - Far below Multi Review's 45-minute stall abandon (`review/progress.ts:57`).
   - The jitter spreads sessions refused at the same moment.
 - **Overrides:** the policy is a runtime option (`capacityRetry`, `capacityRetryRandom`) for tests and embedders, with no env-var surface.
 - **What the user sees:**
@@ -320,7 +320,7 @@ The 1.2.0 reading gives no capacity code and no field that separates a capacity 
     - shutdown during a wait.
   - `sessions/capacity-retry.test.ts` covers the policy.
   - `history/rollout-rows.test.ts` covers the replay.
-  - `multi-review-service-part-2.test.ts` ("an unattended Fix survives a Codex capacity retry", "an unattended Fix waits out an OpenCode capacity retry") covers the backend side of the contract.
+  - `review/service-part-2.test.ts` ("an unattended Fix survives a Codex capacity retry", "an unattended Fix waits out an OpenCode capacity retry") covers the backend side of the contract.
   - `opencode-capacity-retry.test.ts` covered the 1.x classification, continuation, backoff, exhaustion, Stop, and rejected and ambiguous sends (removed with OpenCode 1.x on 2026-11-11: `git show 5f4e27b1c:apps/backend/src/core/opencode-capacity-retry.test.ts`).
   - `acp-prompt.test.ts` and `acp-reconciliation.test.ts` cover the ACP retry, its card, Stop during a long wait, and errors that name a limit.
   - `runtime-env.test.ts` and `session-manager-prompt.test.ts` cover which Claude sessions get the longer backoff.

@@ -1,5 +1,11 @@
 # 2026-09-08 review validation preparation
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/review/validation-service.test.ts`
+- `apps/backend/src/core/review/validation-controllers.test.ts`
+- `apps/backend/src/core/build-pipeline/review-fanout.test.ts`
+
 - **ID:** 0005
 - **Status:** open
 - **Original command:** `mise exec -- bun run test:logged -- --name validation-full-suite -- bun run test`.

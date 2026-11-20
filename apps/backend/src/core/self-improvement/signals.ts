@@ -67,6 +67,8 @@ export interface ExtractedSignals {
   window: DigestWindow;
   signals: Signal[];
   observedHours: ObservedHours;
+  /** The input used to detect crashes, even if none occurred. */
+  crashSource?: "health-summary" | "essential-log";
 }
 
 export const CATEGORY_WEIGHT: Readonly<Record<SignalCategory, number>> = {
@@ -776,6 +778,14 @@ function collectDatabase(
 
 /** Every signal in one bundle, highest score first. */
 export function extractSignals(data: BundleData): ExtractedSignals {
+  for (const { at, startedAt } of data.health) {
+    if (
+      !Number.isFinite(new Date(at).getTime()) ||
+      !Number.isFinite(new Date(startedAt).getTime())
+    ) {
+      throw new Error("The diagnostics bundle contains an invalid health timestamp.");
+    }
+  }
   const timeline = versionTimeline(data.essential, data.manifest.appVersion || UNKNOWN_VERSION);
   const exportedAt = Date.parse(data.manifest.createdAt);
   const times = [
@@ -785,7 +795,7 @@ export function extractSignals(data: BundleData): ExtractedSignals {
   ];
   const from = times.length > 0 ? Math.min(...times) : null;
   const to = times.length > 0 ? Math.max(...times) : null;
-  const essentialFrom = data.essential[0]?.at ?? from;
+  const essentialFrom = data.essential[0]?.at ?? null;
   const days = from !== null && to !== null ? Math.max((to - from) / DAY_MS, 1 / 24) : 1;
   const versionHours =
     essentialFrom !== null && to !== null ? timeline.hoursByVersion(essentialFrom, to) : {};
@@ -830,6 +840,7 @@ export function extractSignals(data: BundleData): ExtractedSignals {
       days: round(days),
     },
     signals: built,
+    crashSource: data.health.length > 0 ? "health-summary" : "essential-log",
     observedHours: {
       "essential-log": roundValues(versionHours),
       "health-summary": roundValues(live.uptimeByVersion),

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type {
   SelfImprovementProgress,
+  SelfImprovementRunSummary,
   SelfImprovementStatus,
 } from "@orkestrator/protocol/self-improvement";
 import { FullscreenSettingsLayout } from "../../apps/web/src/components/settings/FullscreenSettingsLayout";
@@ -18,12 +19,18 @@ import type { AppConfig } from "../../apps/web/src/types";
  * `?old` a backend that sends no progress at all, `?review-off` a run that
  * started with the conversation review off after which the switch was turned
  * on, and `?preview` a preview that has listed the parts it would read.
+ * `?finished` shows no run in progress and a finished run on a machine with no
+ * leaves; `?leaves` the same run on a command node that also read its
+ * connected leaf nodes, one of them failing and one needing an update.
  */
 const params = new URLSearchParams(window.location.search);
 const quiet = params.has("quiet");
 const old = params.has("old");
 const reviewOff = params.has("review-off");
 const preview = params.has("preview");
+const leaves = params.has("leaves");
+const failedLeaves = params.has("failed-leaves");
+const finished = leaves || params.has("finished");
 
 const menuItems = [{ id: "self-improvement", label: "Self-improvement", icon: null }];
 const startedAt = Date.now() - 95_000;
@@ -100,18 +107,84 @@ function progress(now: number): SelfImprovementProgress {
   };
 }
 
+const LAST_RUN: SelfImprovementRunSummary = {
+  digestId: "20261120T080000Z-0f1e2d3c",
+  trigger: preview ? "dry-run" : "manual",
+  startedAt: new Date(startedAt - 3_600_000).toISOString(),
+  finishedAt: new Date(startedAt - 3_300_000).toISOString(),
+  outcome: "succeeded",
+  created: [
+    {
+      ticket: "421",
+      signature: "storage:snapshot.failed:ENOSPC",
+      title: "storage snapshot.failed: ENOSPC",
+    },
+  ],
+  linked: [],
+  verified: [],
+  fixFailed: [],
+  partly: [],
+  markedFixed: [],
+  reopenedFromBoard: [],
+  ignoredDeleted: [],
+  wouldCreate: [],
+  heldForTomorrow: 0,
+  belowBar: 6,
+  ...(leaves
+    ? {
+        machines: [
+          {
+            nodeId: "bk_vps",
+            name: "build-vps",
+            diagnostics: failedLeaves ? "failed" : "read",
+            ...(failedLeaves ? {} : { appVersion: "2.41.0" }),
+            conversations: failedLeaves ? "failed" : "read",
+            conversationParts: failedLeaves ? 0 : 9,
+          },
+          {
+            nodeId: "bk_laptop",
+            name: "travel-laptop",
+            diagnostics: failedLeaves ? "failed" : "read",
+            ...(failedLeaves ? {} : { appVersion: "2.40.2" }),
+            conversations: "failed",
+            conversationParts: 0,
+          },
+          {
+            nodeId: "bk_old",
+            name: "old-mini",
+            diagnostics: "needs-update",
+            conversations: "needs-update",
+            conversationParts: 0,
+          },
+        ],
+      }
+    : {}),
+  conversations: {
+    enabled: true,
+    read: leaves ? 30 : 21,
+    waiting: 0,
+    notesAdded: preview ? 0 : 14,
+    themes: 4,
+    costUsd: preview ? 0 : 0.62,
+    heldForTomorrow: 0,
+    errors: [],
+  },
+};
+
 function status(): SelfImprovementStatus {
   return {
     enabled: true,
     settings: { projectId: "p1", conversationReview: true, dailyRun: false },
     project: { id: "p1", name: "orkestrator-v2" },
-    running: {
-      trigger: preview ? "dry-run" : "manual",
-      startedAt: new Date(startedAt).toISOString(),
-      step: reviewOff ? "board" : preview ? "digesting" : "reading-conversations",
-      ...(old ? {} : { progress: progress(Date.now()) }),
-    },
-    lastRun: null,
+    running: finished
+      ? null
+      : {
+          trigger: preview ? "dry-run" : "manual",
+          startedAt: new Date(startedAt).toISOString(),
+          step: reviewOff ? "board" : preview ? "digesting" : "reading-conversations",
+          ...(old ? {} : { progress: progress(Date.now()) }),
+        },
+    lastRun: finished ? LAST_RUN : null,
     nextDailyRunAt: null,
     tracked: [],
     themes: [],

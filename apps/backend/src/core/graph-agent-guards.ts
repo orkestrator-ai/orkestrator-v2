@@ -58,8 +58,11 @@ import {
   type GraphUpstreamRef,
 } from "@orkestrator/protocol/graphs/run";
 import type { WorkflowResultError } from "@orkestrator/protocol/workflow-results";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
-import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import type {
+  EnvironmentGit,
+  ObservedWorktreeSnapshot,
+  ReviewWorktreeSnapshot,
+} from "./build-pipeline/index.js";
 import {
   graphAttributePush,
   graphCreatedCommits,
@@ -85,10 +88,7 @@ import {
   type WorkspaceChange,
   type WorkspaceSnapshotProbe,
 } from "./workspace-read-only-guard.js";
-import type {
-  WorkflowResultAcceptanceCheck,
-  WorkflowResultAttempt,
-} from "./workflow-result-service.js";
+import type { WorkflowResultAcceptanceCheck, WorkflowResultAttempt } from "./workflows/index.js";
 
 /** `git ls-remote <args>` in the environment, with its credentials (never prompting). */
 export type GraphLsRemote = (environment: Environment, args: string[]) => Promise<string>;

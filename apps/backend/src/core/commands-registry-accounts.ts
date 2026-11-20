@@ -66,14 +66,11 @@ import {
   setAgentAccountAutoSwitch,
   startAgentAccountLogin,
   submitAgentAccountLoginCode,
-} from "./agent-accounts.js";
-import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts-machines.js";
-import {
-  applySharedUsageReadings,
-  collectSharedUsageReadings,
-} from "./agent-accounts-usage-sharing.js";
+} from "./agent-accounts/accounts.js";
+import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./agent-accounts/machines.js";
+import { applySharedUsageReadings, collectSharedUsageReadings } from "./agent-accounts/index.js";
 import { accountSwitchGrantState } from "./nodes/index.js";
-import { readSessionAgentAccount } from "./agent-accounts-session.js";
+import { readSessionAgentAccount } from "./agent-accounts/session.js";
 import { cachedPlanUsage, readProjectUsageLimits } from "./agent-usage-limits.js";
 import { openAgentSignInTerminal, readHostAgentSignIns } from "./agent-sign-ins.js";
 import {
@@ -162,7 +159,7 @@ export function registerAgentAccountCommands(
   /**
    * Shared usage readings, leaf side: called by an attached command node over
    * its link only (`node-routing.ts` never routes them). Usage fields only;
-   * see `agent-accounts-usage-sharing.ts`.
+   * see `agent-accounts/usage-sharing.ts`.
    */
   define(collectSharedUsageReadingsCommand, async (args, context) => {
     attachedController(args, context);

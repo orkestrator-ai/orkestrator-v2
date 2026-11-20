@@ -18,20 +18,20 @@ import type { GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { ProviderSessionFailedError, type ProviderSendOptions } from "./agent-provider-contract.js";
 import { AgentToolsServer } from "./agent-tools.js";
-import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { ReviewWorktreeSnapshot } from "./build-pipeline/prompts.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import {
   installGraphAgentExecutor,
   type GraphAgentWiring,
   type GraphAgentWiringInput,
 } from "./graph-agent-wiring.js";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import type { EnvironmentGit } from "./build-pipeline/code-rewind.js";
 import { compiledPlan } from "./graph-run-executor-test-support.js";
 import { GraphRunService, type GraphRunServiceOptions } from "./graph-run-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 export const AGENT_TEST_COMMIT = "c".repeat(40);
 export const AGENT_TEST_BASE_COMMIT = "b".repeat(40);

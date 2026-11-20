@@ -35,7 +35,7 @@ import {
 } from "./tool-support.js";
 import type { CoordinatorControlScope } from "./tools.js";
 import { environmentSummary, type ControlMcpInvoker } from "../control-shared-actions.js";
-import { normalizedWorkflow, workflowSummary } from "../control-workflow-summary.js";
+import { normalizedWorkflow, workflowSummary } from "../build-pipeline/control-workflow-summary.js";
 import {
   coordinatorPrFields,
   featurePlanFollowSummary,

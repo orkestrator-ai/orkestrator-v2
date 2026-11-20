@@ -8,8 +8,8 @@
 //
 // - `container-credentials.js`, because routing its importers through this
 //   file would close a runtime import cycle (this file reaches
-//   `agent-accounts-containers.ts` through `host-launch.ts`):
-//   `agent-accounts-containers.ts` and `portable-input-status.ts` import it
+//   `agent-accounts/containers.ts` through `host-launch.ts`):
+//   `agent-accounts/containers.ts` and `portable-input-status.ts` import it
 //   directly. It is still re-exported here.
 // - `container-server-lifecycle.js`, `host-database-server.js` and
 //   `provider-login.js`, which reach the command layer (`commands-servers.ts`,

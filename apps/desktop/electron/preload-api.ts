@@ -321,19 +321,21 @@ export function createArtifactHostApi(ipcRenderer: IpcRendererLike): ArtifactHos
  * learns the names. A new document starts by saying it has none, since a
  * reload leaves main with the previous document's.
  */
+const PUSH_STREAM_STATE_EVENT = "push-stream-state";
+
 function createRelayedListenReporter(ipcRenderer: IpcRendererLike) {
   const ready = new Map<string, Promise<void>>();
   ipcRenderer.send?.("orkestrator:relayed-events:reset");
   return {
     started(event: string): void {
-      if (!isPerNodeRelayedEvent(event)) return;
+      if (event !== PUSH_STREAM_STATE_EVENT && !isPerNodeRelayedEvent(event)) return;
       ready.set(
         event,
         ipcRenderer.invoke<void>("orkestrator:relayed-events:listen", event).catch(() => undefined),
       );
     },
     stopped(event: string): void {
-      if (!isPerNodeRelayedEvent(event)) return;
+      if (event !== PUSH_STREAM_STATE_EVENT && !isPerNodeRelayedEvent(event)) return;
       ready.delete(event);
       ipcRenderer.send?.("orkestrator:relayed-events:unlisten", event);
     },
@@ -500,8 +502,10 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
   const listeners = new Map<string, Set<EventCallback<unknown>>>();
   const relayedListens = createRelayedListenReporter(ipcRenderer);
   const nodeApis = createNodeApis(ipcRenderer);
+  let pushStreamState: unknown;
 
   ipcRenderer.on("orkestrator:event", (_event, name: string, payload: unknown) => {
+    if (name === PUSH_STREAM_STATE_EVENT) pushStreamState = payload;
     const callbacks = listeners.get(name);
     if (!callbacks) return;
     for (const callback of callbacks) callback(payload);
@@ -532,10 +536,14 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
       if (callbackSet.size === 0) relayedListens.started(event);
       listeners.set(event, callbackSet);
       callbackSet.add(callback as EventCallback<unknown>);
+      if (event === PUSH_STREAM_STATE_EVENT && pushStreamState !== undefined) {
+        callback(pushStreamState as T);
+      }
       return () => {
         if (!callbackSet.delete(callback as EventCallback<unknown>)) return;
         if (callbackSet.size === 0) {
           listeners.delete(event);
+          if (event === PUSH_STREAM_STATE_EVENT) pushStreamState = undefined;
           relayedListens.stopped(event);
         }
       };

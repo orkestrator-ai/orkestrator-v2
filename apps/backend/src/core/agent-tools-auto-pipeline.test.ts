@@ -7,7 +7,7 @@ import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections"
 import { AgentToolsServer } from "./agent-tools.js";
 import type { AutoPipelineToolHost, AutoPipelineToolScope } from "./agent-tools-auto-pipeline.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 type RpcBody = {
   result?: {

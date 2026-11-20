@@ -15,7 +15,7 @@ test runs, which held the scheduler's exclusive resource for most of the wait.
 The complete unchanged owner passed alone (exit 0, 2.5 s logged):
 
 ```sh
-mise run test:logged -- --name multi-review-graph-eval-owner -- bun test --cwd apps/backend ./src/core/review/graph-evaluation.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name multi-review-graph-eval-owner -- bun test --cwd apps/backend ./src/core/multi-review-graph-evaluation.test.ts --parallel=1 --only-failures
 ```
 
 The same unnamed 5 s timeout was seen earlier, as one row of the aggregate
@@ -38,7 +38,7 @@ host. The aggregate queued for about 740 s. The package reported 15256 passed, 1
 The unchanged owning file passed alone in 8.8 s (exit zero):
 
 ```sh
-mise run test:logged -- --name address-graph-evaluation-rerun -- bun test --cwd apps/backend ./src/core/review/graph-evaluation.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name address-graph-evaluation-rerun -- bun test --cwd apps/backend ./src/core/multi-review-graph-evaluation.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: `/tmp/orkestrator-test-run.NrGGXS/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. Passing owner output was removed by the logged runner.
@@ -56,7 +56,7 @@ worker slots after waiting 914 s beside the root and bridge groups.
 Evidence: `/tmp/orkestrator-test-run.l79QN0/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
 The complete unchanged owner passed alone, exit zero in 3.7 s:
-`NODE_ENV=test mise run test:logged -- --name fix-multi-review-owner -- bun test --cwd apps/backend ./src/core/review/graph-evaluation.test.ts --parallel=1 --only-failures`.
+`NODE_ENV=test mise run test:logged -- --name fix-multi-review-owner -- bun test --cwd apps/backend ./src/core/multi-review-graph-evaluation.test.ts --parallel=1 --only-failures`.
 This establishes a recurrence, not its cause. No timeout or assertion was
 changed, and the aggregate remains failed.
 
@@ -65,5 +65,5 @@ changed, and the aggregate remains failed.
 - **Class:** default test budget (A). `src/core/review/graph-evaluation.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses. The timed-out hook is one of its two `beforeAll` fixtures (a real `git init`, SQLite storage and the corpus runs); the later `Graph artifact is missing` error in one recurrence is the cascade of tests running against a fixture whose hook was cut off.
 - **Root cause:** the recorded failure was Bun's former 5 s default per-test/hook budget expiring while the host was loaded; the owner passes alone in a few seconds and nothing it asserts depends on elapsed time.
 - **Fix:** none in this file. It now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets the default per-test and hook budget to 60 s as a hang watchdog.
-- **Reproduced:** no. Under contention with the old budget forced (`mise run test:logged -- --name a1325 -- bun scripts/test-under-contention.ts --core <n> --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review/graph-evaluation.test.ts --timeout=5000`) the owner passed (14.9 s), so six burners on one core did not recreate the aggregate's load.
+- **Reproduced:** no. Under contention with the old budget forced (`mise run test:logged -- --name a1325 -- bun scripts/test-under-contention.ts --core <n> --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-graph-evaluation.test.ts --timeout=5000`) the owner passed (14.9 s), so six burners on one core did not recreate the aggregate's load.
 - **Stress:** the same contention command with `--rerun-each=3` at the new default passed (31.1 s).

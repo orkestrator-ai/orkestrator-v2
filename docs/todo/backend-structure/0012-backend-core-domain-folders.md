@@ -587,7 +587,9 @@ change, no edits beyond paths, the new `index.ts` and the lint patterns):
    packaged app under `release/`, so it needs the packaging build first; it is
    not a quick per-slice check. Run backend tests with `NODE_ENV=test` in a
    shell that sets `NODE_ENV=production`
-   (`host-model-catalog-refresh.test.ts` fails otherwise).
+   (`host-model-catalog-refresh.test.ts` fails otherwise). For focused backend
+   runs through `mise run test:logged`, pass `--cwd apps/backend` to `bun test`
+   so the preload and test filters resolve in the backend package.
 6. **Merge quickly** and announce it, so open branches rebase promptly.
 
 Done when:
@@ -695,9 +697,10 @@ they move many files that other work in flight touches.
   runtime importer of any of them is reachable from them. A greedy pass
   ordered by importer count and 1,800 randomised greedy passes found no
   valid set with fewer than eight exceptions. The exceptions:
-  `service.ts`, `graph-engine.ts`, `address-findings-dispatch.ts`,
+  `service.ts`, `address-findings-dispatch.ts`,
   `retired-looped-review-cleanup.ts` (only the composition root imports
-  them), `fanout.ts` (`build-pipeline-review-fanout.ts`) and
+  them), `graph-engine.ts` (the composition root and `graph-agent-host.ts`),
+  `fanout.ts` (`build-pipeline-review-fanout.ts`) and
   `validation-service.ts` (the review commands, the build pipeline
   supervisor, graph validation and environment teardown) reach the graph
   runtime, the workflow result contracts and the coordinator's status wakes,

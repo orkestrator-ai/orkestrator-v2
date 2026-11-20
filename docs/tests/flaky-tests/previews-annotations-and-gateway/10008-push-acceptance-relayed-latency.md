@@ -1,12 +1,16 @@
 # The relayed push acceptance test can exceed its virtual latency budget
 
+Relocated tests from the recorded commands now live at
+`apps/backend/src/core/review/transcript-push.test.ts` and
+`apps/backend/src/core/review/service-part-4.test.ts`.
+
 - **ID:** 10008
 - **Status:** open
 - **Observed:** 2026-11-20 on the push-layer review fixes, based on
   `5e9835d0a6981a8d2c217d8941e2e065abbe3008`, after reviewed commit `f255a06da`.
 - **Test:** `push acceptance budgets > two relayed nodes share bridge reads across windows and meet the latency budget`
 - **File:** `apps/backend/tests/push-acceptance.test.ts`
-- **Original command:** `mise run test:logged -- --name findings-backend -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/http-bridge/state-revision.test.ts src/core/push/native-session-push-topic.test.ts src/core/push/review-transcript-push-topic.test.ts src/core/native-agent-tool-output-reads.test.ts src/core/nodes/node-push-subscriptions.test.ts src/core/review/transcript-push.test.ts src/core/review/service-part-4.test.ts tests/push-acceptance.test.ts --parallel=4 --only-failures`.
+- **Original command:** `mise run test:logged -- --name findings-backend -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/http-bridge/state-revision.test.ts src/core/push/native-session-push-topic.test.ts src/core/push/review-transcript-push-topic.test.ts src/core/native-agent-tool-output-reads.test.ts src/core/nodes/node-push-subscriptions.test.ts src/core/multi-review-transcript-push.test.ts src/core/multi-review-service-part-4.test.ts tests/push-acceptance.test.ts --parallel=4 --only-failures`.
 - **Failure:** observed p95 of 300 ms against the 250 ms virtual-time limit.
   The case ran for 1.66 seconds. The run reported 136 passed and 3 failed
   across eight files. The two other failures were fixture setup mistakes in new

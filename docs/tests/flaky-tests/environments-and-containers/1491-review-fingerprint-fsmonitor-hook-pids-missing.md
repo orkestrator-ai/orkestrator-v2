@@ -8,7 +8,7 @@
 - **Worker configuration:** backend workspace `bun test` at 4x parallel, on mbp3 with other workers running at the same time
 - **Failure:** `ENOENT` opening `.git/hook-pids` in the test's temporary repository (duration: 2.35 s)
 - **Suite counts:** backend 11778 total, 11673 passed, 103 skipped, 2 failed
-- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/review/worktree-fingerprint.test.ts` from `apps/backend`, three times → passed each time (15 pass, 0 fail)
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts ./src/core/review-worktree-fingerprint.test.ts` from `apps/backend`, three times → passed each time (15 pass, 0 fail)
 - **Hypothesis:** the test shortens the status timeout to 1500 ms and then reads the pid file the blocking hook writes. The assertions before that read passed, so the fingerprint and its fallback ran, but no pid file existed: the hook appears not to have written it before the timeout fired. Not reproduced under controlled load. The same test passed in the run before it. The change on the branch (retiring the legacy close fallback) does not touch this code.
 
 ### Resolution — 2026-11-06
@@ -27,7 +27,7 @@
   written its PID under load. The path no longer exists to test.
 - **Change in this pass:** none.
 - **Verification:** `mise run test:logged -- --name env-fingerprint -- bun
-  --cwd=apps/backend test ./src/core/review/worktree-fingerprint.test.ts
+  --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts
   --parallel=1 --rerun-each=5`: PASS in 65.2 s.
 
 ### Reopened — 2026-11-15
@@ -39,7 +39,7 @@
   file fails the same way: a pid file the blocking fake process writes is
   missing after the probe's budget fired.
 - **Test:** `stops a blocked git and its descendant at its budget (bun)`,
-  `apps/backend/src/core/review/worktree-fingerprint.test.ts:273`.
+  `apps/backend/src/core/review-worktree-fingerprint.test.ts:273`.
 - **Observed on:** mbp3 (macOS, arm64), branch
   `electron-window-request-adbadd631072-r1` (to-do 6303), base `30b38f696`.
   The branch changes only desktop native dialogs, an Electron spec and docs;
@@ -58,7 +58,7 @@
   `/opt/homebrew/bin/flock`).
 - **Isolated reruns:**
   - The aggregate runner's own rerun of the file alone: passed (8.9 s).
-  - `mise run test:logged -- --name fingerprint-alone -- bun --cwd=apps/backend test ./src/core/review/worktree-fingerprint.test.ts --parallel=1 --rerun-each=3`:
+  - `mise run test:logged -- --name fingerprint-alone -- bun --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts --parallel=1 --rerun-each=3`:
     107 pass, 1 fail, the same test with the same `ENOENT` (525.83 ms). This
     ran while `mise run test:agent:electron` was loading the same host (load
     average 9–11).
@@ -88,7 +88,7 @@
 - **Reproduction:** prefixing the fake Git with `sleep 1;` (the losing side
   delayed past the 500 ms budget) failed both interpreters with the recorded
   `ENOENT` opening `.git/status-pid`:
-  `mise run test:logged -- --name fp-repro -- bun --cwd=apps/backend test ./src/core/review/worktree-fingerprint.test.ts -t "stops a blocked git"`
+  `mise run test:logged -- --name fp-repro -- bun --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts -t "stops a blocked git"`
   → 0 pass, 2 fail.
 - **Fix:** the test retries with longer budgets (500 ms, then 2 s, then 5 s)
   only when the pid file is absent. Every attempt must still end as a
@@ -98,7 +98,7 @@
   attempts.
 - **Verification:** the same `sleep 1;` injection with the fix: PASS (6.6 s,
   both interpreters, through the 2 s attempt). Stress without the injection:
-  `mise run test:logged -- --name fp-stress -- bun scripts/test-under-contention.ts --burners 4 -- bun --cwd=apps/backend test ./src/core/review/worktree-fingerprint.test.ts --rerun-each=5`
+  `mise run test:logged -- --name fp-stress -- bun scripts/test-under-contention.ts --burners 4 -- bun --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts --rerun-each=5`
   → PASS (97.3 s; macOS, burners unpinned).
 
 Each attempt now gives the fake Git its own PID record. The

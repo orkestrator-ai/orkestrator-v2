@@ -22,9 +22,10 @@
 // not part of this surface, because routing their importers through this file
 // would close a runtime import cycle.
 //
-// - `service.ts`, `graph-engine.ts`, `address-findings-dispatch.ts` and
+// - `service.ts`, `address-findings-dispatch.ts` and
 //   `retired-looped-review-cleanup.ts` (imported only by the composition
-//   root, `core/index.ts`), `fanout.ts` (imported by
+//   root, `core/index.ts`), `graph-engine.ts` (imported by the composition
+//   root and `graph-agent-host.ts`), `fanout.ts` (imported by
 //   `build-pipeline-review-fanout.ts`) and `validation-service.ts` (imported
 //   by the review commands, the build pipeline supervisor, graph validation
 //   and environment teardown) reach the graph runtime, the workflow result

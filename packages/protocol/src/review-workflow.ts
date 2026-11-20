@@ -10,7 +10,11 @@ import { isReviewValidationPlan, type ReviewValidationPlan } from "./review-vali
  */
 
 import { getReviewInstructionValidationError } from "./review-prompt.js";
-import { reviewDiffArtifactPath, reviewPackageArtifactPath } from "./review-artifacts.js";
+import {
+  reviewDiffArtifactPath,
+  reviewDiffChunkArtifactPath,
+  reviewPackageArtifactPath,
+} from "./review-artifacts.js";
 import {
   isValidationFailureSummary,
   isValidationFailureTriage,
@@ -115,6 +119,27 @@ export interface ReviewPackageDiffArtifact {
 }
 
 /**
+ * One part of a very large reviewed diff. The parts are consecutive slices of
+ * the same bytes as {@link ReviewPackageDiffArtifact}, cut only between file
+ * diffs, so together they are the whole diff in order. Each reviewer of a
+ * panel reads its share of the parts in full instead of spot-checking a diff
+ * too large to read in one pass.
+ */
+export interface ReviewPackageDiffChunk {
+  /** 1-based part number. */
+  index: number;
+  /** Workspace-relative path (`reviewDiffChunkArtifactPath`). */
+  path: string;
+  bytes: number;
+  sha256: string;
+  /** The changed paths whose diffs this part holds, in diff order. */
+  files: string[];
+}
+
+/** Most parts a package splits its diff into. */
+export const REVIEW_PACKAGE_MAX_DIFF_CHUNKS = 64;
+
+/**
  * The backend-owned evidence pointer every reviewer in one round shares.
  *
  * `baseRef` and `headRef` are immutable commit IDs, so `diffCommand` returns
@@ -138,6 +163,12 @@ export interface ReviewPackage {
    * and when the diff could not be saved (a limitation then says why).
    */
   diffArtifact?: ReviewPackageDiffArtifact;
+  /**
+   * The same diff split into parts, present only when it is too large to read
+   * in one pass (`review-diff-artifact.ts` in the backend). Absent from
+   * packages sealed before it existed.
+   */
+  diffChunks?: ReviewPackageDiffChunk[];
   changedFiles: ReviewPackageFile[];
   validation: ReviewPackageCommandResult[];
   validationPlan?: ReviewValidationPlan;
@@ -375,6 +406,26 @@ function isReviewPackageDiffArtifact(value: unknown): value is ReviewPackageDiff
   );
 }
 
+function isReviewPackageDiffChunks(value: unknown, packageId: string): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= REVIEW_PACKAGE_MAX_DIFF_CHUNKS &&
+    value.every(
+      (chunk, position) =>
+        isRecord(chunk) &&
+        hasOnlyKeys(chunk, ["index", "path", "bytes", "sha256", "files"]) &&
+        chunk.index === position + 1 &&
+        isNonNegativeInteger(chunk.bytes) &&
+        typeof chunk.sha256 === "string" &&
+        /^[a-f0-9]{64}$/.test(chunk.sha256) &&
+        chunk.path === reviewDiffChunkArtifactPath(packageId, position + 1, chunk.sha256) &&
+        isStringArray(chunk.files) &&
+        chunk.files.every((file) => isBoundedNonEmptyString(file, REVIEW_MAX_CONTEXT_TEXT_LENGTH)),
+    )
+  );
+}
+
 export function isReviewPackage(value: unknown, round?: number): value is ReviewPackage {
   if (
     !isRecord(value) ||
@@ -385,6 +436,9 @@ export function isReviewPackage(value: unknown, round?: number): value is Review
       (!isReviewPackageDiffArtifact(value.diffArtifact) ||
         value.diffArtifact.path !==
           reviewDiffArtifactPath(String(value.id), value.diffArtifact.sha256))) ||
+    (value.diffChunks !== undefined &&
+      (value.diffArtifact === undefined ||
+        !isReviewPackageDiffChunks(value.diffChunks, String(value.id)))) ||
     !Array.isArray(value.changedFiles) ||
     !Array.isArray(value.validation) ||
     (value.validationPlan !== undefined &&

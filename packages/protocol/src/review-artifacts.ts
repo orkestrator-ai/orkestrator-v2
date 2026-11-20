@@ -36,6 +36,19 @@ export function reviewDiffArtifactPath(packageId: string, sha256: string): strin
 }
 
 /**
+ * One part of a very large reviewed diff (`ReviewPackage.diffChunks`), split at
+ * file boundaries so each reviewer of a panel can read its share in full.
+ * `index` is the part's 1-based number; the digest keeps the bytes immutable.
+ */
+export function reviewDiffChunkArtifactPath(
+  packageId: string,
+  index: number,
+  sha256: string,
+): string {
+  return `${reviewArtifactDirectory(packageId)}/review-diff-part-${String(index).padStart(2, "0")}-${sha256}.patch`;
+}
+
+/**
  * The ordinal is the entry's 1-based position in the returned `validation`
  * array, counting skipped commands, so entry N always uses ordinal N. Numbering
  * by execution order instead would shift every artifact after a skipped command.

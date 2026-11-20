@@ -32,6 +32,7 @@ import {
   MAX_REPORTED_UNCOMMITTED_PATHS,
   MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   prPrompt,
+  MAX_PULL_REQUEST_FOLLOW_UP_BYTES,
   resolveConflictsLocallyPrompt,
   resolveConflictsPrompt,
   reviewPrompt,
@@ -1228,7 +1229,31 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("2 more items are in the pipeline's notes");
     expect(prompt).toContain("Item 29");
     expect(prompt).not.toContain("Item 30");
-    expect(prompt).not.toContain("x".repeat(500));
+  });
+
+  test("prPrompt never cuts a follow-up mid-string, and leaves whole items out by size", () => {
+    const logPath = `/workspace/.orkestrator/review-artifacts/${"r".repeat(700)}/validation-03.stdout.txt`;
+    const big = "y".repeat(30 * 1024);
+    const prompt = prPrompt("main", {
+      followUps: [
+        { kind: "test", text: "mise run test", detail: `failed: see ${logPath}` },
+        { kind: "not-done", text: `A ${big}` },
+        { kind: "not-done", text: `B ${big}` },
+        { kind: "not-done", text: `C ${big}` },
+      ],
+    });
+    const frame = prompt.slice(
+      prompt.indexOf("<needs-a-look-json>") + "<needs-a-look-json>".length,
+      prompt.indexOf("</needs-a-look-json>"),
+    );
+    const shown = JSON.parse(frame) as Array<{ text: string; detail?: string }>;
+
+    expect(shown[0]!.detail).toBe(`failed: see ${logPath}`);
+    expect(shown.map((item) => item.text)).toEqual(["mise run test", `A ${big}`, `B ${big}`]);
+    expect(frame).not.toContain("…");
+    expect(Buffer.byteLength(frame)).toBeLessThan(MAX_PULL_REQUEST_FOLLOW_UP_BYTES + 1024);
+    expect(prompt).toContain("1 more item is in the pipeline's notes");
+    expect(prompt).toContain("Copy each text and detail in full");
   });
 
   test("prPrompt has no follow-up section when nothing is outstanding", () => {

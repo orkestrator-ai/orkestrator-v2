@@ -14,9 +14,13 @@
  *     independent, so they run concurrently instead of one after another.
  *
  * Group output streams directly to a private per-group file while only a
- * bounded tail is retained in memory. Passing groups print a compact summary;
- * failing groups print that tail, then every Bun failure report seen anywhere
- * in their output, and retain a compressed artifact.
+ * bounded head and tail are retained in memory, with a marker where the middle
+ * was left out. The detailed section at the end starts with the guard stage,
+ * whose short output always prints, then gives every test group a banner and
+ * the test counts from Bun's summary lines (summed across Turbo packages).
+ * Passing groups print nothing more; failing groups print their head and tail,
+ * then every Bun failure report seen anywhere in their output, and retain a
+ * compressed artifact.
  *
  * Unlike the previous sequential runner this does **not** stop at the first
  * failing group: with concurrency the others have already run anyway, so
@@ -57,8 +61,13 @@ const root = path.resolve(import.meta.dir, "..");
 export interface CommandResult {
   status: number | null;
   infrastructureError?: boolean;
-  /** Bounded tail of combined stdout/stderr for the console summary. */
+  /**
+   * Bounded head and tail of combined stdout/stderr for the console summary
+   * (see {@link headAndTailOutput}).
+   */
   output?: string;
+  /** Totals from Bun's summary lines; absent when the output had none. */
+  testCounts?: TestCounts;
   /** Bun's report for each failing test, wherever it appeared in the output. */
   failureReports?: string[];
   /** Failures beyond {@link MAX_FAILURE_REPORTS}, counted but not kept. */
@@ -143,6 +152,12 @@ export const INCLUDE_IOS_TESTS_ENV = "ORKESTRATOR_INCLUDE_IOS";
 export const TEST_SKIP_GUARDS_ENV = "ORKESTRATOR_TEST_SKIP_GUARDS";
 export const MAX_GROUP_OUTPUT_BYTES = 64 * 1024 * 1024;
 export const MAX_GROUP_OUTPUT_TAIL_BYTES = 256 * 1024;
+/**
+ * Start of each group's output kept alongside the tail, so the console shows
+ * how a group began (build steps, the first package tasks) as well as how it
+ * ended.
+ */
+export const MAX_GROUP_OUTPUT_HEAD_BYTES = 32 * 1024;
 export const MAX_FAILURE_REPORTS = 25;
 /** Lines of the failing task's own output kept before each `(fail)` line. */
 export const FAILURE_REPORT_CONTEXT_LINES = 40;
@@ -180,9 +195,26 @@ export interface FailingFile {
  */
 const BUN_FILE_HEADER = /^(?:::group::)?(\S(?:.*\S)?\.(?:test|spec)\.[cm]?[jt]sx?):$/;
 
+/** Totals from Bun's end-of-run summary, summed over every Bun run in a group. */
+export interface TestCounts {
+  tests: number;
+  files: number;
+  pass: number;
+  fail: number;
+  skip: number;
+  todo: number;
+}
+
+/** Bun's per-outcome summary line, such as ` 3190 pass`. */
+const BUN_COUNT_LINE = /^\s*(\d+) (pass|fail|skip|todo)\s*$/;
+/** Bun's closing line, such as `Ran 3201 tests across 412 files. [41.20s]`. */
+const BUN_RAN_LINE = /^Ran (\d+) tests? across (\d+) files?/;
+
 export class FailureReportCollector {
   readonly reports: string[] = [];
   omitted = 0;
+  /** Bun's summary totals, summed across Turbo tasks; undefined until one is seen. */
+  testCounts: TestCounts | undefined;
   /** Every file a `(fail)` line was reported under, in first-failure order, each once. */
   readonly failingFiles: FailingFile[] = [];
   private readonly currentFile = new Map<string, string>();
@@ -210,6 +242,7 @@ export class FailureReportCollector {
       .slice(0, MAX_FAILURE_REPORT_LINE_CHARS);
     const prefix = TASK_PREFIX.exec(line)?.[1] ?? "";
     const body = line.slice(prefix.length);
+    this.countSummary(body);
     // Bun explains a timeout on the line after `(fail)`.
     if (this.lastReport?.prefix === prefix && /^\s*\^ this test timed out/.test(body)) {
       this.reports[this.lastReport.index] += `\n${line}`;
@@ -241,6 +274,45 @@ export class FailureReportCollector {
     }
     this.recent.set(bucket, context);
   }
+
+  private countSummary(body: string): void {
+    const count = BUN_COUNT_LINE.exec(body);
+    const ran = count ? undefined : BUN_RAN_LINE.exec(body);
+    if (!count && !ran) return;
+    const totals = (this.testCounts ??= {
+      tests: 0,
+      files: 0,
+      pass: 0,
+      fail: 0,
+      skip: 0,
+      todo: 0,
+    });
+    if (count) {
+      totals[count[2] as "pass" | "fail" | "skip" | "todo"] += Number(count[1]);
+    } else if (ran) {
+      totals.tests += Number(ran[1]);
+      totals.files += Number(ran[2]);
+    }
+  }
+}
+
+/**
+ * The console copy of a group's output: all of it when the kept head and tail
+ * cover every byte, otherwise the head, a marker naming how much was left
+ * out, and the tail. `head` holds the first bytes and `tail` the last bytes of
+ * `totalBytes` bytes of output.
+ */
+export function headAndTailOutput(head: Buffer, tail: Buffer, totalBytes: number): string {
+  if (totalBytes <= tail.byteLength) return tail.toString("utf8");
+  if (totalBytes <= head.byteLength + tail.byteLength) {
+    return Buffer.concat([head.subarray(0, totalBytes - tail.byteLength), tail]).toString("utf8");
+  }
+  const omitted = totalBytes - head.byteLength - tail.byteLength;
+  return (
+    `${head.toString("utf8")}\n[orkestrator-test-runner] … ${omitted} bytes of output omitted here; ` +
+    "the group's complete log is kept with the failure artifacts listed at the end of a failing run.\n" +
+    tail.toString("utf8")
+  );
 }
 
 export function boundConsoleLines(text: string): string {
@@ -522,7 +594,10 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     let outputBytes = 0;
     let persistedBytes = 0;
     let outputLimitExceeded = false;
+    let outputHead: Buffer = Buffer.alloc(0);
     let outputTail: Buffer = Buffer.alloc(0);
+    /** Every byte the head and tail have seen, runner markers included. */
+    let recordedBytes = 0;
     const failures = new FailureReportCollector();
     let spawnError: Error | undefined;
     let logError: Error | undefined;
@@ -535,7 +610,11 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     let absoluteTimer: ReturnType<typeof setTimeout> | undefined;
     let timeoutReason: CommandResult["timeoutReason"];
 
-    const appendTail = (chunk: Buffer) => {
+    /** Keeps the chunk in the head while it has room, and always in the tail. */
+    const record = (chunk: Buffer) => {
+      recordedBytes += chunk.byteLength;
+      const headRoom = MAX_GROUP_OUTPUT_HEAD_BYTES - outputHead.byteLength;
+      if (headRoom > 0) outputHead = Buffer.concat([outputHead, chunk.subarray(0, headRoom)]);
       outputTail =
         chunk.byteLength >= MAX_GROUP_OUTPUT_TAIL_BYTES
           ? chunk.subarray(chunk.byteLength - MAX_GROUP_OUTPUT_TAIL_BYTES)
@@ -550,7 +629,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       timeoutReason = reason;
       const chunk = Buffer.from(`\n[orkestrator-test-runner] ${marker}\n`);
       if (!logError) log.write(chunk);
-      appendTail(chunk);
+      record(chunk);
       signalProcessTree("SIGTERM");
       forceKill = setTimeout(() => signalProcessTree("SIGKILL"), 1_000);
       forceKill.unref();
@@ -570,7 +649,7 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
     const consume = (value: Buffer | string) => {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
       outputBytes += chunk.byteLength;
-      appendTail(chunk);
+      record(chunk);
       failures.push(chunk);
       armNoProgressTimer();
       if (outputLimitExceeded || logError) return;
@@ -612,8 +691,9 @@ export function defaultRunGroup(group: TestGroup, env: NodeJS.ProcessEnv): Promi
       resolve({
         status: outputLimitExceeded || timeoutReason || errors.length > 0 ? 1 : childStatus,
         output: boundConsoleLines(
-          `${outputTail.toString("utf8")}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
+          `${headAndTailOutput(outputHead, outputTail, recordedBytes)}${errors.length ? `\n${errors.join("\n")}` : ""}`.trim(),
         ),
+        ...(failures.testCounts ? { testCounts: failures.testCounts } : {}),
         failureReports: failures.reports,
         failingFiles: failures.failingFiles,
         omittedFailureReports: failures.omitted,
@@ -664,6 +744,15 @@ export type CompletedGroup = {
   result: CommandResult;
   elapsedMs: number;
 };
+
+/** One line with the group's Bun test totals, or a note that it printed none. */
+export function formatTestCounts(counts: TestCounts | undefined): string {
+  if (!counts) return "Tests: no Bun test summary in this group's output";
+  return (
+    `Tests: ${counts.tests} across ${counts.files} files — ${counts.pass} pass, ` +
+    `${counts.fail} fail, ${counts.skip} skip, ${counts.todo} todo`
+  );
+}
 
 /** Lists every failing test a group reported, including any the tail lost. */
 function logFailureReports(
@@ -1515,14 +1604,26 @@ export async function runAllTests(overrides: Partial<TestAllDependencies> = {}):
     const results = [...guardResults, ...groupResults];
 
     // Detailed output stays in declaration order even though completion is
-    // reported live above.
+    // reported live above. The guard stage comes first, and its output always
+    // prints: one line per guard and a summary, so a reader can check each
+    // guard's verdict without the artifacts a passing run deletes.
     let firstFailure = 0;
-    for (const { group, result, elapsedMs } of groupResults) {
+    const banner = "=".repeat(72);
+    const logBanner = ({ group, result, elapsedMs }: CompletedGroup) => {
       const status = result.status ?? 1;
-      const banner = "=".repeat(72);
       dependencies.log(
         `\n${banner}\n${result.infrastructureError || result.timeoutReason || result.outputLimitExceeded ? "INCOMPLETE" : status === 0 ? "PASS" : "FAIL"}  ${group.name}  (${formatDuration(elapsedMs)})\n${banner}`,
       );
+    };
+    for (const completed of guardResults) {
+      logBanner(completed);
+      if (completed.result.output) dependencies.log(completed.result.output.trimEnd());
+    }
+    for (const completed of groupResults) {
+      const { group, result } = completed;
+      const status = result.status ?? 1;
+      logBanner(completed);
+      dependencies.log(formatTestCounts(result.testCounts));
       if (status !== 0 && result.output) dependencies.log(result.output.trimEnd());
       if (status !== 0) logFailureReports(dependencies, group.name, result);
       if (result.outputLimitExceeded) {

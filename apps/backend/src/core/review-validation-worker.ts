@@ -279,8 +279,14 @@ async function execute(cmd, index, readyAt) {
     delete env.ORKESTRATOR_TEST_PARENT_RESERVATION;
     delete env.ORKESTRATOR_VALIDATION_RESOURCES;
     delete env.ORKESTRATOR_VALIDATION_GRANTED_WORKERS;
+    delete env.ORKESTRATOR_VALIDATION_DEADLINE_MS;
     // Lets a suite tell review validation from a person's run of it.
     env.ORKESTRATOR_REVIEW_VALIDATION = "1";
+    // The wall-clock instant (epoch ms) this command is killed, so a suite can
+    // stop itself first and report what was still running (Playwright's
+    // globalTimeout). A cooperative command's budget is execution time, not
+    // wall time, so it has no fixed deadline to pass.
+    if (!cooperative) env.ORKESTRATOR_VALIDATION_DEADLINE_MS = String(Date.now() + cmd.timeoutMs);
     // Consumers such as Playwright explicitly opt in to the host grant. Do not
     // overwrite ORKESTRATOR_TEST_WORKERS: package runners use it independently,
     // and bridge suites must retain their serial default.

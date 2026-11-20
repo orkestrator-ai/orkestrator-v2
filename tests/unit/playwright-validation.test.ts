@@ -52,7 +52,7 @@ test.each([
   expect(JSON.parse(run.stdout)).toEqual({ workers, retries });
 });
 
-test("line reporter exposes complete Electron diagnostics and review retry evidence", async () => {
+test("review validation reporter exposes complete Electron diagnostics and review retry evidence", async () => {
   // Stay under the checkout so generated specs resolve @playwright/test.
   const fixture = await mkdtemp(path.join(root, "output/playwright-validation-"));
   try {

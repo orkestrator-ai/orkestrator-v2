@@ -14,6 +14,8 @@ import {
   FAILURE_REPORT_CONTEXT_LINES,
   FailureReportCollector,
   finalizeTestLogs,
+  formatTestCounts,
+  headAndTailOutput,
   sampleGroupCpuMs,
   startGroupCpuSampler,
   GUARD_STAGE,
@@ -31,6 +33,7 @@ import {
   MAX_SLOW_BACKEND_TEST_WORKERS,
   MAX_CONSOLE_TAIL_LINE_CHARS,
   MAX_FAILURE_REPORTS,
+  MAX_GROUP_OUTPUT_HEAD_BYTES,
   MAX_GROUP_OUTPUT_TAIL_BYTES,
   MIN_AGGREGATE_TEST_WORKERS,
   MIN_BRIDGE_WORKERS,
@@ -444,7 +447,10 @@ describe("scripts/test-all.ts", () => {
         guardRuns.push({ group, startedGroups: created.started.length });
         return {
           status,
-          output: status === 0 ? "" : "FAIL dom-absence\nGuards failed: dom-absence",
+          output:
+            status === 0
+              ? "PASS dom-absence\nPASS number-claims (bun test, alongside)\nAll 2 guards passed."
+              : "FAIL dom-absence\nGuards failed: dom-absence",
         };
       };
       return { ...created, guardRuns };
@@ -462,6 +468,22 @@ describe("scripts/test-all.ts", () => {
       const rootArgs = invocations.find((entry) => entry.name === ROOT)!.args;
       for (const file of GUARD_STAGE_TEST_FILES)
         expect(rootArgs).toContain(`--path-ignore-patterns=${file}`);
+    });
+
+    test("the detailed section starts with the guard stage and its output, even when it passed", async () => {
+      const { dependencies, logs } = withGuards(0);
+
+      expect(await runAllTests(dependencies)).toBe(0);
+      const report = logs.join("\n");
+      // The early progress line stays.
+      expect(logs.some((line) => line.startsWith("PASS guards ("))).toBe(true);
+      const guardBannerAt = report.indexOf("PASS  guards  (");
+      const guardOutputAt = report.indexOf("PASS dom-absence\nPASS number-claims");
+      expect(guardBannerAt).toBeGreaterThan(report.indexOf("Running 4 default-tier"));
+      expect(guardOutputAt).toBeGreaterThan(guardBannerAt);
+      expect(report.indexOf("All 2 guards passed.")).toBeLessThan(
+        report.indexOf(`PASS  ${WORKSPACE}`),
+      );
     });
 
     test("a failure stops the run before any group is admitted and says how to skip it", async () => {
@@ -983,6 +1005,47 @@ describe("scripts/test-all.ts", () => {
     expect(report.indexOf(ROOT)).toBeLessThan(report.indexOf("root suite details"));
   });
 
+  test("every group's banner is followed by its Bun test totals, passing or failing", async () => {
+    const { dependencies, logs } = createDependencies({ statusByName: { [BRIDGES]: 1 } });
+    const runGroup = dependencies.runGroup;
+    dependencies.runGroup = async (group, env) => {
+      const result = await runGroup(group, env);
+      return group.name === ROOT || group.name === BRIDGES
+        ? {
+            ...result,
+            testCounts: {
+              tests: 3201,
+              files: 412,
+              pass: group.name === ROOT ? 3190 : 3189,
+              fail: group.name === ROOT ? 0 : 1,
+              skip: 11,
+              todo: 0,
+            },
+          }
+        : result;
+    };
+
+    await runAllTests(dependencies);
+    const report = logs.join("\n");
+    // The banner line, the closing rule, then the counts.
+    const countsAfterBanner = (verdict: string, name: string, counts: string) => {
+      const bannerAt = report.indexOf(`${verdict}  ${name}  (`);
+      expect(bannerAt).toBeGreaterThan(-1);
+      expect(report.slice(bannerAt).split("\n")[2]).toBe(counts);
+    };
+    countsAfterBanner(
+      "PASS",
+      ROOT,
+      "Tests: 3201 across 412 files — 3190 pass, 0 fail, 11 skip, 0 todo",
+    );
+    countsAfterBanner(
+      "FAIL",
+      BRIDGES,
+      "Tests: 3201 across 412 files — 3189 pass, 1 fail, 11 skip, 0 todo",
+    );
+    countsAfterBanner("PASS", PROTOCOL, "Tests: no Bun test summary in this group's output");
+  });
+
   test("orders the report by declaration, not completion", async () => {
     // The root group finishes last here, but must still be reported second.
     let release = () => {};
@@ -1154,7 +1217,10 @@ describe("scripts/test-all.ts", () => {
       {
         name: "fixture",
         command: process.execPath,
-        args: ["-e", "process.stdout.write('out'); process.stderr.write('err')"],
+        args: [
+          "-e",
+          "process.stdout.write('out\\n 1 pass\\nRan 1 test across 1 file. [1.00ms]\\n'); process.stderr.write('err')",
+        ],
       },
       isolatedRunnerEnvironment(),
     );
@@ -1162,10 +1228,12 @@ describe("scripts/test-all.ts", () => {
     expect(result.status).toBe(0);
     expect(result.output).toContain("out");
     expect(result.output).toContain("err");
+    expect(result.testCounts).toEqual({ tests: 1, files: 1, pass: 1, fail: 0, skip: 0, todo: 0 });
     if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
   });
 
-  test("default runner keeps failure reports the output tail has dropped", async () => {
+  test("default runner keeps failure reports the output head and tail have dropped", async () => {
+    const headLines = Math.ceil(MAX_GROUP_OUTPUT_HEAD_BYTES / "start\n".length) + 1_000;
     const noiseLines = Math.ceil(MAX_GROUP_OUTPUT_TAIL_BYTES / "noise\n".length) + 1_000;
     const result = await defaultRunGroup(
       {
@@ -1173,7 +1241,7 @@ describe("scripts/test-all.ts", () => {
         command: process.execPath,
         args: [
           "-e",
-          `process.stdout.write("error: expect(received).toBe(expected)\\n(fail) suite > lost case [1.00ms]\\n" + "noise\\n".repeat(${noiseLines})); process.exitCode = 1;`,
+          `process.stdout.write("first line\\n" + "start\\n".repeat(${headLines}) + "error: expect(received).toBe(expected)\\n(fail) suite > lost case [1.00ms]\\n" + "noise\\n".repeat(${noiseLines}) + "last line\\n"); process.exitCode = 1;`,
         ],
       },
       isolatedRunnerEnvironment(),
@@ -1181,9 +1249,19 @@ describe("scripts/test-all.ts", () => {
 
     expect(result.status).toBe(1);
     expect(result.output).not.toContain("(fail)");
-    expect(result.failureReports).toEqual([
-      "error: expect(received).toBe(expected)\n(fail) suite > lost case [1.00ms]",
-    ]);
+    // The console copy keeps both ends, with the gap marked between them.
+    expect(result.output?.startsWith("first line\nstart\n")).toBe(true);
+    expect(result.output?.endsWith("noise\nlast line")).toBe(true);
+    expect(result.output).toMatch(
+      /\n\[orkestrator-test-runner\] … \d+ bytes of output omitted here; the group's complete log is kept with the failure artifacts/,
+    );
+    // The report carries its bounded preceding context (here `start` lines).
+    expect(result.failureReports).toHaveLength(1);
+    expect(
+      result.failureReports?.[0]?.endsWith(
+        "start\nerror: expect(received).toBe(expected)\n(fail) suite > lost case [1.00ms]",
+      ),
+    ).toBe(true);
     if (result.logPath) await rm(path.dirname(result.logPath), { recursive: true, force: true });
   });
 
@@ -1707,9 +1785,98 @@ describe("rerunning failing test files alone", () => {
   });
 });
 
+describe("headAndTailOutput", () => {
+  const text = "0123456789";
+
+  test("joins a head and tail that do not overlap with a marker naming the gap", () => {
+    const output = headAndTailOutput(Buffer.from("0123"), Buffer.from("89"), text.length);
+    expect(output).toBe(
+      "0123\n[orkestrator-test-runner] … 4 bytes of output omitted here; the group's complete log is kept with the failure artifacts listed at the end of a failing run.\n89",
+    );
+  });
+
+  test("returns the whole output once when the head and tail overlap", () => {
+    expect(headAndTailOutput(Buffer.from("012345"), Buffer.from("456789"), text.length)).toBe(text);
+    // Exactly adjacent.
+    expect(headAndTailOutput(Buffer.from("01234"), Buffer.from("56789"), text.length)).toBe(text);
+  });
+
+  test("returns the tail alone when it already holds every byte", () => {
+    expect(headAndTailOutput(Buffer.from("0123"), Buffer.from(text), text.length)).toBe(text);
+    expect(headAndTailOutput(Buffer.alloc(0), Buffer.alloc(0), 0)).toBe("");
+  });
+});
+
 describe("FailureReportCollector", () => {
   const web = "@orkestrator/web:test:workspace: ";
   const backend = "@orkestrator/backend:test:workspace: ";
+
+  test("tallies a plain Bun run's summary lines", () => {
+    const collector = new FailureReportCollector();
+    collector.push(
+      Buffer.from(
+        [
+          "(pass) suite > works [1.00ms]",
+          "",
+          " 3190 pass",
+          " 11 skip",
+          " 2 todo",
+          " \u001b[31m1 fail\u001b[0m",
+          " 9001 expect() calls",
+          "Ran 3204 tests across 412 files. [41.20s]",
+          "",
+        ].join("\n"),
+      ),
+    );
+    collector.finish();
+    expect(collector.testCounts).toEqual({
+      tests: 3204,
+      files: 412,
+      pass: 3190,
+      fail: 1,
+      skip: 11,
+      todo: 2,
+    });
+    expect(formatTestCounts(collector.testCounts)).toBe(
+      "Tests: 3204 across 412 files — 3190 pass, 1 fail, 11 skip, 2 todo",
+    );
+  });
+
+  test("sums Turbo-prefixed summaries across packages", () => {
+    const collector = new FailureReportCollector();
+    collector.push(
+      Buffer.from(
+        [
+          `${web} 100 pass`,
+          `${backend} 40 pass`,
+          `${web} 0 fail`,
+          `${backend} 2 skip`,
+          `${backend} 0 fail`,
+          `${web}Ran 100 tests across 10 files. [3.00s]`,
+          `${backend}Ran 42 tests across 1 file. [9.00s]`,
+          `${web}a log line saying 5 pass is not a summary`,
+          "",
+        ].join("\n"),
+      ),
+    );
+    collector.finish();
+    expect(collector.testCounts).toEqual({
+      tests: 142,
+      files: 11,
+      pass: 140,
+      fail: 0,
+      skip: 2,
+      todo: 0,
+    });
+  });
+
+  test("reports no totals when no Bun summary was seen", () => {
+    const collector = new FailureReportCollector();
+    collector.push(Buffer.from("PASS dom-absence\nAll guards passed.\n"));
+    collector.finish();
+    expect(collector.testCounts).toBeUndefined();
+    expect(formatTestCounts(undefined)).toBe("Tests: no Bun test summary in this group's output");
+  });
 
   test("keeps each failing task's own preceding lines across interleaved, split chunks", () => {
     const collector = new FailureReportCollector();

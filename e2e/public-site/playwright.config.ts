@@ -1,5 +1,6 @@
 import { defineConfig } from "@playwright/test";
 import path from "node:path";
+import { reviewValidationRunOptions } from "../../tests/playwright-review-validation";
 import { installPlaywrightRunnerSigterm } from "../../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../../tests/private-tmpdir";
 import { publicSiteDistDirectory } from "./public-site-dist";
@@ -31,8 +32,12 @@ export default defineConfig({
   testMatch: "*.spec.ts",
   fullyParallel: true,
   workers: 2,
+  // A hang watchdog, as in the component suite (e2e/playwright.config.ts).
+  timeout: 120_000,
   forbidOnly: Boolean(process.env.CI),
-  reporter: "line",
+  // Review validation streams one line per test and stops the run before its
+  // deadline (tests/playwright-review-validation.ts).
+  ...reviewValidationRunOptions("line"),
   outputDir: path.join(repositoryRoot, "output/playwright/public-site"),
   webServer: {
     command: `bun check && bunx vite build --outDir "${distDirectory}" --emptyOutDir && bun "${server}" --dist "${distDirectory}" --config "${vercelConfig}" --port ${port}`,

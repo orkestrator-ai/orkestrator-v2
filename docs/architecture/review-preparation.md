@@ -161,6 +161,15 @@ timeouts range from one second to two hours. Cancellation, timeout, and output
 overflow terminate the command's process group. A worker-death watchdog also
 terminates its command groups. Intentionally detached commands are unsupported.
 
+Each non-cooperative command receives `ORKESTRATOR_VALIDATION_DEADLINE_MS`, the
+epoch millisecond at which its timeout kills it; a cooperative command's budget
+is execution time, so it gets none. The browser suites
+(`tests/playwright-review-validation.ts`) use it: under review validation they
+stream one line per finished test (Playwright's `list` reporter) and set
+Playwright's `globalTimeout` to stop a minute before that deadline, so a run cut
+short ends with Playwright's own report of the tests it interrupted rather than
+silence.
+
 A repository can mark a slow suite as on demand in
 `.orkestrator-test-scheduler.json` (`commandProfiles[<command>].onDemand`,
 parsed by `testSchedulingPolicy`): `when` lists path globs (`*` within a
@@ -202,6 +211,25 @@ Reviewer prompts request summaries first, targeted reads of failure evidence,
 and no duplicate full validation pass. Large successful logs are not injected
 into reviewer prompts. Read-only files and hashes detect accidental changes;
 they are not a security sandbox against a malicious project command.
+
+The backend also seals the reviewed diff beside the package (`diffArtifact`,
+`review-diff-artifact.ts`). A diff above 512 KiB is additionally sealed as
+parts of about 256 KiB, cut only between file diffs (`diffChunks`: at most 64,
+each with its 1-based `index`, digest-named path, byte count, SHA-256 and the
+changed paths it holds; their bytes concatenate to the whole diff). Reviewer
+N of a panel of M reads parts N, N + M, N + 2M and so on in full and the other
+parts' file lists for context; a lone reviewer reads every part in turn
+(`PACKAGED_REVIEW_WORKING_RULES`). A 2.9 MB diff had otherwise left reviewers
+spot-checking it with searches. Integrity verification checks every part as
+it checks the diff, and a part that cannot be written leaves the package with
+the whole diff and a limitation. An older backend ignores `diffChunks`.
+
+Reviewer locations are pinned to the reviewed commit: the packaged reviewer
+prompt names `headRef`, and every `line` a reviewer reports is the line at that
+commit (`git show <headRef>:<path>`, or the new side of the diff), never one
+read from a worktree that may have moved since; one it cannot place there is
+`null` with a `symbol`. Address Findings is told the same and finds a moved
+location by file and symbol.
 
 ## Failure triage
 
@@ -720,6 +748,33 @@ The report therefore says whether the review happened:
   error, which is all a graph run keeps of a failed step. The Multi Review and
   Build Pipeline graphs label the reviewer "Could not review" and show the
   reason on its node, not "Complete" or a bare "Failed".
+
+### Disputed checks
+
+Reviewers sometimes disagree about a check: one lists a command in
+`reviewScope.commandsRun` as passed and another lists the same command
+(whitespace collapsed) as failed. A merge cannot settle that, and a
+consolidator told never to run anything once recorded such a check as failed
+without checking it (2026-11-17). So `review-disputed-checks.ts`:
+
+- **Finds them.** `disputedReviewChecks` lists every command with both
+  results among the completed reports, at most eight.
+- **Lets the consolidator run one.** The consolidation prompt gains a
+  "Disputed checks" section (framed reviewer evidence) and one exception to
+  "do not re-run validation": re-run the first disputed check once, only when
+  it is a test, typecheck, lint or build check that reads the code, and record
+  it as a single `commandsRun` entry whose `summary` starts
+  `Re-run during consolidation:`. Every other disputed check, and one that is
+  not safe to run, goes once into `commandsNotRun` with the reason, plus a
+  limitation saying its result is disputed.
+- **Takes the scope lists back.** While a dispute exists the backend does not
+  fill in the scope lists (`consolidationScopeLists` returns nothing), so the
+  consolidator writes all five and can record its re-run.
+- **Refuses an unresolved report.** `deriveConsolidatedProvenance` adds an
+  issue for each dispute the consolidated report leaves listed twice, unmarked
+  or missing, which sends Multi Review and Build Pipeline consolidation
+  through the usual repair turn. A panel without disputes gets exactly the
+  prompt and contract it had before.
 
 ## Fan-out budgets and benchmark
 

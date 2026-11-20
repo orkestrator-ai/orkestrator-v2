@@ -38,6 +38,7 @@ test("cooperative admission continues when the worktree is already dirty", async
 const admission = createTestAdmission(import.meta.dir, process.env, console.log);
 const result = await admission.run({ name: "fixture", command: "unused", args: [], workers: 1, exclusive: true }, async () => ({ status: 0 }));
 admission.close(); process.exitCode = result.status ?? 1;
+console.log("deadline " + (process.env.ORKESTRATOR_VALIDATION_DEADLINE_MS ?? "unset"));
 `,
     },
   );
@@ -50,6 +51,10 @@ admission.close(); process.exitCode = result.status ?? 1;
   expect(done.environmentChanges).toEqual(["source.txt"]);
   expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toContain(
     "NOTE worktree is dirty while queued",
+  );
+  // Its budget is execution time, so it has no wall-clock deadline to learn.
+  expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toContain(
+    "deadline unset",
   );
 });
 

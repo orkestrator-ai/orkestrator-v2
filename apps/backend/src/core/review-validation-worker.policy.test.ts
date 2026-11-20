@@ -314,6 +314,21 @@ test("a command learns the slots it was granted and that review validation runs 
   expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toBe("3 1");
 });
 
+// The browser suites stop themselves a minute before this instant, so a run
+// cut short names its interrupted tests instead of ending in silence.
+test("a command learns the wall-clock instant it will be killed", async () => {
+  const { root, run } = await fixture([
+    command("deadline", 'printf %s "$ORKESTRATOR_VALIDATION_DEADLINE_MS"', { timeoutMs: 7000 }),
+  ]);
+  const before = Date.now();
+  // An inherited value must not stand in for this command's own deadline.
+  const done = await waitFor(root, run, 12000, { ORKESTRATOR_VALIDATION_DEADLINE_MS: "1" });
+  expect(done.results[0]!.status).toBe("passed");
+  const deadline = Number(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8"));
+  expect(deadline).toBeGreaterThanOrEqual(before + 7000);
+  expect(deadline).toBeLessThanOrEqual(Date.now() + 7000);
+});
+
 test("an unusable scheduling config degrades to plain scheduling instead of losing every result", async () => {
   const { root, run } = await fixture([
     command("first", "printf first"),

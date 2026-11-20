@@ -19,6 +19,7 @@ import {
 import type { ConsolidationScopeLists } from "@orkestrator/protocol/workflow-results";
 import type { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
 import { consolidationScopeLists } from "./review-consolidation-scope.js";
+import { disputedCheckResolutionIssues, disputedReviewChecks } from "./review-disputed-checks.js";
 
 export function reviewerProvenanceLabel(
   reviewer: Pick<ReviewerModelSelection, "agent" | "model">,
@@ -147,11 +148,20 @@ export function consolidationScopeFilledByBackend(reviewers: readonly ReviewerRe
   return consolidationScopeLists(completedReports(reviewers)) !== undefined;
 }
 
+/**
+ * The consolidated report with backend-derived review models, and every way it
+ * breaks the consolidation contract: a finding that cites no valid source, or
+ * a check the reviewers disagreed about that the report leaves unresolved
+ * (`review-disputed-checks.ts`).
+ */
 export function deriveConsolidatedProvenance(
   report: StructuredReviewReport,
   reviewers: readonly ReviewerRecord[],
 ): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
-  const issues: ReviewContractValidationIssue[] = [];
+  const issues: ReviewContractValidationIssue[] = disputedCheckResolutionIssues(
+    report,
+    disputedReviewChecks(completedReports(reviewers)),
+  );
   const sources = provenanceSources(reviewers);
   const inspect = (
     reviewModels: string[] | undefined,

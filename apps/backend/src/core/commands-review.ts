@@ -941,8 +941,12 @@ export async function verifyEnvironmentReviewPackage(
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
     const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
-    if (pkg.diffArtifact) {
-      const reason = await verifyReviewDiffArtifact(pkg.diffArtifact, (filePath) =>
+    // The diff and each of its parts are evidence every reviewer reads.
+    for (const artifact of [
+      ...(pkg.diffArtifact ? [pkg.diffArtifact] : []),
+      ...(pkg.diffChunks ?? []),
+    ]) {
+      const reason = await verifyReviewDiffArtifact(artifact, (filePath) =>
         readEnvironmentWorkspaceFile(environment, runner, filePath),
       );
       if (reason) return { valid: false, reason };
@@ -1179,6 +1183,7 @@ export async function generateReviewPackage(
     },
     diffCommand,
     ...(sealedDiff.artifact ? { diffArtifact: sealedDiff.artifact } : {}),
+    ...(sealedDiff.chunks ? { diffChunks: sealedDiff.chunks } : {}),
     changedFiles,
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),

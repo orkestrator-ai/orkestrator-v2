@@ -11,7 +11,7 @@ import type {
 import { readProviderStatus, type BuildPipelineProvider } from "./build-pipeline/provider.js";
 import type { GraphAgentWiring } from "./graph-agent-wiring.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
-import type { EnsureNativeAgentSessionInput } from "./native-agent-service-shared.js";
+import type { EnsureNativeAgentSessionInput } from "./native-agent/service-shared.js";
 import type { Environment } from "./models.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";

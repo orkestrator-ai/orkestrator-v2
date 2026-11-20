@@ -8,7 +8,7 @@ import {
   ProviderUnavailableError,
   ProviderUnreachableError,
   readProviderStatus,
-} from "../native-agent-provider.js";
+} from "../native-agent/provider.js";
 import {
   claudeConnection,
   codexConnection,

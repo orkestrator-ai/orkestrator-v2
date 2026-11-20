@@ -7,7 +7,7 @@ import {
   nativeTabLogicalSessionKey,
 } from "@orkestrator/protocol/public-api-resources";
 import { AmbiguousPromptDispatchError } from "../agent-provider-contract.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { providerCapabilities } from "./providers.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";
@@ -206,7 +206,7 @@ describe("session.start and request-specific completion", () => {
   test("a failed turn settles as failed with its provider error", async () => {
     const { harness, service, stub } = await setup();
     const started = await startSession(harness, "job-fail");
-    const { ProviderSessionFailedError } = await import("../native-agent-provider.js");
+    const { ProviderSessionFailedError } = await import("../native-agent/provider.js");
     stub.setStatus(async () => {
       throw new ProviderSessionFailedError("claude", "model overloaded");
     });

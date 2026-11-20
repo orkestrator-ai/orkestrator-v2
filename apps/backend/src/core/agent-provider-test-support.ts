@@ -4,7 +4,7 @@ import {
   type AgentInteractionRequest,
   type AgentInteractionResolution,
 } from "@orkestrator/protocol/agent-interactions";
-import { createNativeAgentProvider, type BridgeConnection } from "./native-agent-provider.js";
+import { createNativeAgentProvider, type BridgeConnection } from "./native-agent/provider.js";
 import { mimeTypeForFilename } from "./prompt-attachments.js";
 
 export const claudeConnection: BridgeConnection = {

@@ -3,7 +3,7 @@
  * providers directly instead of through the native projection: Multi Review
  * reviewer tabs and build-pipeline stage transcripts.
  *
- * The rules are the native projection's (`native-agent-service-projection-artifacts.ts`):
+ * The rules are the native projection's (`native-agent/service-projection-artifacts.ts`):
  * the publication ledger is authoritative, read per conversation (the
  * workflow session's own key, in the workflow's environment; publications of
  * any other conversation or environment are refused even if a ledger
@@ -14,10 +14,10 @@
  * renderer's own merge, which also de-duplicates by publication id.
  */
 import {
+  type ArtifactLedgerReader,
   ArtifactOverlayIndex,
   overlayArtifactParts,
-  type ArtifactLedgerReader,
-} from "../native-agent-service-projection-artifacts.js";
+} from "../native-agent/index.js";
 
 export type ArtifactLedgerSource = () => ArtifactLedgerReader | null | undefined;
 

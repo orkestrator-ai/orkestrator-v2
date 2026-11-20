@@ -16,7 +16,7 @@ import { StorageService } from "./storage.js";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { PersistedBuildPipeline, PersistedNativeAgentTurnOutcome } from "./models.js";
 import { BUILD_PIPELINE_VERSION, isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 
 /**
  * Test helpers for the backend database. Stores are named by the data-dir

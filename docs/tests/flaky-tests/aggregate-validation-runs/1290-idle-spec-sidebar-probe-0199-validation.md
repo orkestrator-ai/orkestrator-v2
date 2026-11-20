@@ -1,5 +1,7 @@
 # Idle-spec sidebar probe (todo 0199) branch validation
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/command-catalogue-scale.test.ts`.
+
 - **ID:** 1290
 - **Status:** open
 - **Date observed:** 2026-10-28

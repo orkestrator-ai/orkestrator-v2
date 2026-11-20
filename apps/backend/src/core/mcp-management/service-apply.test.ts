@@ -4,7 +4,7 @@ import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
-import { createNativeAgentProvider } from "../native-agent-provider.js";
+import { createNativeAgentProvider } from "../native-agent/provider.js";
 import { FakeOpenCode2Server } from "../opencode2/fake-server.test-support.js";
 import { OpenCode2Provider } from "../opencode2/provider.js";
 import { createMcpRuntimeProbe } from "../commands-registry-mcp.js";

@@ -7,7 +7,7 @@ import type {
 import {
   createProviderStub,
   withService,
-} from "../../apps/backend/src/core/native-agent-service-projection-test-support";
+} from "../../apps/backend/src/core/native-agent/service-projection-test-support.js";
 
 function thinkingParts(parts: NativeMessagePart[]): NativeMessagePart[] {
   return parts.flatMap((part) =>

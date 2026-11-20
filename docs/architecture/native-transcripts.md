@@ -20,14 +20,14 @@ native transcript windows keep the contract below instead.
 | `packages/protocol/src/node/revised-rows.ts` | `RecentlyRevisedRows`: changed rows outside the live window |
 | `apps/backend/src/core/http-bridge/transcript-v2.ts` | Backend side of v2: capability learning, bounded reads |
 | `apps/backend/src/core/http-bridge/progressive.ts` | Snapshot reads, with the v1 fallback; a `/transcript` 404 is a missing session |
-| `apps/backend/src/core/native-agent-transcript-projection.ts` | Owner of the projection read models and their session lifecycle |
-| `apps/backend/src/core/native-agent-progressive-transcript.ts` | Transcript view: conditional reads, deltas, preview recovery |
-| `apps/backend/src/core/native-agent-history-pages.ts` | Direct history pages |
-| `apps/backend/src/core/native-agent-projection-parts.ts` | Shared row, tool-detail and page caches |
-| `apps/backend/src/core/native-terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
-| `apps/backend/src/core/native-agent-direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
+| `apps/backend/src/core/native-agent/transcript-projection.ts` | Owner of the projection read models and their session lifecycle |
+| `apps/backend/src/core/native-agent/progressive-transcript.ts` | Transcript view: conditional reads, deltas, preview recovery |
+| `apps/backend/src/core/native-agent/history-pages.ts` | Direct history pages |
+| `apps/backend/src/core/native-agent/projection-parts.ts` | Shared row, tool-detail and page caches |
+| `apps/backend/src/core/native-agent/terminal-messages.ts`, `packages/protocol/src/native-terminal-rows.ts` | Terminal-state rows and where they are placed |
+| `apps/backend/src/core/native-agent/direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
 | `packages/protocol/src/native-agent-transcript-patch.ts` | Part-level patches inside a delta |
-| `apps/backend/src/core/native-agent-display-tail-scheduler.ts` | Restart-preview checkpoints |
+| `apps/backend/src/core/native-agent/display-tail-scheduler.ts` | Restart-preview checkpoints |
 | `apps/backend/src/core/transcript-progress.ts` | Progress samples and versioned digests |
 | `apps/backend/src/core/build-pipeline/transcript-store.ts`, `build-pipeline/transcript-checkpoints.ts` | Durable pipeline transcripts and when they are written |
 
@@ -92,7 +92,7 @@ because the next cursor starts before a row, never inside it. Bridge cursors
 are at most `BRIDGE_PAGE_CURSOR_MAX_LENGTH` (1,024) characters.
 
 The backend has one cursor namespace, direct (v2,
-`native-agent-direct-history.ts`). A backend cursor wraps the provider's
+`native-agent/direct-history.ts`). A backend cursor wraps the provider's
 cursor with digests of the logical session and provider session and the
 provider's history epoch. It must fit `DIRECT_HISTORY_CURSOR_MAX_LENGTH`
 (1,024); a provider cursor too long to wrap travels as a backend-held handle
@@ -106,7 +106,7 @@ in `DirectHistoryPageCache`, dropped when the session's epoch changes:
 `NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_ENTRIES` (16) and
 `NATIVE_DIRECT_PAGE_CACHE_MAX_SESSION_BYTES` (8 MiB) per session, with a
 `NATIVE_DIRECT_PAGE_CACHE_TTL_MS` (5 min) backstop for a provider that edits
-history without rotating its epoch (`native-agent-service-shared.ts`).
+history without rotating its epoch (`native-agent/service-shared.ts`).
 
 A progressive view carries a direct cursor (`historyCursor`; every cursor is
 direct, so the `historyPaging` flag that once marked one was removed on
@@ -226,8 +226,8 @@ boundary:
 ## Backend projection and client delivery
 
 The backend projects provider rows into the native view, reusing unchanged
-rows (`native-agent-projection-entries.ts`) and encoding each once
-(`native-agent-projection-encoding.ts`). A client reads with its last view
+rows (`native-agent/projection-entries.ts`) and encoding each once
+(`native-agent/projection-encoding.ts`). A client reads with its last view
 token and gets one of `unchanged`, `delta` (from a base token it holds),
 `snapshot` or `cached` (a persisted or in-memory tail painted while the
 provider read runs behind it). A delta is sent only when it holds at most
@@ -309,7 +309,7 @@ Answering that serialises the provider's raw rows, inline tool output
 included, which are fresh objects on every read. It cost about 110 µs of a
 370 to 440 µs changed read on a 60-row, 500 KB window (benchmark
 `short-incomplete`). The answer is remembered per view under the provider's
-token (`native-agent-preview-fill.ts`), so a view polled while nothing changes
+token (`native-agent/preview-fill.ts`), so a view polled while nothing changes
 measures its window once per revision: an interactive-snapshot provider polled
 at one revision went from about 320 to about 200 µs of CPU per read
 (`short-incomplete-idle`). Only a token that changes whenever the rows do is
@@ -336,7 +336,7 @@ meanwhile.
 
 The recovered head row grows on every read, so no two views share it. The
 ring of superseded views that serves a reader one view behind
-(`native-agent-transcript-delta-bases.ts`) is bounded per key at 2 MiB, but
+(`native-agent/transcript-delta-bases.ts`) is bounded per key at 2 MiB, but
 always keeps its newest base, up to 8 MiB for that one base, and the grown
 row reaches a reader that negotiated patches as its appended text.
 
@@ -357,7 +357,7 @@ view changes in 20 s per viewer up to 2.49 million characters, at about
 The projection moves every tool output, error and diff body behind a
 `detailRef` (`projectionPart`). It also sends two other bulky values as
 previews, with the whole value behind its own reference
-(`native-agent-deferred-display.ts`):
+(`native-agent/deferred-display.ts`):
 
 - **Tool input.** In a settled call (`success` or `failure`), a top-level
   file-contents or replacement-string field (`content`, `contents`,
@@ -385,7 +385,7 @@ previews and cannot expand them; the `…` marks each cut.
 A turn's ending (a provider error, an `error` or `stopped` notice, a kept stop
 result) is not a transcript row: the provider reports it with session state.
 The backend turns each into a system row with a `native-terminal:<kind>:<hash>`
-id (`native-terminal-messages.ts`). The full projection appends them to its
+id (`native-agent/terminal-messages.ts`). The full projection appends them to its
 messages. The progressive transcript read never sees session state, so the
 state view carries them as `terminalMessages`, and the tab shows them after the
 transcript; before that field (2026-10-27) a progressive tab never showed a
@@ -441,7 +441,7 @@ are quoted as its words.
 A visible tab polls, so what a round costs matters more than what one read
 costs. A background round over tokens the view already holds sends
 `get_native_agent_live_update`, which answers transcript and state with the same
-reads and token rules as their own commands (`native-agent-live-update.ts`). A
+reads and token rules as their own commands (`native-agent/live-update.ts`). A
 backend advertises it in `liveUpdateVersions`; one that does not gets the two
 commands, and so does any first, manual or post-mutation read, so a cold
 transcript never travels with session state. The reads were separate so that a
@@ -527,7 +527,7 @@ the renderer's delta.
 
 Read timings are kept in-process, per domain (`transcript`, `state`,
 `discovery`), with source, normalise and scheduler-wait phases
-(`native-agent-progressive-metrics.ts`). They hold durations only, never
+(`native-agent/progressive-metrics.ts`). They hold durations only, never
 payloads or session identifiers.
 
 ### After an MCP server action
@@ -540,7 +540,7 @@ until its 30 s backstop, and that read found the MCP section dropped
 (`loading`, no value) and kept the old row for another round (todo 7221).
 
 So the action then re-reads the session's MCP list once
-(`refreshMcpAfterAction` in `native-agent-progressive-discovery.ts`), stores
+(`refreshMcpAfterAction` in `native-agent/progressive-discovery.ts`), stores
 it as a `ready` section, and announces `mcp-action`, a cause that names
 discovery. The open view reads discovery on that announcement and gets the
 acted-on row straight away. Claude's bridge stores the probe's or the live
@@ -557,7 +557,7 @@ can paint before the provider answers (the native display tails store in
 [storage.md](storage.md)). Tails are capped at `NATIVE_DISPLAY_TAIL_MAX_BYTES` (512 KiB)
 each, `NATIVE_DISPLAY_TAIL_MAX_SESSIONS` (128) sessions and
 `NATIVE_DISPLAY_TAIL_MAX_TOTAL_BYTES` (64 MiB), with LRU eviction
-(`native-agent-display-tails.ts`).
+(`native-agent/display-tails.ts`).
 
 `NativeAgentDisplayTailScheduler` holds at most one pending value per session.
 A session becomes due `NATIVE_DISPLAY_TAIL_WRITE_DEBOUNCE_MS` (2 s) after its
@@ -612,10 +612,10 @@ These are ceilings, not targets to raise.
 | Bound | Value | Constant |
 | --- | --- | --- |
 | Live window | 100 messages, 512 KiB | `DEFAULT_NATIVE_AGENT_LIVE_WINDOW` (`packages/protocol/src/native-agent.ts`) |
-| Projected history | 4,096 messages, 16 MiB | `NATIVE_PROJECTION_MAX_WINDOW_MESSAGES`, `NATIVE_PROJECTION_MAX_BYTES` (`native-agent-service-shared.ts`) |
+| Projected history | 4,096 messages, 16 MiB | `NATIVE_PROJECTION_MAX_WINDOW_MESSAGES`, `NATIVE_PROJECTION_MAX_BYTES` (`native-agent/service-shared.ts`) |
 | Client retained history | 4,096 messages and 8 MiB per session, 32 MiB in total | `CLIENT_HISTORY_MAX_MESSAGES`, `CLIENT_HISTORY_MAX_BYTES`, `CLIENT_HISTORY_TOTAL_MAX_BYTES` (`apps/web/src/hooks/useNativeAgentSession.ts`) |
-| Backend history page | 100 messages and 512 KiB by default, at most 200 and 1 MiB | `NATIVE_HISTORY_PAGE_*` (`native-agent-service-shared.ts`) |
-| Display tails | 512 KiB each, 128 sessions, 64 MiB | `NATIVE_DISPLAY_TAIL_MAX_*` (`native-agent-display-tails.ts`) |
+| Backend history page | 100 messages and 512 KiB by default, at most 200 and 1 MiB | `NATIVE_HISTORY_PAGE_*` (`native-agent/service-shared.ts`) |
+| Display tails | 512 KiB each, 128 sessions, 64 MiB | `NATIVE_DISPLAY_TAIL_MAX_*` (`native-agent/display-tails.ts`) |
 
 ## Retired compatibility paths
 
@@ -663,7 +663,7 @@ ways. Its scenarios and how to compare two commits are in the script's header.
 ### Live bytes per prompt send and turn check
 
 Efficiency batch E9 took its baseline with a provider fake
-(`native-agent-transcript-read-bytes.test.ts`: before E9 a prompt send read 33
+(`native-agent/transcript-read-bytes.test.ts`: before E9 a prompt send read 33
 rows, 271,676 bytes, and a turn check 2 rows, 16,466 bytes, on its 8 KB rows).
 The live figures come from `transcript-read-bytes-live.spec.ts`
 ([how to run it](../development/agent-testing.md#live-bytes-per-prompt-send-and-turn-check-loopback-model)):

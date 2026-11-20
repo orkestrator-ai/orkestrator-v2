@@ -6,7 +6,7 @@
  * the layout. Both belong to the backend, which holds the whole transcript, the
  * change measurements and the authoritative layout. The snapshot format and
  * carrier live in `@orkestrator/protocol/agent-handoff`; delivery at first
- * dispatch is in `native-agent-handoffs.ts`.
+ * dispatch is in `native-agent/handoffs.ts`.
  */
 import {
   AGENT_HANDOFF_CHANGE_SUMMARY_CHARACTERS,

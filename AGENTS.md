@@ -38,8 +38,8 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Logging, `createLogger`, log areas and events, the Electron relay, live logging settings | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
-| The `/goal` loop (`native-agent-goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
-| Suborks (`native-agent-subork*`, `agent-tools-subork*`, `control-mcp/coordinator-suborks.ts`, `coordinator/subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
+| The `/goal` loop (`native-agent/goal*`, `report_goal`) | [`docs/architecture/goals.md`](docs/architecture/goals.md) |
+| Suborks (`native-agent/subork*`, `agent-tools-subork*`, `control-mcp/coordinator-suborks.ts`, `coordinator/subork-actions.ts`, `ask_agents`) | [`docs/architecture/suborks.md`](docs/architecture/suborks.md) |
 | Unified federation plan work items (`plans/unified/`): starting one, updating its status | [`plans/unified/0000-index.md`](plans/unified/0000-index.md#how-to-use-this-board) |
 
 ## Show every visual change as an image in the transcript
@@ -593,7 +593,7 @@ session surface. When touching the session catalogue
 - **The no-control fallback costs a process.** `createProbe()` spawns a whole
   Claude CLI, so `commandInventory` caches the catalogue the way `mcpInventory`
   already did. The backend re-reads both on every session projection
-  (`native-agent-full-projection.ts`), so an uncached fallback is one spawn
+  (`native-agent/full-projection.ts`), so an uncached fallback is one spawn
   per turn boundary rather than a one-off.
 - **Every SDK frame has a declared fate.** `HANDLED_SDK_MESSAGE_TYPES` and
   `SYSTEM_SUBTYPE_DISPOSITIONS` (`src/types/index.ts`) are `Record`s over the

@@ -290,7 +290,7 @@ one self-contained function. It reads:
   and blocked Verify until the verifier argued each away. Replayed against
   this checkout (to-do 6920, 2026-11-09), the ten owners flake case 6862
   recorded as `related` through
-  `native-agent-projection-encoding.ts` (at 3 and 8 hops) are now
+  `native-agent/projection-encoding.ts` (at 3 and 8 hops) are now
   `undetermined`, as are case 6600's seven owners had their branch changed
   `web-annotations.ts` (3 and 4 hops); with `storage.ts` changed, the one
   owner that imports it directly stays `related` and six become

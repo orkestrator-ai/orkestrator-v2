@@ -63,13 +63,13 @@ export async function displayTailWorkload(context: WorkloadContext): Promise<Wor
     StorageService: new (dataDir: string) => StorageLike;
   }>("apps/backend/src/core/storage.ts");
   const tails = await context.load<{ createNativeAgentDisplayTail: (input: Json) => unknown }>(
-    "apps/backend/src/core/native-agent-display-tails.ts",
+    "apps/backend/src/core/native-agent/display-tails.ts",
   );
   const shared = await context.load<{
     nativeAgentSessionStorageKey: (environmentId: string, agent: string, logical: string) => string;
-  }>("apps/backend/src/core/native-agent-service-shared.ts");
+  }>("apps/backend/src/core/native-agent/service-shared.ts");
   const recordStore = await context.loadOptional(
-    "apps/backend/src/core/native-agent-display-tail-store.ts",
+    "apps/backend/src/core/native-agent/display-tail-store.ts",
   );
 
   const key = (index: number) =>
@@ -165,7 +165,7 @@ export async function displayTailWorkload(context: WorkloadContext): Promise<Wor
       update(key: string, source: { environmentId: string; build: () => unknown }): void;
       stats(): Record<string, number>;
     };
-  }>("apps/backend/src/core/native-agent-display-tail-scheduler.ts");
+  }>("apps/backend/src/core/native-agent/display-tail-scheduler.ts");
 
   const checkpointAgeCase = (
     id: string,

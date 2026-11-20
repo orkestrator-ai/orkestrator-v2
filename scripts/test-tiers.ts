@@ -111,7 +111,7 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/environment-move.test.ts",
     "src/core/environment-move.*.test.ts",
     "src/core/index.test.ts",
-    "src/core/native-agent-service-progressive.test.ts",
+    "src/core/native-agent/service-progressive.test.ts",
     "src/core/nodes/node-project-copy.test.ts",
     // Real stand-in `opencode2` servers, polled for readiness.
     "src/core/opencode2/host-server.test.ts",

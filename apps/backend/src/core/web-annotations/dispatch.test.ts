@@ -11,8 +11,8 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
-import { AmbiguousPromptDispatchError } from "../native-agent-provider.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { AmbiguousPromptDispatchError } from "../native-agent/provider.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { StorageService } from "../storage.js";
 import {
   WebAnnotationDispatchAdapter,

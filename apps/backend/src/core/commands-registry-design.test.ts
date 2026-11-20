@@ -13,7 +13,7 @@ import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
 import { resolveDesignDestination } from "./design/exports.js";
 import { DesignService } from "./design/service.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 import { createTestRenderer, trackUnhandledRejections } from "./design/test-support.js";
 import { StorageService } from "./storage.js";
 

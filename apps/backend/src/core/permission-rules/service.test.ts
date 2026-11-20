@@ -5,13 +5,13 @@ import {
   type AgentInteractionResolution,
   type AgentInteractionSnapshot,
 } from "@orkestrator/protocol/agent-interactions";
-import type { ProviderActivityState } from "../native-agent-provider.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import type { ProviderActivityState } from "../native-agent/provider.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import {
   addEnvironment,
   createProviderStub,
   withService,
-} from "../native-agent-service-projection-test-support.js";
+} from "../native-agent/service-projection-test-support.js";
 
 /**
  * Rules apply from the backend's own activity sweep: no tab has to be mounted,

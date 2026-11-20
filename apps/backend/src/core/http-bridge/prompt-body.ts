@@ -8,7 +8,7 @@ import {
   type ProviderSendOptions,
 } from "../agent-provider-contract.js";
 import type { HttpBridgeAgent } from "./catalog.js";
-import { withoutRetiredParameterValues } from "../native-agent-retired-parameters.js";
+import { withoutRetiredParameterValues } from "../native-agent/index.js";
 
 /**
  * The workflow-result attempt a turn runs for, for a bridge that gates tools

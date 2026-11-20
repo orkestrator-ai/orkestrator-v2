@@ -37,14 +37,14 @@ import {
   COMMAND_CATALOGUE_MAX_QUEUED_READS,
   NativeAgentCommandCatalogueCache,
   commandCatalogueKey,
-} from "../apps/backend/src/core/native-agent-command-catalogue";
+} from "../apps/backend/src/core/native-agent/command-catalogue";
 import {
   bridgeCataloguePayload,
   fakeCatalogueBridge,
   syntheticCommandRows,
   type SyntheticInventoryProfile,
-} from "../apps/backend/src/core/native-agent-command-catalogue-test-support";
-import { NativeAgentService } from "../apps/backend/src/core/native-agent-service";
+} from "../apps/backend/src/core/native-agent/command-catalogue-test-support";
+import { NativeAgentService } from "../apps/backend/src/core/native-agent/service";
 import { StorageService } from "../apps/backend/src/core/storage";
 import { rankSlashCommands } from "../apps/web/src/lib/chat/slash-command-search";
 

@@ -15,12 +15,12 @@ import {
   coordinatorRuntimeId,
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
-import { collaborators } from "../native-agent-service-test-collaborators.js";
-import { NativeAgentService } from "../native-agent-service.js";
+import { collaborators } from "../native-agent/service-test-collaborators.js";
+import { NativeAgentService } from "../native-agent/service.js";
 import {
   AmbiguousPromptDispatchError,
   type NativeAgentRuntimeProvider,
-} from "../native-agent-provider.js";
+} from "../native-agent/provider.js";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { readProjectUsageLimits } from "../agent-usage-limits.js";

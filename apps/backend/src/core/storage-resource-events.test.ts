@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "./storage.js";
-import { resolveNativeAgentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "./native-agent/execution-policy.js";
 import { databaseStoreForPath } from "./storage-stores.js";
 import { seedStore } from "./storage-test-support.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";

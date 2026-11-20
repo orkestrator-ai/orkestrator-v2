@@ -198,7 +198,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
 - **A resume closes the session it replaced** (fixed 2026-10-17). A new
   agent tab creates a provider session as it mounts, before its resume picker
   opens. `resumeProjectionSession`
-  (`apps/backend/src/core/native-agent-service.ts`) adopted the
+  (`apps/backend/src/core/native-agent/service.ts`) adopted the
   resumed id and left the created session running. On Grok that was a `grok`
   process holding an `ACP_MAX_SESSIONS` slot for the life of the bridge, with
   no reaper. On every other platform it was a bridge map entry (Codex drops
@@ -217,9 +217,9 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
   the fix, and exit when the resumed one started with it.
 - **OpenCode conversations are titled from their first prompt** (fixed
   2026-10-17). Every provider session is created as "Agent Session"
-  (`native-agent-service.ts`). The projection replaced that
+  (`native-agent/service.ts`). The projection replaced that
   placeholder with the first prompt only for Claude
-  (`native-agent-transcript-projection.ts`), so every OpenCode conversation read
+  (`native-agent/transcript-projection.ts`), so every OpenCode conversation read
   "Agent Session" in the resume list. Live, before the fix, the only OpenCode
   row was "Agent Session". Now any platform's placeholder is replaced. A
   provider's own title (Codex's brief title, Grok's generated title) is still
@@ -245,7 +245,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     before the close and clears it on confirmation. `reconcile_tab_teardowns`
     replays it under the same lock and last-owner rules, without the tab
     mapping checks and without revoking a tab credential, and `teardown_tab`
-    refuses the prefix. Tests: `native-agent-service-resume-close.test.ts`,
+    refuses the prefix. Tests: `native-agent/service-resume-close.test.ts`,
     `commands-registry-teardown.test.ts` ("replaying the close of a session a
     resume replaced").
   - **Untitled resume rows** read `Session <8 chars of the provider's own
@@ -281,7 +281,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
       Pi had accepted and run the prompt. The write is now started, the abort
       sent, and the write awaited at the end; the in-memory interrupt fence
       covers the gap, as it already did for a failed write
-      (`native-agent-service.ts`).
+      (`native-agent/service.ts`).
     - The interrupt was recorded against `dispatchedRequestIds.at(-1)`, the
       finished turn before, because the starting prompt is only in
       `pendingDispatch`. It now names the starting prompt, and storage
@@ -291,7 +291,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     - Stop shows from the moment a dispatch starts (the controller's
       `isTurnActive` includes `isDispatching`), not only once the projection
       reports a running turn.
-    `native-agent-service-turn-outcome.test.ts` ("Stop reaches a prompt the
+    `native-agent/service-turn-outcome.test.ts` ("Stop reaches a prompt the
     provider has not accepted yet…") and `NativeComposeBar.test.tsx` cover
     the backend and renderer halves.
   - **Browser qualification on the real stack** (`e2e/CloseRetention.spec.ts`,
@@ -466,7 +466,7 @@ the history it starts from.
 - **The OpenCode title placeholder is fixed here.** It is one condition in
   the projection, it decides whether the closed conversation can be found in
   the resume list (this item's subject), and live evidence showed it.
-  `native-agent-service-projection.test.ts` covers it per platform, and the
+  `native-agent/service-projection.test.ts` covers it per platform, and the
   OpenCode browser case fails without it, because the OpenCode fake now keeps
   a session's created title as OpenCode does.
 - **The resume close is in the backend, after the resume is adopted.** A

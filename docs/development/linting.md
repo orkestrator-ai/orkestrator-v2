@@ -278,7 +278,8 @@ new.
     `mcp-management/`, `public-api/`, `http-bridge/`, `web-annotations/`,
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
-    `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`) are reached only through their
+    `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
+    `native-agent/`) are reached only through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
@@ -305,10 +306,37 @@ new.
     seven `build-pipeline/` modules such as `build-pipeline/service.ts` and
     `build-pipeline/provider.ts`, which reach the storage layer, the agent
     tools and the review prompts that import the modules re-exported there),
-    leave it out of `index.ts` and name it as an exception. The same
-    goes for a domain's test support imported by a test-only entrypoint whose
-    file name the test globs do not match (`previews/test-support.ts`, which
-    the `preview-*-harness.ts` entrypoints import).
+    leave it out of `index.ts` and name it as an exception.
+
+    The `native-agent/` boundary has eight exceptions for runtime cycles.
+    All eight reach the storage layer, the HTTP bridge provider, OpenCode 2's
+    coordinator and transcript snapshot, graph run launch, or workflow
+    transcript artifacts. Those callers use modules re-exported by
+    `native-agent/index.ts`.
+
+    - `native-agent/service.ts`, `native-agent/service-shared.ts`,
+      `native-agent/provider.ts`, `native-agent/suborks.ts` and
+      `native-agent/goal-verifier.ts` would close cycles through those callers.
+    - `native-agent/goal-check.ts`, `native-agent/job-pipeline-resolve.ts` and
+      `native-agent/job-tab-reuse.ts` would also close a cycle through the
+      public API's session goal actions, which import `goal-service.ts` through
+      `native-agent/index.ts`.
+
+    Name an exception for a domain's test support when an entrypoint outside
+    the test globs imports it. The `preview-*-harness.ts` entrypoints import
+    `previews/test-support.ts`, and `public-api/test-provider.ts` imports
+    `native-agent/service-test-collaborators.ts`.
+
+    The `tests/unit/**` patterns admit only `index.ts` and named exceptions.
+    Add an internal module as an exception in that override when a `tests/unit`
+    test needs it and no production importer outside the folder uses it.
+    The exceptions include `review/validation-prompts.ts`,
+    `build-pipeline/handoff.ts` and `build-pipeline/service-helpers.ts` (for
+    `user-prompt-display-contract.test.ts`), and
+    `native-agent/service-projection-test-support.ts` (for
+    `native-agent-deferred-normalization.test.ts`). Write those specifiers
+    with the `.js` extension: the exceptions name `.js` paths, so an
+    extensionless specifier is reported.
 
   Test files, harnesses and fixtures are exempt from this rule (see the test
   globs in `.oxlintrc.json`).

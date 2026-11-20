@@ -8,7 +8,7 @@ import type { CommandContext } from "./commands-context.js";
 import { createCredentialHost } from "./credentials-host.js";
 import { interactivePolicy } from "./credentials/service-test-support.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 import { createEnvironment, StorageService } from "./storage.js";
 
 const cleanup: Array<() => Promise<unknown> | void> = [];

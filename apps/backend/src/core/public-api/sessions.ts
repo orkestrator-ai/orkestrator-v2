@@ -15,7 +15,7 @@ import {
   openCoordinatorConversation,
 } from "../coordinator/index.js";
 import type { Environment, PersistedNativeAgentSession } from "../models.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { PublicActionError } from "./errors.js";
 import { nativeTabsOfLayout, publicSessionSummary, type NativeTabInfo } from "./summaries.js";
 import type { PublicActionContext } from "./types.js";

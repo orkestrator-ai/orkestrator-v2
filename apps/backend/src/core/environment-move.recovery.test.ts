@@ -430,8 +430,8 @@ test("Cursor read failure retains recovery until the store can follow the destin
 test("an acknowledged native turn with persisted idle prevents move before quiescing", async () => {
   const { root, storage, context, startLocal } = await setup();
   const environment = await startLocal();
-  const { NativeAgentService } = await import("./native-agent-service.js");
-  const { createProviderStub } = await import("./native-agent-service-projection-test-support.js");
+  const { NativeAgentService } = await import("./native-agent/service.js");
+  const { createProviderStub } = await import("./native-agent/service-projection-test-support.js");
   const stub = createProviderStub("codex", { activity: async () => "working" });
   const service = new NativeAgentService(
     storage,

@@ -73,12 +73,12 @@ import path from "node:path";
 process.env.NODE_ENV = "test";
 
 const core = path.join(import.meta.dir, "../apps/backend/src/core");
-const { NativeAgentService } = await import(path.join(core, "native-agent-service.ts"));
+const { NativeAgentService } = await import(path.join(core, "native-agent/service.ts"));
 const { StorageService } = await import(path.join(core, "storage.ts"));
 const { isNormalizedProgressiveMessage } = await import(
-  path.join(core, "native-agent-projection-helpers.ts")
+  path.join(core, "native-agent/projection-helpers.ts")
 );
-const encoding = (await import(path.join(core, "native-agent-projection-encoding.ts"))) as {
+const encoding = (await import(path.join(core, "native-agent/projection-encoding.ts"))) as {
   spliceEncodedJsonBytes?: (value: unknown) => Buffer | undefined;
   spliceEncodedJson?: (value: unknown) => string | undefined;
 };

@@ -180,7 +180,7 @@ the rows it holds do not carry. The same two halves serve the native agent
 tab, Multi Review reviewer tabs, build-pipeline stage transcripts and
 feature-planning chats.
 
-**Backend projection** (`native-agent-service-projection-artifacts.ts`).
+**Backend projection** (`native-agent/service-projection-artifacts.ts`).
 Every projection read asks the ledger for the conversation's revision
 (conversation key = the session's `logicalSessionKey`, owner environment =
 the session's environment; publications of any other conversation or

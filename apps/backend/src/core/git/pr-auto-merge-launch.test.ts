@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { createEnvironment, StorageService } from "../storage.js";
 import { nativeTabsOfLayout } from "../public-api/summaries.js";
 

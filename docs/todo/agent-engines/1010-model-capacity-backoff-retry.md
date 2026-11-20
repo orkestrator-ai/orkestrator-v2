@@ -101,7 +101,7 @@ Read from the 2.1.314 bundle, not run:
 
 ### 6. OpenCode: unattended sessions skip turn recovery
 
-**Problem.** `NativeAgentTurnRecovery` (`native-agent-turn-recovery.ts`) retries OpenCode provider errors with backoff: 5, 15 and 45 s (`OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS`). It skips 401/402/403/404/413. It skips build-pipeline and automated-review sessions entirely (`:160-165`), so those failed on an overload.
+**Problem.** `NativeAgentTurnRecovery` (`native-agent/turn-recovery.ts`) retries OpenCode provider errors with backoff: 5, 15 and 45 s (`OPENCODE_PROVIDER_ERROR_RETRY_DELAYS_MS`). It skips 401/402/403/404/413. It skips build-pipeline and automated-review sessions entirely (`:160-165`), so those failed on an overload.
 
 **Context.** The skip says unattended workflows own their own turn lifecycle.
 

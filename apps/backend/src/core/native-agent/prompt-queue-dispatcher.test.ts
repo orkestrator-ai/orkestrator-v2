@@ -1,0 +1,642 @@
+import { describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  NativeAgentPromptQueueDispatcher,
+  type NativeAgentPromptQueueDispatcherHost,
+} from "./prompt-queue-dispatcher.js";
+import {
+  nativeAgentSessionStorageKey,
+  type DispatchNativeAgentPromptInput,
+  type NativeAgentRuntimeProvider,
+} from "./service-shared.js";
+
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createProject, StorageService } from "../storage.js";
+import {
+  COORDINATOR_EXECUTION_POLICY,
+  COORDINATOR_WORKSPACE_VERSION,
+  coordinatorConversationSessionKey,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import {
+  coordinatorRuntimeEnvironment,
+  resolveCoordinatorRuntime,
+} from "../coordinator/runtime.js";
+import { seedLegacyPromptQueueClaim } from "../storage-test-support.js";
+import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
+
+const identity = {
+  environmentId: "env-1",
+  agent: "codex" as const,
+  logicalSessionKey: "env-env-1:tab-1",
+};
+const sessionKey = nativeAgentSessionStorageKey(
+  identity.environmentId,
+  identity.agent,
+  identity.logicalSessionKey,
+);
+
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+function harness(overrides: Partial<NativeAgentPromptQueueDispatcherHost> = {}) {
+  let stopped = false;
+  const tracked: Promise<void>[] = [];
+  const host: NativeAgentPromptQueueDispatcherHost = {
+    storage: {
+      listAllPromptQueues: async () => [],
+      getPromptQueue: async () => null,
+    } as unknown as StorageService,
+    isStopped: () => stopped,
+    trackScan: (task) => {
+      tracked.push(task);
+      return task;
+    },
+    refreshProjection: mock(async () => null),
+    queueSessionObservedBusy: () => false,
+    assertEnvironmentLive: async () => {
+      throw new Error("unexpected environment check");
+    },
+    ensureSession: async () => {
+      throw new Error("unexpected ensure");
+    },
+    provider: async () => {
+      throw new Error("unexpected provider");
+    },
+    dispatchPrompt: async () => {
+      throw new Error("unexpected dispatch");
+    },
+    dispatchQueuedAsyncQuestionAnswer: async () => {
+      throw new Error("unexpected steer");
+    },
+    recordObservedTurnOutcome: async () => undefined,
+    settleAmbiguousDispatch: mock(async () => "confirmed" as const),
+    settleAmbiguousSteer: mock(async () => "dispatched" as const),
+    ...overrides,
+  };
+  return {
+    dispatcher: new NativeAgentPromptQueueDispatcher(host),
+    host,
+    tracked,
+    stop: () => {
+      stopped = true;
+    },
+  };
+}
+
+describe("NativeAgentPromptQueueDispatcher session work fences", () => {
+  test("work for one session runs in admission order; other sessions are not held", async () => {
+    const { dispatcher } = harness();
+    const order: string[] = [];
+    const first = deferred();
+    const a = dispatcher.withSessionWorkFence(identity, async () => {
+      order.push("a:start");
+      await first.promise;
+      order.push("a:end");
+    });
+    const b = dispatcher.withSessionWorkFence(identity, async () => {
+      order.push("b");
+    });
+    await dispatcher.withSessionWorkFence({ ...identity, logicalSessionKey: "other" }, async () => {
+      order.push("other");
+    });
+    expect(order).toEqual(["a:start", "other"]);
+    first.resolve();
+    await Promise.all([a, b]);
+    expect(order).toEqual(["a:start", "other", "a:end", "b"]);
+  });
+
+  test("a mutation intent is visible while it waits behind the fence", async () => {
+    const { dispatcher } = harness();
+    const holder = deferred();
+    const held = dispatcher.withSessionWorkFence(identity, () => holder.promise);
+    const waiting = dispatcher.withSessionMutationFence(identity, async () => "done");
+    expect(dispatcher.hasPendingSessionMutation(sessionKey)).toBe(true);
+    holder.resolve();
+    await held;
+    await expect(waiting).resolves.toBe("done");
+    expect(dispatcher.hasPendingSessionMutation(sessionKey)).toBe(false);
+  });
+
+  test("mutation admission refuses a new session past 1,024 waiting keys", async () => {
+    const { dispatcher } = harness();
+    const release = deferred();
+    const pending = Array.from({ length: 1_024 }, (_, index) =>
+      dispatcher.withSessionMutationIntent(
+        { ...identity, logicalSessionKey: `tab-${index}` },
+        () => release.promise,
+      ),
+    );
+    await expect(
+      dispatcher.withSessionMutationIntent(
+        { ...identity, logicalSessionKey: "one-too-many" },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("Native session mutation admission is at capacity");
+    release.resolve();
+    await Promise.all(pending);
+  });
+});
+
+describe("NativeAgentPromptQueueDispatcher interrupt fences", () => {
+  test("a Stop fences its request until storage acknowledges it", () => {
+    const { dispatcher } = harness();
+    dispatcher.fenceTurnInterrupt(sessionKey, "provider-session", "request-1");
+    expect(dispatcher.pendingTurnInterrupt(sessionKey, "request-1")).toEqual({
+      providerSessionId: "provider-session",
+      requestId: "request-1",
+    });
+    dispatcher.releaseTurnInterrupt(sessionKey, "request-1");
+    expect(dispatcher.pendingTurnInterrupt(sessionKey, "request-1")).toBeUndefined();
+    expect(dispatcher.interruptFencesOverflowed()).toBe(false);
+  });
+
+  test("past 256 unpersisted Stops no fence is evicted; every outcome becomes untrustworthy", () => {
+    const { dispatcher } = harness();
+    for (let index = 0; index < 256; index += 1) {
+      dispatcher.fenceTurnInterrupt(sessionKey, "provider-session", `request-${index}`);
+    }
+    dispatcher.fenceTurnInterrupt(sessionKey, "provider-session", "request-256");
+    expect(dispatcher.interruptFencesOverflowed()).toBe(true);
+    expect(dispatcher.pendingTurnInterrupt(sessionKey, "request-0")).toBeDefined();
+    expect(dispatcher.pendingTurnInterrupt(sessionKey, "request-256")).toBeUndefined();
+  });
+});
+
+describe("NativeAgentPromptQueueDispatcher parked-dispatch settles", () => {
+  test.each(["confirmed", "retired"] as const)(
+    "concurrent settles coalesce and refresh after %s",
+    async (outcome) => {
+      const settled = deferred<"confirmed" | "retired" | undefined>();
+      const settleAmbiguousDispatch = mock(() => settled.promise);
+      const { dispatcher, host, tracked } = harness({ settleAmbiguousDispatch });
+      const provider = {} as NativeAgentRuntimeProvider;
+
+      dispatcher.scheduleAmbiguousDispatchSettle(identity, sessionKey, "request-1", provider);
+      dispatcher.scheduleAmbiguousDispatchSettle(identity, sessionKey, "request-1", provider);
+      expect(settleAmbiguousDispatch).toHaveBeenCalledTimes(1);
+      expect(dispatcher.forTesting().settlingDispatches.size).toBe(1);
+
+      settled.resolve(outcome);
+      await Promise.all(tracked);
+      expect(host.refreshProjection).toHaveBeenCalledWith(identity);
+      expect(dispatcher.forTesting().settlingDispatches.size).toBe(0);
+    },
+  );
+});
+
+describe("NativeAgentPromptQueueDispatcher scheduling", () => {
+  test("keyed scheduling reports status until stopped", async () => {
+    const { dispatcher } = harness();
+    expect(dispatcher.schedulingStatus()).toBeNull();
+    await expect(dispatcher.reconcileScheduling()).resolves.toBeNull();
+
+    dispatcher.startKeyedScheduling(async () => 0, {
+      progressIntervalMs: 60_000,
+      discoveryIntervalMs: 60_000,
+    });
+    expect(dispatcher.schedulingStatus()).not.toBeNull();
+    dispatcher.stopScheduling();
+    expect(dispatcher.schedulingStatus()).toBeNull();
+  });
+
+  test("a stopped dispatcher ignores queue notifications and drains nothing", async () => {
+    const getPromptQueue = mock(async () => null);
+    const { dispatcher, stop } = harness({
+      storage: { getPromptQueue } as unknown as StorageService,
+    });
+    stop();
+    dispatcher.notifyPromptQueueChanged("codex\0tab-1");
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(getPromptQueue).not.toHaveBeenCalled();
+    expect(dispatcher.pendingDrains()).toEqual([]);
+  });
+});
+
+async function withPersistedQueue(
+  run: (storage: StorageService, context: ReturnType<typeof harness>) => Promise<void>,
+) {
+  const directory = await fs.mkdtemp(path.join(tmpdir(), "ork-legacy-queue-scan-"));
+  const storage = new StorageService(directory);
+  await storage.init();
+  try {
+    const environment = await storage.addEnvironment({
+      id: identity.environmentId,
+      projectId: "project-1",
+      name: "test",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      setupPhase: "ready",
+    });
+    const session = await storage.getOrCreateNativeAgentSession(
+      { ...identity, key: sessionKey },
+      async () => "provider-1",
+    );
+    const context = harness({
+      storage,
+      assertEnvironmentLive: async () => environment,
+      ensureSession: async () => session,
+      provider: async () =>
+        ({ status: async () => "idle" }) as unknown as NativeAgentRuntimeProvider,
+      dispatchPrompt: mock(async () => session),
+    });
+    await run(storage, context);
+  } finally {
+    storage.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+const queueKey = `${identity.agent}\0${identity.logicalSessionKey}`;
+
+test.each(["commit", "cancel"] as const)(
+  "finishing an edit with %s immediately wakes the held head",
+  async (outcome) => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.savePromptQueue(queueKey, identity.environmentId, [
+        { id: "head", text: "old" },
+      ]);
+      const target = { queueKey, environmentId: identity.environmentId, messageId: "head" };
+      const edit = await storage.promptQueueEdits.beginPromptQueueMessageEdit(target);
+      if (edit.status !== "editing") throw new Error("expected a lease");
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).not.toHaveBeenCalled();
+
+      const drains: Promise<void>[] = [];
+      const notifyPromptQueueChanged = mock(() => {
+        drains.push(dispatcher.drainPromptQueueForSession(identity));
+      });
+      const finish = createCommandRegistry().get("finish_prompt_queue_message_edit")!;
+      const context = {
+        storage,
+        nativeAgents: { notifyPromptQueueChanged },
+      } as unknown as CommandContext;
+      const args = { ...target, leaseId: edit.lease.leaseId, outcome };
+      const attachments = Array.from({ length: 20 }, (_, index) => ({
+        type: "file" as const,
+        path: `/workspace/reference-${index}.txt`,
+        filename: `reference-${index}.txt`,
+      }));
+
+      if (outcome === "commit") {
+        await expect(
+          finish(
+            {
+              ...args,
+              text: "",
+              attachments: [...attachments, { type: "file", path: "/workspace/extra" }],
+            },
+            context,
+          ),
+        ).rejects.toThrow("At most 20");
+        expect(notifyPromptQueueChanged).not.toHaveBeenCalled();
+        expect(await storage.reservePromptQueueHeadForDispatch(queueKey)).toBeNull();
+      }
+      await finish(outcome === "commit" ? { ...args, text: "", attachments } : args, context);
+      expect(notifyPromptQueueChanged).toHaveBeenCalledWith(queueKey);
+      await Promise.all(drains);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+      const dispatch = (host.dispatchPrompt as ReturnType<typeof mock>).mock
+        .calls[0]![0] as DispatchNativeAgentPromptInput;
+      expect(dispatch.requestId).toBe("head");
+      if (outcome === "commit") {
+        expect(extractMarkedAttachmentReferences(dispatch.prompt).attachments).toHaveLength(20);
+        expect(dispatch.attachments).toEqual(attachments);
+      } else {
+        expect(dispatch.prompt).toBe("old");
+      }
+    });
+  },
+);
+
+describe("NativeAgentPromptQueueDispatcher restored legacy claims", () => {
+  test.each(["head", undefined, "", "  ", 42])(
+    "the recurring scan dispatches a stored claim with id %p exactly once, live lease or not",
+    async (id) => {
+      await withPersistedQueue(async (storage, { dispatcher, host }) => {
+        // Save accepts opaque legacy rows; restoration must repair invalid ids.
+        await storage.savePromptQueue(queueKey, identity.environmentId, [
+          { id, text: "recovered", attachments: [] },
+        ]);
+        // The default lease has five minutes left; nothing honours it.
+        seedLegacyPromptQueueClaim(storage.getDataDir(), queueKey, id as string);
+        const first = await storage.getPromptQueue(queueKey);
+        const head = first?.messages[0] as { id: string };
+        expect(head.id.trim().length).toBeGreaterThan(0);
+        expect((await storage.getPromptQueue(queueKey))?.messages).toEqual(first?.messages);
+        await dispatcher.forTesting().drainPromptQueues();
+        expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+        expect(host.dispatchPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({ requestId: head.id, prompt: "recovered" }),
+        );
+        await dispatcher.forTesting().drainPromptQueues();
+        expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+        expect(await storage.getPromptQueue(queueKey)).toMatchObject({ messages: [] });
+        expect(await storage.getPromptQueue(queueKey)).not.toHaveProperty("outstandingClaim");
+      });
+    },
+  );
+});
+
+test("conversation-bound corrections require an existing binding and keep the session mode", async () => {
+  await withPersistedQueue(async (storage, { dispatcher, host }) => {
+    const message = {
+      id: "correction",
+      text: "Review the captured line",
+      preserveSessionMode: true,
+      requireProviderSessionId: "provider-1",
+    };
+    const unstartedQueue = `${identity.agent}\0env-${identity.environmentId}:unstarted`;
+    await expect(
+      storage.enqueuePromptQueueMessage(unstartedQueue, identity.environmentId, message),
+    ).rejects.toThrow("destination conversation changed");
+    expect(await storage.getPromptQueue(unstartedQueue)).toBeNull();
+
+    await storage.updateNativeAgentSessionControls(sessionKey, "provider-1", {
+      mode: "plan",
+    });
+    await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, message);
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(host.dispatchPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: message.text,
+        mode: undefined,
+        requireProviderSessionId: "provider-1",
+      }),
+    );
+    expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+    expect((await storage.getNativeAgentSession(sessionKey))?.controls?.mode).toBe("plan");
+
+    await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+      ...message,
+      id: "stale-correction",
+    });
+    await storage.invalidateNativeAgentSession(sessionKey, "provider-1");
+    const replacement = await storage.getOrCreateNativeAgentSession(
+      { ...identity, key: sessionKey },
+      async () => "provider-2",
+    );
+    host.ensureSession = async () => replacement;
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+    expect((await storage.getPromptQueue(queueKey))?.dispatchError?.message).toContain(
+      "destination conversation changed",
+    );
+  });
+});
+
+test("queue holds while limit recovery is pending, then releases the head", async () => {
+  await withPersistedQueue(async (storage, { dispatcher, host }) => {
+    await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+      id: "head",
+      text: "queued",
+    });
+    let pending = true;
+    host.usageLimitResendPending = () => pending;
+    host.provider = async () =>
+      ({ status: async () => "error" }) as unknown as NativeAgentRuntimeProvider;
+    await dispatcher.drainPromptQueueForSession(identity);
+    expect(host.dispatchPrompt).not.toHaveBeenCalled();
+    expect((await storage.getPromptQueue(queueKey))?.inFlight).toBeUndefined();
+    pending = false;
+    const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 6000);
+    try {
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).not.toHaveBeenCalled();
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+      host.provider = async () =>
+        ({ status: async () => "idle" }) as unknown as NativeAgentRuntimeProvider;
+      clock.mockReturnValue(Date.now() + 60000);
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+describe("NativeAgentPromptQueueDispatcher after a restart-interrupted turn", () => {
+  // Found by the multi-client restart qualification (to-do 7120 (retired) task 1): a
+  // prompt queued behind a turn a backend restart cut short was held as if the
+  // model had failed, and went out only after a prompt the user typed later.
+  function observing(read: () => Record<string, unknown>) {
+    return async () =>
+      ({
+        status: async () => read().status,
+        observeSession: async () => read(),
+      }) as unknown as NativeAgentRuntimeProvider;
+  }
+
+  test("queued prompts go out in the order the user queued them, starting at once", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "queued behind the interrupted turn",
+      });
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "later",
+        text: "typed later",
+      });
+      let observation: Record<string, unknown> = {
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        interruptedRequestId: "interrupted",
+      };
+      host.provider = observing(() => observation);
+
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+      expect(host.dispatchPrompt).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requestId: "queued" }),
+      );
+      // Sent on the first pass: no back-off was counted and nothing was parked.
+      expect(dispatcher.forTesting().queueAttempts.has(queueKey)).toBe(false);
+      expect((await storage.getPromptQueue(queueKey))?.dispatchError).toBeUndefined();
+
+      observation = { status: "running" };
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).toHaveBeenCalledTimes(1);
+
+      observation = { status: "idle" };
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(
+        (host.dispatchPrompt as ReturnType<typeof mock>).mock.calls.map(
+          (call) => (call[0] as DispatchNativeAgentPromptInput).requestId,
+        ),
+      ).toEqual(["queued", "later"]);
+      expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([]);
+    });
+  });
+
+  test("an in-flight head from an ambiguous dispatch is resent under its own request id", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "sent once, answer lost",
+      });
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "later",
+        text: "typed later",
+      });
+      // The first send's outcome is unknown (the bridge went away mid-request):
+      // the reservation stays durable rather than being failed or re-minted.
+      let observation: Record<string, unknown> = { status: "idle" };
+      host.provider = observing(() => observation);
+      const dispatch = host.dispatchPrompt as ReturnType<typeof mock>;
+      dispatch.mockImplementationOnce(async () => {
+        throw new Error("socket hang up");
+      });
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect((await storage.getPromptQueue(queueKey))?.inFlight?.requestId).toBe("queued");
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+
+      // The restart that lost the answer also cut the session's turn short.
+      observation = {
+        status: "error",
+        error: "Claude restarted before this turn finished.",
+        interruption: "restart",
+        interruptedRequestId: "queued",
+      };
+      await dispatcher.drainPromptQueueForSession(identity);
+      const requestIds = () =>
+        dispatch.mock.calls.map((call) => (call[0] as DispatchNativeAgentPromptInput).requestId);
+      // The same idempotency key, so the bridge's dispatch journal can answer
+      // "already sent" instead of running the turn twice; never a new id, and
+      // never parked as if the model had failed.
+      expect(requestIds()).toEqual(["queued", "queued"]);
+      const queue = await storage.getPromptQueue(queueKey);
+      expect(queue?.dispatchError).toBeUndefined();
+      expect(queue?.inFlight).toBeUndefined();
+      expect(queue?.messages.map((message) => (message as { id: string }).id)).toEqual(["later"]);
+      expect(dispatcher.forTesting().queueAttempts.has(queueKey)).toBe(false);
+    });
+  });
+
+  test("any other terminal error still holds the queue with back-off", async () => {
+    await withPersistedQueue(async (storage, { dispatcher, host }) => {
+      await storage.enqueuePromptQueueMessage(queueKey, identity.environmentId, {
+        id: "queued",
+        text: "held",
+      });
+      host.provider = observing(() => ({
+        status: "error",
+        error: "Selected model is at capacity.",
+      }));
+      await dispatcher.drainPromptQueueForSession(identity);
+      expect(host.dispatchPrompt).not.toHaveBeenCalled();
+      expect(dispatcher.forTesting().queueAttempts.get(queueKey)).toBe(1);
+      expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+    });
+  });
+});
+
+test("a coordinator's queued message waits for the running turn, then is sent as the next turn", async () => {
+  // What a refused or unavailable steer leaves behind on the Coordinator page:
+  // the durable queue row. The drain must hold it while the turn runs and
+  // deliver it once the turn ends, as it does for an environment's tab.
+  const runtimeId = coordinatorRuntimeId("coordinator-1", "main");
+  const directory = await fs.mkdtemp(path.join(tmpdir(), "ork-coordinator-queue-"));
+  const storage = new StorageService(directory);
+  await storage.init();
+  try {
+    const project = await storage.addProject(
+      createProject("https://example.invalid/repo.git", directory),
+    );
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      id: "coordinator-1",
+      projectId: project.id,
+      executionPolicy: COORDINATOR_EXECUTION_POLICY,
+      lifecycleState: "ready",
+      conversations: [
+        {
+          id: "main",
+          tabId: "coordinator-main",
+          logicalSessionKey: coordinatorConversationSessionKey("coordinator-1", {
+            id: "main",
+            tabId: "coordinator-main",
+          }),
+          agent: "claude",
+          title: "Coordinator",
+          createdAt: new Date(0).toISOString(),
+          mailboxIncarnationId: "incarnation-main",
+          role: "main",
+        },
+      ],
+      selectedConversationId: "main",
+      repositoryContextRevision: 0,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    }));
+    const resolved = await resolveCoordinatorRuntime(storage, runtimeId);
+    if (resolved.status !== "ready") throw new Error(`coordinator ${resolved.status}`);
+    const environment = coordinatorRuntimeEnvironment(runtimeId, resolved);
+    const coordinator = {
+      environmentId: runtimeId,
+      agent: "claude" as const,
+      logicalSessionKey: `env-${runtimeId}:coordinator-main`,
+    };
+    const key = nativeAgentSessionStorageKey(
+      coordinator.environmentId,
+      coordinator.agent,
+      coordinator.logicalSessionKey,
+    );
+    const coordinatorQueueKey = `${coordinator.agent}\0${coordinator.logicalSessionKey}`;
+    const session = await storage.getOrCreateNativeAgentSession(
+      { ...coordinator, key },
+      async () => "provider-1",
+    );
+    let status = "running";
+    const dispatchPrompt = mock(async (_input: DispatchNativeAgentPromptInput) => session);
+    const { dispatcher } = harness({
+      storage,
+      assertEnvironmentLive: async () => environment,
+      ensureSession: async () => session,
+      provider: async () =>
+        ({ status: async () => status }) as unknown as NativeAgentRuntimeProvider,
+      dispatchPrompt,
+    });
+    await storage.enqueuePromptQueueMessage(coordinatorQueueKey, runtimeId, {
+      id: "queued-1",
+      text: "also check the open pull requests",
+      clientTimeZone: "Asia/Tokyo",
+    });
+
+    await dispatcher.drainPromptQueueForSession(coordinator);
+    expect(dispatchPrompt).not.toHaveBeenCalled();
+    expect((await storage.getPromptQueue(coordinatorQueueKey))?.messages).toHaveLength(1);
+
+    status = "idle";
+    await dispatcher.drainPromptQueueForSession(coordinator);
+    expect(dispatchPrompt).toHaveBeenCalledTimes(1);
+    expect(dispatchPrompt.mock.calls[0]![0]).toMatchObject({
+      environmentId: runtimeId,
+      agent: "claude",
+      logicalSessionKey: coordinator.logicalSessionKey,
+      prompt: "also check the open pull requests",
+      requestId: "queued-1",
+      // The queueing renderer's zone travels with the prompt to dispatch.
+      clientTimeZone: "Asia/Tokyo",
+    });
+    expect((await storage.getPromptQueue(coordinatorQueueKey))?.messages ?? []).toHaveLength(0);
+  } finally {
+    storage.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

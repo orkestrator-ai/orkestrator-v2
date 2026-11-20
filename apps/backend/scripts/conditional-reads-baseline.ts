@@ -41,8 +41,8 @@ import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { HttpBridgeProvider } from "../src/core/http-bridge/index.js";
-import { NativeAgentService } from "../src/core/native-agent-service.js";
-import { projectionInternals } from "../src/core/native-agent-service-test-collaborators.js";
+import { NativeAgentService } from "../src/core/native-agent/service.js";
+import { projectionInternals } from "../src/core/native-agent/service-test-collaborators.js";
 import { StorageService } from "../src/core/storage.js";
 import { collectStreamingSamples } from "./conditional-reads-samples.js";
 

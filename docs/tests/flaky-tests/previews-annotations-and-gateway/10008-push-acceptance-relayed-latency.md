@@ -1,5 +1,7 @@
 # The relayed push acceptance test can exceed its virtual latency budget
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/tool-output-reads.test.ts`.
+
 Relocated tests from the recorded commands now live at
 `apps/backend/src/core/review/transcript-push.test.ts` and
 `apps/backend/src/core/review/service-part-4.test.ts`.

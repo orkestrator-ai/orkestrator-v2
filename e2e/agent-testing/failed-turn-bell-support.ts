@@ -12,7 +12,7 @@ export type BellPlatform = (typeof BELL_PLATFORMS)[number];
  * - `refused`: a turn the loopback model refuses (401) rings `agent_failed`,
  *   and opening the environment shows "Agent stopped with an error".
  * - `stop`: a held turn stopped by the user never rings `agent_failed`; it
- *   rings `agent_finished`, as `native-agent-failed-turn-attention.test.ts`
+ *   rings `agent_finished`, as `native-agent/failed-turn-attention.test.ts`
  *   pins for every bridge (only a goal's own Stop rings nothing).
  * - `bridge-kill`: a held turn whose bridge is killed rings `agent_failed`.
  * - `restart`: a held turn across a killed and restarted backend (its local

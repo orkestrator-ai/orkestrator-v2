@@ -30,7 +30,7 @@
  *    the unbound path. The composer and Agent Info send the run their view
  *    showed (`expectedRunId`, to-do 8107 (retired)), and such a steer meeting
  *    a replaced turn is queued as the next turn instead
- *    (`native-agent-service-missed-steer.test.ts`).
+ *    (`native-agent/service-missed-steer.test.ts`).
  *
  * And one Claude case for the stop after several turns: a background task is
  * started, two follow-ups are written into the same warm CLI (its runtime

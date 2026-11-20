@@ -31,10 +31,10 @@ import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
-import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
-import { createProviderStub } from "./native-agent-service-projection-test-support.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent/service.js";
+import { createProviderStub } from "./native-agent/service-projection-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { launchInternals } from "./native-agent-service-test-collaborators.js";
+import { launchInternals } from "./native-agent/service-test-collaborators.js";
 
 /**
  * Registry-level coverage for the commands that back the backend-owned state

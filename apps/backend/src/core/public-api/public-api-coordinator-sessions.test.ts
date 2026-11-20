@@ -12,8 +12,8 @@ import {
 import { classifyReceiptForWait } from "@orkestrator/protocol/public-api-wait";
 import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-interactions";
 import { CoordinatorService } from "../coordinator/service.js";
-import { collaborators, projectionInternals } from "../native-agent-service-test-collaborators.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { collaborators, projectionInternals } from "../native-agent/service-test-collaborators.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { seedCoordinator } from "./test-coordinator.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";

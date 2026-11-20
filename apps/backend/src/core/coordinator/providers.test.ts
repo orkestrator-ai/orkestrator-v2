@@ -12,7 +12,7 @@ import {
   compileGraphCapabilities,
   coordinatorEnforcementPolicy,
 } from "@orkestrator/protocol/graphs/capability-profiles";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import {
   CLAUDE_LINUX_SANDBOX_PROGRAMS,
   probeClaudeLinuxSandbox,

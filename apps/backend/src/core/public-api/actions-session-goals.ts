@@ -22,8 +22,8 @@ import {
   type PublicSessionGoal,
 } from "@orkestrator/protocol/public-api-resources";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { GoalCommandError, goalIdForRequest } from "../native-agent-goal-service.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { GoalCommandError, goalIdForRequest } from "../native-agent/index.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { assertReadyForAgents } from "./actions-sessions.js";
 import { PublicActionError } from "./errors.js";
 import {

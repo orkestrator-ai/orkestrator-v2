@@ -4,10 +4,10 @@ import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { AgentRegistry } from "../agent-registry.js";
 import type { CommandContext } from "../commands-context.js";
-import type { NativeAgentServiceOptions } from "../native-agent-service-shared.js";
-import type { NativeAgentRuntimeProvider } from "../native-agent-provider.js";
-import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
-import { launchInternals } from "../native-agent-service-test-collaborators.js";
+import type { NativeAgentServiceOptions } from "../native-agent/service-shared.js";
+import type { NativeAgentRuntimeProvider } from "../native-agent/provider.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";
+import { launchInternals } from "../native-agent/service-test-collaborators.js";
 import { createProject } from "../storage.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 

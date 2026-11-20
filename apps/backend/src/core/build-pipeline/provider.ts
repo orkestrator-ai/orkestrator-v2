@@ -2,7 +2,7 @@
  * Build-pipeline-facing provider boundary.
  *
  * Provider transports and interactive native-agent capabilities live in
- * `native-agent-provider.ts`; pipeline code intentionally sees only this
+ * `native-agent/provider.ts`; pipeline code intentionally sees only this
  * smaller contract and factory.
  */
 import {
@@ -11,7 +11,7 @@ import {
   type BridgeConnection,
   type ProviderCreateSessionOptions,
   type ProviderDependencies,
-} from "../native-agent-provider.js";
+} from "../native-agent/provider.js";
 import type { NativeAgentRuntimeProvider } from "../agent-provider-contract.js";
 import type { PipelineSessionPhase } from "@orkestrator/protocol/build-pipeline";
 
@@ -22,7 +22,7 @@ export {
   ProviderSessionFailedError,
   ProviderUnavailableError,
   readProviderStatus,
-} from "../native-agent-provider.js";
+} from "../native-agent/provider.js";
 export type {
   BridgeConnection,
   ProviderActivityState,
@@ -34,7 +34,7 @@ export type {
   ProviderSessionObservation,
   ProviderSessionRegistration,
   ProviderStatus,
-} from "../native-agent-provider.js";
+} from "../native-agent/provider.js";
 
 export type BuildPipelineProvider = Omit<AgentSessionProvider, "createSession"> &
   /**

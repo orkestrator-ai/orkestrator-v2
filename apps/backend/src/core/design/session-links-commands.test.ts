@@ -1,11 +1,11 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { BackendRuntime } from "../backend-runtime.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import {
   createProviderStub,
   withService,
-} from "../native-agent-service-projection-test-support.js";
+} from "../native-agent/service-projection-test-support.js";
 import { registerDesignCommandHandlers, type DesignCommandContext } from "./commands.js";
 import { DesignService } from "./service.js";
 import { createTestRenderer } from "./test-support.js";

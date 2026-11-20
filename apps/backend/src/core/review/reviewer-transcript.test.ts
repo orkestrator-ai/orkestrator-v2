@@ -21,7 +21,7 @@ import {
   openCode2TranscriptPage,
   openCode2TranscriptSnapshot,
 } from "../opencode2/transcript-snapshot.js";
-import { encodeDirectHistoryCursor } from "../native-agent-direct-history.js";
+import { encodeDirectHistoryCursor } from "../native-agent/direct-history.js";
 
 function bytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value), "utf8");

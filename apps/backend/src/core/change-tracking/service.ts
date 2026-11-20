@@ -28,7 +28,7 @@ import {
   type ChangeViewResult,
 } from "@orkestrator/protocol/change-resources";
 import type { DiffScanEvent } from "../diff-stats-service.js";
-import type { NativeAgentChangeTrackingHooks } from "../native-agent-service-shared.js";
+import type { NativeAgentChangeTrackingHooks } from "../native-agent/service-shared.js";
 import type { StorageDatabase } from "../storage-database.js";
 import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import { encodePath } from "./capture.js";

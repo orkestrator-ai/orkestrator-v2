@@ -1,5 +1,7 @@
 # Re-cached provider retirement assertion varies in the aggregate
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-reconciliation.test.ts`.
+
 - **ID:** 0172
 - **Status:** resolved
 - **Date observed:** 2026-09-28

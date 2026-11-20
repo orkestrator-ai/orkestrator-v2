@@ -183,7 +183,7 @@ The backend merges runtime actions into the provider list
   turn, and is offered only while one runs. When that turn ends (or another
   starts) before the steer reaches it, the backend sends the text as the next
   turn instead of refusing it: at once when nothing is running, through the
-  prompt queue otherwise (`native-agent-missed-steer.ts`). When steering is
+  prompt queue otherwise (`native-agent/missed-steer.ts`). When steering is
   unavailable a provider's own `/steer` is kept, not deleted.
 - `/compact` **defers**: a provider that ships its own `/compact` (Claude's
   SDK) keeps it; otherwise the row runs the existing compact session action.

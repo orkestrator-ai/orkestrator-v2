@@ -12,7 +12,7 @@ import {
   type NativeAgentControlUpdate,
   type NativeAgentSessionActionOutcome,
 } from "@orkestrator/protocol/native-agent";
-import { nativeAgentSessionWithControls } from "./native-agent-session-controls.js";
+import { nativeAgentSessionWithControls } from "./native-agent/index.js";
 import type {
   IncompleteTurnNotice,
   PersistedNativeAgentPendingDispatch,

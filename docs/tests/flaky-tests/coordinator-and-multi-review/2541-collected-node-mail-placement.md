@@ -1,5 +1,7 @@
 # Collected node mail admission races the automatic drain
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/suborks.test.ts`.
+
 - **ID:** 2541
 - **Status:** resolved
 - **Date observed:** 2026-11-04

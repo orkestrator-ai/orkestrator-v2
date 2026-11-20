@@ -40,7 +40,7 @@ import {
   COORDINATOR_LIVE_SCENARIOS,
 } from "../../../../desktop/scripts/dev/coordinator-live.js";
 import { coordinatorProviderQualification } from "./providers.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { effectiveOpenCodePolicy, openCodePermissionRules } from "../opencode2/policy-rules.js";
 
 /**

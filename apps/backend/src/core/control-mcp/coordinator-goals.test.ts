@@ -18,7 +18,7 @@ import { ControlMcpServer, type ControlMcpInvoker } from "./server.js";
 import { coordinatorRoleCapabilities } from "./tools.js";
 import { CoordinatorService } from "../coordinator/service.js";
 import { copyCommittedCheckout } from "../git/checkout-template-test-support.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { cleanupSessionHarnesses, setup } from "../public-api/test-provider.js";
 import { createEnvironment, createProject } from "../storage.js";
 import { storageInternals } from "../storage-test-support.js";

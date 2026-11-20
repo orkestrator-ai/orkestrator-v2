@@ -1,7 +1,7 @@
 import type {
   ProgressiveReadMetric,
   ProgressiveReadMetrics,
-} from "../src/core/native-agent-progressive-metrics.js";
+} from "../src/core/native-agent/progressive-metrics.js";
 
 /** Benchmark-only collection: exclude warm-up and drain before bounded buffers roll over. */
 export function collectStreamingSamples(metrics: ProgressiveReadMetrics) {

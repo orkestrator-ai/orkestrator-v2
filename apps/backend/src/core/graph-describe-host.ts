@@ -47,7 +47,7 @@ import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { Environment } from "./models.js";
 import type { MultiReviewProgressTracker } from "./review/index.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent/index.js";
 import type { PersistedGraphDescribeJob } from "./storage-graph-describe.js";
 import type { WorkflowResultService } from "./workflows/index.js";
 

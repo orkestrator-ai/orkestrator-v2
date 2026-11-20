@@ -8,7 +8,7 @@ import { PR_MONITOR_CHANGED_EVENT } from "@orkestrator/protocol/pr-monitor";
 import type { BuildPipelineProvider, ProviderStatus } from "../build-pipeline/provider.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";
 import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
-import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { StorageService } from "../storage.js";
 import { BackendRuntime } from "../backend-runtime.js";
 

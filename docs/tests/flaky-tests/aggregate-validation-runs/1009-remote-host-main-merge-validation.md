@@ -1,5 +1,7 @@
 # Remote host upgrades main-merge validation
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/command-catalogue-scale.test.ts`.
+
 - **ID:** 1009
 - **Status:** open
 - **Date observed:** 2026-10-26

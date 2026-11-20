@@ -15,7 +15,7 @@ import {
   toOpenCode2Rules,
 } from "./permissions.js";
 import type { OpenCode2PermissionRule } from "./types.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 
 /** 2.2.6's evaluation (`Permission.evaluate`): the last matching rule, else `ask`. */
 function effect(rules: readonly OpenCode2PermissionRule[], action: string, resource = "*") {

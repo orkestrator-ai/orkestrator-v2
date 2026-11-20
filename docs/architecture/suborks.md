@@ -3,9 +3,9 @@
 Status: living. Owner modules:
 [`suborks.ts`](../../packages/protocol/src/suborks.ts) (limits, views, target
 resolution, carrier, delivery body),
-[`native-agent-suborks.ts`](../../apps/backend/src/core/native-agent-suborks.ts)
+[`native-agent/suborks.ts`](../../apps/backend/src/core/native-agent/suborks.ts)
 (the service),
-[`native-agent-subork-host.ts`](../../apps/backend/src/core/native-agent-subork-host.ts)
+[`native-agent/subork-host.ts`](../../apps/backend/src/core/native-agent/subork-host.ts)
 (the branch host),
 [`agent-tools-suborks.ts`](../../apps/backend/src/core/agent-tools-suborks.ts)
 (the tool on native tabs),

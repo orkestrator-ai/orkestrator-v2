@@ -84,8 +84,10 @@ import type {
   NativeAgentSessionBackendTitle,
   PersistedNativeAgentSignInResend,
 } from "./models.js";
-import type { NativeAgentDisplayTailDeletion } from "./native-agent-display-tail-store.js";
-import type { NativeAgentDisplayTail } from "./native-agent-display-tails.js";
+import type {
+  NativeAgentDisplayTail,
+  NativeAgentDisplayTailDeletion,
+} from "./native-agent/index.js";
 import type { AgentMailboxDirectory } from "./storage-agent-mail-directory.js";
 import type { PendingAgentMailInject } from "./storage-agent-mail-injects.js";
 import type { AgentMailSender } from "./storage-agent-mail-store.js";

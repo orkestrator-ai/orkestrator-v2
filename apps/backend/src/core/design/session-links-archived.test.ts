@@ -1,10 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { NativeAgentResumeEntry } from "@orkestrator/protocol/native-agent";
-import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import {
   createProviderStub,
   withService,
-} from "../native-agent-service-projection-test-support.js";
+} from "../native-agent/service-projection-test-support.js";
 import {
   registerDesignCommandHandlers,
   type DesignCommandContext,

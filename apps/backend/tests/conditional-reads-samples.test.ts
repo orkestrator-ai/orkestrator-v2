@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { ProgressiveReadMetrics } from "../src/core/native-agent-progressive-metrics.js";
+import { ProgressiveReadMetrics } from "../src/core/native-agent/progressive-metrics.js";
 import { collectStreamingSamples } from "../scripts/conditional-reads-samples.js";
 
 test("excludes mixed-domain warm-up and retains all 47 three-viewer streaming reads once", () => {

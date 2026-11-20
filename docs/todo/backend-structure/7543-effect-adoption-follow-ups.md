@@ -73,7 +73,7 @@ Assumptions and decisions, task 2).
 **Problem.** About 40 inline `Promise.race` timeouts in `apps/backend/src` stop
 the caller waiting without stopping the work. Six abortable sleeps disagree on
 whether abort resolves or rejects (`host-standalone-updater.ts`,
-`native-agent-goal-verifier.ts`, `native-agent-goal-check.ts`,
+`native-agent/goal-verifier.ts`, `native-agent/goal-check.ts`,
 `opencode-agent-tools.ts` resolve; `opencode-provider-helpers.ts` rejects).
 `graph-agent-guards.ts` (`listRemote`) retries every error immediately,
 including authentication failures. The reconnect `delay` in

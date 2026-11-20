@@ -98,7 +98,7 @@ import {
   claudeModelParameters,
   claudeModelReasoningIds,
 } from "@orkestrator/protocol/claude-model-catalog";
-import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import { localServerStopCommandName } from "./local-server-runtime.js";
 import { prepareBridgePath } from "./commands-servers.js";
 import { resolveBunBinary } from "./commands-agent-support.js";

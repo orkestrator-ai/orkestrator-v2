@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PersistedNativeAgentSession, PersistedPromptQueue } from "../models.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { resolveConversationBusy, resolveTabsSettled } from "./pr-auto-merge-resolve-settled.js";
 import { nativePromptQueueKey } from "../public-api/index.js";
 

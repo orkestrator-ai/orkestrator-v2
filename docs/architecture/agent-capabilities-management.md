@@ -291,7 +291,7 @@ owns, `<dataDir>/capability-session-plugins/<digest>/` (`.claude-plugin/plugin.j
 `skills/`, `commands/`, `agents/`), from verified artifacts only, and read back
 before the launch is recorded. The launch record keeps its digest and items
 (`privatePlugin`). Every turn of that session, ordinary native turns
-(`native-agent-prompt-dispatch.ts`) and graph activations
+(`native-agent/prompt-dispatch.ts`) and graph activations
 (`agent-branch-runner.ts`, `GraphAgentBranchHost.capabilityPlugins`) alike,
 sends the directory as the prompt's `capabilityPlugins`; the Claude bridge
 passes it to the SDK as an inline plugin (`--plugin-dir`,

@@ -44,7 +44,7 @@ import {
 } from "../build-pipeline/provider.js";
 import { efficiencyPlatform } from "./efficiency.js";
 import { MultiReviewProgressTracker } from "./progress.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/index.js";
 import { flushMicrotasks } from "../recurring-test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost, type ReviewFanoutOutcome } from "./fanout.js";
 import { clearReviewerAdmission, compactReviewerAdmissionQueue } from "./fanout-admission.js";

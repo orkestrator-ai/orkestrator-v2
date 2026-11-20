@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { withService } from "../native-agent-service-projection-test-support.js";
+import { withService } from "../native-agent/service-projection-test-support.js";
 import { readProviderStatus } from "../agent-provider-contract.js";
 import { AmbiguousPromptDispatchError, PromptRejectedError } from "../agent-provider-contract.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "./fake-server.test-support.js";

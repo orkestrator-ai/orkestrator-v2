@@ -519,6 +519,22 @@
                   "!**/build-pipeline/worker-mail.js"
                 ],
                 "message": "Import the build-pipeline domain through build-pipeline/index.js."
+              },
+              {
+                "group": [
+                  "**/native-agent/*",
+                  "!**/native-agent/index.js",
+                  "!**/native-agent/goal-check.js",
+                  "!**/native-agent/goal-verifier.js",
+                  "!**/native-agent/job-pipeline-resolve.js",
+                  "!**/native-agent/job-tab-reuse.js",
+                  "!**/native-agent/provider.js",
+                  "!**/native-agent/service.js",
+                  "!**/native-agent/service-shared.js",
+                  "!**/native-agent/service-test-collaborators.js",
+                  "!**/native-agent/suborks.js"
+                ],
+                "message": "Import the native-agent domain through native-agent/index.js."
               }
             ]
           }
@@ -705,6 +721,14 @@
                   "!**/backend/src/core/build-pipeline/service-helpers.js"
                 ],
                 "message": "Import the build-pipeline domain through build-pipeline/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/native-agent/*",
+                  "!**/backend/src/core/native-agent/index.js",
+                  "!**/backend/src/core/native-agent/service-projection-test-support.js"
+                ],
+                "message": "Import the native-agent domain through native-agent/index.js."
               }
             ]
           }

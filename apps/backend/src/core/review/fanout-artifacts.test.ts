@@ -7,7 +7,7 @@ import { deriveConsolidatedProvenance } from "./fanout-provenance.js";
  */
 import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,

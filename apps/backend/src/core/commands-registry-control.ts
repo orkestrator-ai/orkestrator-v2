@@ -11,7 +11,7 @@ import { COORDINATOR_MAIL_ORIGIN_NOTE } from "@orkestrator/protocol/agent-mail";
 import {
   isTransientDispatchRefusal,
   nativeAgentSessionStorageKey,
-} from "./native-agent-service-shared.js";
+} from "./native-agent/service-shared.js";
 import { controlJobId as jobIdFor, savedControlJobAgent } from "./control-job-identity.js";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -38,8 +38,8 @@ import {
   isNativeAgentJobTabReuse,
   resendToOpenJobTab,
   jobPromptFingerprint,
-} from "./native-agent-job-tab-reuse.js";
-import { adoptPipelineResolveSessionIntoTab } from "./native-agent-job-pipeline-resolve.js";
+} from "./native-agent/job-tab-reuse.js";
+import { adoptPipelineResolveSessionIntoTab } from "./native-agent/job-pipeline-resolve.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

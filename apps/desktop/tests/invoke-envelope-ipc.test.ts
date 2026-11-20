@@ -19,7 +19,7 @@ import { errorCode, ipcErrorText } from "@orkestrator/protocol/contract/ipc-erro
 import {
   NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE,
   NativeAgentProviderSessionMissingError,
-} from "../../backend/src/core/native-agent-service-shared";
+} from "../../backend/src/core/native-agent/service-shared";
 import type { CommandContext } from "../../backend/src/core/commands-context";
 import {
   CommandRegistry,

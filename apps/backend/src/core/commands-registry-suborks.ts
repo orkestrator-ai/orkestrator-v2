@@ -7,7 +7,7 @@ import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { asNonBlankString } from "./commands-validation.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
-import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 
 /** The transcript one read returns, like a graph run's. */
 const TRANSCRIPT_READ_MAX_BYTES = 4 * 1024 * 1024;

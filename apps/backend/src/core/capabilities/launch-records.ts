@@ -1,6 +1,6 @@
 import type { CapabilityTarget } from "@orkestrator/protocol/capability-resources";
 
-import { nativeAgentSessionStorageKey } from "../native-agent-session-key.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/index.js";
 import type { CapabilityLaunchRecord, CapabilityState } from "./types.js";
 
 /** A native logical key is unique only within its environment and provider. */

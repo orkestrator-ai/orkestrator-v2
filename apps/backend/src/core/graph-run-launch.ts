@@ -90,7 +90,7 @@ import { GraphRunServiceError, type GraphRunService } from "./graph-run-service.
 import { GraphTemplateError } from "./graph-template-errors.js";
 import type { GraphTemplateService } from "./graph-template-service.js";
 import type { AppConfig, Environment, Project } from "./models.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent/index.js";
 import type { KanbanTask } from "./storage-shared-core.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { GraphTemplatesStorage } from "./storage-graph-templates.js";

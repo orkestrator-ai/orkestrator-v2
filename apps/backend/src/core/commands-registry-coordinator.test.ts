@@ -12,7 +12,7 @@ import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import { nativeAgentSessionStorageKey } from "./native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,

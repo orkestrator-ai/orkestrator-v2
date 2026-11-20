@@ -1091,7 +1091,7 @@ without stopping to ask, as the delegation required.
 - ~~Whether any supported reviewer platform still reaches the
   reviewer-transcript fallback in production.~~ Settled from the code on
   2026-10-25: every reviewer provider is built by `createNativeAgentProvider`
-  (`native-agent-provider.ts`) as either `HttpBridgeProvider` (Claude, Codex,
+  (`native-agent/provider.ts`) as either `HttpBridgeProvider` (Claude, Codex,
   Cursor, Grok and Pi bridges) or `OpenCodeProvider`, and both implement
   `transcriptSnapshot`. A bridge without `/transcript` is served inside
   `readHttpBridgeTranscriptSnapshot`, below this module. Cursor, Grok,

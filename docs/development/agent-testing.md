@@ -1376,7 +1376,7 @@ billed. Each platform's case finishes a turn and steers after it (one new turn
 must start, on the session's controls), then steers while a second turn runs
 (it names no run, so it joins that turn; a composer or Agent Info steer
 names the run its view showed and is queued as the next turn instead, to-do
-8107 (retired), covered by `native-agent-service-missed-steer.test.ts`). Both steers must
+8107 (retired), covered by `native-agent/service-missed-steer.test.ts`). Both steers must
 also reach the model exactly once: the Claude, Codex and Pi scripted models
 count a spec's marker in the user-role items of every request they are sent
 (`MARKER_WATCH_PATH` in `idle-observation-fake-claude.ts`, counts only), and

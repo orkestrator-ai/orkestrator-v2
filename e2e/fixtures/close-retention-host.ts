@@ -52,9 +52,9 @@ import { BackendRuntime } from "../../apps/backend/src/core/backend-runtime";
 import { createCommandRegistry } from "../../apps/backend/src/core/commands";
 import type { CommandContext } from "../../apps/backend/src/core/commands-context";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
-import { createNativeAgentProvider } from "../../apps/backend/src/core/native-agent-provider";
-import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent-service";
-import { NativeAgentService } from "../../apps/backend/src/core/native-agent-service";
+import { createNativeAgentProvider } from "../../apps/backend/src/core/native-agent/provider";
+import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent/service";
+import { NativeAgentService } from "../../apps/backend/src/core/native-agent/service";
 import { StorageService } from "../../apps/backend/src/core/storage";
 import {
   serializeWithinBudget,

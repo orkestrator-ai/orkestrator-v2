@@ -11,7 +11,7 @@ import {
   fakeSpawner,
   TEST_SECRET,
 } from "../credentials/service-test-support.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { OpenCode2Client } from "./client.js";
 import { openCode2TabMcpServer } from "./permissions.js";
 import { OpenCode2Provider } from "./provider.js";

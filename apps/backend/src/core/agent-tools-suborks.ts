@@ -17,7 +17,7 @@ import {
   type AgentMessagingRateLimitKind,
   type AgentMessagingToolScope,
 } from "./agent-tools-messaging.js";
-import type { SuborkAskInput, SuborkAskResult, SuborkCaller } from "./native-agent-suborks.js";
+import type { SuborkAskInput, SuborkAskResult, SuborkCaller } from "./native-agent/suborks.js";
 import type { StorageService } from "./storage.js";
 
 /** What the tool needs from the subork service. */

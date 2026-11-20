@@ -16,7 +16,7 @@ import {
   nativeTabLogicalSessionKey,
   type PublicSessionGoal,
 } from "@orkestrator/protocol/public-api-resources";
-import { nativeAgentSessionStorageKey } from "../../../apps/backend/src/core/native-agent-service.js";
+import { nativeAgentSessionStorageKey } from "../../../apps/backend/src/core/native-agent/service.js";
 import {
   cleanupSessionHarnesses,
   setActivity,

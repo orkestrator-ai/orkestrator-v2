@@ -330,7 +330,7 @@ or a person.
   everyone else (item 5 removed the auto-reject branch and its option).
 - Execution policy:
   - Resolved once per session by `resolveNativeAgentExecutionPolicy`
-    (`apps/backend/src/core/native-agent-execution-policy.ts`).
+    (`apps/backend/src/core/native-agent/execution-policy.ts`).
   - Defaults for host and pipeline sessions: `sandbox: "none"` and
     `approvals: "auto-approve"`. Containers get `sandbox: "container"`, project
     resources on, and the environment's network mode. The coordinator always

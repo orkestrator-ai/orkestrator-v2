@@ -50,7 +50,7 @@ import {
   type ProviderSendOptions,
 } from "../agent-provider-contract.js";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "../agent-tools.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/index.js";
 import { openCodePermissionRules } from "./policy-rules.js";
 import { listOpenCodeResearchTools, openCodeResearchToolIds } from "./research-tools.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";

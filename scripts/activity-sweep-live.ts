@@ -27,8 +27,8 @@ import { rmSync, writeFileSync } from "node:fs";
 import { cpus } from "node:os";
 import { resolve } from "node:path";
 import { startBridge, stopBridge, type RunningBridge } from "./activity-sweep-bridge";
-import { readActivityGroup } from "../apps/backend/src/core/native-agent-activity-reads";
-import { createNativeAgentProvider } from "../apps/backend/src/core/native-agent-provider";
+import { readActivityGroup } from "../apps/backend/src/core/native-agent/activity-reads";
+import { createNativeAgentProvider } from "../apps/backend/src/core/native-agent/provider";
 import { SESSION_ACTIVITY_BATCH_PATH } from "../packages/protocol/src/session-activity-batch";
 
 interface Options {

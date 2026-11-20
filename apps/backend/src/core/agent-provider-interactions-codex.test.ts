@@ -5,7 +5,7 @@ import {
   AGENT_INTERACTION_LIMITS,
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "@orkestrator/protocol/agent-interactions";
-import { createNativeAgentProvider, ProviderUnavailableError } from "./native-agent-provider.js";
+import { createNativeAgentProvider, ProviderUnavailableError } from "./native-agent/provider.js";
 import {
   codexConnection,
   httpProvider,

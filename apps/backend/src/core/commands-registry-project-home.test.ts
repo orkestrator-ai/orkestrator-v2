@@ -15,8 +15,8 @@ import {
 } from "./commands-environment.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { ProjectGitService } from "./project-git-service.js";
-import { NativeAgentService } from "./native-agent-service.js";
-import type { NativeAgentRuntimeProvider } from "./native-agent-provider.js";
+import { NativeAgentService } from "./native-agent/service.js";
+import type { NativeAgentRuntimeProvider } from "./native-agent/provider.js";
 import { projectHomePrTarget, detectEnvironmentPullRequest } from "./commands-pr-monitor.js";
 import { BackendRuntime } from "./backend-runtime.js";
 

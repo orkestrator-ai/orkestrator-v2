@@ -12,8 +12,8 @@ import {
   PromptRejectedError,
   ProviderUnavailableError,
 } from "../agent-provider-contract.js";
-import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent-provider.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent/provider.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import type { PublicApiHarness } from "./test-support.js";

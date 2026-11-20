@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readProviderStatus } from "../native-agent-provider.js";
+import { readProviderStatus } from "../native-agent/provider.js";
 import { claudeConnection, codexConnection, httpProvider } from "../agent-provider-test-support.js";
-import { nativeTerminalMessages } from "../native-terminal-messages.js";
+import { nativeTerminalMessages } from "../native-agent/terminal-messages.js";
 import { bridgeSessionErrorFields } from "./transport.js";
 
 /**

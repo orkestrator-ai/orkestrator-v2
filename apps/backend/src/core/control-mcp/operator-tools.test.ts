@@ -4,8 +4,8 @@ import {
   encodePublicSessionId,
 } from "@orkestrator/protocol/public-api-resources";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
-import { collaborators, projectionInternals } from "../native-agent-service-test-collaborators.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { collaborators, projectionInternals } from "../native-agent/service-test-collaborators.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { seedCoordinator } from "../public-api/test-coordinator.js";
 import { controlMcpHarness } from "./test-support.js";
 import { operatorNode } from "./operator-tools.js";

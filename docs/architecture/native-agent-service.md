@@ -1,6 +1,6 @@
 # Native agent service
 
-`NativeAgentService` (`apps/backend/src/core/native-agent-service.ts`) is the
+`NativeAgentService` (`apps/backend/src/core/native-agent/service.ts`) is the
 backend's entry point for native agent tabs: it ensures, adopts and inspects
 provider sessions, dispatches prompts and steers, runs session actions, and
 serves every transcript and state read the renderer makes. It is one plain
@@ -11,23 +11,23 @@ collaborators that own it privately, and the service wires them together.
 
 | Collaborator | File | State it owns |
 | --- | --- | --- |
-| `ProviderRegistry` | `native-agent-provider-registry.ts` | Cached providers, dispatch counts, bridge connections and generations, retiring and disposed providers, absent-bridge back-off. |
-| `NativeAgentTurnRecovery` | `native-agent-turn-recovery.ts` | Incomplete-turn recovery tasks and candidates, manual-prompt claims, recovery dispatches. |
-| `NativeAgentObservationBroker` | `native-agent-observation.ts` | Shared observation records, dispatch and generation fences, next-due provider groups. |
-| `NativeAgentCatalogCache` | `native-agent-catalog-cache.ts` | Per-environment model catalogues and their coalesced refreshes; per-session command catalogues (through `NativeAgentCommandCatalogueCache`). |
-| `NativeAgentTranscriptProjection` | `native-agent-transcript-projection.ts` | The session epochs, pushed titles, usage recorder and the session lifecycle that crosses every read model (invalidate, prune, forget an environment, shutdown). Its read models are collaborators of their own, listed in [Transcript projection read models](#transcript-projection-read-models). |
-| `NativeAgentInteractionTracker` | `native-agent-interaction-tracker.ts` | The pending-interaction read cache: one session's pending approvals and questions, read on demand, and withdrawn when its environment stops. |
-| `NativeAgentLaunchActivityReconciler` | `native-agent-launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry. |
-| `NativeAgentPromptQueueDispatcher` | `native-agent-prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
-| `NativeAgentGoalService` | `native-agent-goal-service.ts` | An index of sessions with a running goal, per-session advance tasks, running checks. All durable goal state is on the session record; see [goals.md](goals.md). |
-| `NativeAgentHandoffs` | `native-agent-handoffs.ts` | No state. "Continue in…": the full source-transcript read `create_agent_handoff` builds from, and the pending handoff a dispatch carries. |
-| `NativeAgentSignInResends` | `native-agent-sign-in-resend.ts` | A bounded in-memory copy of each session's last accepted plain Claude prompt. The durable hold is on the session record; see [agent-accounts.md](agent-accounts.md). |
-| `NativeAgentSessionOperations` | `native-agent-session-operations.ts` | No state. The session controls that are not a dispatch: Stop and its abort ladder (taking the dispatcher's mutation intent and turn-interrupt fences), background-task stop, suggested prompts, the resume list, resume and closing the session it replaced, fork, session and MCP actions, sign-in, composer controls and interaction answers. |
-| `NativeAgentPromptDispatch` | `native-agent-prompt-dispatch.ts` | No state. Prompt dispatch: the intent path and its one bounded recovery retry, the at-most-once prompt path (`dispatchAdmittedPrompt`, which holds the storage lease across provider I/O), command planning, the parked-dispatch and parked-steer settles, retry and discard, prompt readiness, and steer (the persisted-steer dispatch it shares with the prompt queue). It is the one place the dispatch fence and lease order is written down; see [Dispatch fence order](#dispatch-fence-order). |
-| `NativeAgentMailInjection` | `native-agent-mail-injection.ts` | No state. Agent mail delivered into a session: the presence gate, idle-turn injection, Deliver now's steer into a running turn, and the two reconciliations. It reaches dispatch only through `NativeAgentPromptDispatch`'s entry points, so it takes no fence or lease itself. |
+| `ProviderRegistry` | `native-agent/provider-registry.ts` | Cached providers, dispatch counts, bridge connections and generations, retiring and disposed providers, absent-bridge back-off. |
+| `NativeAgentTurnRecovery` | `native-agent/turn-recovery.ts` | Incomplete-turn recovery tasks and candidates, manual-prompt claims, recovery dispatches. |
+| `NativeAgentObservationBroker` | `native-agent/observation.ts` | Shared observation records, dispatch and generation fences, next-due provider groups. |
+| `NativeAgentCatalogCache` | `native-agent/catalog-cache.ts` | Per-environment model catalogues and their coalesced refreshes; per-session command catalogues (through `NativeAgentCommandCatalogueCache`). |
+| `NativeAgentTranscriptProjection` | `native-agent/transcript-projection.ts` | The session epochs, pushed titles, usage recorder and the session lifecycle that crosses every read model (invalidate, prune, forget an environment, shutdown). Its read models are collaborators of their own, listed in [Transcript projection read models](#transcript-projection-read-models). |
+| `NativeAgentInteractionTracker` | `native-agent/interaction-tracker.ts` | The pending-interaction read cache: one session's pending approvals and questions, read on demand, and withdrawn when its environment stops. |
+| `NativeAgentLaunchActivityReconciler` | `native-agent/launch-activity-reconciler.ts` | `observedSessionActivity` (the exact turn-edge state machine), activity sweep scheduling and per-group back-off, pending PR-monitor notifications, startup-launch tasks and retry. |
+| `NativeAgentPromptQueueDispatcher` | `native-agent/prompt-queue-dispatcher.ts` | The per-session work fence, mutation-intent counts, unpersisted Stop fences, queue drain tasks with their retry and attempt counts, the keyed queue scheduler, in-flight parked-dispatch settles. |
+| `NativeAgentGoalService` | `native-agent/goal-service.ts` | An index of sessions with a running goal, per-session advance tasks, running checks. All durable goal state is on the session record; see [goals.md](goals.md). |
+| `NativeAgentHandoffs` | `native-agent/handoffs.ts` | No state. "Continue in…": the full source-transcript read `create_agent_handoff` builds from, and the pending handoff a dispatch carries. |
+| `NativeAgentSignInResends` | `native-agent/sign-in-resend.ts` | A bounded in-memory copy of each session's last accepted plain Claude prompt. The durable hold is on the session record; see [agent-accounts.md](agent-accounts.md). |
+| `NativeAgentSessionOperations` | `native-agent/session-operations.ts` | No state. The session controls that are not a dispatch: Stop and its abort ladder (taking the dispatcher's mutation intent and turn-interrupt fences), background-task stop, suggested prompts, the resume list, resume and closing the session it replaced, fork, session and MCP actions, sign-in, composer controls and interaction answers. |
+| `NativeAgentPromptDispatch` | `native-agent/prompt-dispatch.ts` | No state. Prompt dispatch: the intent path and its one bounded recovery retry, the at-most-once prompt path (`dispatchAdmittedPrompt`, which holds the storage lease across provider I/O), command planning, the parked-dispatch and parked-steer settles, retry and discard, prompt readiness, and steer (the persisted-steer dispatch it shares with the prompt queue). It is the one place the dispatch fence and lease order is written down; see [Dispatch fence order](#dispatch-fence-order). |
+| `NativeAgentMailInjection` | `native-agent/mail-injection.ts` | No state. Agent mail delivered into a session: the presence gate, idle-turn injection, Deliver now's steer into a running turn, and the two reconciliations. It reaches dispatch only through `NativeAgentPromptDispatch`'s entry points, so it takes no fence or lease itself. |
 
-`native-agent-queue-message.ts` holds the pure `queue*` readers for one
-persisted prompt-queue message, and `native-agent-projection-helpers.ts` the
+`native-agent/queue-message.ts` holds the pure `queue*` readers for one
+persisted prompt-queue message, and `native-agent/projection-helpers.ts` the
 projection's pure helpers (image paths, notices, usage merging, progress
 folding, discovery keys).
 
@@ -35,7 +35,7 @@ What stays on the service is the work that is not a cluster of state: trusted
 session input (coordinator authority), `ensureSession` / `adoptSession` /
 `inspectSession`, bridge start and peek, turn outcomes, provider teardown and
 moves. A direct steer that misses its turn is handed by the prompt dispatch to
-`native-agent-missed-steer.ts`, which sends it as a new turn or queues it. Its own state is the stop flag, the
+`native-agent/missed-steer.ts`, which sends it as a new turn or queues it. Its own state is the stop flag, the
 initialization promise, the scan-task set every collaborator's background work
 is tracked in (kept on the service, not the launch reconciler, because the
 projection, queue drains and launch scan all feed it and
@@ -44,20 +44,20 @@ shutdown drains it), and the turn-outcome retry bookkeeping.
 ## Transcript projection read models
 
 `NativeAgentTranscriptProjection` builds one `NativeAgentProjectionContext`
-(`native-agent-projection-context.ts`) and hands it to each read model, which
+(`native-agent/projection-context.ts`) and hands it to each read model, which
 reaches its siblings and the owner's lifecycle only through it. The service
 still talks to the owner alone: its public methods are one-line delegates.
 
 | Collaborator | File | State it owns |
 | --- | --- | --- |
-| `NativeAgentProjectionParts` | `native-agent-projection-parts.ts` | The one owner of the caches every read model builds from: tool details (bytes, pins, encodings), projected rows, direct history pages and cursor handles, artifact overlays. Also the row and composer projection steps that fill them. Other read models change the tool-detail cache only through its methods. |
-| `NativeAgentProgressiveReads` | `native-agent-progressive-reads.ts` | Joined progressive reads, their start epochs and waiters, trailing re-reads and follow-up markers, shared provider snapshots, live request descriptors, read metrics; held coordinator reads. |
-| `NativeAgentProgressiveTranscript` | `native-agent-progressive-transcript.ts` | The transcript view cache, delta bases, source tokens, incomplete-preview recovery (hydrations, timers, read starts, preview fills) and the display-tail scheduler. |
-| `NativeAgentProgressiveSessionState` | `native-agent-progressive-session-state.ts` | The session-state view cache. |
-| `NativeAgentProgressiveDiscovery` | `native-agent-progressive-discovery.ts` | Discovery sections and their bytes, per-provider job counts, deferred renewals, the MCP action fence. |
-| `NativeAgentHistoryPages` | `native-agent-history-pages.ts` | No state. Direct history pages over the parts' page cache. |
-| `NativeAgentToolDetailReads` | `native-agent-tool-detail-reads.ts` | In-flight remote detail reads; tool details on demand and the recovery of an evicted reference. |
-| `NativeAgentFullProjection` | `native-agent-full-projection.ts` | The whole-session projection cache, its revisions, missing-session grace, serialized refreshes, stop notices. It is what `get_native_agent_projection`, every session mutation and `cachedProjectionSnapshot` return, plus the `detail-recovery` read. |
+| `NativeAgentProjectionParts` | `native-agent/projection-parts.ts` | The one owner of the caches every read model builds from: tool details (bytes, pins, encodings), projected rows, direct history pages and cursor handles, artifact overlays. Also the row and composer projection steps that fill them. Other read models change the tool-detail cache only through its methods. |
+| `NativeAgentProgressiveReads` | `native-agent/progressive-reads.ts` | Joined progressive reads, their start epochs and waiters, trailing re-reads and follow-up markers, shared provider snapshots, live request descriptors, read metrics; held coordinator reads. |
+| `NativeAgentProgressiveTranscript` | `native-agent/progressive-transcript.ts` | The transcript view cache, delta bases, source tokens, incomplete-preview recovery (hydrations, timers, read starts, preview fills) and the display-tail scheduler. |
+| `NativeAgentProgressiveSessionState` | `native-agent/progressive-session-state.ts` | The session-state view cache. |
+| `NativeAgentProgressiveDiscovery` | `native-agent/progressive-discovery.ts` | Discovery sections and their bytes, per-provider job counts, deferred renewals, the MCP action fence. |
+| `NativeAgentHistoryPages` | `native-agent/history-pages.ts` | No state. Direct history pages over the parts' page cache. |
+| `NativeAgentToolDetailReads` | `native-agent/tool-detail-reads.ts` | In-flight remote detail reads; tool details on demand and the recovery of an evicted reference. |
+| `NativeAgentFullProjection` | `native-agent/full-projection.ts` | The whole-session projection cache, its revisions, missing-session grace, serialized refreshes, stop notices. It is what `get_native_agent_projection`, every session mutation and `cachedProjectionSnapshot` return, plus the `detail-recovery` read. |
 
 The owner keeps the session epochs and what crosses every read model:
 `invalidateProjection` asks each read model to forget the session after
@@ -161,7 +161,7 @@ the session operations, the handoffs, the sign-in resends, then the prompt
 dispatch and mail injection. A callback that names a later collaborator only
 runs after construction. The prompt dispatch is built on first use through a
 getter rather than assigned in the constructor, so a service assembled from
-the prototype alone (`native-agent-bridge-replacement.test.ts`) still reaches
+the prototype alone (`native-agent/bridge-replacement.test.ts`) still reaches
 the real dispatch admission; the constructor builds it when it wires mail
 injection.
 
@@ -187,7 +187,7 @@ fence *state* lives on the dispatcher, so dispatch and Stop share it without
 sharing a class: putting both in one "turn lifecycle" class would have made
 one class of about 2,600 lines. Mail injection runs its admission check as the
 dispatch's `prepare`, under the same lease as a typed prompt.
-`native-agent-prompt-dispatch.test.ts` pins this order.
+`native-agent/prompt-dispatch.test.ts` pins this order.
 
 Public service methods whose work moved (`getTranscriptUpdate`,
 `reconcileAgentActivity`, `notifyPromptQueueChanged`, `withSessionWorkFence`,
@@ -278,11 +278,11 @@ change together.
 ## Tests
 
 Each collaborator has direct tests through its public interface
-(`native-agent-*.test.ts` beside it). The `native-agent-service-*.test.ts`
+(`native-agent/*.test.ts` beside it). The `native-agent/service-*.test.ts`
 suites drive the whole service and are the regression oracle.
 
 A service test that needs a collaborator's state reaches the collaborator with
-`collaborators(service)` from `native-agent-service-test-collaborators.ts`, and
+`collaborators(service)` from `native-agent/service-test-collaborators.ts`, and
 reads its state through the collaborator's `forTesting()` accessor
 (`projectionInternals`, `interactionInternals`, `launchInternals` and
 `queueInternals` are shorthands). Tests never read collaborator state through

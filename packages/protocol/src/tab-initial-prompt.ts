@@ -7,7 +7,7 @@
  * the startup tab's stable ID, the one request ID an opening prompt is ever
  * sent under (sharing it is what keeps the prompt at most once when the queue
  * and a mounted tab race), and the per-provider queue message shape the
- * dispatcher reads (`native-agent-queue-message.ts`).
+ * dispatcher reads (`native-agent/queue-message.ts`).
  */
 import type { AgentPlatform } from "./agent-platforms.js";
 

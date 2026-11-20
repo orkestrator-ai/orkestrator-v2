@@ -43,14 +43,14 @@ interface ActivityProvider {
 export async function activitySweepWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const providerModule = await context.load<{
     createNativeAgentProvider: (connection: Json, dependencies: Json) => ActivityProvider;
-  }>("apps/backend/src/core/native-agent-provider.ts");
+  }>("apps/backend/src/core/native-agent/provider.ts");
   const reads = await context.loadOptional<{
     readActivityGroup: (options: {
       provider: unknown;
       sessions: readonly { providerSessionId: string }[];
       apply: (session: unknown, read: { state: string }) => Promise<void>;
     }) => Promise<void>;
-  }>("apps/backend/src/core/native-agent-activity-reads.ts");
+  }>("apps/backend/src/core/native-agent/activity-reads.ts");
   const batch = await context.loadOptional<{
     SESSION_ACTIVITY_BATCH_PATH: string;
     buildSessionActivityBatchResponse: (

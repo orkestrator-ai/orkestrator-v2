@@ -75,7 +75,7 @@ Primary sources:
 - `packages/protocol/src/native-agent.ts`
 - `apps/web/src/components/native-agent/`
 - `apps/web/src/components/claude/ClaudeTmuxChatTab.tsx`
-- `apps/backend/src/core/native-agent-service-*.ts`
+- `apps/backend/src/core/native-agent/service-*.ts`
 - `apps/backend/src/core/tmux-*.ts`
 - `docs/architecture/agent-engines.md`
 

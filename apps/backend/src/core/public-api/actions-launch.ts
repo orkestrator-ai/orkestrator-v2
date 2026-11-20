@@ -11,7 +11,7 @@ import {
   validateSelection,
   resolveLaunchAgent,
 } from "../control-shared-actions.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import {
   isSetupReady,

@@ -20,7 +20,7 @@ import {
 } from "../agent-test-fanout-stats.js";
 import { MultiReviewProgressTracker } from "./progress.js";
 import { type MultiReviewEfficiencyObserver, RecordingEfficiencyObserver } from "./efficiency.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { ReviewFanoutRunner, ReviewSnapshotChangedError, type ReviewFanoutHost } from "./fanout.js";
 
 const policy = resolveNativeAgentExecutionPolicy(

@@ -34,7 +34,7 @@ import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import type { GraphAgentTurnMode } from "@orkestrator/protocol/graphs/run";
 import type { GraphEnforcementTier } from "@orkestrator/protocol/graphs/template";
 import type { Environment } from "./models.js";
-import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
+import { resolveEnvironmentExecutionPolicy } from "./native-agent/index.js";
 
 export {
   GRAPH_RESEARCHER_ON_CLAUDE_REASON,

@@ -37,7 +37,7 @@ import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,
 } from "@orkestrator/protocol/native-agent";
-import type { DispatchNativeAgentPromptInput } from "./native-agent-service.js";
+import type { DispatchNativeAgentPromptInput } from "./native-agent/service.js";
 import type { FeaturePlanningService } from "./features/index.js";
 import type {
   FeaturePlanningKind,

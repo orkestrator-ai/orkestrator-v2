@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { AgentAccountsRuntime } from "./agent-accounts/runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { containerSignInGuidance } from "./container-sign-in-guidance.js";
-import { createNativeAgentProvider } from "./native-agent-provider.js";
+import { createNativeAgentProvider } from "./native-agent/provider.js";
 import type { Environment } from "./models.js";
 
 const SIGNED_OUT = "You've been signed out of Codex. Sign in again to keep working.";

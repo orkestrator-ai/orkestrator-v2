@@ -50,10 +50,10 @@ import type {
   ProviderTranscriptSnapshot,
 } from "../agent-provider-contract.js";
 import {
-  DIRECT_HISTORY_CURSOR_MAX_LENGTH,
   decodeHistoryCursor,
+  DIRECT_HISTORY_CURSOR_MAX_LENGTH,
   encodeDirectHistoryCursor,
-} from "../native-agent-direct-history.js";
+} from "../native-agent/index.js";
 import {
   MULTI_REVIEW_HISTORY_EPOCH_MAX_LENGTH,
   MULTI_REVIEW_HISTORY_PAGE_MAX_MESSAGES,
@@ -391,7 +391,7 @@ export async function readReviewerToolDetails(
 // The tab shows a bounded newest window; earlier messages are read on demand
 // through the same two cursor namespaces native-agent tabs use:
 //
-// - `v: 2` direct cursors (`native-agent-direct-history.ts`) wrap the
+// - `v: 2` direct cursors (`native-agent/direct-history.ts`) wrap the
 //   provider's own page cursor. A page is one `transcriptPage` call for
 //   exactly that range, in summary form, so details stay behind `detailRef`.
 // - `v: 1` joined cursors name a message by digest within one history epoch.
@@ -425,7 +425,7 @@ export function reviewerHistoryKey(workflowId: string, reviewerId: string): stri
   return `multi-review-reviewer\u0000${workflowId}\u0000${reviewerId}`;
 }
 
-/** Same digest `native-agent-direct-history.ts` puts in a cursor's `key`/`session`. */
+/** Same digest `native-agent/direct-history.ts` puts in a cursor's `key`/`session`. */
 export function reviewerHistoryDigest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 24);
 }

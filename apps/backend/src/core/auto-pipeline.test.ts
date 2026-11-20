@@ -65,7 +65,7 @@ function seed(storage: StorageService) {
  * before the agent runs, as the real service records it, so a draft submitted
  * inside the turn carries that turn's request id. `stopRequest` stops (through
  * `abort`) only while the request is still the tab's newest one; the real
- * service's ownership rules are covered by native-agent-session-operations.test.ts.
+ * service's ownership rules are covered by native-agent/session-operations.test.ts.
  */
 function fakeNativeAgents(
   options: {

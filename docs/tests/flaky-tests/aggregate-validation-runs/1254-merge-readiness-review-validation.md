@@ -1,5 +1,7 @@
 # Merge-readiness review validation
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/service-reconciliation.test.ts`.
+
 - **ID:** 1254
 - **Status:** open
 - **Date observed:** 2026-10-28

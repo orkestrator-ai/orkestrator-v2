@@ -6,7 +6,7 @@ import {
   nativeTabLogicalSessionKey,
 } from "@orkestrator/protocol/public-api-resources";
 import { openCoordinatorConversation } from "../coordinator/index.js";
-import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import type { PublicOperationRecord } from "./operation-ledger.js";
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { PROVIDER_COMPLETION } from "./providers.js";

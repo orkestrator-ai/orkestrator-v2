@@ -26,7 +26,7 @@ import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-
 
 import { waitForLocalServerHealth } from "../src/core/commands-server-health.js";
 import { HttpBridgeProvider } from "../src/core/http-bridge/index.js";
-import { NativeAgentService } from "../src/core/native-agent-service.js";
+import { NativeAgentService } from "../src/core/native-agent/service.js";
 import { StorageService } from "../src/core/storage.js";
 import { waitForProjection } from "./wait-for-projection.js";
 

@@ -1,5 +1,7 @@
 # Worktree-watcher review: mixed-owner aggregate failures that pass alone
 
+Current path for the relocated file: `apps/backend/src/core/native-agent/goal-check.test.ts`.
+
 - **ID:** 9926
 - **Status:** open
 - **Date observed:** 2026-11-10

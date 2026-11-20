@@ -4,7 +4,7 @@ import {
   PromptRejectedError,
   ProviderDispatchPreparationError,
 } from "../agent-provider-contract.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { openCode2TabMcpServer } from "./permissions.js";
 import { OpenCode2Provider } from "./provider.js";

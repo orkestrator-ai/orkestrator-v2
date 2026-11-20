@@ -4228,7 +4228,7 @@ The async and read-only contracts are asserted at the layer that owns each
 guarantee, not by one end-to-end scenario replayed per platform:
 
 - coordinator presence and the turn-end edge:
-  `native-agent-service-reconciliation.test.ts`
+  `native-agent/service-reconciliation.test.ts`
 - one-wake invariant and crash recovery: `coordinator/service.test.ts`
 - the workflow record limit (cleanup when full, protected records, batch
   removal, recent-request replay, the all-in-use refusal, the `workflowStore`

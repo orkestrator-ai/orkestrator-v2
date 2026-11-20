@@ -31,7 +31,7 @@ import {
   type ActivityGroupProvider,
   type ActivityGroupRead,
   readActivityGroup,
-} from "./native-agent-activity-reads.js";
+} from "./native-agent/index.js";
 
 /**
  * How long the first read for a provider waits for others. Concurrent

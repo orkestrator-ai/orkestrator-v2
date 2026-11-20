@@ -8,7 +8,7 @@ import {
   COORDINATOR_WEB_RESEARCH_ENV,
 } from "@orkestrator/protocol/coordinator-web-research";
 import { PromptRejectedError } from "../agent-provider-contract.js";
-import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
+import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import {
   OPENCODE2_COORDINATOR_GUARD_PLUGIN_ID,
   OPENCODE2_EXECUTION_POLICY_ENV,

@@ -6,7 +6,7 @@ import {
   PROMPT_QUEUE_EDIT_LEASE_MS,
   promptQueueHeadHeldByEdit,
 } from "@orkestrator/protocol/prompt-queue-edit";
-import { nativeQueueObligation } from "./native-agent-queue-scheduling.js";
+import { nativeQueueObligation } from "./native-agent/queue-scheduling.js";
 import { StorageService } from "./storage.js";
 
 const dataDirs: string[] = [];

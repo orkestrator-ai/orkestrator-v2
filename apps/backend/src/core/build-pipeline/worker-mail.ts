@@ -42,7 +42,7 @@ import {
 } from "./service-helpers.js";
 import type { BuildPipelineContext } from "./context.js";
 import type { BuildPipelineAgents } from "./service-agents.js";
-import type { MailSteerDispatchOutcome } from "../native-agent-service-shared.js";
+import type { MailSteerDispatchOutcome } from "../native-agent/service-shared.js";
 
 const log = createLogger("build-pipeline");
 

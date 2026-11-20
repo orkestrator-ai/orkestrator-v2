@@ -16,7 +16,7 @@ import { isolatedAgentTestBackend } from "./agent-test-dispatch-hold.js";
  * - `coordinatorRepairIntervalMs`: the period between coordinator repair
  *   passes, which close delegations whose worker environment stopped
  *   (`MAINTENANCE_JOB_MS`, 60 s). The job checks it every second
- *   (`coordinator-repair-job.ts`), so it applies within a second of the file
+ *   (`coordinator/repair-job.ts`), so it applies within a second of the file
  *   being written, not after the pass already scheduled.
  *
  * A spec arms them by writing `{"containerTreeMaxAgeMs": 2000}` (either key,

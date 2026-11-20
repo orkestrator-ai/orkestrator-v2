@@ -10,7 +10,7 @@ import {
   type ContainerOomEventsOptions,
 } from "./container-oom-events.js";
 import { ContainerUsageSampler } from "./container-usage-sampler.js";
-import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
+import { CoordinatorRequestFlights } from "./coordinator/index.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
 import { DockerCleanupGrants } from "./docker-cleanup-grants.js";
 import {

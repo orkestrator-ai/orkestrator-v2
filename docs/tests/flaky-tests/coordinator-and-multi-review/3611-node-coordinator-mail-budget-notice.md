@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-11-03
 - **Test:** `command node coordinator ↔ leaf coordinator > budgets stop two coordinators from waking each other endlessly`
-- **Owning file:** `apps/backend/src/core/coordinator-node-coordinator-mail.test.ts:613`.
+- **Owning file:** `apps/backend/src/core/coordinator/node-coordinator-mail.test.ts:613`.
 - **Original command:** `mise run test:logged -- --name fix-round-root -- mise run test`, during Coordinator Work panel review repair. Workspace grant six slots; backend four isolated workers and web two, alongside root/support (one) and bridges (two).
 - **Failure:** `notice?.body` was not a string at the assertion looking for `Sending another request does not reset this budget` (269.98 ms). Backend: 13,838 passed, 103 skipped, one failed. Web: 11,610 passed, ten skipped, zero failed. Root/support, bridges and protocol passed. Aggregate exit 1 after 347.2 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.oLpm6Y/fix-round-root.log.gz`; group evidence `/tmp/orkestrator-test-run.bOl78I/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.

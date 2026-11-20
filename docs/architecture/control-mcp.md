@@ -592,7 +592,7 @@ needs no approval because the backend does the switching (see
 [agent-accounts.md](agent-accounts.md#automatic-switching)).
 
 **Saved graphs** (item 214, capability `graphs`, main role only;
-`control-mcp/graph-tools.ts`, commands in `coordinator-graph-actions.ts`):
+`control-mcp/graph-tools.ts`, commands in `coordinator/graph-actions.ts`):
 
 - `list_graph_templates {ref?, environmentId?}`: the project's templates with
   trust and launchability, or with `ref` one template's launch options (roles

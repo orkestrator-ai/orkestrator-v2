@@ -27,7 +27,7 @@ import {
   COORDINATOR_PROVIDER_TIER_DEFAULT_VERSION,
   coordinatorProviderTierSetting,
   normalizeCoordinatorProviderTierDefaultVersion,
-} from "./coordinator-providers.js";
+} from "./coordinator/index.js";
 import { normalizeTerminalHistoryRetention } from "@orkestrator/protocol/terminal-history";
 import {
   globalSettingSources,

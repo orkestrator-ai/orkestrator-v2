@@ -1,7 +1,7 @@
 /**
  * Mail injected as a new turn first gives the backend the chance to
  * fast-forward a coordinator's checkout (`beforeMailInject`,
- * `coordinator-mail-upstream.ts`), so the turn reads current code. The hook
+ * `coordinator/mail-upstream.ts`), so the turn reads current code. The hook
  * never stands between the mail and its delivery.
  */
 import { describe, expect, mock, test } from "bun:test";

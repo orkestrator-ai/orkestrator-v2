@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-11-06
 - **Test:** `the sweep's global work > runs the mailbox sync and the delegation scans once for several coordinators`
-- **File:** `apps/backend/src/core/coordinator-sweep.test.ts:226`
+- **File:** `apps/backend/src/core/coordinator/sweep.test.ts:226`
 - **Revision:** `451fccdf1` (bridge authority review repairs).
 
 `mise run test:logged -- --name repair-default -- mise run test` reported

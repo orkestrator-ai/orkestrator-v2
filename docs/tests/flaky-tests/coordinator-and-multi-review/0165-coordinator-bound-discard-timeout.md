@@ -4,7 +4,7 @@
 - **Status:** open
 - **Date observed:** 2026-09-26
 - **Test:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches`
-- **File:** `apps/backend/src/core/coordinator-service.test.ts`
+- **File:** `apps/backend/src/core/coordinator/service.test.ts`
 - **Original command:** `mise run test` on branch
   `implement-improvements-ecf7c41c13cd-r1` (inconsistency remediation; the
   coordinator service and its close paths are not changed by this branch)
@@ -616,7 +616,7 @@ After the full aggregate ended, `mise run test:logged -- --name merge2-after-agg
 ## Upgrade-channel second main merge warm run — 2026-10-18
 
 - **Original command:** the testing guide's macOS GNU-tool PATH with `mise run test:logged -- --name merge2-full-warm -- mise run test`, merging `origin/main` at `62c5c696` into `129e3887`. Workspace/root/bridges/protocol reserved 4/1/2/1 slots; backend used two isolated workers alongside Electron validation on the shared host.
-- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` in `apps/backend/src/core/coordinator-service.test.ts` exceeded 5000 ms at 5126.92 ms.
+- **Failure:** `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches` in `apps/backend/src/core/coordinator/service.test.ts` exceeded 5000 ms at 5126.92 ms.
 - **Suite counts:** backend 9109 passed, 41 skipped and six failed across 9156 tests in 486 files (579.33 seconds). Every other workspace package, root/support, bridges and protocol regeneration passed; aggregate exit 1 after 596.4 seconds.
 - **Isolated rerun:** `mise run test:logged -- --name merge2-coordinator-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures`, with the same GNU-tool PATH, passed the unchanged owning file (exit 0, 31.8 seconds).
 - **Evidence:** `orkestrator-test-run.4BSigl/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and outer `orkestrator-test-run.EJfRvy/merge2-full-warm.log.gz`, below the host temporary directory.
@@ -798,7 +798,7 @@ assertion, timeout or skip was changed for validation.
 - The four-file targeted backend run used
   `mise run test:logged -- --name address-backend -- bun --cwd=apps/backend test ./src/core/commands-local-worktree.test.ts ./src/core/coordinator-service.test.ts ./src/core/commands-registry-coordinator-contract.test.ts ./tests/commands-registry-environments-create.test.ts --parallel=2 --only-failures`.
   It reported 152 passes and one failure in 200.22 seconds. In
-  `apps/backend/src/core/coordinator-service.test.ts`,
+  `apps/backend/src/core/coordinator/service.test.ts`,
   `project coordinator > bound discard confirmations refuse stale and reused tokens`
   exceeded its 30-second budget at 37,776.19 ms. The browser suite also ran on
   the same host. The failed log was retained as

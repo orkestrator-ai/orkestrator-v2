@@ -7,7 +7,7 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { CoordinatorService } from "./coordinator-service.js";
+import { CoordinatorService } from "./coordinator/service.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./nodes/index.js";
 import { MAX_NODE_ROOT_CHANGE_PATCH_BYTES } from "./root-changes-node.js";
 import { runCommand } from "./shell.js";

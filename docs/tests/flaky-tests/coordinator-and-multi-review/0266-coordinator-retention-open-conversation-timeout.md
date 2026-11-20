@@ -2,7 +2,7 @@
 
 - **ID:** 0266
 - **Test:** `project coordinator > retention never removes an open conversation`
-  (`apps/backend/src/core/coordinator-service.test.ts:136`)
+  (`apps/backend/src/core/coordinator/service.test.ts:136`)
 - **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Original command:** GitHub Actions run 38893136380 (`pull_request`,

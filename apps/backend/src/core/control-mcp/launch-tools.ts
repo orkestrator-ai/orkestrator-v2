@@ -39,7 +39,7 @@ import {
   type JsonRecord,
 } from "./tool-support.js";
 import { operatorLaunchEnvironment, operatorLaunchJob, operatorNode } from "./operator-tools.js";
-import { withCoordinatorDelegationPresentation } from "../coordinator-delegation-authority.js";
+import { withCoordinatorDelegationPresentation } from "../coordinator/index.js";
 import type { ControlMcpInvoker } from "../control-shared-actions.js";
 import {
   MAX_PROMPT_LENGTH,

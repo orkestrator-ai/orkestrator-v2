@@ -4219,7 +4219,7 @@ two more minutes per case.
    (or its finished notice when no report arrived) followed, nothing was polled,
    and no other interaction reached anybody.
 
-What the `status` case leaves to `coordinator-status-wakes.test.ts`, because
+What the `status` case leaves to `coordinator/status-wakes.test.ts`, because
 no provider is involved: which states notify under each setting, dedupe and
 coalescing (seven reviews settling together are one wake), ownership (a review
 the user started never wakes a coordinator), budgets, restart recovery, and

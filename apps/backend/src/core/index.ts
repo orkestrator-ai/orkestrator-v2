@@ -1,5 +1,19 @@
-import { connectCoordinatorNodeWakes } from "./coordinator-node-reconnect-wakes.js";
-import { findCoordinatorCheckoutTurn } from "./coordinator-checkout-turn.js";
+import {
+  connectCoordinatorNodeWakes,
+  COORDINATOR_STATUS_COALESCE_MS,
+  coordinatorDelegationAvailable,
+  coordinatorRepairJob,
+  CoordinatorService,
+  CoordinatorUsageLimitNotices,
+  type CoordinatorWaitingBlocker,
+  defaultCoordinatorHostCapabilities,
+  fastForwardBeforeCoordinatorMail,
+  findCoordinatorCheckoutTurn,
+  lastAssistantText,
+  runCoordinatorMaintenance,
+  waitingBlocker,
+} from "./coordinator/index.js";
+import { usageLimitAccountRouting } from "./coordinator/usage-limit-account-routing.js";
 import type { BackendStartupProgress } from "./backend-startup-progress.js";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
@@ -8,12 +22,9 @@ import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-tes
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
 import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
-import { coordinatorRepairJob } from "./coordinator-repair-job.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
 import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
-import { usageLimitAccountRouting } from "./coordinator-usage-limit-account-routing.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
-import { runCoordinatorMaintenance } from "./coordinator-maintenance.js";
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
 import { startLogPolicyService } from "./log-policy-service.js";
@@ -101,8 +112,6 @@ import {
   recordCentralUsageReadings,
 } from "./agent-accounts-usage-sharing.js";
 import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
-import { CoordinatorUsageLimitNotices } from "./coordinator-usage-limit-notices.js";
-import { COORDINATOR_STATUS_COALESCE_MS } from "./coordinator-status-wakes.js";
 import { readSessionAgentAccount } from "./agent-accounts-session.js";
 import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
@@ -259,15 +268,6 @@ import { FeaturePlanningService } from "./features/index.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentRegistry } from "./agent-registry.js";
 import { AgentMailService } from "./agent-mail-service.js";
-import { CoordinatorService } from "./coordinator-service.js";
-import { fastForwardBeforeCoordinatorMail } from "./coordinator-mail-upstream.js";
-import {
-  lastAssistantText,
-  waitingBlocker,
-  type CoordinatorWaitingBlocker,
-} from "./coordinator-status-wakes.js";
-import { coordinatorDelegationAvailable } from "./coordinator-context-reads.js";
-import { defaultCoordinatorHostCapabilities } from "./coordinator-providers.js";
 import { ProjectGitService } from "./project-git-service.js";
 import {
   coordinatorConversationIdFromRuntimeId,
@@ -2915,7 +2915,7 @@ export class OrkestratorBackend {
           ...jobLog("mail-injection"),
         },
         // Agent-test profiles only: a spec may shorten the period after which
-        // a stopped worker's delegation closes (`coordinator-repair-job.ts`).
+        // a stopped worker's delegation closes (`coordinator/repair-job.ts`).
         coordinatorRepairJob({
           intervalMs: MAINTENANCE_JOB_MS,
           timing: this.agentTestTiming,

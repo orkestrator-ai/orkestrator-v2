@@ -4,8 +4,8 @@ import {
   buildPipelineCriteriaReport,
   criteriaNoticeLines,
 } from "./build-pipeline-criteria-report.js";
-import { buildPipelineStatus } from "./coordinator-build-pipeline-status.js";
-import { renderCoordinatorStatusNotice } from "./coordinator-status-wakes.js";
+import { buildPipelineStatus } from "./coordinator/build-pipeline-status.js";
+import { renderCoordinatorStatusNotice } from "./coordinator/status-wakes.js";
 import { workflowSummary } from "./control-workflow-summary.js";
 
 const HEAD = `abc1234${"0".repeat(33)}`;

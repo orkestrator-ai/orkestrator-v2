@@ -1,0 +1,230 @@
+import {
+  coordinatorConversationIdFromRuntimeId,
+  coordinatorIdFromRuntimeId,
+  coordinatorConversationRunnable,
+  type CoordinatorConversation,
+  type CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
+import {
+  AGENT_PLATFORM_LABELS,
+  normalizeAgentPlatforms,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
+import type { Environment, Project } from "../models.js";
+import type { StorageService } from "../storage.js";
+import { coordinatorProviderAllowed } from "./providers.js";
+
+export type CoordinatorRuntimeUnavailableReason =
+  | "workspace"
+  | "workspace-not-ready"
+  | "conversation"
+  | "startup-failed"
+  | "unassigned"
+  | "unsupported-agent"
+  | "checkout";
+
+export type CoordinatorRuntimeResolution =
+  | { status: "not-coordinator" }
+  | {
+      status: "unavailable";
+      coordinatorId: string;
+      reason: CoordinatorRuntimeUnavailableReason;
+      /** With `startup-failed`: why, sanitized for display. */
+      startupError?: string;
+    }
+  | {
+      status: "ready";
+      coordinatorId: string;
+      conversationId: string;
+      workspace: CoordinatorWorkspace;
+      conversation: CoordinatorConversation & { agent: AgentPlatform };
+      project: Project;
+    };
+
+/**
+ * Whether a conversation's platform may run right now: turned on, and within
+ * the coordinator safety level. Read fresh, so changing either setting affects
+ * the next answer, and shared so that holding a read and refusing a runtime
+ * cannot disagree.
+ */
+export async function coordinatorPlatformAllowed(
+  storage: Pick<StorageService, "loadConfig">,
+  agent: AgentPlatform,
+): Promise<boolean> {
+  const config = await storage.loadConfig().catch(() => null);
+  return coordinatorProviderAllowed(agent, {
+    tierSetting: config?.global.coordinatorProviderTiers,
+    ...(config
+      ? { enabledPlatforms: normalizeAgentPlatforms(config.global.enabledAgentPlatforms) }
+      : {}),
+  });
+}
+
+/**
+ * Resolve the common durable authority behind a coordinator runtime id.
+ * Operation-specific gates, such as an idle repository or a canonical path,
+ * are deliberately layered by the caller after this shared eligibility check.
+ */
+export async function resolveCoordinatorRuntime(
+  storage: StorageService,
+  runtimeId: string,
+): Promise<CoordinatorRuntimeResolution> {
+  const coordinatorId = coordinatorIdFromRuntimeId(runtimeId);
+  if (!coordinatorId) return { status: "not-coordinator" };
+
+  const workspace = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+  if (!workspace) return { status: "unavailable", coordinatorId, reason: "workspace" };
+  if (workspace.lifecycleState !== "ready") {
+    return { status: "unavailable", coordinatorId, reason: "workspace-not-ready" };
+  }
+
+  const conversationId = coordinatorConversationIdFromRuntimeId(runtimeId);
+  const conversation = workspace.conversations.find(
+    (item) => item.id === conversationId && !item.closedAt,
+  );
+  if (!conversation || !conversationId) {
+    return { status: "unavailable", coordinatorId, reason: "conversation" };
+  }
+  // Its own failure, not the coordinator's: only this conversation is refused.
+  if (conversation.startupError) {
+    return {
+      status: "unavailable",
+      coordinatorId,
+      reason: "startup-failed",
+      startupError: conversation.startupError,
+    };
+  }
+  // No provider yet: the conversation exists, but nothing has been
+  // materialized for it. Callers that need a runtime must say so distinctly,
+  // because "waiting for a first prompt" is not a failure.
+  if (!conversation.agent) {
+    return { status: "unavailable", coordinatorId, reason: "unassigned" };
+  }
+  if (!(await coordinatorPlatformAllowed(storage, conversation.agent))) {
+    return { status: "unavailable", coordinatorId, reason: "unsupported-agent" };
+  }
+
+  const project = await storage.getProject(workspace.projectId);
+  if (!project?.localPath) {
+    return { status: "unavailable", coordinatorId, reason: "checkout" };
+  }
+  return {
+    status: "ready",
+    coordinatorId,
+    conversationId,
+    workspace,
+    conversation: { ...conversation, agent: conversation.agent },
+    project,
+  };
+}
+
+/**
+ * The open conversation a coordinator runtime id names, whatever its lifecycle
+ * state: a paused coordinator's sessions can still be read, unlike
+ * `resolveCoordinatorRuntime`, which answers whether one can run.
+ */
+export async function openCoordinatorConversation(
+  storage: Pick<StorageService, "coordinators">,
+  runtimeId: string,
+): Promise<{ workspace: CoordinatorWorkspace; conversation: CoordinatorConversation } | null> {
+  const coordinatorId = coordinatorIdFromRuntimeId(runtimeId);
+  if (!coordinatorId) return null;
+  const workspace = await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId);
+  const conversationId = coordinatorConversationIdFromRuntimeId(runtimeId);
+  const conversation = workspace?.conversations.find(
+    (candidate) => candidate.id === conversationId && !candidate.closedAt,
+  );
+  return workspace && conversation ? { workspace, conversation } : null;
+}
+
+/**
+ * Why an open conversation may be read but not run, or null when it may run.
+ * The transcript and state reads answer from saved data while this is set, and
+ * must never resolve a provider, which is what would start a bridge.
+ *
+ * Only a conversation that is otherwise runnable and has a platform pays for
+ * the settings read; one that is paused or failed already has its answer.
+ */
+export async function heldCoordinatorConversation(
+  storage: Pick<StorageService, "coordinators" | "loadConfig">,
+  runtimeId: string,
+): Promise<{
+  workspace: CoordinatorWorkspace;
+  conversation: CoordinatorConversation;
+  message: string;
+} | null> {
+  const open = await openCoordinatorConversation(storage, runtimeId);
+  if (!open) return null;
+  if (!coordinatorConversationRunnable(open.workspace, open.conversation)) {
+    const message =
+      open.workspace.lifecycleState === "paused"
+        ? "The Coordinator is paused; showing saved history"
+        : open.workspace.lifecycleState === "error"
+          ? "The Coordinator could not start; showing saved history"
+          : "This conversation could not start; showing saved history";
+    return { ...open, message };
+  }
+  const agent = open.conversation.agent;
+  if (!agent || (await coordinatorPlatformAllowed(storage, agent))) return null;
+  return {
+    ...open,
+    message: `${AGENT_PLATFORM_LABELS[agent]} is unavailable for Coordinator; showing saved history`,
+  };
+}
+
+export function coordinatorRuntimeUnavailableMessage(
+  resolution: Extract<CoordinatorRuntimeResolution, { status: "unavailable" }>,
+): string {
+  switch (resolution.reason) {
+    case "workspace-not-ready":
+      return "Coordinator workspace is not ready";
+    case "conversation":
+      return "The coordinator conversation is unavailable";
+    case "startup-failed":
+      // An older renderer, which has no pane notice, shows this as the failure.
+      // "not ready" is what a schedule's retry looks for: Retry can still clear it.
+      return `This coordinator conversation is not ready because it could not start: ${resolution.startupError ?? "unknown error"}`;
+    case "unassigned":
+      return "This coordinator conversation has no agent yet; send its first prompt to choose one";
+    case "unsupported-agent":
+      return "This agent platform is not qualified for read-only coordination on this host";
+    case "checkout":
+      return "Native agent coordinator checkout is unavailable";
+    case "workspace":
+      return "Native agent coordinator is unavailable";
+  }
+}
+
+/**
+ * The synthetic environment a coordinator runtime presents to code that is
+ * written against `Environment`.
+ *
+ * A coordinator deliberately has no environment row — it is the project's real
+ * checkout, not a disposable workspace — but the native-agent service resolves
+ * readiness, worktree paths and activity through one. This builds that view
+ * from the durable workspace so the liveness assertion and the activity sweep
+ * cannot disagree about what a coordinator looks like.
+ */
+export function coordinatorRuntimeEnvironment(
+  runtimeId: string,
+  source: { workspace: CoordinatorWorkspace; project: Pick<Project, "localPath"> },
+): Environment {
+  return {
+    id: runtimeId,
+    projectId: source.workspace.projectId,
+    name: "Coordinator",
+    branch: source.workspace.repositoryStatus?.branch ?? "",
+    containerId: null,
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: source.workspace.createdAt,
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    worktreePath: source.project.localPath,
+    setupPhase: "ready",
+    setupScriptsComplete: true,
+  } as Environment;
+}

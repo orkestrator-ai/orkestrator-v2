@@ -4,7 +4,7 @@ import path from "node:path";
 import { coordinatorMainConversation } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "../src/core/commands-context.js";
 import { createCommandRegistry } from "../src/core/commands-registry.js";
-import { CoordinatorService } from "../src/core/coordinator-service.js";
+import { CoordinatorService } from "../src/core/coordinator/service.js";
 import { runCommand } from "../src/core/shell.js";
 import type { StorageContext } from "../src/core/storage-context.js";
 import { createEnvironment, createProject, StorageService } from "../src/core/storage.js";

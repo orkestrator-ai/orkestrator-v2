@@ -18,7 +18,7 @@ import {
 import { asNonBlankString } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { coordinatorCaller, withCoordinatorReceipt } from "./coordinator-action-scope.js";
+import { coordinatorCaller, withCoordinatorReceipt } from "./coordinator/index.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 
 /**

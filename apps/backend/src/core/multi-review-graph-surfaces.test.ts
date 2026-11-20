@@ -11,7 +11,7 @@ import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import { multiReviewStatus } from "./coordinator-status-wakes.js";
+import { multiReviewStatus } from "./coordinator/status-wakes.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { multiReviewGraphRunId } from "./multi-review-graph-engine.js";
 import {

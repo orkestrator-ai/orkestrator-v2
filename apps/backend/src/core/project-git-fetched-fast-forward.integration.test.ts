@@ -6,7 +6,7 @@ import {
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkUpstreamBeforeMessage } from "./coordinator-message-upstream.js";
+import { checkUpstreamBeforeMessage } from "./coordinator/message-upstream.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { runCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";

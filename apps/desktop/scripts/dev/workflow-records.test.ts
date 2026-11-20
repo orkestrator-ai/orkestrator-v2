@@ -14,7 +14,7 @@ import * as bridgeBuilds from "./bridge-builds.js";
 import { startDevelopment } from "./lifecycle.js";
 import * as profileIo from "./profile-io.js";
 import { resolveSeedRecordCount } from "../../../backend/scripts/seed-coordinator-workflows.js";
-import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "../../../backend/src/core/coordinator-workflow-retention.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "../../../backend/src/core/coordinator/workflow-retention.js";
 import {
   formatSeededWorkflowRecords,
   MAX_SEEDED_WORKFLOW_RECORDS,

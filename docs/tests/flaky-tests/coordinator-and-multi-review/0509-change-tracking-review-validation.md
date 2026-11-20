@@ -109,7 +109,7 @@ passed, and web, desktop, public web, CLI, toolchain, protocol, Pi, Cursor,
 Codex and ACP package suites passed. The only remaining failures were:
 
 - Backend: `project coordinator > bound discard confirmations refuse stale, sequencer, nested, and failed switches`
-  (`apps/backend/src/core/coordinator-service.test.ts:623`), 5,189.58 ms, past
+  (`apps/backend/src/core/coordinator/service.test.ts:623`), 5,189.58 ms, past
   its five-second deadline. Backend totals: 9,710 passed, 67 skipped, one
   failed across 550 files. This is a 0165 recurrence. The unchanged owning
   file passed in 11.1 seconds with

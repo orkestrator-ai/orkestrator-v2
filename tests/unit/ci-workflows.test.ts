@@ -283,6 +283,7 @@ describe("CI workflow contracts", () => {
     // Runner images change under the job, so it also runs on a schedule.
     expect(parsed.on.schedule?.length).toBe(1);
     for (const path of [
+      "apps/backend/src/core/coordinator/providers.ts",
       "bridges/claude-bridge/src/conformance-apparmor-live.test.ts",
       "packages/protocol/src/node/claude-linux-sandbox.ts",
       "packages/toolchain/src/manifest.ts",

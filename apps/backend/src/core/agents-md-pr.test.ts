@@ -22,7 +22,7 @@ import {
   readAgentsMdSectionFromBase,
   type AgentsMdPrDependencies,
 } from "./agents-md-pr.js";
-import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
+import { CoordinatorRequestFlights } from "./coordinator/request-flights.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
 // Real Git against a local bare "origin"; only `gh` is faked, so nothing

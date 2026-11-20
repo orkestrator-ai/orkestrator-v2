@@ -5,7 +5,7 @@ import {
   CODEX_SERVER_OVERLOADED_MESSAGE,
   capacityRetriesExhaustedError,
 } from "../../../../bridges/codex-bridge/src/sessions/capacity-retry.js";
-import { multiReviewStatus } from "./coordinator-status-wakes.js";
+import { multiReviewStatus } from "./coordinator/status-wakes.js";
 import { multiReviewAutomation } from "./control-workflow-summary.js";
 import { TEST_REVIEW_PREPARATION } from "./build-pipeline-test-fixtures.js";
 import { expect, jest, test } from "bun:test";

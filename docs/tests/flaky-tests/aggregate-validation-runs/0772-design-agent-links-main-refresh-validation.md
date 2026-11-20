@@ -56,7 +56,7 @@ Every non-OpenCode failing Bun owner ultimately passed unchanged with `--paralle
 | `apps/backend/src/core/environment-move.test.ts` | move_environment > moves every file and re-points git (copy) (5036.86 ms) | Passed unchanged (58.2 s). |
 | `apps/backend/src/core/environment-move.test.ts` | move_environment > moves a worktree with nested submodules (same disk) (5143.84 ms) | Passed unchanged (58.2 s). |
 | `apps/backend/src/core/environment-move.test.ts` | move_environment > moves a worktree with nested submodules (copy) (5075.98 ms) | Passed unchanged (58.2 s). |
-| `apps/backend/src/core/coordinator-service.test.ts` | project coordinator > Git status permits confirmed dirty branch switches and detects external context changes (5401.21 ms) | Passed unchanged (44.5 s). |
+| `apps/backend/src/core/coordinator/service.test.ts` | project coordinator > Git status permits confirmed dirty branch switches and detects external context changes (5401.21 ms) | Passed unchanged (44.5 s). |
 | `apps/backend/src/core/terminal-history.test.ts` | terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages (5006.14 ms) | Passed unchanged (16.0 s). |
 | `apps/backend/src/core/container-git-fetch-git.test.ts` | container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (5093.33 ms) | Passed unchanged (11.7 s). |
 | `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone (9702.50 ms) | Passed unchanged (24.5 s). |

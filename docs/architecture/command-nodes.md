@@ -785,7 +785,7 @@ remain and use the same paths.
   `resource-changed` events (`environment` and `environment-pr-health`
   included) make this prompt; the maintenance sweep covers
   missed events, and an unreachable node changes nothing
-  (`coordinator-remote.ts`, `nodes/node-coordinator-remote.ts`).
+  (`coordinator/remote.ts`, `nodes/node-coordinator-remote.ts`).
 
 ### Images between nodes
 
@@ -864,7 +864,7 @@ and talk over loopback: a slow, SSH-forwarded or dropped link is not exercised.
 That a recipient's agent can open what arrives is checked on the landing places
 themselves, which are the same on every route
 ([coordinator.md](coordinator.md#passing-a-pasted-image-on)):
-`coordinator-mail-attachments-read-live.test.ts` runs the pinned Claude and
+`coordinator/mail-attachments-read-live.test.ts` runs the pinned Claude and
 Codex CLIs against a scripted loopback model.
 
 ## Tickets across nodes

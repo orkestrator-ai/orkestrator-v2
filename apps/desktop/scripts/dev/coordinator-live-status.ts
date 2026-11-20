@@ -37,7 +37,7 @@ import {
  * and only then does the harness deny the approval and let the worker report.
  * Cursor never asks for approvals, so the part does not apply to it.
  *
- * What stays with `coordinator-status-wakes.test.ts`, because no provider is
+ * What stays with `coordinator/status-wakes.test.ts`, because no provider is
  * involved: which states notify under each setting, dedupe and coalescing
  * (seven reviews settling together are one wake), ownership (a review the user
  * started never wakes a coordinator), budgets and restart recovery, and the

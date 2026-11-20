@@ -30,10 +30,7 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import { buildAdmissionKey } from "../build-pipeline-service-helpers.js";
 import { conciseError } from "../commands-error-text.js";
-import {
-  buildPipelineInputWithDefaults,
-  savedLaunchSettings,
-} from "../coordinator-launch-defaults.js";
+import { buildPipelineInputWithDefaults, savedLaunchSettings } from "../coordinator/index.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import type { PersistedBuildPipeline } from "../models.js";
 import { paginate, requireEnvironment, requireProject } from "./actions-discovery.js";

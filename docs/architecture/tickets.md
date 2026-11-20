@@ -512,7 +512,7 @@ limits, messages), `apps/backend/src/core/storage-kanban-sync.ts` (the rules),
 `KanbanRepository` through `KanbanBoardStore`),
 `nodes/node-ticket-sync.ts` (the command node's runs),
 `commands-registry-ticket-sync.ts` (the leaf commands) and
-`coordinator-node-tickets.ts` (coordinator tools with a `nodeId`). It is
+`coordinator/node-tickets.ts` (coordinator tools with a `nodeId`). It is
 qualified over two live `dev:test` profiles by `fleet-ticket-sync-live.spec.ts`
 ([agent-testing.md](../development/agent-testing.md#live-fleet-ticket-sync-two-profiles)).
 

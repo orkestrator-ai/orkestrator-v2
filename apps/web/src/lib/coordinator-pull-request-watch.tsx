@@ -11,7 +11,7 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 
 /**
  * Pull request links a coordinator conversation shows are watched by the
- * backend until they settle (`coordinator-pr-watches.ts`), and their status
+ * backend until they settle (`coordinator/pr-watches.ts`), and their status
  * changes reach the main coordinator as small notices. Links render inside
  * the coordinator panel under this context; everywhere else it is absent and
  * nothing is watched.

@@ -67,13 +67,13 @@ built on 2026-11-13 (see "Decisions made when the to-do was retired").
   coordinator suite" in
   [`agent-testing.md`](agent-testing.md#live-coordinator-suite).
 - The cheap halves, all in `apps/backend/src/core/` unless noted:
-  - `coordinator-conformance.test.ts`: the policy names capabilities, the
+  - `coordinator/conformance.test.ts`: the policy names capabilities, the
     `enforced` set is exactly `claude`, `codex`, `pi`, every platform has
     `delegation`, Claude has no waiting tools, one async contract string;
-  - `coordinator-providers.test.ts`: tiers, the safety-level setting, host
+  - `coordinator/providers.test.ts`: tiers, the safety-level setting, host
     probe, delegation derived from the mail round trip;
   - `native-agent-service-reconciliation.test.ts` (presence and the turn-end
-    edge), `coordinator-service.test.ts` (one wake per delegation, crash
+    edge), `coordinator/service.test.ts` (one wake per delegation, crash
     recovery), `agent-mail-service.test.ts` (one carrier per drain),
     `control-mcp/server.test.ts` (tool contract and poll guard);
   - `agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts`:
@@ -131,7 +131,7 @@ checklist.
    it gets there is in [`agent-testing.md`](agent-testing.md#live-coordinator-suite)
    and under "Constraints and rationale" below.
 2. **Tie qualification to the suite.** Done (2026-10-22).
-   `coordinator-conformance.test.ts` now imports `COORDINATOR_LIVE_PLATFORMS`
+   `coordinator/conformance.test.ts` now imports `COORDINATOR_LIVE_PLATFORMS`
    and fails if a platform the coordinator offers, any `enforced` one
    included, is missing from it, next to the tier table it guards.
    `coordinator-live.test.ts` still requires every agent platform on the list.
@@ -475,7 +475,7 @@ for prerequisites and how to batch them with other provider runs.
     not reachable after `address_multi_review` (an interactive Fix ends at
     `fix-done`; only a structured Fix completes a review), and the build
     pipeline, seven-reviews-one-wake and user-started-review cases involve no
-    provider. They stay owned by `coordinator-status-wakes.test.ts` ("each
+    provider. They stay owned by `coordinator/status-wakes.test.ts` ("each
     later settled state wakes it once more: fix done, then completed", "a
     build pipeline wakes on its end…", "seven reviews settling together
     arrive as one wake", "work the user started never wakes a
@@ -801,8 +801,8 @@ Made on 2026-10-25 while adding the `status` scenario and the tile checks.
   once; a user-started review; the approval wait); (b) drive live only what
   a provider can change, and leave provider-neutral rules to the layer test.
   Chose (b). Which states notify, dedupe, coalescing, ownership and budgets
-  are decided in `coordinator-status-wakes.ts` before any provider is
-  involved, and `coordinator-status-wakes.test.ts` already asserts each one.
+  are decided in `coordinator/status-wakes.ts` before any provider is
+  involved, and `coordinator/status-wakes.test.ts` already asserts each one.
   What differs by provider is whether a system-notice carrier starts a turn,
   whether the agent acts on it with the named tool, and how the echo renders.
   Pros: an hour less per platform, no PR remote or build agent needed for the

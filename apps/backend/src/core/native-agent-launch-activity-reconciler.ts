@@ -39,7 +39,7 @@ import {
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "@orkestrator/protocol/agent-interactions";
 import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
-import { coordinatorRuntimeEnvironment } from "./coordinator-runtime.js";
+import { coordinatorRuntimeEnvironment } from "./coordinator/index.js";
 import { runtimeStillLive } from "./native-agent-runtime-liveness.js";
 import { ProviderRegistry, providerCacheKey } from "./native-agent-provider-registry.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";

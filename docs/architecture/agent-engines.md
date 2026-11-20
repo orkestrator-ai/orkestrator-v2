@@ -871,7 +871,7 @@ bridge so its scoped MCP/mail credential cannot be shared with a sibling tab.
 Unmounting the project page does not stop that backend-owned runtime.
 
 Coordinator qualification lives in one table,
-`apps/backend/src/core/coordinator-providers.ts`. Every gate (workspace
+`apps/backend/src/core/coordinator/providers.ts`. Every gate (workspace
 service, runtime resolver, bridge launcher, trusted session input) consults it.
 A conversation has no agent until the first prompt; that send binds the
 conversation to one platform.

@@ -16,7 +16,7 @@ import * as shell from "./shell.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
-import { CoordinatorRequestFlights } from "./coordinator-request-flights.js";
+import { CoordinatorRequestFlights } from "./coordinator/request-flights.js";
 
 let root: string;
 let checkout: string;

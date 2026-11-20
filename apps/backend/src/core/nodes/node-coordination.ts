@@ -24,7 +24,7 @@ import {
   workerQuestionAnswerProblem,
 } from "@orkestrator/protocol/worker-question-relay";
 
-import type { MailAttachmentRecipient } from "../coordinator-mail-attachments.js";
+import { type MailAttachmentRecipient } from "../coordinator/mail-attachments.js";
 import {
   outboxMailAttachmentBatch,
   parseMailAttachmentBatch,

@@ -195,7 +195,7 @@ failed every Bash call.
   `bwrap-userns-restrict` when AppArmor is enabled and that profile is
   installed. Each run is bounded at 5 s; answers are reused for 5 minutes.
 - **The coordinator table uses it.** `defaultCoordinatorHostCapabilities`
-  (`apps/backend/src/core/coordinator-providers.ts`) reports
+  (`apps/backend/src/core/coordinator/providers.ts`) reports
   `claudeSandbox: false` with the probe's reason on such a host, so Claude is
   `provider-configured` and the picker says why.
 - **A coordinator qualified without the sandbox leaves it off.** With
@@ -252,7 +252,7 @@ failed every Bash call.
      `packages/protocol/src/node/claude-linux-sandbox.test.ts` (works;
      AppArmor-named nested refusal; nested refusal without AppArmor; outer
      refusal; missing programs; no `unshare`; bounded reason; cache window)
-     and `apps/backend/src/core/coordinator-providers.test.ts` (an AppArmor
+     and `apps/backend/src/core/coordinator/providers.test.ts` (an AppArmor
      host is `provider-configured` with `bwrap-userns-restrict` in the reason
      and unavailable at `enforced`; a working host stays `enforced`).
    - Live on `omarchy-hp` (Arch/Omarchy, kernel 7.2.8, bubblewrap 0.13.1, no

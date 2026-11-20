@@ -178,7 +178,7 @@ describe("submissions", () => {
     const receipt = await service.submit("env-1", input);
     expect(receipt.delivery).toBe("queued");
     expect(queue.queued.size).toBe(1);
-    const [[requestId, queued]] = [...queue.queued.entries()];
+    const [requestId, queued] = [...queue.queued.entries()][0]!;
     expect(requestId).toBe(receipt.receiptId);
     expect(queued!.queueKey).toBe("claude\0env-env-1:tab-1");
     expect(parseRichInteractionPrompt(queued!.text)?.envelope).toMatchObject({

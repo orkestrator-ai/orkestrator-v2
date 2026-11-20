@@ -60,19 +60,21 @@ export function CriteriaCard({
     observations: d.observations.filter((o) => o.trim()),
     ...(d.rationale?.trim() ? { rationale: d.rationale.trim() } : {}),
   }));
-  const setDecision = (criterionId: string, patch: Partial<CriteriaDraft["decisions"][string]>) =>
+  const setDecision = (criterionId: string, patch: Partial<CriteriaDraft["decisions"][string]>) => {
+    const previous = value.decisions[criterionId] as CriteriaDraft["decisions"][string] | undefined;
     setDraft({
       ...value,
       decisions: {
         ...value.decisions,
         [criterionId]: {
-          decision: "accepted",
-          observations: [],
-          ...value.decisions[criterionId],
-          ...patch,
+          ...previous,
+          decision: patch.decision ?? previous?.decision ?? "accepted",
+          observations: patch.observations ?? previous?.observations ?? [],
+          ...(patch.rationale !== undefined ? { rationale: patch.rationale } : {}),
         },
       },
     });
+  };
   const counts = spec.criteria.reduce(
     (acc, c) => {
       const a = currentAssessment(spec, c.id);

@@ -122,7 +122,7 @@ export function ChoiceCard({
                         )}
                         <button
                           type="button"
-                          className="absolute top-2 right-2 rounded bg-black/60 p-1 text-white focus-hairline"
+                          className="absolute right-2 bottom-2 rounded bg-black/70 p-1 text-white focus-hairline"
                           aria-label={`Expand preview of ${option.label}`}
                           onClick={() => setExpanded({ questionId: question.id, option })}
                         >

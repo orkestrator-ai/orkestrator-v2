@@ -8,13 +8,14 @@ import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { richInteractionErrorMessage } from "@/lib/backend/rich-interactions";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
+import { browserPreviewTraceApi } from "@/lib/native/browser-preview";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { inputClass, textareaClass } from "../shared";
 
 function traceApi() {
-  return typeof window === "undefined" ? undefined : window.orkestrator?.browserPreview?.trace;
+  return typeof window === "undefined" ? undefined : browserPreviewTraceApi();
 }
 
 /** Whether this client can record a demonstration (the desktop preview runtime). */

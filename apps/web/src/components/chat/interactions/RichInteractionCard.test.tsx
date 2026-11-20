@@ -71,7 +71,7 @@ describe("RichInteractionCard", () => {
     const client = new FakeNodeClient({
       invoke: {
         rich_interaction_get: () => current,
-        rich_interaction_submit: (args) => {
+        rich_interaction_submit: (args: Readonly<Record<string, unknown>>) => {
           submits.push(args);
           current = {
             ...current,
@@ -114,7 +114,7 @@ describe("RichInteractionCard", () => {
     const client = new FakeNodeClient({
       invoke: {
         rich_interaction_get: () => view("choice"),
-        rich_interaction_submit: (args) => {
+        rich_interaction_submit: (args: Readonly<Record<string, unknown>>) => {
           keys.push(String(args.idempotencyKey));
           attempt += 1;
           if (attempt === 1) throw new Error("connection reset");
@@ -148,7 +148,7 @@ describe("RichInteractionCard", () => {
     const client = new FakeNodeClient({
       invoke: {
         rich_interaction_get: () => view("form"),
-        rich_interaction_save_draft: (args) => ({
+        rich_interaction_save_draft: (args: Readonly<Record<string, unknown>>) => ({
           interactionId: args.interactionId,
           requestRevision: 1,
           revision: 1,

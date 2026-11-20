@@ -23,7 +23,7 @@ afterEach(() => {
 
 function record(kind: RichInteractionKind, answered: boolean) {
   const fixture = RICH_KIND_FIXTURES[kind];
-  const origin = USER_ORIGINATED_KINDS.includes(kind) ? "user" : "agent";
+  const origin: "user" | "agent" = USER_ORIGINATED_KINDS.includes(kind) ? "user" : "agent";
   const created = readCreateInput(
     { requestKey: "k", kind, title: fixture.title, spec: fixture.spec },
     { origin },
@@ -125,6 +125,6 @@ describe("interaction receipts in the transcript", () => {
     expect(prompt).toContain("<orkestrator_interaction_result>");
     renderInNodeScope(<InteractionReceiptPart part={part as never} />);
     expect(screen.getByText("Findings layout")).toBeTruthy();
-    expect(screen.queryByText(/orkestrator_interaction_result/)).toBeNull();
+    expect(screen.queryByText(/orkestrator_interaction_result/) === null).toBe(true);
   });
 });

@@ -372,12 +372,12 @@ describe("10 chart selection", () => {
   const chart = spec("chart-selection") as ChartSelectionSpec;
   test("range inclusivity at exact boundaries; missing values stay members", () => {
     const base = {
-      kind: "chart-range",
+      kind: "chart-range" as const,
       seriesIds: ["build-duration"],
       from: 100,
       to: 120,
-      population: "all-underlying-observations",
-    } as const;
+      population: "all-underlying-observations" as const,
+    };
     expect(chartSelectionMembers(chart.chart, { ...base, inclusive: true })).toEqual([
       "build-duration#1",
       "build-duration#2",

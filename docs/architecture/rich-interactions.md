@@ -195,8 +195,37 @@ not inside the artifact's verified source.
 
 ## Not done
 
-- **Provider-resolution decoration.** Rich previews are not yet attached to
-  real provider-native pending questions; those keep the existing question
-  card. The route name is reserved.
-- **Keyframes in demonstrations** and image diffs in result review.
-- Measured performance budgets; the budgets above are starting values.
+Each item below is part of the plan's scope and is not implemented yet. The
+product shows these as absent or disabled with a reason; nothing pretends to
+work.
+
+- **Provider-resolution decoration (features 1, 2, 3).** Rich previews are not
+  attached to real provider-native pending questions, MCP forms or provider
+  plan approvals; those keep the existing native cards. The route name is
+  reserved in the contract.
+- **Browser annotation integration (features 6, 7).** Browser web-annotation
+  threads and result reviews stay in their own service; they are not adapted
+  into `feedback`/`result-review` cards, and result review has no "capture
+  current result" or automatic image diff.
+- **Structured reporters (feature 9).** Cards are built from what the agent
+  reports (marked `reported`); existing review-validation runs are not
+  projected into diagnostics cards, and exact reruns have no registered runner.
+- **Pointer selection on graphics (features 10, 11).** Selection is made in the
+  equivalent table, numeric range fields or object list, not by brushing the
+  chart SVG or clicking diagram nodes.
+- **Add-to-request entry points (feature 15).** The tray is filled from the
+  deliverables panel, file paths and pasted excerpts; transcript excerpts,
+  table/chart selections and file viewers do not yet offer "Add to request",
+  and the tray is not persisted across reloads.
+- **Criteria adapters (feature 16).** Goal checks and graph human nodes are not
+  linked to criteria sets.
+- **Launching alternatives (feature 17).** The comparison card compares what
+  the agent reports; it does not create isolated worktrees or seeded sessions,
+  and no product command adopts code.
+- **Workflow coverage (feature 18).** Only graph runs have registered retry and
+  stop commands; build pipelines and Multi Review do not.
+- **Spoken replies (feature 19)** and **keyframe screenshots in demonstrations
+  (feature 20)**.
+- **Measured budgets and qualification.** The budgets above are starting
+  values; no real-stack (`dev:test`) or live provider qualification was run for
+  these features.

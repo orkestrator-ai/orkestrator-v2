@@ -185,6 +185,24 @@ the visible agent's cost. It was still built because the to-do's recommended
 option is self-contained, keeps the 2026-10-27 subscription decision and its
 exact history, and its A/B showed the gain.
 
+### Task 2: order parser work at replay and capture boundaries
+
+Replacement replay queues its reset behind earlier parser work and immediately
+queues the replacement bytes after it. Cleanup captures history after the
+parser reaches the same boundary and checks that the terminal and session
+still own the result. Pane moves reuse the live buffer, so they avoid a
+serialize-and-replay round trip. The WebSocket client caps the pending
+application queue and recovers an overloaded channel through its snapshot
+path. A revision is acknowledged after its parser callback.
+
+### Task 3: verify each load cell before accepting its measurements
+
+The benchmark requires a dedicated credential-free fixture profile, verifies
+PTY delivery and producer revisions, and starts the fake-model streams
+together after every driver reaches the hold. It verifies the idle and direct
+renderer modes independently. These checks preserve the historical tables
+while making clear which evidence a future backend-worker decision can use.
+
 ### Task 1: not built
 
 The ticket conditions the worker on a measured backend stall. The original

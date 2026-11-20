@@ -8,7 +8,7 @@ import {
   withPipeline,
 } from "./build-pipeline-review-fanout-test-support.js";
 import { TEST_ADDRESS_FINDINGS_RESULT } from "./build-pipeline-test-fixtures.js";
-import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review/prompts.js";
 import { resumePromptFor } from "./build-pipeline-service-helpers.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 

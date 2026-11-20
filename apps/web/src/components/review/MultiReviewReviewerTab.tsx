@@ -52,12 +52,20 @@ import { toPipelineTranscriptRows } from "@/components/build-pipeline/pipeline-t
 import { useWorkflowTranscriptArtifacts } from "@/hooks/useWorkflowTranscriptArtifacts";
 import { RichTranscriptScopeContext } from "@/lib/chat/rich-identity";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  PUSH_RECOVERY_POLL_MS,
+  REVIEW_TRANSCRIPT_PUSH_TOPIC,
+  formatReviewTranscriptPushKey,
+} from "@orkestrator/protocol/push-events";
 
 /**
- * Backstop poll for the active tab. Each poll sends the previous source token,
- * so an unchanged transcript costs a small status projection rather than the
- * message tail; a workflow checkpoint (which lands when the reviewer's
- * transcript moves) refreshes immediately without waiting for the interval.
+ * Backstop poll for the active tab while its push subscription is not
+ * healthy (with one, it reads on frames and every `PUSH_RECOVERY_POLL_MS`).
+ * Each poll sends the previous source token, so an unchanged transcript costs
+ * a small status projection rather than the message tail; a workflow
+ * checkpoint refreshes immediately without waiting for the interval.
  */
 export const REFRESH_INTERVAL_MS = 4_000;
 export const MANUAL_REFRESH_TIMEOUT_MS = REFRESH_INTERVAL_MS * 2;
@@ -726,6 +734,23 @@ export function MultiReviewReviewerTab({
   const settled = Boolean(
     snapshot && snapshot.status !== "running" && snapshot.status !== "pending",
   );
+  /*
+   * Push (docs/architecture/push-events.md): while the tab is active the node
+   * announces each change of this reviewer's record or transcript (the
+   * `review-transcript` topic), and the tab reads then. While that
+   * subscription is healthy the backstop falls to the recovery cadence; while
+   * it is not (no push on this node, a dropped stream) it keeps the old one.
+   */
+  const { scope: pushScope } = useScopesWithCommandFallback();
+  const onPushChangeRef = useRef<() => void>(() => undefined);
+  const pushState = usePushSubscription(
+    pushScope,
+    REVIEW_TRANSCRIPT_PUSH_TOPIC,
+    formatReviewTranscriptPushKey({ workflowId: data.workflowId, reviewerId: data.reviewerId }),
+    isActive && !gone,
+    () => onPushChangeRef.current(),
+  );
+  const pushHealthy = pushState === "healthy";
   const { noteActivity: notePollActivity } = useCoordinatedRead<void>({
     key: {
       resource: "multi-review-reviewer-transcript",
@@ -736,12 +761,24 @@ export function MultiReviewReviewerTab({
     readOnSubscribe: false,
     demand: {
       active: isActive && !gone && !settled,
-      intervalMs: refreshIntervalMs,
+      intervalMs: pushHealthy ? PUSH_RECOVERY_POLL_MS : refreshIntervalMs,
       priority: "standard",
       dataSaving: { quietBackoffMs: REVIEWER_DATA_SAVING_BACKOFF_MS },
     },
     read: () => refresh(),
   });
+  useEffect(() => {
+    onPushChangeRef.current = () => {
+      notePollActivity();
+      void refresh();
+    };
+  }, [notePollActivity, refresh]);
+  // Frames may have been lost while the subscription went unhealthy: read now.
+  const pushWasHealthy = useRef(pushHealthy);
+  useEffect(() => {
+    if (pushWasHealthy.current && !pushHealthy && isActive) void refresh();
+    pushWasHealthy.current = pushHealthy;
+  }, [isActive, pushHealthy, refresh]);
 
   // Activation and every status change (including the final one) read once.
   // Keyed on snapshot?.status: `snapshot` gets a new identity on real changes.

@@ -39,7 +39,7 @@ import {
   type WorkspaceBaselineState,
   type WorkspaceSnapshotProbe,
 } from "./workspace-read-only-guard.js";
-import type { WorkflowResultAttempt, WorkflowResultService } from "./workflow-result-service.js";
+import type { WorkflowResultAttempt, WorkflowResultService } from "./workflows/index.js";
 
 /** How each guarded pipeline turn is named in errors and refusals. */
 export const PIPELINE_READ_ONLY_SUBJECTS = {

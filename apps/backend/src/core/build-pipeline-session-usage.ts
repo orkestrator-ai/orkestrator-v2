@@ -3,7 +3,7 @@
  * review-package preparation, a single review, consolidation, Address, Verify,
  * Ship and conflict resolution.
  *
- * Reviewers in a fan-out meter through the shared runner (`review-fanout.ts`),
+ * Reviewers in a fan-out meter through the shared runner (`review/fanout.ts`),
  * which mirrors its count onto their sessions. Every other stage session is
  * observed by the pipeline itself, and is metered here from that same
  * observation, so the flow graph reads usage from the workflow record for
@@ -11,7 +11,7 @@
  */
 
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
-import type { ReviewerPollGate } from "./review-fanout.js";
+import type { ReviewerPollGate } from "./review/fanout.js";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import type { NativeAgentContextUsage } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";

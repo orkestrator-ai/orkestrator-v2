@@ -89,10 +89,10 @@ import type {
   GraphArtifactRequest,
   GraphLoadedValue,
 } from "./graph-run-view.js";
-import { runBoundedTasks, type ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
+import { type ReviewFanoutConcurrency, runBoundedTasks } from "./review/index.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { AdmissionLease } from "./work-admission.js";
-import { stableSpreadMs } from "./workflow-supervisor.js";
+import { stableSpreadMs } from "./workflows/index.js";
 
 /**
  * The workspace whose locks a run's activations hold: its environment, but

@@ -21,6 +21,7 @@ import { settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
 import { finishRestoredTombstones } from "./session-tombstones.js";
 import { sessions } from "./state.js";
+import { observationHub } from "./state-revision.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.cursor");
@@ -74,6 +75,8 @@ async function releaseEverything(): Promise<void> {
     settleIdleDetaches(),
   ]);
   await replayRecorder?.close();
+  // An open observe stream never ends by itself, and `server.close` waits on it.
+  observationHub.close();
   if (!server.listening) return;
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

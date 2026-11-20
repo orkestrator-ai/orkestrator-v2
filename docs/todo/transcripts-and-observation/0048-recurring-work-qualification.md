@@ -74,7 +74,7 @@ Tasks 1, 2, 5, 8, 9, 12 to 14 and 16 to 18 rechecked against `main` at
 
 **Context.** The idle A/B and a 10-cycle soak ran on macOS (Live evidence, Live soak). The file says each busy step needs credentials, a scripted UI or a fault injector that `scripts/recurring-live-ab.ts` lacks. Outage and resume overlap with the live outage workload in 0051. The run is batched for macOS and Docker Desktop in 0031.
 
-**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline-context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `multi-review-service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
+**Investigation.** `scripts/recurring-live-ab.ts` still drives only profile lifecycle, sampling, freshness probes and the soak (`--soak-cycles`, `scripts/recurring-live-ab.ts:141`). It has no client, credential or fault-injection phase. The keyed domains it would exercise are still switched per domain at `apps/backend/src/core/build-pipeline-context.ts:145`, `feature-planning.ts:259`, `looped-review-service.ts:420`, `review/service.ts:625`, `native-agent-service.ts:988` and `index.ts:359`. Nothing since `00a0cb82` has added busy-profile tooling. Scheduled jobs (#1242) added a new recurring kind, `scheduled-job-tick` (`packages/protocol/src/recurring-work.ts:325`), which a busy profile should include.
 
 **Decisions.**
 
@@ -109,7 +109,7 @@ phase in `recurring-live-ab.ts`). No real provider or login is needed.
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: the driver still had no
 client, approval or workflow phase, and the keyed domains are switched at
 `build-pipeline-context.ts:241`, `features/planning.ts:265`,
-`multi-review-service.ts:751`, `native-agent-service.ts:1438`, `index.ts:525`
+`review/service.ts:751`, `native-agent-service.ts:1438`, `index.ts:525`
 and, since graph runs, `graph-run-service.ts:241` (looped review is retired).
 The recommendation was taken, with every turn on a fake model: a busy phase
 (`--busy-rounds`, `scripts/recurring-live-ab-busy.ts` with its Playwright
@@ -467,7 +467,7 @@ after a restart. Follow-ups needing a decision were in 7120 (retired
 
 **Context.** The idle A/B decides none. The feature-planning keyed row read was decided from the harness (decision 4).
 
-**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux-interactive.ts`) and B20 (`review-validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
+**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux-interactive.ts`) and B20 (`review/validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
 
 **Decisions.**
 
@@ -540,7 +540,7 @@ task 5).
 
 **Context.** Decision 1 is to wait for the busy live profile. `stableJitterMs` has already moved, so deleting `multi-review-scheduler.ts` is self-contained.
 
-**Investigation.** Unchanged. `KEYED_SCHEDULING_ROLLBACK_ENV` and `keyedSchedulingEnabled` are at `apps/backend/src/core/workflow-supervisor.ts:77` and `:79`, with six call sites (task 1). `WorkflowDueScheduler` is at `apps/backend/src/core/multi-review-scheduler.ts:52`, and `stableJitterMs` at `multi-review-scheduling.ts:157`. The desktop allowlist entries are at `apps/desktop/electron/backend-process.ts:71` to `:73`, and observation sharing is read at `apps/backend/src/core/index.ts:699`. The catalogue still describes the adaptive scheduler as Multi Review's rollback (`packages/protocol/src/recurring-work.ts:363`).
+**Investigation.** Unchanged. `KEYED_SCHEDULING_ROLLBACK_ENV` and `keyedSchedulingEnabled` are at `apps/backend/src/core/workflows/supervisor.ts:77` and `:79`, with six call sites (task 1). `WorkflowDueScheduler` is at `apps/backend/src/core/multi-review-scheduler.ts:52`, and `stableJitterMs` at `review/scheduling.ts:157`. The desktop allowlist entries are at `apps/desktop/electron/backend-process.ts:71` to `:73`, and observation sharing is read at `apps/backend/src/core/index.ts:699`. The catalogue still describes the adaptive scheduler as Multi Review's rollback (`packages/protocol/src/recurring-work.ts:363`).
 
 **Decisions.**
 
@@ -560,7 +560,7 @@ task 5).
     - Cons: decision 1 already rejected it; busy obligations stay unproved.
 
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: `KEYED_SCHEDULING_ROLLBACK_ENV`
-and `keyedSchedulingEnabled` are at `workflow-supervisor.ts:79` and `:81`,
+and `keyedSchedulingEnabled` are at `workflows/supervisor.ts:79` and `:81`,
 with seven call sites (task 1, `graph-run` added; its "rollback" only turns
 graph runs off). `WorkflowDueScheduler` is at `multi-review-scheduler.ts:55`,
 the desktop allowlist entries at `backend-process.ts:144` to `:146`, and
@@ -586,14 +586,14 @@ qualify differently (decision W1). Both are removed (decision W2):
   `NativeAgentService.initialize` always starts the keyed launch/queue
   scheduler. The `keyedQueueScheduling` option is gone.
 - The switch can no longer name either domain
-  (`REVERTIBLE_KEYED_SCHEDULING_DOMAINS`, `workflow-supervisor.ts`); a value
+  (`REVERTIBLE_KEYED_SCHEDULING_DOMAINS`, `workflows/supervisor.ts`); a value
   that still names one, or `all`, leaves them keyed. Both stay in
   `KEYED_SCHEDULING_DOMAINS`, which also labels the supervisors.
 - Tests that drove the rollback drivers now drive the keyed ones on a manual
   clock (`index.test.ts`: tab-resource coalescing, periodic activity and
   shutdown, a rejected sweep, repeated init, fault wiring;
   `native-agent-service-dispatch.test.ts`: launch scans and the cadence
-  floor), and `workflow-supervisor.test.ts` pins the revertible list.
+  floor), and `workflows/supervisor.test.ts` pins the revertible list.
 - `recurring-work.md`, `native-agent-service.md`, `testing-guide.md` and the
   `recurring-live-ab.ts` header describe the change. The catalogue
   (`RECURRING_JOB_CATALOGUE`) named no rollback for either domain, so it is
@@ -632,7 +632,7 @@ rollback driver is removed (decision W6):
   review to `ready` on the keyed supervisor; the due scheduler's lease-renewal
   test is replaced by one that drives the keyed critical job on a manual clock
   (one renewal per interval, none overlapping a slow one, one job after a
-  repeated `init`, none after shutdown); `workflow-supervisor.test.ts` pins the
+  repeated `init`, none after shutdown); `workflows/supervisor.test.ts` pins the
   smaller revertible list.
 - The recurring baseline harness keeps a rollback mode for feature planning
   and build pipelines only, and `recurring-baseline.test.ts` checks Multi
@@ -987,7 +987,7 @@ and the decisions below were recorded.
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
-    `workflow-supervisor.ts`): a comma list of `feature-planning`,
+    `workflows/supervisor.ts`): a comma list of `feature-planning`,
     `build-pipeline`, `graph-run`, or `all`. A named domain runs its old
     whole-store driver instead of the keyed one (`graph-run` is turned off).
     `multi-review`, `native-queues` and `backend-activity` are no longer
@@ -1008,7 +1008,7 @@ and the decisions below were recorded.
   `DEFAULT_WORKFLOW_DISCOVERY_MS` (30 s) and `NATIVE_QUIET_BACKOFF_TRIAL_MS`.
 - `HostSuspendDetector` re-times every live scheduler after a host sleep so
   overdue keys run once.
-- `stableJitterMs` lives in `multi-review-scheduling.ts` (moved 2026-10-25),
+- `stableJitterMs` lives in `review/scheduling.ts` (moved 2026-10-25),
   which is why removing `multi-review-scheduler.ts` on 2026-11-10 did not
   touch the keyed path.
 - Container fetch reach (found 2026-10-25): every new container records its
@@ -1711,7 +1711,7 @@ agent sessions, so nothing announces the turn's end. A pass that read the
 turn still running left the result for the next observation pass. Multi
 Review now polls an accepted, unconsumed result on a 250 ms cadence for one
 observation interval from its acceptance
-(`multi-review-result-settle.test.ts`, which fails without the fix).
+(`review/result-settle.test.ts`, which fails without the fix).
 
 Same host (beelink2, Linux, 16 cores, load average 54 to 57 at the start),
 same command as above with `--settle-ms 120000`, `--keep-profiles` and
@@ -2001,7 +2001,7 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
   Decided 2026-11-11: needed only for terminals no client detached, done by
   to-do 7745 (decision C5; retired 2026-11-11, the client lease).
 - ~~Splitting the validation worker's 500 ms liveness write from changed-result
-  writes (B20, `review-validation-worker.ts`), only with cross-process
+  writes (B20, `review/validation-worker.ts`), only with cross-process
   crash-recovery and cancellation proof.~~ Decided 2026-11-11: kept (decision
   C6).
 - ~~A keyed row read for feature planning's per-record pass.~~ Done
@@ -2085,7 +2085,7 @@ Obligations the keyed drivers must keep when the old drivers go:
   Feature planning owes every active phase. Build pipelines owe result
   consumption in any phase, provisioning, review fan-out, stage progression
   and terminal side effects. Multi review's list is shared by every driver in
-  `multi-review-scheduling.ts`. A native queue owes work while pending or
+  `review/scheduling.ts`. A native queue owes work while pending or
   holding a reserved in-flight head; parked, empty and tmux queues owe
   nothing.
 - Wakeups come from workflow-result acceptance, environment readiness and
@@ -2865,7 +2865,7 @@ collide with other tasks' decisions.
   backend log. A missed wake cannot hide
   there: the review validation worker polls the scheduler every 100 ms,
   and each poll reaps finished and dead jobs and re-runs admission
-  (`review-validation-worker.ts`, `host-test-scheduler.ts`), so a queued
+  (`review/validation-worker.ts`, `host-test-scheduler.ts`), so a queued
   command waits only while other jobs hold the host's slots, memory or an
   exclusive resource.
 - to-do 7200 (retired on 2026-11-10; see [recurring-work.md](../../architecture/recurring-work.md)): the

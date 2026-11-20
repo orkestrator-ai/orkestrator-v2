@@ -5,7 +5,7 @@ import type {
   EfficiencyEvent,
   EfficiencyPlatform,
   MultiReviewEfficiencyObserver,
-} from "./multi-review-efficiency.js";
+} from "./review/index.js";
 
 /**
  * A test-only recorder of the reviewer fan-out's peak concurrency (to-do 0027
@@ -17,7 +17,7 @@ import type {
  * A spec arms it by writing a run id into
  * `<data dir>/agent-test-fixtures/fanout-stats/record`. While that marker
  * exists, every fan-out pass's `reviewer.admission_concurrency` and
- * `reviewer.provider_concurrency` events (`review-fanout.ts`) raise the
+ * `reviewer.provider_concurrency` events (`review/fanout.ts`) raise the
  * maxima in `fanout-stats.json` beside it, which is rewritten atomically
  * whenever a maximum or the pass count changes. A new run id starts from
  * zero. The file holds the run id, counts and platform names only.

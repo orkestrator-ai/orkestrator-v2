@@ -1,6 +1,6 @@
 {
   "sleep-before-negative-assertion": {
-    "apps/backend/src/core/agent-accounts-login.test.ts": 1,
+    "apps/backend/src/core/agent-accounts/login.test.ts": 1,
     "apps/backend/src/core/agent-mail-service.test.ts": 1,
     "apps/backend/src/core/backend-runtime.test.ts": 2,
     "apps/backend/src/core/build-pipeline-key-information.test.ts": 2,
@@ -18,7 +18,6 @@
     "apps/backend/src/core/host-maintenance-tasks.test.ts": 1,
     "apps/backend/src/core/index.test.ts": 1,
     "apps/backend/src/core/mcp-management/source-store.test.ts": 1,
-    "apps/backend/src/core/multi-review-service-part-3.test.ts": 1,
     "apps/backend/src/core/native-agent-live-update.test.ts": 1,
     "apps/backend/src/core/native-agent-service-dispatch.test.ts": 1,
     "apps/backend/src/core/native-agent-service-progressive.test.ts": 5,
@@ -29,6 +28,7 @@
     "apps/backend/src/core/nodes/node-portal.test.ts": 1,
     "apps/backend/src/core/nodes/node-profile-sync.test.ts": 3,
     "apps/backend/src/core/registry-writer-lease.test.ts": 2,
+    "apps/backend/src/core/review/service-part-3.test.ts": 1,
     "apps/backend/src/core/storage-atomic.test.ts": 2,
     "apps/backend/src/core/storage-context.test.ts": 2,
     "apps/backend/src/core/storage-database.test.ts": 1,
@@ -165,7 +165,7 @@
     "apps/backend/src/core/transcript-artifacts/content-server.engines-lane-1-test-support.ts": 1,
     "apps/backend/src/core/transcript-artifacts/content-server.engines-lane-2-test-support.ts": 1,
     "apps/backend/src/core/watch-host.test.ts": 9,
-    "apps/backend/src/core/workflow-result-service.test.ts": 2,
+    "apps/backend/src/core/workflows/result-service.test.ts": 2,
     "apps/backend/src/host-standalone-updater.test.ts": 1,
     "apps/backend/src/preview-publication.test.ts": 2,
     "apps/backend/src/preview-tunnel-mux-server.test.ts": 3,

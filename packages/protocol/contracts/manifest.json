@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1084,
-    "defined": 1084,
+    "commands": 1089,
+    "defined": 1089,
     "untyped": 0,
     "events": 48
   },
@@ -74,7 +74,7 @@
       "min": 1
     },
     "native-sessions": {
-      "version": 5,
+      "version": 6,
       "min": 1
     },
     "node-files": {
@@ -1507,6 +1507,24 @@
       "critical": [],
       "argsDigest": "sha256:3abc33044de8f3d2b68f8dc7920928edaddb1372213db50ebb5538ab375b3fc3",
       "resultDigest": "sha256:72a502e0700129e7d8f6c1d0b43e23b54f6b60c87ff633f2910efb8165e04479"
+    },
+    "collect_self_improvement_conversations": {
+      "domain": "system",
+      "since": 2,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ea3074f5f174463204a383700f724c9b36c291d4d4fdd6034486fcce273f540c",
+      "resultDigest": "sha256:5a615dbf88a52f87022e10fbfb6daf5288bd04c729e235c6e4e4e12fa0a119a0"
+    },
+    "collect_self_improvement_diagnostics": {
+      "domain": "system",
+      "since": 2,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:ac7a2193da35edbda9b6c69e7f0032ee1b50553daf1498936748d9ad42652afa"
     },
     "collect_shared_usage_readings": {
       "domain": "accounts",
@@ -4324,6 +4342,15 @@
       "argsDigest": "sha256:e2d9f98d03525b884c8d4102fc37a7fb6bfda9582995a1f5cc05a885a13a3624",
       "resultDigest": "sha256:9df81e33f17bb4f7502c16bfcf016b5f08b32e15accce5605ef8f551bda5cb17"
     },
+    "get_native_agent_tool_output": {
+      "domain": "native-sessions",
+      "since": 5,
+      "access": "workspace",
+      "read": true,
+      "critical": ["messageId"],
+      "argsDigest": "sha256:eb8961fc38b6c10dadc228cb98abec41c3c7bd5852a77ea2acafa9ae36f806e1",
+      "resultDigest": "sha256:1c5e5b26d06b7a050b3117a55424ad8b94d3b430c5804f449ed6b4a742883dfc"
+    },
     "get_native_agent_transcript_update": {
       "domain": "native-sessions",
       "since": 1,
@@ -4638,6 +4665,15 @@
       "critical": [],
       "argsDigest": "sha256:c70ee0a2c1492907562dc615d9b55359b88a0961e7bdd96ebf93f46ea8ed5fc0",
       "resultDigest": "sha256:3976352feee717732405fa31960dbae93ad03b24068b31c5255329d1fb9588e3"
+    },
+    "get_push_metrics": {
+      "domain": "system",
+      "since": 1,
+      "access": "admin",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
     },
     "get_rebuild_preview": {
       "domain": "environments",
@@ -6589,6 +6625,15 @@
       "critical": ["node", "relayedAuthority"],
       "argsDigest": "sha256:bb01ba0620344056575129be5e476e5e8ab72ecb04068f66824cfc63beb3c987",
       "resultDigest": "sha256:d9845eccb449721bb9c4e44cfb06f65d2597a2dee0fb846652d39ef610a1970b"
+    },
+    "push_set_subscriptions": {
+      "domain": "system",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ff707d3ea1651e1727eb680fd39752245a60f0d413dd3b7de92ab00c36c87866",
+      "resultDigest": "sha256:a085a3842bbf40e1ca95fb13fca66d4d166f630799a1b98c4858be95d65ae7f3"
     },
     "put_ticket_image": {
       "domain": "ticket-sync",

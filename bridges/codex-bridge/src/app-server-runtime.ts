@@ -385,6 +385,18 @@ export class AppServerRuntime {
     return this.sessions.getConfig(...args);
   }
 
+  configSnapshot(
+    ...args: Parameters<CodexRuntimeSessions["configSnapshot"]>
+  ): ReturnType<CodexRuntimeSessions["configSnapshot"]> {
+    return this.sessions.configSnapshot(...args);
+  }
+
+  transcriptRevision(
+    ...args: Parameters<CodexRuntimeSessions["transcriptRevision"]>
+  ): ReturnType<CodexRuntimeSessions["transcriptRevision"]> {
+    return this.sessions.transcriptRevision(...args);
+  }
+
   // -------------------------------------------------------------------------
   // Turn dispatch and commands
 

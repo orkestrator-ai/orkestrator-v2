@@ -80,8 +80,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     // Real tmux sessions polled on wall-clock ticks.
     "tests/tmux*.test.ts",
     "src/core/tmux*.test.ts",
-    "src/core/agent-accounts-containers.test.ts",
-    "src/core/agent-accounts.test.ts",
+    "src/core/agent-accounts/containers.test.ts",
+    "src/core/agent-accounts/accounts.test.ts",
     "src/core/agent-mail-service.test.ts",
     "src/core/agents-md-pr.test.ts",
     "src/core/change-tracking/acceptance-sharing.test.ts",
@@ -111,7 +111,6 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/environment-move.test.ts",
     "src/core/environment-move.*.test.ts",
     "src/core/index.test.ts",
-    "src/core/multi-review-service-part-*.test.ts",
     "src/core/native-agent-service-progressive.test.ts",
     "src/core/nodes/node-project-copy.test.ts",
     // Real stand-in `opencode2` servers, polled for readiness.
@@ -122,7 +121,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/public-api/public-api-project-init-cascade.test.ts",
     "src/core/public-api/public-api-projects.test.ts",
     "src/core/public-api/public-api-schedules.test.ts",
-    "src/core/review-validation-worker.*.test.ts",
+    "src/core/review/service-part-*.test.ts",
+    "src/core/review/validation-worker.*.test.ts",
     "src/core/root-changes.test.ts",
     "src/core/shell.test.ts",
     // Credential runs against real shells, deadlines and process-group cancellation.

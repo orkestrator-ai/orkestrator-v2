@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -62,9 +62,8 @@ function monitor(storage: StorageService): PrMonitorService {
       closeTaskForMerge: async (taskId, prUrl) => {
         await storage.kanban.closeKanbanTasksForMergedPullRequests([{ taskId, prUrl }]);
       },
-      returnTaskForClosedPr: async (taskId, prUrl) => {
-        await storage.kanban.returnKanbanTaskForClosedPullRequest(taskId, prUrl);
-      },
+      returnTaskForClosedPr: (taskId, prUrl) =>
+        storage.kanban.reconcileKanbanTaskForClosedPullRequest(taskId, prUrl),
       addTaskComment: async (taskId, text) => {
         await storage.kanban.addKanbanComment(taskId, text);
       },
@@ -154,10 +153,46 @@ describe("a closed pull request", () => {
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
     await life.prDetected(pipeline, "closed");
+    // The column waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    expect((await read(id))?.status).toBe("review");
+    await life.ended(pipeline, "complete");
     expect((await read(id))?.status).toBe("backlog");
     await storage.kanban.updateKanbanTask(id, { status: "in-progress" });
     await monitor(storage).reconcileTerminal(target("env-1"), closed());
     expect((await read(id))?.status).toBe("in-progress");
+  });
+
+  test("retries the status after a hold and a failed terminal write without repeating the comment", async () => {
+    const { storage, life, read } = await machine();
+    const id = (await storage.kanban.addKanbanTask("project-1", "Ticket", "Body")).id;
+    const pipeline = life.pipeline(id);
+    await storage.saveBuildPipeline(pipeline.id, "project-1", "env-1", 1, pipeline);
+    await life.started(pipeline);
+    await life.prDetected(pipeline, "open");
+    const service = monitor(storage);
+    await service.reconcileTerminal(target("env-1"), closed());
+    expect(await read(id)).toMatchObject({ status: "review", prState: "closed" });
+    expect((await read(id))?.prClosedReturnUrl).toBeUndefined();
+
+    // The build's terminal update fails after it has released its hold.
+    await storage.updateEnvironment("env-1", { prState: "closed" });
+    const failedReturn = spyOn(storage.kanban, "updateKanbanTask").mockRejectedValueOnce(
+      new Error("ticket write failed"),
+    );
+    try {
+      await life.ended(pipeline, "complete");
+      expect(pipeline.completionCommentStatus).toBe("failed");
+    } finally {
+      failedReturn.mockRestore();
+    }
+    expect((await read(id))?.status).toBe("review");
+    await service.reconcileTerminal(target("env-1"), closed());
+    expect(await read(id)).toMatchObject({ status: "backlog", prClosedReturnUrl: PR_URL });
+    expect(
+      (await read(id))?.comments.filter(
+        (comment) => comment.text === `${PR_CLOSED_COMMENT}: ${PR_URL}`,
+      ),
+    ).toHaveLength(1);
   });
 
   test("of an older build leaves the ticket a newer build put in review", async () => {
@@ -170,6 +205,7 @@ describe("a closed pull request", () => {
     await newer.started(second);
     await newer.prDetected(second, "open", PR_B_URL);
     expect((await read(id))?.status).toBe("review");
+    await newer.ended(second, "complete");
 
     // The first environment's monitor finds the ticket through its saved
     // pipeline and sees PR A close.

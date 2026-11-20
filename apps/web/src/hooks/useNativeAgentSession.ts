@@ -89,7 +89,14 @@ import {
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { readCoordinatorFor } from "@/lib/read-coordinator";
+import { pushClientFor, usePushSubscription } from "@/lib/push/push-subscriptions";
+import type { PushKeyChange } from "@orkestrator/protocol/push-client";
+import {
+  NATIVE_SESSION_PUSH_TOPIC,
+  formatNativeSessionPushKey,
+} from "@orkestrator/protocol/push-events";
 import type { StoreApi } from "zustand/vanilla";
+import type { ToolOutputTailSource } from "@/lib/chat/tool-output-tail";
 
 /** Mirrors the backend ceiling, so the button stops offering what it would clamp. */
 const MAX_MESSAGE_WINDOW = 4_096;
@@ -802,6 +809,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     matchingProgressiveCache?.discovery,
   );
   const [discoverySchedule] = useState(() => new NativeDiscoveryReadSchedule());
+  const [discoveryFollowUpAt, setDiscoveryFollowUpAt] = useState<number | null>(null);
   const syncLiveProjectionRef = useRef<NativeAgentSessionProjection<TMessage> | null>(
     (sharedSyncCache?.liveProjection as NativeAgentSessionProjection<TMessage> | undefined) ?? null,
   );
@@ -2345,7 +2353,10 @@ export function useNativeAgentSession<TMessage = unknown>({
               }
               discoverySchedule.observe(progressiveDiscoveryRef.current);
             })
-            .catch(() => discoverySchedule.markDue());
+            .catch(() => discoverySchedule.markDue())
+            .finally(() => {
+              if (stillCurrent()) setDiscoveryFollowUpAt(discoverySchedule.followUpAt());
+            });
         }
 
         await Promise.allSettled([transcriptRead, stateRead]);
@@ -2771,6 +2782,56 @@ export function useNativeAgentSession<TMessage = unknown>({
    * reads, and are never joined.
    */
   const sharedReadTarget = `${environmentId}\u0000${platform}\u0000${sessionKey}`;
+  /*
+   * Push (docs/architecture/push-events.md): while this view is active the
+   * node announces each change of the session, and the view reads only then.
+   * While the subscription is healthy the coordinator's cadence falls to the
+   * recovery poll; while it is not (no push on this node, a dropped stream, a
+   * gap being recovered) the view keeps its old cadence.
+   */
+  const pushKey = formatNativeSessionPushKey({
+    environmentId,
+    agent: platform,
+    logicalSessionKey: sessionKey,
+  });
+  const pushFrameReceivedAt = useRef<number | null>(null);
+  const onPushChange = useCallback(
+    (change: PushKeyChange) => {
+      if (change.reason === "frame") pushFrameReceivedAt.current ??= performance.now();
+      if (change.parts === null || change.parts.includes("discovery")) {
+        discoverySchedule.markDue();
+      }
+      coordinatedInvalidateRef.current();
+    },
+    [discoverySchedule],
+  );
+  const pushSubscriptionState = usePushSubscription(
+    scope,
+    NATIVE_SESSION_PUSH_TOPIC,
+    pushKey,
+    enabled && isActive,
+    onPushChange,
+  );
+  const pushHealthy = pushSubscriptionState === "healthy";
+  useEffect(() => {
+    if (!pushHealthy || !enabled || !isActive || discoveryFollowUpAt === null) return;
+    const timer = setTimeout(
+      () => coordinatedInvalidateRef.current(),
+      Math.max(0, discoveryFollowUpAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [discoveryFollowUpAt, enabled, isActive, pushHealthy]);
+  useEffect(
+    () => () => {
+      pushFrameReceivedAt.current = null;
+    },
+    [scope, pushKey, isActive],
+  );
+
+  const pushHealthyRef = useRef(pushHealthy);
+  useLayoutEffect(() => {
+    pushHealthyRef.current = pushHealthy;
+  }, [pushHealthy]);
   useEffect(() => {
     if (!enabled) return;
     return registerNativeSessionView(
@@ -2782,13 +2843,25 @@ export function useNativeAgentSession<TMessage = unknown>({
           if (context.reason !== "interval" && context.reason !== "invalidate") {
             discoverySchedule.markDue();
           }
-          return (
-            refreshRef.current?.(
+          // A recovery-poll read under a healthy subscription that finds a
+          // new projection found a change no frame announced (design D8).
+          const recovery = context.reason === "interval" && pushHealthyRef.current;
+          const before = recovery ? projectionRef.current : null;
+          const receivedAt = pushFrameReceivedAt.current;
+          pushFrameReceivedAt.current = null;
+          const result =
+            (await refreshRef.current?.(
               context.reason === "interval"
                 ? { manual: false, round }
                 : { manual: false, reconcileAfterInFlight: true, round },
-            ) ?? null
-          );
+            )) ?? null;
+          if (result && receivedAt !== null) {
+            pushClientFor(scope).noteObservationApplied(performance.now() - receivedAt);
+          }
+          if (recovery && before && result && result !== before) {
+            pushClientFor(scope).noteRecoveryReadFoundChange(NATIVE_SESSION_PUSH_TOPIC);
+          }
+          return result;
         },
       },
       scope,
@@ -2808,6 +2881,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       active: enabled && isActive,
       observationEvents: nativeObservationEventsSupported(scope),
       quietObservation: runtimeProjection?.turn.quietObservation === true,
+      pushHealthy,
     }),
     read: async (context) => {
       await runNativeSessionReadRound(sharedReadTarget, context, scope);
@@ -2855,12 +2929,20 @@ export function useNativeAgentSession<TMessage = unknown>({
      * is what lets a qualified idle view read less often — it is told when it
      * must read. A missed announcement (stamp gap) or a new observer lifetime
      * re-reads every view.
+     *
+     * While this view's push subscription is healthy, a session announcement
+     * does not read on its own: the same announcement wakes the backend's
+     * observer of this session, and the frame it sends if anything moved is
+     * the read. Reading here too cost every announced change two reads per
+     * view (docs/architecture/push-events.md, "Measured result"). A stamp gap
+     * or reset still re-reads, and an unhealthy view keeps this read.
      */
     const unsubscribeObservation = subscribeNativeObservationInvalidations((invalidation) => {
       if (invalidation.kind === "all") discoverySchedule.markDue();
       if (
         enabled &&
         isActive &&
+        !(invalidation.kind === "session" && pushHealthyRef.current) &&
         nativeObservationInvalidationMatches(invalidation, {
           environmentId,
           agent: platform,
@@ -3295,6 +3377,16 @@ export function useNativeAgentSession<TMessage = unknown>({
       backendForScope(scope).getNativeAgentToolDetails({ ...identity, detailRef }),
     [scope, identity],
   );
+  /** What an expanded running tool row reads its bounded output tail through. */
+  const toolOutputTail = useMemo<ToolOutputTailSource>(
+    () => ({
+      scope,
+      active: enabled && isActive,
+      ...identity,
+      read: (input) => backendForScope(scope).getNativeAgentToolOutput(input),
+    }),
+    [enabled, identity, isActive, scope],
+  );
   /**
    * Page older rows in behind the cursor this tab holds, then reconcile.
    *
@@ -3685,6 +3777,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     unreadRead,
     sessionStateAvailability,
     sessionStateRefreshing,
+    pushRecovering: pushSubscriptionState === "recovering",
     sessionStateError,
     isDispatching,
     refresh,
@@ -3715,6 +3808,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     refreshModels,
     refreshCommands,
     loadToolDetails,
+    toolOutputTail,
     loadEarlierMessages,
     canLoadEarlierAutomatically,
     initialLaunchOptionsRef,

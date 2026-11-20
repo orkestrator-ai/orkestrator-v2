@@ -165,7 +165,7 @@ export interface ReviewPackage {
   diffArtifact?: ReviewPackageDiffArtifact;
   /**
    * The same diff split into parts, present only when it is too large to read
-   * in one pass (`review-diff-artifact.ts` in the backend). Absent from
+   * in one pass (`review/diff-artifact.ts` in the backend). Absent from
    * packages sealed before it existed.
    */
   diffChunks?: ReviewPackageDiffChunk[];

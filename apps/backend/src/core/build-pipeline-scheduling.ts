@@ -5,7 +5,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
-import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
+import type { WorkflowDiscoveryResult } from "./workflows/index.js";
 
 /**
  * What a build pipeline still owes the backend (step 08, task 1).

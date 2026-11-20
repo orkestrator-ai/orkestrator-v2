@@ -1,6 +1,6 @@
 import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import { describe, expect, spyOn, test } from "bun:test";
-import { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
+import { RecordingEfficiencyObserver } from "./review/efficiency.js";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import {
@@ -16,12 +16,12 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
-import { workflowResultProviderSchema } from "./workflow-result-registry.js";
+import { workflowResultProviderSchema } from "./workflows/result-registry.js";
 import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,
   deriveConsolidatedProvenance,
   parseStructuredReportResult,
-} from "./review-fanout.js";
+} from "./review/fanout.js";
 import {
   HEAD,
   advanceUntil,

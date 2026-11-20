@@ -37,7 +37,7 @@ import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
+import { cleanupRetiredLoopedReviews } from "./review/retired-looped-review-cleanup.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
   bugReportReaperEnvironments,
@@ -88,6 +88,7 @@ import {
   nativeAgentSessionActivityEvent,
 } from "@orkestrator/protocol/contract/domains/events";
 import { createBackendEmit, type BackendEventSink } from "./backend-emit.js";
+import { BackendPush, createWorkflowSummaryReader } from "./push/index.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
@@ -106,14 +107,19 @@ import {
   recordAgentAccountAutoSwitchKept,
   renewAgentAccountLogin,
   listAgentAccountUsageIdentities,
-} from "./agent-accounts.js";
+} from "./agent-accounts/accounts.js";
 import {
+  addedClaudeAccountHomes,
+  AgentAccountAutoSwitcher,
   centralUsageReadings,
   recordCentralUsageReadings,
-} from "./agent-accounts-usage-sharing.js";
-import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
-import { readSessionAgentAccount } from "./agent-accounts-session.js";
-import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
+} from "./agent-accounts/index.js";
+import { readSessionAgentAccount } from "./agent-accounts/session.js";
+import {
+  combineProvisionalFindingSinks,
+  multiReviewNativeAddressFindingsOptions,
+  type ProvisionalFindingSink,
+} from "./review/index.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -126,9 +132,17 @@ import { PreviewRuntime } from "./previews/index.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
+import { pauseBackgroundCheckpoints } from "./storage-checkpointer.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
-import type { KeyedWorkflowOwner, WorkflowWakeReason } from "./workflow-supervisor.js";
+import {
+  type ArtifactTurnDispatch,
+  gitEnvironmentValidator,
+  type KeyedWorkflowOwner,
+  WorkflowResultRollout,
+  WorkflowResultService,
+  type WorkflowWakeReason,
+} from "./workflows/index.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { MachineLoadSampler } from "./machine-load.js";
@@ -154,6 +168,7 @@ const capabilityLog = createLogger("capabilities");
 
 /** How long shutdown waits for web annotations to close before going on without them. */
 const WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS = 5_000;
+const STORAGE_CHECKPOINT_DRAIN_TIMEOUT_MS = 5_000;
 
 const activityLog = createLogger("backend.activity");
 const scheduledLog = createLogger("scheduler");
@@ -175,10 +190,6 @@ import {
   type WebAnnotationToolHost,
 } from "./web-annotations/index.js";
 import {
-  combineProvisionalFindingSinks,
-  type ProvisionalFindingSink,
-} from "./review-provisional-findings.js";
-import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
   mcpContainerOptions,
@@ -191,7 +202,6 @@ import {
 } from "./capabilities/index.js";
 import { remoteScopedEnvironments } from "./capabilities/scoped-sources.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
   scheduleMergeCleanupRecovery,
@@ -216,7 +226,6 @@ import {
   type TranscriptArtifactService,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import { probeCreator } from "./container-host-reachability-creator.js";
 import {
@@ -225,11 +234,9 @@ import {
 } from "./commands-environment.js";
 import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
 import { type BackendProfile } from "@orkestrator/protocol/backend-profile";
-import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
 import { applyGhChannel, fetchReleasePins } from "./host-maintenance-tasks.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
   controlMcpPortOverride,
@@ -262,8 +269,8 @@ import {
 import {
   dispatchMultiReviewAddressFindingsPrompt,
   recoverMissingMultiReviewAddressFindingsSession,
-} from "./multi-review-address-findings-dispatch.js";
-import { MultiReviewService } from "./multi-review-service.js";
+} from "./review/address-findings-dispatch.js";
+import { MultiReviewService } from "./review/service.js";
 import { FeaturePlanningService } from "./features/index.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -288,7 +295,6 @@ import {
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
 import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
-import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphBranchWorktreeJanitor, GraphBranchWorktrees } from "./graph-branch-worktrees.js";
@@ -299,10 +305,7 @@ import { GraphRunAttention } from "./graph-run-attention.js";
 import { BuildPipelineActivity } from "./build-pipeline-activity.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
-import {
-  configuredMultiReviewEngine,
-  MultiReviewGraphEngine,
-} from "./multi-review-graph-engine.js";
+import { configuredMultiReviewEngine, MultiReviewGraphEngine } from "./review/graph-engine.js";
 import { launchSettingsTiers } from "./control-shared-actions.js";
 import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
 import {
@@ -321,6 +324,7 @@ import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import { GraphAgentProviders, graphAgentBridgeConnection } from "./graph-agent-providers.js";
 import { autoPipelineToolHost, createAutoPipelineService } from "./auto-pipeline-wiring.js";
+import { AutoPipelineService, onAutoPipelineChange } from "./auto-pipeline.js";
 import { GraphDescribeService } from "./graph-describe-service.js";
 import { GraphMockRuns } from "./graph-mock-launch.js";
 import { installGraphMockExecutors } from "./graph-mock-provider.js";
@@ -347,6 +351,14 @@ export class OrkestratorBackend {
   private readonly context: CommandContext;
   private readonly buildPipelines: BuildPipelineService;
   private readonly nativeAgents: NativeAgentService;
+  /**
+   * The push event layer (docs/architecture/push-events.md): the gateway opens
+   * a connection here per event stream; topics observe what clients subscribe.
+   */
+  readonly push: BackendPush;
+  /** The `workflow` topic's `auto-pipeline` reads; built once the context exists. */
+  private autoPipelineReadService: AutoPipelineService | null = null;
+  private stopAutoPipelineWakes: (() => void) | null = null;
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly coordinators: CoordinatorService;
@@ -596,9 +608,72 @@ export class OrkestratorBackend {
     /** Test seam: node links (fetch, SSH, timers). */
     nodeLinks?: Pick<NodeServiceOptions, "fetchImpl" | "createSsh" | "timers" | "heartbeatMs">;
   }) {
-    const emit = createBackendEmit((event, payload) => options.emit(event, payload));
+    const emit = createBackendEmit((event, payload) => {
+      options.emit(event, payload);
+      // After delivery, and never throwing into the emitter: a topic only
+      // wakes the observer of the session an event names.
+      try {
+        this.push?.observeEvent(event, payload);
+      } catch (error) {
+        log.warn("push.observe-event-failed", { error: formatLogError(error) });
+      }
+    });
     this.activityJobClock = options.activityJobClock;
     const storage = new StorageService(options.dataDir);
+    this.push = new BackendPush({
+      nativeAgents: () => this.nativeAgents,
+      sessionExists: async (environmentId, agent, logicalSessionKey) => {
+        const session = await storage.getNativeAgentSession(
+          nativeAgentSessionStorageKey(
+            environmentId,
+            agent as BuildPipelineAgent,
+            logicalSessionKey,
+          ),
+        );
+        return (
+          session !== null &&
+          session !== undefined &&
+          session.environmentId === environmentId &&
+          session.agent === agent &&
+          session.logicalSessionKey === logicalSessionKey
+        );
+      },
+      // The `environment` topic compares what `get_environment` and the
+      // sidebar's `get_agent_registry` read; the registry is built later, so
+      // it is looked up at read time.
+      environments: {
+        readEnvironment: async (environmentId) =>
+          ((await storage.getEnvironment(environmentId)) as Record<string, unknown> | null) ?? null,
+        readRegistry: async (environmentId) => {
+          const registry = this.context?.agentRegistry;
+          if (!registry) throw new Error("Agent registry is unavailable");
+          return registry.snapshot({ environmentId }, { includePending: true });
+        },
+      },
+      // The `workflow` topic compares each subscribed run's record revision
+      // and phase; the record's own `resource-changed` wakes it.
+      // `auto-pipeline` keys compare the toolbar offer and a tab's draft
+      // state; the service announces its own changes (below).
+      workflows: {
+        readSummary: createWorkflowSummaryReader(storage, () => this.autoPipelineReads()),
+      },
+      // The `review-transcript` topic reads the Multi Review record; the
+      // service is built later, so it is looked up at read time.
+      reviewTranscripts: {
+        readTarget: async (key) => {
+          if (!this.multiReviews) throw new Error("Multi Review is unavailable");
+          return this.multiReviews.transcriptPushTarget(key);
+        },
+        bridgeAnnounces: (target) => this.multiReviews?.transcriptBridgeAnnounces(target) ?? false,
+        probeTranscript: async (key, token) => {
+          if (!this.multiReviews) throw new Error("Multi Review is unavailable");
+          return this.multiReviews.transcriptPushProbe(key, token);
+        },
+      },
+    });
+    this.stopAutoPipelineWakes = onAutoPipelineChange(storage, (environmentId) =>
+      this.push.workflows?.wakeAutoPipeline(environmentId),
+    );
     // History survives a restart through one database row (#2287).
     this.machineLoad = new MachineLoadSampler({
       historyStore: {
@@ -986,6 +1061,9 @@ export class OrkestratorBackend {
       ...(options.nodeLinks?.fetchImpl ? { fetchImpl: options.nodeLinks.fetchImpl } : {}),
     });
     context.nodePortal = this.nodePortal;
+    // Windows subscribe to relayed nodes' keys through this node (design D10).
+    this.nodePortal.pushSubscriptions.attachDownstream(this.push.hub);
+    this.push.attachNodeSubscriptions(this.nodePortal.pushSubscriptions);
     this.nodeCoordination = new NodeCoordination({
       storage,
       nodes: this.nodes,
@@ -1085,7 +1163,7 @@ export class OrkestratorBackend {
         this.coordinators.statusWakes.notePullRequestChange(environmentId, nodeId),
     });
     // Per-turn transcript-artifact bookkeeping, shared by native turns and the
-    // workflows that drive providers directly (workflow-artifact-turns.ts).
+    // workflows that drive providers directly (workflows/artifact-turns.ts).
     // The artifact service is constructed after this; resolve it lazily.
     const artifactDispatch: ArtifactTurnDispatch = {
       beginTurn: (turn) => {
@@ -1182,6 +1260,8 @@ export class OrkestratorBackend {
       },
       {
         changeTracking: () => this.runtime.changeTracking?.nativeAgentHooks() ?? null,
+        onPushObservationHint: (environmentId, agent, providerSessionId, parts) =>
+          this.push.nativeSessions.wakeProvider(environmentId, agent, providerSessionId, parts),
         // Never under `bun test`: a title run would use this machine's real
         // agent login. `ORKESTRATOR_SESSION_TITLE_GENERATION=0` turns it off.
         ...(sessionTitleGenerationEnabled(process.env)
@@ -1484,6 +1564,7 @@ export class OrkestratorBackend {
       },
     );
     context.nativeAgents = this.nativeAgents;
+    context.push = this.push;
     this.agentTools.setGoalToolHost?.(this.nativeAgents.goals);
     context.agentRegistry = new AgentRegistry(storage, {
       native: (environmentId, agent, logicalSessionKey) =>
@@ -1597,10 +1678,17 @@ export class OrkestratorBackend {
     const workspaceWriters = new WorkspaceWriters(storage);
     this.buildPipelines = new BuildPipelineService(
       storage,
-      async <T>(command: string, args: Record<string, unknown> = {}) => {
+      async <T>(
+        command: string,
+        args: Record<string, unknown> = {},
+        buildKanbanWrite?: CommandContext["buildKanbanWrite"],
+      ) => {
         const handler = this.commands.get(command);
         if (!handler) throw unknownCommand(command);
-        return (await handler(args, context)) as T;
+        return (await handler(
+          args,
+          buildKanbanWrite ? { ...context, buildKanbanWrite } : context,
+        )) as T;
       },
       {
         workflowResults: this.workflowResults,
@@ -1678,6 +1766,8 @@ export class OrkestratorBackend {
           usageLimitStops: this.accountAutoSwitch,
           openCodeWorkflow,
         },
+        onTranscriptHint: (environmentId, agent, providerSessionId, parts) =>
+          this.push.reviewTranscripts?.hint(environmentId, agent, providerSessionId, parts),
         resolveAgentToolConnection,
         resolveWorkerToolConnection: (environmentId, projectId, target, tabId) =>
           this.agentTools.connection(environmentId, projectId, target, tabId),
@@ -3342,9 +3432,28 @@ export class OrkestratorBackend {
     this.stopLogPolicyListener = policy.stop;
   }
 
+  /**
+   * The Auto-pipeline service the push layer reads through. Its `sources`
+   * and `state` read storage and the process-local outcomes (shared by
+   * storage), so this instance never drafts and needs no ports.
+   */
+  private autoPipelineReads(): AutoPipelineService | null {
+    if (!this.context) return null;
+    this.autoPipelineReadService ??= new AutoPipelineService(this.context, () => {
+      throw new Error("The push layer's Auto-pipeline reads never draft");
+    });
+    return this.autoPipelineReadService;
+  }
+
   async shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    // Observers read sessions on timers of their own; stop them first.
+    stopStepNow("push", () => {
+      this.stopAutoPipelineWakes?.();
+      this.stopAutoPipelineWakes = null;
+      this.push.dispose();
+    });
     stopStepNow("agent-test-dispatch-hold", () => this.uninstallDispatchHold?.());
     // Each synchronous stop is guarded: one that throws is logged and the rest
     // still run, since an exception here would skip the drain and every close.
@@ -3431,9 +3540,6 @@ export class OrkestratorBackend {
       () => ({ stopped: true as const }),
       () => ({ stopped: false as const }),
     );
-    // Synchronous, so it runs before the awaited drain rather than racing it:
-    // every watcher holds a file descriptor and a debounce timer.
-    stopStepNow("runtime", () => this.runtime.shutdown());
     stopStepNow("environment-cleanup-schedule", () =>
       cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir()),
     );
@@ -3441,6 +3547,8 @@ export class OrkestratorBackend {
     const attempt = (async () => {
       let drained = false;
       let closeFailure: ShutdownStepFailure | null = null;
+      let checkpointFailure: ShutdownStepFailure | null = null;
+      const checkpoints = pauseBackgroundCheckpoints(this.context.storage.getDataDir());
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
         // Close both admission gates before waiting on any in-flight work.
@@ -3450,6 +3558,20 @@ export class OrkestratorBackend {
         const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
           this.environmentLifecycleDrainTimeoutMs,
         );
+        // The runtime closes the ledger. Wait for any passive checkpoint and
+        // retry deferred scrubs while both files' connections are still open.
+        checkpointFailure = await Effect.runPromise(
+          shutdownStep("storage-checkpoints", checkpoints.waitForWorkers, {
+            timeoutMs: Math.min(
+              STORAGE_CHECKPOINT_DRAIN_TIMEOUT_MS,
+              Math.max(0, lifecycleDeadline - Date.now()),
+            ),
+          }),
+        );
+        checkpointFailure ??= await Effect.runPromise(
+          shutdownStep("storage-privacy-scrub", checkpoints.flushScrubs),
+        );
+        stopStepNow("runtime", () => this.runtime.shutdown());
         // Pipeline passes may still be writing snapshots or using a bridge.
         // Drain them before terminating backend-owned local servers — but never
         // let a failed drain skip that teardown, or every backend-owned bridge
@@ -3538,14 +3660,19 @@ export class OrkestratorBackend {
           throw new Error("User command termination could not be confirmed. Retry shutdown.");
         drained = true;
       } finally {
-        closeFailure = await Effect.runPromise(
-          this.releaseShutdownResources(drained, reachabilitySettled),
-        );
+        try {
+          closeFailure = await Effect.runPromise(
+            this.releaseShutdownResources(drained && !checkpointFailure, reachabilitySettled),
+          );
+        } finally {
+          checkpoints.resume();
+        }
       }
       // Reached only after a drain that succeeded: a failed drain keeps its own
       // error. The first failed close fails this attempt so a later
       // `shutdown()` retries it.
-      if (closeFailure) throw closeFailure.error;
+      const failure = checkpointFailure ?? closeFailure;
+      if (failure) throw failure.error;
     })();
     this.shutdownPromise = attempt;
     try {

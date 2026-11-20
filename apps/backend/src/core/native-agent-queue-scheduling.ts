@@ -10,7 +10,7 @@ import {
   type WorkflowDiscoveryResult,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+} from "./workflows/index.js";
 
 /**
  * Native launch intents and prompt queues as due keys (step 08, task 9).

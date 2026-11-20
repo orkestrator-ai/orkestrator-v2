@@ -24,6 +24,7 @@ process.env.CODEX_BRIDGE_NO_SERVER = "1";
 process.env.CODEX_BRIDGE_AUTH_DISABLED_FOR_TESTING = "1";
 
 const { app, __testing } = await import("./index.js");
+const { sessionStateRevisions } = await import("./state-revision.js");
 
 interface Frame {
   event: string;
@@ -170,7 +171,13 @@ describe("/event/subscribe", () => {
 
     const connected = frames.find((frame) => frame.event === "connected");
     expect(connected).toBeDefined();
-    expect(connected!.data).toMatchObject({ status: "connected", revision: before, observe: true });
+    expect(connected!.data).toMatchObject({
+      status: "connected",
+      revision: before,
+      observe: true,
+      // Frames carry state and transcript revisions (to-do 8102 task 2).
+      revisions: 1,
+    });
   });
 
   test("frames carry the event type, cursor and session, never the payload", async () => {
@@ -187,8 +194,49 @@ describe("/event/subscribe", () => {
     );
     const live = frames.find((frame) => frame.data.sessionId === "observed-live");
     expect(live).toMatchObject({ event: "message.updated", data: { sessionId: "observed-live" } });
-    expect(Object.keys(live!.data)).toEqual(["sessionId"]);
+    // The session and its state revision; a session this runtime does not hold
+    // has no transcript revision to report.
+    expect(Object.keys(live!.data)).toEqual(["sessionId", "stateRevision"]);
     expect(JSON.stringify(frames)).not.toContain("secret transcript text");
+  });
+
+  test("a state event moves the frame's state revision; a transcript event does not", async () => {
+    const runtime = __testing.runtimeForTesting();
+    const { sessionId } = runtime.createSession({ mode: "build" });
+    const frames = await collect(
+      "",
+      () => {
+        __testing.emitForTesting({ type: "message.updated", sessionId });
+        __testing.emitForTesting({ type: "session.updated", sessionId });
+      },
+      { expected: 2 },
+    );
+    const [transcript, state] = frames.filter((frame) => frame.data.sessionId === sessionId);
+    expect(typeof transcript!.data.transcriptRevision).toBe("string");
+    expect(state!.data.stateRevision).not.toBe(transcript!.data.stateRevision);
+    expect(state!.data.stateRevision).toBe(sessionStateRevisions.peek(sessionId));
+  });
+
+  test("the status route answers a current knownStateRevision with the small unchanged body", async () => {
+    const runtime = __testing.runtimeForTesting();
+    const { sessionId } = runtime.createSession({ mode: "build" });
+    const full = (await (await app.request(`/session/${sessionId}/status`)).json()) as {
+      stateRevision?: string;
+      status?: string;
+    };
+    expect(full.status).toBe("idle");
+    expect(full.stateRevision).toMatch(/:\d+$/);
+    const known = encodeURIComponent(full.stateRevision!);
+    const again = await app.request(`/session/${sessionId}/status?knownStateRevision=${known}`);
+    expect(await again.json()).toEqual({ unchanged: true, stateRevision: full.stateRevision });
+
+    __testing.emitForTesting({ type: "session.title-updated", sessionId });
+    const moved = (await (
+      await app.request(`/session/${sessionId}/status?knownStateRevision=${known}`)
+    ).json()) as { unchanged?: boolean; status?: string; stateRevision?: string };
+    expect(moved.unchanged).toBeUndefined();
+    expect(moved.status).toBe("idle");
+    expect(moved.stateRevision).not.toBe(full.stateRevision);
   });
 
   test("a cursor behind the current revision gets a reconcile frame, not the missed events", async () => {
@@ -235,7 +283,7 @@ describe("/event/subscribe", () => {
     expect(frames).toContainEqual(
       expect.objectContaining({
         event: "session.reconcile-required",
-        data: { sessionId: "ordered-overflow" },
+        data: expect.objectContaining({ sessionId: "ordered-overflow" }),
       }),
     );
   });

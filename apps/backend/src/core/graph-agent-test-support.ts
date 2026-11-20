@@ -31,7 +31,7 @@ import { compiledPlan } from "./graph-run-executor-test-support.js";
 import { GraphRunService, type GraphRunServiceOptions } from "./graph-run-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 export const AGENT_TEST_COMMIT = "c".repeat(40);
 export const AGENT_TEST_BASE_COMMIT = "b".repeat(40);

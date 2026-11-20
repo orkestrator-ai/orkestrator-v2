@@ -26,6 +26,15 @@ export type KeyInformationFraming = (typeof KEY_INFORMATION_FRAMINGS)[number];
 export const KEY_INFORMATION_TEST_RESULTS = ["passed", "failed", "skipped", "not-run"] as const;
 export type KeyInformationTestResult = (typeof KEY_INFORMATION_TEST_RESULTS)[number];
 
+/**
+ * How a verification check came out. `not-checked` is a check the stage could
+ * not run (it needs a live provider, another platform, credentials or a
+ * person); it is neither a pass nor a failure and carries its reason in
+ * `details`.
+ */
+export const KEY_INFORMATION_CHECK_STATUSES = ["passed", "failed", "not-checked"] as const;
+export type KeyInformationCheckStatus = (typeof KEY_INFORMATION_CHECK_STATUSES)[number];
+
 export const KEY_INFORMATION_ISSUE_STATUSES = [
   "open",
   "resolved",
@@ -105,8 +114,24 @@ export interface KeyInformationIssue {
 
 export interface KeyInformationCheck {
   check: string;
+  /**
+   * True only for a passed check. Always present, because readers that
+   * predate `status` require it; a `not-checked` check stores `false`, which
+   * those readers show as a failure.
+   */
   passed: boolean;
+  /** Absent on records that predate it; {@link keyInformationCheckStatus} reads either. */
+  status?: KeyInformationCheckStatus;
+  /** What failed, or for a `not-checked` check why it was not checked. */
   details?: string;
+}
+
+/** A check's outcome, from `status` when recorded and from `passed` otherwise. */
+export function keyInformationCheckStatus(
+  check: Pick<KeyInformationCheck, "passed" | "status">,
+): KeyInformationCheckStatus {
+  if (check.status) return check.status;
+  return check.passed ? "passed" : "failed";
 }
 
 export interface KeyInformationVerification {
@@ -266,9 +291,12 @@ function boundIssue(value: KeyInformationIssue): KeyInformationIssue {
 
 function boundCheck(value: KeyInformationCheck): KeyInformationCheck {
   const details = boundedOptional(value.details, KEY_INFORMATION_LIMITS.itemLength);
+  const status = keyInformationCheckStatus(value);
   return {
     check: bounded(value.check, KEY_INFORMATION_LIMITS.checkLength),
-    passed: value.passed,
+    // `status` wins, so the two can never disagree in the stored record.
+    passed: status === "passed",
+    ...(value.status ? { status } : {}),
     ...(details ? { details } : {}),
   };
 }
@@ -416,13 +444,30 @@ export function recordKeyInformationVerdict(
   const checks =
     previous && previous.checks.length > 0
       ? previous.checks
-      : verdict.criteria
-          .filter((criterion) => criterion.status !== "not-checked")
-          .map((criterion) => ({
+      : verdict.criteria.map((criterion): KeyInformationCheck => {
+          const status = oneOf(KEY_INFORMATION_CHECK_STATUSES, criterion.status)
+            ? criterion.status
+            : "failed";
+          const details =
+            criterion.evidence.trim() ||
+            (status === "not-checked"
+              ? "Verify did not record why this criterion was not checked."
+              : "");
+          return {
             check: criterion.text,
-            passed: criterion.status === "passed",
-            ...(criterion.evidence ? { details: criterion.evidence } : {}),
-          }));
+            passed: status === "passed",
+            status,
+            ...(details ? { details } : {}),
+          };
+        });
+  if (!previous?.checks.length && checks.length > KEY_INFORMATION_LIMITS.checks) {
+    // Preserve checked evidence when unrun criteria would otherwise crowd it out.
+    const priority = { failed: 0, passed: 1, "not-checked": 2 };
+    checks.sort(
+      (left, right) =>
+        priority[keyInformationCheckStatus(left)] - priority[keyInformationCheckStatus(right)],
+    );
+  }
   next.verifications = boundVerifications([
     ...next.verifications.filter((entry) => entry.round !== round),
     {
@@ -526,6 +571,7 @@ function isVerification(value: unknown): boolean {
         isRecord(check) &&
         isText(check.check, limits.checkLength) &&
         typeof check.passed === "boolean" &&
+        (check.status === undefined || oneOf(KEY_INFORMATION_CHECK_STATUSES, check.status)) &&
         isOptionalText(check.details, limits.itemLength),
     )
   );

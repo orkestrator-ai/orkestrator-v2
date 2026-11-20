@@ -1,4 +1,5 @@
 import type {
+  SelfImprovementMachineResult,
   SelfImprovementRunSummary,
   SelfImprovementTheme,
   SelfImprovementTrackedItem,
@@ -208,12 +209,17 @@ export function LastRunDetails({
       {run.outcome === "succeeded" && nothing ? (
         <p className="text-xs text-muted-foreground">Nothing new to file and no fix to judge.</p>
       ) : null}
+      {run.machines && run.machines.length > 0 ? (
+        <MachineList machines={run.machines} preview={run.trigger === "dry-run"} />
+      ) : null}
       <div className="space-y-0.5 text-xs text-muted-foreground">
         {conversations.enabled ? (
           <p>
-            Conversations: read {conversations.read} part{conversations.read === 1 ? "" : "s"},{" "}
-            {conversations.notesAdded} new note{conversations.notesAdded === 1 ? "" : "s"},{" "}
-            {conversations.themes} theme{conversations.themes === 1 ? "" : "s"} in the last 30 days
+            Conversations: {run.trigger === "dry-run" ? "found" : "read"} {conversations.read} part
+            {conversations.read === 1 ? "" : "s"}
+            {run.trigger === "dry-run" ? " to review" : ""}, {conversations.notesAdded} new note
+            {conversations.notesAdded === 1 ? "" : "s"}, {conversations.themes} theme
+            {conversations.themes === 1 ? "" : "s"} in the last 30 days
             {conversations.waiting > 0
               ? `, ${conversations.waiting} more waiting for the next run`
               : ""}
@@ -238,6 +244,57 @@ export function LastRunDetails({
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** What a run read from one connected leaf node, in words. */
+function machineResultText(machine: SelfImprovementMachineResult, preview: boolean): string {
+  if (machine.diagnostics === "needs-update") return "needs an update to take part";
+  const parts = [machine.diagnostics === "read" ? "diagnostics" : "diagnostics could not be read"];
+  if (machine.conversations === "read") {
+    parts.push(
+      `${machine.conversationParts} conversation part${machine.conversationParts === 1 ? "" : "s"}${preview ? " to review" : " reviewed"}`,
+    );
+  } else if (machine.conversations === "failed") {
+    parts.push("conversations could not be read");
+  } else if (machine.conversations === "needs-update") {
+    parts.push("conversations need an update");
+  }
+  return parts.join(", ");
+}
+
+function machineFailed(machine: SelfImprovementMachineResult): boolean {
+  return (
+    machine.diagnostics !== "read" || ["failed", "needs-update"].includes(machine.conversations)
+  );
+}
+
+/** The connected leaf nodes a command node's run contacted. */
+function MachineList({
+  machines,
+  preview,
+}: {
+  machines: readonly SelfImprovementMachineResult[];
+  preview: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-foreground">
+        Attempted reads from {machines.length} connected machine{machines.length === 1 ? "" : "s"}
+      </p>
+      <ul className="mt-1 space-y-0.5 text-xs">
+        {machines.map((machine) => (
+          <li
+            key={machine.nodeId}
+            className={machineFailed(machine) ? "text-amber-400" : "text-muted-foreground"}
+          >
+            <span className="text-foreground">{machine.name}</span>
+            {machine.appVersion ? ` (app ${machine.appVersion})` : ""}:{" "}
+            {machineResultText(machine, preview)}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

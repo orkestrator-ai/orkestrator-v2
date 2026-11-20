@@ -1,5 +1,7 @@
 # Modal-width main-merge validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0630
 - **Status:** open
 - **Observed:** 2026-10-21

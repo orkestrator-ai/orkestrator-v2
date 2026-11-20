@@ -38,7 +38,7 @@ import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
-import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./review/prompts.js";
 import {
   normalizeOpenCode2ModelCatalogue,
   resolveOpenCode2DefaultModel,

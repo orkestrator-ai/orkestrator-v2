@@ -85,10 +85,7 @@ import {
   type WorkspaceChange,
   type WorkspaceSnapshotProbe,
 } from "./workspace-read-only-guard.js";
-import type {
-  WorkflowResultAcceptanceCheck,
-  WorkflowResultAttempt,
-} from "./workflow-result-service.js";
+import type { WorkflowResultAcceptanceCheck, WorkflowResultAttempt } from "./workflows/index.js";
 
 /** `git ls-remote <args>` in the environment, with its credentials (never prompting). */
 export type GraphLsRemote = (environment: Environment, args: string[]) => Promise<string>;

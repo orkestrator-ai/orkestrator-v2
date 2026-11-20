@@ -52,12 +52,12 @@ import {
 } from "./mcp-in-process.js";
 import type { ScheduledJobService } from "./scheduled-jobs/index.js";
 import { registerScheduleTools, type ScheduleToolBackend } from "./scheduled-jobs/tools.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   registerWorkflowResultBrokerTools,
   registerWorkflowResultSlotTools,
   registerWorkflowResultTools,
-} from "./workflow-result-tools.js";
+  type WorkflowResultService,
+} from "./workflows/index.js";
 import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import type { BuildPipelineKeyInformationHost } from "./build-pipeline-key-information.js";
 import { registerKeyInformationTools } from "./build-pipeline-key-information-tools.js";
@@ -65,7 +65,7 @@ import {
   registerAutoPipelineTool,
   type AutoPipelineToolHost,
 } from "./agent-tools-auto-pipeline.js";
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import type { ProvisionalFindingSink } from "./review/index.js";
 import {
   registerSuborkRefusalTool,
   registerSuborkTools,

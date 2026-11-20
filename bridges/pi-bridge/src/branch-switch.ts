@@ -21,6 +21,7 @@
  */
 import type { AgentSession, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isObject, type SessionState } from "./state.js";
+import { revisionChanged } from "./observation.js";
 
 /**
  * How long the bridge lets Pi summarize before it stops the switch.
@@ -125,7 +126,7 @@ export function beginBranchSummary(state: SessionState): BranchSummaryRun {
   timer.unref?.();
   const run: BranchSummaryRun = { settled, settle, timer };
   state.branchSummary = run;
-  state.revision += 1;
+  revisionChanged(state);
   return run;
 }
 
@@ -138,7 +139,7 @@ export function endBranchSummary(
   clearTimeout(run.timer);
   run.abort = undefined;
   run.settle(stopped);
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**

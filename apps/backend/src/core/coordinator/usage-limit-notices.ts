@@ -40,7 +40,7 @@ import {
   type UsageLimitStop,
 } from "@orkestrator/protocol/coordinator-notices";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import type { LimitedAccountMove, UsageLimitStopReport } from "../agent-accounts-auto-switch.js";
+import type { LimitedAccountMove, UsageLimitStopReport } from "../agent-accounts/index.js";
 import type { CoordinatorNoticeRouter } from "./notice-router.js";
 import type {
   UsageLimitNoticeGroup,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { graphBuiltInTypes } from "@orkestrator/protocol/graphs/types";
-import { validateWorkflowResult, workflowResultJsonSchema } from "./workflow-result-contracts.js";
+import { validateWorkflowResult, workflowResultJsonSchema } from "./workflows/result-contracts.js";
 
 /**
  * Built-in graph types that map a workflow result kind must stay that kind's

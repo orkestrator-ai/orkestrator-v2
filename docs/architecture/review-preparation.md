@@ -213,7 +213,7 @@ into reviewer prompts. Read-only files and hashes detect accidental changes;
 they are not a security sandbox against a malicious project command.
 
 The backend also seals the reviewed diff beside the package (`diffArtifact`,
-`review-diff-artifact.ts`). A diff above 512 KiB is additionally sealed as
+`review/diff-artifact.ts`). A diff above 512 KiB is additionally sealed as
 parts targeting 256 KiB, preferring file and hunk boundaries (`diffChunks`: at most 64,
 each with its 1-based `index`, digest-named path, byte count, SHA-256 and the
 changed paths it holds; their bytes concatenate to the whole diff). Reviewer
@@ -527,7 +527,7 @@ session pushes the branch and opens the pull request; nothing merges.
 The built-in Multi Review graph template (`@orkestrator/protocol/graphs/builtins`,
 plan item 108) describes these rules: `multiReviewAutoFixDue`,
 `queueCleanReviewAutoPr`, `queueAutoPr` and `fixResultCompletes` in
-`multi-review-auto-pr.ts` decide the route, and `multi-review-steps.ts` holds
+`review/auto-pr.ts` decide the route, and `review/steps.ts` holds
 each step's result kind and turn (`MULTI_REVIEW_STEP_TURNS`,
 `MULTI_REVIEW_INTERACTIVE_FIX`). `graph-builtin-templates.test.ts` pins the
 template to them. The template cannot express an Address Findings run the user starts by hand
@@ -549,7 +549,7 @@ Every launch surface (the dialog, `launch_multi_review`, an operator's
 service records `engine: "graph"` and `graphRun.runId`
 (`multi-review-<workflow id>`), and its first pass launches a graph run of the
 built-in Multi Review template inlined as a copy
-(`multi-review-graph-template.ts`): `engine` dropped, `targetBranch` and
+(`review/graph-template.ts`): `engine` dropped, `targetBranch` and
 `reviewInstruction` added as parameters, and the target branch written onto the
 package and pull request system nodes. Roles are bound from the review's own
 input: the preparer is `reviewModel` (else `addressFindingsModel`), the
@@ -564,7 +564,7 @@ engines.
 
 The record stays the read model. Each supervision pass reads the run by id and,
 when its revision moved, projects it onto the record under the controller lease
-(`multi-review-graph-projection.ts`): the `plan` activation becomes
+(`review/graph-projection.ts`): the `plan` activation becomes
 `preparationSession`, `package` the sealed `reviewPackage`, each `review`
 branch `panel.N` reviewer N (status, session, report attributed by the backend,
 `report_progress` issues as provisional findings), `consolidate` the
@@ -625,7 +625,7 @@ lets validation finish, reloads, and reads the same completed snapshot.
 
 ## Fan-out supervision
 
-One runner, `ReviewFanoutRunner` (`apps/backend/src/core/review-fanout.ts`),
+One runner, `ReviewFanoutRunner` (`apps/backend/src/core/review/fanout.ts`),
 drives the reviewers of standalone Multi Review and of Build Pipeline review
 stages. Its control plane (admission, observation, persistence, evidence
 verification and consolidation input) must stay bounded, and independent of
@@ -765,7 +765,7 @@ bespoke paths, and the consolidation prompt tells the consolidator to leave
 disputed checks out and not to run them.
 
 The backend then re-runs them
-([`review-disputed-checks.ts`](../../apps/backend/src/core/review-disputed-checks.ts)).
+([`review/disputed-checks.ts`](../../apps/backend/src/core/review/disputed-checks.ts)).
 Only a command of the sealed validation plan is re-run: the plan the package
 was sealed from, discovered at the package's commit. A disputed command
 matches a planned one in its sealed form (`cd '<cwd>' && <command>`) or, when
@@ -799,7 +799,7 @@ substitution leaves the planned check unverified.
 ## Fan-out budgets and benchmark
 
 After sealing, `ReviewFanoutRunner`
-([`review-fanout.ts`](../../apps/backend/src/core/review-fanout.ts)) hands the
+([`review/fanout.ts`](../../apps/backend/src/core/review/fanout.ts)) hands the
 package to every reviewer, for standalone Multi Review and Build Pipeline review
 stages alike. The cost of that control plane (admission, observation,
 persistence, evidence verification, consolidation input) is bounded
@@ -807,22 +807,22 @@ independently of panel size, up to the 32-reviewer maximum:
 
 | Dimension | Budget | Owner |
 | --- | --- | --- |
-| Concurrent session setups | 4 (`DEFAULT_REVIEW_ADMISSION_CONCURRENCY`) | `review-fanout-scheduler.ts` |
-| Concurrent observations | 8 (`DEFAULT_REVIEW_OBSERVATION_CONCURRENCY`) | `review-fanout-scheduler.ts` |
-| Concurrent work per provider | 4 (`DEFAULT_REVIEW_PROVIDER_CONCURRENCY`) | `review-fanout-scheduler.ts` |
-| Any configured cap | Clamped to 16 (`MAX_REVIEW_FANOUT_CONCURRENCY`) | `review-fanout-scheduler.ts` |
-| Evidence verifications | 2 per evidence generation: before admission and before consolidation. Each hashes the package and every validation artifact it references (at most 32 MiB per stream); `evidence.verify` reports both as `bytes` and the artifact count as `count` | `review-evidence-permits.ts`, `review-validation-artifacts.ts` |
-| Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `multi-review-progress.ts`, `review-fanout-transcript.ts` |
+| Concurrent session setups | 4 (`DEFAULT_REVIEW_ADMISSION_CONCURRENCY`) | `review/fanout-scheduler.ts` |
+| Concurrent observations | 8 (`DEFAULT_REVIEW_OBSERVATION_CONCURRENCY`) | `review/fanout-scheduler.ts` |
+| Concurrent work per provider | 4 (`DEFAULT_REVIEW_PROVIDER_CONCURRENCY`) | `review/fanout-scheduler.ts` |
+| Any configured cap | Clamped to 16 (`MAX_REVIEW_FANOUT_CONCURRENCY`) | `review/fanout-scheduler.ts` |
+| Evidence verifications | 2 per evidence generation: before admission and before consolidation. Each hashes the package and every validation artifact it references (at most 32 MiB per stream); `evidence.verify` reports both as `bytes` and the artifact count as `count` | `review/evidence-permits.ts`, `review/validation-artifacts.ts` |
+| Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `review/progress.ts`, `review/fanout-transcript.ts` |
 | Observational writes | At most one workflow write per pass, for any panel size | `ReviewFanoutRunner.stageObservation` |
 | Controller fence checks | One committed row read each, with no lease, whatever the panel size or retained review history; four per running reviewer per pass, plus one (and one per pending request) on providers that report interactions | `ReviewsRepository.validateMultiReviewController` |
 | Multi Review store work per running pass | No whole-store read; two lease acquisitions (the controller claim and the observational flush) at any panel size | `storage-reviews.ts` |
-| Running-reviewer observation | Next pass 3 s after the previous one finishes, plus up to 1 s stable per-workflow jitter; admission, dispatch and consolidation work runs at 1 s | `multi-review-service.ts` |
+| Running-reviewer observation | Next pass 3 s after the previous one finishes, plus up to 1 s stable per-workflow jitter; admission, dispatch and consolidation work runs at 1 s | `review/service.ts` |
 | Accepted report | 1 MiB, 100 issues, 16 KiB per prose field | `packages/protocol/src/structured-review/budgets.ts` |
-| Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review-consolidation-evidence.ts` |
-| Reviewer-tab transcript snapshot | 500 messages and 2 MiB; unchanged polls carry no messages | `multi-review-reviewer-transcript.ts` |
-| Flow graph step-session tail (preparation, consolidation, Address Findings) | 100 messages and 256 KiB; unchanged polls carry no messages; polled only while the step is live and visible | `multi-review-step-transcript.ts` |
-| Provisional findings (`report_finding`) | 50 per reviewer, 16 KiB each, so together under one report's budget; staged in memory and written with the pass's observations | `review-provisional-findings.ts` |
-| Admission queue position | No write of its own: rides on the pass's safety commits and observational flush | `review-fanout-admission.ts` |
+| Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review/consolidation-evidence.ts` |
+| Reviewer-tab transcript snapshot | 500 messages and 2 MiB; unchanged polls carry no messages | `review/reviewer-transcript.ts` |
+| Flow graph step-session tail (preparation, consolidation, Address Findings) | 100 messages and 256 KiB; unchanged polls carry no messages; polled only while the step is live and visible | `review/step-transcript.ts` |
+| Provisional findings (`report_finding`) | 50 per reviewer, 16 KiB each, so together under one report's budget; staged in memory and written with the pass's observations | `review/provisional-findings.ts` |
+| Admission queue position | No write of its own: rides on the pass's safety commits and observational flush | `review/fanout-admission.ts` |
 
 Why these values:
 
@@ -848,9 +848,9 @@ Why these values:
   50 retained finished 8-reviewer workflows (about 8 MiB) made a running pass
   about 25 times slower.
 
-[`multi-review-efficiency.bench.test.ts`](../../apps/backend/src/core/multi-review-efficiency.bench.test.ts)
+[`review/efficiency.bench.test.ts`](../../apps/backend/src/core/review/efficiency.bench.test.ts)
 measures this with fake providers, a temporary store and synthetic reports
-(`multi-review-efficiency-fixtures.ts`) for 1, 2, 4, 8, 16 and 32 reviewers,
+(`review/efficiency-fixtures.ts`) for 1, 2, 4, 8, 16 and 32 reviewers,
 an 8-reviewer panel over 50 retained finished workflows, a two-provider panel
 and one slow reviewer. It counts only through the fake provider, the command
 invoker and storage and database spies, so the same file can run against an
@@ -871,7 +871,7 @@ the result table:
 MULTI_REVIEW_BENCH_OUT=/tmp/multi-review-bench.json \
   mise run test:logged -- --name multi-review-bench -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/multi-review-efficiency.bench.test.ts --parallel=1
+  ./src/core/review/efficiency.bench.test.ts --parallel=1
 ```
 
 Add `MULTI_REVIEW_BENCH_REPORT_ONLY=1` to measure an older build without the
@@ -879,7 +879,7 @@ assertions.
 
 That benchmark fakes verification, so it counts verifications but not what
 one costs. The opt-in
-[`multi-review-large-evidence.bench.test.ts`](../../apps/backend/src/core/multi-review-large-evidence.bench.test.ts)
+[`review/large-evidence.bench.test.ts`](../../apps/backend/src/core/review/large-evidence.bench.test.ts)
 writes validation artifacts totalling `ORKESTRATOR_MULTI_REVIEW_LARGE_EVIDENCE_MIB`
 MiB into a temporary local worktree (32 MiB per artifact), verifies them twice
 with real streamed SHA-256 as one evidence generation does, checks that one
@@ -890,7 +890,7 @@ variable:
 ORKESTRATOR_MULTI_REVIEW_LARGE_EVIDENCE_MIB=512 \
 MULTI_REVIEW_LARGE_EVIDENCE_OUT=/tmp/large-evidence.json \
   mise exec -- bun test --cwd apps/backend \
-  ./src/core/multi-review-large-evidence.bench.test.ts
+  ./src/core/review/large-evidence.bench.test.ts
 ```
 
 On an Apple M5 Pro (internal SSD, Bun 1.4.4, 2026-10-25) 512 MiB in 16
@@ -899,13 +899,13 @@ generation, with peak RSS growing by under 20 MiB; Bun 1.4.2 runs of 512 MiB
 and 1 GiB took 0.36 to 1.2 s per pass. A GiB of evidence costs about two
 seconds per generation on local disk, against reviews that take minutes. Container artifacts are hashed inside the container
 (`stat`, then `sha256sum`) and were not measured. The remaining budgets are asserted by focused tests:
-`review-fanout-efficiency.test.ts` (transcript reads, writes per pass,
-admission, isolation), `multi-review-service-efficiency.test.ts` and
-`multi-review-reviewer-transcript.test.ts` (reviewer-tab snapshots),
+`review/fanout-efficiency.test.ts` (transcript reads, writes per pass,
+admission, isolation), `review/service-efficiency.test.ts` and
+`review/reviewer-transcript.test.ts` (reviewer-tab snapshots),
 `storage-multi-review.test.ts`
 (fence checks read one row without the lease),
 `structured-review/budgets.test.ts` (reports) and
-`review-consolidation-evidence.test.ts` (consolidation input). Open
+`review/consolidation-evidence.test.ts` (consolidation input). Open
 scale and cost work is in
 [0027-multi-review-scale-and-cost.md](../todo/coordinator-and-multi-review/0027-multi-review-scale-and-cost.md).
 
@@ -914,7 +914,7 @@ scale and cost work is in
 Each reviewer's prompt goes out at most once per request id: `prepared` →
 durable `dispatching` → `send` → `sent`, with the send the next fallible step
 after the durable write. Two rules keep a recovered record honest
-(`review-fanout.ts`):
+(`review/fanout.ts`):
 
 - **`dispatching` is written only by the reviewer's own commit.** Every save
   serializes the whole panel, so the runner applies `dispatching` inside that
@@ -959,7 +959,7 @@ within the reconnect deadline before failing closed ("dispatch acceptance
 could not be confirmed"). Legacy attempts use their original `startedAt`
 for that deadline. An older backend ignores these fields and re-sends, as before.
 
-`review-fanout-interleaving.test.ts` checks both rules over seeded
+`review/fanout-interleaving.test.ts` checks both rules over seeded
 interleavings of commits, provider calls, cancellation, fence loss and backend
 restarts. Its "a provider that proves an id never arrived" suites run the
 restart and chaos flavours against a provider that answers `absent`, lets a
@@ -984,7 +984,7 @@ guard, presets and prompt section live in
   consolidation and fix selections use `isReviewStepModelSelection`
   (`isMultiReviewModelSelection`), which refuses it.
 - **Prompt.** The lens is the reviewer's own text, so it goes after the panel
-  position (`reviewerPanelTail` in `multi-review-prompts.ts`): the packaged and
+  position (`reviewerPanelTail` in `review/multi-review-prompts.ts`): the packaged and
   live-worktree Multi Review prompts and the Build Pipeline fan-out prompt end
   with the panel section and then a framed "**Review focus**" section with the
   label and instruction inside `<reviewer-focus>` … `</reviewer-focus>`
@@ -1060,7 +1060,7 @@ reviewer IDs.
 
 - **Overlap counts.** When a consolidation is accepted,
   `consolidationOverlap`
-  ([`review-fanout-provenance.ts`](../../apps/backend/src/core/review-fanout-provenance.ts))
+  ([`review/fanout-provenance.ts`](../../apps/backend/src/core/review/fanout-provenance.ts))
   turns the `reviewSourceIds` the model cited into a `ReviewPanelOverlapV1`
   (`packages/protocol/src/review-fanout.ts`). It has to run then: the stored
   report keeps model labels, not source IDs. Multi Review stores it as
@@ -1098,18 +1098,18 @@ reviewer IDs.
   bridge), and no reviewer session is given a directory of its own. See
   [0025](../todo/coordinator-and-multi-review/0025-multi-review-panel-value.md#qualification).
 - **Evaluation corpus.**
-  [`multi-review-evaluation-corpus.ts`](../../apps/backend/src/core/multi-review-evaluation-corpus.ts)
+  [`review/evaluation-corpus.ts`](../../apps/backend/src/core/review/evaluation-corpus.ts)
   holds nine synthetic panels with a reference consolidation for each:
   severity disagreement, a contradiction, a late unique finding, two distinct
   problems at one location, a clean panel, failed and invalid reviewers,
   coverage gaps, Unicode and list limit boundaries, and evidence-frame
   injection.
-  [`multi-review-evaluation.ts`](../../apps/backend/src/core/multi-review-evaluation.ts)
+  [`review/evaluation.ts`](../../apps/backend/src/core/review/evaluation.ts)
   scores an answer by recall, false merges, splits, unexpected findings,
   dropped sources, severity, location, provenance validity and verdict. It
   also rebuilds the pre-#833 full-report evidence (`d680ccdb`) inside the
   current prompt, so the evidence is the only thing that differs between the
-  two. CI covers these in `multi-review-evaluation.test.ts`.
+  two. CI covers these in `review/evaluation.test.ts`.
 
 [`scripts/multi-review-evaluation.ts`](../../scripts/multi-review-evaluation.ts)
 runs the live comparison. `prompts` writes each case's full and compact prompt

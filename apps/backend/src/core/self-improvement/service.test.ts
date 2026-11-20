@@ -379,3 +379,117 @@ describe("the daily run", () => {
     });
   });
 });
+
+describe("a run on a command node", () => {
+  test("reads its connected leaves, goes on without the ones that fail, and reports each", async () => {
+    const capture = captureLogs();
+    cleanups.push(() => capture.restore());
+    const leafLines: EssentialLine[] = [
+      {
+        at: NOW - 5 * DAY,
+        level: "info",
+        area: "backend",
+        event: "starting",
+        fields: { version: "2.31.0" },
+      },
+      ...Array.from({ length: 12 }, (_, index): EssentialLine => ({
+        at: NOW - 4 * DAY + index * HOUR,
+        level: "error",
+        area: "tmux",
+        event: "poll.failed",
+      })),
+    ];
+    const leaves = [
+      {
+        nodeId: "bk_vps",
+        name: "VPS",
+        diagnostics: async () =>
+          bundleArchive({ createdAt: NOW, appVersion: "2.31.0", essential: leafLines }),
+        conversations: async () => ({ segments: [], skipped: [], waiting: 0 }),
+      },
+      {
+        nodeId: "bk_old",
+        name: "Old",
+        diagnostics: async () => {
+          throw new Error("Unknown backend command: collect_self_improvement_diagnostics");
+        },
+        conversations: async () => ({ segments: [], skipped: [], waiting: 0 }),
+      },
+      {
+        nodeId: "bk_away",
+        name: "Away",
+        diagnostics: async () => {
+          throw new Error("/home/someone/secret path");
+        },
+        conversations: async () => ({ segments: [], skipped: [], waiting: 0 }),
+      },
+      {
+        nodeId: "bk_bad_health",
+        name: "Invalid health",
+        diagnostics: async () =>
+          bundleArchive({
+            createdAt: NOW,
+            health: [{ kind: "started", at: Number.MAX_VALUE, pid: 2, startedAt: NOW }],
+          }),
+        conversations: async () => ({ segments: [], skipped: [], waiting: 0 }),
+      },
+    ];
+    const h = harness({
+      fleet: async () => ({ self: { nodeId: "bk_desk", name: "Desk" }, leaves }),
+    });
+    await h.service.run({ trigger: "manual" });
+    await settle(h.service);
+
+    const { lastRun } = await h.service.status();
+    expect(lastRun?.outcome).toBe("succeeded");
+    expect(lastRun?.machines).toEqual([
+      {
+        nodeId: "bk_vps",
+        name: "VPS",
+        diagnostics: "read",
+        appVersion: "2.31.0",
+        conversations: "off",
+        conversationParts: 0,
+      },
+      {
+        nodeId: "bk_old",
+        name: "Old",
+        diagnostics: "needs-update",
+        conversations: "off",
+        conversationParts: 0,
+      },
+      {
+        nodeId: "bk_away",
+        name: "Away",
+        diagnostics: "failed",
+        conversations: "off",
+        conversationParts: 0,
+      },
+      {
+        nodeId: "bk_bad_health",
+        name: "Invalid health",
+        diagnostics: "failed",
+        conversations: "off",
+        conversationParts: 0,
+      },
+    ]);
+    // The leaf's own problem was filed alongside this machine's.
+    expect(lastRun?.created.map((item) => item.signature)).toContain("tmux:poll.failed");
+    expect(lastRun?.created.map((item) => item.signature)).toContain(
+      "storage:snapshot.failed:ENOSPC",
+    );
+    expect(
+      capture.records().find((record) => record.event === "run.finished")?.fields,
+    ).toMatchObject({ leaves: 4, leavesRead: 1 });
+    expect(capture.lines.join("\n")).not.toContain("secret path");
+  });
+
+  test("a node with no connected leaves runs and reports as before", async () => {
+    const h = harness({ fleet: async () => null });
+    await h.service.run({ trigger: "manual" });
+    await settle(h.service);
+    const { lastRun } = await h.service.status();
+    expect(lastRun?.outcome).toBe("succeeded");
+    expect(lastRun?.machines).toBeUndefined();
+  });
+});

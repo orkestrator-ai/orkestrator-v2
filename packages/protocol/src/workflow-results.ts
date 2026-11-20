@@ -132,7 +132,7 @@ export interface WorkflowResultDelivery {
 /**
  * The scope lists of a consolidated review that the backend merges from the
  * reviewer reports instead of asking the consolidation model to retype them.
- * See `review-consolidation-scope.ts` in the backend.
+ * See `review/consolidation-scope.ts` in the backend.
  */
 export type ConsolidationScopeLists = Pick<
   ReviewScope,

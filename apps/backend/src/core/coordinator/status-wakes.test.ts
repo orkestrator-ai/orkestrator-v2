@@ -1,4 +1,4 @@
-import { multiReviewAddressFindingsIdentity } from "../multi-review-address-findings-identity.js";
+import { multiReviewAddressFindingsIdentity } from "../review/address-findings-identity.js";
 /**
  * Status wakes on the real mail world: storage, routes, budgets, the
  * coordinator service and the injection drain are production code; only the

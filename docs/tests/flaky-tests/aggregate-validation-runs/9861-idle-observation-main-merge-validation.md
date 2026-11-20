@@ -1,5 +1,7 @@
 # Idle-observation main-merge validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/containers.test.ts`.
+
 - **ID:** 9861
 - **Status:** open
 - **Date observed:** 2026-10-21

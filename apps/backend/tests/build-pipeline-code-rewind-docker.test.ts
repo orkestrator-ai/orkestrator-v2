@@ -47,7 +47,7 @@ import { EnvironmentMutationFence } from "../src/core/environment-replacement-fe
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
-} from "../src/core/review-worktree-fingerprint";
+} from "../src/core/review/worktree-fingerprint";
 import { runCommand } from "../src/core/shell";
 import type { StorageService } from "../src/core/storage";
 import { removeLabelledResources } from "./container-live-cleanup";

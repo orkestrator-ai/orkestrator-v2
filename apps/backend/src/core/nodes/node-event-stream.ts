@@ -3,6 +3,7 @@ import {
   GatewayEventStreamState,
   NATIVE_EVENT_STREAM_CONNECTED_EVENT,
   readSseStream,
+  type GatewayConnectedInfo,
 } from "@orkestrator/protocol/gateway-event-stream";
 import { ReconnectBackoff } from "@orkestrator/protocol/reconnect-backoff";
 
@@ -40,6 +41,13 @@ export class NodeEventStream {
       prefixes: readonly string[];
       onEvent: (event: string, payload: unknown) => void;
       onOpen?: () => void;
+      /**
+       * Every `gateway.connected` frame, with what it offered (the push
+       * layer's offer for this connection, design D10).
+       */
+      onConnected?: (info: GatewayConnectedInfo) => void;
+      /** A connection that had opened ended (dropped, silent or stopped). */
+      onClosed?: () => void;
       fetchImpl?: typeof fetch;
       /** Test seam; production uses {@link NODE_EVENT_STREAM_IDLE_MS}. */
       idleMs?: number;
@@ -78,6 +86,7 @@ export class NodeEventStream {
       const endConnection = () => connection.abort();
       signal.addEventListener("abort", endConnection, { once: true });
       let lastActivity = Date.now();
+      let opened = false;
       const watchdog = setInterval(
         () => {
           if (Date.now() - lastActivity >= idleMs) connection.abort();
@@ -100,6 +109,7 @@ export class NodeEventStream {
         }
         backoff.connected();
         lastActivity = Date.now();
+        opened = true;
         this.options.onOpen?.();
         await readSseStream(
           response.body,
@@ -107,6 +117,9 @@ export class NodeEventStream {
           (frame) => {
             if (!frame.data) return;
             const message = this.state.accept(frame.data, frame.id);
+            if ((message.kind === "resync" || message.kind === "control") && message.connected) {
+              this.options.onConnected?.(message.connected);
+            }
             if (message.kind === "event") this.options.onEvent(message.event, message.payload);
             else if (message.kind === "resync") {
               this.options.onEvent(NATIVE_EVENT_STREAM_CONNECTED_EVENT, undefined);
@@ -122,6 +135,7 @@ export class NodeEventStream {
       } finally {
         clearInterval(watchdog);
         signal.removeEventListener("abort", endConnection);
+        if (opened) this.options.onClosed?.();
       }
       if (signal.aborted) return;
       await new Promise<void>((resolve) => {

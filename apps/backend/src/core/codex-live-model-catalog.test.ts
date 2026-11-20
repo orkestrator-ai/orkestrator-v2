@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import { LocalServerRuntime } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import * as containerExec from "./commands-container-exec.js";

@@ -11,7 +11,7 @@ import {
   ARTIFACT_TOOL_INSTRUCTIONS,
   artifactAuthoringNotice,
 } from "./tools.js";
-import { WorkflowResultService } from "../workflow-result-service.js";
+import { WorkflowResultService } from "../workflows/result-service.js";
 import {
   CONVERSATION,
   ENV,

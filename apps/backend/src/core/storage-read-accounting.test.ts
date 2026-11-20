@@ -6,7 +6,7 @@ import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StorageService } from "./storage.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 // Storage cost charged to recurring work. An extra read must show however warm
 // the connection's row cache is, so a whole-store read served from that cache
@@ -228,7 +228,7 @@ describe("scoped storage read accounting", () => {
     ["sessions", "environmentId", false],
     ["sessions", "environmentId", true],
   ] as const)(
-    "%s owner reads charge selected rows once (%s, warm: %s)",
+    "%s owner reads charge selected rows once, or nothing from a current cache (%s, warm: %s)",
     async (store, ownerField, warm) => {
       const { storage, dataDir } = await storageIn();
       const db = openBackendDatabase(dataDir);
@@ -237,7 +237,8 @@ describe("scoped storage read accounting", () => {
         { id: "c", [ownerField]: "p1" },
       ];
       db.writeStore(store, [selected[0], { id: "b", [ownerField]: "p2" }, selected[1]]);
-      // A separate connection starts cold; warming it must not change scoped cost.
+      // A separate connection starts cold and selects only the owner's rows.
+      // Warmed at the committed revision, it answers from its cache.
       const reader = openBackendDatabase(dataDir);
       try {
         if (warm) reader.readStore(store);
@@ -247,7 +248,7 @@ describe("scoped storage read accounting", () => {
           }),
         ).toEqual({
           units: { "storage-read": 1 },
-          bytes: selected.reduce((sum, row) => sum + JSON.stringify(row).length, 0),
+          bytes: warm ? 0 : selected.reduce((sum, row) => sum + JSON.stringify(row).length, 0),
         });
         expect(
           await costDuring("tab-cleanup", () => {

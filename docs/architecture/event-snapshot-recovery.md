@@ -27,6 +27,8 @@ compare revisions from two generations of the same row.
 | View owner generation | One lifetime of the service that owns a view (for PR/diff: one `PrMonitorService` / `DiffStatsService` instance, a random UUID) | `generation` on view events and snapshots | Equality only. A different value means the owner was replaced (backend restart, transport switch, retarget to a different lineage): reset the view. |
 | View domain revision | Per owner generation; integer that increases by exactly one per announced event (`packages/protocol/src/view-sync.ts`) | `revision` on view events and snapshots | Order events against a snapshot, drop duplicates, detect a missed event as a gap. Revision `0` = nothing announced yet (snapshots only). |
 | Native observation generation + revision | One `NativeAgentObservationBroker` lifetime (`native-agent-observation.ts`); revision advances by exactly one per announced session activity transition | `generation`/`revision` on `native-agent-session-activity`, plus `agent`/`logical_session_key`; current position in `get_native_agent_sync_capabilities.observation` | `apps/web/src/lib/native-observation-events.ts` only: invalidation, never state. A gap or new generation re-reads every mounted native view. |
+| Push connection `seq` | One push connection (one authoritative event stream's `streamId`); contiguous across subscription changes | `seq` on `push.changed` / `push.resync`; `seqBase` in the `push_set_subscriptions` answer | `packages/protocol/src/push-client.ts` only. A gap re-sends the subscription set; see [push-events.md](push-events.md). |
+| Push key stamp | One topic observer lifetime per key (`generation`) and its announced changes (`revision`) | `push.changed` changes and the subscription answer | Equality of `generation`, order of `revision` within it, for one key only: an invalidation, never state. |
 | Target generation (worktree snapshots) | One tracked environment's lineage inside a `DiffStatsService` generation (worktree path or container, comparison ref); a service-unique integer, new on retarget, resume from pause, or re-track | `targetGeneration` on worktree snapshot states and on file-list/tree read stamps | Equality only. A different value means the file list and tree describe a different target: re-read, never compare its revisions with the old lineage's. An untracked environment is announced as a removal. |
 | File-list / tree revision | Per target lineage; advances on every semantic change of the changed-file list (paths, original paths, statuses, line counts, truncation) or of the bounded tree | `fileListRevision` / `treeRevision` in worktree snapshot states; `view.revision` on read responses | Decide whether the list or tree the client shows is older than the announced one. Never a content revision. |
 
@@ -216,6 +218,11 @@ State convergence and notifications are separate contracts.
 | Without view revision stamps | Current | Extra optional fields are ignored; the unconditional snapshot shape is unchanged. |
 
 ## Native observation invalidations
+
+The live native view also reads on the push layer's `native-session`
+changes while its subscription is healthy, and then polls only every 30 s;
+the announcements below keep reaching it either way.
+See [push-events.md](push-events.md).
 
 The native session view is not an event-folded view: its state comes from its
 own progressive reads (transcript/state/discovery tokens). The stamped

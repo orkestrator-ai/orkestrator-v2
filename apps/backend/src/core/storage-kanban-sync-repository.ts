@@ -22,6 +22,7 @@ import {
   acceptsFieldChange,
   assignTicketContent,
   attributeFields,
+  journalTicketOp,
   mergeSnapshotImages,
   pendingTicketFields,
   recordConflict,
@@ -101,10 +102,13 @@ export class KanbanSyncRepository {
       }
       const reset = epoch !== store.epoch || cursor < (store.prunedThrough[projectId] ?? 0);
       const from = reset ? 0 : cursor;
+      const changed = own.filter((task) => (task.sync?.seq ?? 0) > from);
+      const held = changed.length ? await this.board.ticketsHeldByBuilds() : undefined;
       const items: TicketSyncItem[] = [
-        ...own
-          .filter((task) => (task.sync?.seq ?? 0) > from)
-          .map((task) => ticketSnapshot(normalizeKanbanTask(task), selfId)),
+        ...changed.map((task) => ({
+          ...ticketSnapshot(normalizeKanbanTask(task), selfId),
+          ...(held?.has(task.id) ? { commandBuildHolds: true as const } : {}),
+        })),
         ...(reset
           ? []
           : Object.entries(store.tombstones)
@@ -161,6 +165,8 @@ export class KanbanSyncRepository {
       const removedImages: string[] = [];
       let applied = 0;
       let next = tasks;
+      let held: Promise<ReadonlySet<string>> | undefined;
+      const heldByBuilds = () => (held ??= this.board.ticketsHeldByBuilds());
       const ofThisController = (task: KanbanTask) =>
         task.projectId === input.projectId &&
         task.sync?.replica?.controllerId === input.controllerId;
@@ -253,20 +259,45 @@ export class KanbanSyncRepository {
         if (!pending.fields.has("content")) {
           assignTicketContent(updated, content);
         }
-        if (!pending.fields.has("status")) {
+        const confirmedMerge =
+          item.status === "done" &&
+          item.prMergeDoneUrl &&
+          item.prMergeDoneUrl !== row.prMergeDoneUrl;
+        if (confirmedMerge || !pending.fields.has("status")) {
+          const statusRev = item.revs.status ?? 0;
+          const previousStatusRev = row.sync?.replica?.revs.status ?? 0;
+          const correctiveEcho = item.rejectedStatusRevision === previousStatusRev;
           if (updated.status !== item.status) {
-            updated.status = item.status;
-            updated.order = orderIn(item.status, row.id);
-            // Moved on the command node: no longer the build lifecycle's column.
+            if (!confirmedMerge && !item.commandBuildHolds && (await heldByBuilds()).has(row.id)) {
+              // Only the command node can overrule a leaf that holds the column.
+              journalTicketOp(
+                store,
+                input.controllerId,
+                row.id,
+                input.sourceProjectId,
+                {
+                  kind: "set-status",
+                  value: row.status,
+                  baseRev: statusRev,
+                  restoresHeldStatus: true,
+                },
+                now,
+              );
+            } else {
+              updated.status = item.status;
+              updated.order = orderIn(item.status, row.id);
+              clearKanbanLifecycleOwnership(updated);
+            }
+          } else if (confirmedMerge) {
             clearKanbanLifecycleOwnership(updated);
-          } else if ((item.revs.status ?? 0) > (row.sync?.replica?.revs.status ?? 0)) {
-            // The same column with a newer revision: this leaf's own lifecycle
-            // move coming back, or someone moving the ticket away and back
-            // between two pulls, which is a hand move all the same.
+          } else if (statusRev > previousStatusRev) {
+            // A return echo or a command-board edit during a hold leaves the
+            // local lifecycle's claim intact.
             if (updated.lifecycleEcho) delete updated.lifecycleEcho;
-            else clearKanbanLifecycleOwnership(updated);
+            else if (!correctiveEcho && !(await heldByBuilds()).has(row.id)) {
+              clearKanbanLifecycleOwnership(updated);
+            }
           }
-          // Older peers omit the marker; they must not erase one already known.
           if (item.prMergeDoneUrl) updated.prMergeDoneUrl = item.prMergeDoneUrl;
         }
         const authority = new Set(item.comments.map((comment) => comment.id));
@@ -505,6 +536,12 @@ export class KanbanSyncRepository {
       const createdAs = new Map<string, KanbanTask>();
       const attributed = new Map<string, Set<TicketSyncField>>();
       const workChanged = new Set<string>();
+      // Tickets whose snapshot goes to the leaves again though nothing changed.
+      const resend = new Set<string>();
+      const confirmedMerges = new Set<string>();
+      const rejectedStatusRevisions = new Map<string, number>();
+      let held: Promise<ReadonlySet<string>> | undefined;
+      const heldByBuilds = () => (held ??= this.board.ticketsHeldByBuilds());
       const conflicts: TicketSyncConflict[] = [];
       const removedImages: string[] = [];
       let applied = 0;
@@ -632,12 +669,38 @@ export class KanbanSyncRepository {
             if (op.kind === "set-content" && op.value.labels === undefined) {
               delete (current as { labels?: string[] }).labels;
             }
-            const mergeChanged =
+            const statusRev = row.sync?.revs.status ?? 0;
+            const confirmedMerge =
               op.kind === "set-status" &&
+              op.value === "done" &&
               op.prMergeDoneUrl !== undefined &&
               row.prMergeDoneUrl !== op.prMergeDoneUrl;
-            if (JSON.stringify(current) === JSON.stringify(incoming) && !mergeChanged) break;
-            if (!acceptsFieldChange(row.sync, field, op.baseRev, input.nodeId)) {
+            if (JSON.stringify(current) === JSON.stringify(incoming) && !confirmedMerge) break;
+            if (!confirmedMerge && op.kind === "set-status") {
+              // A duplicate merge must respect a user's deliberate reopening.
+              if (
+                op.value === "done" &&
+                op.prMergeDoneUrl === row.prMergeDoneUrl &&
+                op.prMergeDoneUrl
+              ) {
+                break;
+              }
+              const predatesMerge =
+                row.status === "done" &&
+                row.prMergeDoneUrl &&
+                op.prMergeDoneUrl !== row.prMergeDoneUrl &&
+                (confirmedMerges.has(row.id) || op.baseRev < statusRev);
+              if (
+                predatesMerge ||
+                (op.restoresHeldStatus && op.baseRev !== statusRev) ||
+                (await heldByBuilds()).has(row.id)
+              ) {
+                track(row);
+                resend.add(row.id);
+                break;
+              }
+            }
+            if (!confirmedMerge && !acceptsFieldChange(row.sync, field, op.baseRev, input.nodeId)) {
               conflict(
                 item,
                 field,
@@ -656,7 +719,13 @@ export class KanbanSyncRepository {
                 clearKanbanLifecycleOwnership(row);
               }
               row.status = op.value;
-              if (op.prMergeDoneUrl) row.prMergeDoneUrl = op.prMergeDoneUrl;
+              rejectedStatusRevisions.delete(row.id);
+              if (op.restoresHeldStatus) rejectedStatusRevisions.set(row.id, statusRev);
+              if (confirmedMerge) {
+                clearKanbanLifecycleOwnership(row);
+                row.prMergeDoneUrl = op.prMergeDoneUrl;
+                confirmedMerges.add(row.id);
+              }
             }
             if (op.kind === "set-content") {
               assignTicketContent(row, op.value);
@@ -760,8 +829,17 @@ export class KanbanSyncRepository {
         });
         if (!change.stored) continue;
         attributeFields(change.stored, [...(attributed.get(change.stored.id) ?? [])], input.nodeId);
-        // Work on another machine is shown everywhere, so it is a synced change here.
-        if (workChanged.has(change.stored.id) && change.stored.sync?.seq === seqBefore) {
+        const rejectedStatusRevision = rejectedStatusRevisions.get(change.stored.id);
+        if (rejectedStatusRevision !== undefined && change.stored.sync) {
+          change.stored.sync.rejectedStatusRevision = rejectedStatusRevision;
+        }
+        // Work on another machine is shown everywhere, so it is a synced change
+        // here; so is a leaf's move a build here held back, so the leaf gets
+        // the board's column again.
+        if (
+          (workChanged.has(change.stored.id) || resend.has(change.stored.id)) &&
+          change.stored.sync?.seq === seqBefore
+        ) {
           change.stored.sync = {
             ...(change.stored.sync ?? { revs: {} }),
             seq: store.nextSeq,

@@ -1,5 +1,7 @@
 # Chromium executable-document policy hook timeout
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/containers.test.ts`.
+
 - **ID:** 0507
 - **Status:** resolved
 - **Date observed:** 2026-10-20

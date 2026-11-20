@@ -1,10 +1,3 @@
-import {
-  disputedCheckDigests,
-  disputedReviewChecks,
-  recordDisputedChecks,
-  disputedCheckRerunRequest,
-  settleDisputedCheckReruns,
-} from "./review-disputed-checks.js";
 import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 /**
  * One graph agent activation as the shared agent branch runner's host
@@ -43,7 +36,6 @@ import {
   type ReviewValidationRun,
   type ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
-import { reviewChunkCoverageFailure } from "./review-diff-artifact.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
@@ -93,8 +85,16 @@ import {
 } from "./graph-agent-state.js";
 import type { GraphActivationReport, GraphExecutorContext } from "./graph-run-executors.js";
 import type { Environment } from "./models.js";
-import { multiReviewWorkflowIdOfRun } from "./multi-review-graph-engine.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import { multiReviewWorkflowIdOfRun } from "./review/graph-engine.js";
+import {
+  disputedCheckDigests,
+  disputedCheckRerunRequest,
+  disputedReviewChecks,
+  MultiReviewProgressTracker,
+  recordDisputedChecks,
+  reviewChunkCoverageFailure,
+  settleDisputedCheckReruns,
+} from "./review/index.js";
 
 import type { GraphAgentExecutorDependencies } from "./graph-node-agent.js";
 

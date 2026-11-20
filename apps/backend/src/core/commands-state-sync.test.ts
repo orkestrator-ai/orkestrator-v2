@@ -26,7 +26,7 @@ import {
   FIRST_USE_CATALOG_BUDGET_MS,
   firstUseCatalogFetchTimeoutMs,
 } from "./commands-registry-projects.js";
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
 import { StorageService } from "./storage.js";
 import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";

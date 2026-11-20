@@ -10,6 +10,13 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { JOURNAL_SIZE_LIMIT_BYTES, startBackgroundCheckpoints } from "./storage-checkpointer.js";
+import {
+  StorageDatabaseVersionError,
+  StoreConflictError,
+  StoreCorruptError,
+  StoreTooLargeError,
+} from "./storage-database-errors.js";
 import { leaseFamily, leaseLogName, leaseWaitMetrics } from "./storage-lease-metrics.js";
 import {
   applyArrayRowUpdate,
@@ -17,6 +24,8 @@ import {
   compareRowEntries,
   decompose,
   isUnchanged,
+  normalizeSqliteText,
+  ownedCachedValues,
   rowId,
   stabilizePositions,
   type StoreRow,
@@ -62,6 +71,7 @@ const log = createLogger("storage");
 
 export { STORAGE_DATABASE_FILE };
 export { applyArrayRowUpdate, rowBytesExpression };
+export { StorageDatabaseVersionError, StoreConflictError, StoreCorruptError, StoreTooLargeError };
 
 /**
  * The change-tracking ledger's own database file, beside
@@ -186,41 +196,6 @@ export interface StoreSnapshot {
   revision: number;
 }
 
-export class StorageDatabaseVersionError extends Error {
-  constructor(found: number, supported: number) {
-    super(
-      `Storage database schema version ${found} is newer than this build supports (${supported}). Update Orkestrator to open it.`,
-    );
-    this.name = "StorageDatabaseVersionError";
-  }
-}
-
-/** A stored value that is not valid JSON (imported from a corrupt legacy file). */
-export class StoreCorruptError extends Error {
-  constructor(store: string) {
-    super(`Storage ${store} is unreadable`);
-    this.name = "StoreCorruptError";
-  }
-}
-
-/** A write refused by its `maxBytes` bound; nothing was written. */
-export class StoreTooLargeError extends Error {
-  constructor(
-    store: string,
-    readonly bytes: number,
-  ) {
-    super(`Storage ${store} would exceed its size limit`);
-    this.name = "StoreTooLargeError";
-  }
-}
-
-export class StoreConflictError extends Error {
-  constructor(store: string) {
-    super(`Storage ${store} changed concurrently`);
-    this.name = "StoreConflictError";
-  }
-}
-
 const SCHEMA: StorageMigration = {
   version: 1,
   name: "schema",
@@ -275,6 +250,8 @@ export interface StorageDatabaseOptions {
   file?: string;
   /** WAL commit durability; defaults to full. Only the change ledger opts into normal. */
   synchronous?: "normal" | "full";
+  /** Checkpoint the WAL on a worker thread (`storage-checkpointer.ts`), not in commits. */
+  backgroundCheckpoint?: boolean;
   busyTimeoutMs?: number;
   /**
    * Called before migrating a database that already has data (outside any
@@ -375,6 +352,7 @@ export class StorageDatabase {
   private readonly busyTimeoutMs: number;
   /** The connection's `synchronous` setting, restored after a lease commit. */
   private readonly synchronous: "NORMAL" | "FULL";
+  private readonly releaseCheckpointer: (() => void) | undefined;
   /** Times this connection's calls (`storage-slow-operations.ts`). */
   private readonly timing: SqliteConnectionTiming;
   /** The timer of a deferred scrub, while one is pending. */
@@ -435,7 +413,7 @@ export class StorageDatabase {
       // No table declares a foreign key, so `foreign_keys` is left off: setting
       // it would promise referential checks that nothing enforces. A migration
       // that declares keys must turn it on here.
-      this.db.exec("PRAGMA journal_size_limit = 8388608");
+      this.db.exec(`PRAGMA journal_size_limit = ${JOURNAL_SIZE_LIMIT_BYTES}`);
       const migrations = [SCHEMA, ...(options.migrations ?? [])];
       const target = migrations.reduce((max, migration) => Math.max(max, migration.version), 0);
       const existing = this.schemaVersion();
@@ -466,6 +444,13 @@ export class StorageDatabase {
     }
     this.unregisterCacheGauges =
       options.cacheGaugeRegistry?.addCacheSource("storage-row-cache", this) ?? (() => undefined);
+    const name = storageDatabaseName(options.file ?? STORAGE_DATABASE_FILE);
+    if (options.backgroundCheckpoint) {
+      this.releaseCheckpointer = startBackgroundCheckpoints(this.db, this.path, name, () => {
+        if (this.hasDeferredScrub()) this.scrubDeletedContent();
+        return !this.hasDeferredScrub();
+      });
+    }
   }
 
   /**
@@ -496,10 +481,10 @@ export class StorageDatabase {
    */
   close(): void {
     if (this.closed) return;
+    this.releaseCheckpointer?.();
     this.optimize();
     if (this.scrubRetry) {
-      clearTimeout(this.scrubRetry);
-      this.scrubRetry = null;
+      this.cancelScrubRetry();
       this.tryTruncateWal();
     }
     this.closed = true;
@@ -786,11 +771,17 @@ export class StorageDatabase {
   /**
    * Reads only the rows of a record/array store whose owner column matches.
    * Returns the items as an array in stored order (record keys are dropped).
+   *
+   * A store this connection caches at the committed revision, every row's
+   * owner known, answers from the cache; otherwise only the owner's rows are
+   * selected, without filling the cache. Rows are parsed after the snapshot
+   * ends. (Refetching a multi-megabyte Kanban board on every read held the
+   * event loop 250–450 ms: `operation.slow`, `store=kanban`.)
    */
   readStoreRowsByOwner(store: string, owner: string): unknown[] | null {
     this.timing.store = store;
-    return this.db
-      .transaction(() => {
+    const read = this.db
+      .transaction((): { items: unknown[] } | { values: string[] } | null => {
         const header = this.readStoreHeader(store);
         if (!header) return null;
         if (header.mode === "document") {
@@ -804,25 +795,35 @@ export class StorageDatabase {
             : isPlainRecord(value)
               ? Object.values(value)
               : [];
-          return items.filter((item) => ownerOf?.(item) === owner);
+          return { items: items.filter((item) => ownerOf?.(item) === owner) };
+        }
+        this.observe?.("read");
+        const cached = this.pendingCache?.has(store)
+          ? this.pendingCache.get(store)
+          : this.cache.get(store);
+        if (cached && cached.revision === header.revision && cached.mode === "rows") {
+          const values = ownedCachedValues(cached.rows, owner);
+          if (values) return { values };
         }
         // Do not populate the whole-store cache for an owner-scoped read.
         // The header and selected rows must come from the same snapshot.
-        this.observe?.("read");
         const rows = this.db
           .query(
             "SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY position, key",
           )
           .all(store, owner) as Array<{ value: string }>;
         this.fetched(rows.reduce((length, row) => length + row.value.length, 0));
-        try {
-          return rows.map((row) => JSON.parse(row.value) as unknown);
-        } catch (error) {
-          if (error instanceof SyntaxError) throw new StoreCorruptError(store);
-          throw error;
-        }
+        return { values: rows.map((row) => row.value) };
       })
       .deferred();
+    if (read === null) return null;
+    if ("items" in read) return read.items;
+    try {
+      return read.values.map((value) => JSON.parse(value) as unknown);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new StoreCorruptError(store);
+      throw error;
+    }
   }
 
   /**
@@ -975,9 +976,14 @@ export class StorageDatabase {
       const unchangedRows = previous?.mode === "rows" ? previous.rows : undefined;
       for (const [id, row] of next.rows) {
         const before = unchangedRows?.get(id);
-        if (before && before.value === row.value && before.position === row.position) continue;
+        if (before && before.value === row.value && before.position === row.position) {
+          // The stored row, owner column included, stays as it was.
+          row.owner = before.owner;
+          continue;
+        }
         const owner = ownerOf && !row.collection ? ownerOf(JSON.parse(row.value)) : undefined;
-        upsertRow.run(store, row.collection, row.key, row.position, owner ?? null, row.value);
+        row.owner = owner == null ? null : normalizeSqliteText(owner);
+        upsertRow.run(store, row.collection, row.key, row.position, row.owner, row.value);
       }
     }
     this.db
@@ -1149,6 +1155,7 @@ export class StorageDatabase {
           layout.kind === "record" || layout.kind === "array"
             ? layout.owner?.(update.value)
             : undefined;
+        const boundOwner = owner == null ? null : normalizeSqliteText(owner);
         this.db
           .query(
             `INSERT INTO store_rows (store, collection, key, position, owner, value)
@@ -1156,8 +1163,8 @@ export class StorageDatabase {
              ON CONFLICT (store, collection, key) DO UPDATE SET
                owner = excluded.owner, value = excluded.value`,
           )
-          .run(store, collection, key, position, owner ?? null, value);
-        nextRow = { collection, key, position, value };
+          .run(store, collection, key, position, boundOwner, value);
+        nextRow = { collection, key, position, value, owner: boundOwner };
         if (collection && document !== null) {
           // A first row of a collection the envelope did not have yet.
           const envelope = JSON.parse(document) as Record<string, unknown>;
@@ -1590,7 +1597,7 @@ export class StorageDatabase {
     if (meta.mode === "rows") {
       for (const row of this.db
         .query(
-          "SELECT collection, key, position, value FROM store_rows WHERE store = ? ORDER BY collection, position, key",
+          "SELECT collection, key, position, owner, value FROM store_rows WHERE store = ? ORDER BY collection, position, key",
         )
         .all(store) as StoreRow[]) {
         rows.set(rowId(row.collection, row.key), row);

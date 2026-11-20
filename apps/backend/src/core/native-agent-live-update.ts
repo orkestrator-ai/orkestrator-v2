@@ -49,12 +49,21 @@ export async function readNativeAgentLiveUpdate(
     agent: input.agent,
     logicalSessionKey: input.logicalSessionKey,
     viewVersion: NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION,
+    ...(input.pushObservation ? { pushObservation: true } : {}),
   };
   let transcript: NativeAgentLiveUpdate["transcript"] = PENDING;
   let state: NativeAgentLiveUpdate["state"] = PENDING;
   // Neither of these rejects, so a part that outlives the deadline settles
   // with nobody listening rather than as an unhandled rejection.
   const parts = [
+    settleUpdate(() =>
+      reads.getSessionStateUpdate({
+        ...session,
+        ...(input.stateToken === undefined ? {} : { knownToken: input.stateToken }),
+      }),
+    ).then((update) => {
+      state = update;
+    }),
     settleUpdate(() =>
       reads.getTranscriptUpdate({
         ...session,
@@ -64,14 +73,6 @@ export async function readNativeAgentLiveUpdate(
       }),
     ).then((update) => {
       transcript = update;
-    }),
-    settleUpdate(() =>
-      reads.getSessionStateUpdate({
-        ...session,
-        ...(input.stateToken === undefined ? {} : { knownToken: input.stateToken }),
-      }),
-    ).then((update) => {
-      state = update;
     }),
   ];
   let timer: ReturnType<typeof setTimeout> | undefined;

@@ -1534,6 +1534,8 @@ export interface BuildPipeline {
   skippedValidationRunId?: string;
   /** Retried independently of stage dispatch until the active ticket is reconciled. */
   pendingKanbanReactivation?: boolean;
+  /** An admitted ticket still owes its initial In progress transition. */
+  pendingKanbanAdmission?: true;
   /** Earliest retry after a failed Kanban reactivation, persisted across reloads. */
   kanbanReactivationRetryAt?: string;
   /** Restarts that rewound the pipeline, oldest first, at most {@link MAX_PIPELINE_REWINDS}. */
@@ -2522,6 +2524,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     !isOptionalNonBlankString(value.skippedValidationRunId) ||
     (value.kanbanReactivationRetryAt !== undefined &&
       !isIsoDate(value.kanbanReactivationRetryAt)) ||
+    (value.pendingKanbanAdmission !== undefined && value.pendingKanbanAdmission !== true) ||
     (value.pendingKanbanReactivation !== undefined &&
       typeof value.pendingKanbanReactivation !== "boolean") ||
     (value.rewinds !== undefined &&

@@ -57,16 +57,16 @@ import { GraphStorageError } from "./graph-run-errors.js";
 import type { Environment } from "./models.js";
 import { removeConfinedDirectory, writeConfinedFile } from "./path-safety.js";
 import {
-  WorkspaceFileHashError,
   hashEnvironmentWorkspaceFile,
+  MAX_REVIEW_DIFF_ARTIFACT_BYTES,
+  WorkspaceFileHashError,
   type WorkspaceFileHashFailure,
-} from "./review-validation-artifacts.js";
+} from "./review/index.js";
 import { runCommand } from "./shell.js";
 import {
   isReviewPackageReference,
   type ReviewPackage,
 } from "@orkestrator/protocol/review-workflow";
-import { MAX_REVIEW_DIFF_ARTIFACT_BYTES } from "./review-diff-artifact.js";
 import {
   graphStorageHash,
   type GraphArtifactUsage,
@@ -153,7 +153,7 @@ export class GraphArtifactStore {
   private readonly now: () => Date;
   /**
    * Sealed-file verification permits (item 301), the graph form of Multi
-   * Review's evidence permits (`review-evidence-permits.ts`): key
+   * Review's evidence permits (`review/evidence-permits.ts`): key
    * `run\0artifact\0consumer` → when its file was last hashed. A consumer
    * node's branches share one permit, so a reviewer panel hashes the shared
    * package once and consolidation, another consumer, hashes it again: two

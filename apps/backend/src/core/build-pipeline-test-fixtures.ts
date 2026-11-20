@@ -1,4 +1,4 @@
-import type { ReviewAddressFindingsResult, ReviewPreparationResult } from "./review-prompts.js";
+import type { ReviewAddressFindingsResult, ReviewPreparationResult } from "./review/prompts.js";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 
 export const TEST_REVIEW_PREPARATION: ReviewPreparationResult = {

@@ -23,6 +23,7 @@ import events, {
   parseEventCursor,
 } from "./events.js";
 import { eventEmitter } from "../services/event-emitter.js";
+import { sessionStateRevisions } from "../services/state-revision.js";
 
 const app = new Hono();
 app.route("/", events);
@@ -325,6 +326,7 @@ describe("GET /subscribe (SSE)", () => {
       const initial = await readUntil(reader!, (b) => b.includes("event: connected"));
       expect(initial).toContain('"status":"connected"');
       expect(initial).toContain('"observe":true');
+      expect(initial).toContain('"revisions":1');
       expect(initial).toContain('"resetRequired":false');
       expect(initial).toContain(`id: ${eventEmitter.currentCursor}`);
       expect(initial).not.toContain("event: replay.required");
@@ -339,7 +341,11 @@ describe("GET /subscribe (SSE)", () => {
       const live = await readUntil(reader!, (b) => b.includes("observed-live"));
       expect(live).toContain("event: session.updated");
       expect(live).toContain(`id: ${eventEmitter.currentCursor}`);
-      expect(live).toContain('data: {"sessionId":"observed-live"}');
+      // The session and its revisions only (to-do 8102 task 2). A session that
+      // is not resident has no transcript revision to report.
+      expect(live).toContain(
+        `data: {"sessionId":"observed-live","stateRevision":"${sessionStateRevisions.peek("observed-live")}"}`,
+      );
       expect(live).not.toContain("private output");
     } finally {
       controller.abort();
@@ -381,7 +387,10 @@ describe("GET /subscribe (SSE)", () => {
         readUntil(secondReader!, (buffer) => buffer.includes("event: message.updated")),
       ]);
       for (const frames of [firstEvent, secondEvent]) {
-        expect(frames).toContain('data: {"sessionId":"shared-session"}');
+        // A transcript-only event leaves the state revision where it was.
+        expect(frames).toContain(
+          `data: {"sessionId":"shared-session","stateRevision":"${sessionStateRevisions.peek("shared-session")}"}`,
+        );
         expect(frames).not.toContain("secret transcript text");
       }
     } finally {

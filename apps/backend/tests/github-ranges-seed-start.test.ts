@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import {
   startContainerWithAgentAccounts,
   type ContainerRunners,
-} from "../src/core/agent-accounts-containers";
+} from "../src/core/agent-accounts/containers";
 import type { CommandContext } from "../src/core/commands-context";
 import { resetNetworkOwnerCache } from "../src/core/container-network-owner";
 import type { Environment } from "../src/core/models";

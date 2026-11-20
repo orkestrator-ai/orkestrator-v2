@@ -72,6 +72,16 @@ export function renderDigest(digest: DigestRecord, top: number = DEFAULT_TOP): s
     `Essential log: ${bundle.essentialEntries} entries${bundle.essentialUnreadable ? ` (${bundle.essentialUnreadable} unreadable lines)` : ""}. Health rows: ${bundle.healthRows}. Database figures: ${bundle.hasDatabase ? "yes" : "no"}.`,
   );
   if (bundle.absent.length > 0) lines.push(`Not in the bundle: ${bundle.absent.join(", ")}.`);
+  if (digest.machines && digest.machines.length > 0) {
+    lines.push(
+      `Machines: ${digest.machines
+        .map(
+          (machine) =>
+            `${machine.name} (app ${machine.appVersion}, ${machine.essentialEntries} log entries)`,
+        )
+        .join(", ")}. Signals cover them all; rates are per machine-day.`,
+    );
+  }
   if (digest.previousDigestId) lines.push(`Trends compare with digest ${digest.previousDigestId}.`);
   else lines.push("No earlier digest: every signal is reported as new.");
   lines.push("");

@@ -1,5 +1,4 @@
 import { buildPipelineDisputedCheckInput } from "./build-pipeline-review-fanout.js";
-import { disputedCheckRerunRequest } from "./review-disputed-checks.js";
 /**
  * Agent harness resolution for build pipelines: the cached provider per
  * environment and harness, the bridge connection behind it, the model, effort
@@ -37,7 +36,7 @@ import { stagePromptImages } from "./prompt-attachments.js";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import { managedProvider, retireProvider } from "./provider-retirement.js";
-import { clearReviewerAdmission } from "./review-fanout-admission.js";
+import { clearReviewerAdmission, disputedCheckRerunRequest } from "./review/index.js";
 
 /** Tiers and catalogue access shared by every selection in one operation. */
 interface BuildSelectionContext {

@@ -1,5 +1,7 @@
 # Reconnect freshness validation: unrelated backend failures under host load
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/active.test.ts`.
+
 - **ID:** 9890
 - **Status:** open
 - **Date observed:** 2026-10-25

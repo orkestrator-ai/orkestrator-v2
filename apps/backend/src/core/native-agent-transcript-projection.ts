@@ -34,6 +34,11 @@ import type {
 import { NativeAgentProjectionParts } from "./native-agent-projection-parts.js";
 import { NativeAgentProgressiveReads } from "./native-agent-progressive-reads.js";
 import { NativeAgentProgressiveTranscript } from "./native-agent-progressive-transcript.js";
+import {
+  NativeAgentToolOutputReads,
+  type ToolOutputSource,
+} from "./native-agent-tool-output-reads.js";
+import type { NativeAgentToolOutputRead } from "@orkestrator/protocol/native-agent-tool-output";
 import { NativeAgentProgressiveSessionState } from "./native-agent-progressive-session-state.js";
 import { NativeAgentProgressiveDiscovery } from "./native-agent-progressive-discovery.js";
 import { NativeAgentHistoryPages } from "./native-agent-history-pages.js";
@@ -117,6 +122,7 @@ export class NativeAgentTranscriptProjection {
   private readonly history: NativeAgentHistoryPages;
   private readonly toolDetails: NativeAgentToolDetailReads;
   private readonly full: NativeAgentFullProjection;
+  private readonly toolOutputs: NativeAgentToolOutputReads;
 
   constructor(private readonly host: NativeAgentTranscriptProjectionHost) {
     this.storage = host.storage;
@@ -164,6 +170,7 @@ export class NativeAgentTranscriptProjection {
     context.history = this.history = new NativeAgentHistoryPages(context);
     context.toolDetails = this.toolDetails = new NativeAgentToolDetailReads(context);
     context.full = this.full = new NativeAgentFullProjection(context);
+    this.toolOutputs = new NativeAgentToolOutputReads(context);
   }
 
   /**
@@ -194,6 +201,21 @@ export class NativeAgentTranscriptProjection {
   /** What `get_progressive_read_metrics` reports. */
   progressiveReadSamples(): readonly ProgressiveReadMetric[] {
     return this.reads.progressiveReadSamples();
+  }
+
+  /** The push layer observes a session (`NativeAgentProgressiveReads.observeSession`). */
+  observePushSession(sessionKey: string): () => void {
+    return this.reads.observeSession(sessionKey);
+  }
+
+  /** A pushed session moved: its settled reads stop answering. */
+  forgetPushSettled(sessionKey: string): void {
+    this.reads.forgetObservedSettled(sessionKey);
+  }
+
+  /** A pushed session's bridge hinted a change (`NativeAgentProgressiveReads.noteObservationHint`). */
+  notePushHint(sessionKey: string): void {
+    this.reads.noteObservationHint(sessionKey);
   }
 
   /** Keep a session's stop result until its next authoritative projection. */
@@ -247,6 +269,22 @@ export class NativeAgentTranscriptProjection {
     input: NativeAgentProjectionInput & { detailRef: string },
   ): Promise<NativeAgentToolDetails> {
     return this.toolDetails.getProjectionToolDetails(input);
+  }
+
+  /** One bounded slice of a tool call's output (`get_native_agent_tool_output`). */
+  readToolOutput(
+    input: Parameters<NativeAgentToolOutputReads["readToolOutput"]>[0],
+  ): Promise<NativeAgentToolOutputRead> {
+    return this.toolOutputs.readToolOutput(input);
+  }
+
+  /** What the cached live view says about a tool call; in memory only. */
+  toolOutputSource(
+    input: Parameters<NativeAgentToolOutputReads["toolOutputSource"]>[0],
+    toolUseId: string,
+    messageId?: string,
+  ): ToolOutputSource | null {
+    return this.toolOutputs.toolOutputSource(input, toolUseId, messageId);
   }
 
   /** Write a session's newest pending display tail now. */

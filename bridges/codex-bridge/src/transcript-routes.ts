@@ -3,6 +3,7 @@ import type { Context, Hono } from "hono";
 import { compress } from "hono/compress";
 import {
   bridgeTranscriptDetailRouteBody,
+  bridgeTranscriptOutputRouteBody,
   bridgeTranscriptPageRouteBody,
   bridgeTranscriptRouteBody,
   type BridgeTranscriptSource,
@@ -118,6 +119,12 @@ export function registerCodexTranscriptRoutes(app: Hono, runtime: CodexTranscrip
   app.get("/session/:id/transcript/detail", (c) =>
     c.json(
       bridgeTranscriptDetailRouteBody(codexTranscriptSource(runtime, c.req.param("id")), query(c)),
+    ),
+  );
+
+  app.get("/session/:id/transcript/output", (c) =>
+    c.json(
+      bridgeTranscriptOutputRouteBody(codexTranscriptSource(runtime, c.req.param("id")), query(c)),
     ),
   );
 

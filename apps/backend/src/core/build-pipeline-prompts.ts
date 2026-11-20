@@ -1,7 +1,7 @@
 import { taskSnapshotCriteria } from "@orkestrator/protocol/build-pipeline";
 import { usesPackagePreparationSession } from "./build-pipeline-stages.js";
 import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
-import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
+import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review/validation-prompts.js";
 import { createHash } from "node:crypto";
 import type {
   BuildPipeline,
@@ -20,7 +20,7 @@ import {
   buildReviewBody,
   buildStructuredReviewOutputGuide,
 } from "@orkestrator/protocol/review-workflow";
-import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review/consolidation-scope.js";
 import {
   ADDRESS_FINDINGS_RESULT_FRAME_CLOSE,
   ADDRESS_FINDINGS_RESULT_FRAME_INSTRUCTION,
@@ -1106,7 +1106,7 @@ const KEY_INFORMATION_STAGE_GUIDANCE: Partial<Record<PipelineSessionPhase, strin
   "address-findings":
     "Record `issues`: every issue the review reported for this round, how you solved it (or why you did not) and its status. Update `summary`, `workDone`, `decisions`, `notDone` and `tests` where your changes affect them.",
   verify:
-    "Record `verification` for this round: each check you made with whether it passed and, for a failure, what failed; set `passed` to your verdict. Leave the other sections alone unless one is now wrong.",
+    "Record `verification` for this round: each check with its `status`: `passed`, `failed` with what failed in `details`, or `not-checked` with why in `details` for a check you did not or could not run (never record an unrun check as `failed`). Set `passed` to your verdict. Pass `verification` as a JSON object, not a string. Leave the other sections alone unless one is now wrong.",
 };
 
 /**

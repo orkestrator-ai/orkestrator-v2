@@ -66,16 +66,16 @@ import {
 import {
   reviewValidationDiscoveryPrompt,
   REVIEW_VALIDATION_PLAN_SCHEMA,
-} from "./review-validation-prompts.js";
-import { validationPreparation } from "./review-validation-service.js";
+} from "./review/validation-prompts.js";
+import { validationPreparation } from "./review/validation-service.js";
 import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   workflowRestartContinuationPrompt,
-  workflowUsageLimitContinuationPrompt,
   workflowResultRefusals,
   workflowResultReminderPrompt,
-} from "./workflow-result-missing.js";
+  workflowUsageLimitContinuationPrompt,
+} from "./workflows/index.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { carriesReworkBaseline, retainRoundReviewReport } from "./build-pipeline-rewind.js";
 import { recordReviewIssuesInKeyInformation } from "./build-pipeline-key-information.js";
@@ -103,7 +103,15 @@ import {
   BuildPipelineReviewFanout,
   type ReviewFanoutStep,
 } from "./build-pipeline-review-fanout.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import {
+  MultiReviewProgressTracker,
+  parseReviewPackageReference,
+  parseReviewPreparationResult,
+  probeReviewWorktree,
+  probeReviewWorktreeOnce,
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+  type ReviewWorktreeProbeOptions,
+} from "./review/index.js";
 import {
   recordPipelineSessionUsage,
   deferPipelineSessionUsage,
@@ -114,16 +122,6 @@ import {
   readTranscriptProgressSample,
   type ProgressSample,
 } from "./transcript-progress.js";
-import {
-  probeReviewWorktree,
-  probeReviewWorktreeOnce,
-  type ReviewWorktreeProbeOptions,
-} from "./review-worktree-probe.js";
-import {
-  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-  parseReviewPreparationResult,
-} from "./review-prompts.js";
-import { parseReviewPackageReference } from "./review-package.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";
@@ -406,6 +404,14 @@ export class BuildPipelineSupervisor {
     if (!isActiveBuildPhase(pipeline.phase)) {
       await this.recovery.reconcileTerminalState(pipeline);
       return;
+    }
+
+    if (pipeline.pendingKanbanAdmission) {
+      const revision = await this.recovery.moveTicketOnAdmission(pipeline, record.revision);
+      if (revision !== undefined) record.revision = revision;
+      // Provisioning can continue during a transient board failure. Hold stage
+      // dispatch, including adopted Build review, until the move settles.
+      else if (pipeline.phase === "waiting-for-setup" && pipeline.sourceLinkedAt) return;
     }
 
     if (pipeline.environmentId && !pipeline.sourceLinkedAt) {

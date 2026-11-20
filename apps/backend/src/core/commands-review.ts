@@ -12,15 +12,19 @@ import {
   reconcileProjectHomeEnvironment,
   isProjectHomeEnvironment,
 } from "./project-home-environment.js";
-import { verifyValidationArtifacts } from "./review-validation-artifacts.js";
-import { triageValidationFailures } from "./validation-failure-triage-service.js";
-import { buildValidationReport } from "@orkestrator/protocol/validation-report";
 import {
+  MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
   MAX_REVIEW_DIFF_ARTIFACT_BYTES,
+  normalizeGeneratedReviewPackage,
   reviewDiffArgs,
+  reviewPackageFileContents,
+  reviewPackageReference,
   sealReviewDiff,
   verifyReviewDiffArtifact,
-} from "./review-diff-artifact.js";
+  verifyValidationArtifacts,
+} from "./review/index.js";
+import { triageValidationFailures } from "./validation-failure-triage-service.js";
+import { buildValidationReport } from "@orkestrator/protocol/validation-report";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -55,12 +59,6 @@ import {
 } from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
 import { gitExcludeSetupScript } from "./tmux-hooks.js";
-import {
-  MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
-  normalizeGeneratedReviewPackage,
-  reviewPackageFileContents,
-  reviewPackageReference,
-} from "./review-package.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("pull-request");

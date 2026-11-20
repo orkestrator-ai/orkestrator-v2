@@ -71,7 +71,7 @@ import {
   type RecoveryCopyRequest,
   type RestoreCopyRequest,
 } from "./recovery-copies.js";
-import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { stopEnvironmentReviewValidation } from "./review/validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { promises as fs } from "node:fs";
 import { isIP } from "node:net";
@@ -198,7 +198,7 @@ import type { CommandContext } from "./commands-context.js";
 import {
   startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
-} from "./agent-accounts-containers.js";
+} from "./agent-accounts/index.js";
 import {
   createSetupCompletionTracker,
   isRetiredSetupTerminal,

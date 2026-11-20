@@ -54,6 +54,7 @@ import {
   toolPartIn,
   turnStartIndex,
 } from "./acp-rows.js";
+import { markStateChanged, markTranscriptChanged } from "./acp-state-revision.js";
 
 export function pushToolPart(
   state: SessionState,
@@ -156,7 +157,7 @@ export function commitToolPartMutation(
   part: BridgeToolPart,
   source: AcpToolSourceState,
 ): boolean {
-  state.revision += 1;
+  markTranscriptChanged(state);
   notePartMutation(state, part);
   // Unchanged string fields cost nothing and a grown one only its suffix; see
   // `EncodedObjectSizes`.
@@ -259,7 +260,7 @@ export function applyToolCallUpdate(
   // of being rebuilt as a context-free ghost part.
   if (!part && !isInitial && state.activeSubagentToolIds.has(toolCallId)) {
     if (settleEvictedSubagentFromToolUpdate(state, toolCallId, update)) {
-      state.revision += 1;
+      markTranscriptChanged(state);
       schedulePersist();
     }
     return undefined;
@@ -667,6 +668,7 @@ export function activateSubagent(
     failAllActiveSubagents(state);
     state.status = "error";
     state.error = `${provider} exceeded the active sub-agent limit`;
+    markStateChanged(state);
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return false;
   }
@@ -1128,7 +1130,7 @@ export function applyCursorUpdateTodos(state: SessionState, params: JsonObject):
     // a trim or an evicted row took it, and rebuilding it here would leave a
     // bare `Update TODOs` on the trailing row in its place.
     if (droppedToolCall(state, toolCallId, false)) {
-      state.revision += 1;
+      markTranscriptChanged(state);
       schedulePersist();
       return;
     }
@@ -1191,7 +1193,7 @@ export function applyAcpPlanUpdate(state: SessionState, update: JsonObject): voi
   let found = findTurnPart(state, isCurrentTodoToolPart);
   if (!found) {
     if (incoming.length === 0) {
-      state.revision += 1;
+      markTranscriptChanged(state);
       schedulePersist();
       return;
     }
@@ -1496,7 +1498,7 @@ export function finishSubagentTool(
     commitToolPartMutation(state, mutation.part, mutation.source);
     return;
   }
-  state.revision += 1;
+  markTranscriptChanged(state);
   schedulePersist();
 }
 

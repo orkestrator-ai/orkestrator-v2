@@ -6,10 +6,30 @@ import {
   withService,
   pipeline,
 } from "./build-pipeline-service-test-support.js";
+import { readStoredValue, seedStore } from "./storage-test-support.js";
+import type { KanbanTask } from "./storage-shared.js";
 
 const PR_URL = "https://github.com/acme/repo/pull/1";
 
 const kanban = (taskId: string) => ({ taskId, source: { type: "kanban" as const, taskId } });
+
+/**
+ * Writes ticket fields straight to the store. A running build holds its
+ * ticket's column (`build-pipeline-ticket-hold.ts`), so a hand move cannot
+ * make these states during a build any more; they still exist on boards
+ * written before the hold, and an ending must leave them alone.
+ */
+function seedTicket(storage: StorageService, taskId: string, fields: Partial<KanbanTask>): void {
+  const dir = storage.getDataDir();
+  const rows = readStoredValue<KanbanTask[]>(dir, "kanban.json") ?? [];
+  // A hand move: no longer the column the build set.
+  const moved = { ...fields, lifecycleStatus: undefined };
+  seedStore(
+    dir,
+    "kanban.json",
+    rows.map((row) => (row.id === taskId ? { ...row, ...moved } : row)),
+  );
+}
 
 /** Records that this pipeline's Ship opened a pull request (`pipelineReachedPullRequestStage`). */
 async function markShipped(storage: StorageService, pipelineId: string): Promise<void> {
@@ -50,10 +70,7 @@ describe("a build that ends after its pull request merged", () => {
         const { started } = await startBuilding(service, storage, kanban(task.id));
         await markShipped(storage, started.id);
         await storage.updateEnvironment("env-1", { prUrl: PR_URL, prState: "merged" });
-        await storage.kanban.updateKanbanTask(task.id, {
-          status: "review",
-          prMergeDoneUrl: PR_URL,
-        });
+        seedTicket(storage, task.id, { status: "review", prMergeDoneUrl: PR_URL });
 
         await service.cancel(started.id);
 
@@ -85,7 +102,7 @@ describe("a build that ends without a merged pull request", () => {
       async (service, storage) => {
         const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
         const { started } = await startBuilding(service, storage, kanban(task.id));
-        await storage.kanban.updateKanbanTask(task.id, { status: "done" });
+        seedTicket(storage, task.id, { status: "done" });
 
         await service.cancel(started.id);
 

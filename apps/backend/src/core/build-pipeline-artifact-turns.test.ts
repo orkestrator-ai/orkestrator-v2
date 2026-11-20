@@ -10,7 +10,7 @@ import {
   startInput,
   withPipeline,
 } from "./build-pipeline-review-fanout-test-support.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import type { ArtifactTurnDispatch } from "./workflows/artifact-turns.js";
 
 describe("build-pipeline stage turns' artifact authority", () => {
   test("a tool-mode stage turn publishes as its own stage session, until the turn ends", async () => {

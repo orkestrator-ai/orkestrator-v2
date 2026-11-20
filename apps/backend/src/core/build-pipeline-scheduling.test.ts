@@ -26,7 +26,7 @@ import {
 } from "./recurring-test-support.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StorageService } from "./storage.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
+import type { WorkflowResultService } from "./workflows/result-service.js";
 
 /** Build-stage stand-in: busy until released, then idle with a result. */
 class Provider {

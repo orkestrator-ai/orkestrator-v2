@@ -4,8 +4,8 @@ import {
   type AgentAccountPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 import { usageLimitAccountKey } from "@orkestrator/protocol/coordinator-notices";
-import { coordinatorSessionAccount } from "../agent-accounts-session.js";
-import type { AgentAccountAutoSwitcher } from "../agent-accounts-auto-switch.js";
+import { coordinatorSessionAccount } from "../agent-accounts/session.js";
+import type { AgentAccountAutoSwitcher } from "../agent-accounts/index.js";
 import type { UsageLimitNoticeDeps } from "./usage-limit-notices.js";
 
 /** Production wiring shared by the backend composition root and its contract test. */

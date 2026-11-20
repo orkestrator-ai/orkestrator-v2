@@ -8,7 +8,7 @@ import { AgentToolsServer } from "./agent-tools.js";
 import { bindListener, closeListeners } from "./agent-tools-listen.js";
 import { AgentToolsPeerFilter, type AgentToolsPeerGate } from "./agent-tools-peer-filter.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 /**
  * #1936: a restarted backend asks for the agent tools port it saved last

@@ -64,7 +64,7 @@ import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { AppConfig, Environment } from "./models.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import { MultiReviewProgressTracker } from "./review/index.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
   GOAL_VERIFIER_BACKEND_STOPPING,
@@ -73,8 +73,7 @@ import {
   type GoalVerifierRequest,
   type GoalVerifierRun,
 } from "./native-agent-goal-service.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
-import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import { ElapsedPollGate, type WorkflowResultService } from "./workflows/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent.goal");

@@ -131,11 +131,18 @@ describe("standalone backend service", () => {
       await writeFile(
         executable,
         `#!/bin/sh
+# Config discovery can invoke this binary while the backend starts the server.
+if [ "$1" = "debug" ] && [ "$2" = "config" ]; then
+  printf '%s\\n' '{}'
+  exit 0
+fi
+[ "$1" = "serve" ] || exit 2
 PORT=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--port" ]; then shift; PORT="$1"; fi
   shift
 done
+[ -n "$PORT" ] || exit 2
 exec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeServerPath)} "$PORT"
 `,
       );

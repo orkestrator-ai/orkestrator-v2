@@ -171,7 +171,7 @@ five consecutive runs with `--parallel=4`. None of them logged a `maintenance.lo
 
 **Second template (same day).** The next `mise run test` on the same branch
 failed `fingerprints content changes even when HEAD and dirty paths stay the
-same (bun)` in `apps/backend/src/core/review-worktree-fingerprint.test.ts`
+same (bun)` in `apps/backend/src/core/review/worktree-fingerprint.test.ts`
 with the same ENOENT, from that file's own template
 (`ork-review-fingerprint-template-*`, built with `git commit` and copied with
 `fs.cp`); the aggregate runner's rerun of the unchanged file passed alone in

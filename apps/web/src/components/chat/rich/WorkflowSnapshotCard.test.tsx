@@ -298,9 +298,10 @@ describe("WorkflowLiveInspector", () => {
     ).toBe("connecting");
     await waitFor(() => expect(resolvers).toHaveLength(1));
 
-    // A change announcement for this workflow triggers a second, newer read.
+    // A change announcement for this run (it names the record id, the
+    // snapshot's `runId`) triggers a second, newer read.
     act(() =>
-      dispatchResourceChange({ resource: "multi-review", id: "wf1", revision: 2 } as never),
+      dispatchResourceChange({ resource: "multi-review", id: "run1", revision: 2 } as never),
     );
     await waitFor(() => expect(resolvers).toHaveLength(2), { timeout: 2_000 });
 

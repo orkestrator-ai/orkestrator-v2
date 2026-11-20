@@ -97,7 +97,7 @@ function recordDockerCalls() {
 
 /**
  * Starts a runtime the way `startContainerWithAgentAccounts`
- * (`agent-accounts-containers.ts`) does, without its login staging,
+ * (`agent-accounts/containers.ts`) does, without its login staging,
  * timing its three steps: the egress gateway brought up to an applied
  * firewall (with the gateway's GitHub ranges seed refreshed before it boots),
  * the runtime's own seed delivery and `docker start`, and its entrypoint to

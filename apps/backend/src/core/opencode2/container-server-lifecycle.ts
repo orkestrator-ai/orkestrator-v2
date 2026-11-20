@@ -37,7 +37,7 @@ import { createHash } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
-import { syncContainerLoginUnlocked } from "../agent-accounts-containers.js";
+import { syncContainerLoginUnlocked } from "../agent-accounts/index.js";
 import type { CommandContext } from "../commands-context.js";
 import { dockerExec, getHostPort, isContainerRunning } from "../commands-container-exec.js";
 import { isHttpServerReachable, waitForHttpServerExit } from "../commands-server-health.js";

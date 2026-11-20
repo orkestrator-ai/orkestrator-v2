@@ -63,6 +63,11 @@ export type BackendInvoker = {
   databaseStats?(): DatabaseStats;
   /** Lets the backend's diagnostics read the same snapshot `/metrics` answers. */
   attachGatewayMetrics?(source: () => unknown): void;
+  /**
+   * The push event layer (`core/push/`). Absent from a backend without it: its
+   * streams then advertise no push and clients keep polling.
+   */
+  readonly push?: import("./core/push/index.js").PushGatewayPort;
 };
 
 export type NetworkInterfaceMap = NodeJS.Dict<NetworkInterfaceInfo[]>;

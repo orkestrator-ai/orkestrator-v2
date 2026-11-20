@@ -3,6 +3,13 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { eventEmitter } from "../services/event-emitter.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  BRIDGE_STATE_REVISION_VERSION,
+  bridgeObservationFrameData,
+} from "@orkestrator/protocol/bridge-state-revision";
+import { sessionStateRevisions } from "../services/state-revision.js";
+import { peekSession } from "../services/session-manager-core.js";
+import { readTranscriptVersion } from "../services/transcript-revision.js";
 
 const log = createLogger("bridge.claude");
 
@@ -23,12 +30,26 @@ interface SseFrame {
 
 /**
  * The only stream the bridge serves (`?observe=1`): each frame is the event
- * type, its cursor and the session it names, never the payload. The backend's
- * activity observer subscribes only to learn *that* a session changed, then
- * reads it through the no-touch activity route.
+ * type, its cursor, the session it names and that session's state and
+ * transcript revisions (to-do 8102 task 2), never the payload. The backend
+ * learns *that* a session changed, and which part, then reads it.
+ *
+ * Computed when the event is emitted, so the revisions are the ones the event
+ * moved. Both reads are O(1), never touch the idle clock and never hydrate:
+ * a session that is not resident has no transcript revision to report.
  */
 export function observationFrameData(sessionId: string | undefined): string {
-  return JSON.stringify(sessionId === undefined ? {} : { sessionId });
+  if (sessionId === undefined) return "{}";
+  try {
+    const resident = peekSession(sessionId);
+    const transcript = resident ? readTranscriptVersion(resident) : undefined;
+    return bridgeObservationFrameData(sessionId, {
+      stateRevision: sessionStateRevisions.peek(sessionId),
+      ...(transcript ? { transcriptRevision: `${transcript.epoch}.${transcript.revision}` } : {}),
+    });
+  } catch {
+    return JSON.stringify({ sessionId });
+  }
 }
 
 interface EventCursor {
@@ -258,7 +279,7 @@ export function createEventsRouter(
         // Subscribe before reading the current revision. Anything emitted
         // during the handshake is buffered and flushed after it, so no event
         // falls between the cursor check and the live stream.
-        unsubscribe = eventEmitter.subscribe((event, revision) => {
+        unsubscribe = eventEmitter.subscribeObserver((event, revision) => {
           if (!isOpen) return;
           const frame: SseFrame = {
             id: formatCursor(revision),
@@ -312,6 +333,8 @@ export function createEventsRouter(
             resetRequired,
             // Confirms observation mode; a backend refuses a bridge that does not.
             observe: true,
+            // Frames carry state and transcript revisions (to-do 8102 task 2).
+            revisions: BRIDGE_STATE_REVISION_VERSION,
           }),
         });
         if (resetRequired) {

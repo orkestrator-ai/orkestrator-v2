@@ -8,10 +8,24 @@
  * version, so a quiet week cannot pass for a fix. Notes, themes and the cursor
  * live in `<state dir>/insights/` (owner-only): they hold paraphrases and short
  * quotes of what people wrote, never tool output or file contents.
+ *
+ * On a command node, connected leaf nodes' conversations are read too: each
+ * leaf selects and renders its own parts after read positions this node keeps
+ * for it (`insights/nodes/<hash>/cursor.json`), and the notes, themes and
+ * verdicts are this node's. A leaf's conversation ids carry its node id
+ * (`leafConversationId`), so two machines never share one.
  */
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { BundleData } from "../bundle.js";
+import {
+  type LeafNode,
+  leafConversationId,
+  leafFailure,
+  leafInsightsDir,
+  leafOfConversation,
+  validInsightTime,
+} from "../leaves.js";
 import { writeAtomic } from "../ledger.js";
 import type { InsightProgress } from "../progress.js";
 import { scoreSignal, type Signal, UNKNOWN_VERSION, versionTimeline } from "../signals.js";
@@ -20,9 +34,12 @@ import {
   cursorAfter,
   type InsightCursor,
   loadCursor,
+  MAX_SEGMENTS_PER_RUN,
   saveCursor,
   type Segment,
+  type Selection,
   selectSegments,
+  type SkippedPart,
 } from "./prepare.js";
 import type { TranscriptSources } from "./transcripts.js";
 
@@ -57,6 +74,7 @@ export interface Note {
   provider: string;
   project: string;
   at: number;
+  version?: string;
   kind: NoteKind;
   area: string;
   summary: string;
@@ -67,6 +85,7 @@ export interface Note {
 
 export interface ThemeConversation {
   at: number;
+  version?: string;
   project: string;
 }
 
@@ -222,12 +241,14 @@ export function loadNotes(dir: string): Note[] {
     path.join(dir, "notes.json"),
     {},
   );
-  return stored.schemaVersion === 1 && Array.isArray(stored.notes) ? stored.notes : [];
+  return stored.schemaVersion === 1 && Array.isArray(stored.notes)
+    ? stored.notes.filter((note) => validInsightTime(note?.at))
+    : [];
 }
 
 export function saveNotes(dir: string, notes: Note[], now: number): void {
   const kept = notes
-    .filter((note) => now - note.at <= NOTE_RETENTION_MS)
+    .filter((note) => validInsightTime(note.at) && now - note.at <= NOTE_RETENTION_MS)
     .sort((left, right) => left.at - right.at)
     .slice(-MAX_STORED_NOTES);
   writeAtomic(
@@ -314,7 +335,7 @@ export async function updateThemes(
   statusOf: (slug: string) => string | null,
 ): Promise<{ changed: string[]; costUsd: number }> {
   const recent = notes
-    .filter((note) => now - note.at <= THEME_WINDOW_MS)
+    .filter((note) => validInsightTime(note.at) && now - note.at <= THEME_WINDOW_MS)
     .sort((left, right) => right.at - left.at)
     .slice(0, MAX_THEME_NOTES);
   if (recent.length === 0) return { changed: [], costUsd: 0 };
@@ -341,8 +362,15 @@ export async function updateThemes(
     if (members.length === 0) continue;
     const existing = store.themes[proposed.slug];
     const conversations: Record<string, ThemeConversation> = { ...existing?.conversations };
-    for (const note of members)
-      conversations[note.conversationId] = { at: note.at, project: note.project };
+    for (const note of members) {
+      const prior = conversations[note.conversationId];
+      if (prior && (prior.at > note.at || (prior.at === note.at && prior.version))) continue;
+      conversations[note.conversationId] = {
+        at: note.at,
+        project: note.project,
+        version: note.version,
+      };
+    }
     const kept = Object.entries(conversations)
       .filter(([, conversation]) => now - conversation.at <= NOTE_RETENTION_MS)
       .sort((left, right) => right[1].at - left[1].at)
@@ -387,8 +415,8 @@ export function readConversationsByVersion(
   const counts: Record<string, number> = {};
   for (const entry of Object.values(cursor.conversations)) {
     const reviewedAt = entry.reviewedAt;
-    if (reviewedAt === undefined || now - reviewedAt > THEME_WINDOW_MS) continue;
-    const version = versionAt(reviewedAt);
+    if (!validInsightTime(reviewedAt) || now - reviewedAt > THEME_WINDOW_MS) continue;
+    const version = entry.reviewedVersion ?? versionAt(reviewedAt);
     counts[version] = (counts[version] ?? 0) + 1;
   }
   return counts;
@@ -403,20 +431,22 @@ export function readConversationsByVersion(
 export function themeSignals(
   store: ThemeStore,
   readByVersion: Record<string, number>,
-  versionAt: (at: number) => string,
+  versionAt: (at: number, conversationId: string) => string,
   now: number,
 ): Signal[] {
   const totalRead = Object.values(readByVersion).reduce((sum, count) => sum + count, 0);
   const signals: Signal[] = [];
   for (const theme of Object.values(store.themes)) {
-    const recent = Object.values(theme.conversations).filter(
-      (conversation) => now - conversation.at <= THEME_WINDOW_MS,
+    const recentEntries = Object.entries(theme.conversations).filter(
+      ([, conversation]) =>
+        validInsightTime(conversation.at) && now - conversation.at <= THEME_WINDOW_MS,
     );
+    const recent = recentEntries.map(([, conversation]) => conversation);
     if (recent.length === 0) continue;
     const versions: Signal["versions"] = {};
     const days = new Set<string>();
-    for (const conversation of recent) {
-      const version = versionAt(conversation.at);
+    for (const [conversationId, conversation] of recentEntries) {
+      const version = conversation.version ?? versionAt(conversation.at, conversationId);
       versions[version] = { count: (versions[version]?.count ?? 0) + 1 };
       days.add(new Date(conversation.at).toISOString().slice(0, 10));
     }
@@ -452,6 +482,13 @@ export function themeSignals(
   );
 }
 
+/** What the review did with one leaf node this run. */
+export interface InsightLeafResult {
+  state: "read" | "failed" | "needs-update";
+  /** Parts read from it (in a preview: that would be read). */
+  parts: number;
+}
+
 export interface InsightRun {
   signals: Signal[];
   themes: ThemeStore;
@@ -468,6 +505,16 @@ export interface InsightRun {
   groupingPending: boolean;
   costUsd: number;
   errors: string[];
+  /** Per leaf node asked this run, by node id. */
+  leaves: Record<string, InsightLeafResult>;
+}
+
+/** A connected leaf whose conversations the review reads too. */
+export interface InsightLeaf {
+  nodeId: string;
+  conversations: LeafNode["conversations"];
+  /** The leaf's app versions over time, from its own bundle. */
+  versionAt?: (at: number) => string;
 }
 
 export interface InsightOptions {
@@ -483,12 +530,39 @@ export interface InsightOptions {
   onThemes?: () => void;
   /** Told as files are checked and parts are read, so a page can show the run moving. */
   progress?: InsightProgress;
+  /** Connected leaf nodes, on a command node. */
+  leaves?: InsightLeaf[];
+}
+
+/** Read positions kept for a machine: this one's, or a leaf's under `nodes/`. */
+interface PositionBook {
+  dir: string;
+  cursor: InsightCursor;
+  /** Its conversation id on this node, from the id the machine itself uses. */
+  idOf: (conversationId: string) => string;
+  leaf?: InsightLeaf;
+}
+
+/** Every leaf's saved positions, connected this run or not: their reviews still count. */
+function storedLeafDirs(dir: string): string[] {
+  try {
+    return readdirSync(path.join(dir, "nodes"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(dir, "nodes", entry.name));
+  } catch {
+    return [];
+  }
+}
+
+function addCounts(into: Record<string, number>, counts: Record<string, number>): void {
+  for (const [version, value] of Object.entries(counts))
+    into[version] = (into[version] ?? 0) + value;
 }
 
 /** Reads new conversation parts, updates themes and returns one signal per theme. */
 export async function runInsights(options: InsightOptions): Promise<InsightRun> {
   const dir = insightsDir(options.stateDir);
-  const cursor = loadCursor(dir);
+  const local: PositionBook = { dir, cursor: loadCursor(dir), idOf: (id) => id };
   const notes = loadNotes(dir);
   const store = loadThemes(dir);
   const timeline = versionTimeline(
@@ -506,50 +580,117 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
     groupingPending: false,
     costUsd: 0,
     errors: [],
+    leaves: {},
   };
 
-  const selection = await selectSegments({
+  // Keep at least one slot for this machine. Large fleets rotate the 29
+  // remaining slots using a saved position in the sorted leaf ids.
+  const leaves = [...(options.leaves ?? [])].sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+  const turnFile = path.join(dir, "leaf-turn.json");
+  const priorLeaf = readJson<string>(turnFile, "");
+  const first = Math.max(
+    0,
+    leaves.findIndex((leaf) => leaf.nodeId.localeCompare(priorLeaf) > 0),
+  );
+  const rotated = [...leaves.slice(first), ...leaves.slice(0, first)];
+  const leafShare = Math.max(1, Math.floor(MAX_SEGMENTS_PER_RUN / (leaves.length + 1)));
+  const activeLeaves = rotated.slice(0, MAX_SEGMENTS_PER_RUN - 1);
+  const activeIds = new Set(activeLeaves.map((leaf) => leaf.nodeId));
+  const leafSelections = await Promise.all(
+    leaves.map(async (leaf) => {
+      const leafDir = leafInsightsDir(dir, leaf.nodeId);
+      const book: PositionBook = {
+        dir: leafDir,
+        cursor: loadCursor(leafDir),
+        idOf: (id) => leafConversationId(leaf.nodeId, id),
+        leaf,
+      };
+      const budget = activeIds.has(leaf.nodeId) ? leafShare : 0;
+      try {
+        const received = await leaf.conversations({ cursor: book.cursor, maxSegments: budget });
+        const selection = {
+          ...received,
+          segments: received.segments.slice(0, budget),
+          waiting: received.waiting + Math.max(0, received.segments.length - budget),
+        };
+        run.leaves[leaf.nodeId] = {
+          state: "read",
+          parts: options.dryRun ? selection.segments.length : 0,
+        };
+        return { book, selection };
+      } catch (error) {
+        run.leaves[leaf.nodeId] = { state: leafFailure(error), parts: 0 };
+        return null;
+      }
+    }),
+  );
+  const fromLeaves = leafSelections.filter((entry) => entry !== null);
+  const leafParts = fromLeaves.reduce((sum, entry) => sum + entry.selection.segments.length, 0);
+  const selection: Selection = await selectSegments({
     sources: options.sources,
-    cursor,
+    cursor: local.cursor,
     now: options.now,
     excludeDirs: options.excludeDirs,
+    maxSegments: Math.max(0, MAX_SEGMENTS_PER_RUN - leafParts),
     ...(options.progress ? { onFile: options.progress.fileChecked.bind(options.progress) } : {}),
   });
-  run.waiting = selection.waiting;
-  options.progress?.scanned(selection.segments.length, selection.waiting);
+  const selections: Array<{ book: PositionBook; selection: Selection }> = [
+    ...fromLeaves,
+    { book: local, selection },
+  ];
+  const parts = selections.reduce((sum, entry) => sum + entry.selection.segments.length, 0);
+  run.waiting = selections.reduce((sum, entry) => sum + entry.selection.waiting, 0);
+  options.progress?.scanned(parts, run.waiting);
 
   if (options.dryRun) {
-    run.read = selection.segments.length;
+    run.read = parts;
   } else {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    for (const skipped of selection.skipped) {
-      cursor.conversations[skipped.conversationId] = cursorAfter(
-        skipped,
-        false,
-        cursor.conversations[skipped.conversationId],
-        options.now,
-      );
+    const books = new Set<PositionBook>();
+    const record = (book: PositionBook, part: Segment | SkippedPart, reviewed: boolean): void => {
+      const previous = book.cursor.conversations[part.conversationId];
+      const entry = cursorAfter(part, reviewed, previous, options.now);
+      if (book.leaf) {
+        entry.reviewedVersion = reviewed
+          ? (book.leaf.versionAt?.(part.lastAt) ?? UNKNOWN_VERSION)
+          : previous?.reviewedVersion;
+      }
+      book.cursor.conversations[part.conversationId] = entry;
+      books.add(book);
+    };
+    const save = (book: PositionBook): void => {
+      mkdirSync(book.dir, { recursive: true, mode: 0o700 });
+      saveCursor(book.dir, book.cursor, options.now);
+    };
+    for (const { book, selection: chosen } of selections) {
+      for (const skipped of chosen.skipped) record(book, skipped, false);
     }
-    const queue = [...selection.segments];
+    const queue = selections.flatMap(({ book, selection: chosen }) =>
+      chosen.segments.map((segment) => ({ book, segment })),
+    );
     // One line per distinct problem, with how many parts it hit.
     const failures = new Map<string, number>();
     const worker = async () => {
-      for (let segment = queue.shift(); segment; segment = queue.shift()) {
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        const { book, segment } = item;
         try {
-          const result = await notesFor(segment, options.runner);
+          const result = await notesFor(
+            { ...segment, conversationId: book.idOf(segment.conversationId) },
+            options.runner,
+          );
+          const version = book.leaf
+            ? (book.leaf.versionAt?.(segment.lastAt) ?? UNKNOWN_VERSION)
+            : undefined;
           notes.push(
-            ...result.notes.filter((note) => !notes.some((existing) => existing.id === note.id)),
+            ...result.notes
+              .filter((note) => !notes.some((existing) => existing.id === note.id))
+              .map((note) => ({ ...note, version })),
           );
           run.notesAdded += result.notes.length;
           run.costUsd += result.costUsd;
           run.read += 1;
           options.progress?.partRead(result.notes.length);
-          cursor.conversations[segment.conversationId] = cursorAfter(
-            segment,
-            true,
-            cursor.conversations[segment.conversationId],
-            options.now,
-          );
+          record(book, segment, true);
           // Marked before the notes are saved, so no saved note can miss grouping.
           if (result.notes.length > 0 && !store.pendingGrouping) {
             store.pendingGrouping = true;
@@ -557,7 +698,8 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
           }
           // Saved after every part, so an interrupted run loses nothing it paid for.
           saveNotes(dir, notes, options.now);
-          saveCursor(dir, cursor, options.now);
+          save(book);
+          if (book.leaf) run.leaves[book.leaf.nodeId]!.parts += 1;
         } catch (error) {
           const message = (error as Error).message;
           options.progress?.partFailed();
@@ -568,7 +710,12 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
       }
     };
     await Promise.all(Array.from({ length: NOTE_CONCURRENCY }, worker));
-    saveCursor(dir, cursor, options.now);
+    save(local);
+    for (const book of books) save(book);
+    const lastActive = activeLeaves.at(-1);
+    if (lastActive && leaves.length > activeLeaves.length) {
+      writeAtomic(turnFile, JSON.stringify(lastActive.nodeId));
+    }
     for (const [message, count] of failures) {
       run.errors.push(
         count > 1
@@ -599,7 +746,27 @@ export async function runInsights(options: InsightOptions): Promise<InsightRun> 
   }
   run.groupingPending = store.pendingGrouping === true;
 
-  run.readByVersion = readConversationsByVersion(cursor, timeline.versionAt, options.now);
-  run.signals = themeSignals(store, run.readByVersion, timeline.versionAt, options.now);
+  // Older leaf cursor entries and themes have no recorded version. Keep
+  // them visible without counting them as fix-carrying evidence.
+  const unknownVersion = () => UNKNOWN_VERSION;
+  addCounts(
+    run.readByVersion,
+    readConversationsByVersion(local.cursor, timeline.versionAt, options.now),
+  );
+  for (const leafDir of storedLeafDirs(dir)) {
+    const saved = fromLeaves.find((entry) => entry.book.dir === leafDir)?.book.cursor;
+    addCounts(
+      run.readByVersion,
+      readConversationsByVersion(saved ?? loadCursor(leafDir), unknownVersion, options.now),
+    );
+  }
+  run.signals = themeSignals(
+    store,
+    run.readByVersion,
+    (at, conversationId) => {
+      return leafOfConversation(conversationId) ? UNKNOWN_VERSION : timeline.versionAt(at);
+    },
+    options.now,
+  );
   return run;
 }

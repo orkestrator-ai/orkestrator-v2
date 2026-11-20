@@ -1,5 +1,7 @@
 # Coordinator adapter review validation under shared-host load
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0725
 - **Status:** environmental
 - **Date observed:** 2026-10-24

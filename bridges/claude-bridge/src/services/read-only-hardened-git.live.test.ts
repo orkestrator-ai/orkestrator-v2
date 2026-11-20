@@ -90,6 +90,16 @@ test(
       expect(observation.toolResult!.excerpt, name).toContain("+two");
       expect(observation.helperRan, name).toBe(false);
     }
+    // The list ran as the hook serialized it: variable substituted, Git hardened.
+    const list = byName.get("hardened-quoted-list")!;
+    expect(list.hookCommand).toBe(
+      "git rev-parse --verify HEAD && git diff --no-ext-diff --no-textconv --submodule=short HEAD~1..HEAD -- a.txt | grep -n '^+two\\|^-one'",
+    );
+    expect(list.toolResult).not.toBeNull();
+    expect(list.toolResult!.isError).toBe(false);
+    expect(list.toolResult!.excerpt).toContain("+two");
+    expect(list.toolResult!.excerpt).toContain("-one");
+    expect(list.helperRan).toBe(false);
     // The fixture's helper is live: the same command without the hook runs it.
     const control = byName.get("unhooked-control")!;
     expect(control.hookCommand).toBeNull();

@@ -134,6 +134,32 @@ test("terminal status updates preserve done under storage's lease, while users c
   });
 });
 
+test("a workspace update cannot claim lifecycle authority from its arguments", async () => {
+  await withTemporaryStorage(async (storage) => {
+    const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "");
+    const snapshot = { phase: "building", source: { type: "kanban", taskId: task.id } };
+    await storage.saveBuildPipeline("pipeline", "project-1", "", 1, snapshot);
+    const update = commands.get("update_kanban_task")!;
+    const args = { taskId: task.id, status: "review", preserveDoneStatus: true };
+    expect(await update(args, { storage } as never)).toMatchObject({ status: "backlog" });
+    expect(await update(args, { storage, buildKanbanWrite: {} } as never)).toMatchObject({
+      status: "review",
+      lifecycleStatus: "review",
+    });
+
+    await storage.saveBuildPipeline("pipeline", "project-1", "", 1, {
+      ...snapshot,
+      phase: "failed",
+    });
+    expect(
+      await update({ ...args, status: "in-progress" }, {
+        storage,
+        buildKanbanWrite: { admissionPipelineId: "pipeline" },
+      } as never),
+    ).toMatchObject({ status: "review" });
+  });
+});
+
 describe("Kanban label command validation", () => {
   test.each([
     ["get_kanban_labels", {}, "projectId"],

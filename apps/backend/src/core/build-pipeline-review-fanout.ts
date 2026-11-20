@@ -15,7 +15,7 @@ import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
  * teaching every later stage about a list.
  *
  * The reviewer turn itself is not implemented here. It lives in
- * `review-fanout.ts` and is shared with Multi Review, so a fix to a wedged
+ * `review/fanout.ts` and is shared with Multi Review, so a fix to a wedged
  * reviewer, a schema repair or a dispatch race lands in both at once. What this
  * module owns is what only the pipeline knows: that its state is a field on the
  * pipeline snapshot, that its reviewers are mirrored into `pipeline.sessions`
@@ -70,16 +70,19 @@ import {
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
 import {
+  type ArtifactTurnDispatch,
+  beginWorkflowArtifactTurn,
   lastAssistantText,
   missingWorkflowResultMessage,
-  workflowResultRefusals,
+  settleArtifactDispatchTurn,
   workflowRestartContinuationPrompt,
+  workflowResultRefusals,
+  workflowResultReminderPrompt,
+  type WorkflowResultService,
   workflowResumeContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
-  workflowResultReminderPrompt,
-} from "./workflow-result-missing.js";
+} from "./workflows/index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   recordPipelineSessionUsage,
   deferPipelineSessionUsage,
@@ -91,16 +94,32 @@ import {
   readProviderStatus,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
-import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review-consolidation-scope.js";
+import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./review/consolidation-scope.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import type { BuildStepSelection } from "./build-pipeline-service-helpers.js";
-import { createDiscoveryPrompt } from "./review-prompts.js";
+import {
+  clearReviewerAdmission,
+  compactReviewerAdmissionQueue,
+  createDiscoveryPrompt,
+  DEFAULT_STALL_ABANDON_MS,
+  DEFAULT_STALL_WARNING_MS,
+  disputedReviewChecks,
+  dropProvisionalFindings,
+  type MultiReviewEfficiencyObserver,
+  MultiReviewProgressTracker,
+  noProgressElapsedMs,
+  type ProvisionalFindingInbox,
+  recordEfficiency,
+  reviewerPanelTail,
+  type ReviewFanoutConcurrency,
+  settleDisputedCheckReruns,
+  stalledMinutes,
+} from "./review/index.js";
 import {
   pipelineReviewPreparationInstructions,
   pipelineReviewerInstructions,
   withBuildStepInstructions,
 } from "@orkestrator/protocol/build-pipeline-stage-instructions";
-import { reviewerPanelTail } from "./multi-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
   MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
@@ -121,34 +140,11 @@ import {
   reviewFanoutReviewerMode,
   type ReviewFanoutHost,
   type ReviewerPollGate,
-} from "./review-fanout.js";
+} from "./review/fanout.js";
 import { buildPipelineStage, buildPipelineStageTurn } from "./build-pipeline-stages.js";
-import { disputedReviewChecks, settleDisputedCheckReruns } from "./review-disputed-checks.js";
-import {
-  clearReviewerAdmission,
-  compactReviewerAdmissionQueue,
-} from "./review-fanout-admission.js";
-import {
-  dropProvisionalFindings,
-  type ProvisionalFindingInbox,
-} from "./review-provisional-findings.js";
-import {
-  DEFAULT_STALL_ABANDON_MS,
-  DEFAULT_STALL_WARNING_MS,
-  MultiReviewProgressTracker,
-  noProgressElapsedMs,
-  stalledMinutes,
-} from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
-import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
-import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
 import { reviewLensField } from "@orkestrator/protocol/review-lens";
-import {
-  beginWorkflowArtifactTurn,
-  settleArtifactDispatchTurn,
-  type ArtifactTurnDispatch,
-} from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
 import {
@@ -265,7 +261,7 @@ export interface BuildPipelineReviewFanoutDeps {
   efficiency?: MultiReviewEfficiencyObserver;
   /** Elapsed-time gate for reviewer poll counts during this pipeline's pass. */
   pollGate?(pipeline: BuildPipeline): ReviewerPollGate;
-  /** Reviewer and consolidation turns' artifact grants (`workflow-artifact-turns.ts`). */
+  /** Reviewer and consolidation turns' artifact grants (`workflows/artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
   /**
    * The read-only guard's baseline for a new pass, taken before any reviewer

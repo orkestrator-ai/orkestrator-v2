@@ -31,7 +31,7 @@ import {
 import { NativeAgentGoalVerifier } from "./native-agent-goal-verifier.js";
 import type { PersistedNativeAgentSession } from "./native-agent-service-shared.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 const KEY = "session-key";
 const SCOPE = { environmentId: "e1", tabId: "t1" };

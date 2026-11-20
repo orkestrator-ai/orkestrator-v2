@@ -1,3 +1,7 @@
+import type {
+  NativeAgentToolOutputRead,
+  ToolOutputReadMode,
+} from "@orkestrator/protocol/native-agent-tool-output";
 import { coordinatorApi } from "@/lib/node-scope/domains/coordinator";
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
 import { terminals } from "@/lib/node-scope/domains/terminals";
@@ -410,6 +414,26 @@ export function createWorkflowsApi(client: BackendClient) {
     detailRef: string;
   }): Promise<NativeAgentToolDetails> {
     return asWebModel(native().get_native_agent_tool_details(input));
+  }
+
+  /**
+   * One bounded slice of a tool call's output (`get_native_agent_tool_output`).
+   * A node without the command answers `unknown-command`; the caller reads
+   * the row's details instead.
+   */
+  async function getNativeAgentToolOutput(input: {
+    environmentId: string;
+    agent: NativeAgentClientPlatform;
+    logicalSessionKey: string;
+    toolUseId: string;
+    messageId?: string;
+    detailRef?: string;
+    mode: ToolOutputReadMode;
+    cursor?: number;
+    anchor?: string;
+    limit: number;
+  }): Promise<NativeAgentToolOutputRead> {
+    return asWebModel(native().get_native_agent_tool_output(input));
   }
 
   async function refreshNativeAgentModels<TMessage = unknown>(input: {
@@ -992,6 +1016,7 @@ export function createWorkflowsApi(client: BackendClient) {
     getNativeAgentDiscoveryUpdate,
     getNativeAgentMessagePage,
     getNativeAgentToolDetails,
+    getNativeAgentToolOutput,
     refreshNativeAgentModels,
     refreshNativeAgentCommands,
     stopNativeAgentSession,
@@ -1059,6 +1084,7 @@ export const {
   getNativeAgentDiscoveryUpdate,
   getNativeAgentMessagePage,
   getNativeAgentToolDetails,
+  getNativeAgentToolOutput,
   refreshNativeAgentModels,
   refreshNativeAgentCommands,
   stopNativeAgentSession,

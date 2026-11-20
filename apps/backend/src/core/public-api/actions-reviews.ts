@@ -20,7 +20,7 @@ import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/proto
 import { conciseError } from "../commands-error-text.js";
 import { workflowSummary } from "../control-workflow-summary.js";
 import type { Environment } from "../models.js";
-import { MULTI_REVIEW_AUTO_PR_TAB_TITLE } from "../multi-review-auto-pr.js";
+import { MULTI_REVIEW_AUTO_PR_TAB_TITLE } from "../review/index.js";
 import { requireEnvironment } from "./actions-discovery.js";
 import {
   parseAgentSelection,

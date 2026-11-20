@@ -108,6 +108,43 @@ test("continues through the normal Review and PR path without a second Build or 
   });
 });
 
+test("an adopted Build retries a failed admission move before review preparation", async () => {
+  await withService(
+    async (service, storage, provider) => {
+      const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
+      let blockAdmission = true;
+      const update = storage.kanban.updateKanbanTask.bind(storage.kanban);
+      const fault = spyOn(storage.kanban, "updateKanbanTask").mockImplementation(
+        async (...args) => {
+          if (blockAdmission && args[1].status === "in-progress")
+            throw new Error("ticket write failed");
+          return update(...args);
+        },
+      );
+      try {
+        const started = await service.startFromCompletedBuild(
+          startInput({ taskId: task.id, source: { type: "kanban", taskId: task.id } }),
+          completedBuild(),
+        );
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).pendingKanbanAdmission).toBe(true);
+        expect((await storage.kanban.getKanbanTask(task.id))?.status).toBe("backlog");
+        expect(provider.sent).toEqual([]);
+
+        blockAdmission = false;
+        await service.advanceNow(started.id);
+        expect((await pipeline(storage, started.id)).pendingKanbanAdmission).toBeUndefined();
+        expect((await storage.kanban.getKanbanTask(task.id))?.status).toBe("in-progress");
+        expect(provider.created.every((session) => session.phase !== "build")).toBe(true);
+      } finally {
+        fault.mockRestore();
+      }
+    },
+    { realKanban: true },
+  );
+});
+
 for (const source of ["kanban", "github"] as const) {
   test(`Notes publication failure preserves completion and ${source} reconciliation`, async () => {
     await withService(async (service, storage, _provider, invocations, controls) => {

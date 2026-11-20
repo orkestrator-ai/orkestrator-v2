@@ -282,7 +282,7 @@ environment, never anything a model supplied.
 
 **Publishing.** These agents have no tab credential, so every dispatched
 turn goes through the same per-turn bookkeeping as a native turn
-(`workflow-artifact-turns.ts`, sharing `artifactDispatch` with the native
+(`workflows/artifact-turns.ts`, sharing `artifactDispatch` with the native
 service): the turn is noted for attribution and a grant bound to the
 conversation, turn and provider session is minted, then revoked when the
 turn settles (the reviewer's status read shows the turn ended, the stage

@@ -1,0 +1,87 @@
+# The relayed push acceptance test can exceed its virtual latency budget
+
+Relocated tests from the recorded commands now live at
+`apps/backend/src/core/review/transcript-push.test.ts` and
+`apps/backend/src/core/review/service-part-4.test.ts`.
+
+- **ID:** 10008
+- **Status:** open
+- **Observed:** 2026-11-20 on the push-layer review fixes, based on
+  `5e9835d0a6981a8d2c217d8941e2e065abbe3008`, after reviewed commit `f255a06da`.
+- **Test:** `push acceptance budgets > two relayed nodes share bridge reads across windows and meet the latency budget`
+- **File:** `apps/backend/tests/push-acceptance.test.ts`
+- **Original command:** `mise run test:logged -- --name findings-backend -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts src/core/http-bridge/state-revision.test.ts src/core/push/native-session-push-topic.test.ts src/core/push/review-transcript-push-topic.test.ts src/core/native-agent-tool-output-reads.test.ts src/core/nodes/node-push-subscriptions.test.ts src/core/multi-review-transcript-push.test.ts src/core/multi-review-service-part-4.test.ts tests/push-acceptance.test.ts --parallel=4 --only-failures`.
+- **Failure:** observed p95 of 300 ms against the 250 ms virtual-time limit.
+  The case ran for 1.66 seconds. The run reported 136 passed and 3 failed
+  across eight files. The two other failures were fixture setup mistakes in new
+  reviewer count tests. Evidence: `/tmp/orkestrator-test-run.qvEDlP/findings-backend.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name findings-acceptance-only -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts tests/push-acceptance.test.ts --parallel=1`
+  passed the owning file in 23.8 seconds.
+- **Open question:** the manual clock advances in 25 ms increments while the
+  relay reads real SSE sockets outside the fixture's quiescence check. It is
+  unclear whether delayed socket delivery or a product scheduling race explains
+  the extra virtual ticks. The latency limit and scenario remain unchanged.
+
+## Recurrence on 2026-11-20
+
+- **Observed:** while merging `origin/main` at `0b778d995` into `03261be68`,
+  whose merge base was `5e9835d0a6981a8d2c217d8941e2e065abbe3008`.
+  The case was branch-local before renumbering, so the recurrence check used
+  its old number 10003 against the pre-merge branch and reported it open.
+- **Aggregate command:** `mise run test:logged -- --name merge-default-suite -- mise run test`.
+  The backend ran with four Bun workers. The case measured virtual p95 of
+  275 ms against its 250 ms budget and failed after 1105.76 ms. The backend
+  suite reported 19,956 passed, 152 skipped, and two failed across 1,415 files.
+  Evidence: `/tmp/orkestrator-test-run.oFfodQ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name merge-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
+  passed the owning file in 11.6 seconds. The relay still reads real SSE
+  sockets outside the fixture's quiescence check, and the source of the
+  extra virtual tick remains unverified.
+
+## Later recurrence on 2026-11-20
+
+- **Observed:** while merging `origin/main` at `2f2c4b383` into `df73b63e8`,
+  whose merge base was `0b778d9957ba241e34231f6f86b2ce0e97205c05`. The
+  recurrence check found the open case on the pre-merge branch.
+- **Aggregate command:** `mise run test:logged -- --name refresh-main-default-suite -- mise run test`.
+  The backend ran with four Bun workers. The case measured virtual p95 of
+  300 ms against its 250 ms budget and failed after 908.40 ms. The backend
+  suite reported 19,972 passed, 152 skipped, and one failed across 1,417 files.
+  Evidence: `/tmp/orkestrator-test-run.QhGIbq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated rerun:** `mise run test:logged -- --name refresh-main-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
+  passed the owning file in 10.7 seconds.
+
+## Isolated failures on 2026-11-20
+
+- **Observed:** on the `review` domain move of to-do 0012, based on
+  `05f3db2d8`. `mise run flaky:recurrence -- 10008 --base 05f3db2d8`
+  reported the case open.
+- **Command:** `NODE_ENV=test bun scripts/run-logged.ts --name review-importer-tests -- bun --cwd=apps/backend test --preload ../../tests/setup-node.ts <33 test files> --parallel=4 --only-failures`,
+  where it measured virtual p95 of 300 ms against its 250 ms budget; the
+  other 32 files passed (789 of 790 tests).
+- **Isolated reruns:** the owning file alone
+  (`bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts`)
+  failed three times out of three with p95 300 ms (8 passed, 1 failed), on
+  the branch and on an untouched checkout of `05f3db2d8`. Unlike the earlier
+  observations it did not pass alone, so on this host (macOS, Apple Silicon)
+  it now fails deterministically on `main`. The move does not touch the push
+  layer; only the test's import path changed.
+
+## Merge validation on 2026-11-20
+
+- **Observed.** Merging `11fca66ca0` into `d1d1f7139`, with merge base
+  `8e5d0081cb300512267659942e2cb5b7d0a91b9a`. The recurrence check against
+  that base reported the case open.
+- **Aggregate.** `mise run test:logged -- --name merge-default -- mise run test`
+  used four Bun workers for the backend. The relayed case measured 300 ms
+  against the 250 ms virtual p95 limit and failed after 308.96 ms. The backend
+  reported 20,095 passed, 152 skipped, and 3 failed across 1,424 files. The other
+  two failures concerned graph-review package reads. Evidence is in
+  `/tmp/orkestrator-test-run.Lm4TT1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated reruns.** The aggregate runner's one-worker rerun repeated the
+  300 ms p95 failure (8 passed, 1 failed). A separate
+  `mise run test:logged -- --name merge-push-acceptance -- bun test --cwd apps/backend ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
+  also reported 8 passed and 1 failed, with one viewer at revision 25 when
+  the bridge was at 26. Evidence is in
+  `/tmp/orkestrator-test-run.Lm4TT1/rerun-apps-backend-tests-push-acceptance-test-ts.log.gz`
+  and `/tmp/orkestrator-test-run.aDDbUi/merge-push-acceptance.log.gz`.

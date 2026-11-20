@@ -373,7 +373,7 @@ export async function probeWorkload(context: WorkloadContext): Promise<WorkloadD
     "apps/backend/src/core/transcript-progress.ts",
   );
   const reviewer = await context.loadOptional<ReviewerModule>(
-    "apps/backend/src/core/multi-review-reviewer-transcript.ts",
+    "apps/backend/src/core/review/reviewer-transcript.ts",
   );
   const summary = await context.loadOptional<Summary>(
     "packages/protocol/src/node/bridge-transcript-summary.ts",

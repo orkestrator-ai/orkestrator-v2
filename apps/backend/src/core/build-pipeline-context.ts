@@ -19,10 +19,12 @@ export interface BranchPushState {
  * and the workflow-result helpers.
  */
 import { workerMailTurnFor } from "./pipeline-worker-identity.js";
-import { ProvisionalFindingInbox } from "./review-provisional-findings.js";
+import {
+  type MultiReviewEfficiencyObserver,
+  ProvisionalFindingInbox,
+  type ReviewFanoutConcurrency,
+} from "./review/index.js";
 import { randomUUID } from "node:crypto";
-import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
-import type { MultiReviewEfficiencyObserver } from "./multi-review-efficiency.js";
 import {
   type BuildPipeline,
   type BuildPipelineAgent,
@@ -38,8 +40,20 @@ import type {
 import type { PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import {
+  type ArtifactLedgerSource,
+  type ArtifactTurnDispatch,
+  beginWorkflowArtifactTurn,
+  ElapsedPollGate,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowServiceOptions,
+  KeyedWorkflowSupervisor,
+  type PollTrigger,
+  settleArtifactDispatchTurn,
+  type WorkflowArtifactTurnOptions,
+  WorkflowResultRollout,
+  type WorkflowResultService,
+} from "./workflows/index.js";
 import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import { type PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
@@ -59,24 +73,11 @@ import {
 } from "./build-pipeline-service-helpers.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import {
-  KeyedWorkflowSupervisor,
-  keyedSchedulingEnabled,
-  type KeyedWorkflowServiceOptions,
-} from "./workflow-supervisor.js";
-import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
-import {
   buildPipelineObligation,
   buildPipelineTarget,
   type BuildPipelineObligation,
 } from "./build-pipeline-scheduling.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import {
-  beginWorkflowArtifactTurn,
-  settleArtifactDispatchTurn,
-  type ArtifactTurnDispatch,
-  type WorkflowArtifactTurnOptions,
-} from "./workflow-artifact-turns.js";
-import type { ArtifactLedgerSource } from "./workflow-transcript-artifacts.js";
 import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import {
   assertNoOtherWorkflowWriting,
@@ -130,7 +131,7 @@ export type BuildPipelineServiceOptions = {
   reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
   /** Content-free fan-out measurements (tests and benchmarks). */
   efficiency?: MultiReviewEfficiencyObserver;
-  /** Stage turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  /** Stage turns' transcript-artifact grants (`workflows/artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
   /** Publication ledger; stage transcripts place each publication beside its call. */
   artifactLedger?: ArtifactLedgerSource;
@@ -369,7 +370,7 @@ export class BuildPipelineContext {
   /**
    * A stage turn's transcript-artifact authority, owned by the stage
    * session's own key in the pipeline's environment, or undefined when the
-   * provider has no path for it (`workflow-artifact-turns.ts`).
+   * provider has no path for it (`workflows/artifact-turns.ts`).
    */
   beginArtifactTurn(
     pipeline: BuildPipeline,

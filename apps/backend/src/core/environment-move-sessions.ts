@@ -7,8 +7,8 @@ import {
   hostClaudeConfigDir,
   hostClaudeJsonPath,
   hostCodexHome,
-} from "./agent-accounts-homes.js";
-import { runtimeHostCodexHome } from "./agent-accounts-active.js";
+} from "./agent-accounts/homes.js";
+import { runtimeHostCodexHome } from "./agent-accounts/index.js";
 import { claudeProjectSlug } from "./claude-project-slug.js";
 import type { CommandContext } from "./commands-context.js";
 import { environmentStateDirectory } from "./environment-state-paths.js";

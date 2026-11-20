@@ -97,7 +97,7 @@ import {
   coordinatorPromptWithAttachmentPaths,
   promptWithPendingAgentHandoff,
 } from "./native-agent-handoffs.js";
-import { beginArtifactDispatchTurn } from "./workflow-artifact-turns.js";
+import { beginArtifactDispatchTurn } from "./workflows/index.js";
 import type { NativeAgentCatalogCache } from "./native-agent-catalog-cache.js";
 import type {
   NativeAgentTranscriptProjection,

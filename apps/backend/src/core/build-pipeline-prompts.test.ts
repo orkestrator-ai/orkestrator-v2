@@ -41,9 +41,9 @@ import {
   verificationCriteriaSection,
   worktreeSnapshotSection,
 } from "./build-pipeline-prompts.js";
-import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review-validation-prompts.js";
+import { IMPLEMENTATION_VALIDATION_HANDOFF } from "./review/validation-prompts.js";
 import type { LegacyReviewPackage, ReviewPackage } from "@orkestrator/protocol/review-workflow";
-import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review-prompts.js";
+import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./review/prompts.js";
 
 function contractIssue(
   overrides: Partial<ReviewContractValidationIssue> = {},

@@ -67,7 +67,7 @@ import {
   type WorkflowReconcileReport,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+} from "./workflows/index.js";
 import {
   discoverBuildPipelines,
   type BuildPipelineObligation,
@@ -102,7 +102,7 @@ import {
   inspectCodeRewind,
   readWorktreeStatus,
 } from "./build-pipeline-code-rewind.js";
-import { probeReviewWorktree } from "./review-worktree-probe.js";
+import { probeReviewWorktree } from "./review/index.js";
 import {
   applyBuildPipelineRestartSelection,
   pipelineRestartSlot,
@@ -542,6 +542,7 @@ export class BuildPipelineLifecycle {
       taskTitle: input.taskTitle,
       taskSnapshot,
       source: input.source,
+      ...(input.source?.type === "kanban" ? { pendingKanbanAdmission: true } : {}),
       ...(deliveryPolicy ? { deliveryPolicy } : {}),
       featurePlanId: input.featurePlanId?.trim() || undefined,
       admissionKey: buildAdmissionKey(input),

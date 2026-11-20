@@ -42,7 +42,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "../agent-tools.js";
-import { pushedLoginHostFile } from "../agent-accounts-containers.js";
+import { pushedLoginHostFile } from "../agent-accounts/index.js";
 import { resolveOpenCode2Binary } from "../commands-agent-support.js";
 import type { CommandContext } from "../commands-context.js";
 import { loadCoordinatorResearch } from "../coordinator/index.js";

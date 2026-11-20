@@ -1,5 +1,7 @@
 # Environment-deletion main merge validation
 
+The relocated test in the recorded commands now lives at `apps/backend/src/core/review/worktree-fingerprint.test.ts`.
+
 - **ID:** 9839
 - **Status:** open
 - **Date observed:** 2026-11-06

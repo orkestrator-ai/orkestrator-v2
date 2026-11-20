@@ -4,8 +4,8 @@ import { registerAgentAccountCommands } from "./commands-registry-accounts.js";
 import type { CommandHandler } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
-import { agentAccountLoginProgress } from "./agent-accounts.js";
-import { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
+import { agentAccountLoginProgress } from "./agent-accounts/accounts.js";
+import { AgentAccountsRuntime } from "./agent-accounts/runtime.js";
 import { OpenCodeProviderLoginSlot } from "./opencode2/provider-login-slot.js";
 
 import * as cursorBridge from "./cursor-sdk-bridge.js";

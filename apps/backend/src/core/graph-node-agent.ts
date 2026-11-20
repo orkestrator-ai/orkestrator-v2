@@ -80,9 +80,8 @@ import {
   type GraphNodeExecutor,
 } from "./graph-run-executors.js";
 import type { Environment } from "./models.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
+import { MultiReviewProgressTracker } from "./review/index.js";
+import type { ArtifactTurnDispatch, WorkflowResultService } from "./workflows/index.js";
 import type { WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
 import {
   GraphAgentBranchHost,

@@ -83,13 +83,16 @@ import {
   resolveConflictsLocallyPrompt,
   verificationTaskPrompt,
 } from "./build-pipeline-prompts.js";
-import { createMultiReviewConsolidationPrompt, reviewerPanelTail } from "./multi-review-prompts.js";
-import { createDiscoveryPrompt } from "./review-prompts.js";
-import { ConsolidationBudgetError } from "./review-consolidation-evidence.js";
+import {
+  ConsolidationBudgetError,
+  createDiscoveryPrompt,
+  createMultiReviewConsolidationPrompt,
+  reviewerPanelTail,
+} from "./review/index.js";
 import {
   IMPLEMENTATION_VALIDATION_HANDOFF,
   reviewValidationDiscoveryPrompt,
-} from "./review-validation-prompts.js";
+} from "./review/validation-prompts.js";
 
 export interface GraphBuiltInPromptInputValue {
   /** The node's input port name. */

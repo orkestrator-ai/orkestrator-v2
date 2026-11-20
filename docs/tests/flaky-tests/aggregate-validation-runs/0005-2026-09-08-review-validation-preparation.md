@@ -1,5 +1,9 @@
 # 2026-09-08 review validation preparation
 
+Relocated tests from the recorded commands now live at
+`apps/backend/src/core/review/validation-service.test.ts` and
+`apps/backend/src/core/review/validation-controllers.test.ts`.
+
 - **ID:** 0005
 - **Status:** open
 - **Original command:** `mise exec -- bun run test:logged -- --name validation-full-suite -- bun run test`.

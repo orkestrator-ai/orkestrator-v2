@@ -3,10 +3,10 @@ import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { HttpBridgeProvider } from "../src/core/http-bridge/index.js";
-import { MultiReviewService } from "../src/core/multi-review-service.js";
+import { MultiReviewService } from "../src/core/review/service.js";
 import { StorageService } from "../src/core/storage.js";
 import { readProviderStatus } from "../src/core/agent-provider-contract.js";
-import { captureReviewWorktreeSnapshot } from "../src/core/review-fanout.js";
+import { captureReviewWorktreeSnapshot } from "../src/core/review/fanout.js";
 import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   type MultiReviewWorkflow,

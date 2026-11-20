@@ -1,6 +1,6 @@
 /**
  * Seeded restart interleavings for graph agent activations (items 204, 205),
- * in the spirit of `review-fanout-interleaving.test.ts`. Each seed picks one
+ * in the spirit of `review/fanout-interleaving.test.ts`. Each seed picks one
  * of two shapes:
  *
  * - **steps**: one to three independent agent steps;
@@ -44,7 +44,7 @@ import {
   type FakeAgentTurn,
   type GraphAgentWorld,
 } from "./graph-agent-test-support.js";
-import { SeededRandom, interleavingSeeds } from "./review-fanout-interleaving-support.js";
+import { SeededRandom, interleavingSeeds } from "./review/fanout-interleaving-support.js";
 
 type StepScript = "complete" | "silentOnce" | "restartOnce" | "fail";
 const SCRIPTS: readonly StepScript[] = [

@@ -33,7 +33,7 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
 import type { WorkspaceWriters } from "./workspace-writers.js";
@@ -365,7 +365,7 @@ export async function withService(
       if (options.realKanban) {
         const { taskId: _taskId, preserveDoneStatus, ...updates } = args;
         return (await storage.kanban.updateKanbanTask(taskId, updates, undefined, {
-          preserveDoneStatus: preserveDoneStatus === true,
+          lifecycle: preserveDoneStatus === true,
         })) as T;
       }
       const task = kanbanTasks.get(taskId) ?? {

@@ -19,7 +19,7 @@ test("registers every native-sessions command with its definition", () => {
       defined: true,
     });
   }
-  expect(registry.helloDomains()["native-sessions"]).toEqual({ min: 1, max: 5 });
+  expect(registry.helloDomains()["native-sessions"]).toEqual({ min: 1, max: 6 });
 });
 
 test("a dispatch reaches the service with every key the parser reads", async () => {

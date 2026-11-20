@@ -35,7 +35,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
-import { pushedLoginHostFile } from "../agent-accounts-containers.js";
+import { pushedLoginHostFile } from "../agent-accounts/index.js";
 import { resolveOpenCode2Binary } from "../commands-agent-support.js";
 import type { CommandContext } from "../commands-context.js";
 import { allocateLocalPort } from "../commands-servers.js";

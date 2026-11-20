@@ -34,7 +34,7 @@ import {
   effectiveDeliveryPolicy,
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
-import { parseAddressFindingsResult, type ReviewAddressFindingsResult } from "./review-prompts.js";
+import { parseAddressFindingsResult, type ReviewAddressFindingsResult } from "./review/index.js";
 import { type BuildPipelineProvider, ProviderUnavailableError } from "./build-pipeline-provider.js";
 import { buildPipelineKanbanUpdate } from "./build-pipeline-kanban-lifecycle.js";
 import { archiveValidationRun } from "./build-pipeline-validation-history.js";
@@ -74,7 +74,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowResultRefusals,
-} from "./workflow-result-missing.js";
+} from "./workflows/index.js";
 
 const log = createLogger("build-pipeline");
 
@@ -565,7 +565,9 @@ export class BuildPipelineRecovery {
     // Closed without merging, found by the build itself (a conflict
     // resolution's re-detection): the same return the PR monitor applies,
     // decided once per pull request, so the monitor seeing the closed link
-    // later neither skips it nor repeats it.
+    // later neither skips it nor repeats it. While the build still runs it
+    // holds the column (`build-pipeline-ticket-hold.ts`), so this leaves the
+    // closure undecided and the build's ending returns the ticket.
     if (detection.state === "closed") await this.returnTicketForClosedPr(pipeline, detection.url);
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
@@ -727,6 +729,30 @@ export class BuildPipelineRecovery {
     }
   }
 
+  /**
+   * Settle the admission move under the supervisor lock. The saved obligation
+   * survives a restart and is replayable if the board write already landed.
+   */
+  async moveTicketOnAdmission(
+    pipeline: BuildPipeline,
+    revision: number,
+  ): Promise<number | undefined> {
+    try {
+      await this.updateKanbanLifecycle(
+        pipeline,
+        { status: buildPipelineKanbanUpdate("build-started").status },
+        { admission: true },
+      );
+      delete pipeline.pendingKanbanAdmission;
+      return (await this.ctx.save(pipeline, revision)).revision;
+    } catch (error) {
+      pipeline.pendingKanbanAdmission = true;
+      pipeline.backendRevision = revision;
+      log.warn("kanban.status-failed", { pipelineId: pipeline.id, error: formatLogError(error) });
+      return undefined;
+    }
+  }
+
   async updateKanbanLifecycle(
     pipeline: BuildPipeline,
     updates: {
@@ -737,6 +763,7 @@ export class BuildPipelineRecovery {
     },
     options: {
       requireTicket?: boolean;
+      admission?: boolean;
       /** The build has ended (`complete`/`failed`), see {@link terminalTicketStatus}. */
       terminal?: boolean;
     } = {},
@@ -769,15 +796,19 @@ export class BuildPipelineRecovery {
       (updates.prUrl && task.prUrl !== updates.prUrl) ||
       (updates.prState && task.prState !== updates.prState)
     ) {
-      await this.ctx.invoke("update_kanban_task", {
-        taskId: task.id,
-        // Every lifecycle move: a done ticket is never reopened by a build,
-        // and storage records the column it set (`lifecycleStatus`).
-        ...(updates.status ? { preserveDoneStatus: true } : {}),
-        ...(updates.status ? { status: updates.status } : {}),
-        ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
-        ...(updates.prState ? { prState: updates.prState } : {}),
-      });
+      await this.ctx.invoke(
+        "update_kanban_task",
+        {
+          taskId: task.id,
+          // Every lifecycle move: a done ticket is never reopened by a build,
+          // and storage records the column it set (`lifecycleStatus`).
+          ...(updates.status ? { preserveDoneStatus: true } : {}),
+          ...(updates.status ? { status: updates.status } : {}),
+          ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
+          ...(updates.prState ? { prState: updates.prState } : {}),
+        },
+        options.admission ? { admissionPipelineId: pipeline.id } : {},
+      );
     }
     if (updates.comment && !task.comments.some((comment) => comment.text === updates.comment)) {
       await this.ctx.invoke("add_kanban_comment", {

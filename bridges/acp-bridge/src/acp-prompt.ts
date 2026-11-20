@@ -31,6 +31,7 @@ import {
   type PromptTurnClock,
 } from "./acp-prompt-clock.js";
 import type { PromptResponse, StopReason } from "@agentclientprotocol/sdk";
+import { markTranscriptChanged } from "./acp-state-revision.js";
 
 // Transient provider codes the bridge auto-retries. `resource_exhausted` is
 // Cursor's capacity signal; `unavailable` is a dropped connection / PING
@@ -147,7 +148,7 @@ export function stripFlattenedRetriableProviderTail(
   if (!tail.part.content) tail.message.parts.pop();
   // Interim provider serialization is not part of the transcript users should
   // have to interpret. The final marker is retained if all retries exhaust.
-  state.revision += 1;
+  markTranscriptChanged(state);
   schedulePersist();
 }
 
@@ -211,7 +212,7 @@ function openRetryCard(state: SessionState, text: string): BridgeRetryPart {
   };
   message.parts.push(part);
   noteMessageMutation(state, message);
-  state.revision += 1;
+  markTranscriptChanged(state);
   schedulePersist();
   return part;
 }
@@ -225,7 +226,7 @@ function settleRetryCard(
   part.content = text;
   part.toolState = toolState;
   notePartMutation(state, part);
-  state.revision += 1;
+  markTranscriptChanged(state);
   schedulePersist();
 }
 

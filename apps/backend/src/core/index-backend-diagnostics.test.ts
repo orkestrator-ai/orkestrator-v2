@@ -1,10 +1,12 @@
 import { expect, mock, test, spyOn } from "bun:test";
+import { Database } from "bun:sqlite";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
 import { readHealthRows } from "./health-summary.js";
+import { BackgroundCheckpointer } from "./storage-checkpointer.js";
 import { openBackendDatabase } from "./storage-stores.js";
 
 function createBackend(dataDir: string) {
@@ -77,6 +79,107 @@ test("a failed shutdown drain closes diagnostics without a clean-exit marker", a
       database.close();
     }
   } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("shutdown waits for the WAL worker and scrubs the deleted frames before marking a clean exit", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-checkpoint-drain-"));
+  const backend = createBackend(dataDir);
+  await backend.init();
+  backend.diagnostics.health.start();
+
+  const workers: BackgroundCheckpointer[] = [];
+  const start = BackgroundCheckpointer.start;
+  const startSpy = spyOn(BackgroundCheckpointer, "start").mockImplementation((file, options) => {
+    const worker = start(file, { ...options, intervalMs: 10 });
+    if (worker) workers.push(worker);
+    return worker;
+  });
+  const checkpoint = Promise.withResolvers<void>();
+  const close = Promise.withResolvers<void>();
+  const held: Array<() => void> = [];
+  const postMessage = Worker.prototype.postMessage;
+  // Hold the in-flight checkpoint and its following close at the transport
+  // boundary so the test controls their ordering without timing disk I/O.
+  const post = spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+    this: Worker,
+    message: { type: string },
+  ) {
+    if (message.type === "checkpoint" || message.type === "close") {
+      held.push(() => postMessage.call(this, message));
+      if (message.type === "checkpoint") checkpoint.resolve();
+      else close.resolve();
+    } else {
+      postMessage.call(this, message);
+    }
+  });
+  const release = () => {
+    post.mockRestore();
+    for (const send of held.splice(0)) send();
+  };
+  const writer = openBackendDatabase(dataDir, { backgroundCheckpoint: true });
+  const reader = new Database(writer.path);
+  const observer = openBackendDatabase(dataDir);
+  let shutdown: Promise<void> | undefined;
+  try {
+    const marker = "WAL-SCRUB-DELETED-FIXTURE";
+    writer.writeStore("fixture", { marker });
+    reader.exec("BEGIN");
+    reader.query("SELECT revision FROM stores WHERE name = 'fixture'").get();
+    writer.writeStore("fixture", {});
+    writer.scrubDeletedContent();
+    expect(writer.hasDeferredScrub()).toBe(true);
+    const wal = Bun.file(`${writer.path}-wal`);
+    expect(Buffer.from(await wal.arrayBuffer()).includes(marker)).toBe(true);
+
+    await checkpoint.promise;
+    shutdown = backend.shutdown();
+    await close.promise;
+    reader.exec("ROLLBACK");
+    expect(writer.hasDeferredScrub()).toBe(true);
+    expect(readHealthRows(observer).map((row) => row.kind)).toEqual(["started"]);
+    // Let all later worker messages through, including test cleanup.
+    release();
+    await shutdown;
+
+    expect(writer.hasDeferredScrub()).toBe(false);
+    expect((await wal.exists()) && Buffer.from(await wal.arrayBuffer()).includes(marker)).toBe(
+      false,
+    );
+    expect(readHealthRows(observer).map((row) => row.kind)).toEqual(["started", "clean-exit"]);
+  } finally {
+    reader.close();
+    release();
+    await (shutdown ?? backend.shutdown()).catch(() => undefined);
+    writer.close();
+    observer.close();
+    await Promise.all(workers.map((worker) => worker.exited));
+    startSpy.mockRestore();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test("a blocked WAL privacy scrub fails shutdown without marking a clean exit", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-checkpoint-blocked-"));
+  const backend = createBackend(dataDir);
+  await backend.init();
+  backend.diagnostics.health.start();
+  const writer = openBackendDatabase(dataDir, { backgroundCheckpoint: true });
+  const reader = new Database(writer.path);
+  try {
+    writer.writeStore("fixture", { marker: "blocked WAL scrub" });
+    reader.exec("BEGIN");
+    reader.query("SELECT revision FROM stores WHERE name = 'fixture'").get();
+    writer.writeStore("fixture", {});
+    writer.scrubDeletedContent();
+    expect(writer.hasDeferredScrub()).toBe(true);
+
+    await expect(backend.shutdown()).rejects.toThrow("Storage WAL privacy scrub is incomplete");
+    expect(readHealthRows(writer).map((row) => row.kind)).toEqual(["started"]);
+  } finally {
+    reader.close();
+    writer.close();
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }, 60_000);

@@ -11,6 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useNodeScope } from "@/lib/node-scope/providers";
+import { startCoordinatedPoll } from "@/lib/coordinated-poll";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
+import {
+  PUSH_RECOVERY_POLL_MS,
+  WORKFLOW_PUSH_TOPIC,
+  formatAutoPipelinePushId,
+  formatWorkflowPushKey,
+} from "@orkestrator/protocol/push-events";
 import { cn } from "@/lib/utils";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import type { AutoPipelineTabData } from "@/types/paneLayout";
@@ -26,7 +34,11 @@ const STEPS: readonly { id: AutoPipelineStep; label: string }[] = [
   { id: "criteria", label: "Acceptance criteria" },
   { id: "confirm", label: "Confirm" },
 ];
-/** How often a visible tab re-reads the backend's state. */
+/**
+ * How often a visible tab re-reads the backend's state while its push
+ * subscription is not healthy; with one it reads on frames and every
+ * `PUSH_RECOVERY_POLL_MS`.
+ */
 const POLL_MS = 1500;
 /** Edits are saved to the backend this long after the last keystroke. */
 const SAVE_DELAY_MS = 600;
@@ -100,7 +112,8 @@ export function AutoPipelineTab({
 }) {
   const backend = useScopeBackend();
   // The environment's node keeps its pane layout.
-  const paneLayouts = useNodeScope().store(paneLayoutStore);
+  const nodeScope = useNodeScope();
+  const paneLayouts = nodeScope.store(paneLayoutStore);
   const fieldId = useId();
   const sourceTabId = data.sourceTabId;
   const [state, setState] = useState<AutoPipelineState | null>(null);
@@ -145,13 +158,43 @@ export function AutoPipelineTab({
       ),
     [backend, environmentId, paneLayouts, sourceTabId, tabId],
   );
-  // Re-read on every return to the tab and keep polling while it is shown.
+  /*
+   * Push (docs/architecture/push-events.md): while the tab is shown the node
+   * announces each change of this tab's draft (the `auto-pipeline` workflow
+   * key), and the tab reads then. While the subscription is healthy the
+   * backstop poll falls to the recovery cadence; while it is not (no push on
+   * this node, a dropped stream) the tab keeps its old cadence. Either way
+   * the poll runs through the read coordinator, so it pauses while the
+   * window is hidden and catches up once when it returns.
+   */
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+  const pushState = usePushSubscription(
+    nodeScope,
+    WORKFLOW_PUSH_TOPIC,
+    formatWorkflowPushKey({
+      kind: "auto-pipeline",
+      id: formatAutoPipelinePushId({ environmentId, tabId: sourceTabId }),
+    }),
+    isActive,
+    () => void refreshRef.current(),
+  );
+  const pushHealthy = pushState === "healthy";
+  // Re-read on every return to the tab (and whenever the subscription's health
+  // changes, since frames may have been missed) and keep polling while shown.
   useEffect(() => {
     if (!isActive) return;
     void refresh();
-    const timer = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [isActive, refresh]);
+    return startCoordinatedPoll({
+      resource: "auto-pipeline-state",
+      target: `${environmentId}\u0000${sourceTabId}`,
+      intervalMs: pushHealthy ? PUSH_RECOVERY_POLL_MS : POLL_MS,
+      scope: nodeScope,
+      read: () => refresh(),
+    });
+  }, [environmentId, isActive, nodeScope, pushHealthy, refresh, sourceTabId]);
 
   /**
    * Saves the newest pending edits. A failure keeps them pending (and in

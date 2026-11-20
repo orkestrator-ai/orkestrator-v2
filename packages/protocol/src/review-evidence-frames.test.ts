@@ -6,6 +6,7 @@ import {
   REVIEW_VALIDATION_DISCOVERY_PROMPT_PREFIX,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_SIGNATURE,
   REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE,
+  REVIEW_VALIDATION_DISCOVERY_FOCUSED_PATH_GUIDANCE,
   REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE,
   SYSTEM_INSTRUCTIONS_FRAME_CLOSE,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
@@ -125,6 +126,8 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
     expect(body).toContain("Give every command a scope.");
     expect(body).toContain('list it first, and set its scope to "changed"');
     expect(body).toContain("The focused command never replaces a required suite.");
+    expect(body).toContain("A local branch with the same name may be stale.");
+    expect(body).toContain("Put the exact test paths directly");
   });
 
   test("still recognizes discovery bodies from before the scope guidance", () => {
@@ -160,7 +163,7 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
     const previousBody = REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE.replace(
       REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE,
       "",
-    );
+    ).replace(`\n\n${REVIEW_VALIDATION_DISCOVERY_FOCUSED_PATH_GUIDANCE}`, "");
     expect(previousBody).not.toBe(REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE);
     expect(
       isReviewValidationDiscoveryPrompt(

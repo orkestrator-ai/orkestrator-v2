@@ -146,7 +146,7 @@ Keep discovery focused on what must run and how it can overlap safely. Narrate c
 
 You are review preparation, not a pre-review implementation worker. Exemptions that let implementation workers defer full validation until review do not apply to this discovery task. Discover and schedule every applicable repository-required validation command, including required full suites, once against the committed branch; never defer them to a later review.
 
-Give every command a scope. When the change adds or edits tests, or test files own the source files it changes, add one focused command that runs only those tests (the repository's focused test entrypoint given their exact paths), list it first, and set its scope to "changed"; every other command has scope "general". The backend starts "changed" commands first and reports their result on its own, so an unrelated failing suite cannot hide whether the change's own tests passed. Put the exact test paths directly in that command. Never use command substitution to populate test paths, because an empty selection can turn a focused command into full discovery. The focused command never replaces a required suite. Keep it even when a general suite profile covers it or has an identical command: changed-scope evidence must run independently. When the change has no tests of its own, plan no "changed" command.`;
+Give every command a scope. When the change adds or edits tests, or test files own the source files it changes, add one focused command that runs only those tests (the repository's focused test entrypoint given their exact paths), list it first, and set its scope to "changed"; every other command has scope "general". The backend starts "changed" commands first and reports their result on its own, so an unrelated failing suite cannot hide whether the change's own tests passed. The focused command never replaces a required suite. Keep it even when a general suite profile covers it or has an identical command: changed-scope evidence must run independently. When the change has no tests of its own, plan no "changed" command.`;
 
 /** Where step 4 ends; the provisioning guidance goes before it. */
 const DISCOVERY_STEP_FIVE = "\n5. resources names";
@@ -159,6 +159,9 @@ const DISCOVERY_STEP_FIVE = "\n5. resources names";
 export const REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE =
   " Provision what the selected suites need as earlier commands they depend on, rather than letting a suite fail on a missing prerequisite: build artifacts a suite reads but does not build itself (for example a web bundle a browser test serves), a repository-owned task that creates a missing local environment file from its committed example, and repository-owned one-shot tasks that start throwaway services such as a test database. Never point a suite at a database or service another workspace may be using. In a local environment Orkestrator sets COMPOSE_PROJECT_NAME to a name unique to this workspace and reserves the host ports ORKESTRATOR_PORT_BASE through ORKESTRATOR_PORT_MAX for it; a service started for validation must use those ports or ports the repository derives from them, and a service that can only bind a fixed host port is the host-shared resource host:tcp:<port>. When a suite needs a secret, credential or external service that this workspace lacks and the repository offers no local substitute, name what is missing in a limitation.";
 
+export const REVIEW_VALIDATION_DISCOVERY_FOCUSED_PATH_GUIDANCE =
+  "For changed-scope tests, confirm the target revision used for the review before inventorying paths. A local branch with the same name may be stale. Use the review's target revision and the final head to resolve the relevant test paths during discovery. Put the exact test paths directly in each focused command. Never use command substitution to populate test paths at execution time: an empty selection can turn a focused command into full discovery.";
+
 /**
  * Official discovery prose after the signature. Legacy transcripts and test
  * fixtures may be truncated; they still match when they are an exact prefix of
@@ -168,7 +171,7 @@ export const REVIEW_VALIDATION_DISCOVERY_PROMPT_BODY_AFTER_SIGNATURE =
   PRE_PROVISIONING_DISCOVERY_PROMPT_BODY.replace(
     DISCOVERY_STEP_FIVE,
     `${REVIEW_VALIDATION_DISCOVERY_PROVISIONING_GUIDANCE}${DISCOVERY_STEP_FIVE}`,
-  );
+  ) + `\n\n${REVIEW_VALIDATION_DISCOVERY_FOCUSED_PATH_GUIDANCE}`;
 
 /**
  * Earlier official bodies, kept so unframed transcripts recorded before the

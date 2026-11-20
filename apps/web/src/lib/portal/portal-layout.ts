@@ -191,20 +191,16 @@ export function useManualOrderSupported(): boolean {
 }
 
 /**
- * Whether the command node keeps a Manual environment order: `loading` until
- * its layout has been read, `unsupported` for one that does not advertise it
- * (an older backend), whose sidebar orders by machine.
+ * Whether the command node keeps a Manual environment order. An unsupported
+ * backend has completed the capability check. A failed check can be retried.
  */
-export type ManualOrderAvailability = "loading" | "supported" | "unsupported";
+export type ManualOrderAvailability = "loading" | "supported" | "unsupported" | "error";
 
 export function useManualOrderAvailability(): ManualOrderAvailability {
-  return useStore(store, (state) =>
-    !state.loaded
-      ? "loading"
-      : state.layout.manualOrderSupported === true
-        ? "supported"
-        : "unsupported",
-  );
+  return useStore(store, (state) => {
+    if (!state.loaded) return state.error ? "error" : "loading";
+    return state.layout.manualOrderSupported === true ? "supported" : "unsupported";
+  });
 }
 
 export function usePortalLayout(): PortalLayout {

@@ -1384,6 +1384,11 @@ export function HierarchicalSidebar() {
           environments={allEnvironments}
           loading={projectsLoading}
           onAddProject={() => setShowAddProjectDialog(true)}
+          rendering={{
+            ordering: environmentOrdering,
+            bound: boundRendering,
+            projectEnvironments: getProjectEnvironments,
+          }}
         />
       ) : (
         <div ref={listScrollRef} data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">

@@ -1007,7 +1007,25 @@ sidebar one large icon wide (56px), listing only top-level repositories.
   `CoordinatorActivityIcon`. Its outline is `repositoryTileColor`,
   also as on a heading: the command node's colour while it has a copy of the
   repository, else the colour of the machine whose coordinator a click opens. The
-  name is a tooltip and the accessible name, and there is no other text.
+  name is the accessible name, and the rail draws no text of its own.
+- **The popover.** Resting the pointer on an icon (or focusing it from the
+  keyboard) slides out a popover beside the rail (`CompactRepositoryPopover`,
+  on the shared `HoverPopoverPanel`): the repository's name and status words,
+  then its environments exactly as the repository list draws them under its
+  heading. Rows come from `RepositoryEnvironmentRows`, which orders them with
+  `orderRepository` (by machine or manually, as the list is set) and draws them
+  through the list's own row components, so markers, activity, unread dots and
+  clicks match; only dragging is off. A window that names no machines lists
+  its project's rows from its project group's environments. A repository with
+  no environments says so. Only one popover is shown (`useHoverPopoverGroup`):
+  the first waits a short hover-intent delay, moving to another icon swaps it
+  at once, and it closes a moment after the pointer leaves both the icon and
+  the popover, with a strip joining them so the gap does not count as leaving.
+  Choosing an environment opens it and closes the popover; clicking the icon
+  still opens what it did. From the keyboard, Right moves into the popover, Up,
+  Down, Home and End move among its rows, Enter opens one, and Escape, Left or
+  Tab past either end close it and return focus to the icon. Under reduced
+  motion it appears and disappears without the slide.
 - **Opening** a repository goes where its heading goes (`openRepository`), and a
   project with no repository where its row goes. The icon of whatever project is
   shown is marked selected, and the sidebar stays compact. For another node's
@@ -1026,7 +1044,8 @@ sidebar one large icon wide (56px), listing only top-level repositories.
   every list, including **By activity**, so compact can be left with a mouse. The
   search bar is not mounted, so ⌘K does nothing and is not held for later. The
   footer actions stay, stacked. A multi-selection is cleared, having no rows.
-- **Sorting by activity** does not replace compact, which lists no environments.
+- **Sorting by activity** does not replace compact, which lists environments only
+  in its popover, in the repository list's order.
   Both are kept: leaving compact with the activity sort returns to the activity
   list.
 - **The phone layout's** overlay has no compact form. It falls back to the
@@ -1076,6 +1095,7 @@ component with two thin adapters:
 | Repository heading and its rows | `SortableProjectFolder`, `RepositoryEnvironmentList` | `BoundEnvironmentRendering` (`HierarchicalSidebar`) | `RemoteSortableEnvironmentItem` |
 | Project home activity | `ProjectHomeActivityButton`, `projectHomeStatus` | `ProjectHomeActivity` | `RemoteProjectHomeActivity` |
 | Compact icon status | `compactRepositoryStatus`, `projectHomeStatus` | `useCompactStatuses` | `remoteMemberFacts` |
+| Compact popover rows | `RepositoryEnvironmentRows`, `SortableEnvironmentRowFrame` | `BoundEnvironmentRendering` (`HierarchicalSidebar`) | `RemoteSortableEnvironmentItem` |
 | Activity list | `ActivityEnvironmentList`, `compareActivity` | `HierarchicalSidebar` | `FederatedActivityList` |
 | Empty project list | `SidebarEmptyState` | `HierarchicalSidebar` | `RepositoryEnvironmentList` |
 | Drag card | `SidebarDragOverlay` | `HierarchicalSidebar` | `RepositoryEnvironmentList` |

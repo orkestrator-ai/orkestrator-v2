@@ -449,35 +449,103 @@ function RepositoryRows({
       onDragCancel={() => setDragItem(null)}
     >
       <SortableContext items={rows.map((row) => row.id)} strategy={strategy}>
-        {rows.map((row) =>
-          row.machine.bound ? (
-            <SortableEnvironmentRowFrame
-              key={row.id}
-              sortableId={row.id}
-              sortable={rowSortable(row)}
-              selected={
-                !multiSelecting && bound.selectedEnvironmentId === row.environment.ref.environmentId
-              }
-              name={row.environment.name}
-              data={{
-                "data-testid": "repository-environment-row",
-                "data-machine": row.machine.connectionId,
-              }}
-            >
-              {bound.renderEnvironment(row.environment.ref.environmentId)}
-            </SortableEnvironmentRowFrame>
-          ) : (
-            <RemoteSortableEnvironmentItem
-              key={row.id}
-              machine={row.machine}
-              environment={row.environment}
-              sortable={rowSortable(row)}
-            />
-          ),
-        )}
+        {rows.map((row) => (
+          <RepositoryEnvironmentRow
+            key={row.id}
+            row={row}
+            sortable={rowSortable(row)}
+            bound={bound}
+            multiSelecting={multiSelecting}
+          />
+        ))}
       </SortableContext>
       <SidebarDragOverlay item={dragItem} />
     </DndContext>
+  );
+}
+
+/** One row of a repository, whichever machine it is on: the list's and the compact popover's. */
+function RepositoryEnvironmentRow({
+  row,
+  sortable,
+  bound,
+  multiSelecting,
+}: {
+  row: ListedEnvironment;
+  sortable: boolean;
+  bound: BoundEnvironmentRendering;
+  multiSelecting: boolean;
+}) {
+  return row.machine.bound ? (
+    <SortableEnvironmentRowFrame
+      sortableId={row.id}
+      sortable={sortable}
+      selected={
+        !multiSelecting && bound.selectedEnvironmentId === row.environment.ref.environmentId
+      }
+      name={row.environment.name}
+      data={{
+        "data-testid": "repository-environment-row",
+        "data-machine": row.machine.connectionId,
+      }}
+    >
+      {bound.renderEnvironment(row.environment.ref.environmentId)}
+    </SortableEnvironmentRowFrame>
+  ) : (
+    <RemoteSortableEnvironmentItem
+      machine={row.machine}
+      environment={row.environment}
+      sortable={sortable}
+    />
+  );
+}
+
+/**
+ * One repository's rows exactly as the list draws them under its heading, in
+ * the same order and through the same row components, but not draggable: the
+ * compact sidebar's popover. `repositoryKey` is a `RepositoryEntry` key (the
+ * repository identity, or the project key of a project with none). Renders
+ * `empty` when the repository has no rows on the machines shown.
+ */
+export function RepositoryEnvironmentRows({
+  machines,
+  shownIds,
+  repositoryKey,
+  ordering: preferredOrdering,
+  bound,
+  empty = null,
+}: {
+  machines: readonly MachineView[];
+  shownIds: ReadonlySet<string>;
+  repositoryKey: string;
+  ordering: EnvironmentOrdering;
+  bound: BoundEnvironmentRendering;
+  empty?: ReactNode;
+}) {
+  const layout = usePortalLayout();
+  const ordering = useManualOrderSupported() ? preferredOrdering : "machine";
+  const { portalState } = useFederation();
+  const { environmentsOf } = useRemoteEnvironments();
+  const multiSelecting = useUIStore((state) => state.selectedEnvironmentIds.length > 0);
+  const rows = useMemo(() => {
+    const entry = repositoryEntries(machines, shownIds, layout, portalState.selfId).entries.find(
+      (candidate) => candidate.key === repositoryKey,
+    );
+    return entry ? orderRepository(entry, machines, ordering, layout, environmentsOf).rows : [];
+  }, [environmentsOf, layout, machines, ordering, portalState.selfId, repositoryKey, shownIds]);
+  if (rows.length === 0) return <>{empty}</>;
+  return (
+    <>
+      {rows.map((row) => (
+        <RepositoryEnvironmentRow
+          key={row.id}
+          row={row}
+          sortable={false}
+          bound={bound}
+          multiSelecting={multiSelecting}
+        />
+      ))}
+    </>
   );
 }
 

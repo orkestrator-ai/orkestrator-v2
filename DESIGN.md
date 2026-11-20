@@ -412,6 +412,7 @@ Quiet until touched. Most app buttons are ghost or tonal; the filled blue is rar
 
 ### Navigation
 - **Sidebar rows:** 8px-radius rows inset 4px from the panel edge. Hover is `environment-hover`; the selected row is the `selected` → `selected-edge` gradient with a 2px Signal Blue bar on the left that gives way to the drag grip on hover. Offline machines dim to 60%.
+- **Compact sidebar popover:** resting on a compact rail icon slides out an 18rem floating panel 8px to its right, on the menu surface (`zinc-900` at 95%, 1px `zinc-700` hairline at 70%, 12px radius, the menu shadow). A 13px medium name over a `divider` hairline heads the sidebar's own environment rows. It slides 6px and fades in over 160ms and back out over 120ms; under reduced motion it appears and disappears without moving.
 - **Workspace tabs.** Tabs use 12–14px labels with an icon. The active tab gets a 2px Signal Blue underline. Top section tabs such as Home, Coordinator and Kanban mark the active section with a blue fill and 8px corners.
 - **Segmented selector:** an `input-surface` track with a `divider` border and 2px inset; the selected segment is a filled blue with bold text.
 - **Shared Tabs variants.** Use `underline` for icon-and-label views within a pane, `pill` for section switches with an 8px corner radius on the selected fill and its focus hairline, and `segmented` to choose between modes or representations. The segmented variant uses the same track as the segmented selector.

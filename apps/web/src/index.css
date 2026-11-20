@@ -503,6 +503,48 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 /*
+ * A hover popover (`HoverPopoverPanel`) slides out from the element it sits
+ * beside and back into it. Under reduced motion it appears and disappears.
+ */
+@keyframes hover-popover-in {
+  from {
+    opacity: 0;
+    transform: translateX(-0.375rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes hover-popover-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateX(-0.375rem);
+  }
+}
+
+.hover-popover[data-state="open"] {
+  animation: hover-popover-in 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hover-popover[data-state="closed"] {
+  animation: hover-popover-out 120ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hover-popover[data-state] {
+    animation: none;
+  }
+}
+
+/*
  * Tool groups fold and open by animating real layout height (Radix measures
  * the content into --radix-collapsible-content-height), so the
  * bottom-anchored transcript follows the fold rather than jumping. A group

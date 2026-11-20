@@ -52,6 +52,8 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
           suppressed: "number",
         },
       },
+      "menu.open-external-failed":
+        "A menu item could not open its page in the default browser (Help → Release Notes).",
       "process-memory":
         "Development only: working set per Electron process type, sampled on an interval.",
       "process-memory.failed": "Development only: one process memory sample could not be read.",

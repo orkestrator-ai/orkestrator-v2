@@ -28,6 +28,7 @@ app.whenReady().then(async () => {
           zoom: (direction) => record(`zoom:${direction}`),
           showKeyboardShortcuts: (request) => record(`shortcuts:${request}`),
           openSettings: () => record("settings"),
+          openExternal: (url) => record(`external:${url}`),
           checkForUpdates: () => record("updates"),
           openDeveloperTools: debugTools.anyEnabled()
             ? () => void debugTools.open([window.webContents])

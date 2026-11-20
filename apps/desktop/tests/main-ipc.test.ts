@@ -1315,6 +1315,7 @@ test("trusted debug IPC resolves webContents, rebuilds menu, and prefers the foc
       zoom: () => {},
       showKeyboardShortcuts: () => {},
       openSettings: () => {},
+      openExternal: () => {},
       openDeveloperTools: tools.anyEnabled()
         ? () => {
             tools.open([focused, shell]);

@@ -170,7 +170,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         kind: "agent",
         label: "Review",
         description:
-          "Each reviewer reads the sealed package in a read-only plan-mode turn and submits a structured report. A failed reviewer is carried to consolidation as a summary. For partitioned diffs, every assigned part needs a usable reviewer report.",
+          "Each reviewer reads the sealed package in a read-only plan-mode turn and submits a structured report. A failed reviewer is carried to consolidation as a summary, not a blocker.",
         role: "reviewer",
         replicate: { over: "panel", role: "reviewer" },
         capabilities: { profile: "reviewer" },
@@ -184,7 +184,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         kind: "agent",
         label: "Consolidate",
         description:
-          "Starts once every reviewer has settled, at least one report is usable, and assigned diff parts are covered. A read-only report turn that may make targeted reads. The backend validates finding citations and which check outcomes can be reported.",
+          "Starts once every reviewer has settled and at least one report is usable. A read-only report turn that may make targeted reads; every consolidated finding cites the source finding IDs it merges, and the backend rejects IDs that do not exist.",
         role: "consolidator",
         capabilities: { profile: "reviewer" },
         workspaceAccess: "read",

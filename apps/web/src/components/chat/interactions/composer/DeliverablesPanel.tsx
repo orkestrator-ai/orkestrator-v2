@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageSquarePlus, Pin, PinOff, PlusSquare } from "lucide-react";
+import { MessageSquarePlus, Pin, PinOff } from "lucide-react";
 import type { RichDeliverableRecord } from "@orkestrator/protocol/contract/domains/rich-interactions";
 import type { AnchorLocation } from "@orkestrator/protocol/rich-interactions";
 import type { ArtifactPublicationView } from "@orkestrator/protocol/transcript-artifact-commands";
@@ -7,10 +7,8 @@ import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
 import { newIdempotencyKey, useRichInteractionList } from "@/lib/chat/rich-interactions";
-import { useNodeScope } from "@/lib/node-scope/providers";
 import { onResourceChanged } from "@/lib/resource-sync";
 import { cn } from "@/lib/utils";
-import { contextTrayKey, contextTrayStore } from "@/stores/contextTrayStore";
 import { RichInteractionCard } from "../RichInteractionCard";
 import {
   ContentRefPreview,
@@ -18,7 +16,6 @@ import {
   textareaClass,
   useConversationPublications,
 } from "../shared";
-import { newContextItemId } from "./composer-shared";
 
 interface DeliverableGroup {
   artifactId: string;
@@ -42,7 +39,6 @@ export function DeliverablesPanel({
   logicalSessionKey: string;
 }) {
   const backend = useScopeBackend();
-  const scope = useNodeScope();
   const [pageStarts, setPageStarts] = useState<number[]>([]);
   const { publications, loaded, nextSequence, failed } = useConversationPublications(
     pageStarts.at(-1),
@@ -120,18 +116,6 @@ export function DeliverablesPanel({
       readMeta();
     }
   };
-  const addToTray = (artifactId: string, revision: number, title: string) =>
-    scope
-      .store(contextTrayStore)
-      .getState()
-      .add(contextTrayKey(environmentId, logicalSessionKey), {
-        itemId: newContextItemId(),
-        kind: "artifact",
-        source: { kind: "artifact", artifactId, revision, label: title.slice(0, 120) },
-        label: `${title.slice(0, 60)} (rev ${revision})`,
-        included: true,
-        freeze: "frozen",
-      });
   const open = views.filter((view) => view.open && view.request.origin === "agent");
 
   return (
@@ -275,15 +259,6 @@ export function DeliverablesPanel({
                         value={group.meta?.userLabel ?? ""}
                         onSave={(label) => void update(group, { userLabel: label || null })}
                       />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7"
-                        onClick={() => addToTray(group.artifactId, shownRevision, shown.ref.title)}
-                      >
-                        <PlusSquare className="size-3.5" aria-hidden />
-                        Discuss this version
-                      </Button>
                       <Button
                         size="sm"
                         variant="outline"

@@ -69,16 +69,19 @@ import {
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
 import {
+  type ArtifactTurnDispatch,
+  beginWorkflowArtifactTurn,
   lastAssistantText,
   missingWorkflowResultMessage,
-  workflowResultRefusals,
+  settleArtifactDispatchTurn,
   workflowRestartContinuationPrompt,
+  workflowResultRefusals,
+  workflowResultReminderPrompt,
+  type WorkflowResultService,
   workflowResumeContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
-  workflowResultReminderPrompt,
-} from "./workflow-result-missing.js";
+} from "./workflows/index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
 import {
   recordPipelineSessionUsage,
   deferPipelineSessionUsage,
@@ -141,11 +144,6 @@ import { recordEfficiency, type MultiReviewEfficiencyObserver } from "./multi-re
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
 import { reviewLensField } from "@orkestrator/protocol/review-lens";
-import {
-  beginWorkflowArtifactTurn,
-  settleArtifactDispatchTurn,
-  type ArtifactTurnDispatch,
-} from "./workflow-artifact-turns.js";
 import type { ReviewPackageVerification } from "./commands-review.js";
 import { retainRoundReviewReport } from "./build-pipeline-rewind.js";
 import {
@@ -262,7 +260,7 @@ export interface BuildPipelineReviewFanoutDeps {
   efficiency?: MultiReviewEfficiencyObserver;
   /** Elapsed-time gate for reviewer poll counts during this pipeline's pass. */
   pollGate?(pipeline: BuildPipeline): ReviewerPollGate;
-  /** Reviewer and consolidation turns' artifact grants (`workflow-artifact-turns.ts`). */
+  /** Reviewer and consolidation turns' artifact grants (`workflows/artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
   /**
    * The read-only guard's baseline for a new pass, taken before any reviewer

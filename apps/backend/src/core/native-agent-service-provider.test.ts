@@ -26,7 +26,7 @@ import {
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
 import { AmbiguousPromptDispatchError } from "./native-agent-provider.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "./opencode2/fake-server.test-support.js";
 import { OpenCode2Provider } from "./opencode2/provider.js";
 import { seedUnreadableStore } from "./storage-test-support.js";

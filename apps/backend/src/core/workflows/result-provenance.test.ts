@@ -9,14 +9,14 @@ import type {
   WorkflowResultSlotInput,
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
-import { evaluationCorpus } from "./multi-review-evaluation-corpus.js";
-import { referenceConsolidation } from "./multi-review-evaluation.js";
-import { consolidationResultContext } from "./review-fanout-provenance.js";
+import { evaluationCorpus } from "../multi-review-evaluation-corpus.js";
+import { referenceConsolidation } from "../multi-review-evaluation.js";
+import { consolidationResultContext } from "../review-fanout-provenance.js";
 import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   REVIEW_CONSOLIDATION_WORDING,
   validateWorkflowResult,
-} from "./workflow-result-contracts.js";
+} from "./result-contracts.js";
 
 type ConsolidationContext = Extract<
   NonNullable<WorkflowResultSlotInput["context"]>,
@@ -28,7 +28,7 @@ type Draft = any;
 
 /**
  * The consolidation context check exactly as it was before the registry
- * (`workflow-result-contracts.ts` at the 004 merge), kept here as the oracle
+ * (`workflows/result-contracts.ts` at the 004 merge), kept here as the oracle
  * the generic provenance validator must reproduce.
  */
 function legacyConsolidationContext(

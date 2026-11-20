@@ -62,8 +62,7 @@ import {
 import type { StorageService } from "./storage.js";
 import { nativeAgentSessionStorageKey } from "./native-agent-service-shared.js";
 import type { RecordUsageTurnsInput } from "./usage-history-store.js";
-import { ElapsedPollGate } from "./workflow-poll-gate.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
+import { ElapsedPollGate, type WorkflowResultService } from "./workflows/index.js";
 import {
   readOnlyAcceptanceCheck,
   WorkspaceBaselineUnavailableError,

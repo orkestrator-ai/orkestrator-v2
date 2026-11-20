@@ -149,7 +149,7 @@ import {
   type ResolvedProjectionSession,
 } from "./native-agent-transcript-projection.js";
 import { PermissionRuleEnforcer, type PermissionRuleChoice } from "./permission-rules/index.js";
-import { DEFAULT_WORKFLOW_DISCOVERY_MS } from "./workflow-supervisor.js";
+import { DEFAULT_WORKFLOW_DISCOVERY_MS, settleArtifactDispatchTurn } from "./workflows/index.js";
 import {
   PromptRejectedError,
   type ProviderMcpConfigEvidenceRead,
@@ -176,7 +176,6 @@ import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import { NativeAgentHandoffs } from "./native-agent-handoffs.js";
 import { NativeAgentSignInResends } from "./native-agent-sign-in-resend.js";
 import { SettledTurnUsage } from "./native-agent-settled-turn-usage.js";
-import { settleArtifactDispatchTurn } from "./workflow-artifact-turns.js";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import {
   sessionHeldDispatchModelUpdate,

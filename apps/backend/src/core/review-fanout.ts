@@ -49,8 +49,7 @@ import {
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
 import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import type { WorkflowResultRefusals } from "./workflow-result-service.js";
+import type { ArtifactTurnDispatch, WorkflowResultRefusals } from "./workflows/index.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import {
@@ -514,7 +513,7 @@ export interface ReviewFanoutHost {
    * Transcript-artifact authority for reviewer turns. With it, each turn gets
    * an artifact grant owned by the reviewer session's own key
    * ({@link sessionKeyFor}) in this environment, delivered with the turn and
-   * revoked when the turn settles (`workflow-artifact-turns.ts`).
+   * revoked when the turn settles (`workflows/artifact-turns.ts`).
    */
   readonly artifactTurns?: {
     dispatch: ArtifactTurnDispatch;

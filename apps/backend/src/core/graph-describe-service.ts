@@ -51,7 +51,7 @@ import {
   type GraphDescribeStorage,
   type PersistedGraphDescribeJob,
 } from "./storage-graph-describe.js";
-import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import { ElapsedPollGate } from "./workflows/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("graph");

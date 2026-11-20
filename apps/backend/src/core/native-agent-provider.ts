@@ -17,7 +17,7 @@ import {
 } from "./opencode2/index.js";
 import { resolveCodexBridgeDefaultModel } from "./session-held-model.js";
 import type { UsageLimitStops } from "./native-agent-usage-limit-resend.js";
-import type { WorkflowResultReader } from "./workflow-result-service.js";
+import type { WorkflowResultReader } from "./workflows/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

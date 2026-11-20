@@ -11,17 +11,17 @@ import {
 } from "@orkestrator/protocol/graphs/types";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { WorkflowResultSlotInput } from "@orkestrator/protocol/workflow-results";
-import { AgentToolsServer } from "./agent-tools.js";
-import { StorageService } from "./storage.js";
+import { AgentToolsServer } from "../agent-tools.js";
+import { StorageService } from "../storage.js";
 import {
   graphOutputCombinedSchema,
   graphOutputPortIssues,
   graphOutputSlotInput,
   splitGraphOutputCombined,
   type GraphOutputStructuredPort,
-} from "./workflow-result-graph-output.js";
-import type { WorkflowResultEnvironmentRequest } from "./workflow-result-registry.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+} from "./result-graph-output.js";
+import type { WorkflowResultEnvironmentRequest } from "./result-registry.js";
+import { WorkflowResultService } from "./result-service.js";
 
 /**
  * Graph output slots end to end: the runtime opens one `graph-output` slot per

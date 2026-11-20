@@ -13,8 +13,8 @@ import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { ManualTime } from "./recurring-test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
-import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { ElapsedPollGate, type PollTrigger } from "./workflows/poll-gate.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 const scope = { environmentId: "env-1", projectId: "project-1" };
 const report: StructuredReviewReport = {

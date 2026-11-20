@@ -80,7 +80,7 @@ import { STORAGE_MIGRATIONS } from "./storage-stores.js";
 import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   workflowResultJsonSchema,
-} from "./workflow-result-contracts.js";
+} from "./workflows/result-contracts.js";
 
 // ------------------------------------------------------------------ support
 

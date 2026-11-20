@@ -17,7 +17,7 @@ import {
   ArtifactOverlayIndex,
   overlayArtifactParts,
   type ArtifactLedgerReader,
-} from "./native-agent-service-projection-artifacts.js";
+} from "../native-agent-service-projection-artifacts.js";
 
 export type ArtifactLedgerSource = () => ArtifactLedgerReader | null | undefined;
 

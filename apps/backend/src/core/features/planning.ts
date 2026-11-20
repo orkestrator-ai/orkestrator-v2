@@ -43,29 +43,27 @@ import {
 import type { Environment } from "../models.js";
 import type { AgentToolConnection } from "../agent-tools.js";
 import {
-  beginWorkflowArtifactTurn,
-  settleArtifactDispatchTurn,
   type ArtifactTurnDispatch,
-} from "../workflow-artifact-turns.js";
+  beginWorkflowArtifactTurn,
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowOwner,
+  type KeyedWorkflowServiceOptions,
+  KeyedWorkflowSupervisor,
+  settleArtifactDispatchTurn,
+  type WorkflowReconcileReport,
+  WorkflowResultRollout,
+  type WorkflowResultService,
+  type WorkflowSupervisorStatus,
+  type WorkflowWakeReason,
+} from "../workflows/index.js";
 import type { PlanUsageState } from "../plan-usage/index.js";
-import type { WorkflowResultService } from "../workflow-result-service.js";
-import { WorkflowResultRollout } from "../workflow-result-rollout.js";
 import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
 import {
   createAgentModelCatalogReader,
   resolveFastMode,
 } from "../build-pipeline-service-helpers.js";
 import { recurringWorkMetrics } from "../recurring-work-metrics.js";
-import {
-  DEFAULT_WORKFLOW_DISCOVERY_MS,
-  KeyedWorkflowSupervisor,
-  keyedSchedulingEnabled,
-  type KeyedWorkflowOwner,
-  type KeyedWorkflowServiceOptions,
-  type WorkflowReconcileReport,
-  type WorkflowSupervisorStatus,
-  type WorkflowWakeReason,
-} from "../workflow-supervisor.js";
 import {
   discoverFeaturePlanning,
   featurePlanningObligation,
@@ -218,7 +216,7 @@ export interface FeaturePlanningServiceOptions extends KeyedWorkflowServiceOptio
   ) => AgentToolConnection;
   /** Rejects when the environment's container cannot reach the agent tools server. */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
-  /** Planning turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  /** Planning turns' transcript-artifact grants (`workflows/artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
 }
 
@@ -1391,7 +1389,7 @@ export class FeaturePlanningService implements KeyedWorkflowOwner {
     return true;
   }
 
-  /** Ends the exchange's artifact grant (`workflow-artifact-turns.ts`). Best-effort. */
+  /** Ends the exchange's artifact grant (`workflows/artifact-turns.ts`). Best-effort. */
   private settleArtifactTurn(
     record: Pick<FeaturePlanningRecord, "featureId" | "storyId" | "environmentId" | "requestId">,
   ): void {

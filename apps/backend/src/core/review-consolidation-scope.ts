@@ -31,7 +31,7 @@ import type {
   ConsolidationScopeLists,
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
-import { inspectFinalText } from "./workflow-result-final-text.js";
+import { inspectFinalText } from "./workflows/result-final-text.js";
 
 /** The `reviewScope` fields the backend fills in, in schema order. */
 export const CONSOLIDATION_SCOPE_LIST_FIELDS = [

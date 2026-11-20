@@ -8,7 +8,7 @@ import {
   workflowResultReminderPrompt,
   workflowRestartContinuationPrompt,
   workflowUsageLimitContinuationPrompt,
-} from "./workflow-result-missing.js";
+} from "./result-missing.js";
 
 const BASE = {
   subject: "The consolidation model",

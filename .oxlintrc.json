@@ -482,6 +482,14 @@
                   "!**/agent-accounts/store.js"
                 ],
                 "message": "Import the agent-accounts domain through agent-accounts/index.js."
+              },
+              {
+                "group": [
+                  "**/workflows/*",
+                  "!**/workflows/index.js",
+                  "!**/workflows/result-final-text.js"
+                ],
+                "message": "Import the workflows domain through workflows/index.js."
               }
             ]
           }
@@ -644,6 +652,13 @@
                   "!**/backend/src/core/agent-accounts/index.js"
                 ],
                 "message": "Import the agent-accounts domain through agent-accounts/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/workflows/*",
+                  "!**/backend/src/core/workflows/index.js"
+                ],
+                "message": "Import the workflows domain through workflows/index.js."
               }
             ]
           }

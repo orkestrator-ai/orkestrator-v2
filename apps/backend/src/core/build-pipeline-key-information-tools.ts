@@ -11,7 +11,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { describe, list, str, toolInput } from "./tool-schema.js";
-import { describeJsonTextFault } from "./workflow-result-json-text.js";
+import { describeJsonTextFault } from "./workflows/index.js";
 import {
   KEY_INFORMATION_CHECK_STATUSES,
   KEY_INFORMATION_FRAMINGS,

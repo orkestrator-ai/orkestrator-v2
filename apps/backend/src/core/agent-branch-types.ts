@@ -38,8 +38,7 @@ import type {
 } from "./multi-review-efficiency.js";
 import type { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import type { ReviewFanoutConcurrency } from "./review-fanout-scheduler.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import type { WorkflowResultRefusals } from "./workflow-result-service.js";
+import type { ArtifactTurnDispatch, WorkflowResultRefusals } from "./workflows/index.js";
 
 export type AgentBranchStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 export type AgentBranchDispatchState = "prepared" | "dispatching" | "sent";

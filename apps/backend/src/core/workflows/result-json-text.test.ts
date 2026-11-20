@@ -3,17 +3,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
-import { callToolInProcess } from "./mcp-in-process.js";
+import { callToolInProcess } from "../mcp-in-process.js";
 import {
   CONSOLIDATED_REVIEW_EXAMPLE,
   CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS,
-} from "./review-consolidation-example.js";
-import { decodeJsonTextResult, findJsonTextFault } from "./workflow-result-json-text.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
-import {
-  registerWorkflowResultBrokerTools,
-  registerWorkflowResultTools,
-} from "./workflow-result-tools.js";
+} from "../review-consolidation-example.js";
+import { decodeJsonTextResult, findJsonTextFault } from "./result-json-text.js";
+import { WorkflowResultService } from "./result-service.js";
+import { registerWorkflowResultBrokerTools, registerWorkflowResultTools } from "./result-tools.js";
 
 /** The tool's published shape, whose `blockedReason` is null when the review was not blocked. */
 const report = {

@@ -65,11 +65,11 @@ import {
   type WorkflowResultKindDefinition,
   type WorkflowResultSlotView,
   workflowResultKindDefinition,
-} from "./workflow-result-registry.js";
+} from "./result-registry.js";
 import {
   isReviewConsolidationProvenance,
   REVIEW_CONSOLIDATION_WORDING,
-} from "./review-consolidation-provenance.js";
+} from "../review-consolidation-provenance.js";
 
 /** The contract of a `graph-output` slot that names no port type: any object. */
 export const GRAPH_OUTPUT_GENERIC_SCHEMA: JsonSchema = Object.freeze({ type: "object" });

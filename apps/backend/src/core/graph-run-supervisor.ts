@@ -44,7 +44,7 @@ import {
   KeyedWorkflowSupervisor,
   type WorkflowDiscoveryResult,
   type WorkflowPass,
-} from "./workflow-supervisor.js";
+} from "./workflows/index.js";
 
 export const GRAPH_RUN_OBLIGATIONS = [
   "provision",

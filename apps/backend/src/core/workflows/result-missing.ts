@@ -2,7 +2,7 @@ import {
   WORKFLOW_RESULT_MALFORMED_CALL_GUIDANCE,
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
-import type { WorkflowResultRefusals, WorkflowResultService } from "./workflow-result-service.js";
+import type { WorkflowResultRefusals, WorkflowResultService } from "./result-service.js";
 
 /**
  * The refused calls associated with an open slot, from a service that may predate

@@ -26,7 +26,7 @@ import {
   type NativeAgentSuborkServiceOptions,
 } from "./native-agent-suborks.js";
 import type { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 export const CATALOG: AgentModel[] = [
   { platform: "claude", id: "opus", label: "Opus", resolvedModel: "claude-opus-5-5" },

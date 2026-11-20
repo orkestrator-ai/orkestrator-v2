@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeReadOnlyAllowedTools } from "../../../../bridges/claude-bridge/src/services/read-only-policy.js";
-import { AgentToolsServer } from "./agent-tools.js";
-import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { claudeReadOnlyAllowedTools } from "../../../../../bridges/claude-bridge/src/services/read-only-policy.js";
+import { AgentToolsServer } from "../agent-tools.js";
+import { StorageService } from "../storage.js";
+import { WorkflowResultService } from "./result-service.js";
 
 /**
  * Transport conformance for the qualified tool-mode adapters.

@@ -383,7 +383,7 @@ function checkFileList(value: unknown): WorkflowResultValidationIssue[] {
 const PLACEHOLDER_CHECKS =
   "prose that is a placeholder or probe (workflow-result final-content checks)";
 const CONTRACTS_MODULE =
-  "apps/backend/src/core/workflow-result-contracts.ts#validateWorkflowResult";
+  "apps/backend/src/core/workflows/result-contracts.ts#validateWorkflowResult";
 
 const VALIDATORS: readonly GraphBuiltInValidator[] = [
   {

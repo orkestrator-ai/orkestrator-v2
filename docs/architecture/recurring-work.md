@@ -136,7 +136,7 @@ monotonic progress. In-process deadlines are monotonic, so on resume it
 reports the lost time once and every registered scheduler re-times its due
 work. Durable expiry keeps wall-clock semantics.
 
-**Keyed workflow supervision** (`workflow-supervisor.ts`). Feature planning,
+**Keyed workflow supervision** (`workflows/supervisor.ts`). Feature planning,
 build pipelines, multi review, graph runs and native prompt queues keep one
 due key per record that owes work, instead of listing the whole store each
 tick. Wakeups come from workflow-result acceptance, environment readiness and
@@ -224,7 +224,7 @@ quiet backoff through 8, 15 and 30 s. These are trial values, measured live in
 Each is read once at startup and allowed through the desktop environment
 allowlist in `apps/desktop/electron/backend-process.ts`:
 
-- `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflow-supervisor.ts`): a comma
+- `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`workflows/supervisor.ts`): a comma
   list of `feature-planning`, `build-pipeline`, `graph-run`, or `all`. A named
   domain runs its old whole-store driver. `graph-run` has no previous driver:
   rolling it back disables graph runs (launches are refused, nothing

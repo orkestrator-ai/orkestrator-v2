@@ -32,11 +32,11 @@ import {
   type WorkflowResultValidation,
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
-import { isConsolidationScopeLists } from "./review-consolidation-scope.js";
-import { validateWorkflowResult } from "./workflow-result-contracts.js";
+import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { StoreCorruptError, type StorageDatabase } from "../storage-database.js";
+import { openBackendDatabase } from "../storage-stores.js";
+import { isConsolidationScopeLists } from "../review-consolidation-scope.js";
+import { validateWorkflowResult } from "./result-contracts.js";
 import {
   WORKFLOW_RESULT_MAX_ISSUES as WORKFLOW_RESULT_ISSUE_LIMIT,
   WorkflowResultRegistry,
@@ -46,11 +46,8 @@ import {
   type WorkflowResultAttempt,
   type WorkflowResultEnvironmentValidator,
   type WorkflowResultSlotView,
-} from "./workflow-result-registry.js";
-import {
-  WorkflowResultMetrics,
-  type WorkflowResultPreflightOutcome,
-} from "./workflow-result-metrics.js";
+} from "./result-registry.js";
+import { WorkflowResultMetrics, type WorkflowResultPreflightOutcome } from "./result-metrics.js";
 
 /** Database stores that replaced `workflow-results.json` and `workflow-result-tools.json`. */
 export const WORKFLOW_RESULTS_STORE = "workflow-results";

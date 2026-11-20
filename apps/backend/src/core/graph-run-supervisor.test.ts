@@ -27,7 +27,7 @@ import {
   KEYED_SCHEDULING_DOMAINS,
   KEYED_SCHEDULING_ROLLBACK_ENV,
   keyedSchedulingEnabled,
-} from "./workflow-supervisor.js";
+} from "./workflows/supervisor.js";
 
 const worlds: GraphRunWorld[] = [];
 

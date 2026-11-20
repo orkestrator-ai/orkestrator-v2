@@ -4,7 +4,7 @@ import {
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
 } from "@orkestrator/protocol/workflow-results";
-import { validateWorkflowResult, workflowResultJsonSchema } from "./workflow-result-contracts.js";
+import { validateWorkflowResult, workflowResultJsonSchema } from "./result-contracts.js";
 import {
   WorkflowResultRegistry,
   registerWorkflowResultKind,
@@ -13,7 +13,7 @@ import {
   workflowResultProviderSchema,
   workflowResultSlotTools,
   type WorkflowResultAcceptanceCheck,
-} from "./workflow-result-registry.js";
+} from "./result-registry.js";
 
 describe("workflow result kind registry", () => {
   test("every protocol kind registers itself, in protocol order", () => {

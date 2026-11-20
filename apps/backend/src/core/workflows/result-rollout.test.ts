@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { WorkflowResultMetrics } from "./workflow-result-metrics.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
+import { WorkflowResultMetrics } from "./result-metrics.js";
+import { WorkflowResultRollout } from "./result-rollout.js";
 
 describe("WorkflowResultRollout", () => {
   test("defaults to the qualified providers before any configuration is read", () => {

@@ -6,7 +6,7 @@ import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { StorageService } from "./storage.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 // Storage cost charged to recurring work. An extra read must show however warm
 // the connection's row cache is, so a whole-store read served from that cache

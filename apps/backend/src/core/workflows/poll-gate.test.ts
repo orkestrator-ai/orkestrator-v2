@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { ManualTime } from "./recurring-test-support.js";
-import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import { ManualTime } from "../recurring-test-support.js";
+import { ElapsedPollGate } from "./poll-gate.js";
 
 describe("ElapsedPollGate", () => {
   test("clearing a progress scope gives a later idle stretch its own elapsed grace", () => {

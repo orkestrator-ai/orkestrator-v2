@@ -20,26 +20,26 @@ import {
   str,
   strictObject,
   toolInput,
-} from "./tool-schema.js";
+} from "../tool-schema.js";
 import {
   CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
   CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
-} from "./review-consolidation-scope.js";
+} from "../review-consolidation-scope.js";
 // Registers the built-in kinds the registry functions below look up.
-import "./workflow-result-contracts.js";
-import { graphOutputContext } from "./workflow-result-graph-output.js";
-import { decodeJsonTextResult } from "./workflow-result-json-text.js";
+import "./result-contracts.js";
+import { graphOutputContext } from "./result-graph-output.js";
+import { decodeJsonTextResult } from "./result-json-text.js";
 import {
   workflowResultAnySlotSchema,
   workflowResultKindDefinition,
   workflowResultProviderSchema,
   type WorkflowResultSlotView,
-} from "./workflow-result-registry.js";
+} from "./result-registry.js";
+import type { WorkflowResultCallerScope, WorkflowResultService } from "./result-service.js";
 import type {
-  WorkflowResultCallerScope,
-  WorkflowResultService,
-} from "./workflow-result-service.js";
-import type { ProvisionalFindingSink, ReportFindingResult } from "./review-provisional-findings.js";
+  ProvisionalFindingSink,
+  ReportFindingResult,
+} from "../review-provisional-findings.js";
 
 export interface WorkflowResultToolScope extends WorkflowResultCallerScope {
   workflowResultKey: string;

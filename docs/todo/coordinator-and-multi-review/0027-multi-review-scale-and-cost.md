@@ -245,7 +245,7 @@ platforms than Claude and Codex.
   the session, and unchanged polls answer `unchanged`. Every read goes through
   the provider's `transcriptSnapshot`; a provider without it fails the read
   (the count-bounded compatibility read was retired on 2026-10-25).
-- **Scheduling.** `KeyedWorkflowSupervisor` (`workflow-supervisor.ts`) is the
+- **Scheduling.** `KeyedWorkflowSupervisor` (`workflows/supervisor.ts`) is the
   only driver. `wakeWorkflows` in `index.ts` delivers provider-transition
   wakeups to `MultiReviewService.wakeEnvironment`. Its rollback,
   `WorkflowDueScheduler` (`multi-review-scheduler.ts`), was removed on

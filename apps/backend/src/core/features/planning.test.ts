@@ -6,8 +6,8 @@ import type { FeaturePlanningRecord } from "@orkestrator/protocol/feature-planni
 import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
 import { StorageService } from "../storage.js";
 import { FeaturePlanningService } from "./planning.js";
-import { WorkflowResultService } from "../workflow-result-service.js";
-import { WorkflowResultRollout } from "../workflow-result-rollout.js";
+import { WorkflowResultService } from "../workflows/result-service.js";
+import { WorkflowResultRollout } from "../workflows/result-rollout.js";
 import {
   AmbiguousPromptDispatchError,
   ProviderSessionFailedError,

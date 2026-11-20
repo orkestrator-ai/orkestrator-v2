@@ -96,12 +96,12 @@ export type CommandContext = {
   /** Auto-merge of ready pull requests (`git/pr-auto-merge.ts`); absent in fixtures. */
   prAutoMerge?: import("./git/pr-auto-merge.js").PrAutoMergeController;
   featurePlanning?: FeaturePlanningService;
-  workflowResults?: import("./workflow-result-service.js").WorkflowResultService;
+  workflowResults?: import("./workflows/index.js").WorkflowResultService;
   /** Remote-initiated Orkestrator updates of this host. */
   hostMaintenance?: import("./host-maintenance.js").HostMaintenanceService;
   /** Environment deletion: drops the environment's workflow result slots. */
   deleteWorkflowResultsByEnvironment?: (environmentId: string) => Promise<unknown>;
-  workflowResultRollout?: import("./workflow-result-rollout.js").WorkflowResultRollout;
+  workflowResultRollout?: import("./workflows/index.js").WorkflowResultRollout;
   coordinators?: CoordinatorService;
   /** Agent credentials: connections, requests, grants and their uses (credentials/). */
   credentials?: import("./credentials/index.js").CredentialService;

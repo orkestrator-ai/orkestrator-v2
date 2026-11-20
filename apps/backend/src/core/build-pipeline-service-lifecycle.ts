@@ -67,7 +67,7 @@ import {
   type WorkflowReconcileReport,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+} from "./workflows/index.js";
 import {
   discoverBuildPipelines,
   type BuildPipelineObligation,

@@ -20,8 +20,8 @@ import {
   type BuildPipelineServiceOptions,
 } from "./build-pipeline-service.js";
 import { ReviewSnapshotChangedError } from "./review-fanout.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultRollout } from "./workflows/result-rollout.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,

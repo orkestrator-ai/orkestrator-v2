@@ -131,7 +131,14 @@ import { BackendDiagnostics } from "./backend-diagnostics.js";
 import { pauseBackgroundCheckpoints } from "./storage-checkpointer.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
-import type { KeyedWorkflowOwner, WorkflowWakeReason } from "./workflow-supervisor.js";
+import {
+  type ArtifactTurnDispatch,
+  gitEnvironmentValidator,
+  type KeyedWorkflowOwner,
+  WorkflowResultRollout,
+  WorkflowResultService,
+  type WorkflowWakeReason,
+} from "./workflows/index.js";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { MachineLoadSampler } from "./machine-load.js";
@@ -219,7 +226,6 @@ import {
   type TranscriptArtifactService,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
 import { ContainerHostReachabilityService } from "./container-host-reachability.js";
 import { probeCreator } from "./container-host-reachability-creator.js";
 import {
@@ -228,11 +234,9 @@ import {
 } from "./commands-environment.js";
 import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
 import { type BackendProfile } from "@orkestrator/protocol/backend-profile";
-import { WorkflowResultService } from "./workflow-result-service.js";
 import { HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, readRestartImpact, readToolStatus } from "./host-maintenance-readers.js";
 import { applyGhChannel, fetchReleasePins } from "./host-maintenance-tasks.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import {
   ControlMcpServer,
   controlMcpPortOverride,
@@ -291,7 +295,6 @@ import {
   runStartupEnvironmentCleanup,
 } from "./environment-cleanup-reconciler.js";
 import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
-import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphBranchWorktreeJanitor, GraphBranchWorktrees } from "./graph-branch-worktrees.js";
@@ -1163,7 +1166,7 @@ export class OrkestratorBackend {
         this.coordinators.statusWakes.notePullRequestChange(environmentId, nodeId),
     });
     // Per-turn transcript-artifact bookkeeping, shared by native turns and the
-    // workflows that drive providers directly (workflow-artifact-turns.ts).
+    // workflows that drive providers directly (workflows/artifact-turns.ts).
     // The artifact service is constructed after this; resolve it lazily.
     const artifactDispatch: ArtifactTurnDispatch = {
       beginTurn: (turn) => {

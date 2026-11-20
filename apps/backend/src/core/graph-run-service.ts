@@ -87,7 +87,6 @@ import {
 } from "./review-fanout-scheduler.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
-import type { WorkflowResultAcceptance } from "./workflow-result-service.js";
 import {
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,
@@ -95,9 +94,10 @@ import {
   type KeyedWorkflowSupervisor,
   type WorkflowPass,
   type WorkflowReconcileReport,
+  type WorkflowResultAcceptance,
   type WorkflowSupervisorStatus,
   type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+} from "./workflows/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("graph");

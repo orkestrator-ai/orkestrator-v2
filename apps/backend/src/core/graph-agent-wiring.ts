@@ -29,10 +29,13 @@ import {
 import { GraphAgentNodeExecutor, type GraphAgentExecutorDependencies } from "./graph-node-agent.js";
 import type { GraphRunService } from "./graph-run-service.js";
 import type { Environment } from "./models.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import type { WorkflowResultReader, WorkflowResultService } from "./workflow-result-service.js";
+import {
+  type ArtifactTurnDispatch,
+  ElapsedPollGate,
+  type WorkflowResultReader,
+  type WorkflowResultService,
+} from "./workflows/index.js";
 import { commandWorkspaceProbe, type WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
-import { ElapsedPollGate } from "./workflow-poll-gate.js";
 import { GRAPH_RUN_OBSERVATION_MS } from "./graph-run-pass.js";
 
 /** Immediate probe attempts per guard observation, as the pipeline's guard uses. */

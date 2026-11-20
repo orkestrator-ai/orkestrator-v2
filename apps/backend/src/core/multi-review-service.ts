@@ -84,24 +84,31 @@ import {
   type WorkflowResultKind,
 } from "@orkestrator/protocol/workflow-results";
 import {
+  type ArtifactLedgerSource,
+  type ArtifactTurnDispatch,
+  DEFAULT_WORKFLOW_DISCOVERY_MS,
+  ElapsedPollGate,
+  type KeyedWorkflowOwner,
+  type KeyedWorkflowServiceOptions,
+  KeyedWorkflowSupervisor,
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
   missingWorkflowResultMessage,
-  workflowResultRefusals,
+  type PollTrigger,
+  type WorkflowReconcileReport,
   workflowRestartContinuationPrompt,
-  workflowUsageLimitContinuationPrompt,
+  workflowResultRefusals,
   workflowResultReminderPrompt,
-} from "./workflow-result-missing.js";
+  WorkflowResultRollout,
+  type WorkflowResultService,
+  type WorkflowSupervisorStatus,
+  WorkflowTranscriptArtifacts,
+  workflowUsageLimitContinuationPrompt,
+  type WorkflowWakeReason,
+} from "./workflows/index.js";
 import type { AgentActivityCompletionOutcome, AppConfig, Environment } from "./models.js";
 import type { StorageService } from "./storage.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
-import {
-  WorkflowTranscriptArtifacts,
-  type ArtifactLedgerSource,
-} from "./workflow-transcript-artifacts.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
-import { WorkflowResultRollout } from "./workflow-result-rollout.js";
 import { ProviderUnreachableError } from "./agent-provider-contract.js";
 import {
   AmbiguousPromptDispatchError,
@@ -208,16 +215,6 @@ import {
   validationRunJustStarted,
   type MultiReviewObligation,
 } from "./multi-review-scheduling.js";
-import {
-  DEFAULT_WORKFLOW_DISCOVERY_MS,
-  KeyedWorkflowSupervisor,
-  type KeyedWorkflowOwner,
-  type KeyedWorkflowServiceOptions,
-  type WorkflowReconcileReport,
-  type WorkflowSupervisorStatus,
-  type WorkflowWakeReason,
-} from "./workflow-supervisor.js";
-import { ElapsedPollGate, type PollTrigger } from "./workflow-poll-gate.js";
 import {
   readReviewerHistoryPage,
   readReviewerToolDetails,
@@ -666,7 +663,7 @@ export interface MultiReviewServiceOptions extends Omit<
    * so the stage fails now instead of idling until its result poll gives up.
    */
   assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
-  /** Reviewer turns' transcript-artifact grants (`workflow-artifact-turns.ts`). */
+  /** Reviewer turns' transcript-artifact grants (`workflows/artifact-turns.ts`). */
   artifactDispatch?: ArtifactTurnDispatch;
   /** Publication ledger; reviewer transcripts place each publication beside its call. */
   artifactLedger?: ArtifactLedgerSource;

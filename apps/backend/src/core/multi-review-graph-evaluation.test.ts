@@ -90,8 +90,8 @@ import {
 import { parseStructuredReportResult } from "./review-fanout.js";
 import { runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
-import { validateWorkflowResult } from "./workflow-result-contracts.js";
-import { validateRegisteredWorkflowResult } from "./workflow-result-registry.js";
+import { validateWorkflowResult } from "./workflows/result-contracts.js";
+import { validateRegisteredWorkflowResult } from "./workflows/result-registry.js";
 
 // Tests edit payloads into shapes the types forbid.
 // oxlint-disable-next-line typescript/no-explicit-any

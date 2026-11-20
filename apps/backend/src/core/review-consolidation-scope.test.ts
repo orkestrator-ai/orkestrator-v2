@@ -36,8 +36,8 @@ import {
   consolidationScopeFilledByBackend,
 } from "./review-fanout-provenance.js";
 import { parseStructuredReportResult } from "./review-fanout.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
-import { workflowResultProviderSchema } from "./workflow-result-registry.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
+import { workflowResultProviderSchema } from "./workflows/result-registry.js";
 
 type Scope = StructuredReviewReport["reviewScope"];
 
@@ -265,7 +265,7 @@ describe("the consolidated review submission schema", () => {
         if (name === "submit_consolidated_review") inputSchema = meta.inputSchema;
       },
     };
-    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultTools } = await import("./workflows/result-tools.js");
     registerWorkflowResultTools(server as never, {} as never, {
       kind: "consolidated-review",
       workflowResultKey: crypto.randomUUID(),
@@ -300,7 +300,7 @@ describe("the OpenCode broker's consolidated review tool", () => {
         schemas.set(name, meta.inputSchema);
       },
     };
-    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultBrokerTools } = await import("./workflows/result-tools.js");
     registerWorkflowResultBrokerTools(server as never, {} as never, {
       environmentId: "env-1",
       projectId: "project-1",
@@ -539,7 +539,7 @@ describe("WorkflowResultService with merged scope lists", () => {
     async (provider) => {
       const { McpServer } = await import("@modelcontextprotocol/server");
       const { callToolInProcess } = await import("./mcp-in-process.js");
-      const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+      const { registerWorkflowResultTools } = await import("./workflows/result-tools.js");
       const resultKey = crypto.randomUUID();
       const input = {
         resultKey,

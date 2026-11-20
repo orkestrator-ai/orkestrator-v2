@@ -31,8 +31,8 @@ import {
 } from "./multi-review-address-findings-dispatch.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService } from "./multi-review-service.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
-import { workflowResultProviderSchema } from "./workflow-result-registry.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
+import { workflowResultProviderSchema } from "./workflows/result-registry.js";
 import {
   Provider,
   REVIEW_FINGERPRINT,

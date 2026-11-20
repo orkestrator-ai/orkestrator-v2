@@ -11,8 +11,8 @@ import {
   validateWorkflowJsonSchema,
   validateWorkflowResult,
   workflowResultJsonSchema,
-} from "./workflow-result-contracts.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+} from "./result-contracts.js";
+import { WorkflowResultService } from "./result-service.js";
 
 /** Whether a registered tool's input schema (a Standard Schema) accepts `value`. */
 function parses(schema: unknown, value: unknown): boolean {
@@ -463,7 +463,7 @@ describe("workflow result broker tools", () => {
         return null;
       },
     };
-    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultBrokerTools } = await import("./result-tools.js");
     const scope = { environmentId: "env-1", projectId: "project-1" };
     registerWorkflowResultBrokerTools(server as never, workflowResults as never, scope);
     const registration = registrations.get("validate_workflow_result");
@@ -543,7 +543,7 @@ describe("workflow result broker tools", () => {
     const boundKey = crypto.randomUUID();
     // The slip that stranded a real run: one digit of the key mistyped.
     const mistyped = `${boundKey.slice(0, -1)}${boundKey.endsWith("0") ? "1" : "0"}`;
-    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultTools } = await import("./result-tools.js");
     registerWorkflowResultTools(
       server as never,
       workflowResults as never,
@@ -623,7 +623,7 @@ describe("workflow result broker tools", () => {
         return { ok: true, valid: true };
       },
     };
-    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultBrokerTools } = await import("./result-tools.js");
     registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
       environmentId: "env-1",
       projectId: "project-1",
@@ -672,7 +672,7 @@ describe("workflow result broker tools", () => {
         return null;
       },
     };
-    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultBrokerTools } = await import("./result-tools.js");
     registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
       environmentId: "env-1",
       projectId: "project-1",
@@ -742,7 +742,7 @@ describe("broker result key correction with signed capabilities", () => {
     capability = service.capabilityToken(scope, resultKey);
     handlers = new Map();
     findingCalls = [];
-    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultBrokerTools } = await import("./result-tools.js");
     registerWorkflowResultBrokerTools(
       {
         registerTool(name: string, _meta: unknown, handler: Handler) {
@@ -926,7 +926,7 @@ describe("committing a submission by validated digest", () => {
       workflowResultKey: resultKey,
       kind: "review-report" as const,
     };
-    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultTools } = await import("./result-tools.js");
     registerWorkflowResultTools(server as never, workflowResults as never, scope);
     const submit = registrations.get("submit_review_report");
     if (!submit) throw new Error("missing submission tool");
@@ -1003,7 +1003,7 @@ describe("committing a submission by validated digest", () => {
         return { ok: true, lifecycle: "accepted" };
       },
     };
-    const { registerWorkflowResultBrokerTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultBrokerTools } = await import("./result-tools.js");
     registerWorkflowResultBrokerTools(server as never, workflowResults as never, {
       environmentId: "env-1",
       projectId: "project-1",
@@ -1034,7 +1034,7 @@ describe("result tools load up front and name the field at fault", () => {
       },
     };
     const { registerWorkflowResultTools, registerWorkflowResultBrokerTools } =
-      await import("./workflow-result-tools.js");
+      await import("./result-tools.js");
     const scope = { environmentId: "env-1", projectId: "project-1" };
     const findings = { accepts: () => true, report: async () => ({ ok: true }) };
     registerWorkflowResultTools(
@@ -1065,9 +1065,9 @@ describe("result tools load up front and name the field at fault", () => {
 
   test("a refused consolidated report names each field at fault before reaching the service", async () => {
     const { McpServer } = await import("@modelcontextprotocol/server");
-    const { callToolInProcess } = await import("./mcp-in-process.js");
-    const { CONSOLIDATED_REVIEW_EXAMPLE } = await import("./review-consolidation-example.js");
-    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const { callToolInProcess } = await import("../mcp-in-process.js");
+    const { CONSOLIDATED_REVIEW_EXAMPLE } = await import("../review-consolidation-example.js");
+    const { registerWorkflowResultTools } = await import("./result-tools.js");
     const resultKey = crypto.randomUUID();
     let serviceCalls = 0;
     const workflowResults = {
@@ -1116,7 +1116,7 @@ describe("result tools load up front and name the field at fault", () => {
 
   test("the alwaysLoad key reaches the client in tools/list", async () => {
     const { McpServer, createMcpHandler } = await import("@modelcontextprotocol/server");
-    const { registerWorkflowResultTools } = await import("./workflow-result-tools.js");
+    const { registerWorkflowResultTools } = await import("./result-tools.js");
     const handler = createMcpHandler(
       () => {
         const server = new McpServer({ name: "result-tools-list-test", version: "1.0.0" });

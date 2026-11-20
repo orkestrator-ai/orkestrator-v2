@@ -4,8 +4,8 @@
  * Every result kind maps to one {@link WorkflowResultKindDefinition}: its
  * schema, the provider-facing schema, its submission and validation tools, and
  * the validators that run at submit time. Built-in kinds register themselves in
- * `workflow-result-contracts.ts`; graph output ports register the generic
- * `graph-output` kind (`workflow-result-graph-output.ts`), whose schema and
+ * `workflows/result-contracts.ts`; graph output ports register the generic
+ * `graph-output` kind (`workflows/result-graph-output.ts`), whose schema and
  * tool name come from the slot. Adding a kind is a registration, not an edit
  * to enums, switch statements and context unions.
  *

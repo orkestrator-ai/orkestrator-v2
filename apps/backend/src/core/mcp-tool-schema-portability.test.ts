@@ -18,7 +18,7 @@ import { DesignService } from "./design/service.js";
 import { createTestRenderer } from "./design/test-support.js";
 import { StorageService } from "./storage.js";
 import type { WebAnnotationToolHost } from "./web-annotations/contracts.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 /**
  * Every tool input schema is sent verbatim to whichever model the agent uses.

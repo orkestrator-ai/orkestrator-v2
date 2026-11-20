@@ -49,7 +49,7 @@ import type { Environment } from "./models.js";
 import type { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { PersistedGraphDescribeJob } from "./storage-graph-describe.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
+import type { WorkflowResultService } from "./workflows/index.js";
 
 export const GRAPH_DESCRIBE_WORDING: AgentBranchWording = Object.freeze({
   subject: "designer agent",

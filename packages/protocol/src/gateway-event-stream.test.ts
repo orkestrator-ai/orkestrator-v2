@@ -13,6 +13,7 @@ import {
   SseFrameDecoder,
   type SseFrame,
 } from "./gateway-event-stream";
+import { PUSH_STREAM_STATE_EVENT } from "./push-events";
 
 const envelope = (event: string, payload: unknown = null) => JSON.stringify({ event, payload });
 
@@ -216,38 +217,74 @@ describe("gateway event envelopes", () => {
 
 describe("GatewayEventStreamState", () => {
   const connected = (status: unknown) => envelope(GATEWAY_CONNECTED_EVENT, { status });
+  /** A connected frame from a backend that offers no push. */
+  const NO_PUSH = { connected: { push: null } };
+
+  test("reports the connection's push offer", () => {
+    const state = new GatewayEventStreamState();
+    const offer = { versions: [1], streamId: "stream-aaaaaaaaaaaaaaaa" };
+    expect(
+      state.accept(
+        envelope(GATEWAY_CONNECTED_EVENT, { status: "fresh", push: offer }),
+        "gen00001:0",
+      ),
+    ).toEqual({ kind: "resync", connected: { push: offer } });
+    expect(
+      state.accept(envelope(GATEWAY_CONNECTED_EVENT, { status: "caught-up", push: offer }), null),
+    ).toEqual({ kind: "control", connected: { push: offer } });
+  });
+
+  test("never lets a server frame impersonate the push stream state", () => {
+    const state = new GatewayEventStreamState();
+    expect(state.accept(envelope(PUSH_STREAM_STATE_EVENT, { state: "connected" }), null)).toEqual({
+      kind: "control",
+    });
+    expect(isGatewayTransportEvent(PUSH_STREAM_STATE_EVENT)).toBe(true);
+  });
 
   test("resyncs once for the first fresh connection, not for replayed reconnects", () => {
     const state = new GatewayEventStreamState();
-    expect(state.accept(connected("fresh"), "gen00001:0")).toEqual({ kind: "resync" });
+    expect(state.accept(connected("fresh"), "gen00001:0")).toEqual({ kind: "resync", ...NO_PUSH });
     expect(state.accept(envelope("changed", 1), "gen00001:1")).toEqual({
       kind: "event",
       event: "changed",
       payload: 1,
     });
-    expect(state.accept(connected("replayed"), "gen00001:1")).toEqual({ kind: "control" });
-    expect(state.accept(connected("caught-up"), "gen00001:1")).toEqual({ kind: "control" });
+    expect(state.accept(connected("replayed"), "gen00001:1")).toEqual({
+      kind: "control",
+      ...NO_PUSH,
+    });
+    expect(state.accept(connected("caught-up"), "gen00001:1")).toEqual({
+      kind: "control",
+      ...NO_PUSH,
+    });
     // A later "fresh" is impossible once a cursor exists, but must not re-announce.
-    expect(state.accept(connected("fresh"), "gen00001:1")).toEqual({ kind: "control" });
+    expect(state.accept(connected("fresh"), "gen00001:1")).toEqual({ kind: "control", ...NO_PUSH });
     expect(state.cursor).toBe("gen00001:1");
   });
 
   test("resyncs for every explicit reconciliation", () => {
     const state = new GatewayEventStreamState();
     const reconcile = envelope(GATEWAY_RECONCILE_REQUIRED_EVENT, { reason: "cursor-expired" });
-    expect(state.accept(connected("reconcile"), "gen00001:4")).toEqual({ kind: "control" });
+    expect(state.accept(connected("reconcile"), "gen00001:4")).toEqual({
+      kind: "control",
+      ...NO_PUSH,
+    });
     expect(state.accept(reconcile, "gen00002:9")).toEqual({ kind: "resync" });
     expect(state.accept(reconcile, "gen00002:9")).toEqual({ kind: "resync" });
     // Reconciliation counts as the first announcement.
-    expect(state.accept(connected("fresh"), "gen00002:9")).toEqual({ kind: "control" });
+    expect(state.accept(connected("fresh"), "gen00002:9")).toEqual({ kind: "control", ...NO_PUSH });
     expect(state.cursor).toBe("gen00002:9");
   });
 
   test("ignores missing and malformed connected statuses", () => {
     const state = new GatewayEventStreamState();
-    expect(state.accept(envelope(GATEWAY_CONNECTED_EVENT), null)).toEqual({ kind: "control" });
-    expect(state.accept(connected(7), null)).toEqual({ kind: "control" });
-    expect(state.accept(connected("fresh"), null)).toEqual({ kind: "resync" });
+    expect(state.accept(envelope(GATEWAY_CONNECTED_EVENT), null)).toEqual({
+      kind: "control",
+      ...NO_PUSH,
+    });
+    expect(state.accept(connected(7), null)).toEqual({ kind: "control", ...NO_PUSH });
+    expect(state.accept(connected("fresh"), null)).toEqual({ kind: "resync", ...NO_PUSH });
   });
 
   test("advances the cursor from cursor frames without delivering them", () => {

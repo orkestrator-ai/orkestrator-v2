@@ -24,12 +24,24 @@ calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
   computing it fail the read: omit the field instead. The backend announces a
   change on an idle session from it, and only a session that reports one may
   back off on the client.
-- `GET /event/subscribe?observe=1` is the backend observer's stream and the
-  only one the Claude and Codex bridges serve (no `observe=1` is a 400):
-  frames carry only the event type, the cursor `id:` and `{"sessionId"}`, the
-  `connected` frame confirms `"observe": true`, and nothing is retained for
-  replay. It is a wakeup hint, never a source of activity,
-  and like `/activity` it must not touch, hydrate or re-attach anything.
+- `GET /event/subscribe?observe=1` is the backend observer's stream, served
+  by every bridge and the only stream any of them serves (no `observe=1` is a
+  400). Claude and Codex serve it from their Hono routes; Cursor, Pi and the
+  ACP bridge through `BridgeObservationHub`
+  (`@orkestrator/protocol/node/bridge-observation-stream`). Frames carry only
+  the event type, the cursor `id:` and
+  `{"sessionId","stateRevision","transcriptRevision"}` (see
+  [State revisions](#state-revisions)), the `connected` frame confirms
+  `"observe": true` and `"revisions": 1`, and nothing is retained for replay.
+  It is a wakeup hint, never a source of activity or state, and like
+  `/activity` it must not touch, hydrate or re-attach anything. Publishing a
+  frame is synchronous and never awaits, so it is safe in an SDK listener; a
+  subscriber that cannot drain is closed, not queued.
+- `GET /session/:id/transcript/output?locator=&mode=&limit=` slices the exact
+  body named by a transcript detail locator before sending it. It uses the same
+  transcript source and stale-locator checks as `/transcript/detail`, answers
+  an unknown session in band, and leaves completion to the backend projection.
+  Only 404/405 indicate a bridge that predates the range route.
 - `/session/:id/activity` answers an unknown session **in band** as
   `{"activity":"missing"}` and never 404s. The backend reads a 404 there as "this
   bridge predates the route" and fails the environment; if 404 also meant "session
@@ -79,6 +91,66 @@ calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
   it: storage refuses every other request id until it is settled. Surface both
   ways out — retry under the same idempotency key, or discard — rather than the
   storage-level refusal, which names an invariant the user cannot act on.
+
+## State revisions
+
+The change signal between a bridge and the backend (to-do 8102 task 2, design
+D7; the contract is `@orkestrator/protocol/bridge-state-revision`). The
+backend's push observer reads a subscribed session only when its bridge says
+it moved, so a quiet session costs no bridge read beyond a 30 s backstop.
+
+- **`stateRevision`** (`<bridge process generation>:<counter>`, kept by
+  `BridgeStateRevisions` in `@orkestrator/protocol/node/bridge-state-revision`)
+  is per session and moves on every change of anything the backend's state
+  read returns. These fields **share** it, per bridge:
+
+  | Bridge | State route | Side routes folded into the same revision |
+  | --- | --- | --- |
+  | Claude | `GET /session/:id` (not `lastActivity`) | `/questions`, `/plan-approvals`, `/interactions` |
+  | Codex | `GET /session/:id/status` (not `messageRevision`, `contentEpoch`) | `/config` (not `durable`), `/approvals`, `/interactions` |
+  | Cursor | `GET /session/:id/status` with its composer (not `revision`) | `/approvals`, `/interactions` (not their `revision`) |
+  | ACP/Grok | `GET /session/:id/status` with its composer (not `revision`) | `/approvals`, `/interactions` |
+  | Pi | `GET /session/:id/status` (the composer as `composerRevision`) | `/queue`, `/approvals`, `/interactions` |
+
+  The excluded fields are liveness (`lastActivity`, which the read itself
+  moves), a field the backend's state read never takes (`durable`) or the
+  transcript's own revision. Pi keeps `revision` in its state, so a Pi state
+  revision also moves with its transcript.
+- **Independent revisions.** `transcriptRevision` is the transcript's own,
+  opaque and printable: it moves whenever the transcript route's answer would
+  (Claude: `readTranscriptVersion`'s epoch and revision; Codex: engine
+  generation, `contentEpoch` and `messageRevision`; Cursor, Pi and ACP: their
+  transcript token's sources). It can move while the state does not, and the
+  reverse. Pi's **`composerRevision`** is the composer and model list's own:
+  `?knownComposerRevision=` naming the current one leaves `composer` out of a
+  full `/status` body.
+- **The conditional read.** The state route answers
+  `{ "unchanged": true, "stateRevision" }` to a `?knownStateRevision=` that
+  is still current, and the backend then reuses its complete cached read
+  (`apps/backend/src/core/http-bridge/state-revision.ts`). Without the query
+  every body is today's plus `stateRevision`, so an older backend and the
+  backend's full `interactiveSnapshot` read are unaffected; an older bridge
+  that ignores the query is read in full, as before.
+- **Two inputs move a revision, and both are required.** Every mutation
+  (or the event fan-out that announces it) calls `bump` synchronously, before
+  its frame is published: that is what the stream carries, so it is how the
+  backend learns of a change without reading. And the state route `settle`s
+  the revision against a digest of exactly what it returns, so the
+  `unchanged` answer is always true even where a bump was forgotten; a
+  forgotten bump costs push latency up to the backstop, never a stale view.
+  Never put a field that moves on every read (a timestamp, a counter of
+  reads) in the digested content, or the revision moves on every read.
+- **The harness keeps it honest.** Each bridge has a revision harness test
+  (`expectStateRevisionMoves`) that snapshots the state read before and after
+  every mutation path its tests drive and fails when the body changed but the
+  peeked revision did not: Claude `routes/session-state-revision.test.ts`,
+  Codex `state-revision.test.ts`, Cursor `state-revision.test.ts`, Pi
+  `state-revision.test.ts`, ACP `acp-state-revision.test.ts`. A new mutation
+  path joins it.
+- **Known gaps** (caught by the digest at the next read, not pushed): a
+  bridge-wide readiness change (sign-in lost or regained) moves no
+  per-session revision on Claude, Cursor (a separate `--login` child), Pi
+  (a failed global catalogue read) or ACP.
 
 ## Recorded provider traffic
 

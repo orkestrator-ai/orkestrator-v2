@@ -1,5 +1,5 @@
 /**
- * Route bodies for a bridge's three transcript reads, from one read source.
+ * Route bodies for a bridge's transcript reads, from one read source.
  *
  * `GET /session/:id/transcript`, `/transcript/detail` and `/transcript/page`
  * must agree about what they read: the same message array, generation,
@@ -15,9 +15,16 @@
  */
 
 import {
+  boundToolOutputError,
+  parseToolOutputReadInput,
+  sliceToolOutput,
+  type NativeAgentToolOutputRead,
+} from "../native-agent-tool-output.js";
+import {
   bridgeTranscriptPage,
   bridgeTranscriptSummaryUpdate,
   readBridgeTranscriptDetail,
+  locateBridgeTranscriptDetail,
   type BridgeTranscriptDetailResponse,
   type BridgeTranscriptPageResponse,
   type BridgeTranscriptSummaryUpdate,
@@ -88,12 +95,51 @@ export function bridgeTranscriptDetailRouteBody<T extends { content: string; par
   return readBridgeTranscriptDetail(source.messages, locator);
 }
 
+/** A bounded slice of the exact body named by a summary locator. */
+export function bridgeTranscriptOutputRouteBody<T extends { content: string; parts: unknown[] }>(
+  source: BridgeTranscriptSource<T> | undefined,
+  query: BridgeTranscriptQuery,
+): NativeAgentToolOutputRead {
+  if (!source) return { status: "missing" };
+  const locator = query("locator");
+  if (!locator) return { status: "expired" };
+  const mode = query("mode") ?? undefined;
+  const cursor = query("cursor");
+  const anchor = query("anchor") ?? undefined;
+  let request;
+  try {
+    request = parseToolOutputReadInput({
+      environmentId: "",
+      agent: "",
+      logicalSessionKey: "",
+      toolUseId: "output",
+      mode,
+      cursor: cursor == null ? undefined : Number(cursor),
+      anchor,
+      limit: Number(query("limit") ?? undefined),
+    });
+  } catch {
+    return { status: "expired" };
+  }
+  const detail = locateBridgeTranscriptDetail(source.messages, locator);
+  if (detail.status !== "ok") return { status: "expired" };
+  return {
+    status: "ok",
+    // The backend's authoritative projection owns completion.
+    complete: false,
+    ...sliceToolOutput(detail.detail.toolOutput ?? "", request),
+    ...(detail.detail.toolError
+      ? { toolError: boundToolOutputError(detail.detail.toolError) }
+      : {}),
+  };
+}
+
 /** The transcript sub-routes: `/transcript/detail` and `/transcript/page`. */
-export type BridgeTranscriptSubRead = "detail" | "page";
+export type BridgeTranscriptSubRead = "detail" | "page" | "output";
 
 /** Whether a path segment after `/transcript` names one of the sub-routes. */
 export function isBridgeTranscriptSubRead(segment: unknown): segment is BridgeTranscriptSubRead {
-  return segment === "detail" || segment === "page";
+  return segment === "detail" || segment === "page" || segment === "output";
 }
 
 /** Dispatch for bridges whose router hands over the sub-route as a path segment. */
@@ -101,7 +147,8 @@ export function bridgeTranscriptSubReadBody<T extends { content: string; parts: 
   source: BridgeTranscriptSource<T> | undefined,
   subRead: BridgeTranscriptSubRead,
   query: BridgeTranscriptQuery,
-): BridgeTranscriptDetailResponse | BridgeTranscriptPageResponse {
+): BridgeTranscriptDetailResponse | BridgeTranscriptPageResponse | NativeAgentToolOutputRead {
+  if (subRead === "output") return bridgeTranscriptOutputRouteBody(source, query);
   return subRead === "detail"
     ? bridgeTranscriptDetailRouteBody(source, query)
     : bridgeTranscriptPageRouteBody(source, query);

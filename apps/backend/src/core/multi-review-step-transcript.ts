@@ -40,6 +40,13 @@ export interface StepTranscriptHost {
     session: MultiReviewSession,
     read: (provider: BuildPipelineProvider) => Promise<T>,
   ): Promise<T>;
+  shareRead?(
+    workflow: MultiReviewWorkflow,
+    step: MultiReviewStepKind,
+    session: MultiReviewSession,
+    token: string | undefined,
+    read: (knownToken: string | undefined) => Promise<ReviewerTranscriptRead>,
+  ): Promise<ReviewerTranscriptRead>;
   /** Content-free measurement of one provider read. */
   recordRead?(read: ReviewerTranscriptRead, elapsedMs: number): void;
 }
@@ -55,14 +62,20 @@ export async function readMultiReviewStepTranscript(
   let read: ReviewerTranscriptRead | undefined;
   if (access.kind === "own") {
     const { providerSessionId } = access.session;
-    const started = Date.now();
-    read = await host.withProvider(workflow, access.session, (provider) =>
-      readReviewerTranscript(provider, providerSessionId, knownSourceToken, undefined, {
-        maxMessages: MULTI_REVIEW_STEP_TRANSCRIPT_MAX_MESSAGES,
-        maxBytes: MULTI_REVIEW_STEP_TRANSCRIPT_MAX_BYTES,
-      }),
-    );
-    host.recordRead?.(read, Date.now() - started);
+    const session = access.session;
+    const load = async (token: string | undefined) => {
+      const started = Date.now();
+      const answer = await host.withProvider(workflow, session, (provider) =>
+        readReviewerTranscript(provider, providerSessionId, token, undefined, {
+          maxMessages: MULTI_REVIEW_STEP_TRANSCRIPT_MAX_MESSAGES,
+          maxBytes: MULTI_REVIEW_STEP_TRANSCRIPT_MAX_BYTES,
+        }),
+      );
+      host.recordRead?.(answer, Date.now() - started);
+      return answer;
+    };
+    read = await (host.shareRead?.(workflow, step, session, knownSourceToken, load) ??
+      load(knownSourceToken));
     // The step may have been restarted in a new session, or handed its shared
     // session to the next step, while the read was in flight. Its answer then
     // describes a session this step no longer shows, so it is dropped and the

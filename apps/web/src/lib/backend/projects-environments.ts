@@ -286,7 +286,7 @@ export function createProjectsEnvironmentsApi(client: BackendClient) {
       namingPrompt,
       ...(buildPipelineId ? { buildPipelineId } : {}),
       ...(worktreeBaseDir ? { worktreeBaseDir } : {}),
-      ...(launchBase
+      ...(launchBase && typeof launchBase === "object"
         ? "pending" in launchBase
           ? { worktreeBaseBranch: null }
           : { worktreeBaseBranch: launchBase.branch, worktreeBaseCommit: launchBase.commit }

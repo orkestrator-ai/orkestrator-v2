@@ -281,6 +281,16 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   revision, under a `generation:revision` cursor. A reconnect whose cursor is
   not the current one gets `replay.required`; nothing is serialized or
   retained for replay.
+- **Every state change moves the state revision**
+  ([State revisions](../AGENTS.md#state-revisions)). `eventEmitter.emit` bumps
+  it for every session event except `message.updated`/`message.patched`
+  (transcript only), before the fan-out, so the frame carries it. A change to
+  what `GET /session/:id` or its three side routes return that emits no event
+  (a status flip at admission, settle or close, a hold) calls
+  `eventEmitter.announceState(sessionId)`, which reaches only the observe
+  stream, never the bridge's own listeners or tests that capture events.
+  `routes/session-state-revision.test.ts` drives each path and fails on a
+  change without a move; add a new path there.
 - **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`
   and no code in it calls the SDK's `deleteSession`; an older bridge's DELETE
   did, which removed the `{sessionId}.jsonl` rollout. Tab close uses
@@ -336,13 +346,24 @@ because no tool-name rule can separate `git log` from `git commit` — which is
 why `capabilityPolicy`'s `shell.mutate` maps to no tool names at all. Three
 invariants keep it honest:
 
-- **The command checked must be the command that runs.** `COMPOSITION_PATTERN`
-  refuses anything that can become several commands, and a newline counts: the
-  shell treats it exactly as `;` does, while a whitespace split would reduce
-  `ls\nrm -rf .` to a harmless-looking `ls`. A plain pipe is the one
-  exception: with every other metacharacter refused it can only separate
-  stages, so `isReadOnlyShellCommand` splits on it and judges each stage as a
-  command of its own (`git diff a..b | head`), and `||` stays refused. A pipe
+- **The command checked must be the command that runs.**
+  `read-only-shell-syntax.ts` admits only shell whose words are known before
+  it runs: quoted words, `\` escapes, `;`, newlines, `&&`, `||`, plain pipes,
+  and a command that is only `NAME=value` (a plain value, run whatever came
+  before it), whose `$NAME`/`${NAME}` it substitutes. It refuses redirection,
+  substitution, globs, grouping, background `&`, comments and any other `$`.
+  `isReadOnlyShellCommand` judges each command of the list on its own (`git
+  diff a..b --stat; git show b:x | grep -n "y z"`), and what runs is
+  `serializeShellList` of the words judged (the hook's `updatedInput`
+  whenever it differs from the text the model wrote), so a reading the shell
+  would not share cannot reach it. `read-only-shell-syntax.integration.test.ts` checks the parser against
+  real bash. `cd` (alone in a list) and `git -C` may name only an existing
+  directory physically inside the checkout (`directoriesWithin`). The session's
+  `cwd` is the root, wherever an earlier call left the shell. `cd` bypasses
+  `CDPATH`, and multiple `git -C` options are checked in order. The list
+  operators determine where each command may run, and `shellCommandRefused`
+  checks arguments from all of those directories. `sed` is admitted
+  only for line-number ranges to print (`sed -n 120,180p`). A pipe
   also makes a stage's stdin the model's to write, so a path need never
   appear as a token: a program that takes file names from its input
   (`du`/`sort`/`wc --files0-from`, `find -files0-from`, `file -f`) is refused
@@ -351,12 +372,13 @@ invariants keep it honest:
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout
   put there, so programs run by bare name only. Where a reading tool has a
-  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`,
-  `yq -i`) rather than dropping the tool; a one-letter flag there also matches
+  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`).
+  A one-letter flag there also matches
   inside a cluster or with its value attached (`-no out`, `-oout`). A tool that
-  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`, and one
-  with too many writing options to list (gawk) in `OPTION_ALLOWLISTS`. Git
-  subcommands whose effect depends on their arguments belong in
+  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`. AWK is
+  limited to field printing and numeric line selection with an optional
+  literal field separator. yq is limited to field selectors and file operands.
+  Git subcommands whose effect depends on their arguments belong in
   `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
   `remote` and `config` all read in one form and write in another.
 - **Assume no sandbox behind it.** The SDK sandbox lets a command write its
@@ -401,10 +423,10 @@ invariants keep it honest:
   with a scripted model and a fixture directory.
 - **Git runs against the checkout and nothing else.** Options before the
   subcommand are an allowlist (`GIT_GLOBAL_OPTIONS`, exact match), because
-  `--git-dir`, `--work-tree`, `-c` and `-C` choose which repository's config
-  Git obeys, and a checkout can commit a bare-repo layout naming
-  `core.fsmonitor`. A read-only turn's CLI also runs with
-  `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor, hooks
+  `--git-dir`, `--work-tree` and `-c` can change which configuration Git obeys.
+  The `-C` check also refuses a nested repository, submodule or bare layout
+  between the effective Git directory and the checkout root. A read-only turn's
+  CLI also runs with `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor, hooks
   and the signature programs off through `GIT_CONFIG_COUNT`, outranking the
   checkout's own config, and sets `GIT_OPTIONAL_LOCKS=0` and
   `GIT_NO_LAZY_FETCH=1`.

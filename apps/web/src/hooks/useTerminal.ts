@@ -661,14 +661,20 @@ export function useTerminal({
             lastAppliedRevision = Math.max(lastAppliedRevision, pending.revision);
           }
         });
-        liveApplicationTail = application.catch(() => undefined);
+        liveApplicationTail = application.catch(() => {
+          // A rejected parser write can have applied part of its frame. Only
+          // a replacement snapshot can recover the exact parser state.
+          activeGeneration = null;
+          if (replayOutputBuffer) snapshotPending = true;
+          void reconcileSnapshot();
+        });
         return application;
       };
 
       const deliverWithoutSnapshot = (pending: PendingOutput): void => {
         // Legacy payloads have no cursor and therefore cannot be deduplicated.
         if (pending.revision === null || pending.generation === null) {
-          void applyLiveOutput(pending);
+          void applyLiveOutput(pending).catch(() => undefined);
           return;
         }
 
@@ -679,7 +685,7 @@ export function useTerminal({
         }
         if (pending.revision <= lastReceivedRevision) return;
         lastReceivedRevision = pending.revision;
-        void applyLiveOutput(pending);
+        void applyLiveOutput(pending).catch(() => undefined);
       };
 
       const reconcileOnce = async (): Promise<void> => {

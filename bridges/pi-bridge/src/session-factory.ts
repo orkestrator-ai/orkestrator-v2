@@ -8,13 +8,18 @@
 import { randomBytes } from "node:crypto";
 import { RuntimeHealthRecorder } from "@orkestrator/protocol/runtime-health";
 import { emptyComposer } from "./models.js";
+import { stateChanged } from "./observation.js";
 import type { SessionState } from "./state.js";
 
 export function newSessionState(
   clientSessionKey?: string,
   policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy,
 ): SessionState {
-  return {
+  // `/status` carries the recorder's drift and notices in `runtime`, recorded
+  // from many places (SDK listener included), so the recorder announces each
+  // change itself. Bound late: it announces against the state it belongs to.
+  const health = new RuntimeHealthRecorder({ onChange: () => stateChanged(state) });
+  const state: SessionState = {
     id: randomBytes(16).toString("hex"),
     ...(policy ? { policy } : {}),
     ...(clientSessionKey ? { clientSessionKey } : {}),
@@ -45,6 +50,7 @@ export function newSessionState(
     commandCatalogue: { status: "stale", revision: 0 },
     compacting: false,
     lastAccessed: Date.now(),
-    health: new RuntimeHealthRecorder(),
+    health,
   };
+  return state;
 }

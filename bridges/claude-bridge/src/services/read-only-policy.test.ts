@@ -222,12 +222,13 @@ describe("Claude coordinator read-only policy", () => {
       "yq -s .name file.yaml",
       "file -C -m magic",
       "hostname evil",
-      // gawk writes and loads programs through options; only -F and -v pass.
+      // gawk writes and loads programs through options; only a literal -F passes.
       "awk -i inplace NR==1 file",
       "awk -iinplace NR==1 file",
       "awk -f prog.awk file",
       "awk -o file",
       "awk --profile=prof.out NR==1 file",
+      "awk -F : -v n=1 NR==n file",
       // Git output files and programs chosen by argument.
       "git diff --output=patch.diff",
       "git log -p --output patch.diff",
@@ -309,7 +310,6 @@ describe("Claude coordinator read-only policy", () => {
       "git --glob-pathspecs log",
       "git --bare log",
       "git -c core.fsmonitor=touch status",
-      "git -C ../other status",
       // Allowlisted options do not carry an unlisted one through.
       "git --no-pager --git-dir=vendor/evil log",
       // Git does not abbreviate its own options, so neither does the allowlist.
@@ -328,6 +328,16 @@ describe("Claude coordinator read-only policy", () => {
     ]) {
       const verdict = isReadOnlyShellCommand(command, { commandSandbox: "required" });
       expect({ command, allowed: verdict.allowed }).toEqual({ command, allowed: true });
+    }
+    // `-C` may only name a directory inside the checkout, and only where the
+    // shell's directory is known to resolve it against.
+    for (const options of [{}, { cwd: "/workspace" }]) {
+      const verdict = isReadOnlyShellCommand("git -C ../other status", {
+        commandSandbox: "required",
+        ...options,
+      });
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toContain("within this checkout only");
     }
     expect(
       isReadOnlyShellCommand("git --git-dir=vendor/evil status", {
@@ -368,7 +378,7 @@ describe("Claude coordinator read-only policy", () => {
       "yq .name file.yaml",
       "awk NR==1 file",
       "awk -F, NR==1 file",
-      "awk -F : -v n=1 NR==n file",
+      "awk -F : NR==1 file",
       "hostname",
       "git diff --stat",
       "git log --output-indicator-new=+ -p",
@@ -557,7 +567,8 @@ describe("Claude coordinator read-only policy", () => {
       isReadOnlyShellCommand("git push origin HEAD", options).reason,
       isReadOnlyShellCommand("touch file", options).reason,
       isReadOnlyShellCommand("sort -o out in", options).reason,
-      isReadOnlyShellCommand("ls && wc", options).reason,
+      isReadOnlyShellCommand("ls > out", options).reason,
+      isReadOnlyShellCommand("cd /", { ...options, cwd: "/workspace" }).reason,
       isReadOnlyShellCommand("bin/cat x", options).reason,
       isReadOnlyShellCommand("git status", { role: "read-only" }).reason,
     ];

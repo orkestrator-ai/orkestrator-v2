@@ -38,7 +38,9 @@ import { parseTerminalSizeClientId } from "@orkestrator/protocol/terminal-size-o
 import {
   checkContainerWorkspacePathsCommand,
   copyExternalFileCommand,
+  createContainerFileCommand,
   createContainerFolderCommand,
+  createLocalFileCommand,
   createLocalFolderCommand,
   deleteContainerAnnotationEvidenceCommand,
   deleteContainerFileCommand,
@@ -127,7 +129,6 @@ import {
   decodeEditorTextFile,
   runCommand,
   writeFileBase64,
-  CommandFailedError,
 } from "./shell.js";
 import { runContainerWrite } from "./container-write.js";
 import {
@@ -184,6 +185,7 @@ import {
   moveLocalFile,
   renameLocalFile,
   copyExternalFileToLocalWorkspace,
+  containerAttachmentWriteFailure,
   createLocalFolder,
   requireLocalMutationEnvironment,
   requireContainerMutationEnvironment,
@@ -203,6 +205,7 @@ import {
   parseContainerFileSubtree,
 } from "./commands-helpers.js";
 import { conditionalSnapshot } from "./commands-terminal.js";
+import { createContainerFile, createLocalFile } from "./commands-file-create.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
@@ -1273,6 +1276,18 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
+  register(
+    createLocalFileCommand,
+    async ({ environmentId: id, parentDirectory, fileName }, context) => {
+      return withLocalFileMutation(context, id, async (environment) => {
+        const result = await createLocalFile(environment.worktreePath!, parentDirectory, fileName);
+        context.runtime.diffStats.fileCreated({ worktreePath: environment.worktreePath! }, result);
+        context.runtime.diffStats.service.refresh(id);
+        return result;
+      });
+    },
+    ASYNC_HANDLER,
+  );
 
   register(
     getGitStatusCommand,
@@ -1688,6 +1703,24 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
+  register(
+    createContainerFileCommand,
+    async ({ environmentId, parentDirectory, fileName }, context) => {
+      const environment = await requireContainerMutationEnvironment(context.storage, environmentId);
+      const id = environment.containerId!;
+      const filePath = await createContainerFile(
+        dependencies.runContainerFileCopyCommand,
+        id,
+        parentDirectory,
+        fileName,
+        dependencies.containerFileCopyTimeoutMs,
+      );
+      context.runtime.diffStats.fileCreated({ containerId: id }, filePath);
+      context.runtime.diffStats.service.refresh(environmentId);
+      return filePath;
+    },
+    ASYNC_HANDLER,
+  );
 
   register(
     copyExternalFileCommand,
@@ -1739,12 +1772,11 @@ export function registerTerminalCommands(
             { stdin: data, timeoutMs: dependencies.containerFileCopyTimeoutMs },
           );
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          const exitCode = error instanceof CommandFailedError ? error.exitCode : undefined;
-          if ((exitCode === 76 || exitCode === undefined) && message.includes("EEXIST")) {
+          const failure = containerAttachmentWriteFailure(error);
+          if (failure === "exists") {
             throw new Error(`A file already exists at ${copy.destination}`);
           }
-          if ((exitCode === 77 || exitCode === undefined) && message.includes("ENOENT_ANCESTOR")) {
+          if (failure === "missing-parent") {
             throw new Error(
               copy.directory === "."
                 ? "Workspace root is not available"

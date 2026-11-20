@@ -1,3 +1,7 @@
+import type {
+  NativeAgentToolOutputRead,
+  ToolOutputReadRequest,
+} from "@orkestrator/protocol/native-agent-tool-output";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import type {
@@ -955,6 +959,15 @@ export interface AgentSessionProvider {
    */
   observationStreamLive?(): boolean;
   /**
+   * Whether that stream is live and carries each session's state and
+   * transcript revisions (to-do 8102 task 2), so every change of what a
+   * session's state or transcript read returns is announced through
+   * `onObservationHint`. Only then may the push observer stop polling a
+   * subscribed session on a timer, running or idle; absent or `false` keeps
+   * its cadence.
+   */
+  observationStreamRevisions?(): boolean;
+  /**
    * Derive cumulative session usage from an already-read transcript. The
    * function must never reinterpret current context occupancy as consumption.
    */
@@ -1017,6 +1030,12 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     locator: string,
   ): Promise<ProviderTranscriptDetail | undefined>;
+  /** A bounded read of the output behind a transcript detail locator. */
+  transcriptOutput?(
+    sessionId: string,
+    locator: string,
+    request: ToolOutputReadRequest,
+  ): Promise<NativeAgentToolOutputRead | undefined>;
   /**
    * History before a snapshot's `historyCursor`, served directly by the
    * provider. Undefined when this provider connection cannot page.
@@ -1265,10 +1284,15 @@ export interface ProviderCommonDependencies {
   /**
    * Content-free hint that an owned session's activity or pending input may
    * have changed (`sessionId`), or that the event stream lost continuity
-   * (`undefined`). Hints only make the next observation due; they are never
-   * applied as activity themselves. Must not throw or await.
+   * (`undefined`). `parts` names what moved when the bridge carries revisions
+   * (`state`, `transcript`); absent means unknown. Hints only make the next
+   * observation due; they are never applied as activity themselves. Must not
+   * throw or await.
    */
-  onObservationHint?: (sessionId: string | undefined) => void;
+  onObservationHint?: (
+    sessionId: string | undefined,
+    parts?: readonly ("state" | "transcript")[],
+  ) => void;
 }
 
 /**

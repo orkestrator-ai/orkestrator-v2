@@ -272,7 +272,14 @@ describe("what the supervisor records", () => {
         round: 1,
         passed: false,
         summary: "Criterion failed",
-        checks: [{ check: "Header shows the timer", passed: false, details: "Not in the diff" }],
+        checks: [
+          {
+            check: "Header shows the timer",
+            passed: false,
+            status: "failed",
+            details: "Not in the diff",
+          },
+        ],
       },
     ]);
 
@@ -499,7 +506,16 @@ describe("the key information tools", () => {
     };
     const updated = await callToolInProcess(factory, "update_key_information", update);
     expect(updated.isError).toBe(false);
-    expect(host.patches).toEqual([update]);
+    // The older `passed` form is recorded with its status.
+    expect(host.patches).toEqual([
+      {
+        ...update,
+        verification: {
+          summary: "ok",
+          checks: [{ check: "a", passed: true, status: "passed" }],
+        },
+      },
+    ]);
 
     const empty = await callToolInProcess(factory, "update_key_information", {});
     expect(empty.isError).toBe(true);
@@ -507,7 +523,200 @@ describe("the key information tools", () => {
       tests: [{ name: "a", result: "flaky" }],
     });
     expect(invalid.isError).toBe(true);
+    expect(invalid.text).toContain("Expected arguments");
     expect(host.patches).toHaveLength(1);
+  });
+
+  function toolFactory(host: ReturnType<typeof fixedHost>) {
+    return async () => {
+      const server = new McpServer({ name: "test", version: "1.0.0" });
+      await registerKeyInformationTools(server, host, SCOPE);
+      return server;
+    };
+  }
+
+  test("record a check that was not run as not-checked, never as a failure", async () => {
+    const host = fixedHost(view);
+    const updated = await callToolInProcess(toolFactory(host), "update_key_information", {
+      verification: {
+        passed: true,
+        summary: "One criterion needs a live provider",
+        checks: [
+          { check: "Unit tests", status: "passed" },
+          { check: "Live sign-in", status: "not-checked", details: "Needs a provider account" },
+          { check: "Lint", status: "failed", details: "Two findings" },
+        ],
+      },
+    });
+    expect(updated.isError).toBe(false);
+    expect(host.patches).toEqual([
+      {
+        verification: {
+          passed: true,
+          summary: "One criterion needs a live provider",
+          checks: [
+            { check: "Unit tests", passed: true, status: "passed" },
+            {
+              check: "Live sign-in",
+              passed: false,
+              status: "not-checked",
+              details: "Needs a provider account",
+            },
+            { check: "Lint", passed: false, status: "failed", details: "Two findings" },
+          ],
+        },
+      },
+    ]);
+  });
+
+  test("refuse an ill-formed check with the reason and the expected structure", async () => {
+    const host = fixedHost(view);
+    const call = (checks: unknown[]) =>
+      callToolInProcess(toolFactory(host), "update_key_information", {
+        verification: { summary: "s", checks },
+      });
+
+    const noReason = await call([{ check: "Live sign-in", status: "not-checked" }]);
+    expect(noReason.isError).toBe(true);
+    expect(noReason.text).toContain("needs `details` saying why it was not checked");
+    expect(noReason.text).toContain('"not-checked"');
+    expect(noReason.text).toContain("Expected arguments");
+
+    const contradiction = await call([{ check: "a", status: "failed", passed: true }]);
+    expect(contradiction.isError).toBe(true);
+    expect(contradiction.text).toContain("contradicts");
+
+    const neither = await call([{ check: "a" }]);
+    expect(neither.isError).toBe(true);
+    expect(neither.text).toContain("Give the check a `status`");
+    expect(host.patches).toHaveLength(0);
+  });
+
+  test("accept sections sent as JSON text, and point at where broken JSON text fails", async () => {
+    const host = fixedHost(view);
+    const verification = {
+      summary: "ok",
+      checks: [{ check: "a", status: "not-checked", details: "No host" }],
+    };
+    const asText = await callToolInProcess(toolFactory(host), "update_key_information", {
+      verification: JSON.stringify(verification),
+      workDone: JSON.stringify(["Did the work"]),
+    });
+    expect(asText.isError).toBe(false);
+    expect(host.patches).toEqual([
+      {
+        workDone: ["Did the work"],
+        verification: {
+          summary: "ok",
+          checks: [{ check: "a", passed: false, status: "not-checked", details: "No host" }],
+        },
+      },
+    ]);
+
+    const broken = await callToolInProcess(toolFactory(host), "update_key_information", {
+      verification: '{"summary": "ok", "checks": [{"check": "a", "status": "passed"}}',
+    });
+    expect(broken.isError).toBe(true);
+    expect(broken.text).toContain("verification: was sent as a string of JSON text");
+    expect(broken.text).toMatch(/line 1, column \d+/);
+    expect(broken.text).toContain("Expected arguments");
+
+    // A plain sentence is not JSON text: it is refused as the wrong type.
+    const prose = await callToolInProcess(toolFactory(host), "update_key_information", {
+      workDone: "Did the work",
+    });
+    expect(prose.isError).toBe(true);
+    expect(prose.text).not.toContain("JSON text");
+    expect(host.patches).toHaveLength(1);
+  });
+
+  test("a verification refusal includes an example that can be submitted as JSON", async () => {
+    const host = fixedHost(view);
+    const factory = toolFactory(host);
+    const refused = await callToolInProcess(factory, "update_key_information", {
+      verification: { summary: "s", checks: [{ check: "Live sign-in", status: "not-checked" }] },
+    });
+    expect(refused.isError).toBe(true);
+    expect(host.patches).toHaveLength(0);
+
+    const example = refused.text.split("Example verification update\n")[1] ?? "";
+    const repaired = await callToolInProcess(
+      factory,
+      "update_key_information",
+      JSON.parse(example),
+    );
+    expect(repaired.isError).toBe(false);
+    expect(host.patches).toEqual([
+      {
+        verification: {
+          summary: "Live sign-in could not run",
+          checks: [
+            {
+              check: "Live sign-in",
+              passed: false,
+              status: "not-checked",
+              details: "No test account was available",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  const checksText = JSON.stringify([{ check: "Lint", status: "passed" }]);
+  const verification = { summary: "Checks ran", checks: checksText };
+  test.each([
+    ["inside an object", verification],
+    ["inside a JSON-text section", JSON.stringify(verification)],
+    ["inside a double-encoded JSON-text section", JSON.stringify(JSON.stringify(verification))],
+  ])("accepts verification.checks sent as JSON text %s", async (_case, verificationInput) => {
+    const host = fixedHost(view);
+    const result = await callToolInProcess(toolFactory(host), "update_key_information", {
+      verification: verificationInput,
+    });
+    expect(result.isError).toBe(false);
+    expect(host.patches).toEqual([
+      {
+        verification: {
+          summary: "Checks ran",
+          checks: [{ check: "Lint", status: "passed", passed: true }],
+        },
+      },
+    ]);
+  });
+
+  test.each([
+    ["source text", (value: string) => value, "it is not valid JSON:"],
+    ["double-encoded text", JSON.stringify, "after decoding the outer JSON string:"],
+  ] as const)(
+    "points to the exact character in malformed verification %s",
+    async (_case, encode, locationPrefix) => {
+      const host = fixedHost(view);
+      const result = await callToolInProcess(toolFactory(host), "update_key_information", {
+        verification: encode('\n\n  {"summary": }'),
+      });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain(`${locationPrefix} at character 16 (line 3, column 15)`);
+      expect(result.text).toContain("⟪HERE⟫}");
+      expect(host.patches).toHaveLength(0);
+    },
+  );
+
+  test.each([
+    ["workDone", { workDone: '["ran tests"] extra' }],
+    ["verification.checks", { verification: { summary: "s", checks: '["ran tests"] extra' } }],
+  ])("gives array repair guidance for trailing text in %s", async (path, args) => {
+    const host = fixedHost(view);
+    const result = await callToolInProcess(toolFactory(host), "update_key_information", args);
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(`${path}: was sent as a string of JSON text`);
+    expect(result.text).toContain(
+      "at character 14 (line 1, column 15) more text follows a complete JSON value",
+    );
+    expect(result.text).toContain("Pass exactly one JSON array.");
+    expect(result.text).toContain("⟪HERE⟫extra");
+    expect(result.text).not.toContain("Pass exactly one JSON object.");
+    expect(host.patches).toHaveLength(0);
   });
 });
 

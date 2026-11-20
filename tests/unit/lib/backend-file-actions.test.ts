@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
 import {
+  createContainerFile,
   createContainerFolder,
+  createLocalFile,
   createLocalFolder,
   deleteContainerFile,
   deleteLocalFile,
@@ -104,6 +106,24 @@ describe("file action backend wrappers", () => {
       environmentId: "env-local",
       filePath: "src/App.tsx",
       newName: "Main.tsx",
+    });
+  });
+
+  test("binds empty-file creation to an environment id", async () => {
+    await expect(createContainerFile("env-container", "src", "notes.md")).resolves.toBe(
+      "src/App.tsx",
+    );
+    await expect(createLocalFile("env-local", ".", "TODO.md")).resolves.toBe("src/App.tsx");
+
+    expect(invokeMock).toHaveBeenNthCalledWith(1, "create_container_file", {
+      environmentId: "env-container",
+      parentDirectory: "src",
+      fileName: "notes.md",
+    });
+    expect(invokeMock).toHaveBeenNthCalledWith(2, "create_local_file", {
+      environmentId: "env-local",
+      parentDirectory: ".",
+      fileName: "TODO.md",
     });
   });
 

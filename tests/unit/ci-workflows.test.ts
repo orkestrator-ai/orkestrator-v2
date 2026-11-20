@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GUARD_STAGE_TEST_FILES, TEST_GROUP_KEYS } from "../../scripts/test-all";
 
@@ -44,7 +45,12 @@ describe("CI workflow contracts", () => {
       (step) => step.id === "install-cache-keys",
     )!;
     expect(step.run).toContain("source /etc/os-release");
+    // GITHUB_OUTPUT is a real file: Bun may hand the child a socket for
+    // stdout, and opening /dev/stdout on a socket fails with ENXIO.
+    const outputDir = mkdtempSync(join(tmpdir(), "ci-cache-keys-"));
+    let runs = 0;
     const run = (release: string, image: string, day: string) => {
+      const outputFile = join(outputDir, `output-${runs++}`);
       const result = Bun.spawnSync(
         [
           "bash",
@@ -61,7 +67,7 @@ describe("CI workflow contracts", () => {
             BROWSER: "webkit",
             ImageVersion: image,
             CACHE_DAY: day,
-            GITHUB_OUTPUT: "/dev/stdout",
+            GITHUB_OUTPUT: outputFile,
           },
         },
       );
@@ -70,26 +76,29 @@ describe("CI workflow contracts", () => {
         stderr: "",
       });
       return Object.fromEntries(
-        result.stdout
-          .toString()
+        readFileSync(outputFile, "utf8")
           .trim()
           .split("\n")
           .map((line) => line.split("=")),
       );
     };
-    const first = run("24.04", "20261118.1", "2026-11-19");
-    const nextImage = run("24.04", "20261119.1", "2026-11-19");
-    const nextRelease = run("26.04", "20261119.1", "2026-11-19");
-    const nextDay = run("26.04", "20261119.1", "2026-11-20");
+    try {
+      const first = run("24.04", "20261118.1", "2026-11-19");
+      const nextImage = run("24.04", "20261119.1", "2026-11-19");
+      const nextRelease = run("26.04", "20261119.1", "2026-11-19");
+      const nextDay = run("26.04", "20261119.1", "2026-11-20");
 
-    expect(run("24.04", "20261118.1", "2026-11-19")).toEqual(first);
-    expect(nextImage["browser-key"]).not.toBe(first["browser-key"]);
-    expect(nextImage["browser-key"]).toStartWith(first["browser-prefix"]!);
-    expect(nextRelease["browser-key"]).not.toStartWith(first["browser-prefix"]!);
-    expect(nextRelease["apt-key"]).not.toStartWith(first["apt-prefix"]!);
-    expect(nextDay["browser-key"]).toBe(nextRelease["browser-key"]);
-    expect(nextDay["apt-key"]).not.toBe(nextRelease["apt-key"]);
-    expect(nextDay["apt-key"]).toStartWith(nextRelease["apt-prefix"]!);
+      expect(run("24.04", "20261118.1", "2026-11-19")).toEqual(first);
+      expect(nextImage["browser-key"]).not.toBe(first["browser-key"]);
+      expect(nextImage["browser-key"]).toStartWith(first["browser-prefix"]!);
+      expect(nextRelease["browser-key"]).not.toStartWith(first["browser-prefix"]!);
+      expect(nextRelease["apt-key"]).not.toStartWith(first["apt-prefix"]!);
+      expect(nextDay["browser-key"]).toBe(nextRelease["browser-key"]);
+      expect(nextDay["apt-key"]).not.toBe(nextRelease["apt-key"]);
+      expect(nextDay["apt-key"]).toStartWith(nextRelease["apt-prefix"]!);
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 
   test("mobile shell restores separate caches and exercises the browser before saving it", () => {

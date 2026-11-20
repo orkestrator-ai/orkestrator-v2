@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import {
   ChevronRight,
   Copy,
+  FilePlus,
   Folder,
   FolderInput,
   FolderOpen,
@@ -108,6 +109,8 @@ interface FileTreeNodeProps {
   /** Asks to rename a file or folder in place; `isFolder` picks the dialog's wording. */
   onRequestRename?: (path: string, isFolder: boolean) => void;
   onCreateFolder?: (parentDirectory: string) => void;
+  /** Asks for a new empty file in `parentDirectory`. */
+  onCreateFile?: (parentDirectory: string) => void;
   movePending?: boolean;
 }
 
@@ -127,6 +130,7 @@ export const FileTreeNode = memo(function FileTreeNode({
   onRequestMove,
   onRequestRename,
   onCreateFolder,
+  onCreateFile,
   movePending = false,
 }: FileTreeNodeProps) {
   const expandedFolders = useFilesPanelStore((state) => state.expandedFolders);
@@ -222,7 +226,7 @@ export const FileTreeNode = memo(function FileTreeNode({
 
     return (
       <Collapsible open={isExpanded} onOpenChange={(open) => setFolderExpanded(item.path, open)}>
-        {onCreateFolder || onDeleteFolder || onRequestRename ? (
+        {onCreateFile || onCreateFolder || onDeleteFolder || onRequestRename ? (
           <ContextMenu>
             <ContextMenuTrigger
               asChild
@@ -232,6 +236,12 @@ export const FileTreeNode = memo(function FileTreeNode({
               <div>{folderRow}</div>
             </ContextMenuTrigger>
             <ContextMenuContent>
+              {onCreateFile && (
+                <ContextMenuItem disabled={movePending} onSelect={() => onCreateFile(item.path)}>
+                  <FilePlus />
+                  New file
+                </ContextMenuItem>
+              )}
               {onCreateFolder && (
                 <ContextMenuItem disabled={movePending} onSelect={() => onCreateFolder(item.path)}>
                   <FolderPlus />
@@ -309,6 +319,7 @@ export const FileTreeNode = memo(function FileTreeNode({
               onRequestMove={onRequestMove}
               onRequestRename={onRequestRename}
               onCreateFolder={onCreateFolder}
+              onCreateFile={onCreateFile}
               movePending={movePending}
             />
           ))}
@@ -380,6 +391,15 @@ export const FileTreeNode = memo(function FileTreeNode({
         {fileRow}
       </ContextMenuTrigger>
       <ContextMenuContent>
+        {onCreateFile && (
+          <ContextMenuItem
+            disabled={movePending}
+            onSelect={() => onCreateFile(workspaceParentDirectory(item.path))}
+          >
+            <FilePlus />
+            New file
+          </ContextMenuItem>
+        )}
         {onCreateFolder && (
           <ContextMenuItem
             disabled={movePending}

@@ -2,6 +2,7 @@ import { useMemo, useState, type DragEvent, type MouseEvent, type ReactNode } fr
 import { useFilesPanelStore } from "@/stores";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
+import { isDesignFilePath } from "@/components/design/design-open-file";
 import {
   externalFilesFromDataTransfer,
   FILE_DRAG_TYPE,
@@ -11,9 +12,10 @@ import {
   reportUnsupportedDroppedDirectories,
   workspaceParentDirectory,
 } from "./FileTreeNode";
+import { CreateFileDialog } from "./CreateFileDialog";
 import { CreateFolderDialog } from "./CreateFolderDialog";
 import { RenameFileDialog } from "./RenameFileDialog";
-import { Loader2, Folder, FolderPlus, FolderTree } from "lucide-react";
+import { FilePlus, Loader2, Folder, FolderPlus, FolderTree } from "lucide-react";
 import { useMediaQuery } from "@/hooks";
 import {
   Dialog,
@@ -53,6 +55,8 @@ interface AllFilesViewProps {
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
   onCopyFiles?: (files: File[], destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
+  /** Creates an empty file and resolves to its workspace path; refuses an existing name. */
+  onCreateFile?: (parentDirectory: string, fileName: string) => Promise<string>;
   onRename?: (
     path: string,
     newName: string,
@@ -63,24 +67,35 @@ interface AllFilesViewProps {
   onOpenFile?: (path: string, options?: CreateFileTabOptions) => void;
 }
 
-function WorkspaceCreateFolderMenu({
+/** The workspace root's own menu: what can be created at the root. */
+function WorkspaceCreateMenu({
   disabled,
-  onRequest,
+  onRequestFile,
+  onRequestFolder,
   children,
 }: {
   disabled: boolean;
-  onRequest?: (parentDirectory: string) => void;
+  onRequestFile?: (parentDirectory: string) => void;
+  onRequestFolder?: (parentDirectory: string) => void;
   children: ReactNode;
 }) {
-  if (!onRequest) return children;
+  if (!onRequestFile && !onRequestFolder) return children;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem disabled={disabled} onSelect={() => onRequest(".")}>
-          <FolderPlus />
-          New folder
-        </ContextMenuItem>
+        {onRequestFile && (
+          <ContextMenuItem disabled={disabled} onSelect={() => onRequestFile(".")}>
+            <FilePlus />
+            New file
+          </ContextMenuItem>
+        )}
+        {onRequestFolder && (
+          <ContextMenuItem disabled={disabled} onSelect={() => onRequestFolder(".")}>
+            <FolderPlus />
+            New folder
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -94,6 +109,7 @@ export function AllFilesView({
   onMove,
   onCopyFiles,
   onCreateFolder,
+  onCreateFile,
   onRename,
   movePending = false,
   onOpenFile,
@@ -114,6 +130,7 @@ export function AllFilesView({
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [moveSourcePaths, setMoveSourcePaths] = useState<string[] | null>(null);
   const [createParentDirectory, setCreateParentDirectory] = useState<string | null>(null);
+  const [createFileParentDirectory, setCreateFileParentDirectory] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ path: string; isFolder: boolean } | null>(
     null,
   );
@@ -216,6 +233,25 @@ export function AllFilesView({
     setCreateParentDirectory(null);
   };
 
+  const requestCreateFile = onCreateFile ? setCreateFileParentDirectory : undefined;
+
+  const handleCreateFile = async (parentDirectory: string, fileName: string) => {
+    if (!onCreateFile) return;
+    const created = await onCreateFile(parentDirectory, fileName);
+    if (parentDirectory !== ".") {
+      setFolderExpanded(parentDirectory, true);
+    }
+    setCreateFileParentDirectory(null);
+    // An empty design export cannot be imported. Keep its row selected.
+    setSelectedPaths([created]);
+    setAnchorPath(created);
+    if (isDesignFilePath(created)) return;
+    const openFile = createFileTab ?? onOpenFile;
+    if (!openFile) return;
+    openFile(created);
+    if (isMobile) closePanel();
+  };
+
   const handleRename = async (path: string, newName: string) => {
     if (!onRename) return;
     const isFolder = renameTarget?.path === path && renameTarget.isFolder;
@@ -291,7 +327,11 @@ export function AllFilesView({
   if (fileTree.length === 0) {
     return (
       <>
-        <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+        <WorkspaceCreateMenu
+          disabled={movePending}
+          onRequestFile={requestCreateFile}
+          onRequestFolder={requestCreateFolder}
+        >
           <div
             aria-label={onCopyFiles ? "Workspace root drop target" : undefined}
             onDragEnter={(event) => {
@@ -315,12 +355,18 @@ export function AllFilesView({
             <FolderTree className="mb-2 h-8 w-8 opacity-50" />
             <p className="text-sm">No files found</p>
           </div>
-        </WorkspaceCreateFolderMenu>
+        </WorkspaceCreateMenu>
         <CreateFolderDialog
           parentDirectory={createParentDirectory}
           isPending={movePending}
           onCancel={() => setCreateParentDirectory(null)}
           onCreate={handleCreateFolder}
+        />
+        <CreateFileDialog
+          parentDirectory={createFileParentDirectory}
+          isPending={movePending}
+          onCancel={() => setCreateFileParentDirectory(null)}
+          onCreate={handleCreateFile}
         />
       </>
     );
@@ -365,9 +411,13 @@ export function AllFilesView({
     <>
       <div className="flex min-h-40 select-none flex-col p-2">
         {workspaceRootTarget && (
-          <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+          <WorkspaceCreateMenu
+            disabled={movePending}
+            onRequestFile={requestCreateFile}
+            onRequestFolder={requestCreateFolder}
+          >
             {workspaceRootTarget}
-          </WorkspaceCreateFolderMenu>
+          </WorkspaceCreateMenu>
         )}
         {fileTree.map((node) => (
           <FileTreeNode
@@ -389,13 +439,18 @@ export function AllFilesView({
               onRename ? (path, isFolder) => setRenameTarget({ path, isFolder }) : undefined
             }
             onCreateFolder={requestCreateFolder}
+            onCreateFile={requestCreateFile}
             movePending={movePending}
           />
         ))}
-        {requestCreateFolder && (
-          <WorkspaceCreateFolderMenu disabled={movePending} onRequest={requestCreateFolder}>
+        {(requestCreateFile || requestCreateFolder) && (
+          <WorkspaceCreateMenu
+            disabled={movePending}
+            onRequestFile={requestCreateFile}
+            onRequestFolder={requestCreateFolder}
+          >
             <div className="min-h-16 flex-1" aria-label="Workspace empty space" />
-          </WorkspaceCreateFolderMenu>
+          </WorkspaceCreateMenu>
         )}
       </div>
       <CreateFolderDialog
@@ -403,6 +458,12 @@ export function AllFilesView({
         isPending={movePending}
         onCancel={() => setCreateParentDirectory(null)}
         onCreate={handleCreateFolder}
+      />
+      <CreateFileDialog
+        parentDirectory={createFileParentDirectory}
+        isPending={movePending}
+        onCancel={() => setCreateFileParentDirectory(null)}
+        onCreate={handleCreateFile}
       />
       <RenameFileDialog
         filePath={renameTarget?.path ?? null}

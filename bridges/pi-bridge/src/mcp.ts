@@ -50,6 +50,7 @@ import {
 } from "./mcp-config.js";
 import { getAgentDir } from "./pi-sdk.js";
 import { isObject, type JsonObject, type SessionState } from "./state.js";
+import { stateChanged } from "./observation.js";
 import { withTimeout } from "./timeout.js";
 
 const CONNECT_TIMEOUT_MS = 3_000;
@@ -455,7 +456,11 @@ export async function preparePiMcp(
       recordConnectFailure(state, server, error),
     ),
   );
-  if (!runtime.closed) runtime.inventory = connected;
+  if (!runtime.closed) {
+    runtime.inventory = connected;
+    // The runtime summary lists these servers.
+    stateChanged(state);
+  }
 }
 
 export function piMcpExtension(state: SessionState): (pi: ExtensionAPI) => void {

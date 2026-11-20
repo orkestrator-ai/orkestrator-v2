@@ -90,7 +90,7 @@ type LocalBackend = Pick<
 > & {
   /** Authenticated hello of the local backend; absent on test doubles. */
   hello?: (timeoutMs: number) => Promise<BackendHello | null>;
-} & Partial<Pick<BackendHttpClient, "setRelayedEvents" | "relayedEventReady">>;
+} & Partial<Pick<BackendHttpClient, "setRelayedEvents" | "relayedEventReady" | "listenPush">>;
 
 export type SecureStorage = {
   isAsyncEncryptionAvailable(): Promise<boolean>;
@@ -1828,6 +1828,12 @@ export class ConnectionManager {
   /** Settles once that event's stream is open, at once for a connection with no client. */
   relayedEventReady(connectionId: string, event: string): Promise<void> {
     return this.relayedEventClient(connectionId)?.relayedEventReady?.(event) ?? Promise.resolve();
+  }
+
+  pushStreamClient(connectionId: string): Pick<BackendHttpClient, "listenPush"> | null {
+    if (connectionId === LOCAL_CONNECTION_ID && !this.localBackendAvailable) return null;
+    const client = this.relayedEventClient(connectionId);
+    return client?.listenPush ? (client as Pick<BackendHttpClient, "listenPush">) : null;
   }
 
   private relayedEventClient(connectionId: string): LocalBackend | null {

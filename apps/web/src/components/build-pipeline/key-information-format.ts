@@ -3,6 +3,7 @@ import {
   hasKeyInformation,
   type BuildPipelineKeyInformation,
   type KeyInformationAuthor,
+  type KeyInformationCheckStatus,
   type KeyInformationIssueStatus,
   type KeyInformationSection,
   type KeyInformationTestResult,
@@ -33,6 +34,19 @@ export const KEY_INFORMATION_TEST_RESULT: Record<
   failed: { label: "Failed", icon: XCircle, className: "text-failure" },
   skipped: { label: "Skipped", icon: MinusCircle, className: "text-muted-foreground" },
   "not-run": { label: "Not run", icon: CircleDashed, className: "text-muted-foreground" },
+};
+
+/**
+ * A verification check's outcome. `not-checked` is deliberately neutral: a
+ * check the stage could not run is not a failure.
+ */
+export const KEY_INFORMATION_CHECK_STATUS: Record<
+  KeyInformationCheckStatus,
+  { label: string; icon: LucideIcon; className: string }
+> = {
+  passed: { label: "Passed", icon: CheckCircle2, className: "text-success" },
+  failed: { label: "Failed", icon: XCircle, className: "text-failure" },
+  "not-checked": { label: "Not checked", icon: CircleDashed, className: "text-muted-foreground" },
 };
 
 export const KEY_INFORMATION_ISSUE_STATUS: Record<

@@ -138,6 +138,8 @@ export interface TestNode {
   impersonate?: string;
   /** Replaces hello fields: a new version or generation, or `undefined` to omit one. */
   helloOverrides?: Record<string, unknown>;
+  /** Extra `gateway.connected` fields for each new stream (a push offer). */
+  connectedPayload?: () => Record<string, unknown>;
   online: boolean;
   portal: NodePortal;
   /**
@@ -198,9 +200,10 @@ export class TestNodeNetwork {
         start(controller) {
           own = controller;
           node.streams.add(controller);
+          const payload = { status: "fresh", ...node.connectedPayload?.() };
           controller.enqueue(
             new TextEncoder().encode(
-              `id: c1\ndata: ${JSON.stringify({ event: "gateway.connected", payload: { status: "fresh" } })}\n\n`,
+              `id: c1\ndata: ${JSON.stringify({ event: "gateway.connected", payload })}\n\n`,
             ),
           );
         },

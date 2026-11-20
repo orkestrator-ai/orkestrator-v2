@@ -748,6 +748,24 @@ export const ToolDetailsSchema = openRecord({
   fileDataUrl: optionalString,
 });
 
+/**
+ * `get_native_agent_tool_output` (`native-agent-tool-output.ts`): one bounded
+ * slice of a tool call's output, or `missing` / `expired`.
+ */
+export const ToolOutputReadSchema = openRecord({
+  status: Schema.String,
+  text: optionalString,
+  start: Schema.optionalKey(Schema.Number),
+  end: Schema.optionalKey(Schema.Number),
+  totalBytes: Schema.optionalKey(Schema.Number),
+  truncatedBefore: Schema.optionalKey(Schema.Boolean),
+  complete: Schema.optionalKey(Schema.Boolean),
+  startAnchor: optionalString,
+  endAnchor: optionalString,
+  reset: Schema.optionalKey(Schema.Boolean),
+  toolError: optionalString,
+});
+
 /** `refresh_native_agent_commands`: the outcome and the projection after it. */
 export const CommandRefreshResultSchema = openRecord({
   outcome: Schema.String,

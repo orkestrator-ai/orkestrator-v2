@@ -40,6 +40,7 @@ import {
 } from "./change-evidence.js";
 import { applyCommandChanges } from "./translate.js";
 import { chargeTranscript, noteRowRevised } from "./transcript.js";
+import { revisionChanged } from "./observation.js";
 
 /** Pi's built-in shell tools. Neither has a background mode to skip. */
 const SHELL_TOOLS = new Set(["bash", "powershell"]);
@@ -223,7 +224,7 @@ export async function overlayCommandChanges(
         applied += 1;
       }
     }
-    if (applied > 0) state.revision += 1;
+    if (applied > 0) revisionChanged(state);
     await Promise.all(copies);
   } catch {
     // A lost overlay costs badges, never the resume.

@@ -331,6 +331,10 @@ test("a paused copy refuses file writers and new workers before deleting the sou
         "create_local_folder",
         { environmentId: environment.id, parentDirectory: "", folderName: "new" },
       ],
+      [
+        "create_local_file",
+        { environmentId: environment.id, parentDirectory: ".", fileName: "new.txt" },
+      ],
     ] as const)
       await expect(
         Promise.resolve().then(() => commands.get(command)!(args, context)),

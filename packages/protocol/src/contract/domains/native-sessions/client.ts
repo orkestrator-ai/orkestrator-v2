@@ -9,7 +9,7 @@
  * (`api.get_native_agent_session(args)`), plus the domain's two capability
  * reads:
  *
- * - **Versions 5, 4, 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
+ * - **Versions 6, 5, 4, 3, 2 and 1** (a node whose hello advertises `native-sessions`): calls are
  *   typed by their definitions, carry the envelope (version and the critical
  *   keys the arguments hold), and results are decoded with the command's
  *   schema. Both capability commands are folded into the version: every
@@ -123,10 +123,27 @@ function checkFailureRetry(args: unknown): void {
   }
 }
 
-function currentApi(call: CommandCall, guardedFailureRetry = false): NativeSessionsApi {
+function checkToolOutputOccurrence(args: unknown): void {
+  if (args && typeof args === "object" && "messageId" in args && args.messageId !== undefined) {
+    throw new UnsupportedFieldError({
+      message: "This machine needs an update before it can follow a tool output occurrence.",
+      domain: nativeSessionsDomain.name,
+      field: "messageId",
+    });
+  }
+}
+
+function currentApi(
+  call: CommandCall,
+  guardedFailureRetry = false,
+  toolOutputOccurrence = false,
+): NativeSessionsApi {
   return Object.freeze({
     ...commandApi(async (command, args) => {
       if (!guardedFailureRetry) checkFailureRetry(args);
+      if (!toolOutputOccurrence && command.name === "get_native_agent_tool_output") {
+        checkToolOutputOccurrence(args);
+      }
       return call(command, args as ArgsOf<typeof command>);
     }),
     handoffCapabilities: async () => NATIVE_SESSIONS_HANDOFF_CAPABILITIES,
@@ -143,6 +160,7 @@ function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSes
   return Object.freeze({
     ...commandApi(async (command, args) => {
       checkFailureRetry(args);
+      if (command.name === "get_native_agent_tool_output") checkToolOutputOccurrence(args);
       return context.invoke(command.name, args as Readonly<Record<string, unknown>> | undefined);
     }),
     handoffCapabilities: async () => {
@@ -174,6 +192,7 @@ function legacyApi(_call: CommandCall, context: DomainAdapterContext): NativeSes
 }
 
 export const nativeSessionsClient = domainClient(nativeSessionsDomain, {
+  6: (call) => currentApi(call, true, true),
   5: (call) => currentApi(call, true),
   // Older peers cannot verify that the requested failure is still current.
   4: (call) => currentApi(call),

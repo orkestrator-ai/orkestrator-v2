@@ -20,6 +20,7 @@ import { json, route } from "./http.js";
 import { settleIdleDetaches, sweepIdleSessions } from "./idle-detach.js";
 import { denyAllApprovals } from "./interactions.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
+import { observationHub } from "./observation.js";
 import { sessions } from "./state.js";
 
 const IDLE_SWEEP_MS = 60 * 1000;
@@ -75,6 +76,8 @@ async function releaseEverything(): Promise<void> {
     settleIdleDetaches(),
   ]);
   await replayRecorder?.close();
+  // An open observe stream would otherwise hold `server.close` forever.
+  observationHub.close();
   if (!server.listening) return;
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }

@@ -367,6 +367,15 @@ export function createFilesSessionsApi(client: BackendClient) {
     });
   }
 
+  /** Create an empty file inside an existing container workspace directory; never replaces one. */
+  async function createContainerFile(
+    environmentId: string,
+    parentDirectory: string,
+    fileName: string,
+  ): Promise<string> {
+    return filesDomain().create_container_file({ environmentId, parentDirectory, fileName });
+  }
+
   /** Copy a browser-selected host file into an existing environment directory. */
   async function copyExternalFile(
     environmentId: string,
@@ -637,6 +646,15 @@ export function createFilesSessionsApi(client: BackendClient) {
     });
   }
 
+  /** Create an empty file inside an existing local-worktree directory; never replaces one. */
+  async function createLocalFile(
+    environmentId: string,
+    parentDirectory: string,
+    fileName: string,
+  ): Promise<string> {
+    return filesDomain().create_local_file({ environmentId, parentDirectory, fileName });
+  }
+
   /** Update port mappings for an environment (requires restart to apply) */
   async function updatePortMappings(
     environmentId: string,
@@ -892,6 +910,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     moveContainerFile,
     renameContainerFile,
     createContainerFolder,
+    createContainerFile,
     copyExternalFile,
     getLocalGitStatusSnapshot,
     getEnvironmentDiffStats,
@@ -914,6 +933,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     moveLocalFile,
     renameLocalFile,
     createLocalFolder,
+    createLocalFile,
     updatePortMappings,
     updateEnvironmentAgentSettings,
     prepareEnvironmentAgentLaunch,
@@ -957,6 +977,7 @@ export const {
   moveContainerFile,
   renameContainerFile,
   createContainerFolder,
+  createContainerFile,
   copyExternalFile,
   getLocalGitStatusSnapshot,
   getEnvironmentDiffStats,
@@ -979,6 +1000,7 @@ export const {
   moveLocalFile,
   renameLocalFile,
   createLocalFolder,
+  createLocalFile,
   updatePortMappings,
   updateEnvironmentAgentSettings,
   prepareEnvironmentAgentLaunch,

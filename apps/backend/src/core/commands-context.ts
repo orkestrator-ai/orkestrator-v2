@@ -87,6 +87,8 @@ export type CommandContext = {
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
   nativeAgents?: NativeAgentService;
+  /** The push event layer (`core/push/`): its metrics; the subscribe command is the gateway's. */
+  push?: import("./push/index.js").BackendPush;
   suborks?: NativeAgentSuborkService;
   multiReviews?: MultiReviewService;
   /** Auto-merge of ready pull requests (`git/pr-auto-merge.ts`); absent in fixtures. */

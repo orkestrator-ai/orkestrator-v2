@@ -146,6 +146,16 @@ import {
 } from "./state.js";
 import { sessionActivityObservation } from "./session-activity.js";
 import {
+  everySessionStateChanged,
+  observationHub,
+  sessionChanged,
+  stateChanged,
+  stateReadContent,
+  stateRevisions,
+  transcriptChanged,
+} from "./state-revision.js";
+import { BRIDGE_KNOWN_STATE_REVISION_PARAM } from "@orkestrator/protocol/bridge-state-revision";
+import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
 } from "@orkestrator/protocol/session-activity-batch";
@@ -216,6 +226,12 @@ export async function route(
       return json(response, answer.status, answer.body);
     }
     if (await routeChangeEvidence(request, response, url)) return;
+    // The backend observer's content-free wakeup stream (state-revision.ts).
+    // Like `/activity`, it touches no liveness and attaches nothing.
+    if (url.pathname === "/event/subscribe" && request.method === "GET") {
+      observationHub.serve(request, response, url);
+      return;
+    }
     const handled = await routeGlobal(request, response, url);
     if (handled) return;
     return await routeSession(request, response, url, clientSignal);
@@ -314,6 +330,8 @@ async function routeGlobal(
     activeLogin?.cancel();
     activeLogin = null;
     await logout();
+    // A detached session's readiness reads the credential.
+    everySessionStateChanged();
     json(response, 200, await authStatus());
     return true;
   }
@@ -372,6 +390,7 @@ async function routeGlobal(
       await detachAgent(state);
       assertSessionOpen(state);
       state.readOnly = readOnly;
+      stateChanged(state);
     }
     // The backend stores the returned id the moment it sees 201, so the
     // session, its client key and its selections must already be something a
@@ -426,6 +445,7 @@ async function startLogin(response: ServerResponse): Promise<void> {
       .catch(() => undefined)
       .finally(() => {
         if (activeLogin === handle) activeLogin = null;
+        everySessionStateChanged();
       });
   }
   const loginUrl = await activeLogin.loginUrl.catch((error: unknown) => {
@@ -557,7 +577,21 @@ async function routeSession(
             // `/global/auth/login` returns the browser URL the tab opens.
             signIn: { kind: "browser-url" as const },
           };
-    return json(response, 200, publicStatus(state, readiness));
+    const body = publicStatus(state, readiness);
+    // The state revision covers this body and the two side routes the
+    // backend reads with it (state-revision.ts). Without the query the body
+    // is exactly what it was, plus `stateRevision`.
+    const answer = stateRevisions.answer(
+      state.id,
+      stateReadContent({
+        status: body,
+        approvals: approvalsBody(state),
+        interactions: interactionsBody(state),
+      }),
+      url.searchParams.get(BRIDGE_KNOWN_STATE_REVISION_PARAM),
+    );
+    if (answer.unchanged) return json(response, 200, answer.body);
+    return json(response, 200, { ...body, stateRevision: answer.revision });
   }
   if (action === "usage" && request.method === "GET") {
     const agent = await ensureAgent(state);
@@ -698,7 +732,7 @@ async function routeSession(
         severity: "warning",
         detail: `rewind-unpublished; ${error.code}`,
       });
-      state.revision += 1;
+      sessionChanged(state);
       return json(response, 200, { rewound: true, persisted: false });
     }
     return json(response, 200, { rewound: true });
@@ -709,14 +743,13 @@ async function routeSession(
       structuredOutput: state.structured.get(requestId) ?? null,
     });
   }
-  // The SDK runs headless and approves its own tool calls, so there is never a
-  // parked approval. Answering with an empty list keeps the backend's
-  // reconciliation loop correct instead of making it treat a 404 as a fault.
+  // Answering with an empty list keeps the backend's reconciliation loop
+  // correct instead of making it treat a 404 as a fault (`approvalsBody`).
   if (action === "approvals" && request.method === "GET") {
-    return json(response, 200, { approvals: [], revision: state.revision });
+    return json(response, 200, approvalsBody(state));
   }
   if (action === "interactions" && request.method === "GET") {
-    return json(response, 200, { interactions: [], revision: state.revision });
+    return json(response, 200, interactionsBody(state));
   }
   if (action === "prompt" && request.method === "POST") {
     return await handlePrompt(request, response, state, clientSignal);
@@ -939,7 +972,7 @@ async function handleConfig(
         await persistBarrier();
       } catch (error) {
         state.composer = previous;
-        state.revision += 1;
+        sessionChanged(state);
         throw error;
       }
     }
@@ -1110,7 +1143,7 @@ async function handlePrompt(
         local: true,
       });
     }
-    state.revision += 1;
+    transcriptChanged(state);
     schedulePersist();
     return json(response, 200, { accepted: true, local: true });
   }
@@ -1197,6 +1230,7 @@ async function dispatchClaimedPrompt(
       await detachAgent(state);
       assertSessionOpen(state);
       state.readOnly = readOnly;
+      stateChanged(state);
     }
     agent = await ensureAgent(state, { atTurnStart: true });
     assertSessionOpen(state);
@@ -1245,7 +1279,7 @@ async function dispatchClaimedPrompt(
         local: true,
       });
     }
-    state.revision += 1;
+    sessionChanged(state);
     boundTranscript(state);
     schedulePersist();
     return json(response, 202, { accepted: true, cancelled: true });
@@ -1268,7 +1302,7 @@ async function dispatchClaimedPrompt(
   state.currentTurnUsage = {};
   state.currentTurnOutput = schema ? "" : null;
   beginAssistantTurn(state);
-  state.revision += 1;
+  sessionChanged(state);
   boundTranscript(state);
   schedulePersist();
 
@@ -1318,7 +1352,7 @@ async function dispatchClaimedPrompt(
         sendFailed: true,
       });
     }
-    state.revision += 1;
+    sessionChanged(state);
     schedulePersist();
     // `detachAgent` nulls `state.agent` synchronously. Do not await the rest:
     // dispose, warm-workspace release and hosted-MCP close have no timeout, and
@@ -1400,7 +1434,7 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
     state.currentTurnUsage = {};
     state.currentTurnOutput = null;
     beginAssistantTurn(state);
-    state.revision += 1;
+    sessionChanged(state);
     schedulePersist();
 
     let handle: Awaited<ReturnType<typeof dispatchCompaction>>;
@@ -1415,7 +1449,7 @@ async function handleCompact(response: ServerResponse, state: SessionState): Pro
       state.dispatching = false;
       state.currentTurnUsage = undefined;
       state.currentRunModelId = undefined;
-      state.revision += 1;
+      sessionChanged(state);
       schedulePersist();
       // Matched on the words: a missing model is a `ConfigurationError` too.
       if (error instanceof Error && error.message.includes("no saved conversation")) {
@@ -1497,6 +1531,19 @@ function appendUserMessage(
   });
   chargeTranscript(state, Buffer.byteLength(prompt) + 256 * (images.length + 1));
   return messageId;
+}
+
+/**
+ * The SDK runs headless and approves its own tool calls, so there is never a
+ * parked approval or interaction. `revision` is the transcript token; the
+ * state revision leaves it out (state-revision.ts).
+ */
+function approvalsBody(state: SessionState): Record<string, unknown> {
+  return { approvals: [], revision: state.revision };
+}
+
+function interactionsBody(state: SessionState): Record<string, unknown> {
+  return { interactions: [], revision: state.revision };
 }
 
 function readBoundedString(value: unknown, limit: number, field: string): string | undefined {

@@ -51,6 +51,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./state.js";
+import { revisionChanged } from "./observation.js";
 
 /**
  * Whether a turn-scoped frame still has an owner to render into.
@@ -192,7 +193,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       break;
     case "compaction_start":
       state.compacting = true;
-      state.revision += 1;
+      revisionChanged(state);
       break;
     case "compaction_end":
       state.compacting = false;
@@ -205,7 +206,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     case "session_info_changed":
       if (nonBlank(event.name)) {
         state.title = boundText(event.name.trim(), 512);
-        state.revision += 1;
+        revisionChanged(state);
       }
       break;
     case "auto_retry_start":
@@ -634,7 +635,7 @@ function applyQueueUpdate(state: SessionState, event: JsonObject): void {
     steering: readStringList(event.steering),
     followUp: readStringList(event.followUp),
   };
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**
@@ -659,7 +660,7 @@ function applyQueueUpdate(state: SessionState, event: JsonObject): void {
 function applyCompaction(state: SessionState, event: JsonObject): void {
   settleCompactionRetry(state, event);
   if (event.aborted === true) {
-    state.revision += 1;
+    revisionChanged(state);
     return;
   }
   const message = currentAssistantMessage(state);
@@ -953,7 +954,7 @@ function applyRetryEnd(state: SessionState, event: JsonObject): void {
 function applyThinkingLevel(state: SessionState, level: unknown): void {
   if (!nonBlank(level) || state.composer.selectedReasoningId === level) return;
   state.composer = { ...state.composer, selectedReasoningId: level };
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**

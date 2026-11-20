@@ -1381,6 +1381,8 @@ export class CodexRuntimeSessions {
     if (policyRequested) session.policyPending = false;
     session.configurationRevision += 1;
     this.ctx.registry.touch(sessionId);
+    // `/config` is part of the state revision; the observe stream must hear of it.
+    this.ctx.options.emit({ type: "session.updated", sessionId });
     return (await this.persistSessionVerified(session)) ? "updated" : "memory-only";
   }
 
@@ -1942,6 +1944,26 @@ export class CodexRuntimeSessions {
     if (!session) return null;
     await this.ctx.callbacks.touchSession(sessionId);
     return {
+      ...this.configSnapshot(sessionId)!,
+      durable: await this.isSessionConfigPersisted(session),
+    };
+  }
+
+  /**
+   * The `/config` fields the backend's state read uses, for the state
+   * revision (to-do 8102 task 2): no touch, no disk read, and without
+   * `durable`, which the state read never takes.
+   */
+  configSnapshot(sessionId: string): {
+    model?: string;
+    modelReasoningEffort?: string;
+    mode: ConversationMode;
+    fastMode: boolean;
+    policy?: import("@orkestrator/protocol/native-agent").NativeAgentExecutionPolicy;
+  } | null {
+    const session = this.ctx.registry.getSession(sessionId);
+    if (!session) return null;
+    return {
       ...(session.config.model ? { model: session.config.model } : {}),
       ...(session.config.reasoningEffort
         ? { modelReasoningEffort: session.config.reasoningEffort }
@@ -1949,8 +1971,17 @@ export class CodexRuntimeSessions {
       mode: session.config.mode,
       fastMode: session.config.serviceTier === "fast",
       ...this.reportedPolicyField(session.config),
-      durable: await this.isSessionConfigPersisted(session),
     };
+  }
+
+  /**
+   * The session's transcript revision for observe frames: O(1), no touch.
+   * Moves with every change the transcript route reports.
+   */
+  transcriptRevision(sessionId: string): string | undefined {
+    const session = this.ctx.registry.getSession(sessionId);
+    if (!session) return undefined;
+    return `${this.ctx.options.engine.info().generation}.${session.contentEpoch}.${session.messageRevision}`;
   }
 
   /**

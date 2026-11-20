@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { RICH_KIND_FIXTURES } from "@orkestrator/protocol/testing/rich-interaction-fixtures";
 import {
   RICH_INTERACTION_KINDS,
@@ -306,6 +306,83 @@ test("deliverables show newest outputs with continuation and retry a first inter
       .filter((call) => call.command === "transcript_artifact_list_publications")
       .at(-1)?.args.beforeSequence,
   ).toBe(500);
+});
+
+test("discussing a comment targets the selected older deliverable revision", async () => {
+  const artifactId = "art-review";
+  const title = "Release summary";
+  const client = new FakeNodeClient({
+    invoke: {
+      rich_interactions_list: [],
+      rich_deliverables_list: [],
+      transcript_artifact_list_publications: (args: Record<string, unknown>) => ({
+        nextSequence: null,
+        publications: args.artifactId
+          ? []
+          : [2, 1].map((revision) => ({
+              ref: { artifactId, revision, title, kind: "chart", summary: `Draft ${revision}` },
+              conversationSequence: revision,
+              availability: "available",
+            })),
+      }),
+      rich_deliverable_update: (args: Record<string, unknown>) => ({
+        deliverableId: "deliverable-1",
+        logicalSessionKey: transcriptScope.logicalSessionKey,
+        artifactId,
+        pinned: false,
+        selectedRevision: args.selectedRevision,
+        revision: 1,
+        updatedAt: "2026-11-20T00:00:00.000Z",
+      }),
+      rich_interaction_compose: () => {
+        const { request, receipts } = record("feedback", true);
+        return { request, receipt: receipts[0] };
+      },
+    },
+  });
+  renderInNodeScope(
+    <RichTranscriptScopeContext.Provider value={transcriptScope}>
+      <DeliverablesPanel
+        environmentId={transcriptScope.environmentId}
+        logicalSessionKey={transcriptScope.logicalSessionKey}
+      />
+    </RichTranscriptScopeContext.Provider>,
+    { client },
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: title }));
+  const version = screen.getByRole<HTMLSelectElement>("combobox", { name: "Version" });
+  expect(version.value).toBe("2");
+  fireEvent.change(version, { target: { value: "1" } });
+  await screen.findByText("showing rev 1");
+  expect(screen.queryByRole("button", { name: "Discuss this version" }) === null).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+
+  const comment = screen.getByRole("group", { name: "New comment" });
+  const body = "Can we clarify the scope of this revision?";
+  fireEvent.change(within(comment).getByRole("textbox", { name: "Comment" }), {
+    target: { value: body },
+  });
+  fireEvent.click(within(comment).getByRole("button", { name: "Discuss" }));
+  await waitFor(() => expect(comment.isConnected).toBe(false));
+
+  expect(client.calls("rich_interaction_compose").map(({ args }) => args)).toEqual([
+    expect.objectContaining({
+      environmentId: transcriptScope.environmentId,
+      tabId: "tab-1",
+      kind: "feedback",
+      actionId: "discuss",
+      spec: {
+        target: {
+          source: { kind: "artifact", artifactId, revision: 1 },
+          location: { kind: "whole" },
+        },
+        entries: [],
+        resolved: false,
+      },
+      result: { body },
+    }),
+  ]);
 });
 
 test("a result revision keeps earlier decisions labelled with their original revision", async () => {

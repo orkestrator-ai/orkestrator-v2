@@ -201,12 +201,15 @@ not inside the artifact's verified source.
 | 12 | Widget results | Versioned candidate message through all hosts, host-owned review and submit | Declaration on the interaction, not in the artifact source hash |
 | 13 | Deliverables panel | Ledger-backed list, versions, pins, labels, accepted revision, comment (save or discuss), open interactions | No drag grouping UI (group field only) |
 | 14 | Evidence cards | Claims, evidence with provenance, asserted relevance, challenges | — |
-| 15 | Context tray | Removed from the composer (2026-11-20); `context-packet` requests already sent still render | No way to compose one |
+| 15 | Context tray | Removed from the composer (2026-11-20); `context-packet` requests already sent still render | No composer entry point |
 | 16 | Acceptance criteria | Agree/edit, evidence, human decisions bound to criterion hash, historical decisions, guided walkthrough with saved progress, immutable agreed definitions for agent edits | — |
 | 17 | Alternatives | Criterion-aligned comparison, unknown measurements, prefer/request evidence/prepare adoption at exact commit | No product command adopts code; adoption asks the agent for a reviewable change |
 | 18 | Workflow controls | Graph-run retry and confirmed whole-run stop with locked revision, owner and activation checks | Only graph runs have registered commands |
-| 19 | Point and talk | Removed from the composer (2026-11-20); `voice-request` requests already sent still render | No way to compose one |
+| 19 | Point and talk | Removed from the composer (2026-11-20); `voice-request` requests already sent still render | No composer entry point |
 | 20 | Demonstrations | Desktop recorder (semantic steps, never values, path-only routes, origin scope, bounds), retained review after a stop, trim, expected outcome | No keyframe screenshots; desktop only |
+
+The `rich_interaction_compose` workspace command still accepts `context-packet`
+and `voice-request` requests.
 
 ## Not done
 

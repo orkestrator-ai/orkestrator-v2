@@ -1,5 +1,7 @@
 # Agent accounts and sign-in (0003) validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/homes.ts`.
+
 - **ID:** 0740
 - **Status:** environmental
 - **Date observed:** 2026-10-24, node mbp3
@@ -48,7 +50,7 @@ tests and prose, so validation includes auto-merged changes.
 
 | Original conflicted file | Resolution |
 | --- | --- |
-| `apps/backend/src/core/agent-accounts/homes.ts` | Keep the branch's shared Claude credential lookup; discard the now-unused Keychain constant import. |
+| `apps/backend/src/core/agent-accounts-homes.ts` | Keep the branch's shared Claude credential lookup; discard the now-unused Keychain constant import. |
 | `apps/backend/src/core/commands-registry-accounts.ts` | Retain session-free sign-in status and main's machine-account, session-account and terminal sign-in commands. |
 | `apps/backend/src/core/commands-registry-accounts.test.ts` | Retain both sets of argument-validation and dispatch tests. |
 | `apps/backend/src/core/commands-runtime-state.ts` | Accept main's deletion; move the branch's explicit host Claude config-directory constant into the extracted `agent-credential-files.ts`. |

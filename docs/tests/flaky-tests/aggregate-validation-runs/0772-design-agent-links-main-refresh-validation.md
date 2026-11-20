@@ -1,5 +1,7 @@
 # Design-agent links main refresh validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0772
 - **Status:** environmental
 - **Date observed:** 2026-10-24, macOS arm64, Bun 1.4.3.
@@ -61,7 +63,7 @@ Every non-OpenCode failing Bun owner ultimately passed unchanged with `--paralle
 | `apps/backend/src/core/container-git-fetch-git.test.ts` | container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (5093.33 ms) | Passed unchanged (11.7 s). |
 | `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone (9702.50 ms) | Passed unchanged (24.5 s). |
 | `apps/backend/tests/container-replacement.test.ts` | replacement admission > migrate rootless budget refusal precedes source stop (failedCapacity=false) (5007.33 ms) | Passed unchanged (15.2 s). |
-| `apps/backend/src/core/agent-accounts/accounts.test.ts` | agent accounts > the same login cannot be added twice (305.22 ms) | Passed unchanged (6.4 s). |
+| `apps/backend/src/core/agent-accounts.test.ts` | agent accounts > the same login cannot be added twice (305.22 ms) | Passed unchanged (6.4 s). |
 | `apps/backend/src/core/conformance-execution-policy.test.ts` | execution policy conformance: opencode > host-auto-approve: host default: no sandbox, auto-approve (1204.88 ms) | Version assertion; separate final-owner result below. |
 | `apps/backend/src/core/conformance-execution-policy.test.ts` | execution policy conformance: opencode > host-ask: host with approvals on request (1435.54 ms) | Version assertion; separate final-owner result below. |
 | `apps/backend/src/core/conformance-execution-policy.test.ts` | execution policy conformance: opencode > host-deny: host with approvals denied (1348.79 ms) | Version assertion; separate final-owner result below. |
@@ -100,7 +102,7 @@ Each line is a separate logged suite. The disk-report final retry supplements it
 - `mise run test:logged -- --name design-links-owner-container-fetch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` → exit 0, 11.7 s.
 - `mise run test:logged -- --name design-links-owner-mermaid -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` → exit 0, 24.5 s.
 - `mise run test:logged -- --name design-links-owner-replacement -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-replacement.test.ts --parallel=1 --only-failures` → exit 0, 15.2 s.
-- `mise run test:logged -- --name design-links-owner-agent-accounts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-accounts/accounts.test.ts --parallel=1 --only-failures` → exit 0, 6.4 s.
+- `mise run test:logged -- --name design-links-owner-agent-accounts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1 --only-failures` → exit 0, 6.4 s.
 - `mise run test:logged -- --name design-links-owner-disk-final -- bun test ./tests/unit/disk-report.test.ts --parallel=1 --only-failures` → exit 0, 2.2 s.
 
 ## Component-browser follow-up

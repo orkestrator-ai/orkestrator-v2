@@ -1,5 +1,7 @@
 # Modal-width main-merge validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0630
 - **Status:** open
 - **Observed:** 2026-10-21
@@ -49,7 +51,7 @@ passed on rerun:
 | `tests/unit/disk-report.test.ts` | Five-second timeout, subprocess status null | Passed in a sequential two-owner run with Pi vendoring; the Pi case still failed. Related case 0259. |
 | `apps/web/src/components/chat/rich-transcript.long-fixture.test.tsx` | `bounded concurrency and queues; caches converge within bounds over 20 scroll/expand cycles` exceeded 120 seconds | Whole owner passed alone in 44.1 seconds. |
 | `apps/backend/tests/tmux-commands.test.ts` | `generated blocking hooks use an integer timeout and fail closed on expiry` expected three timeout records, observed two | Whole owner passed alone in 16.2 seconds. Related case 0141. |
-| `apps/backend/src/core/agent-accounts/accounts.test.ts` | `the same login cannot be added twice` left an extra account directory | Whole owner passed alone in 8.8 seconds. Related case 0239. |
+| `apps/backend/src/core/agent-accounts.test.ts` | `the same login cannot be added twice` left an extra account directory | Whole owner passed alone in 8.8 seconds. Related case 0239. |
 
 Reruns used `mise run test:logged` and `bun test` with explicit file paths and
 `--parallel=1 --only-failures`; the backend owner used the Node-only preload.

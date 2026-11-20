@@ -10,7 +10,7 @@
 // surface, because each reaches back into code that imports this file, so
 // re-exporting it here would close a runtime import cycle. Each has one
 // importer, which imports it directly:
-// - `github-cli-setup.ts` (imports `agent-accounts/login.ts` and
+// - `github-cli-setup.ts` (imports `agent-accounts/index.ts` and
 //   `host-tools.ts`), for `commands-registry-tools.ts`;
 // - `github-clone-browser.ts` (imports `commands-error-text.ts`), for
 //   `commands-registry-projects.ts`;

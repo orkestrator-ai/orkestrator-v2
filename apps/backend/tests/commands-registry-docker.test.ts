@@ -562,7 +562,7 @@ exit 1
           const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
           // Each start syncs only the GitHub credential: no agent platform is
           // enabled, so no Claude restrict or sign-out drop is piped (those
-          // payloads are owned by agent-accounts-containers*.test.ts).
+          // payloads are owned by agent-accounts/containers*.test.ts).
           expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
           const calls = await fs.readFile(logs.all, "utf8");
           expect(calls.match(/start container-1/g)).toHaveLength(2);

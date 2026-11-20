@@ -29,6 +29,7 @@ import type {
 } from "@orkestrator/protocol/capability-resources-api";
 
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
+import { capabilityLaunchKey } from "../src/core/capabilities/launch-records.js";
 import { OrkestratorBackend } from "../src/core/index.js";
 import type { CapabilityService } from "../src/core/capabilities/service.js";
 
@@ -155,9 +156,12 @@ test("capabilities across two real backends: delivery, offline catch-up, leaf la
     ).toBeDefined();
 
     // A leaf launch is resolved and recorded by the command node.
-    const launched = await capabilities(leaf).preflightSession({
+    const launchTarget = {
       environmentId: "env-1",
-      provider: "cursor",
+      provider: "cursor" as const,
+    };
+    const launched = await capabilities(leaf).preflightSession({
+      ...launchTarget,
       sessionKey: "leaf-session-1",
     });
     expect(launched?.resolvedPackages.map((entry) => entry.id)).toEqual([
@@ -176,7 +180,8 @@ test("capabilities across two real backends: delivery, offline catch-up, leaf la
         };
       }
     ).context.storage.capabilities.loadCapabilityState();
-    expect(commandState.launches[`${leafId}|leaf-session-1`]).toMatchObject({
+    const launchKey = capabilityLaunchKey({ nodeId: leafId, ...launchTarget }, "leaf-session-1");
+    expect(commandState.launches[launchKey]).toMatchObject({
       resolvedBy: (await command.invoke<{ nodeId: string }>("get_node_status")).nodeId,
     });
 

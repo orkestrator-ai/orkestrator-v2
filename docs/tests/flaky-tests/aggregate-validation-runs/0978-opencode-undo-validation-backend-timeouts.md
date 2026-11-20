@@ -29,7 +29,7 @@ Each rerun selected exactly one complete owner with the Node preload, from
 `apps/backend`:
 
 ```sh
-bun test --preload ../../tests/setup-node.ts ./src/core/coordinator/service.test.ts
+bun test --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts
 bun test --preload ../../tests/setup-node.ts ./src/core/design/cross-process.test.ts
 bun test --preload ../../tests/setup-node.ts ./src/core/looped-review-service.test.ts
 ```

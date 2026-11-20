@@ -16,7 +16,7 @@ Neither this test nor `coordinator-sweep.ts` is changed by the branch.
 The complete unchanged owning file passed alone (exit 0, 14.2 s):
 
 ```sh
-mise run test:logged -- --name isolate-coordinator-sweep -- bun test --cwd apps/backend ./src/core/coordinator/sweep.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name isolate-coordinator-sweep -- bun test --cwd apps/backend ./src/core/coordinator-sweep.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: host temporary files
@@ -37,7 +37,7 @@ bridge group two package slots with one Bun worker per bridge).
 The complete unchanged owning file passed alone (exit 0, 3.3 s):
 
 ```sh
-mise run test:logged -- --name address-coordinator-recorded-owner -- bun test --cwd apps/backend ./src/core/coordinator/sweep.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name address-coordinator-recorded-owner -- bun test --cwd apps/backend ./src/core/coordinator-sweep.test.ts --parallel=1 --only-failures
 ```
 
 Original evidence remains in
@@ -73,10 +73,10 @@ No assertion, deadline or production code changed.
 - Reproduced before the fix: a temporary `await Bun.sleep(300)` after the
   spies were installed failed the case with the CI message (expected 1,
   received 2; 367.68 ms) via `bun test --cwd apps/backend
-  ./src/core/coordinator/sweep.test.ts -t "runs the mailbox sync"`.
+  ./src/core/coordinator-sweep.test.ts -t "runs the mailbox sync"`.
 - With the fix and the same delay: passed. Delay removed afterwards.
 - Stress: eight concurrent runs of the case pinned to two cores with two
   busy-loop processes: 8 of 8 passed. The complete owning file passed through
   `mise run test:logged -- --name coordinator-sweep -- bun test --cwd
-  apps/backend ./src/core/coordinator/sweep.test.ts --parallel=1
+  apps/backend ./src/core/coordinator-sweep.test.ts --parallel=1
   --only-failures` (1.1 s).

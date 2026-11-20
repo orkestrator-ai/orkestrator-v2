@@ -8,7 +8,7 @@
 
 During the focused checks for security report L7/L9 (branch
 `git-security-scans-a144ae01591c-r1`), this case failed in
-`mise run test:logged -- --name backend-related -- bash -c "cd apps/backend && bun test ./src/core/change-tracking ./src/core/commands-agent-support.test.ts ./src/core/commands-agent-support-branch-rename.test.ts ./tests/commands-environment-fork.test.ts ./tests/commands-registry-environments-create.test.ts ./src/core/git/fsmonitor.test.ts ./src/core/public-api ./src/core/commands-files-local-scan.test.ts ./src/core/git/url-option-injection.test.ts ./src/core/commands-project-creation.test.ts ./src/core/worktrees/snapshots-git.test.ts ./src/core/coordinator/worker-changes.integration.test.ts --parallel=6 --only-failures"`
+`mise run test:logged -- --name backend-related -- bash -c "cd apps/backend && bun test ./src/core/change-tracking ./src/core/commands-agent-support.test.ts ./src/core/commands-agent-support-branch-rename.test.ts ./tests/commands-environment-fork.test.ts ./tests/commands-registry-environments-create.test.ts ./src/core/git/fsmonitor.test.ts ./src/core/public-api ./src/core/commands-files-local-scan.test.ts ./src/core/git/url-option-injection.test.ts ./src/core/commands-project-creation.test.ts ./src/core/worktrees/snapshots-git.test.ts ./src/core/coordinator-worker-changes.integration.test.ts --parallel=6 --only-failures"`
 (56 files, 6 isolated workers; 1,252 passed, 2 failed). It failed after
 127.22 ms: the **first** `add_project` promise rejected with
 `A project already uses this local path: …/shared-destination`, thrown from the

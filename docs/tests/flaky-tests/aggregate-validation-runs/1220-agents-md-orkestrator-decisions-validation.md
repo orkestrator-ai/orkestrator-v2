@@ -145,7 +145,7 @@ none changes assertions, skips or deadlines.
 | Owner | Owning-file command after wrapper | Result |
 | --- | --- | --- |
 | Environment move | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` | 32 passed, 6 failed, 5 errors; 93.8 s; same real-Git deadline/cleanup class recorded above |
-| Coordinator service | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator/service.test.ts --parallel=1 --only-failures` | Passed, 49.2 s; case 0165 updated |
+| Coordinator service | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` | Passed, 49.2 s; case 0165 updated |
 | Profile cleanup | `bun test --cwd apps/desktop ./scripts/dev/profile-cleanup.test.ts --parallel=1 --only-failures` | 20 passed, 2 failed; unexpected keychainWarning fields, 3.1 s |
 | Copy helper | `bun test ./tests/unit/migrate-copy.test.ts --parallel=1 --only-failures` | 10 passed, 2 failed; extract status 2 instead of 0, 9.0 s |
 | Claude lifecycle | `bun test --cwd bridges/claude-bridge ./src/services/session-manager-lifecycle.test.ts --parallel=1 --only-failures` | 38 passed, 1 failed; missing sessionManagerTestHome, 1.2 s |

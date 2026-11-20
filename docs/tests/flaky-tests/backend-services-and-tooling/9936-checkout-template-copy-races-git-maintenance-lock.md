@@ -107,7 +107,7 @@ The fix proposed under Hypothesis still applies; it was not attempted here.
   `maintenance.lock` error inside `MailWorld.create()` (28 pass, 1 fail),
   then passed alone twice: `mise run test:logged -- --name
   deliver-now-rerun-N -- mise exec -- bun --cwd=apps/backend test --preload
-  ../../tests/setup-node.ts src/core/coordinator/deliver-now.test.ts
+  ../../tests/setup-node.ts src/core/coordinator-deliver-now.test.ts
   --parallel=1` (11.9 s each). Failing alone under load fits the hypothesis
   (the race is with Git's detached maintenance, not with sibling test files).
 - **Evidence:** `orkestrator-test-run.tVTJUs/` under the host temporary

@@ -76,7 +76,7 @@ it does not touch this file or the container create path.
   Received true: the same fake-Docker `ps ` entry as the first observation.
 - **Isolated rerun:** the aggregate runner's rerun budget was spent before it
   reached this file. A manual
-  `mise run test:logged -- --name rerun-backend-alone -- bun --cwd=apps/backend test ./src/core/coordinator/status-wakes-pr.test.ts ./tests/project-git-mirror-create.test.ts ./tests/container-rootless-host-ports-create.test.ts`
+  `mise run test:logged -- --name rerun-backend-alone -- bun --cwd=apps/backend test ./src/core/coordinator-status-wakes-pr.test.ts ./tests/project-git-mirror-create.test.ts ./tests/container-rootless-host-ports-create.test.ts`
   passed (19.4 s).
 
 Status stays open; no assertion, timeout or skip changed.

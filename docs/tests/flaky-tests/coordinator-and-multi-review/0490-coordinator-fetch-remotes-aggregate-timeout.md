@@ -16,7 +16,7 @@
   timeout, beside 0165 (5260.49 ms) in the same file and run. Workspace
   artifact:
   `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.UQLOD6/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
-- **Isolated rerun:** `bun test src/core/coordinator/service.test.ts` from
+- **Isolated rerun:** `bun test src/core/coordinator-service.test.ts` from
   `apps/backend` failed the same two cases once more while the load average
   was 69, then passed the whole unchanged file (52 pass, 0 fail, 19.6 s).
 

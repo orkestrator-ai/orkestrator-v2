@@ -19,7 +19,7 @@ rerunning their owning files separately:
 
 | Test | Owning file under `apps/backend/` | Aggregate symptom |
 | --- | --- | --- |
-| `project coordinator > retention never removes an open conversation` | `src/core/coordinator/service.test.ts` | Five-second deadline, reported at 5196.81 ms; timeout teardown also reported `SQLITE_IOERR_VNODE`. |
+| `project coordinator > retention never removes an open conversation` | `src/core/coordinator-service.test.ts` | Five-second deadline, reported at 5196.81 ms; timeout teardown also reported `SQLITE_IOERR_VNODE`. |
 | `continues merged environment cleanup when the remote head branch is already deleted` | `tests/commands-registry-environments.test.ts` | Five-second deadline, reported at 5234.80 ms. |
 | `agent-test container mounts come from the isolated profile paths, not the host home` | `tests/commands-registry-environments-status.test.ts` | At 225.08 ms, the fake Docker log contained only image inspection, without the expected Claude config mount. |
 
@@ -41,7 +41,7 @@ mise run test:logged -- --name <name> -- bun test --cwd apps/backend --preload .
 
 | Name | Path | Result |
 | --- | --- | --- |
-| `coordinator-owner` | `./src/core/coordinator/service.test.ts` | Passed, exit 0, 15.4 s |
+| `coordinator-owner` | `./src/core/coordinator-service.test.ts` | Passed, exit 0, 15.4 s |
 | `design-owner` | `./src/core/design/service.test.ts` | Passed, exit 0, 3.4 s |
 | `cleanup-owner` | `./tests/commands-integration.test.ts` | Passed, exit 0, 37.6 s |
 | `environments-owner` | `./tests/commands-registry-environments.test.ts` | Passed, exit 0, 26.5 s |

@@ -29,8 +29,8 @@ Backend failures (exact names and observed durations):
 | `src/core/opencode-host-start.test.ts` | (fail) local OpenCode server starts on one host > shutdown between database-lock attempts prevents a retry spawn [540.42ms] |
 | `src/core/environment-move.test.ts` | (fail) restart recovery re-links submodules of an adopted or abandoned copy [5040.52ms] |
 | `src/core/transcript-artifacts/content-server.engines.test.ts` | (fail) executable document policy in firefox > (unnamed) [5000.53ms] |
-| `src/core/coordinator/service.test.ts` | (fail) project coordinator > Git status permits confirmed dirty branch switches and detects external context changes [5048.10ms] |
-| `src/core/coordinator/service.test.ts` | (fail) project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe [5071.17ms] |
+| `src/core/coordinator-service.test.ts` | (fail) project coordinator > Git status permits confirmed dirty branch switches and detects external context changes [5048.10ms] |
+| `src/core/coordinator-service.test.ts` | (fail) project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe [5071.17ms] |
 | `src/core/transcript-artifacts/mermaid-render.test.ts` | (fail) mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone [13012.69ms] |
 | `src/core/change-tracking/review-regressions.test.ts` | (fail) untracked inventory caps publish non-exact Git scope totals [5726.86ms] |
 | `src/core/change-tracking/review-regressions.test.ts` | (fail) advancing provisional endpoints releases obsolete thread-latest pins for collection [777.79ms] |
@@ -45,7 +45,7 @@ Backend owners were run separately, one file per command, using `mise run test:l
 | Owning file | Separate-file result |
 | --- | --- |
 | `src/core/transcript-artifacts/content-server.engines.test.ts` | Failed: 38 passed, one Firefox favicon sink hit; see 0697 |
-| `src/core/coordinator/service.test.ts` | Pass |
+| `src/core/coordinator-service.test.ts` | Pass |
 | `src/core/transcript-artifacts/mermaid-render.test.ts` | Pass |
 | `src/core/change-tracking/review-regressions.test.ts` | Pass |
 | `src/core/container-git-fetch-git.test.ts` | Pass |

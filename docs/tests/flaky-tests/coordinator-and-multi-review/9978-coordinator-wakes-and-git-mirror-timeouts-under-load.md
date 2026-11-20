@@ -148,7 +148,7 @@ it does not touch the coordinator wake or git-mirror code.
   `coordinator-status-wakes-pr.test.ts` waited for host capacity and ended
   INCOMPLETE at its 600 s budget with no verdict; `project-git-mirror-create`
   was not rerun. A manual
-  `mise run test:logged -- --name rerun-backend-alone -- bun --cwd=apps/backend test ./src/core/coordinator/status-wakes-pr.test.ts ./tests/project-git-mirror-create.test.ts ./tests/container-rootless-host-ports-create.test.ts`
+  `mise run test:logged -- --name rerun-backend-alone -- bun --cwd=apps/backend test ./src/core/coordinator-status-wakes-pr.test.ts ./tests/project-git-mirror-create.test.ts ./tests/container-rootless-host-ports-create.test.ts`
   passed both owners (19.4 s).
 
 Status stays open; no assertion, timeout or skip changed.
@@ -165,7 +165,7 @@ validated at `e7e25352f`) ran `mise run test:logged -- --name review-default-tes
   The branch changes no backend code. `mise run flaky:recurrence -- 9978 --base 963ffa6ab`
   answered "open. Record the failure as a recurrence".
 - **Evidence:** `validation-04.stderr.txt` under `.orkestrator/review-artifacts/review-validation-63babffd-7be4-45f4-9eba-00d573593669/`.
-- **Isolated rerun:** `mise run test:logged -- --name pr-wakes-alone -- bun test --cwd apps/backend src/core/coordinator/status-wakes-pr.test.ts --only-failures`
+- **Isolated rerun:** `mise run test:logged -- --name pr-wakes-alone -- bun test --cwd apps/backend src/core/coordinator-status-wakes-pr.test.ts --only-failures`
   passed (7.3 s).
 
 Status stayed open; no assertion, timeout or skip changed. This run predates the resolution below (its base, `963ffa6ab`, lacks the fix).

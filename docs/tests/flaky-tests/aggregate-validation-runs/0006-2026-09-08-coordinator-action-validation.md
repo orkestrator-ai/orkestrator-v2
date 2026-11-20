@@ -57,7 +57,7 @@
 - **Isolated reruns:** exit 0 for all three logged commands below. Each used
   one worker, so owning files ran separately, with no concurrent file pool:
   - `bun run test:logged -- --name composite-timeout-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./apps/backend/tests/commands-integration.test.ts ./apps/backend/tests/commands-registry-pr.test.ts ./apps/backend/tests/commands-io-coverage.test.ts --parallel=1 --only-failures` (37.8s).
-  - `bun run test:logged -- --name composite-backend-timeout-owners -- bun test --cwd apps/backend src/core/commands-state-sync.test.ts src/core/coordinator/service.test.ts --parallel=1 --only-failures` (17.6s).
+  - `bun run test:logged -- --name composite-backend-timeout-owners -- bun test --cwd apps/backend src/core/commands-state-sync.test.ts src/core/coordinator-service.test.ts --parallel=1 --only-failures` (17.6s).
   - `bun run test:logged -- --name composite-acp-timeout-owner -- bun test ./bridges/acp-bridge/src/acp-http.test.ts --parallel=1 --only-failures` (10.1s).
 - **Evidence:** `/tmp/orkestrator-test-run.Cun1t8/summary.json` and its compressed
   group logs. Host contention is a hypothesis supported by broad elapsed-time

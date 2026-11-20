@@ -9,6 +9,21 @@ export function isMissingRemoteRefFailure(error: unknown): boolean {
   );
 }
 
+/**
+ * The fetch reached the remote but could not move a local ref, because another
+ * Git process in the same repository was updating it at that moment (git
+ * prints `cannot lock ref '<ref>': is at X but expected Y`, or
+ * `... Unable to create '<ref>.lock': File exists`, and marks the ref
+ * `unable to update local ref`). Worktrees of one clone share their refs, so a
+ * background fetch races the project's own refresh, another worktree's fetch
+ * and anything the user runs by hand. A retry usually finds the ref already
+ * current; a stale lock file fails the retry as well.
+ */
+export function isRefLockContentionFailure(error: unknown): boolean {
+  if (!(error instanceof CommandFailedError) || error.timedOut) return false;
+  return /cannot lock ref|unable to update local ref/i.test(`${error.stderr}\n${error.message}`);
+}
+
 /** Keep the executable's original shell spelling, including quoted paths. */
 function openSshExecutable(command: string, variant: string | undefined): string | null {
   // Recognize literal executables without rewriting expansions or compound commands.

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { GitFetchScheduler } from "../src/core/git/fetch-scheduler";
+import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
+import { CommandFailedError } from "../src/core/shell";
 
 /** A background fetch: one explicit remote-tracking ref, no FETCH_HEAD write. */
 const MAIN_REFSPEC = [
@@ -17,6 +19,9 @@ interface Harness {
   /** Holds the next fetch open until released. */
   block: () => () => void;
   failFetches: (shouldFail: boolean) => void;
+  /** Fails the next fetches, in order, with these errors. */
+  failNextFetches: (...errors: Error[]) => void;
+  metrics: RecurringWorkMetrics;
   /** Makes the common-dir resolve fail, as an old git or a non-repo would. */
   failResolve: (shouldFail: boolean) => void;
   setCommonDir: (worktreePath: string, commonDir: string) => void;
@@ -29,6 +34,8 @@ function createHarness(
     resolveTimeoutMs?: number;
   } = {},
 ): Harness {
+  const metrics = new RecurringWorkMetrics();
+  const queuedFailures: Error[] = [];
   const calls: string[][] = [];
   const timeouts: number[] = [];
   const fetches: string[][] = [];
@@ -43,6 +50,8 @@ function createHarness(
     ttlMs: options.ttlMs,
     fetchTimeoutMs: options.fetchTimeoutMs,
     resolveTimeoutMs: options.resolveTimeoutMs,
+    lockRetryDelayMs: 0,
+    metrics,
     now: () => clock.value,
     run: async (args, timeoutMs) => {
       calls.push(args);
@@ -59,6 +68,8 @@ function createHarness(
           pendingRelease = resolve;
         });
       }
+      const queued = queuedFailures.shift();
+      if (queued) throw queued;
       if (fetchFails) throw new Error("network down");
       return { stdout: "" };
     },
@@ -77,6 +88,10 @@ function createHarness(
     failFetches(shouldFail) {
       fetchFails = shouldFail;
     },
+    failNextFetches(...errors) {
+      queuedFailures.push(...errors);
+    },
+    metrics,
     failResolve(shouldFail) {
       resolveFails = shouldFail;
     },
@@ -184,6 +199,87 @@ describe("GitFetchScheduler", () => {
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
     // Otherwise an unreachable remote would be retried on every single read.
+    expect(harness.fetches).toHaveLength(1);
+  });
+
+  // Worktrees share their refs, so a background fetch races the project's own
+  // `fetch --prune origin` and anything the user runs. Git then refuses the ref
+  // update even though the fetch itself worked.
+  describe("when another git process holds the ref", () => {
+    const lockLost = () =>
+      new CommandFailedError("Command failed: git fetch", {
+        exitCode: 1,
+        stderr:
+          "error: cannot lock ref 'refs/remotes/origin/main': is at 1111111 but expected 2222222\n" +
+          " ! 2222222..3333333  main       -> origin/main  (unable to update local ref)\n",
+      });
+
+    test("retries once and records one successful attempt", async () => {
+      const harness = createHarness({ ttlMs: 60_000 });
+      harness.failNextFetches(lockLost());
+
+      await harness.scheduler.ensureFetched("/wt/a", "main");
+
+      expect(harness.fetches).toEqual([
+        ["-C", "/wt/a", "fetch", ...MAIN_REFSPEC],
+        ["-C", "/wt/a", "fetch", ...MAIN_REFSPEC],
+      ]);
+      const job = harness.metrics.snapshot().kinds["git-fetch-local"];
+      expect(job).toMatchObject({ started: 1, completed: 1, failed: 0 });
+    });
+
+    test("records a failure when the retry fails too, and still honours the ttl", async () => {
+      const harness = createHarness({ ttlMs: 60_000 });
+      harness.failNextFetches(lockLost(), lockLost());
+
+      await expect(harness.scheduler.ensureFetched("/wt/a", "main")).resolves.toBeUndefined();
+      await harness.scheduler.ensureFetched("/wt/a", "main");
+
+      // A stale lock file fails every attempt: one retry, then the TTL as before.
+      expect(harness.fetches).toHaveLength(2);
+      const job = harness.metrics.snapshot().kinds["git-fetch-local"];
+      expect(job).toMatchObject({ started: 1, completed: 0, failed: 1 });
+    });
+
+    test("concurrent callers share the retried fetch", async () => {
+      const harness = createHarness({ ttlMs: 60_000 });
+      harness.failNextFetches(lockLost());
+
+      await Promise.all([
+        harness.scheduler.ensureFetched("/wt/a", "main"),
+        harness.scheduler.ensureFetched("/wt/b", "main"),
+      ]);
+
+      expect(harness.fetches).toHaveLength(2);
+    });
+  });
+
+  test("does not retry a fetch that failed for any other reason", async () => {
+    const harness = createHarness();
+    harness.failNextFetches(
+      new CommandFailedError("Command failed: git fetch", {
+        exitCode: 128,
+        stderr: "fatal: couldn't find remote ref refs/heads/main\n",
+      }),
+    );
+
+    await harness.scheduler.ensureFetched("/wt/a", "main");
+
+    expect(harness.fetches).toHaveLength(1);
+    expect(harness.metrics.snapshot().kinds["git-fetch-local"]).toMatchObject({ failed: 1 });
+  });
+
+  test("does not retry a fetch that timed out", async () => {
+    const harness = createHarness();
+    harness.failNextFetches(
+      new CommandFailedError("Command timed out", {
+        timedOut: true,
+        stderr: "error: cannot lock ref 'refs/remotes/origin/main'\n",
+      }),
+    );
+
+    await harness.scheduler.ensureFetched("/wt/a", "main");
+
     expect(harness.fetches).toHaveLength(1);
   });
 

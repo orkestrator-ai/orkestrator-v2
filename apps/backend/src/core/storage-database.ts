@@ -10,11 +10,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import {
-  type BackgroundCheckpointer,
-  JOURNAL_SIZE_LIMIT_BYTES,
-  startBackgroundCheckpoints,
-} from "./storage-checkpointer.js";
+import { JOURNAL_SIZE_LIMIT_BYTES, startBackgroundCheckpoints } from "./storage-checkpointer.js";
 import {
   StorageDatabaseVersionError,
   StoreConflictError,
@@ -28,6 +24,7 @@ import {
   compareRowEntries,
   decompose,
   isUnchanged,
+  normalizeSqliteText,
   ownedCachedValues,
   rowId,
   stabilizePositions,
@@ -355,8 +352,7 @@ export class StorageDatabase {
   private readonly busyTimeoutMs: number;
   /** The connection's `synchronous` setting, restored after a lease commit. */
   private readonly synchronous: "NORMAL" | "FULL";
-  /** Runs this file's WAL checkpoints off the event loop, when enabled. */
-  private readonly checkpointer: BackgroundCheckpointer | null;
+  private readonly releaseCheckpointer: (() => void) | undefined;
   /** Times this connection's calls (`storage-slow-operations.ts`). */
   private readonly timing: SqliteConnectionTiming;
   /** The timer of a deferred scrub, while one is pending. */
@@ -449,9 +445,12 @@ export class StorageDatabase {
     this.unregisterCacheGauges =
       options.cacheGaugeRegistry?.addCacheSource("storage-row-cache", this) ?? (() => undefined);
     const name = storageDatabaseName(options.file ?? STORAGE_DATABASE_FILE);
-    this.checkpointer = options.backgroundCheckpoint
-      ? startBackgroundCheckpoints(this.db, this.path, name, () => this.closed)
-      : null;
+    if (options.backgroundCheckpoint) {
+      this.releaseCheckpointer = startBackgroundCheckpoints(this.db, this.path, name, () => {
+        if (this.hasDeferredScrub()) this.scrubDeletedContent();
+        return !this.hasDeferredScrub();
+      });
+    }
   }
 
   /**
@@ -482,11 +481,10 @@ export class StorageDatabase {
    */
   close(): void {
     if (this.closed) return;
-    this.checkpointer?.stop();
+    this.releaseCheckpointer?.();
     this.optimize();
     if (this.scrubRetry) {
-      clearTimeout(this.scrubRetry);
-      this.scrubRetry = null;
+      this.cancelScrubRetry();
       this.tryTruncateWal();
     }
     this.closed = true;
@@ -984,8 +982,8 @@ export class StorageDatabase {
           continue;
         }
         const owner = ownerOf && !row.collection ? ownerOf(JSON.parse(row.value)) : undefined;
-        upsertRow.run(store, row.collection, row.key, row.position, owner ?? null, row.value);
-        row.owner = owner ?? null;
+        row.owner = owner == null ? null : normalizeSqliteText(owner);
+        upsertRow.run(store, row.collection, row.key, row.position, row.owner, row.value);
       }
     }
     this.db
@@ -1157,6 +1155,7 @@ export class StorageDatabase {
           layout.kind === "record" || layout.kind === "array"
             ? layout.owner?.(update.value)
             : undefined;
+        const boundOwner = owner == null ? null : normalizeSqliteText(owner);
         this.db
           .query(
             `INSERT INTO store_rows (store, collection, key, position, owner, value)
@@ -1164,8 +1163,8 @@ export class StorageDatabase {
              ON CONFLICT (store, collection, key) DO UPDATE SET
                owner = excluded.owner, value = excluded.value`,
           )
-          .run(store, collection, key, position, owner ?? null, value);
-        nextRow = { collection, key, position, value, owner: owner ?? null };
+          .run(store, collection, key, position, boundOwner, value);
+        nextRow = { collection, key, position, value, owner: boundOwner };
         if (collection && document !== null) {
           // A first row of a collection the envelope did not have yet.
           const envelope = JSON.parse(document) as Record<string, unknown>;

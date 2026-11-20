@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 
 import { createLogger } from "@orkestrator/protocol/logger";
 
@@ -179,7 +181,10 @@ export class BackgroundCheckpointer {
     this.worker = worker;
     const { promise, resolve } = Promise.withResolvers<void>();
     this.exited = promise;
-    worker.addEventListener("close", () => resolve());
+    worker.addEventListener("close", () => {
+      resolve();
+      this.fail({ reason: "worker-error" });
+    });
     // Never what keeps the backend process alive. Bun's Worker has `unref`;
     // the DOM type this package compiles against does not.
     (worker as Worker & { unref?: () => void }).unref?.();
@@ -215,7 +220,6 @@ export class BackgroundCheckpointer {
     this.worker = null;
     if (!worker) return;
     worker.onmessage = null;
-    worker.onerror = null;
     try {
       worker.postMessage({ type: "close" });
     } catch {
@@ -226,7 +230,11 @@ export class BackgroundCheckpointer {
   private tick(): void {
     if (this.stopped || !this.opened || this.inFlight) return;
     this.inFlight = true;
-    this.worker?.postMessage({ type: "checkpoint" });
+    try {
+      this.worker?.postMessage({ type: "checkpoint" });
+    } catch {
+      this.fail({ reason: "worker-error" });
+    }
   }
 
   private receive(message: WorkerMessage): void {
@@ -251,37 +259,144 @@ export class BackgroundCheckpointer {
   }
 }
 
-/**
- * Moves `db`'s WAL checkpoints to a {@link BackgroundCheckpointer}: raises the
- * connection's `wal_autocheckpoint` to the fallback while the worker runs and
- * restores SQLite's default if it fails (unless `isClosed`). `null` when no
- * worker could start, leaving the connection as it was. `database` names the
- * file in logs (`main`, `ledger`).
- */
+const sharedCheckpointers = new Map<string, SharedCheckpointer>();
+const pausedDirectories = new Map<string, number>();
+
+function canonicalPath(file: string): string {
+  try {
+    return realpathSync(file);
+  } catch {
+    return path.resolve(file);
+  }
+}
+
+class SharedCheckpointer {
+  private readonly clients = new Map<Database, () => boolean>();
+  private worker: BackgroundCheckpointer | null = null;
+  private failed = false;
+  private restartAfterExit = false;
+  readonly directory: string;
+
+  constructor(
+    private readonly file: string,
+    private readonly database: string,
+  ) {
+    this.directory = path.dirname(file);
+  }
+
+  attach(db: Database, flushScrub: () => boolean): () => void {
+    this.clients.set(db, flushScrub);
+    db.exec(
+      `PRAGMA wal_autocheckpoint = ${
+        this.worker?.isRunning()
+          ? BACKGROUND_CHECKPOINT_FALLBACK_PAGES
+          : DEFAULT_AUTOCHECKPOINT_PAGES
+      }`,
+    );
+    if (this.worker && !this.worker.isRunning() && !pausedDirectories.has(this.directory)) {
+      this.restartAfterExit = true;
+    }
+    this.ensureRunning();
+    return () => {
+      if (!this.clients.delete(db) || this.clients.size) return;
+      if (this.worker) this.worker.stop();
+      else sharedCheckpointers.delete(this.file);
+    };
+  }
+
+  private ensureRunning(): void {
+    if (this.worker || this.failed || !this.clients.size || pausedDirectories.has(this.directory)) {
+      return;
+    }
+    const worker = BackgroundCheckpointer.start(this.file, {
+      journalSizeLimit: JOURNAL_SIZE_LIMIT_BYTES,
+      onFailure: ({ reason, code }) => {
+        this.failed = true;
+        this.setThreshold(DEFAULT_AUTOCHECKPOINT_PAGES);
+        log.warn("checkpoint.background-failed", { database: this.database, reason, code });
+      },
+    });
+    if (!worker) {
+      this.failed = true;
+      log.warn("checkpoint.background-failed", {
+        database: this.database,
+        reason: "worker-unavailable",
+      });
+      return;
+    }
+    this.worker = worker;
+    void worker.exited.then(() => {
+      this.worker = null;
+      // Keep the entry until exit. An opener racing the last close can then
+      // start its replacement without overlapping the retiring worker.
+      const restart = this.restartAfterExit;
+      this.restartAfterExit = false;
+      if (!this.clients.size) sharedCheckpointers.delete(this.file);
+      else if (restart) this.ensureRunning();
+    });
+    this.setThreshold(BACKGROUND_CHECKPOINT_FALLBACK_PAGES);
+  }
+
+  stop(): Promise<void> | undefined {
+    this.restartAfterExit = false;
+    this.worker?.stop();
+    this.setThreshold(DEFAULT_AUTOCHECKPOINT_PAGES);
+    return this.worker?.exited;
+  }
+
+  flushScrubs(): boolean {
+    let completed = true;
+    for (const flush of this.clients.values()) if (!flush()) completed = false;
+    return completed;
+  }
+
+  private setThreshold(pages: number): void {
+    for (const db of this.clients.keys()) {
+      db.exec(`PRAGMA wal_autocheckpoint = ${pages}`);
+    }
+  }
+}
+
+/** Shares one worker per SQLite file. Release the lease before closing `db`. */
 export function startBackgroundCheckpoints(
   db: Database,
   file: string,
   database: string,
-  isClosed: () => boolean,
-  options: Pick<BackgroundCheckpointerOptions, "intervalMs" | "onCheckpoint"> = {},
-): BackgroundCheckpointer | null {
-  const checkpointer = BackgroundCheckpointer.start(file, {
-    ...options,
-    journalSizeLimit: JOURNAL_SIZE_LIMIT_BYTES,
-    onFailure: ({ reason, code }) => {
-      log.warn("checkpoint.background-failed", { database, reason, code });
-      if (isClosed()) return;
-      try {
-        db.exec(`PRAGMA wal_autocheckpoint = ${DEFAULT_AUTOCHECKPOINT_PAGES}`);
-      } catch {
-        // Closing concurrently; nothing left to checkpoint for.
-      }
-    },
-  });
-  if (!checkpointer) {
-    log.warn("checkpoint.background-failed", { database, reason: "worker-unavailable" });
-    return null;
+  flushScrub: () => boolean,
+): () => void {
+  const key = canonicalPath(file);
+  let shared = sharedCheckpointers.get(key);
+  if (!shared) {
+    shared = new SharedCheckpointer(key, database);
+    sharedCheckpointers.set(key, shared);
   }
-  db.exec(`PRAGMA wal_autocheckpoint = ${BACKGROUND_CHECKPOINT_FALLBACK_PAGES}`);
-  return checkpointer;
+  return shared.attach(db, flushScrub);
+}
+
+/** Prevents new workers for this backend's files while its connections close. */
+export function pauseBackgroundCheckpoints(dataDir: string): {
+  waitForWorkers: () => Promise<void>;
+  flushScrubs: () => void;
+  resume: () => void;
+} {
+  const directory = canonicalPath(dataDir);
+  pausedDirectories.set(directory, (pausedDirectories.get(directory) ?? 0) + 1);
+  const entries = () =>
+    Array.from(sharedCheckpointers.values()).filter((entry) => entry.directory === directory);
+
+  return {
+    async waitForWorkers() {
+      await Promise.all(entries().map((entry) => entry.stop()));
+    },
+    flushScrubs() {
+      let scrubbed = true;
+      for (const entry of entries()) if (!entry.flushScrubs()) scrubbed = false;
+      if (!scrubbed) throw new Error("Storage WAL privacy scrub is incomplete");
+    },
+    resume() {
+      const count = pausedDirectories.get(directory) ?? 0;
+      if (count > 1) pausedDirectories.set(directory, count - 1);
+      else pausedDirectories.delete(directory);
+    },
+  };
 }

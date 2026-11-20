@@ -1,4 +1,5 @@
 import { STORAGE_COLLECTION_MARKER } from "@orkestrator/protocol/node/storage-database";
+import { Buffer } from "node:buffer";
 import type { RowUpdate, StoreLayout, StoreRowEntry } from "./storage-database.js";
 
 /**
@@ -199,6 +200,12 @@ export function decompose(layout: StoreLayout, value: unknown): DecomposedStore 
   return { mode: "rows", document: JSON.stringify(envelope), rows };
 }
 
+/** Bun binds SQLite TEXT as UTF-8, replacing unpaired UTF-16 surrogates. */
+export function normalizeSqliteText(value: string): string {
+  // With the Unicode flag, a paired surrogate is one code point outside this range.
+  return value.replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
+}
+
 /**
  * The serialized values of a cached store's rows owned by `owner`, in the
  * order `SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY
@@ -210,19 +217,17 @@ export function ownedCachedValues(
   rows: ReadonlyMap<string, StoreRow>,
   owner: string,
 ): string[] | null {
+  const boundOwner = normalizeSqliteText(owner);
   const owned: StoreRow[] = [];
   for (const row of rows.values()) {
     if (row.owner === undefined) return null;
-    if (row.owner === owner) owned.push(row);
+    if (row.owner === boundOwner) owned.push(row);
   }
-  owned.sort((left, right) =>
-    left.position !== right.position
-      ? left.position - right.position
-      : left.key < right.key
-        ? -1
-        : left.key > right.key
-          ? 1
-          : 0,
+  // SQLite's BINARY collation compares UTF-8 bytes. Encode keys only for ties.
+  owned.sort(
+    (left, right) =>
+      left.position - right.position ||
+      Buffer.compare(Buffer.from(left.key), Buffer.from(right.key)),
   );
   return owned.map((row) => row.value);
 }

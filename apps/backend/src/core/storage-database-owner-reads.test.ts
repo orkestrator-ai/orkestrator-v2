@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { StorageDatabase, type StoreLayout } from "./storage-database.js";
+import { StorageDatabase, StoreCorruptError, type StoreLayout } from "./storage-database.js";
 import { ownedCachedValues } from "./storage-database-rows.js";
 
 type Item = { id: string; owner?: string; n?: number };
@@ -135,11 +135,84 @@ describe("owner-scoped reads from the row cache", () => {
 
   test("an unreadable cached row still reports the store as corrupt", async () => {
     const directory = await dataDir();
-    const { db } = connection(directory);
+    const { db, fetched } = connection(directory);
     db.writeStore("owned", { a: { id: "a", owner: "p1" } });
     db.db.query("UPDATE store_rows SET value = '{' WHERE store = 'owned'").run();
     db.db.query("UPDATE stores SET revision = revision + 1 WHERE name = 'owned'").run();
-    expect(() => db.readStoreRowsByOwner("owned", "p1")).toThrow("Storage owned is unreadable");
+    expect(Array.from(db.readStoreSerialized("owned")!.rows, (row) => row.value)).toEqual(["{"]);
+    expect(fetched()).toBeGreaterThan(0);
+    expect(() => db.readStoreRowsByOwner("owned", "p1")).toThrow(StoreCorruptError);
+    expect(fetched()).toBe(0);
+  });
+
+  test("tied positions follow SQLite's binary ordering of Unicode keys", async () => {
+    const directory = await dataDir();
+    const { db, fetched } = connection(directory);
+    const supplementary = { id: "\u{10000}", owner: "project" };
+    const privateUse = { id: "\uE000", owner: "project" };
+    db.transaction(() => {
+      db.rows("owned").put(supplementary.id, JSON.stringify(supplementary), {
+        owner: "project",
+        position: 1,
+      });
+      db.rows("owned").put(privateUse.id, JSON.stringify(privateUse), {
+        owner: "project",
+        position: 1,
+      });
+    });
+
+    const cold = uncached(directory, "owned", "project");
+    expect(cold).toEqual([privateUse, supplementary]);
+    db.readStoreSerialized("owned");
+    fetched();
+    expect(db.readStoreRowsByOwner("owned", "project")).toEqual(cold);
+    expect(fetched()).toBe(0);
+  });
+
+  test("owner binding replaces lone surrogates in whole-store and single-row writes", async () => {
+    const directory = await dataDir();
+    const writer = connection(directory);
+    const first = { id: "first", owner: "p\uD800" };
+    const second = { id: "second", owner: "p\uDC00" };
+    writer.db.writeStore("items", [first]);
+    writer.db.updateStoreRow("items", second.id, () => ({ result: null, value: second }));
+    const loaded = connection(directory);
+    loaded.db.readStoreSerialized("items");
+    writer.fetched();
+    loaded.fetched();
+    for (const owner of [first.owner, second.owner, "p\uFFFD"]) {
+      const cold = uncached(directory, "items", owner);
+      expect(cold).toEqual([first, second]);
+      expect(writer.db.readStoreRowsByOwner("items", owner)).toEqual(cold);
+      expect(loaded.db.readStoreRowsByOwner("items", owner)).toEqual(cold);
+    }
+    expect(writer.fetched()).toBe(0);
+    expect(loaded.fetched()).toBe(0);
+  });
+
+  test("owner reads use the pending cache after each uncommitted write", async () => {
+    const { db, fetched } = connection(await dataDir());
+    const initial = { id: "a", owner: "original" };
+    const edited = { id: "a", owner: "edited" };
+    const updated = { id: "a", owner: "updated" };
+    db.writeStore("items", [initial]);
+    expect(() =>
+      db.transaction(() => {
+        db.writeStoreInTransaction("items", [edited]);
+        fetched();
+        expect(db.readStoreRowsByOwner("items", "edited")).toEqual([edited]);
+        expect(fetched()).toBe(0);
+        db.updateStoreRow("items", "a", () => ({ result: null, value: updated }));
+        fetched();
+        expect(db.readStoreRowsByOwner("items", "updated")).toEqual([updated]);
+        expect(db.readStoreRowsByOwner("items", "edited")).toEqual([]);
+        expect(fetched()).toBe(0);
+        throw new Error("roll back owner edits");
+      }),
+    ).toThrow("roll back owner edits");
+    expect(db.readStoreRowsByOwner("items", "original")).toEqual([initial]);
+    expect(db.readStoreRowsByOwner("items", "updated")).toEqual([]);
+    expect(fetched()).toBe(0);
   });
 });
 

@@ -621,22 +621,25 @@ primitives above serialize their writes.
   (`DEFAULT_CKPTFULLFSYNC`); setting it keeps the ordering if the library or
   its build changes. It changes nothing on Linux, which has no such call.
   `fullfsync` (each commit) stays off.
-- The backend's two files (`orkestrator.sqlite` and the change ledger) are
-  checkpointed by a worker thread with its own connection
-  (`storage-checkpointer.ts`), not inside the backend's commits. SQLite's
+- Each of the backend's two files (`orkestrator.sqlite` and the change ledger)
+  has one worker thread per backend process. Enabled connections to the
+  resolved file path share the worker (`storage-checkpointer.ts`). SQLite's
   automatic checkpoint runs in whichever commit pushes the WAL past
   `wal_autocheckpoint` frames, and with the barrier sync above it took up to
   seconds when other processes were syncing the same disk; that commit was
   then reported as `operation.slow`. Commits at `synchronous = NORMAL` (lease
   rows, the ledger), which sync nothing themselves, taking 0.3–2.2 s were the
   sign. The worker runs a PASSIVE checkpoint every second, which never waits
-  for or blocks the backend's readers and writers, and the backend's
-  connection keeps `wal_autocheckpoint = 10000` (about 40 MB) as a bound if the
-  worker falls behind. If the worker cannot start or fails, the connection goes
-  back to SQLite's default of 1000 and logs `checkpoint.background-failed`.
-  Closing the database closes the worker's connection, never terminates it:
-  SQLite keeps every connection's locks in one table per process. Durability
-  is unchanged. Under `bun test` (`NODE_ENV=test`) the openers leave it off
+  for readers or writers. Each participating connection keeps
+  `wal_autocheckpoint = 10000` (about 40 MB) as a fallback if the worker falls
+  behind. If the worker cannot start or fails, its connections return to
+  SQLite's default of 1000 and the worker logs `checkpoint.background-failed`.
+  The last release asks the worker to close its SQLite connection and exit
+  cooperatively because SQLite keeps every connection's locks in one table per
+  process. Graceful backend shutdown waits for the workers within the shutdown
+  deadline and retries pending privacy scrubs before closing storage. A timeout
+  or a scrub that remains busy fails the shutdown step and suppresses the
+  clean-exit marker. Under `bun test` (`NODE_ENV=test`) the openers leave it off
   (`backgroundCheckpointsByDefault`); its tests turn it on. A synthetic run on
   mini (three processes writing and syncing 128 MB files, two committing with
   `fullfsync`; 3000 single-row writes per run, four alternating runs each)

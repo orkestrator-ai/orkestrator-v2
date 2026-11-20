@@ -282,7 +282,7 @@ and no site logs a stderr tail.
 | `native-agent` | `steer.qualification-failed` | `warn`, throttled per bridge connection | A bridge's steer qualification request failed or answered non-OK, so steering is not offered. Carries `agent` and `status` or the error class, never a session id or message. [To-do 4700](../todo/coordinator-and-multi-review/4700-coordinator-steer-missing-on-long-lived-coordinator.md#current-state) says how to read it. |
 | `storage` | `lease.heartbeat-failed` | `warn`, throttled by lease name | A lease heartbeat failed, which only shortens the lease. |
 | `storage` | `scrub.checkpoint-failed` | `warn`, throttled under `scrub` | The truncating checkpoint threw, or SQLite reported it blocked (`kind=busy`), which it does in a result row rather than as an error. Scrubbing is a [privacy step](storage.md#durability-and-deletion). |
-| `storage` | `checkpoint.background-failed` | `warn` | The worker thread that checkpoints a database's WAL could not start or failed (`database`, `reason`, SQLite's `code`); that connection checkpoints in its own commits again until the backend restarts ([storage.md](storage.md#durability-and-deletion)). |
+| `storage` | `checkpoint.background-failed` | `warn` | The worker thread that checkpoints a database's WAL could not start or failed (`database`, `reason`, SQLite's `code`). Its connections return to SQLite's default automatic checkpoint threshold ([storage.md](storage.md#durability-and-deletion)). |
 
 The lines the [essential log](#the-essential-event-log) lists are always kept there;
 the rest reach disk only while **Save logs to disk** is on. A normal agent close
@@ -332,10 +332,12 @@ body ran (the write lock, for `immediate`: a busy wait of up to the 10 s
 `busy_timeout` on the event-loop thread), `sqlMs` its statements, `commitMs`
 the commit and its WAL sync. `beginMs` equal to `durationMs` with `busy=true`
 means another connection held the lock for the whole timeout. `commitMs` is the
-commit's WAL write and, at `synchronous = FULL`, its sync: checkpoints run on
-a worker thread ([storage.md](storage.md#durability-and-deletion)), so a
-commit holds an automatic checkpoint only while that worker is off or failed. Lines are spaced
-per series (`database:op:table`) at one per 10 s, with the ones between folded
+commit's WAL write and, at `synchronous = FULL`, its sync. It can include an
+automatic checkpoint when the WAL reaches the threshold: 10,000 frames with
+the worker active and 1,000 when it is off or has failed.
+The worker's own checkpoints run on its thread
+([storage.md](storage.md#durability-and-deletion)). Lines are spaced per series
+(`database:op:table`) at one per 10 s, with the ones between folded
 into `folded` and `foldedMaxMs`; a call of 5 s or more is always written. The
 same records, without the spacing, are in `get_database_stats` and
 `database.json` as `slowOperations`: counts, total and longest per series (64

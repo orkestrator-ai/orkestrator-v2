@@ -127,6 +127,7 @@ import { PreviewRuntime } from "./previews/index.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
+import { pauseBackgroundCheckpoints } from "./storage-checkpointer.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import type { KeyedWorkflowOwner, WorkflowWakeReason } from "./workflow-supervisor.js";
@@ -155,6 +156,7 @@ const capabilityLog = createLogger("capabilities");
 
 /** How long shutdown waits for web annotations to close before going on without them. */
 const WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS = 5_000;
+const STORAGE_CHECKPOINT_DRAIN_TIMEOUT_MS = 5_000;
 
 const activityLog = createLogger("backend.activity");
 const scheduledLog = createLogger("scheduler");
@@ -3531,9 +3533,6 @@ export class OrkestratorBackend {
       () => ({ stopped: true as const }),
       () => ({ stopped: false as const }),
     );
-    // Synchronous, so it runs before the awaited drain rather than racing it:
-    // every watcher holds a file descriptor and a debounce timer.
-    stopStepNow("runtime", () => this.runtime.shutdown());
     stopStepNow("environment-cleanup-schedule", () =>
       cancelScheduledEnvironmentCleanup(this.context.storage.getDataDir()),
     );
@@ -3541,6 +3540,8 @@ export class OrkestratorBackend {
     const attempt = (async () => {
       let drained = false;
       let closeFailure: ShutdownStepFailure | null = null;
+      let checkpointFailure: ShutdownStepFailure | null = null;
+      const checkpoints = pauseBackgroundCheckpoints(this.context.storage.getDataDir());
       try {
         const lifecycleDeadline = Date.now() + this.environmentLifecycleDrainTimeoutMs;
         // Close both admission gates before waiting on any in-flight work.
@@ -3550,6 +3551,20 @@ export class OrkestratorBackend {
         const lifecycleDrain = this.environmentLifecycleTasks.beginShutdown(
           this.environmentLifecycleDrainTimeoutMs,
         );
+        // The runtime closes the ledger. Wait for any passive checkpoint and
+        // retry deferred scrubs while both files' connections are still open.
+        checkpointFailure = await Effect.runPromise(
+          shutdownStep("storage-checkpoints", checkpoints.waitForWorkers, {
+            timeoutMs: Math.min(
+              STORAGE_CHECKPOINT_DRAIN_TIMEOUT_MS,
+              Math.max(0, lifecycleDeadline - Date.now()),
+            ),
+          }),
+        );
+        checkpointFailure ??= await Effect.runPromise(
+          shutdownStep("storage-privacy-scrub", checkpoints.flushScrubs),
+        );
+        stopStepNow("runtime", () => this.runtime.shutdown());
         // Pipeline passes may still be writing snapshots or using a bridge.
         // Drain them before terminating backend-owned local servers — but never
         // let a failed drain skip that teardown, or every backend-owned bridge
@@ -3638,14 +3653,19 @@ export class OrkestratorBackend {
           throw new Error("User command termination could not be confirmed. Retry shutdown.");
         drained = true;
       } finally {
-        closeFailure = await Effect.runPromise(
-          this.releaseShutdownResources(drained, reachabilitySettled),
-        );
+        try {
+          closeFailure = await Effect.runPromise(
+            this.releaseShutdownResources(drained && !checkpointFailure, reachabilitySettled),
+          );
+        } finally {
+          checkpoints.resume();
+        }
       }
       // Reached only after a drain that succeeded: a failed drain keeps its own
       // error. The first failed close fails this attempt so a later
       // `shutdown()` retries it.
-      if (closeFailure) throw closeFailure.error;
+      const failure = checkpointFailure ?? closeFailure;
+      if (failure) throw failure.error;
     })();
     this.shutdownPromise = attempt;
     try {

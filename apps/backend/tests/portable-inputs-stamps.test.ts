@@ -15,7 +15,7 @@ import {
   stagePortableInputs,
   stagedInputMountArguments,
 } from "../src/core/portable-inputs";
-import { buildMergeContainerClaudeCredentialCommand } from "../src/core/agent-accounts-containers";
+import { buildMergeContainerClaudeCredentialCommand } from "../src/core/agent-accounts/containers";
 import { tempDir } from "./container-lifecycle-fixtures";
 
 const REPO = path.join(import.meta.dir, "../../..");

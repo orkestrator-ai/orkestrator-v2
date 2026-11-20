@@ -6,9 +6,9 @@ import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-
 import type { CommandContext } from "./commands-context.js";
 import { resolveClaudeBinary } from "./commands-agent-support.js";
 import {
-  stripInheritedAgentCredentials,
   type ResolvedAgentAccount,
-} from "./agent-accounts-active.js";
+  stripInheritedAgentCredentials,
+} from "./agent-accounts/index.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import {
   CLAUDE_HOST_REFRESH_ARGS,

@@ -19,8 +19,8 @@
 
 ## Container account marker validation recurrence — 2026-10-21
 
-- **Original command:** `mise run test:logged -- --name account-containers -- bun run --cwd apps/backend test ./src/core/agent-accounts-containers.test.ts`.
-- **Configuration:** the package script expands to `bun test --preload ../../tests/setup-node.ts src tests --parallel ./src/core/agent-accounts-containers.test.ts`; its existing `src tests` arguments selected the whole backend suite, with default parallelism. Other aggregate and browser validation was running on the host.
+- **Original command:** `mise run test:logged -- --name account-containers -- bun run --cwd apps/backend test ./src/core/agent-accounts/containers.test.ts`.
+- **Configuration:** the package script expands to `bun test --preload ../../tests/setup-node.ts src tests --parallel ./src/core/agent-accounts/containers.test.ts`; its existing `src tests` arguments selected the whole backend suite, with default parallelism. Other aggregate and browser validation was running on the host.
 - **Failure:** the same unnamed Chromium hook timed out after 5005.58 ms. Backend totals were 9,807 passed, 67 skipped and one failed across 552 files, in 138.49 seconds. Credential account tests passed.
 - **Owning-file rerun:** `mise run test:logged -- --name artifact-engine-isolated -- bun test --cwd apps/backend ./src/core/transcript-artifacts/content-server.engines.test.ts --parallel=1 --only-failures`.
 - **Isolated result:** unchanged owning file passed, exit 0 in 88.0 seconds. No assertions, deadlines or skips changed.

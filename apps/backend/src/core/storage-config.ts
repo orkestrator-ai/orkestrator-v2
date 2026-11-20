@@ -73,7 +73,7 @@ import {
 } from "@orkestrator/protocol/review-lens";
 import type { StorageContext } from "./storage-context.js";
 import type { AgentAccountsRepository } from "./storage-agent-accounts.js";
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import type { StorageFiles } from "./storage-files.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

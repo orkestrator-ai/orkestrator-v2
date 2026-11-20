@@ -11,7 +11,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseAgentAccountStore } from "../../apps/backend/src/core/agent-accounts-store";
+import { parseAgentAccountStore } from "../../apps/backend/src/core/agent-accounts/store";
 import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent-service-shared";
 import { createEnvironment, StorageService } from "../../apps/backend/src/core/storage";
 import { readStoredValue, seedStore } from "../../apps/backend/src/core/storage-test-support";

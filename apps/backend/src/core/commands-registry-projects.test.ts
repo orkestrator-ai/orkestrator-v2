@@ -7,7 +7,7 @@ import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import type { Project } from "./models.js";
 
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import * as agentBridges from "./commands-servers.js";
 import { persistHostCatalog } from "./host-model-catalog-seed.js";

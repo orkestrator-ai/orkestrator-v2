@@ -10,12 +10,12 @@ Status: Living — `apps/backend/src/core/agent-accounts*.ts`,
 `apps/web/src/components/settings/machines/MachineAgentAccountsSection.tsx`,
 `apps/web/src/components/layout/AgentInfoAccountSection.tsx`,
 `apps/backend/src/core/agent-sign-ins.ts`,
-`apps/backend/src/core/agent-accounts-auto-switch.ts`,
+`apps/backend/src/core/agent-accounts/auto-switch.ts`,
 `apps/backend/src/core/native-agent-usage-limit-resend.ts`,
 `packages/protocol/src/agent-account-auto-switch.ts`,
 `packages/protocol/src/agent-account-shared-usage.ts`,
-`apps/backend/src/core/agent-accounts-usage-sharing.ts`,
-`apps/backend/src/core/agent-accounts-shared-usage.ts`,
+`apps/backend/src/core/agent-accounts/usage-sharing.ts`,
+`apps/backend/src/core/agent-accounts/shared-usage.ts`,
 `apps/backend/src/core/nodes/node-usage-sync.ts`,
 `apps/web/src/components/settings/UsageReading.tsx`;
 `apps/backend/src/core/opencode2/provider-login.ts`,
@@ -62,7 +62,7 @@ entries with one email become a single row named by the added entry, marked
 their usage readings is freshest. A signed-out entry stays its own row so it can be
 signed in again or removed.
 
-The registry is `agent-accounts.json` (`agent-accounts-store.ts`): accounts,
+The registry is `agent-accounts.json` (`agent-accounts/store.ts`): accounts,
 the active id per platform and a per-platform `loginGeneration`. It is kept
 out of `config.json` because the renderer writes the whole global config back
 and would overwrite a list it never edits. It holds no credential.
@@ -175,7 +175,7 @@ deletes its directory and, on macOS, its Keychain entry.
 ## Login
 
 `start_agent_account_login` drives the provider CLI's own login from the
-backend (`agent-accounts-login.ts`). One sign-in runs at a time across both
+backend (`agent-accounts/login.ts`). One sign-in runs at a time across both
 platforms. The renderer polls `get_agent_account_login`, opens the URL itself,
 and sends Claude's code with `submit_agent_account_login_code`.
 
@@ -622,7 +622,7 @@ renew it ([Stale and unknown readings](#stale-and-unknown-readings)). Codex
 tokens last days.
 
 Each account's last successful reading is kept in
-`<agent-accounts>/last-usage.json` (`agent-accounts-last-usage.ts`). The active
+`<agent-accounts>/last-usage.json` (`agent-accounts/last-usage.ts`). The active
 account's reading is saved when it is read and when the user switches away from
 it. Whenever a fresh read fails, including the lapsed-token case above, the last
 reading is served instead with `stale: true`, its original `fetchedAt` and the
@@ -683,7 +683,7 @@ so its windows never fold. A bridge still finishing a turn on the previous
 account therefore cannot put its windows on the new account's card: proved
 live for Codex on 2026-10-26, and for Claude, whose bridge reports windows only
 near a limit (`rate_limit_event` and the SDK usage report), by
-`agent-accounts.test.ts` ("a Claude bridge still on the previous account
+`agent-accounts/accounts.test.ts` ("a Claude bridge still on the previous account
 cannot fold its windows into the new account's usage").
 
 ### How old a reading is
@@ -781,7 +781,7 @@ handed to every machine with the same login.
 ## Containers
 
 A container receives the active account's login instead of the host's at
-these points (`agent-accounts-containers.ts`). Nothing is rewritten for a
+these points (`agent-accounts/containers.ts`). Nothing is rewritten for a
 platform that never had an account added, renewed or made active, and a
 provider the environment has revoked is never handed a login.
 
@@ -1017,7 +1017,7 @@ used up in the order its week ends, and allowance is not lost to a reset. A tick
 per account says whether that account takes part. These are the only two providers
 with accounts to switch between: Grok, Pi, OpenCode and Cursor hold one login per
 machine. The backend
-does all of it (`agent-accounts-auto-switch.ts`; the rule is pure, in
+does all of it (`agent-accounts/auto-switch.ts`; the rule is pure, in
 `@orkestrator/protocol/agent-account-auto-switch`), so it needs no client and no
 coordinator. It never writes a credential: a switch only records which existing
 login is active. `mise run verify:accounts:resend-live` runs the resend on real
@@ -1238,7 +1238,7 @@ known reading, or nothing at all. So the switcher remembers each login a fresh
 reading put at or past 98% on either limit, and until that limit resets
 (its reset time, or the window's length from the reading when none was given)
 every idle entry of the login reads as held past 98% with that reset ahead
-(`holdPastThreshold` in `agent-accounts-auto-switch.ts`). The `soonest-reset`
+(`holdPastThreshold` in `agent-accounts/auto-switch.ts`). The `soonest-reset`
 move ranks only accounts with room, so a held login is never where it goes,
 however soon its week ends. The hold is lifted by exactly two things:
 
@@ -1260,12 +1260,12 @@ next fresh reading rebuilds it.
 On 2026-11-16 two machines moved between two logins every few minutes: a fresh
 98% weekly reading moved each off one login (`threshold`), and the next check,
 reading it idle from an earlier, lower reading, moved back because its week ended
-sooner (`soonest-reset`). `agent-accounts-auto-switch-flap.test.ts` replays that
+sooner (`soonest-reset`). `agent-accounts/auto-switch-flap.test.ts` replays that
 for both limits on Claude and Codex. On 2.39.2-beta, with that hold in place,
 beelink2 and omarchy-hp (where the other login was the host login) still cycled
 the same way: the hold skipped any idle entry whose reading was fresh, and a
 fresh weekly window with no percentage counted as room, so the login came back
-first in the order. `agent-accounts-auto-switch-flap-replay.test.ts` replays both
+first in the order. `agent-accounts/auto-switch-flap-replay.test.ts` replays both
 machines' sequences, with the reset-only reading, a failed read, an older reading
 below 98% and a stale lower one, and checks that a later fresh reading below 98%
 or the weekly reset still lets the login back.
@@ -1280,7 +1280,7 @@ tolerance (an hour, `AUTO_SWITCH_RESET_TOLERANCE_MS`) to an earlier still-future
 reset, or when twin entries of one login disagree within the same check. The
 switcher remembers, per login, the weekly resets fresh
 readings named, whichever machine took them (`disputedResets` in
-`agent-accounts-auto-switch.ts`). Once disputed, while conflicting claims remain,
+`agent-accounts/auto-switch.ts`). Once disputed, while conflicting claims remain,
 each entry of the login
 carries the earliest and latest of them (`resetRange` on its reading), and a
 `soonest-reset` move goes only where it is better on every one: the active
@@ -1306,7 +1306,7 @@ limit-reset grants. Whichever of the two was newest won
 ([Shared readings](#shared-readings)), so machines with that login and one whose
 week ended between the two moved off it and back (`soonest-reset` both ways)
 every time the newest reading changed sides; neither reading was near 98%, so the
-hold did not apply. `agent-accounts-auto-switch-reset-dispute.test.ts` replays
+hold did not apply. `agent-accounts/auto-switch-reset-dispute.test.ts` replays
 it on Claude and Codex. How mbp3 came to read the other login's usage was not
 established; this rule keeps any such reading from moving machines back and forth.
 

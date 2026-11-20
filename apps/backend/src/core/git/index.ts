@@ -10,12 +10,12 @@
 // surface, because each reaches back into code that imports this file, so
 // re-exporting it here would close a runtime import cycle. Each has one
 // importer, which imports it directly:
-// - `github-cli-setup.ts` (imports `agent-accounts-login.ts` and
+// - `github-cli-setup.ts` (imports `agent-accounts/login.ts` and
 //   `host-tools.ts`), for `commands-registry-tools.ts`;
 // - `github-clone-browser.ts` (imports `commands-error-text.ts`), for
 //   `commands-registry-projects.ts`;
 // - `github-ranges-seed-delivery.ts` (imports `egress-gateway.ts`), for
-//   `agent-accounts-containers.ts`;
+//   `agent-accounts/containers.ts`;
 // - `pr-auto-merge.ts` (imports `project-home-environment.ts` and
 //   `action-default-selection.ts`) and `pr-auto-merge-resolve-settled.ts`
 //   (imports `native-agent-service-shared.ts` and `public-api/index.ts`), for

@@ -5,8 +5,8 @@ import path from "node:path";
 import { jwtExpiryMs } from "@orkestrator/protocol/login-snapshots";
 import type { CommandContext } from "./commands-context.js";
 import { resolveCodexBinary } from "./commands-agent-support.js";
-import { readCodexAuthFile } from "./agent-accounts-homes.js";
-import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts-login.js";
+import { readCodexAuthFile } from "./agent-accounts/homes.js";
+import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts/index.js";
 
 const REFRESH_LEAD_MS = 5 * 60_000;
 const RETRY_MS = 60_000;

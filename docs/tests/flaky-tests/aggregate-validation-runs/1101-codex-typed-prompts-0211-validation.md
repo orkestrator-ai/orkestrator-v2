@@ -125,7 +125,7 @@ links into the build worktree; removed afterwards):
 
 | Owner | Branch alone | Base alone |
 | --- | --- | --- |
-| `apps/backend/src/core/agent-accounts.test.ts` | passed | not needed |
+| `apps/backend/src/core/agent-accounts/accounts.test.ts` | passed | not needed |
 | `apps/backend/src/core/public-api/public-api-projects.test.ts` | passed | not needed |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | passed | not needed |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | one retarget timeout; then passed once, failed once | passed |

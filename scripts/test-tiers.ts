@@ -80,8 +80,8 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     // Real tmux sessions polled on wall-clock ticks.
     "tests/tmux*.test.ts",
     "src/core/tmux*.test.ts",
-    "src/core/agent-accounts-containers.test.ts",
-    "src/core/agent-accounts.test.ts",
+    "src/core/agent-accounts/containers.test.ts",
+    "src/core/agent-accounts/accounts.test.ts",
     "src/core/agent-mail-service.test.ts",
     "src/core/agents-md-pr.test.ts",
     "src/core/change-tracking/acceptance-sharing.test.ts",

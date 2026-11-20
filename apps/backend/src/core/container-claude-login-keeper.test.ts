@@ -8,7 +8,7 @@ import {
   ContainerClaudeLoginKeeper,
 } from "./container-claude-login-keeper.js";
 import * as credentialFiles from "./commands-files.js";
-import type { ClaudeLoginHandover, ClaudeLoginPassSnapshot } from "./agent-accounts-containers.js";
+import type { ClaudeLoginHandover, ClaudeLoginPassSnapshot } from "./agent-accounts/containers.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 const runtimes: BackendRuntime[] = [];

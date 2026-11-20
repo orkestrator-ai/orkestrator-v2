@@ -57,7 +57,7 @@ import {
   readAddedClaudeCredentials,
   readAddedCodexAuth,
   resolveActiveAgentAccount,
-} from "../agent-accounts-active.js";
+} from "../agent-accounts/index.js";
 
 /**
  * Platforms whose plan quota Orkestrator can read outside an agent session.

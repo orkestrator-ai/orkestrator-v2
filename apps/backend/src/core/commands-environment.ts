@@ -198,7 +198,7 @@ import type { CommandContext } from "./commands-context.js";
 import {
   startContainerWithAgentAccounts,
   syncContainerAgentAccountsOnStart,
-} from "./agent-accounts-containers.js";
+} from "./agent-accounts/index.js";
 import {
   createSetupCompletionTracker,
   isRetiredSetupTerminal,

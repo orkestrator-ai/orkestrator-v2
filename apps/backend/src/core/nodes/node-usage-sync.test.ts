@@ -16,14 +16,14 @@ import {
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
-import { AgentAccountSharedUsage } from "../agent-accounts-shared-usage.js";
+import { AgentAccountSharedUsage } from "../agent-accounts/shared-usage.js";
 import {
   applySharedUsageReadings,
   centralUsageReadings,
   collectSharedUsageReadings,
   recordCentralUsageReadings,
   shareAndMergeUsage,
-} from "../agent-accounts-usage-sharing.js";
+} from "../agent-accounts/usage-sharing.js";
 import { eventSink } from "../backend-emit.js";
 import type { CommandContext } from "../commands-context.js";
 import type { ContractEnvelope } from "./node-link.js";

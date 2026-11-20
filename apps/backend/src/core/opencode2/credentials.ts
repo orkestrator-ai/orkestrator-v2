@@ -9,7 +9,7 @@
  *   credentials from it per use, and 2.x refreshes OAuth logins in it.
  * - **`auth.json` is the container hand-off.** Containers are handed the
  *   host's logins access-only from OpenCode 1.x's `auth.json`
- *   (`pushedLoginHostFile(context, "opencode")`, `agent-accounts-containers.ts`),
+ *   (`pushedLoginHostFile(context, "opencode")`, `agent-accounts/containers.ts`),
  *   which `ContainerLoginFileWatcher` polls. That file is kept in step with
  *   the database here: a sign-in change writes the provider's entry (or
  *   removes it), and while a host 2.x server runs, a login 2.x has refreshed

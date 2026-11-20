@@ -468,6 +468,20 @@
                   "!@orkestrator/protocol/contract/domains/coordinator/*"
                 ],
                 "message": "Import the coordinator domain through coordinator/index.js."
+              },
+              {
+                "group": [
+                  "**/agent-accounts/*",
+                  "!**/agent-accounts/index.js",
+                  "!**/agent-accounts/accounts.js",
+                  "!**/agent-accounts/auto-switch-notices.js",
+                  "!**/agent-accounts/homes.js",
+                  "!**/agent-accounts/machines.js",
+                  "!**/agent-accounts/runtime.js",
+                  "!**/agent-accounts/session.js",
+                  "!**/agent-accounts/store.js"
+                ],
+                "message": "Import the agent-accounts domain through agent-accounts/index.js."
               }
             ]
           }
@@ -623,6 +637,13 @@
                   "!**/backend/src/core/coordinator/index.js"
                 ],
                 "message": "Import the coordinator domain through coordinator/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/agent-accounts/*",
+                  "!**/backend/src/core/agent-accounts/index.js"
+                ],
+                "message": "Import the agent-accounts domain through agent-accounts/index.js."
               }
             ]
           }

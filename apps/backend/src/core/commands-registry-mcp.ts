@@ -51,7 +51,7 @@ import {
   type RuntimeProbe,
   type StagedDefaultsWriter,
 } from "./mcp-management/index.js";
-import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
+import { addedClaudeAccountHomes } from "./agent-accounts/index.js";
 import {
   DOCKER_LABEL_DEBIAN_ARCHIVE,
   DOCKER_LABEL_INPUTS_REVISION,

@@ -29,7 +29,7 @@
     `driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges`:
     exceeded the unchanged 5000 ms timeout (5025.31 ms). See
     [0177](../native-agents-and-transcripts/0177-driven-observation-baseline-timeout.md).
-  - `apps/backend/src/core/agent-accounts-active.test.ts:571`,
+  - `apps/backend/src/core/agent-accounts/active.test.ts:571`,
     `renews an expired owner login without ordinary sessions before the coordinator handoff`:
     expected `login.loginless` to be undefined, received `true` (32.36 ms).
   - `apps/backend/src/core/native-agent-command-catalogue-scale.test.ts`,
@@ -40,7 +40,7 @@
     expected `teardown_tab` to resolve `{ completed: true }`, but the promise
     rejected (408.08 ms).
 - **Complete owning-file rerun:**
-  `mise run test:logged -- --name backend-failure-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts ./tests/recurring-baseline.test.ts ./src/core/agent-accounts-active.test.ts --parallel=1 --only-failures`.
+  `mise run test:logged -- --name backend-failure-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts ./tests/recurring-baseline.test.ts ./src/core/agent-accounts/active.test.ts --parallel=1 --only-failures`.
   Bun isolated the files and ran one worker. Result: 199 passed, one failed,
   868 expectations across three files (71.5 s logged). The complete teardown
   and account-login owners passed unchanged. The baseline owner again

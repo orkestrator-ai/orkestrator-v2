@@ -47,7 +47,7 @@ import {
   openCodeHealthHeaders,
   bearerBridgeHeaders,
 } from "./commands-server-health.js";
-import type { AgentAccountsRuntime } from "./agent-accounts-runtime.js";
+import type { AgentAccountsRuntime } from "./agent-accounts/runtime.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
 import type { AgentToolConnection } from "./agent-tools.js";
@@ -139,15 +139,15 @@ import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
   applyCoordinatorClaudeAccount,
-  readCoordinatorCodexLogin,
+  type CoordinatorAgentAccount,
   coordinatorHostCodexHome,
   localBridgeIsOnActiveAccount,
+  readCoordinatorCodexLogin,
   resolveActiveAgentAccount,
   stripInheritedAgentCredentials,
-  type CoordinatorAgentAccount,
-} from "./agent-accounts-active.js";
+} from "./agent-accounts/index.js";
 
-import { agentAccountLoginKey } from "./agent-accounts-store.js";
+import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import {
   LOCAL_SERVER_PORT_ATTEMPTS,
   LocalServerPortTakenError,

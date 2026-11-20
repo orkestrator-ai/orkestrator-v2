@@ -9,7 +9,7 @@
 
 ## Confirmed owning-file reruns
 
-`mise run test:logged -- --name merge-backend-owners -- bun test --cwd apps/backend ./src/core/agent-accounts-containers.test.ts ./src/core/host-model-catalog-refresh.test.ts ./src/core/native-agent-service-progressive.test.ts ./tests/commands-integration.test.ts ./tests/commands-registry-servers.test.ts ./tests/portable-inputs.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name merge-backend-owners -- bun test --cwd apps/backend ./src/core/agent-accounts/containers.test.ts ./src/core/host-model-catalog-refresh.test.ts ./src/core/native-agent-service-progressive.test.ts ./tests/commands-integration.test.ts ./tests/commands-registry-servers.test.ts ./tests/portable-inputs.test.ts --parallel=1 --only-failures`
 reported 200 passed and two failed across six files in 192.8 seconds:
 
 - `Electron backend command registry > backend-owned diff statistics > serves the Files panel from the scan the badge already ran` (`apps/backend/tests/commands-integration.test.ts`): the supposedly empty Git command log contained one `status --porcelain=v1` scan; 2153.92 ms.

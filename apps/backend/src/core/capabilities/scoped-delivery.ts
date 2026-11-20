@@ -14,7 +14,7 @@
  *   repository tracks, or anything already there that Orkestrator did not
  *   write, is a collision that is reported and left alone (`project-git.ts`).
  * - **Added Claude and Codex accounts** link their skill and command
- *   directories to the host's (`agent-accounts-homes.ts`), so the host copy
+ *   directories to the host's (`agent-accounts/homes.ts`), so the host copy
  *   serves them. A CLI that saved a directory by atomic rename leaves a
  *   private copy instead; that account then gets its own copy of the
  *   machine-wide installations, with its own receipts. Only package files

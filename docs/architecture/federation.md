@@ -965,10 +965,12 @@ with `MachinesFilter`:
   for you" when its unread reason is a question), and then names the request
   once its machine reports it: "Needs approval: Run bun install · 5 min",
   "Question: Which API should this use? · 2 min", with "· 3 waiting" when
-  several are pending. Unread work it is no longer blocked on reads "Finished ·
-  result unread", "Failed · error unread", "Asked a question · unread",
-  "Setup needs your approval" and the like, from the record's `unreadReason`
-  (relayed for another machine as the summary's `unreadReason`). A waiting
+  several are pending. Unread work it is no longer blocked on reads "Failed ·
+  error unread", "Asked a question · unread", "Setup needs your approval" and
+  the like, from the record's `unreadReason` (relayed for another machine as
+  the summary's `unreadReason`). A plain unread finish (`agent_finished`,
+  `terminal_finished`) has no line: the amber bell beside the name marks it,
+  and clicking the row opens the environment as the line did. A waiting
   native tab gets a line even while a sibling keeps the environment working.
   Project-home activity buttons show the same request summary in activity
   view and in their compact tooltip. Clicking selects the environment,

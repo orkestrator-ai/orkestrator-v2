@@ -4,8 +4,9 @@ import { expect, test } from "@playwright/test";
 test("each waiting or unread row says what it needs, and only those rows", async ({ page }) => {
   await page.goto("/environment-attention");
   const lines = page.getByTestId("environment-attention-line");
-  // Working and idle-seen rows have no line.
-  await expect(lines).toHaveCount(6);
+  // Working and idle-seen rows have no line, nor does a plain unread finish:
+  // its bell beside the name says so on its own.
+  await expect(lines).toHaveCount(5);
   await expect(lines.nth(0)).toHaveText(
     /^Needs approval: Claude wants to run bun install · \d+ min$/,
   );
@@ -14,17 +15,27 @@ test("each waiting or unread row says what it needs, and only those rows", async
   );
   // A form that may hold sensitive input keeps its label alone.
   await expect(lines.nth(2)).toHaveText(/^Needs input · \d+ min$/);
-  await expect(lines.nth(3)).toHaveText("Finished · result unread");
-  await expect(lines.nth(4)).toHaveText("Failed · error unread");
-  await expect(lines.nth(5)).toHaveText("Setup needs your approval");
+  await expect(lines.nth(3)).toHaveText("Failed · error unread");
+  await expect(lines.nth(4)).toHaveText("Setup needs your approval");
+  await expect(page.getByText("Finished · result unread")).toHaveCount(0);
+});
+
+test("a finished unread row keeps its bell and opens from the row", async ({ page }) => {
+  await page.goto("/environment-attention");
+  const row = page.getByTestId("attention-sidebar").locator('[role="button"]', {
+    hasText: "billing-export",
+  });
+  await expect(row.locator('[aria-label="New completed activity"]')).toBeVisible();
+  await row.click();
+  await expect(page.getByTestId("attention-opened")).toHaveText("billing-export: row");
 });
 
 test("clicking a line opens the tab holding the request, not just the row", async ({ page }) => {
   await page.goto("/environment-attention");
   await page.getByRole("button", { name: /^Question: Which API/ }).click();
   await expect(page.getByTestId("attention-opened")).toHaveText("api-client: api-client-agent");
-  await page.getByRole("button", { name: "Finished · result unread" }).click();
-  await expect(page.getByTestId("attention-opened")).toHaveText("billing-export: environment");
+  await page.getByRole("button", { name: "Failed · error unread" }).click();
+  await expect(page.getByTestId("attention-opened")).toHaveText("flaky-ci: environment");
 });
 
 test("the sidebar opens the named question after the layout hydrates", async ({

@@ -158,8 +158,8 @@ function Row({
 
 /**
  * Sidebar rows in every attention state: waiting with a named approval, a
- * question and a sensitive form; working; finished, failed and setup unread;
- * idle and seen. `?before` hides the attention lines, as rows were drawn
+ * question and a sensitive form; working; finished (bell only, no line),
+ * failed and setup unread; idle and seen. `?before` hides the attention lines, as rows were drawn
  * before them.
  */
 export function EnvironmentAttentionFixture() {

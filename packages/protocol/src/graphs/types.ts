@@ -190,13 +190,12 @@ const stringField = (description: string): GraphJsonSchema => ({ type: "string",
 function objectSchema(
   properties: Record<string, GraphJsonSchema>,
   description?: string,
-  optional: readonly string[] = [],
 ): GraphJsonSchema {
   return {
     type: "object",
     ...(description ? { description } : {}),
     additionalProperties: false,
-    required: Object.keys(properties).filter((key) => !optional.includes(key)),
+    required: Object.keys(properties),
     properties,
   };
 }
@@ -629,25 +628,25 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
       "A sealed review package in the environment, by reference: the diff, validation output and context a reviewer reads.",
     family: "package",
     storage: "reference",
-    schema: objectSchema(
-      {
-        kind: { type: "string", const: "file" },
-        id: { type: "string" },
-        round: { type: "integer", minimum: 1 },
-        preparedAt: { type: "string" },
-        targetBranch: { type: "string" },
-        baseRef: { type: "string" },
-        headRef: { type: "string" },
-        filePath: { type: "string" },
-        sha256: { type: "string" },
-        bytes: { type: "integer", minimum: 1 },
-        changedFileCount: { type: "integer", minimum: 0 },
-        diffChunkCount: { type: "integer", minimum: 1, maximum: REVIEW_PACKAGE_MAX_DIFF_CHUNKS },
-        limitations: { type: "array", items: { type: "string" } },
-      },
-      undefined,
-      ["diffChunkCount"],
-    ),
+    schema: objectSchema({
+      kind: { type: "string", const: "file" },
+      id: { type: "string" },
+      round: { type: "integer", minimum: 1 },
+      preparedAt: { type: "string" },
+      targetBranch: { type: "string" },
+      baseRef: { type: "string" },
+      headRef: { type: "string" },
+      filePath: { type: "string" },
+      sha256: { type: "string" },
+      bytes: { type: "integer", minimum: 1 },
+      changedFileCount: { type: "integer", minimum: 0 },
+      diffChunkCount: nullable({
+        type: "integer",
+        minimum: 1,
+        maximum: REVIEW_PACKAGE_MAX_DIFF_CHUNKS,
+      }),
+      limitations: { type: "array", items: { type: "string" } },
+    }),
     budgets: { maxBytes: REVIEW_PACKAGE_MAX_BYTES, maxItems: 128 },
     render: {
       markdown: "Review package `{{id}}` ({{changedFileCount}} files) at `{{filePath}}`",
@@ -1165,13 +1164,21 @@ export function validateGraphArtifactValue(
     definition.builtIn && definition.name === "decision" && context.choices
       ? graphDecisionSchema(context.choices)
       : definition.schema;
-  // A review report from before `reviewScope.outcome` existed reads as reviewed.
-  const structural = validateGraphSchemaValue(
-    schema,
-    definition.validator === "structured-review-report"
-      ? backfillLegacyReviewOutcome(value)
-      : value,
-  );
+  let schemaValue = value;
+  // Older reports and package references omit fields now present in the
+  // portable schema. The domain validators still receive the original value.
+  if (definition.validator === "structured-review-report") {
+    schemaValue = backfillLegacyReviewOutcome(value);
+  } else if (
+    definition.validator === "review-package-reference" &&
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !Object.hasOwn(value, "diffChunkCount")
+  ) {
+    schemaValue = { ...value, diffChunkCount: null };
+  }
+  const structural = validateGraphSchemaValue(schema, schemaValue);
   if (structural.length > 0) return structural;
   if (!definition.validator) return [];
   return graphBuiltInValidator(definition.validator).check(value, context).slice(0, MAX_ISSUES);

@@ -285,6 +285,12 @@ describe("domain validators", () => {
     ).toEqual(["duplicate"]);
   });
 
+  test("review package graph artifacts accept a bounded chunk count", () => {
+    const descriptor = builtIn("review-package@2").example as Record<string, unknown>;
+    expect(codes("review-package@2", { ...descriptor, diffChunkCount: 3 })).toEqual([]);
+    expect(codes("review-package@2", { ...descriptor, diffChunkCount: 65 })).not.toEqual([]);
+  });
+
   test("validators name what they wrap and what the backend adds", () => {
     expect(graphBuiltInValidator("review-package-reference").backend?.existing).toContain(
       "verifyEnvironmentReviewPackage",

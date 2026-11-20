@@ -33,19 +33,43 @@ export function candidateHash(value: unknown): string {
  * freezes what they reviewed. Only the "Send result" click here submits; a
  * newer candidate never replaces values under an open review.
  */
-export function WidgetResultCard({ view, spec, act, disabled, actions }: KindProps<WidgetResultSpec>) {
-  const [candidate, setCandidate] = useState<ArtifactResultCandidate | null>(() => latestArtifactResultCandidate(spec.artifactId, spec.revision));
-  const [review, setReview] = useState<{ candidate: ArtifactResultCandidate; values: FormValues } | null>(null);
-  useEffect(() => subscribeArtifactResultCandidates(spec.artifactId, spec.revision, setCandidate), [spec.artifactId, spec.revision]);
-  const candidateErrors = useMemo(() => (candidate ? formErrors(spec.output, candidate.value) : {}), [candidate, spec.output]);
-  const reviewErrors = useMemo(() => (review ? formErrors(spec.output, review.values) : {}), [review, spec.output]);
+export function WidgetResultCard({
+  view,
+  spec,
+  act,
+  disabled,
+  actions,
+}: KindProps<WidgetResultSpec>) {
+  const [candidate, setCandidate] = useState<ArtifactResultCandidate | null>(() =>
+    latestArtifactResultCandidate(spec.artifactId, spec.revision),
+  );
+  const [review, setReview] = useState<{
+    candidate: ArtifactResultCandidate;
+    values: FormValues;
+  } | null>(null);
+  useEffect(
+    () => subscribeArtifactResultCandidates(spec.artifactId, spec.revision, setCandidate),
+    [spec.artifactId, spec.revision],
+  );
+  const candidateErrors = useMemo(
+    () => (candidate ? formErrors(spec.output, candidate.value) : {}),
+    [candidate, spec.output],
+  );
+  const reviewErrors = useMemo(
+    () => (review ? formErrors(spec.output, review.values) : {}),
+    [review, spec.output],
+  );
   const send = actions[0];
-  const changedSinceReview = review && candidate && candidate.candidateId !== review.candidate.candidateId;
+  const changedSinceReview =
+    review && candidate && candidate.candidateId !== review.candidate.candidateId;
 
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm">{spec.intent}</p>
-      <ContentRefPreview reference={{ kind: "artifact", artifactId: spec.artifactId, revision: spec.revision }} description="The explorer. Activate it, adjust the inputs, and its proposed result appears below." />
+      <ContentRefPreview
+        reference={{ kind: "artifact", artifactId: spec.artifactId, revision: spec.revision }}
+        description="The explorer. Activate it, adjust the inputs, and its proposed result appears below."
+      />
       {spec.assumptions.length ? (
         <ul className="list-disc pl-5 text-xs text-muted-foreground">
           {spec.assumptions.map((a) => (
@@ -56,23 +80,52 @@ export function WidgetResultCard({ view, spec, act, disabled, actions }: KindPro
       <div className="rounded border border-border/60 p-2">
         <p className="mb-1 text-xs font-medium">Proposed by the explorer</p>
         {!candidate ? (
-          <p className="text-xs text-muted-foreground">No result proposed yet. Exploring in the viewer costs no model call.</p>
+          <p className="text-xs text-muted-foreground">
+            No result proposed yet. Exploring in the viewer costs no model call.
+          </p>
         ) : Object.keys(candidateErrors).length ? (
-          <p className="text-xs text-failure" role="alert">The explorer proposed values that do not match its declared output ({Object.values(candidateErrors)[0]}). They cannot be sent.</p>
+          <p className="text-xs text-failure" role="alert">
+            The explorer proposed values that do not match its declared output (
+            {Object.values(candidateErrors)[0]}). They cannot be sent.
+          </p>
         ) : (
-          <pre className="whitespace-pre-wrap text-xs">{summarizeFormValues(spec.output.fields, candidate.value as FormValues).join("\n")}</pre>
+          <pre className="whitespace-pre-wrap text-xs">
+            {summarizeFormValues(spec.output.fields, candidate.value as FormValues).join("\n")}
+          </pre>
         )}
         {candidate && !Object.keys(candidateErrors).length && !review && !disabled ? (
-          <Button size="sm" variant="outline" className="mt-2" onClick={() => setReview({ candidate, values: candidate.value as FormValues })}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2"
+            onClick={() => setReview({ candidate, values: candidate.value as FormValues })}
+          >
             Review these values
           </Button>
         ) : null}
       </div>
       {review ? (
-        <div className="flex flex-col gap-2 rounded border border-primary/30 bg-primary/[0.04] p-2" role="group" aria-label="Review result">
-          <p className="text-xs font-medium">Values to send (frozen from candidate {review.candidate.candidateId}; adjust if needed)</p>
-          {changedSinceReview ? <p className="text-xs text-amber-300">The explorer proposed newer values. This review keeps the values you are looking at; start a new review to use the newer ones.</p> : null}
-          <FormFields fields={spec.output.fields} values={review.values} onChange={(values) => setReview({ ...review, values })} errors={reviewErrors} disabled={disabled} />
+        <div
+          className="flex flex-col gap-2 rounded border border-primary/30 bg-primary/[0.04] p-2"
+          role="group"
+          aria-label="Review result"
+        >
+          <p className="text-xs font-medium">
+            Values to send (frozen from candidate {review.candidate.candidateId}; adjust if needed)
+          </p>
+          {changedSinceReview ? (
+            <p className="text-xs text-amber-300">
+              The explorer proposed newer values. This review keeps the values you are looking at;
+              start a new review to use the newer ones.
+            </p>
+          ) : null}
+          <FormFields
+            fields={spec.output.fields}
+            values={review.values}
+            onChange={(values) => setReview({ ...review, values })}
+            errors={reviewErrors}
+            disabled={disabled}
+          />
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="ghost" onClick={() => setReview(null)}>
               Cancel
@@ -82,7 +135,12 @@ export function WidgetResultCard({ view, spec, act, disabled, actions }: KindPro
                 size="sm"
                 disabled={disabled || Object.keys(reviewErrors).length > 0}
                 onClick={() => {
-                  act(send.id, { candidateId: review.candidate.candidateId, candidateHash: candidateHash(review.values), generation: review.candidate.generation, value: review.values });
+                  act(send.id, {
+                    candidateId: review.candidate.candidateId,
+                    candidateHash: candidateHash(review.values),
+                    generation: review.candidate.generation,
+                    value: review.values,
+                  });
                   setReview(null);
                 }}
               >
@@ -92,7 +150,11 @@ export function WidgetResultCard({ view, spec, act, disabled, actions }: KindPro
           </div>
         </div>
       ) : null}
-      {view.receipts.length ? <p className="text-[11px] text-muted-foreground">{view.receipts.length} result(s) sent from this explorer.</p> : null}
+      {view.receipts.length ? (
+        <p className="text-[11px] text-muted-foreground">
+          {view.receipts.length} result(s) sent from this explorer.
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -18,11 +18,17 @@ import { commandBackendClient, type BackendClient } from "./client";
 export function createRichInteractionsApi(client: BackendClient) {
   const api = richInteractions(client);
 
-  function listRichInteractions(input: { environmentId: string; logicalSessionKey?: string }): Promise<RichInteractionViewRecord[]> {
+  function listRichInteractions(input: {
+    environmentId: string;
+    logicalSessionKey?: string;
+  }): Promise<RichInteractionViewRecord[]> {
     return api().rich_interactions_list(input) as Promise<RichInteractionViewRecord[]>;
   }
 
-  function getRichInteraction(input: { environmentId: string; interactionId: string }): Promise<RichInteractionViewRecord> {
+  function getRichInteraction(input: {
+    environmentId: string;
+    interactionId: string;
+  }): Promise<RichInteractionViewRecord> {
     return api().rich_interaction_get(input) as Promise<RichInteractionViewRecord>;
   }
 
@@ -33,10 +39,15 @@ export function createRichInteractionsApi(client: BackendClient) {
     requestRevision: number;
     value: unknown;
   }): Promise<NonNullable<RichInteractionViewRecord["draft"]>> {
-    return api().rich_interaction_save_draft(input) as Promise<NonNullable<RichInteractionViewRecord["draft"]>>;
+    return api().rich_interaction_save_draft(input) as Promise<
+      NonNullable<RichInteractionViewRecord["draft"]>
+    >;
   }
 
-  function clearRichInteractionDraft(input: { environmentId: string; interactionId: string }): Promise<{ ok: boolean }> {
+  function clearRichInteractionDraft(input: {
+    environmentId: string;
+    interactionId: string;
+  }): Promise<{ ok: boolean }> {
     return api().rich_interaction_clear_draft(input) as Promise<{ ok: boolean }>;
   }
 
@@ -62,18 +73,31 @@ export function createRichInteractionsApi(client: BackendClient) {
     idempotencyKey: string;
     result: unknown;
   }): Promise<{ request: RichInteractionRequest; receipt: RichInteractionReceipt }> {
-    return api().rich_interaction_compose(input) as Promise<{ request: RichInteractionRequest; receipt: RichInteractionReceipt }>;
+    return api().rich_interaction_compose(input) as Promise<{
+      request: RichInteractionRequest;
+      receipt: RichInteractionReceipt;
+    }>;
   }
 
-  function dismissRichInteraction(input: { environmentId: string; interactionId: string; expectedRevision: number }): Promise<RichInteractionRequest> {
+  function dismissRichInteraction(input: {
+    environmentId: string;
+    interactionId: string;
+    expectedRevision: number;
+  }): Promise<RichInteractionRequest> {
     return api().rich_interaction_dismiss(input) as Promise<RichInteractionRequest>;
   }
 
-  function retryRichInteractionDelivery(input: { environmentId: string; receiptId: string }): Promise<RichInteractionReceipt> {
+  function retryRichInteractionDelivery(input: {
+    environmentId: string;
+    receiptId: string;
+  }): Promise<RichInteractionReceipt> {
     return api().rich_interaction_retry_delivery(input) as Promise<RichInteractionReceipt>;
   }
 
-  function listRichDeliverables(input: { environmentId: string; logicalSessionKey: string }): Promise<RichDeliverableRecord[]> {
+  function listRichDeliverables(input: {
+    environmentId: string;
+    logicalSessionKey: string;
+  }): Promise<RichDeliverableRecord[]> {
     return api().rich_deliverables_list(input) as Promise<RichDeliverableRecord[]>;
   }
 
@@ -129,5 +153,7 @@ export function richInteractionErrorCode(error: unknown): string | null {
 /** The readable part of a refusal, without its code prefix. */
 export function richInteractionErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  return message.replace(/^.*?rich-interaction:[a-z-]+:\s*/u, "").slice(0, 500) || "The request failed.";
+  return (
+    message.replace(/^.*?rich-interaction:[a-z-]+:\s*/u, "").slice(0, 500) || "The request failed."
+  );
 }

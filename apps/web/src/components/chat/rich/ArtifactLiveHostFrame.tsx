@@ -128,7 +128,13 @@ export function ArtifactLiveHostFrame({
           });
           break;
         case "result-candidate":
-          publishArtifactResultCandidate({ artifactId: outcome.artifactId, revision: outcome.revision, generation: outcome.generation, candidateId: outcome.candidateId, value: outcome.value });
+          publishArtifactResultCandidate({
+            artifactId: outcome.artifactId,
+            revision: outcome.revision,
+            generation: outcome.generation,
+            candidateId: outcome.candidateId,
+            value: outcome.value,
+          });
           break;
         case "disposed":
           // The shell already tore the artifact frame down; show the saved preview.

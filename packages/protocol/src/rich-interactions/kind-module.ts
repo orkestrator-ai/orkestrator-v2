@@ -29,7 +29,14 @@ export type RichInteractionRoute = (typeof RICH_INTERACTION_ROUTES)[number];
  * - `provider`: resolve the decorated provider-native request.
  * - `close`: dismiss/close the request without a decision.
  */
-export const RICH_ACTION_EFFECTS = ["followup", "record", "revise", "command", "provider", "close"] as const;
+export const RICH_ACTION_EFFECTS = [
+  "followup",
+  "record",
+  "revise",
+  "command",
+  "provider",
+  "close",
+] as const;
 export type RichActionEffect = (typeof RICH_ACTION_EFFECTS)[number];
 
 export interface RichActionDef {
@@ -72,7 +79,12 @@ export interface RichKindModule<Spec, Result> {
    * action; a non-null spec is published as a new request revision in the
    * same transaction as the action receipt.
    */
-  applyRevision?(spec: Spec, result: Result, action: RichActionDef, context: RichRevisionContext): Spec | null;
+  applyRevision?(
+    spec: Spec,
+    result: Result,
+    action: RichActionDef,
+    context: RichRevisionContext,
+  ): Spec | null;
   /**
    * For agent updates of an existing request: merge the agent's new spec with
    * user-owned state (thread history, assessments) and refuse changes the
@@ -84,7 +96,11 @@ export interface RichKindModule<Spec, Result> {
   fallback(spec: Spec): string;
 }
 
-export const followup = (id: string, label: string, extra: Partial<RichActionDef> = {}): RichActionDef => ({
+export const followup = (
+  id: string,
+  label: string,
+  extra: Partial<RichActionDef> = {},
+): RichActionDef => ({
   id,
   label,
   route: "agent-followup",
@@ -93,7 +109,11 @@ export const followup = (id: string, label: string, extra: Partial<RichActionDef
   ...extra,
 });
 
-export const record = (id: string, label: string, extra: Partial<RichActionDef> = {}): RichActionDef => ({
+export const record = (
+  id: string,
+  label: string,
+  extra: Partial<RichActionDef> = {},
+): RichActionDef => ({
   id,
   label,
   route: "record-only",
@@ -102,7 +122,11 @@ export const record = (id: string, label: string, extra: Partial<RichActionDef> 
   ...extra,
 });
 
-export const revise = (id: string, label: string, extra: Partial<RichActionDef> = {}): RichActionDef => ({
+export const revise = (
+  id: string,
+  label: string,
+  extra: Partial<RichActionDef> = {},
+): RichActionDef => ({
   id,
   label,
   route: "record-only",

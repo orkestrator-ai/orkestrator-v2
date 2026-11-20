@@ -4498,7 +4498,10 @@ export function SharedNativeAgentController({
               <>
                 {richTranscriptScope ? (
                   <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
-                    <SessionInteractionTools environmentId={data.environmentId} logicalSessionKey={sessionKey} />
+                    <SessionInteractionTools
+                      environmentId={data.environmentId}
+                      logicalSessionKey={sessionKey}
+                    />
                   </RichTranscriptScopeContext.Provider>
                 ) : null}
                 {canSearchFiles ? (

@@ -7,8 +7,10 @@ export const RICH_INTERACTIONS_LOG_AREAS = defineLogAreas({
     events: {
       "dispatch.enqueue-failed":
         "A committed follow-up could not be handed to the session's prompt queue; it stays pending and is retried.",
-      "sweep.deliver-failed": "The delivery sweep could not advance one receipt; the next sweep retries it.",
-      "start.failed": "The rich interaction service could not start; interaction tools are unavailable on this backend.",
+      "sweep.deliver-failed":
+        "The delivery sweep could not advance one receipt; the next sweep retries it.",
+      "start.failed":
+        "The rich interaction service could not start; interaction tools are unavailable on this backend.",
     },
   },
 });

@@ -21,7 +21,8 @@ export class RichInteractionValidationError extends Error {
   }
 }
 
-export type Validated<T> = { ok: true; value: T } | { ok: false; error: string; path: string; code: "invalid" | "capacity" };
+export type Validated<T> =
+  { ok: true; value: T } | { ok: false; error: string; path: string; code: "invalid" | "capacity" };
 
 export function validated<T>(read: () => T): Validated<T> {
   try {
@@ -67,7 +68,8 @@ export function id(value: unknown, path: string, max = 200): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) {
     fail(path, `must be an id of 1-${max} characters`);
   }
-  if (!ID_PATTERN.test(value)) fail(path, "must be printable text without control characters or surrounding whitespace");
+  if (!ID_PATTERN.test(value))
+    fail(path, "must be printable text without control characters or surrounding whitespace");
   return value;
 }
 
@@ -78,7 +80,8 @@ export function optId(value: unknown, path: string, max = 200): string | undefin
 export function str(value: unknown, path: string, max: number, min = 0): string {
   if (typeof value !== "string") fail(path, "must be a string");
   if (value.length > max) capacity(path, `must be at most ${max} characters`);
-  if (value.trim().length < min) fail(path, min === 1 ? "must not be empty" : `must be at least ${min} characters`);
+  if (value.trim().length < min)
+    fail(path, min === 1 ? "must not be empty" : `must be at least ${min} characters`);
   return value;
 }
 
@@ -102,8 +105,10 @@ export function num(
 ): number {
   if (typeof value !== "number" || !Number.isFinite(value)) fail(path, "must be a finite number");
   if (options.integer && !Number.isSafeInteger(value)) fail(path, "must be an integer");
-  if (options.min !== undefined && value < options.min) fail(path, `must be at least ${options.min}`);
-  if (options.max !== undefined && value > options.max) fail(path, `must be at most ${options.max}`);
+  if (options.min !== undefined && value < options.min)
+    fail(path, `must be at least ${options.min}`);
+  if (options.max !== undefined && value > options.max)
+    fail(path, `must be at most ${options.max}`);
   return value;
 }
 
@@ -178,10 +183,12 @@ export function jsonValue(value: unknown, path: string, depth = 0): unknown {
     if (!Number.isFinite(value)) fail(path, "must be a finite number");
     return value;
   }
-  if (Array.isArray(value)) return value.map((item, index) => jsonValue(item, `${path}[${index}]`, depth + 1));
+  if (Array.isArray(value))
+    return value.map((item, index) => jsonValue(item, `${path}[${index}]`, depth + 1));
   if (isRecord(value)) {
     const out: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) out[key] = jsonValue(item, `${path}.${key}`, depth + 1);
+    for (const [key, item] of Object.entries(value))
+      out[key] = jsonValue(item, `${path}.${key}`, depth + 1);
     return out;
   }
   fail(path, "must be plain JSON");

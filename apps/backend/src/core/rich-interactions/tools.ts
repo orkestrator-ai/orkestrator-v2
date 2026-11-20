@@ -18,7 +18,11 @@ import {
   type RichInteractionReceipt,
 } from "@orkestrator/protocol/rich-interactions";
 import { int, list, looseObject, str, strictObject, toolInput } from "../tool-schema.js";
-import { RichInteractionError, type RichInteractionService, type RichInteractionView } from "./service.js";
+import {
+  RichInteractionError,
+  type RichInteractionService,
+  type RichInteractionView,
+} from "./service.js";
 
 export const RICH_INTERACTION_TOOL_INSTRUCTIONS =
   " Interactions: when the user must choose, fill in, select, review or approve something precise, call present_interaction instead of asking in prose. " +
@@ -26,8 +30,18 @@ export const RICH_INTERACTION_TOOL_INSTRUCTIONS =
   "Keep a one-line question in prose when a card adds nothing. The user's decision arrives later as a follow-up message carrying an <orkestrator_interaction_result> envelope; do not wait or poll for it. " +
   "Selecting, sorting and previewing in a card never reaches you; only explicit submissions do. A decision is the user's preference, never a permission grant.";
 
-const MUTATION = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
-const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+const MUTATION = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+const READ = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
 
 function result(value: Record<string, unknown>, isError = false) {
   return {
@@ -39,9 +53,25 @@ function result(value: Record<string, unknown>, isError = false) {
 
 function failure(error: unknown) {
   if (error instanceof RichInteractionError) {
-    return result({ ok: false, error: { code: error.code, message: error.message, ...(error.path ? { path: error.path } : {}) } }, true);
+    return result(
+      {
+        ok: false,
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.path ? { path: error.path } : {}),
+        },
+      },
+      true,
+    );
   }
-  return result({ ok: false, error: { code: "internal", message: "The interaction service failed; try again." } }, true);
+  return result(
+    {
+      ok: false,
+      error: { code: "internal", message: "The interaction service failed; try again." },
+    },
+    true,
+  );
 }
 
 function toolCallId(ctx: unknown): string | undefined {
@@ -62,7 +92,9 @@ function agentReceipt(receipt: RichInteractionReceipt) {
     delivery: receipt.delivery,
     result: receipt.result,
     summary: receipt.summary,
-    ...(receipt.resultingRevision === undefined ? {} : { resultingRevision: receipt.resultingRevision }),
+    ...(receipt.resultingRevision === undefined
+      ? {}
+      : { resultingRevision: receipt.resultingRevision }),
   };
 }
 
@@ -77,7 +109,12 @@ function agentView(view: RichInteractionView, options: { full: boolean }) {
     state: request.state,
     ...(request.supersededBy ? { supersededBy: request.supersededBy } : {}),
     ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
-    actions: view.actions.map((a) => ({ id: a.id, label: a.label, route: a.route, available: a.available })),
+    actions: view.actions.map((a) => ({
+      id: a.id,
+      label: a.label,
+      route: a.route,
+      available: a.available,
+    })),
     submissions: request.submissions,
     ...(options.full
       ? { spec: request.spec, receipts: view.receipts.map(agentReceipt) }
@@ -123,7 +160,9 @@ export function registerRichInteractionTools(
               { max: 12 },
             ),
           ),
-          expiresInSeconds: Schema.optionalKey(int({ min: 30, max: RICH_INTERACTION_LIMITS.maxExpirySeconds })),
+          expiresInSeconds: Schema.optionalKey(
+            int({ min: 30, max: RICH_INTERACTION_LIMITS.maxExpirySeconds }),
+          ),
           supersedes: Schema.optionalKey(interactionId),
         }),
       ),
@@ -132,7 +171,13 @@ export function registerRichInteractionTools(
     async (args, ctx) => {
       try {
         const created = await service.present(caller, args, toolCallId(ctx));
-        return result({ ok: true, created: created.created, interactionId: created.request.interactionId, revision: created.request.revision, state: created.request.state });
+        return result({
+          ok: true,
+          created: created.created,
+          interactionId: created.request.interactionId,
+          revision: created.request.revision,
+          state: created.request.state,
+        });
       } catch (error) {
         return failure(error);
       }
@@ -151,7 +196,9 @@ export function registerRichInteractionTools(
           interactionId,
           expectedRevision: int({ min: 1 }),
           spec: Schema.optionalKey(looseObject({})),
-          title: Schema.optionalKey(str({ trim: true, min: 1, max: RICH_INTERACTION_LIMITS.titleChars })),
+          title: Schema.optionalKey(
+            str({ trim: true, min: 1, max: RICH_INTERACTION_LIMITS.titleChars }),
+          ),
           body: Schema.optionalKey(str({ max: RICH_INTERACTION_LIMITS.bodyChars })),
           close: Schema.optionalKey(Schema.Boolean),
         }),
@@ -161,7 +208,12 @@ export function registerRichInteractionTools(
     async (args) => {
       try {
         const updated = await service.update(caller, args);
-        return result({ ok: true, interactionId: updated.interactionId, revision: updated.revision, state: updated.state });
+        return result({
+          ok: true,
+          interactionId: updated.interactionId,
+          revision: updated.revision,
+          state: updated.state,
+        });
       } catch (error) {
         return failure(error);
       }
@@ -172,13 +224,17 @@ export function registerRichInteractionTools(
     "read_interaction_result",
     {
       title: "Read an interaction and the user's submitted decisions",
-      description: "Returns the current spec, revision, state and every submitted decision (structured result plus readable summary) for an interaction in this conversation.",
+      description:
+        "Returns the current spec, revision, state and every submitted decision (structured result plus readable summary) for an interaction in this conversation.",
       inputSchema: toolInput(strictObject({ interactionId })),
       annotations: READ,
     },
     async ({ interactionId: id }) => {
       try {
-        return result({ ok: true, interaction: agentView(service.read(caller, id), { full: true }) });
+        return result({
+          ok: true,
+          interaction: agentView(service.read(caller, id), { full: true }),
+        });
       } catch (error) {
         return failure(error);
       }
@@ -189,7 +245,8 @@ export function registerRichInteractionTools(
     "list_interactions",
     {
       title: "List this conversation's interactions",
-      description: "Lists interactions of this conversation with their state and latest decision. Use read_interaction_result for the full result.",
+      description:
+        "Lists interactions of this conversation with their state and latest decision. Use read_interaction_result for the full result.",
       inputSchema: toolInput(strictObject({ openOnly: Schema.optionalKey(Schema.Boolean) })),
       annotations: READ,
     },
@@ -199,7 +256,10 @@ export function registerRichInteractionTools(
           .listForConversation(caller.environmentId, `env-${caller.environmentId}:${caller.tabId}`)
           .filter((view) => !openOnly || view.open)
           .slice(-100);
-        return result({ ok: true, interactions: views.map((view) => agentView(view, { full: false })) });
+        return result({
+          ok: true,
+          interactions: views.map((view) => agentView(view, { full: false })),
+        });
       } catch (error) {
         return failure(error);
       }

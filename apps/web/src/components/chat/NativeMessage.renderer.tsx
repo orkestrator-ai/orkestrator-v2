@@ -9,7 +9,10 @@ import { MailToolPart } from "./MailToolPart";
 import { TodoToolPart } from "@/components/todo/TodoToolPart";
 import { PlanToolPart } from "./PlanToolPart";
 import { InteractionReceiptPart } from "./interactions/InteractionReceiptPart";
-import { RichInteractionToolPart, isPresentInteractionTool } from "./interactions/RichInteractionToolPart";
+import {
+  RichInteractionToolPart,
+  isPresentInteractionTool,
+} from "./interactions/RichInteractionToolPart";
 import { type NativeMessagePart } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {

@@ -117,7 +117,11 @@ export function readContentRef(value: unknown, path: string): ContentRef {
       });
     case "file": {
       only(["path", "contentHash", "commit", "live"]);
-      const contentHash = optStr(record.contentHash, `${path}.contentHash`, RICH_REF_LIMITS.hashChars);
+      const contentHash = optStr(
+        record.contentHash,
+        `${path}.contentHash`,
+        RICH_REF_LIMITS.hashChars,
+      );
       const live = bool(record.live, `${path}.live`);
       if (!live && contentHash === undefined && record.commit === undefined) {
         fail(path, "a non-live file reference needs a contentHash or commit");
@@ -145,7 +149,9 @@ export function readContentRef(value: unknown, path: string): ContentRef {
       return withLabel({
         kind,
         runId: id(record.runId, `${path}.runId`),
-        ...(record.revision === undefined ? {} : { revision: revision(record.revision, `${path}.revision`) }),
+        ...(record.revision === undefined
+          ? {}
+          : { revision: revision(record.revision, `${path}.revision`) }),
       });
     case "url": {
       only(["url", "capturedAt"]);
@@ -230,7 +236,14 @@ export interface NormalizedRect {
 
 export type AnchorLocation =
   | { kind: "whole" }
-  | { kind: "document-block"; blockId: string; quote?: string; start?: number; end?: number; contextDigest?: string }
+  | {
+      kind: "document-block";
+      blockId: string;
+      quote?: string;
+      start?: number;
+      end?: number;
+      contextDigest?: string;
+    }
   | { kind: "text-range"; quote: string; prefix?: string; suffix?: string }
   | { kind: "table-rows"; rowIds: string[] }
   | { kind: "table-cell"; rowId: string; columnId: string }
@@ -357,9 +370,14 @@ export function readAnchorLocation(value: unknown, path: string): AnchorLocation
     case "document-block": {
       const start = optNum(record.start, `${path}.start`, { min: 0, integer: true });
       const end = optNum(record.end, `${path}.end`, { min: 0, integer: true });
-      if (start !== undefined && end !== undefined && end < start) fail(`${path}.end`, "must not precede start");
+      if (start !== undefined && end !== undefined && end < start)
+        fail(`${path}.end`, "must not precede start");
       const q = quote("quote");
-      const digest = optStr(record.contextDigest, `${path}.contextDigest`, RICH_REF_LIMITS.hashChars);
+      const digest = optStr(
+        record.contextDigest,
+        `${path}.contextDigest`,
+        RICH_REF_LIMITS.hashChars,
+      );
       return {
         kind,
         blockId: id(record.blockId, `${path}.blockId`),
@@ -382,7 +400,11 @@ export function readAnchorLocation(value: unknown, path: string): AnchorLocation
     case "table-rows":
       return { kind, rowIds: ids(record.rowIds, `${path}.rowIds`) };
     case "table-cell":
-      return { kind, rowId: id(record.rowId, `${path}.rowId`), columnId: id(record.columnId, `${path}.columnId`) };
+      return {
+        kind,
+        rowId: id(record.rowId, `${path}.rowId`),
+        columnId: id(record.columnId, `${path}.columnId`),
+      };
     case "chart-points":
       return {
         kind,
@@ -417,7 +439,11 @@ export function readAnchorLocation(value: unknown, path: string): AnchorLocation
       const startLine = num(record.startLine, `${path}.startLine`, { min: 1, integer: true });
       const endLine = num(record.endLine, `${path}.endLine`, { min: 1, integer: true });
       if (endLine < startLine) fail(`${path}.endLine`, "must not precede startLine");
-      const contentHash = optStr(record.contentHash, `${path}.contentHash`, RICH_REF_LIMITS.hashChars);
+      const contentHash = optStr(
+        record.contentHash,
+        `${path}.contentHash`,
+        RICH_REF_LIMITS.hashChars,
+      );
       const hunkId = optId(record.hunkId, `${path}.hunkId`);
       return {
         kind,
@@ -442,7 +468,12 @@ export function readAnchorLocation(value: unknown, path: string): AnchorLocation
       const endMs = num(record.endMs, `${path}.endMs`, { min: 0, integer: true });
       if (endMs <= startMs) fail(`${path}.endMs`, "must be after startMs");
       const excerpt = quote("transcriptExcerpt");
-      return { kind, startMs, endMs, ...(excerpt === undefined ? {} : { transcriptExcerpt: excerpt }) };
+      return {
+        kind,
+        startMs,
+        endMs,
+        ...(excerpt === undefined ? {} : { transcriptExcerpt: excerpt }),
+      };
     }
     case "plan-step":
       return { kind, stepId: id(record.stepId, `${path}.stepId`) };

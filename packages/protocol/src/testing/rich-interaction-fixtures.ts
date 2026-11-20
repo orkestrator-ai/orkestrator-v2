@@ -12,7 +12,12 @@ export interface RichKindFixture {
   result: unknown;
 }
 
-const artifact = (artifactId: string, revision: number, label?: string) => ({ kind: "artifact", artifactId, revision, ...(label ? { label } : {}) });
+const artifact = (artifactId: string, revision: number, label?: string) => ({
+  kind: "artifact",
+  artifactId,
+  revision,
+  ...(label ? { label } : {}),
+});
 
 export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = {
   choice: {
@@ -23,8 +28,22 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
           id: "findings-layout",
           prompt: "Which findings layout should I implement?",
           options: [
-            { id: "focused-list", label: "Focused list", description: "One finding at a time", tradeoffs: ["Less overview"], preview: { kind: "artifact", description: "List mockup", ref: artifact("layout-list", 3) } },
-            { id: "board", label: "Visual board", preview: { kind: "text", description: "Board sketch", source: "[ a ][ b ][ c ]" } },
+            {
+              id: "focused-list",
+              label: "Focused list",
+              description: "One finding at a time",
+              tradeoffs: ["Less overview"],
+              preview: {
+                kind: "artifact",
+                description: "List mockup",
+                ref: artifact("layout-list", 3),
+              },
+            },
+            {
+              id: "board",
+              label: "Visual board",
+              preview: { kind: "text", description: "Board sketch", source: "[ a ][ b ][ c ]" },
+            },
           ],
           recommendedOptionId: "focused-list",
           recommendationRationale: "Matches keyboard review flow",
@@ -32,7 +51,10 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       ],
     },
     actionId: "submit",
-    result: { answers: [{ questionId: "findings-layout", optionIds: ["focused-list"] }], constraints: "Keep keyboard navigation visible" },
+    result: {
+      answers: [{ questionId: "findings-layout", optionIds: ["focused-list"] }],
+      constraints: "Keep keyboard navigation visible",
+    },
   },
   form: {
     title: "Configure the task",
@@ -40,16 +62,49 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       purpose: "Configure the background job",
       form: {
         fields: [
-          { id: "concurrency", type: "number", label: "Concurrency", required: true, integer: true, minimum: 1, maximum: 16, unit: "workers", default: 4 },
-          { id: "timeoutSeconds", type: "number", label: "Timeout", required: false, unit: "s", minimum: 0 },
-          { id: "paths", type: "list", itemType: "text", label: "Allowed directories", required: false },
+          {
+            id: "concurrency",
+            type: "number",
+            label: "Concurrency",
+            required: true,
+            integer: true,
+            minimum: 1,
+            maximum: 16,
+            unit: "workers",
+            default: 4,
+          },
+          {
+            id: "timeoutSeconds",
+            type: "number",
+            label: "Timeout",
+            required: false,
+            unit: "s",
+            minimum: 0,
+          },
+          {
+            id: "paths",
+            type: "list",
+            itemType: "text",
+            label: "Allowed directories",
+            required: false,
+          },
           { id: "browser", type: "boolean", label: "Include browser checks", required: true },
-          { id: "browserName", type: "enum", label: "Browser", required: true, options: [{ id: "chromium", label: "Chromium" }], visibleWhen: { fieldId: "browser", equals: true } },
+          {
+            id: "browserName",
+            type: "enum",
+            label: "Browser",
+            required: true,
+            options: [{ id: "chromium", label: "Chromium" }],
+            visibleWhen: { fieldId: "browser", equals: true },
+          },
         ],
       },
     },
     actionId: "submit",
-    result: { schemaRevision: 1, values: { concurrency: 0 + 4, timeoutSeconds: 0, paths: ["apps/web"], browser: false } },
+    result: {
+      schemaRevision: 1,
+      values: { concurrency: 0 + 4, timeoutSeconds: 0, paths: ["apps/web"], browser: false },
+    },
   },
   plan: {
     title: "Session reliability plan",
@@ -57,7 +112,12 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       planId: "session-reliability",
       steps: [
         { id: "schema", title: "Add schema", dependsOn: [] },
-        { id: "historical-migration", title: "Migrate history", dependsOn: ["schema"], optional: true },
+        {
+          id: "historical-migration",
+          title: "Migrate history",
+          dependsOn: ["schema"],
+          optional: true,
+        },
         { id: "recovery-tests", title: "Recovery tests", dependsOn: ["schema"] },
         { id: "release", title: "Release", dependsOn: ["recovery-tests"] },
       ],
@@ -80,7 +140,13 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       columns: [
         { id: "title", label: "Finding", type: "text" },
         { id: "severity", label: "Severity", type: "number" },
-        { id: "priority", label: "Priority", type: "enum", options: ["low", "high"], editable: true },
+        {
+          id: "priority",
+          label: "Priority",
+          type: "enum",
+          options: ["low", "high"],
+          editable: true,
+        },
       ],
       rows: [
         { id: "finding-02", cells: { title: "Focus lost", severity: 3, priority: "low" } },
@@ -89,7 +155,11 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       complete: true,
     },
     actionId: "discuss-selected",
-    result: { sourceRevision: 3, selection: { mode: "explicit", rowIds: ["finding-02", "finding-07"] }, edits: [{ rowId: "finding-07", field: "priority", value: "high" }] },
+    result: {
+      sourceRevision: 3,
+      selection: { mode: "explicit", rowIds: ["finding-02", "finding-07"] },
+      edits: [{ rowId: "finding-07", field: "priority", value: "high" }],
+    },
   },
   "code-review": {
     title: "Review session changes",
@@ -116,12 +186,29 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       ],
     },
     actionId: "send-review",
-    result: { items: [{ itemId: "i1", file: "apps/backend/src/session.ts", scope: "lines", hunkId: "h1", side: "after", startLine: 41, endLine: 42, disposition: "revise", comment: "Return a clear error when the session no longer exists." }] },
+    result: {
+      items: [
+        {
+          itemId: "i1",
+          file: "apps/backend/src/session.ts",
+          scope: "lines",
+          hunkId: "h1",
+          side: "after",
+          startLine: 41,
+          endLine: 42,
+          disposition: "revise",
+          comment: "Return a clear error when the session no longer exists.",
+        },
+      ],
+    },
   },
   feedback: {
     title: "Comment",
     spec: {
-      target: { source: artifact("settings-preview", 5), location: { kind: "image-region", rect: { x: 0.12, y: 0.28, width: 0.3, height: 0.16 } } },
+      target: {
+        source: artifact("settings-preview", 5),
+        location: { kind: "image-region", rect: { x: 0.12, y: 0.28, width: 0.3, height: 0.16 } },
+      },
       entries: [],
       resolved: false,
     },
@@ -135,12 +222,25 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       requestSummary: "Implement the focused list",
       sourceRevision: 2,
       resultRevision: 5,
-      comparisons: [{ id: "screen", label: "Findings screen", mode: "image", before: artifact("shot-before", 1), after: artifact("shot-after", 1) }],
+      comparisons: [
+        {
+          id: "screen",
+          label: "Findings screen",
+          mode: "image",
+          before: artifact("shot-before", 1),
+          after: artifact("shot-after", 1),
+        },
+      ],
       checks: [{ id: "unit", label: "Unit tests", status: "passed", provenance: "agent-reported" }],
       criteria: [{ id: "keyboard-navigation", text: "Keyboard navigation works" }],
     },
     actionId: "request-changes",
-    result: { expectedResultRevision: 5, decision: "request-changes", criterionIds: ["keyboard-navigation"], comment: "Keep the layout; improve the keyboard focus indicator." },
+    result: {
+      expectedResultRevision: 5,
+      decision: "request-changes",
+      criterionIds: ["keyboard-navigation"],
+      comment: "Keep the layout; improve the keyboard focus indicator.",
+    },
   },
   document: {
     title: "Provider integration spec",
@@ -165,8 +265,19 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       status: "failed",
       commands: [{ id: "unit", label: "bun test", status: "failed", exitCode: 1 }],
       cases: [
-        { id: "auth:expired-session", name: "expired session", status: "failed", message: "expected 401", rerunnable: true },
-        { id: "auth:refresh-token", name: "refresh token", status: "failed", excerpt: "TypeError: x is undefined" },
+        {
+          id: "auth:expired-session",
+          name: "expired session",
+          status: "failed",
+          message: "expected 401",
+          rerunnable: true,
+        },
+        {
+          id: "auth:refresh-token",
+          name: "refresh token",
+          status: "failed",
+          excerpt: "TypeError: x is undefined",
+        },
         { id: "ui:browser", name: "browser case", status: "skipped" },
         { id: "types", name: "typecheck", status: "passed" },
       ],
@@ -184,12 +295,34 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
         description: "Build duration per run",
         xAxis: { kind: "number", label: "Run" },
         yAxis: { label: "Duration", unit: "s" },
-        series: [{ id: "build-duration", label: "Build", points: [{ x: 99, y: 40 }, { x: 100, y: 80 }, { x: 110, y: null }, { x: 120, y: 85 }, { x: 121, y: 41 }] }],
+        series: [
+          {
+            id: "build-duration",
+            label: "Build",
+            points: [
+              { x: 99, y: 40 },
+              { x: 100, y: 80 },
+              { x: 110, y: null },
+              { x: 120, y: 85 },
+              { x: 121, y: 41 },
+            ],
+          },
+        ],
       },
       source: artifact("chart_example", 3),
     },
     actionId: "investigate-selection",
-    result: { selection: { kind: "chart-range", seriesIds: ["build-duration"], from: 100, to: 120, inclusive: true, population: "all-underlying-observations" }, question: "Why did this regress?" },
+    result: {
+      selection: {
+        kind: "chart-range",
+        seriesIds: ["build-duration"],
+        from: 100,
+        to: 120,
+        inclusive: true,
+        population: "all-underlying-observations",
+      },
+      question: "Why did this regress?",
+    },
   },
   diagram: {
     title: "Architecture",
@@ -199,11 +332,20 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       objects: [
         { id: "node:provider-bridge", type: "node", label: "Provider bridge" },
         { id: "node:backend", type: "node", label: "Backend" },
-        { id: "edge:bridge-to-backend", type: "edge", label: "HTTP", from: "node:provider-bridge", to: "node:backend" },
+        {
+          id: "edge:bridge-to-backend",
+          type: "edge",
+          label: "HTTP",
+          from: "node:provider-bridge",
+          to: "node:backend",
+        },
       ],
     },
     actionId: "explain",
-    result: { objectIds: ["node:provider-bridge", "edge:bridge-to-backend"], question: "What happens when this connection is interrupted?" },
+    result: {
+      objectIds: ["node:provider-bridge", "edge:bridge-to-backend"],
+      question: "What happens when this connection is interrupted?",
+    },
   },
   "widget-result": {
     title: "Capacity explorer",
@@ -212,28 +354,83 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       revision: 5,
       intent: "Choose worker settings",
       assumptions: ["Illustrative resource model; not a measured benchmark"],
-      output: { fields: [{ id: "workers", type: "number", label: "Workers", required: true, integer: true, minimum: 1 }, { id: "memoryPerWorkerMiB", type: "number", label: "Memory per worker", unit: "MiB", required: true }] },
+      output: {
+        fields: [
+          {
+            id: "workers",
+            type: "number",
+            label: "Workers",
+            required: true,
+            integer: true,
+            minimum: 1,
+          },
+          {
+            id: "memoryPerWorkerMiB",
+            type: "number",
+            label: "Memory per worker",
+            unit: "MiB",
+            required: true,
+          },
+        ],
+      },
     },
     actionId: "send-result",
-    result: { candidateId: "candidate_12", candidateHash: "fnv1a:0000", generation: "gen-1", value: { workers: 4, memoryPerWorkerMiB: 2048 } },
+    result: {
+      candidateId: "candidate_12",
+      candidateHash: "fnv1a:0000",
+      generation: "gen-1",
+      value: { workers: 4, memoryPerWorkerMiB: 2048 },
+    },
   },
   evidence: {
     title: "Why change buffering",
     spec: {
       recommendation: "Change transcript buffering",
-      claims: [{ id: "claim_buffering", text: "Buffering causes the stall", kind: "interpretation" }],
-      evidence: [{ id: "trace_steady_state", label: "Performance trace", source: artifact("trace", 7), excerpt: "frame 120ms" }],
-      links: [{ claimId: "claim_buffering", evidenceId: "trace_steady_state", relevance: "Shows long frames during flush" }],
+      claims: [
+        { id: "claim_buffering", text: "Buffering causes the stall", kind: "interpretation" },
+      ],
+      evidence: [
+        {
+          id: "trace_steady_state",
+          label: "Performance trace",
+          source: artifact("trace", 7),
+          excerpt: "frame 120ms",
+        },
+      ],
+      links: [
+        {
+          claimId: "claim_buffering",
+          evidenceId: "trace_steady_state",
+          relevance: "Shows long frames during flush",
+        },
+      ],
     },
     actionId: "challenge-assumption",
-    result: { claimId: "claim_buffering", evidenceIds: ["trace_steady_state"], question: "Does this interval exclude initialization?" },
+    result: {
+      claimId: "claim_buffering",
+      evidenceIds: ["trace_steady_state"],
+      question: "Does this interval exclude initialization?",
+    },
   },
   "context-packet": {
     title: "Regression context",
     spec: {
       items: [
-        { itemId: "ctx-1", kind: "file", source: { kind: "file", path: "src/a.ts", live: true }, label: "a.ts", freeze: "latest" },
-        { itemId: "ctx-2", kind: "artifact-selection", source: artifact("benchmark-a", 4), location: { kind: "chart-points", seriesIds: ["compile"], pointIds: ["compile#4"] }, label: "the regression", userNote: "Explain this regression" },
+        {
+          itemId: "ctx-1",
+          kind: "file",
+          source: { kind: "file", path: "src/a.ts", live: true },
+          label: "a.ts",
+          freeze: "latest",
+        },
+        {
+          itemId: "ctx-2",
+          kind: "artifact-selection",
+          source: artifact("benchmark-a", 4),
+          location: { kind: "chart-points", seriesIds: ["compile"], pointIds: ["compile#4"] },
+          label: "the regression",
+          userNote: "Explain this regression",
+        },
       ],
     },
     actionId: "send",
@@ -245,8 +442,16 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       setId: "crit-1",
       phase: "proposed",
       criteria: [
-        { id: "narrow", requirement: "Usable at 390px", verification: { kind: "manual-walkthrough", steps: ["Resize to 390px", "Open menu"] } },
-        { id: "keyboard-menu", requirement: "Every menu action is reachable by keyboard", verification: { kind: "inspection" } },
+        {
+          id: "narrow",
+          requirement: "Usable at 390px",
+          verification: { kind: "manual-walkthrough", steps: ["Resize to 390px", "Open menu"] },
+        },
+        {
+          id: "keyboard-menu",
+          requirement: "Every menu action is reachable by keyboard",
+          verification: { kind: "inspection" },
+        },
       ],
     },
     actionId: "agree",
@@ -260,12 +465,29 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       baseline: { commit: "base123" },
       criteria: [{ id: "latency", text: "p95 under 200ms" }],
       alternatives: [
-        { id: "bounded-memory", label: "Bounded memory", summary: "LRU", status: "ready", commit: "aaa111", measurements: [{ criterionId: "latency", label: "p95", value: 180, unit: "ms" }] },
-        { id: "disk", label: "Disk cache", summary: "SQLite", status: "ready", commit: "bbb222", measurements: [{ criterionId: "latency", label: "p95", value: null, unit: "ms" }] },
+        {
+          id: "bounded-memory",
+          label: "Bounded memory",
+          summary: "LRU",
+          status: "ready",
+          commit: "aaa111",
+          measurements: [{ criterionId: "latency", label: "p95", value: 180, unit: "ms" }],
+        },
+        {
+          id: "disk",
+          label: "Disk cache",
+          summary: "SQLite",
+          status: "ready",
+          commit: "bbb222",
+          measurements: [{ criterionId: "latency", label: "p95", value: null, unit: "ms" }],
+        },
       ],
     },
     actionId: "prefer",
-    result: { alternativeId: "bounded-memory", rationale: "Meets latency target with simpler invalidation" },
+    result: {
+      alternativeId: "bounded-memory",
+      rationale: "Meets latency target with simpler invalidation",
+    },
   },
   "workflow-actions": {
     title: "Validation workflow",
@@ -276,7 +498,13 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       snapshotRevision: 4,
       nodes: [
         { id: "lint", label: "Lint", state: "succeeded" },
-        { id: "validation", label: "Validation", state: "failed", attemptId: "attempt-3", detail: "2 tests failed" },
+        {
+          id: "validation",
+          label: "Validation",
+          state: "failed",
+          attemptId: "attempt-3",
+          detail: "2 tests failed",
+        },
       ],
     },
     actionId: "explain-failure",
@@ -285,7 +513,12 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
   "voice-request": {
     title: "Spoken request",
     spec: {
-      targets: [{ source: artifact("build-trend", 5), location: { kind: "chart-points", seriesIds: ["build"], pointIds: ["build#42"] } }],
+      targets: [
+        {
+          source: artifact("build-trend", 5),
+          location: { kind: "chart-points", seriesIds: ["build"], pointIds: ["build#42"] },
+        },
+      ],
       recognized: "explain why this changed",
       engine: { name: "web-speech", processing: "unknown" },
     },
@@ -301,14 +534,39 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
       startedAt: "2026-11-20T10:00:00.000Z",
       durationMs: 9_000,
       steps: [
-        { stepId: "step-1", offsetMs: 0, action: "click", target: { role: "button", label: "Menu" }, route: "/items", documentSegment: 0 },
-        { stepId: "step-2", offsetMs: 4_000, action: "input", target: { role: "textbox", label: "Name" }, documentSegment: 0, valueOmitted: true },
-        { stepId: "step-4", offsetMs: 8_250, action: "submit", target: { role: "button", label: "Save" }, documentSegment: 0, userObservation: "The selection disappears", wrongHere: true },
+        {
+          stepId: "step-1",
+          offsetMs: 0,
+          action: "click",
+          target: { role: "button", label: "Menu" },
+          route: "/items",
+          documentSegment: 0,
+        },
+        {
+          stepId: "step-2",
+          offsetMs: 4_000,
+          action: "input",
+          target: { role: "textbox", label: "Name" },
+          documentSegment: 0,
+          valueOmitted: true,
+        },
+        {
+          stepId: "step-4",
+          offsetMs: 8_250,
+          action: "submit",
+          target: { role: "button", label: "Save" },
+          documentSegment: 0,
+          userObservation: "The selection disappears",
+          wrongHere: true,
+        },
       ],
       gaps: [],
       stopReason: "user",
     },
     actionId: "send",
-    result: { stepIds: ["step-1", "step-2", "step-4"], expectedOutcome: "The chosen item remains visible" },
+    result: {
+      stepIds: ["step-1", "step-2", "step-4"],
+      expectedOutcome: "The chosen item remains visible",
+    },
   },
 };

@@ -22,7 +22,10 @@ import { RichInteractionError, type RichInteractionService } from "./rich-intera
  */
 
 function service(context: CommandContext): RichInteractionService {
-  if (!context.richInteractions) throw new Error("rich-interaction:unavailable: Rich interactions are unavailable on this backend.");
+  if (!context.richInteractions)
+    throw new Error(
+      "rich-interaction:unavailable: Rich interactions are unavailable on this backend.",
+    );
   return context.richInteractions;
 }
 
@@ -39,10 +42,19 @@ async function guarded<T>(work: () => T | Promise<T>): Promise<T> {
 
 export function registerRichInteractionCommands(register: CommandRegistrar): void {
   register(richInteractionsListCommand, (args, context) =>
-    guarded(() => service(context).listForConversation(args.environmentId, args.logicalSessionKey) as RichInteractionViewRecord[]),
+    guarded(
+      () =>
+        service(context).listForConversation(
+          args.environmentId,
+          args.logicalSessionKey,
+        ) as RichInteractionViewRecord[],
+    ),
   );
   register(richInteractionGetCommand, (args, context) =>
-    guarded(() => service(context).get(args.environmentId, args.interactionId) as RichInteractionViewRecord),
+    guarded(
+      () =>
+        service(context).get(args.environmentId, args.interactionId) as RichInteractionViewRecord,
+    ),
   );
   register(richInteractionSaveDraftCommand, (args, context) =>
     guarded(() => {
@@ -88,7 +100,9 @@ export function registerRichInteractionCommands(register: CommandRegistrar): voi
     ),
   );
   register(richInteractionDismissCommand, (args, context) =>
-    guarded(() => service(context).dismiss(args.environmentId, args.interactionId, args.expectedRevision)),
+    guarded(() =>
+      service(context).dismiss(args.environmentId, args.interactionId, args.expectedRevision),
+    ),
   );
   register(richInteractionRetryDeliveryCommand, (args, context) =>
     guarded(() => service(context).retryDelivery(args.environmentId, args.receiptId)),
@@ -105,7 +119,9 @@ export function registerRichInteractionCommands(register: CommandRegistrar): voi
         patch: {
           ...(args.pinned === undefined ? {} : { pinned: args.pinned }),
           ...(args.userLabel === undefined ? {} : { userLabel: args.userLabel }),
-          ...(args.selectedRevision === undefined ? {} : { selectedRevision: args.selectedRevision }),
+          ...(args.selectedRevision === undefined
+            ? {}
+            : { selectedRevision: args.selectedRevision }),
           ...(args.group === undefined ? {} : { group: args.group }),
         },
       }),

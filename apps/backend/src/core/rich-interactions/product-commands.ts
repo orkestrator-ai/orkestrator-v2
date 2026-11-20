@@ -1,5 +1,8 @@
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
-import type { WorkflowActionsResult, WorkflowActionsSpec } from "@orkestrator/protocol/rich-interactions";
+import type {
+  WorkflowActionsResult,
+  WorkflowActionsSpec,
+} from "@orkestrator/protocol/rich-interactions";
 import type { StoredReceipt, StoredRequest } from "./store.js";
 
 /**
@@ -47,13 +50,20 @@ function message(error: unknown): string {
  * must still be at the snapshot revision the user acted on, so a retry or
  * stop never lands on an attempt that started after the card was read.
  */
-export function graphWorkflowCommands(graphRuns: () => GraphRunControls | undefined): ProductCommand[] {
+export function graphWorkflowCommands(
+  graphRuns: () => GraphRunControls | undefined,
+): ProductCommand[] {
   const availability = (request: StoredRequest) => {
     const spec = request.spec as WorkflowActionsSpec;
     if (request.kind !== "workflow-actions" || spec.workflowId !== "graph") {
-      return { available: false as const, reason: "Only graph-run workflows have registered retry and stop operations on this backend." };
+      return {
+        available: false as const,
+        reason:
+          "Only graph-run workflows have registered retry and stop operations on this backend.",
+      };
     }
-    if (!graphRuns()) return { available: false as const, reason: "Graph runs are unavailable on this backend." };
+    if (!graphRuns())
+      return { available: false as const, reason: "Graph runs are unavailable on this backend." };
     return { available: true as const };
   };
   const live = async (request: StoredRequest, result: WorkflowActionsResult) => {
@@ -66,7 +76,9 @@ export function graphWorkflowCommands(graphRuns: () => GraphRunControls | undefi
       return { error: "The graph run belongs to another environment." } as const;
     }
     if (run.revision !== result.snapshotRevision) {
-      return { error: `The run advanced (revision ${run.revision}, card showed ${result.snapshotRevision}); refresh the card before acting.` } as const;
+      return {
+        error: `The run advanced (revision ${run.revision}, card showed ${result.snapshotRevision}); refresh the card before acting.`,
+      } as const;
     }
     return { controls, run, spec } as const;
   };
@@ -78,10 +90,14 @@ export function graphWorkflowCommands(graphRuns: () => GraphRunControls | undefi
         const typed = result as WorkflowActionsResult;
         const checked = await live(request, typed);
         if ("error" in checked) return { state: "failed", detail: checked.error ?? "Refused" };
-        if (!typed.attemptId) return { state: "failed", detail: "The node has no attempt to retry." };
+        if (!typed.attemptId)
+          return { state: "failed", detail: "The node has no attempt to retry." };
         try {
           const run = await checked.controls.retry(checked.spec.runId, typed.attemptId);
-          return { state: "applied", detail: `Retry accepted; run is now at revision ${run.revision}.` };
+          return {
+            state: "applied",
+            detail: `Retry accepted; run is now at revision ${run.revision}.`,
+          };
         } catch (error) {
           return { state: "failed", detail: message(error) };
         }
@@ -98,7 +114,10 @@ export function graphWorkflowCommands(graphRuns: () => GraphRunControls | undefi
           // A cancel request is not proof work stopped: report the run's own status.
           return run.status === "cancelled"
             ? { state: "applied", detail: "The run reports cancelled." }
-            : { state: "unknown", detail: `Stop requested; the run reports ${run.status}. Work may still be running.` };
+            : {
+                state: "unknown",
+                detail: `Stop requested; the run reports ${run.status}. Work may still be running.`,
+              };
         } catch (error) {
           return { state: "failed", detail: message(error) };
         }
@@ -114,17 +133,31 @@ export class ProductCommandRegistry {
     this.commands.set(command.id, command);
   }
 
-  availability(commandId: string | undefined, request: StoredRequest): { available: true } | { available: false; reason: string } {
+  availability(
+    commandId: string | undefined,
+    request: StoredRequest,
+  ): { available: true } | { available: false; reason: string } {
     const command = commandId ? this.commands.get(commandId) : undefined;
     if (!command) {
-      return { available: false, reason: "No operation is registered for this action on this backend. Ask the agent instead." };
+      return {
+        available: false,
+        reason:
+          "No operation is registered for this action on this backend. Ask the agent instead.",
+      };
     }
     return command.availability(request);
   }
 
-  async run(commandId: string, invocation: ProductCommandInvocation): Promise<ProductCommandOutcome> {
+  async run(
+    commandId: string,
+    invocation: ProductCommandInvocation,
+  ): Promise<ProductCommandOutcome> {
     const command = this.commands.get(commandId);
-    if (!command) return { state: "failed", detail: "No operation is registered for this action on this backend." };
+    if (!command)
+      return {
+        state: "failed",
+        detail: "No operation is registered for this action on this backend.",
+      };
     try {
       return await command.run(invocation);
     } catch (error) {

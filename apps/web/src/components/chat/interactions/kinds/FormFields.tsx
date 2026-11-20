@@ -45,7 +45,17 @@ export function FormFields({
     <div className="flex flex-col gap-3">
       {fields.map((field) => {
         if (!isFieldVisible(field, values)) return null;
-        return <Field key={field.id} field={field} value={values[field.id]} onChange={(v) => set(field.id, v)} errors={errors} disabled={disabled} path={`${path}${path ? "." : ""}${field.id}`} />;
+        return (
+          <Field
+            key={field.id}
+            field={field}
+            value={values[field.id]}
+            onChange={(v) => set(field.id, v)}
+            errors={errors}
+            disabled={disabled}
+            path={`${path}${path ? "." : ""}${field.id}`}
+          />
+        );
       })}
     </div>
   );
@@ -72,24 +82,57 @@ function Field({
   const label = (
     <label htmlFor={id} className="flex items-baseline gap-1.5 text-sm font-medium">
       {field.label}
-      {field.required ? <span className="text-failure" aria-hidden>*</span> : null}
-      {field.inferred ? <span className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground" title="The agent pre-filled this value; check it">inferred</span> : null}
-      {"unit" in field && field.unit ? <span className="text-xs font-normal text-muted-foreground">({field.unit})</span> : null}
+      {field.required ? (
+        <span className="text-failure" aria-hidden>
+          *
+        </span>
+      ) : null}
+      {field.inferred ? (
+        <span
+          className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground"
+          title="The agent pre-filled this value; check it"
+        >
+          inferred
+        </span>
+      ) : null}
+      {"unit" in field && field.unit ? (
+        <span className="text-xs font-normal text-muted-foreground">({field.unit})</span>
+      ) : null}
     </label>
   );
   const help = (
     <>
-      {field.description ? <p id={`${id}-description`} className="text-xs text-muted-foreground">{field.description}</p> : null}
-      {error ? <p id={`${id}-error`} className="text-xs text-failure" role="alert">{error}</p> : null}
+      {field.description ? (
+        <p id={`${id}-description`} className="text-xs text-muted-foreground">
+          {field.description}
+        </p>
+      ) : null}
+      {error ? (
+        <p id={`${id}-error`} className="text-xs text-failure" role="alert">
+          {error}
+        </p>
+      ) : null}
     </>
   );
-  const common = { id, disabled, "aria-invalid": error ? true : undefined, "aria-describedby": describedBy, "aria-required": field.required || undefined };
+  const common = {
+    id,
+    disabled,
+    "aria-invalid": error ? true : undefined,
+    "aria-describedby": describedBy,
+    "aria-required": field.required || undefined,
+  };
   switch (field.type) {
     case "text":
       return (
         <div className="flex flex-col gap-1">
           {label}
-          <input {...common} className={inputClass} value={typeof value === "string" ? value : ""} maxLength={field.maxLength} onChange={(e) => onChange(e.target.value)} />
+          <input
+            {...common}
+            className={inputClass}
+            value={typeof value === "string" ? value : ""}
+            maxLength={field.maxLength}
+            onChange={(e) => onChange(e.target.value)}
+          />
           {help}
         </div>
       );
@@ -97,7 +140,14 @@ function Field({
       return (
         <div className="flex flex-col gap-1">
           {label}
-          <textarea {...common} className={textareaClass} rows={3} value={typeof value === "string" ? value : ""} maxLength={field.maxLength} onChange={(e) => onChange(e.target.value)} />
+          <textarea
+            {...common}
+            className={textareaClass}
+            rows={3}
+            value={typeof value === "string" ? value : ""}
+            maxLength={field.maxLength}
+            onChange={(e) => onChange(e.target.value)}
+          />
           {help}
         </div>
       );
@@ -145,7 +195,13 @@ function Field({
       return (
         <div className="flex flex-col gap-1">
           <label className="flex items-center gap-2 text-sm">
-            <input {...common} type="checkbox" className="size-4 accent-primary" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
+            <input
+              {...common}
+              type="checkbox"
+              className="size-4 accent-primary"
+              checked={value === true}
+              onChange={(e) => onChange(e.target.checked)}
+            />
             <span className="font-medium">{field.label}</span>
             {field.required ? <span className="sr-only">(required)</span> : null}
           </label>
@@ -156,7 +212,14 @@ function Field({
       return (
         <div className="flex flex-col gap-1">
           {label}
-          <select {...common} className={inputClass} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? (field.nullable ? null : undefined) : e.target.value)}>
+          <select
+            {...common}
+            className={inputClass}
+            value={typeof value === "string" ? value : ""}
+            onChange={(e) =>
+              onChange(e.target.value === "" ? (field.nullable ? null : undefined) : e.target.value)
+            }
+          >
             <option value="">{field.required ? "Choose…" : "None"}</option>
             {field.options.map((option) => (
               <option key={option.id} value={option.id}>
@@ -170,7 +233,11 @@ function Field({
     case "multiselect": {
       const selected = Array.isArray(value) ? (value as string[]) : [];
       return (
-        <fieldset className="flex flex-col gap-1" disabled={disabled} aria-describedby={describedBy}>
+        <fieldset
+          className="flex flex-col gap-1"
+          disabled={disabled}
+          aria-describedby={describedBy}
+        >
           <legend className="text-sm font-medium">
             {field.label}
             {field.required ? <span className="text-failure"> *</span> : null}
@@ -182,7 +249,13 @@ function Field({
                   type="checkbox"
                   className="size-4 accent-primary"
                   checked={selected.includes(option.id)}
-                  onChange={(e) => onChange(e.target.checked ? [...selected, option.id] : selected.filter((id) => id !== option.id))}
+                  onChange={(e) =>
+                    onChange(
+                      e.target.checked
+                        ? [...selected, option.id]
+                        : selected.filter((id) => id !== option.id),
+                    )
+                  }
                 />
                 {option.label}
               </label>
@@ -194,14 +267,35 @@ function Field({
     }
     case "date": {
       if (field.mode === "local-datetime") {
-        const record = value && typeof value === "object" && !Array.isArray(value) && "dateTime" in value ? (value as { dateTime: string; timeZone: string }) : null;
+        const record =
+          value && typeof value === "object" && !Array.isArray(value) && "dateTime" in value
+            ? (value as { dateTime: string; timeZone: string })
+            : null;
         const zone = record?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         return (
           <div className="flex flex-col gap-1">
             {label}
             <div className="flex flex-wrap gap-2">
-              <input {...common} type="datetime-local" className={cn(inputClass, "w-auto")} value={record?.dateTime ?? ""} onChange={(e) => onChange(e.target.value ? { dateTime: e.target.value, timeZone: zone } : undefined)} />
-              <input className={cn(inputClass, "w-48")} aria-label={`${field.label} time zone`} value={zone} disabled={disabled} onChange={(e) => onChange({ dateTime: record?.dateTime ?? "", timeZone: e.target.value })} />
+              <input
+                {...common}
+                type="datetime-local"
+                className={cn(inputClass, "w-auto")}
+                value={record?.dateTime ?? ""}
+                onChange={(e) =>
+                  onChange(
+                    e.target.value ? { dateTime: e.target.value, timeZone: zone } : undefined,
+                  )
+                }
+              />
+              <input
+                className={cn(inputClass, "w-48")}
+                aria-label={`${field.label} time zone`}
+                value={zone}
+                disabled={disabled}
+                onChange={(e) =>
+                  onChange({ dateTime: record?.dateTime ?? "", timeZone: e.target.value })
+                }
+              />
             </div>
             {help}
           </div>
@@ -214,22 +308,51 @@ function Field({
             {...common}
             type={field.mode === "local-date" ? "date" : "datetime-local"}
             className={cn(inputClass, "w-auto")}
-            value={typeof value === "string" ? (field.mode === "instant" ? toLocalInput(value) : value) : ""}
-            onChange={(e) => onChange(e.target.value ? (field.mode === "instant" ? new Date(e.target.value).toISOString() : e.target.value) : undefined)}
+            value={
+              typeof value === "string"
+                ? field.mode === "instant"
+                  ? toLocalInput(value)
+                  : value
+                : ""
+            }
+            onChange={(e) =>
+              onChange(
+                e.target.value
+                  ? field.mode === "instant"
+                    ? new Date(e.target.value).toISOString()
+                    : e.target.value
+                  : undefined,
+              )
+            }
           />
-          {field.mode === "instant" ? <p className="text-[11px] text-muted-foreground">Entered in your local time; sent as an exact instant.</p> : null}
+          {field.mode === "instant" ? (
+            <p className="text-[11px] text-muted-foreground">
+              Entered in your local time; sent as an exact instant.
+            </p>
+          ) : null}
           {help}
         </div>
       );
     }
     case "file":
     case "list": {
-      const items = field.type === "file" && !field.multiple ? null : Array.isArray(value) ? (value as Array<string | number>) : [];
+      const items =
+        field.type === "file" && !field.multiple
+          ? null
+          : Array.isArray(value)
+            ? (value as Array<string | number>)
+            : [];
       if (!items) {
         return (
           <div className="flex flex-col gap-1">
             {label}
-            <input {...common} className={cn(inputClass, "font-mono")} placeholder="path/in/workspace" value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value || undefined)} />
+            <input
+              {...common}
+              className={cn(inputClass, "font-mono")}
+              placeholder="path/in/workspace"
+              value={typeof value === "string" ? value : ""}
+              onChange={(e) => onChange(e.target.value || undefined)}
+            />
             {help}
           </div>
         );
@@ -247,14 +370,33 @@ function Field({
                 type={numeric ? "number" : "text"}
                 value={String(item)}
                 disabled={disabled}
-                onChange={(e) => onChange(items.map((x, i) => (i === index ? (numeric ? Number(e.target.value) : e.target.value) : x)))}
+                onChange={(e) =>
+                  onChange(
+                    items.map((x, i) =>
+                      i === index ? (numeric ? Number(e.target.value) : e.target.value) : x,
+                    ),
+                  )
+                }
               />
-              <Button size="icon" variant="ghost" className="size-7" aria-label={`Remove ${field.label} item ${index + 1}`} disabled={disabled} onClick={() => onChange(items.filter((_, i) => i !== index))}>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-7"
+                aria-label={`Remove ${field.label} item ${index + 1}`}
+                disabled={disabled}
+                onClick={() => onChange(items.filter((_, i) => i !== index))}
+              >
                 <Minus className="size-3.5" />
               </Button>
             </div>
           ))}
-          <Button size="sm" variant="outline" className="self-start" disabled={disabled || items.length >= max} onClick={() => onChange([...items, numeric ? 0 : ""])}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="self-start"
+            disabled={disabled || items.length >= max}
+            onClick={() => onChange([...items, numeric ? 0 : ""])}
+          >
             <Plus className="size-3.5" aria-hidden />
             Add {field.label.toLowerCase()}
           </Button>
@@ -263,12 +405,27 @@ function Field({
       );
     }
     case "group": {
-      const nested = value && typeof value === "object" && !Array.isArray(value) ? (value as FormValues) : initialFormValues(field.fields);
+      const nested =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as FormValues)
+          : initialFormValues(field.fields);
       return (
-        <fieldset className="flex flex-col gap-2 rounded-md border border-border/60 p-3" disabled={disabled}>
+        <fieldset
+          className="flex flex-col gap-2 rounded-md border border-border/60 p-3"
+          disabled={disabled}
+        >
           <legend className="px-1 text-sm font-medium">{field.label}</legend>
-          {field.description ? <p className="text-xs text-muted-foreground">{field.description}</p> : null}
-          <FormFields fields={field.fields} values={nested} onChange={(v) => onChange(v)} errors={errors} disabled={disabled} path={path} />
+          {field.description ? (
+            <p className="text-xs text-muted-foreground">{field.description}</p>
+          ) : null}
+          <FormFields
+            fields={field.fields}
+            values={nested}
+            onChange={(v) => onChange(v)}
+            errors={errors}
+            disabled={disabled}
+            path={path}
+          />
         </fieldset>
       );
     }
@@ -278,22 +435,46 @@ function Field({
       return (
         <fieldset className="flex flex-col gap-2" disabled={disabled}>
           <legend className="text-sm font-medium">
-            {field.label} <span className="text-xs font-normal text-muted-foreground">({items.length}{field.maxItems ? ` of at most ${field.maxItems}` : ""})</span>
+            {field.label}{" "}
+            <span className="text-xs font-normal text-muted-foreground">
+              ({items.length}
+              {field.maxItems ? ` of at most ${field.maxItems}` : ""})
+            </span>
           </legend>
           {items.map((item, index) => (
-            <div key={item.itemId} className="flex flex-col gap-2 rounded-md border border-border/60 p-3">
+            <div
+              key={item.itemId}
+              className="flex flex-col gap-2 rounded-md border border-border/60 p-3"
+            >
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>
                   {field.label} #{index + 1}
                 </span>
                 <div className="flex gap-1">
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={index === 0} onClick={() => onChange(swap(items, index, index - 1))}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    disabled={index === 0}
+                    onClick={() => onChange(swap(items, index, index - 1))}
+                  >
                     Move up
                   </Button>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" disabled={index === items.length - 1} onClick={() => onChange(swap(items, index, index + 1))}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    disabled={index === items.length - 1}
+                    onClick={() => onChange(swap(items, index, index + 1))}
+                  >
                     Move down
                   </Button>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => onChange(items.filter((x) => x.itemId !== item.itemId))}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => onChange(items.filter((x) => x.itemId !== item.itemId))}
+                  >
                     Remove
                   </Button>
                 </div>
@@ -301,18 +482,39 @@ function Field({
               <FormFields
                 fields={field.fields}
                 values={item.values}
-                onChange={(v) => onChange(items.map((x) => (x.itemId === item.itemId ? { itemId: x.itemId, values: v } : x)))}
+                onChange={(v) =>
+                  onChange(
+                    items.map((x) =>
+                      x.itemId === item.itemId ? { itemId: x.itemId, values: v } : x,
+                    ),
+                  )
+                }
                 errors={errors}
                 disabled={disabled}
                 path={`${path}[${index}].values`}
               />
             </div>
           ))}
-          <Button size="sm" variant="outline" className="self-start" disabled={items.length >= max} onClick={() => onChange([...items, { itemId: newRepeatItemId(), values: initialFormValues(field.fields) }])}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="self-start"
+            disabled={items.length >= max}
+            onClick={() =>
+              onChange([
+                ...items,
+                { itemId: newRepeatItemId(), values: initialFormValues(field.fields) },
+              ])
+            }
+          >
             <Plus className="size-3.5" aria-hidden />
             Add {field.label.toLowerCase()}
           </Button>
-          {errors[path] ? <p className="text-xs text-failure" role="alert">{errors[path]}</p> : null}
+          {errors[path] ? (
+            <p className="text-xs text-failure" role="alert">
+              {errors[path]}
+            </p>
+          ) : null}
         </fieldset>
       );
     }

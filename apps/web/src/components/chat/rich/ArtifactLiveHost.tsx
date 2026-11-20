@@ -376,7 +376,13 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
           });
           break;
         case "result-candidate":
-          publishArtifactResultCandidate({ artifactId: session.artifactId, revision: session.revision, generation: session.generation, candidateId: event.candidateId, value: event.value });
+          publishArtifactResultCandidate({
+            artifactId: session.artifactId,
+            revision: session.revision,
+            generation: session.generation,
+            candidateId: event.candidateId,
+            value: event.value,
+          });
           break;
         case "navigation-blocked":
           report({

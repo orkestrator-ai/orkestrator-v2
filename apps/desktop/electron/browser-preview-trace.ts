@@ -18,7 +18,12 @@ import type {
   BrowserPreviewTraceStep,
 } from "@orkestrator/protocol/browser-preview";
 
-export const TRACE_BOUNDS = { steps: 120, durationMs: 5 * 60_000, pollMs: 500, labelChars: 120 } as const;
+export const TRACE_BOUNDS = {
+  steps: 120,
+  durationMs: 5 * 60_000,
+  pollMs: 500,
+  labelChars: 120,
+} as const;
 
 export interface TraceWebContents {
   getURL(): string;
@@ -105,7 +110,10 @@ function pathOf(url: string): string {
 
 function text(value: unknown, max: number): string | undefined {
   if (typeof value !== "string") return undefined;
-  const clean = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, max);
+  const clean = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .trim()
+    .slice(0, max);
   return clean || undefined;
 }
 
@@ -126,7 +134,12 @@ interface TraceSession {
 export class BrowserPreviewTraceSessions {
   private readonly sessions = new Map<string, TraceSession>();
 
-  constructor(private readonly options: { preview: (tabId: string) => TracePreviewHandle | null; now?: () => number }) {}
+  constructor(
+    private readonly options: {
+      preview: (tabId: string) => TracePreviewHandle | null;
+      now?: () => number;
+    },
+  ) {}
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
@@ -161,14 +174,26 @@ export class BrowserPreviewTraceSessions {
   status(tabId: string): BrowserPreviewTraceStatus {
     const session = this.sessions.get(tabId);
     if (!session) return { recording: false, steps: 0, elapsedMs: 0, stopReason: null };
-    return { recording: session.stopReason === null, steps: session.steps.length, elapsedMs: this.now() - session.startedAt, stopReason: session.stopReason, origin: session.origin };
+    return {
+      recording: session.stopReason === null,
+      steps: session.steps.length,
+      elapsedMs: this.now() - session.startedAt,
+      stopReason: session.stopReason,
+      origin: session.origin,
+    };
   }
 
   /** A "wrong here" marker with the person's own observation (host-owned, not page text). */
   mark(tabId: string, observation: string): BrowserPreviewTraceStatus {
     const session = this.sessions.get(tabId);
     if (!session || session.stopReason) throw new Error("No recording is in progress.");
-    this.append(session, { action: "mark", target: undefined, route: session.lastRoute, userObservation: text(observation, 2_000), wrongHere: true });
+    this.append(session, {
+      action: "mark",
+      target: undefined,
+      route: session.lastRoute,
+      userObservation: text(observation, 2_000),
+      wrongHere: true,
+    });
     return this.status(tabId);
   }
 
@@ -183,7 +208,10 @@ export class BrowserPreviewTraceSessions {
     return {
       service: { label: session.label, origin: session.origin },
       startedAt: new Date(session.startedAt).toISOString(),
-      durationMs: Math.min(TRACE_BOUNDS.durationMs, Math.max(0, (session.steps.at(-1)?.offsetMs ?? 0))),
+      durationMs: Math.min(
+        TRACE_BOUNDS.durationMs,
+        Math.max(0, session.steps.at(-1)?.offsetMs ?? 0),
+      ),
       steps: session.steps,
       gaps: session.gaps,
       stopReason: session.stopReason ?? "user",
@@ -214,13 +242,17 @@ export class BrowserPreviewTraceSessions {
 
   private async poll(session: TraceSession): Promise<void> {
     if (session.stopReason) return;
-    if (this.now() - session.startedAt >= TRACE_BOUNDS.durationMs) return this.finish(session, "time-limit");
+    if (this.now() - session.startedAt >= TRACE_BOUNDS.durationMs)
+      return this.finish(session, "time-limit");
     const handle = this.options.preview(session.tabId);
     if (!handle || handle.contents.isDestroyed()) return this.finish(session, "preview-closed");
     const url = handle.contents.getURL();
     if (originOf(url) !== session.origin) {
       // Never broaden the recording silently: leaving the service stops it.
-      session.gaps.push({ ...(session.steps.at(-1) ? { afterStepId: session.steps.at(-1)!.stepId } : {}), reason: "The preview left the recorded service; recording stopped." });
+      session.gaps.push({
+        ...(session.steps.at(-1) ? { afterStepId: session.steps.at(-1)!.stepId } : {}),
+        reason: "The preview left the recorded service; recording stopped.",
+      });
       return this.finish(session, "left-service");
     }
     if (handle.generation !== session.generation) {
@@ -232,7 +264,10 @@ export class BrowserPreviewTraceSessions {
       try {
         await handle.contents.executeJavaScript(TRACE_SCRIPT, false);
       } catch {
-        session.gaps.push({ afterStepId: session.steps.at(-1)?.stepId, reason: "The recorder could not attach to the new page." } as BrowserPreviewTraceResult["gaps"][number]);
+        session.gaps.push({
+          afterStepId: session.steps.at(-1)?.stepId,
+          reason: "The recorder could not attach to the new page.",
+        } as BrowserPreviewTraceResult["gaps"][number]);
       }
       return;
     }
@@ -252,12 +287,24 @@ export class BrowserPreviewTraceSessions {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
       const record = raw as Record<string, unknown>;
       if (typeof record.action !== "string" || !ACTIONS.has(record.action)) continue;
-      const target = record.target && typeof record.target === "object" ? (record.target as Record<string, unknown>) : {};
-      const route = typeof record.route === "string" ? record.route.split(/[?#]/u)[0]!.slice(0, 1_000) : session.lastRoute;
+      const target =
+        record.target && typeof record.target === "object"
+          ? (record.target as Record<string, unknown>)
+          : {};
+      const route =
+        typeof record.route === "string"
+          ? record.route.split(/[?#]/u)[0]!.slice(0, 1_000)
+          : session.lastRoute;
       session.lastRoute = route;
       this.append(session, {
         action: record.action as BrowserPreviewTraceStep["action"],
-        target: { ...(text(target.role, 40) ? { role: text(target.role, 40) } : {}), ...(text(target.label, TRACE_BOUNDS.labelChars) ? { label: text(target.label, TRACE_BOUNDS.labelChars) } : {}), ...(text(target.text, 80) ? { text: text(target.text, 80) } : {}) },
+        target: {
+          ...(text(target.role, 40) ? { role: text(target.role, 40) } : {}),
+          ...(text(target.label, TRACE_BOUNDS.labelChars)
+            ? { label: text(target.label, TRACE_BOUNDS.labelChars) }
+            : {}),
+          ...(text(target.text, 80) ? { text: text(target.text, 80) } : {}),
+        },
         route,
         ...(record.valueOmitted === true ? { valueOmitted: true } : {}),
       });
@@ -265,7 +312,10 @@ export class BrowserPreviewTraceSessions {
     }
   }
 
-  private append(session: TraceSession, step: Omit<BrowserPreviewTraceStep, "stepId" | "offsetMs" | "documentSegment">): void {
+  private append(
+    session: TraceSession,
+    step: Omit<BrowserPreviewTraceStep, "stepId" | "offsetMs" | "documentSegment">,
+  ): void {
     if (session.steps.length >= TRACE_BOUNDS.steps) {
       this.finish(session, "step-limit");
       return;

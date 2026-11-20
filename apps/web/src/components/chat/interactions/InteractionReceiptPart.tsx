@@ -13,7 +13,10 @@ export function InteractionReceiptPart({ part }: { part: NativeInteractionReceip
   const { interaction } = part;
   const module = RICH_KIND_MODULES[interaction.kind];
   return (
-    <div className="my-1 rounded-md border border-primary/25 bg-primary/[0.04] text-sm" data-interaction-receipt={interaction.receiptId}>
+    <div
+      className="my-1 rounded-md border border-primary/25 bg-primary/[0.04] text-sm"
+      data-interaction-receipt={interaction.receiptId}
+    >
       <button
         type="button"
         className="flex w-full items-center gap-2 px-3 py-2 text-left focus-hairline"
@@ -25,9 +28,17 @@ export function InteractionReceiptPart({ part }: { part: NativeInteractionReceip
         <span className="shrink-0 text-xs text-muted-foreground">
           {module?.title ?? interaction.kind} · {interaction.actionId} · rev {interaction.revision}
         </span>
-        {open ? <ChevronDown className="ml-auto size-3.5" aria-hidden /> : <ChevronRight className="ml-auto size-3.5" aria-hidden />}
+        {open ? (
+          <ChevronDown className="ml-auto size-3.5" aria-hidden />
+        ) : (
+          <ChevronRight className="ml-auto size-3.5" aria-hidden />
+        )}
       </button>
-      {open ? <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-primary/15 px-3 py-2 text-xs text-foreground/85">{part.content}</pre> : null}
+      {open ? (
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap border-t border-primary/15 px-3 py-2 text-xs text-foreground/85">
+          {part.content}
+        </pre>
+      ) : null}
     </div>
   );
 }

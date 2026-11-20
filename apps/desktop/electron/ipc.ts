@@ -1,4 +1,7 @@
-import type { BrowserPreviewTraceResult, BrowserPreviewTraceStatus } from "@orkestrator/protocol/browser-preview";
+import type {
+  BrowserPreviewTraceResult,
+  BrowserPreviewTraceStatus,
+} from "@orkestrator/protocol/browser-preview";
 import { DesktopFileDraftWrites } from "./desktop-file-draft-writes.js";
 import type { BrowserWindow } from "electron";
 import type { GatewayTokenSettings, WebClientStatus } from "@orkestrator/protocol/web-client";
@@ -851,12 +854,20 @@ export function registerMainIpc({
   });
   const traceController = (event: IpcEventLike, tabId: string) => {
     const controller = tabPreviews(event, tabId);
-    if (!controller.startTrace || !controller.traceStatus || !controller.markTrace || !controller.stopTrace) {
+    if (
+      !controller.startTrace ||
+      !controller.traceStatus ||
+      !controller.markTrace ||
+      !controller.stopTrace
+    ) {
       throw new Error("Demonstration recording is unavailable in this preview runtime");
     }
-    return controller as Required<Pick<BrowserPreviewController, "startTrace" | "traceStatus" | "markTrace" | "stopTrace">>;
+    return controller as Required<
+      Pick<BrowserPreviewController, "startTrace" | "traceStatus" | "markTrace" | "stopTrace">
+    >;
   };
-  const traceText = (value: unknown, max: number): string => (typeof value === "string" ? value.slice(0, max) : "");
+  const traceText = (value: unknown, max: number): string =>
+    typeof value === "string" ? value.slice(0, max) : "";
   handle("orkestrator:browser-preview:trace-start", (event, tabId: unknown, label: unknown) => {
     const tab = browserPreviewTabId(tabId);
     return traceController(event, tab).startTrace(tab, traceText(label, 120));
@@ -865,10 +876,13 @@ export function registerMainIpc({
     const tab = browserPreviewTabId(tabId);
     return traceController(event, tab).traceStatus(tab);
   });
-  handle("orkestrator:browser-preview:trace-mark", (event, tabId: unknown, observation: unknown) => {
-    const tab = browserPreviewTabId(tabId);
-    return traceController(event, tab).markTrace(tab, traceText(observation, 2_000));
-  });
+  handle(
+    "orkestrator:browser-preview:trace-mark",
+    (event, tabId: unknown, observation: unknown) => {
+      const tab = browserPreviewTabId(tabId);
+      return traceController(event, tab).markTrace(tab, traceText(observation, 2_000));
+    },
+  );
   handle("orkestrator:browser-preview:trace-stop", (event, tabId: unknown) => {
     const tab = browserPreviewTabId(tabId);
     return traceController(event, tab).stopTrace(tab);

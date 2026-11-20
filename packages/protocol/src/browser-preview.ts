@@ -635,7 +635,8 @@ export interface BrowserPreviewTraceResult {
   durationMs: number;
   steps: BrowserPreviewTraceStep[];
   gaps: Array<{ afterStepId?: string; reason: string }>;
-  stopReason: "user" | "step-limit" | "time-limit" | "byte-limit" | "preview-closed" | "left-service";
+  stopReason:
+    "user" | "step-limit" | "time-limit" | "byte-limit" | "preview-closed" | "left-service";
 }
 
 /** `window.orkestrator.browserPreview.trace` (desktop only). */

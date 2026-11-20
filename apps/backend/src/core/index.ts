@@ -1804,7 +1804,9 @@ export class OrkestratorBackend {
     });
     context.richInteractions = this.richInteractions;
     (
-      this.agentTools as { setRichInteractionService?: (service: RichInteractionService | null) => void }
+      this.agentTools as {
+        setRichInteractionService?: (service: RichInteractionService | null) => void;
+      }
     ).setRichInteractionService?.(this.richInteractions);
     // System nodes (item 207): backend side effects, journaled per run.
     const graphShell = createGraphEnvironmentShell(

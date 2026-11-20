@@ -5,7 +5,11 @@ import path from "node:path";
 import { parseRichInteractionPrompt } from "@orkestrator/protocol/rich-interactions";
 import { RICH_KIND_FIXTURES } from "@orkestrator/protocol/testing/rich-interaction-fixtures";
 import { StorageService } from "../storage.js";
-import { ProductCommandRegistry, graphWorkflowCommands, type GraphRunControls } from "./product-commands.js";
+import {
+  ProductCommandRegistry,
+  graphWorkflowCommands,
+  type GraphRunControls,
+} from "./product-commands.js";
 import { RichInteractionError, RichInteractionService, type FollowupDelivery } from "./service.js";
 
 const directories: string[] = [];
@@ -70,9 +74,18 @@ async function setup(options: { graphRuns?: GraphRunControls; now?: () => Date }
 
 const caller = { environmentId: "env-1", tabId: "tab-1" };
 
-async function present(service: RichInteractionService, kind: keyof typeof RICH_KIND_FIXTURES, requestKey = "k1", extra: Record<string, unknown> = {}) {
+async function present(
+  service: RichInteractionService,
+  kind: keyof typeof RICH_KIND_FIXTURES,
+  requestKey = "k1",
+  extra: Record<string, unknown> = {},
+) {
   const fixture = RICH_KIND_FIXTURES[kind];
-  return service.present(caller, { requestKey, kind, title: fixture.title, spec: fixture.spec, ...extra }, "toolu_1");
+  return service.present(
+    caller,
+    { requestKey, kind, title: fixture.title, spec: fixture.spec, ...extra },
+    "toolu_1",
+  );
 }
 
 async function rejection(work: () => Promise<unknown> | unknown): Promise<RichInteractionError> {
@@ -90,22 +103,49 @@ describe("present_interaction", () => {
     const { service } = await setup();
     const first = await present(service, "choice");
     expect(first.created).toBe(true);
-    expect(first.request.owner).toMatchObject({ environmentId: "env-1", tabId: "tab-1", logicalSessionKey: "env-env-1:tab-1", agent: "claude" });
+    expect(first.request.owner).toMatchObject({
+      environmentId: "env-1",
+      tabId: "tab-1",
+      logicalSessionKey: "env-env-1:tab-1",
+      agent: "claude",
+    });
     expect(first.request.toolCallId).toBe("toolu_1");
     const replay = await present(service, "choice");
-    expect(replay).toMatchObject({ created: false, request: { interactionId: first.request.interactionId } });
-    const conflict = await rejection(() => service.present(caller, { requestKey: "k1", kind: "choice", title: "Other", spec: RICH_KIND_FIXTURES.choice.spec }));
+    expect(replay).toMatchObject({
+      created: false,
+      request: { interactionId: first.request.interactionId },
+    });
+    const conflict = await rejection(() =>
+      service.present(caller, {
+        requestKey: "k1",
+        kind: "choice",
+        title: "Other",
+        spec: RICH_KIND_FIXTURES.choice.spec,
+      }),
+    );
     expect(conflict.code).toBe("conflict");
   });
 
   test("a superseded request refuses submissions and names its replacement", async () => {
     const { service } = await setup();
     const old = await present(service, "choice", "a");
-    const next = await present(service, "choice", "b", { supersedes: old.request.interactionId, title: "Revised" });
+    const next = await present(service, "choice", "b", {
+      supersedes: old.request.interactionId,
+      title: "Revised",
+    });
     const view = service.get("env-1", old.request.interactionId);
-    expect(view.request).toMatchObject({ state: "superseded", supersededBy: next.request.interactionId });
+    expect(view.request).toMatchObject({
+      state: "superseded",
+      supersededBy: next.request.interactionId,
+    });
     const refused = await rejection(() =>
-      service.submit("env-1", { interactionId: old.request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "i1", result: RICH_KIND_FIXTURES.choice.result }),
+      service.submit("env-1", {
+        interactionId: old.request.interactionId,
+        expectedRevision: 1,
+        actionId: "submit",
+        idempotencyKey: "i1",
+        result: RICH_KIND_FIXTURES.choice.result,
+      }),
     );
     expect(refused.code).toBe("closed");
   });
@@ -114,7 +154,13 @@ describe("present_interaction", () => {
     const { service } = await setup();
     const created = await present(service, "form");
     expect(service.read(caller, created.request.interactionId).request.kind).toBe("form");
-    expect((await rejection(() => service.read({ environmentId: "env-1", tabId: "tab-2" }, created.request.interactionId))).code).toBe("not-found");
+    expect(
+      (
+        await rejection(() =>
+          service.read({ environmentId: "env-1", tabId: "tab-2" }, created.request.interactionId),
+        )
+      ).code,
+    ).toBe("not-found");
   });
 });
 
@@ -122,14 +168,24 @@ describe("submissions", () => {
   test("a follow-up commits once, is queued for the creating tab and recovers its receipt on retry", async () => {
     const { service, queue } = await setup();
     const { request } = await present(service, "choice");
-    const input = { interactionId: request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "click-1", result: RICH_KIND_FIXTURES.choice.result };
+    const input = {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "submit",
+      idempotencyKey: "click-1",
+      result: RICH_KIND_FIXTURES.choice.result,
+    };
     const receipt = await service.submit("env-1", input);
     expect(receipt.delivery).toBe("queued");
     expect(queue.queued.size).toBe(1);
     const [[requestId, queued]] = [...queue.queued.entries()];
     expect(requestId).toBe(receipt.receiptId);
     expect(queued!.queueKey).toBe("claude\0env-env-1:tab-1");
-    expect(parseRichInteractionPrompt(queued!.text)?.envelope).toMatchObject({ interactionId: request.interactionId, receiptId: receipt.receiptId, actionId: "submit" });
+    expect(parseRichInteractionPrompt(queued!.text)?.envelope).toMatchObject({
+      interactionId: request.interactionId,
+      receiptId: receipt.receiptId,
+      actionId: "submit",
+    });
     expect(queued!.text).toContain("Focused list");
     // Lost response: the same key returns the same receipt and queues nothing new.
     const again = await service.submit("env-1", input);
@@ -138,14 +194,25 @@ describe("submissions", () => {
     // The single-use question is closed.
     expect(service.get("env-1", request.interactionId).request.state).toBe("closed");
     // A changed payload under the same key is a conflict.
-    const conflict = await rejection(() => service.submit("env-1", { ...input, result: { answers: [{ questionId: "findings-layout", optionIds: ["board"] }] } }));
+    const conflict = await rejection(() =>
+      service.submit("env-1", {
+        ...input,
+        result: { answers: [{ questionId: "findings-layout", optionIds: ["board"] }] },
+      }),
+    );
     expect(conflict.code).toBe("conflict");
   });
 
   test("delivery advances to delivered once the session dispatches the request", async () => {
     const { service, queue } = await setup();
     const { request } = await present(service, "form");
-    const receipt = await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "s1", result: RICH_KIND_FIXTURES.form.result });
+    const receipt = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "submit",
+      idempotencyKey: "s1",
+      result: RICH_KIND_FIXTURES.form.result,
+    });
     queue.dispatched.add(receipt.receiptId);
     await service.sweep();
     expect(service.get("env-1", request.interactionId).receipts[0]!.delivery).toBe("delivered");
@@ -155,7 +222,13 @@ describe("submissions", () => {
     const { service, queue } = await setup();
     const { request } = await present(service, "form");
     queue.failNext = 1;
-    const receipt = await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "s1", result: RICH_KIND_FIXTURES.form.result });
+    const receipt = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "submit",
+      idempotencyKey: "s1",
+      result: RICH_KIND_FIXTURES.form.result,
+    });
     expect(receipt.delivery).toBe("pending");
     expect(queue.queued.size).toBe(0);
     await service.sweep();
@@ -167,7 +240,13 @@ describe("submissions", () => {
     const { service, queue } = await setup();
     const { request } = await present(service, "form");
     queue.failNext = 100;
-    await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "s1", result: RICH_KIND_FIXTURES.form.result });
+    await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "submit",
+      idempotencyKey: "s1",
+      result: RICH_KIND_FIXTURES.form.result,
+    });
     for (let i = 0; i < 6; i += 1) await service.sweep();
     const receipt = service.get("env-1", request.interactionId).receipts[0]!;
     expect(receipt.delivery).toBe("unknown");
@@ -181,10 +260,28 @@ describe("submissions", () => {
   test("a stale revision is refused and the draft is kept", async () => {
     const { service } = await setup();
     const { request } = await present(service, "plan");
-    service.saveDraft("env-1", { interactionId: request.interactionId, expectedDraftRevision: 0, requestRevision: 1, value: { changes: [] } });
-    await service.update(caller, { interactionId: request.interactionId, expectedRevision: 1, spec: { ...(RICH_KIND_FIXTURES.plan.spec as object), constraints: [{ id: "c1", text: "new" }] } });
+    service.saveDraft("env-1", {
+      interactionId: request.interactionId,
+      expectedDraftRevision: 0,
+      requestRevision: 1,
+      value: { changes: [] },
+    });
+    await service.update(caller, {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      spec: {
+        ...(RICH_KIND_FIXTURES.plan.spec as object),
+        constraints: [{ id: "c1", text: "new" }],
+      },
+    });
     const stale = await rejection(() =>
-      service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "accept-scope", idempotencyKey: "a", result: RICH_KIND_FIXTURES.plan.result }),
+      service.submit("env-1", {
+        interactionId: request.interactionId,
+        expectedRevision: 1,
+        actionId: "accept-scope",
+        idempotencyKey: "a",
+        result: RICH_KIND_FIXTURES.plan.result,
+      }),
     );
     expect(stale.code).toBe("stale");
     expect(service.get("env-1", request.interactionId).draft?.value).toEqual({ changes: [] });
@@ -198,30 +295,64 @@ describe("submissions", () => {
       expectedRevision: 1,
       actionId: "save",
       idempotencyKey: "save-1",
-      result: { baseRevision: 1, changes: [{ op: "setIncluded", stepId: "historical-migration", value: false }] },
+      result: {
+        baseRevision: 1,
+        changes: [{ op: "setIncluded", stepId: "historical-migration", value: false }],
+      },
     });
     expect(saved).toMatchObject({ delivery: "recorded", resultingRevision: 2 });
     expect(queue.queued.size).toBe(0);
     const view = service.get("env-1", request.interactionId);
     expect(view.request).toMatchObject({ revision: 2, revisionAuthor: "user", state: "open" });
     // The agent must re-read before publishing: its stale update is refused.
-    expect((await rejection(() => service.update(caller, { interactionId: request.interactionId, expectedRevision: 1, spec: RICH_KIND_FIXTURES.plan.spec }))).code).toBe("stale");
+    expect(
+      (
+        await rejection(() =>
+          service.update(caller, {
+            interactionId: request.interactionId,
+            expectedRevision: 1,
+            spec: RICH_KIND_FIXTURES.plan.spec,
+          }),
+        )
+      ).code,
+    ).toBe("stale");
   });
 
   test("drafts are revision-checked between windows", async () => {
     const { service } = await setup();
     const { request } = await present(service, "form");
-    service.saveDraft("env-1", { interactionId: request.interactionId, expectedDraftRevision: 0, requestRevision: 1, value: { a: 1 } });
-    const conflict = await rejection(() => service.saveDraft("env-1", { interactionId: request.interactionId, expectedDraftRevision: 0, requestRevision: 1, value: { a: 2 } }));
+    service.saveDraft("env-1", {
+      interactionId: request.interactionId,
+      expectedDraftRevision: 0,
+      requestRevision: 1,
+      value: { a: 1 },
+    });
+    const conflict = await rejection(() =>
+      service.saveDraft("env-1", {
+        interactionId: request.interactionId,
+        expectedDraftRevision: 0,
+        requestRevision: 1,
+        value: { a: 2 },
+      }),
+    );
     expect(conflict.code).toBe("conflict");
-    expect(service.get("env-1", request.interactionId).draft).toMatchObject({ revision: 1, value: { a: 1 } });
+    expect(service.get("env-1", request.interactionId).draft).toMatchObject({
+      revision: 1,
+      value: { a: 1 },
+    });
   });
 
   test("another environment cannot submit to a request", async () => {
     const { service } = await setup();
     const { request } = await present(service, "choice");
     const refused = await rejection(() =>
-      service.submit("env-2", { interactionId: request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "x", result: RICH_KIND_FIXTURES.choice.result }),
+      service.submit("env-2", {
+        interactionId: request.interactionId,
+        expectedRevision: 1,
+        actionId: "submit",
+        idempotencyKey: "x",
+        result: RICH_KIND_FIXTURES.choice.result,
+      }),
     );
     expect(refused.code).toBe("not-found");
   });
@@ -233,7 +364,13 @@ describe("submissions", () => {
     now += 120_000;
     expect(service.get("env-1", request.interactionId).request.state).toBe("expired");
     const refused = await rejection(() =>
-      service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "submit", idempotencyKey: "x", result: RICH_KIND_FIXTURES.choice.result }),
+      service.submit("env-1", {
+        interactionId: request.interactionId,
+        expectedRevision: 1,
+        actionId: "submit",
+        idempotencyKey: "x",
+        result: RICH_KIND_FIXTURES.choice.result,
+      }),
     );
     expect(refused.code).toBe("closed");
   });
@@ -254,7 +391,13 @@ describe("user-originated requests", () => {
     expect(receipt.delivery).toBe("recorded");
     expect(queue.queued.size).toBe(0);
     expect(request.revision).toBe(2);
-    const discuss = await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 2, actionId: "discuss", idempotencyKey: "d1", result: { body: "Why is this misaligned?" } });
+    const discuss = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 2,
+      actionId: "discuss",
+      idempotencyKey: "d1",
+      result: { body: "Why is this misaligned?" },
+    });
     expect(discuss.delivery).toBe("queued");
     const view = service.get("env-1", request.interactionId);
     expect((view.request.spec as { entries: unknown[] }).entries).toHaveLength(2);
@@ -262,28 +405,52 @@ describe("user-originated requests", () => {
     const replied = await service.update(caller, {
       interactionId: request.interactionId,
       expectedRevision: view.request.revision,
-      spec: { ...spec, entries: [...spec.entries, { entryId: "a1", author: "agent", body: "Fixed padding", createdAt: "t" }] },
+      spec: {
+        ...spec,
+        entries: [
+          ...spec.entries,
+          { entryId: "a1", author: "agent", body: "Fixed padding", createdAt: "t" },
+        ],
+      },
     });
     expect((replied.spec as { entries: unknown[] }).entries).toHaveLength(3);
   });
 
   test("agents cannot create user-originated kinds", async () => {
     const { service } = await setup();
-    const refused = await rejection(() => service.present(caller, { requestKey: "k", kind: "context-packet", title: "x", spec: RICH_KIND_FIXTURES["context-packet"].spec }));
+    const refused = await rejection(() =>
+      service.present(caller, {
+        requestKey: "k",
+        kind: "context-packet",
+        title: "x",
+        spec: RICH_KIND_FIXTURES["context-packet"].spec,
+      }),
+    );
     expect(refused.code).toBe("invalid");
   });
 });
 
 describe("product commands", () => {
-  const graphRun = (revision: number) => ({ id: "run-3", revision, status: "running", environmentId: "env-1" }) as unknown as Awaited<ReturnType<GraphRunControls["retry"]>>;
+  const graphRun = (revision: number) =>
+    ({ id: "run-3", revision, status: "running", environmentId: "env-1" }) as unknown as Awaited<
+      ReturnType<GraphRunControls["retry"]>
+    >;
 
   test("unregistered commands are unavailable and refused before commit", async () => {
     const { service } = await setup();
     const { request } = await present(service, "diagnostics");
     const view = service.get("env-1", request.interactionId);
-    expect(view.actions.find((a) => a.id === "rerun-selection")).toMatchObject({ available: false });
+    expect(view.actions.find((a) => a.id === "rerun-selection")).toMatchObject({
+      available: false,
+    });
     const refused = await rejection(() =>
-      service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "rerun-selection", idempotencyKey: "r", result: { runRevision: 7, caseIds: ["auth:expired-session"] } }),
+      service.submit("env-1", {
+        interactionId: request.interactionId,
+        expectedRevision: 1,
+        actionId: "rerun-selection",
+        idempotencyKey: "r",
+        result: { runRevision: 7, caseIds: ["auth:expired-session"] },
+      }),
     );
     expect(refused.code).toBe("unavailable");
     expect(service.get("env-1", request.interactionId).receipts).toHaveLength(0);
@@ -301,26 +468,64 @@ describe("product commands", () => {
       cancel: async () => graphRun(5),
     };
     const { service } = await setup({ graphRuns });
-    const spec = { ...(RICH_KIND_FIXTURES["workflow-actions"].spec as object), workflowId: "graph" };
-    const { request } = await service.present(caller, { requestKey: "w", kind: "workflow-actions", title: "Validation", spec });
-    const ok = await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "retry-node", idempotencyKey: "r1", result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 } });
+    const spec = {
+      ...(RICH_KIND_FIXTURES["workflow-actions"].spec as object),
+      workflowId: "graph",
+    };
+    const { request } = await service.present(caller, {
+      requestKey: "w",
+      kind: "workflow-actions",
+      title: "Validation",
+      spec,
+    });
+    const ok = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "retry-node",
+      idempotencyKey: "r1",
+      result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 },
+    });
     expect(ok.delivery).toBe("applied");
     expect(calls).toEqual(["run-3:attempt-3"]);
     liveRevision = 6;
-    const stale = await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "retry-node", idempotencyKey: "r2", result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 } });
+    const stale = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "retry-node",
+      idempotencyKey: "r2",
+      result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 },
+    });
     expect(stale.delivery).toBe("failed");
     expect(stale.deliveryDetail).toContain("advanced");
     expect(calls).toHaveLength(1);
   });
 
   test("a stop that does not report cancelled stays unknown", async () => {
-    const graphRuns: GraphRunControls = { get: async () => graphRun(4), retry: async () => graphRun(4), cancel: async () => graphRun(5) };
+    const graphRuns: GraphRunControls = {
+      get: async () => graphRun(4),
+      retry: async () => graphRun(4),
+      cancel: async () => graphRun(5),
+    };
     const { service } = await setup({ graphRuns });
-    const spec = structuredClone(RICH_KIND_FIXTURES["workflow-actions"].spec) as { workflowId: string; nodes: Array<{ state: string }> };
+    const spec = structuredClone(RICH_KIND_FIXTURES["workflow-actions"].spec) as {
+      workflowId: string;
+      nodes: Array<{ state: string }>;
+    };
     spec.workflowId = "graph";
     spec.nodes[1]!.state = "running";
-    const { request } = await service.present(caller, { requestKey: "w", kind: "workflow-actions", title: "Validation", spec });
-    const receipt = await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "stop-node", idempotencyKey: "s1", result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 } });
+    const { request } = await service.present(caller, {
+      requestKey: "w",
+      kind: "workflow-actions",
+      title: "Validation",
+      spec,
+    });
+    const receipt = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "stop-node",
+      idempotencyKey: "s1",
+      result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 },
+    });
     expect(receipt.delivery).toBe("unknown");
   });
 });
@@ -329,20 +534,62 @@ describe("deliverables and deletion", () => {
   test("accepting a result review records the accepted artifact revision", async () => {
     const { service } = await setup();
     const { request } = await present(service, "result-review");
-    await service.submit("env-1", { interactionId: request.interactionId, expectedRevision: 1, actionId: "accept", idempotencyKey: "a", result: { expectedResultRevision: 5, decision: "accept" } });
+    await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "accept",
+      idempotencyKey: "a",
+      result: { expectedResultRevision: 5, decision: "accept" },
+    });
     const deliverables = service.listDeliverables("env-1", "env-env-1:tab-1");
-    expect(deliverables).toEqual([expect.objectContaining({ artifactId: "shot-after", acceptedRevision: 1, pinned: false })]);
-    const pinned = service.updateDeliverable("env-1", { logicalSessionKey: "env-env-1:tab-1", artifactId: "shot-after", expectedRevision: 1, patch: { pinned: true, userLabel: "Approved direction" } });
-    expect(pinned).toMatchObject({ pinned: true, userLabel: "Approved direction", acceptedRevision: 1, revision: 2 });
-    expect((await rejection(() => service.updateDeliverable("env-1", { logicalSessionKey: "env-env-1:tab-1", artifactId: "shot-after", expectedRevision: 1, patch: { pinned: false } }))).code).toBe("conflict");
-    expect((await rejection(() => service.updateDeliverable("env-1", { logicalSessionKey: "env-env-2:tab-1", artifactId: "x", expectedRevision: 0, patch: {} }))).code).toBe("forbidden");
+    expect(deliverables).toEqual([
+      expect.objectContaining({ artifactId: "shot-after", acceptedRevision: 1, pinned: false }),
+    ]);
+    const pinned = service.updateDeliverable("env-1", {
+      logicalSessionKey: "env-env-1:tab-1",
+      artifactId: "shot-after",
+      expectedRevision: 1,
+      patch: { pinned: true, userLabel: "Approved direction" },
+    });
+    expect(pinned).toMatchObject({
+      pinned: true,
+      userLabel: "Approved direction",
+      acceptedRevision: 1,
+      revision: 2,
+    });
+    expect(
+      (
+        await rejection(() =>
+          service.updateDeliverable("env-1", {
+            logicalSessionKey: "env-env-1:tab-1",
+            artifactId: "shot-after",
+            expectedRevision: 1,
+            patch: { pinned: false },
+          }),
+        )
+      ).code,
+    ).toBe("conflict");
+    expect(
+      (
+        await rejection(() =>
+          service.updateDeliverable("env-1", {
+            logicalSessionKey: "env-env-2:tab-1",
+            artifactId: "x",
+            expectedRevision: 0,
+            patch: {},
+          }),
+        )
+      ).code,
+    ).toBe("forbidden");
   });
 
   test("deleting an environment removes its records", async () => {
     const { service } = await setup();
     const { request } = await present(service, "choice");
     service.environmentDeleted("env-1");
-    expect((await rejection(() => service.get("env-1", request.interactionId))).code).toBe("not-found");
+    expect((await rejection(() => service.get("env-1", request.interactionId))).code).toBe(
+      "not-found",
+    );
     expect(service.listForConversation("env-1", undefined)).toEqual([]);
   });
 });

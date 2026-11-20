@@ -25,7 +25,10 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { int, str, toolInput, withDefault } from "./tool-schema.js";
-import { RICH_INTERACTION_TOOL_INSTRUCTIONS, registerRichInteractionTools } from "./rich-interactions/tools.js";
+import {
+  RICH_INTERACTION_TOOL_INSTRUCTIONS,
+  registerRichInteractionTools,
+} from "./rich-interactions/tools.js";
 import type { RichInteractionService } from "./rich-interactions/service.js";
 import { parseTicketSectionsPatch } from "@orkestrator/protocol/ticket-sections";
 import {
@@ -1040,7 +1043,10 @@ async function createAgentToolServer(
 
   // Tab-scoped credentials only: an interaction's decisions go back to the tab that created it.
   if (interactionTools && scope.tabId)
-    registerRichInteractionTools(server, interactionTools, { environmentId: scope.environmentId, tabId: scope.tabId });
+    registerRichInteractionTools(server, interactionTools, {
+      environmentId: scope.environmentId,
+      tabId: scope.tabId,
+    });
 
   if (credentialTools && credentialCaller)
     registerCredentialTools(server, credentialTools, credentialCaller);

@@ -21,8 +21,14 @@ import { modelRecord, opaqueRecord } from "../../model-schema.js";
 import { richInteractionsDomain } from "./domain.js";
 
 const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
-const Key = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(RICH_INTERACTION_LIMITS.idempotencyKeyChars));
-const Revision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER - 1));
+const Key = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(RICH_INTERACTION_LIMITS.idempotencyKeyChars),
+);
+const Revision = Schema.Int.check(
+  Schema.isGreaterThanOrEqualTo(0),
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER - 1),
+);
 const LogicalSessionKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512));
 
 const RequestRecord = modelRecord<RichInteractionRequest>()({
@@ -41,8 +47,16 @@ const ReceiptRecord = modelRecord<RichInteractionReceipt>()({
 export interface RichInteractionViewRecord {
   request: RichInteractionRequest;
   receipts: RichInteractionReceipt[];
-  draft: { interactionId: string; requestRevision: number; revision: number; value: unknown; updatedAt: string } | null;
-  actions: Array<RichInteractionRequest["actions"][number] & { available: boolean; unavailableReason?: string }>;
+  draft: {
+    interactionId: string;
+    requestRevision: number;
+    revision: number;
+    value: unknown;
+    updatedAt: string;
+  } | null;
+  actions: Array<
+    RichInteractionRequest["actions"][number] & { available: boolean; unavailableReason?: string }
+  >;
   open: boolean;
 }
 
@@ -73,7 +87,10 @@ export const richInteractionsListCommand = defineCommand({
   since: 1,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ environmentId: Id, logicalSessionKey: Schema.optionalKey(LogicalSessionKey) }),
+  args: Schema.Struct({
+    environmentId: Id,
+    logicalSessionKey: Schema.optionalKey(LogicalSessionKey),
+  }),
   result: Schema.Array(ViewRecord),
   critical: [],
 });

@@ -16,8 +16,14 @@ import { richInteractionsDomain } from "./domain.js";
 
 export type RichInteractionsApi = CommandApi<typeof RICH_INTERACTIONS_COMMANDS>;
 
-const richInteractionsApi = (call: CommandCall): RichInteractionsApi => commandApi(call, RICH_INTERACTIONS_COMMANDS);
-const legacyRichInteractionsApi = (_call: CommandCall, context: DomainAdapterContext): RichInteractionsApi =>
-  legacyCommandApi(context, RICH_INTERACTIONS_COMMANDS);
+const richInteractionsApi = (call: CommandCall): RichInteractionsApi =>
+  commandApi(call, RICH_INTERACTIONS_COMMANDS);
+const legacyRichInteractionsApi = (
+  _call: CommandCall,
+  context: DomainAdapterContext,
+): RichInteractionsApi => legacyCommandApi(context, RICH_INTERACTIONS_COMMANDS);
 
-export const richInteractionsClient = domainClient(richInteractionsDomain, { 1: richInteractionsApi, 0: legacyRichInteractionsApi });
+export const richInteractionsClient = domainClient(richInteractionsDomain, {
+  1: richInteractionsApi,
+  0: legacyRichInteractionsApi,
+});

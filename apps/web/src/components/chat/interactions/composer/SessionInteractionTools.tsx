@@ -13,10 +13,22 @@ import { PointAndTalk } from "./PointAndTalk";
 type Panel = "tray" | "talk" | "deliverables" | "demo";
 
 const TITLES: Record<Panel, { title: string; description: string }> = {
-  tray: { title: "Context tray", description: "References for your next request. Nothing is sent until you send it." },
-  talk: { title: "Point and talk", description: "Speak (or type) a request about what you are pointing at." },
-  deliverables: { title: "Session deliverables", description: "Published outputs, comment threads and interactions waiting for you." },
-  demo: { title: "Record a demonstration", description: "Show the agent a workflow in a preview, then review and send it." },
+  tray: {
+    title: "Context tray",
+    description: "References for your next request. Nothing is sent until you send it.",
+  },
+  talk: {
+    title: "Point and talk",
+    description: "Speak (or type) a request about what you are pointing at.",
+  },
+  deliverables: {
+    title: "Session deliverables",
+    description: "Published outputs, comment threads and interactions waiting for you.",
+  },
+  demo: {
+    title: "Record a demonstration",
+    description: "Show the agent a workflow in a preview, then review and send it.",
+  },
 };
 
 /**
@@ -26,11 +38,28 @@ const TITLES: Record<Panel, { title: string; description: string }> = {
  * it survives transcript scrolling and virtualization; closing a sheet stops
  * nothing (a recording stops only on its own Stop).
  */
-export function SessionInteractionTools({ environmentId, logicalSessionKey, disabled }: { environmentId: string; logicalSessionKey: string; disabled?: boolean }) {
+export function SessionInteractionTools({
+  environmentId,
+  logicalSessionKey,
+  disabled,
+}: {
+  environmentId: string;
+  logicalSessionKey: string;
+  disabled?: boolean;
+}) {
   const [panel, setPanel] = useState<Panel | null>(null);
-  const trayCount = useContextTrayStore((state) => state.trays.get(contextTrayKey(environmentId, logicalSessionKey))?.filter((item) => item.included).length ?? 0);
-  const trayItems = useContextTrayStore((state) => state.trays.get(contextTrayKey(environmentId, logicalSessionKey)));
-  const targets: RichAnchor[] = (trayItems ?? []).filter((item) => item.included).map((item) => ({ source: item.source, location: item.location ?? { kind: "whole" } }));
+  const trayCount = useContextTrayStore(
+    (state) =>
+      state.trays
+        .get(contextTrayKey(environmentId, logicalSessionKey))
+        ?.filter((item) => item.included).length ?? 0,
+  );
+  const trayItems = useContextTrayStore((state) =>
+    state.trays.get(contextTrayKey(environmentId, logicalSessionKey)),
+  );
+  const targets: RichAnchor[] = (trayItems ?? [])
+    .filter((item) => item.included)
+    .map((item) => ({ source: item.source, location: item.location ?? { kind: "whole" } }));
   const button = (id: Panel, label: string, icon: React.ReactNode, badge?: number) => (
     <Button
       key={id}
@@ -44,7 +73,11 @@ export function SessionInteractionTools({ environmentId, logicalSessionKey, disa
       onClick={() => setPanel(panel === id ? null : id)}
     >
       {icon}
-      {badge ? <span className="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-primary-fill px-1 text-[10px] leading-4 text-primary-foreground">{badge}</span> : null}
+      {badge ? (
+        <span className="absolute -top-0.5 -right-0.5 min-w-4 rounded-full bg-primary-fill px-1 text-[10px] leading-4 text-primary-foreground">
+          {badge}
+        </span>
+      ) : null}
     </Button>
   );
   return (
@@ -56,16 +89,43 @@ export function SessionInteractionTools({ environmentId, logicalSessionKey, disa
         {button("demo", "Record a demonstration", <Video className="size-4" />)}
       </div>
       <Sheet open={panel !== null} onOpenChange={(open) => !open && setPanel(null)} modal={false}>
-        <SheetContent className="w-full max-w-none overflow-y-auto px-4 py-4 sm:max-w-xl" onInteractOutside={(event) => event.preventDefault()}>
+        <SheetContent
+          className="w-full max-w-none overflow-y-auto px-4 py-4 sm:max-w-xl"
+          onInteractOutside={(event) => event.preventDefault()}
+        >
           {panel ? (
             <>
               <SheetTitle>{TITLES[panel].title}</SheetTitle>
               <SheetDescription>{TITLES[panel].description}</SheetDescription>
               <div className="mt-4">
-                {panel === "tray" ? <ContextTrayPanel environmentId={environmentId} logicalSessionKey={logicalSessionKey} onSent={() => setPanel(null)} /> : null}
-                {panel === "talk" ? <PointAndTalk environmentId={environmentId} logicalSessionKey={logicalSessionKey} targets={targets} onSent={() => setPanel(null)} /> : null}
-                {panel === "deliverables" ? <DeliverablesPanel environmentId={environmentId} logicalSessionKey={logicalSessionKey} /> : null}
-                {panel === "demo" ? <DemonstrationRecorder environmentId={environmentId} logicalSessionKey={logicalSessionKey} onSent={() => setPanel(null)} /> : null}
+                {panel === "tray" ? (
+                  <ContextTrayPanel
+                    environmentId={environmentId}
+                    logicalSessionKey={logicalSessionKey}
+                    onSent={() => setPanel(null)}
+                  />
+                ) : null}
+                {panel === "talk" ? (
+                  <PointAndTalk
+                    environmentId={environmentId}
+                    logicalSessionKey={logicalSessionKey}
+                    targets={targets}
+                    onSent={() => setPanel(null)}
+                  />
+                ) : null}
+                {panel === "deliverables" ? (
+                  <DeliverablesPanel
+                    environmentId={environmentId}
+                    logicalSessionKey={logicalSessionKey}
+                  />
+                ) : null}
+                {panel === "demo" ? (
+                  <DemonstrationRecorder
+                    environmentId={environmentId}
+                    logicalSessionKey={logicalSessionKey}
+                    onSent={() => setPanel(null)}
+                  />
+                ) : null}
               </div>
             </>
           ) : null}

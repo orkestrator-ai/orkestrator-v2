@@ -137,7 +137,13 @@ function parseNativeUserContent(
   if (interaction) {
     return {
       cleanContent: "",
-      parts: [{ type: "interaction-receipt" as const, content: interaction.summary, interaction: interaction.envelope }],
+      parts: [
+        {
+          type: "interaction-receipt" as const,
+          content: interaction.summary,
+          interaction: interaction.envelope,
+        },
+      ],
     };
   }
   const parsedReferences = parsePromptTranscriptReferences(content);

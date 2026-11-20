@@ -11,9 +11,17 @@ import type { RichInteractionTx, StoredDeliverable, StoredRequest } from "./stor
  * body or rewrites an artifact's own title.
  */
 
-export const DELIVERABLE_LIMITS = { perConversation: 500, labelChars: 120, groupChars: 60 } as const;
+export const DELIVERABLE_LIMITS = {
+  perConversation: 500,
+  labelChars: 120,
+  groupChars: 60,
+} as const;
 
-export function deliverableIdFor(environmentId: string, logicalSessionKey: string, artifactId: string): string {
+export function deliverableIdFor(
+  environmentId: string,
+  logicalSessionKey: string,
+  artifactId: string,
+): string {
   return `dl_${createHash("sha256").update(environmentId).update("\0").update(logicalSessionKey).update("\0").update(artifactId).digest("hex").slice(0, 32)}`;
 }
 
@@ -26,13 +34,30 @@ export interface DeliverablePatch {
 
 export function applyDeliverablePatch(
   tx: RichInteractionTx,
-  input: { environmentId: string; logicalSessionKey: string; artifactId: string; expectedRevision: number; patch: DeliverablePatch; now: string },
+  input: {
+    environmentId: string;
+    logicalSessionKey: string;
+    artifactId: string;
+    expectedRevision: number;
+    patch: DeliverablePatch;
+    now: string;
+  },
 ): StoredDeliverable | { conflict: StoredDeliverable } {
-  const deliverableId = deliverableIdFor(input.environmentId, input.logicalSessionKey, input.artifactId);
+  const deliverableId = deliverableIdFor(
+    input.environmentId,
+    input.logicalSessionKey,
+    input.artifactId,
+  );
   const current = tx.getDeliverable(deliverableId);
   if ((current?.revision ?? 0) !== input.expectedRevision) return { conflict: current! };
-  if (!current && tx.listDeliverables(input.environmentId, input.logicalSessionKey).length >= DELIVERABLE_LIMITS.perConversation) {
-    throw new Error(`A conversation keeps metadata for at most ${DELIVERABLE_LIMITS.perConversation} deliverables`);
+  if (
+    !current &&
+    tx.listDeliverables(input.environmentId, input.logicalSessionKey).length >=
+      DELIVERABLE_LIMITS.perConversation
+  ) {
+    throw new Error(
+      `A conversation keeps metadata for at most ${DELIVERABLE_LIMITS.perConversation} deliverables`,
+    );
   }
   const base: StoredDeliverable = current ?? {
     deliverableId,
@@ -68,15 +93,26 @@ export function applyDeliverablePatch(
  * acceptance and its receipt commit together. Accepting revision 2 is never
  * overwritten by a later publication of revision 3.
  */
-export function recordAcceptedArtifacts(tx: RichInteractionTx, request: StoredRequest, actionId: string, result: unknown, now: string): void {
-  if (request.kind !== "result-review" || (actionId !== "accept" && actionId !== "accept-selected")) return;
+export function recordAcceptedArtifacts(
+  tx: RichInteractionTx,
+  request: StoredRequest,
+  actionId: string,
+  result: unknown,
+  now: string,
+): void {
+  if (request.kind !== "result-review" || (actionId !== "accept" && actionId !== "accept-selected"))
+    return;
   const decision = result as ResultReviewResult;
   if (decision.decision !== "accept") return;
   const spec = request.spec as ResultReviewSpec;
   for (const comparison of spec.comparisons) {
     if (comparison.after?.kind !== "artifact") continue;
     const { artifactId, revision } = comparison.after;
-    const deliverableId = deliverableIdFor(request.owner.environmentId, request.owner.logicalSessionKey, artifactId);
+    const deliverableId = deliverableIdFor(
+      request.owner.environmentId,
+      request.owner.logicalSessionKey,
+      artifactId,
+    );
     const current = tx.getDeliverable(deliverableId);
     tx.putDeliverable({
       ...(current ?? {

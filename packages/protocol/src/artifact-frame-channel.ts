@@ -21,7 +21,11 @@ export const ARTIFACT_FRAME_PROTOCOL_VERSION = 1;
 /** Version of the result-candidate message (feature 12); older hosts drop it as unknown. */
 export const ARTIFACT_RESULT_CANDIDATE_PROTOCOL = 2;
 /** Bounds of one candidate's value: small structured data, never documents. */
-export const ARTIFACT_RESULT_CANDIDATE_LIMITS = { keys: 64, valueBytes: 6 * 1024, candidateIdChars: 64 } as const;
+export const ARTIFACT_RESULT_CANDIDATE_LIMITS = {
+  keys: 64,
+  valueBytes: 6 * 1024,
+  candidateIdChars: 64,
+} as const;
 
 export interface ArtifactFrameIdentity {
   artifactId: string;
@@ -84,7 +88,17 @@ const MESSAGE_KEYS: Record<ArtifactFrameMessage["type"], readonly string[]> = {
   ready: ["channel", "v", "type", "protocolVersion", "nonce"],
   size: ["channel", "v", "type", "height", "width", "artifactId", "revision", "generation"],
   "link-request": ["channel", "v", "type", "url", "label", "artifactId", "revision", "generation"],
-  "result-candidate": ["channel", "v", "type", "protocolVersion", "candidateId", "value", "artifactId", "revision", "generation"],
+  "result-candidate": [
+    "channel",
+    "v",
+    "type",
+    "protocolVersion",
+    "candidateId",
+    "value",
+    "artifactId",
+    "revision",
+    "generation",
+  ],
 };
 
 /** A candidate value: a plain JSON object, bounded in keys, depth and bytes. */
@@ -95,17 +109,23 @@ export function isArtifactResultCandidateValue(value: unknown): value is Record<
     if (item === null || typeof item === "string" || typeof item === "boolean") return true;
     if (typeof item === "number") return Number.isFinite(item);
     if (depth > 3) return false;
-    if (Array.isArray(item)) return item.length <= 100 && item.every((child) => plain(child, depth + 1));
+    if (Array.isArray(item))
+      return item.length <= 100 && item.every((child) => plain(child, depth + 1));
     if (typeof item === "object") {
       const proto = Object.getPrototypeOf(item);
       if (proto !== Object.prototype && proto !== null) return false;
-      return Object.values(item as Record<string, unknown>).every((child) => plain(child, depth + 1));
+      return Object.values(item as Record<string, unknown>).every((child) =>
+        plain(child, depth + 1),
+      );
     }
     return false;
   };
   if (!plain(value, 0)) return false;
   try {
-    return new TextEncoder().encode(JSON.stringify(value)).length <= ARTIFACT_RESULT_CANDIDATE_LIMITS.valueBytes;
+    return (
+      new TextEncoder().encode(JSON.stringify(value)).length <=
+      ARTIFACT_RESULT_CANDIDATE_LIMITS.valueBytes
+    );
   } catch {
     return false;
   }
@@ -410,7 +430,13 @@ export function installArtifactFrameRuntime(identity: {
       } catch {
         return;
       }
-      post({ type: "result-candidate", protocolVersion: 2, candidateId: candidateId.slice(0, 64), value: copy, ...fields });
+      post({
+        type: "result-candidate",
+        protocolVersion: 2,
+        candidateId: candidateId.slice(0, 64),
+        value: copy,
+        ...fields,
+      });
     },
     requestLink: (url: string, label = "") => {
       const fields = identityFields();

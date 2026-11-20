@@ -31,7 +31,9 @@ function notify(key: string, candidate: ArtifactResultCandidate | null): void {
   for (const listener of listeners.get(key) ?? []) listener(candidate);
 }
 
-export function publishArtifactResultCandidate(candidate: Omit<ArtifactResultCandidate, "receivedAt">): void {
+export function publishArtifactResultCandidate(
+  candidate: Omit<ArtifactResultCandidate, "receivedAt">,
+): void {
   const key = keyOf(candidate.artifactId, candidate.revision);
   const next = { ...candidate, receivedAt: Date.now() };
   latest.delete(key);
@@ -45,7 +47,11 @@ export function publishArtifactResultCandidate(candidate: Omit<ArtifactResultCan
 }
 
 /** The viewer for this revision closed or was replaced: its candidates no longer apply. */
-export function clearArtifactResultCandidates(artifactId: string, revision: number, generation?: string): void {
+export function clearArtifactResultCandidates(
+  artifactId: string,
+  revision: number,
+  generation?: string,
+): void {
   const key = keyOf(artifactId, revision);
   const current = latest.get(key);
   if (!current || (generation !== undefined && current.generation !== generation)) return;
@@ -53,11 +59,18 @@ export function clearArtifactResultCandidates(artifactId: string, revision: numb
   notify(key, null);
 }
 
-export function latestArtifactResultCandidate(artifactId: string, revision: number): ArtifactResultCandidate | null {
+export function latestArtifactResultCandidate(
+  artifactId: string,
+  revision: number,
+): ArtifactResultCandidate | null {
   return latest.get(keyOf(artifactId, revision)) ?? null;
 }
 
-export function subscribeArtifactResultCandidates(artifactId: string, revision: number, listener: Listener): () => void {
+export function subscribeArtifactResultCandidates(
+  artifactId: string,
+  revision: number,
+  listener: Listener,
+): () => void {
   const key = keyOf(artifactId, revision);
   let set = listeners.get(key);
   if (!set) listeners.set(key, (set = new Set()));

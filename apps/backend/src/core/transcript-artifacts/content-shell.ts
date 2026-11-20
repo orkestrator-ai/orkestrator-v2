@@ -189,9 +189,22 @@ export function installArtifactShellRelay(config: ArtifactShellRelayConfig): voi
     if (data.type === "result-candidate") {
       // Feature 12: proposed values only, relayed as an exact copy of the
       // validated shape; the host decides whether anything may use them.
-      const keys = ["channel", "v", "type", "protocolVersion", "candidateId", "value", ...IDENTITY_KEYS];
+      const keys = [
+        "channel",
+        "v",
+        "type",
+        "protocolVersion",
+        "candidateId",
+        "value",
+        ...IDENTITY_KEYS,
+      ];
       if (!onlyKeys(data, keys)) return null;
-      if (data.protocolVersion !== 2 || typeof data.candidateId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(data.candidateId)) return null;
+      if (
+        data.protocolVersion !== 2 ||
+        typeof data.candidateId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,64}$/.test(data.candidateId)
+      )
+        return null;
       if (!isRecord(data.value)) return null;
       let value;
       try {
@@ -199,7 +212,14 @@ export function installArtifactShellRelay(config: ArtifactShellRelayConfig): voi
       } catch {
         return null;
       }
-      return { ...base, type: "result-candidate", protocolVersion: 2, candidateId: data.candidateId, value, ...identity };
+      return {
+        ...base,
+        type: "result-candidate",
+        protocolVersion: 2,
+        candidateId: data.candidateId,
+        value,
+        ...identity,
+      };
     }
     if (data.type === "link-request") {
       const keys = ["channel", "v", "type", "url", "label", ...IDENTITY_KEYS];

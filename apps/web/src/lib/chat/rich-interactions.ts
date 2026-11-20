@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RichInteractionViewRecord } from "@orkestrator/protocol/contract/domains/rich-interactions";
 import type { RichInteractionReceipt } from "@orkestrator/protocol/rich-interactions";
-import { richInteractionErrorCode, richInteractionErrorMessage } from "@/lib/backend/rich-interactions";
+import {
+  richInteractionErrorCode,
+  richInteractionErrorMessage,
+} from "@/lib/backend/rich-interactions";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 
@@ -48,7 +51,10 @@ export type RichInteractionLoad =
   | { status: "error"; view: RichInteractionView | null; message: string };
 
 /** Reads one interaction and keeps it current. */
-export function useRichInteraction(environmentId: string | null, interactionId: string | null): {
+export function useRichInteraction(
+  environmentId: string | null,
+  interactionId: string | null,
+): {
   load: RichInteractionLoad;
   refresh: () => Promise<RichInteractionView | null>;
   replace: (view: RichInteractionView) => void;
@@ -63,36 +69,41 @@ export function useRichInteraction(environmentId: string | null, interactionId: 
 
   // One read path, defined with the subscriptions that trigger it; `refresh`
   // forwards to it so callers (a submit, a retry) can ask for a fresh read.
-  const refresh = useCallback(
-    (): Promise<RichInteractionView | null> => {
-      if (!environmentId || !interactionId) return Promise.resolve(null);
-      const request = ++sequence.current;
-      const key = cacheKey(environmentId, interactionId);
-      return backend.getRichInteraction({ environmentId, interactionId }).then(
-        (view) => {
-          if (request === sequence.current) {
-            remember(key, view);
-            setState({ key, load: { status: "ready", view } });
-          }
-          return view;
-        },
-        (error: unknown) => {
-          if (request === sequence.current) {
-            const code = richInteractionErrorCode(error);
-            setState((current) => ({
-              key,
-              load:
-                code === "not-found"
-                  ? { status: "missing", view: null, message: "This interaction is no longer available." }
-                  : { status: "error", view: current.load.view, message: richInteractionErrorMessage(error) },
-            }));
-          }
-          return null;
-        },
-      );
-    },
-    [backend, environmentId, interactionId],
-  );
+  const refresh = useCallback((): Promise<RichInteractionView | null> => {
+    if (!environmentId || !interactionId) return Promise.resolve(null);
+    const request = ++sequence.current;
+    const key = cacheKey(environmentId, interactionId);
+    return backend.getRichInteraction({ environmentId, interactionId }).then(
+      (view) => {
+        if (request === sequence.current) {
+          remember(key, view);
+          setState({ key, load: { status: "ready", view } });
+        }
+        return view;
+      },
+      (error: unknown) => {
+        if (request === sequence.current) {
+          const code = richInteractionErrorCode(error);
+          setState((current) => ({
+            key,
+            load:
+              code === "not-found"
+                ? {
+                    status: "missing",
+                    view: null,
+                    message: "This interaction is no longer available.",
+                  }
+                : {
+                    status: "error",
+                    view: current.load.view,
+                    message: richInteractionErrorMessage(error),
+                  },
+          }));
+        }
+        return null;
+      },
+    );
+  }, [backend, environmentId, interactionId]);
 
   useEffect(() => {
     if (!environmentId || !interactionId) return;
@@ -116,24 +127,36 @@ export function useRichInteraction(environmentId: string | null, interactionId: 
     (view: RichInteractionView) => {
       if (!environmentId) return;
       remember(cacheKey(environmentId, view.request.interactionId), view);
-      setState({ key: cacheKey(environmentId, view.request.interactionId), load: { status: "ready", view } });
+      setState({
+        key: cacheKey(environmentId, view.request.interactionId),
+        load: { status: "ready", view },
+      });
     },
     [environmentId],
   );
 
   const load: RichInteractionLoad =
-    state.key === key ? state.load : { status: "loading", view: key ? (SNAPSHOT_CACHE.get(key) ?? null) : null };
+    state.key === key
+      ? state.load
+      : { status: "loading", view: key ? (SNAPSHOT_CACHE.get(key) ?? null) : null };
   return { load, refresh, replace };
 }
 
 /** Every interaction of one conversation (the Interactions/Deliverables panels). */
-export function useRichInteractionList(environmentId: string | null, logicalSessionKey: string | null): {
+export function useRichInteractionList(
+  environmentId: string | null,
+  logicalSessionKey: string | null,
+): {
   views: RichInteractionView[];
   status: "loading" | "ready" | "error";
   refresh: () => void;
 } {
   const backend = useScopeBackend();
-  const [state, setState] = useState<{ key: string; views: RichInteractionView[]; status: "loading" | "ready" | "error" }>({ key: "", views: [], status: "loading" });
+  const [state, setState] = useState<{
+    key: string;
+    views: RichInteractionView[];
+    status: "loading" | "ready" | "error";
+  }>({ key: "", views: [], status: "loading" });
   const key = environmentId && logicalSessionKey ? `${environmentId}\0${logicalSessionKey}` : "";
   const sequence = useRef(0);
   const refresh = useCallback(() => {
@@ -142,7 +165,8 @@ export function useRichInteractionList(environmentId: string | null, logicalSess
     void backend
       .listRichInteractions({ environmentId, logicalSessionKey })
       .then((views) => {
-        if (request === sequence.current) setState({ key: `${environmentId}\0${logicalSessionKey}`, views, status: "ready" });
+        if (request === sequence.current)
+          setState({ key: `${environmentId}\0${logicalSessionKey}`, views, status: "ready" });
       })
       .catch(() => {
         if (request === sequence.current) setState((current) => ({ ...current, status: "error" }));
@@ -161,11 +185,16 @@ export function useRichInteractionList(environmentId: string | null, logicalSess
       offResync();
     };
   }, [environmentId, key, refresh]);
-  return state.key === key ? { views: state.views, status: state.status, refresh } : { views: [], status: "loading", refresh };
+  return state.key === key
+    ? { views: state.views, status: state.status, refresh }
+    : { views: [], status: "loading", refresh };
 }
 
 export function newIdempotencyKey(): string {
-  const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   return `ui-${random}`;
 }
 
@@ -185,12 +214,22 @@ export type SubmitOutcome =
  * Drafts: local first; synced after a pause with the expected draft revision.
  * A conflict keeps the local draft and reports it; nothing is overwritten.
  */
-export function useInteractionController(environmentId: string | null, view: RichInteractionView | null, onView: (view: RichInteractionView) => void, refresh: () => Promise<RichInteractionView | null>) {
+export function useInteractionController(
+  environmentId: string | null,
+  view: RichInteractionView | null,
+  onView: (view: RichInteractionView) => void,
+  refresh: () => Promise<RichInteractionView | null>,
+) {
   const backend = useScopeBackend();
   const request = view?.request ?? null;
   const hasServerDraft = Boolean(view?.draft);
-  const serverDraft = view?.draft && request && view.draft.requestRevision === request.revision ? view.draft : null;
-  const [local, setLocal] = useState<{ interactionId: string; revision: number; value: unknown } | null>(null);
+  const serverDraft =
+    view?.draft && request && view.draft.requestRevision === request.revision ? view.draft : null;
+  const [local, setLocal] = useState<{
+    interactionId: string;
+    revision: number;
+    value: unknown;
+  } | null>(null);
   const [draftConflict, setDraftConflict] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [outcome, setOutcome] = useState<SubmitOutcome | null>(null);
@@ -202,12 +241,23 @@ export function useInteractionController(environmentId: string | null, view: Ric
     draftRevision.current = view?.draft?.revision ?? 0;
   }, [view?.draft?.revision]);
 
-  useEffect(() => () => {
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    },
+    [],
+  );
 
-  const draft = local && request && local.interactionId === request.interactionId && local.revision === request.revision ? local.value : (serverDraft?.value ?? undefined);
-  const staleDraft = Boolean(view?.draft && request && view.draft.requestRevision !== request.revision);
+  const draft =
+    local &&
+    request &&
+    local.interactionId === request.interactionId &&
+    local.revision === request.revision
+      ? local.value
+      : (serverDraft?.value ?? undefined);
+  const staleDraft = Boolean(
+    view?.draft && request && view.draft.requestRevision !== request.revision,
+  );
 
   const setDraft = useCallback(
     (value: unknown) => {
@@ -219,7 +269,13 @@ export function useInteractionController(environmentId: string | null, view: Ric
       const requestRevision = request.revision;
       saveTimer.current = setTimeout(() => {
         void backend
-          .saveRichInteractionDraft({ environmentId, interactionId, expectedDraftRevision: draftRevision.current, requestRevision, value })
+          .saveRichInteractionDraft({
+            environmentId,
+            interactionId,
+            expectedDraftRevision: draftRevision.current,
+            requestRevision,
+            value,
+          })
           .then((saved) => {
             draftRevision.current = saved.revision;
             setDraftConflict(false);
@@ -234,9 +290,19 @@ export function useInteractionController(environmentId: string | null, view: Ric
   );
 
   const submit = useCallback(
-    async (actionId: string, result: unknown, options: { keepDraft?: boolean } = {}): Promise<SubmitOutcome> => {
-      if (!request || !environmentId) return { ok: false, code: "invalid", message: "Not ready.", retryable: false };
-      const fingerprint = JSON.stringify([request.interactionId, request.revision, actionId, result]);
+    async (
+      actionId: string,
+      result: unknown,
+      options: { keepDraft?: boolean } = {},
+    ): Promise<SubmitOutcome> => {
+      if (!request || !environmentId)
+        return { ok: false, code: "invalid", message: "Not ready.", retryable: false };
+      const fingerprint = JSON.stringify([
+        request.interactionId,
+        request.revision,
+        actionId,
+        result,
+      ]);
       if (!pendingKey.current || pendingKey.current.fingerprint !== fingerprint) {
         pendingKey.current = { fingerprint, key: newIdempotencyKey() };
       }
@@ -256,12 +322,16 @@ export function useInteractionController(environmentId: string | null, view: Ric
           // A progress save (e.g. a walkthrough step): the rest of the draft carries on
           // against the revision this submission produced.
           const resulting = receipt.resultingRevision;
-          if (resulting !== undefined) setLocal((current) => (current ? { ...current, revision: resulting } : current));
+          if (resulting !== undefined)
+            setLocal((current) => (current ? { ...current, revision: resulting } : current));
         } else {
           if (saveTimer.current) clearTimeout(saveTimer.current);
           setLocal(null);
           // The decision is committed; its draft has served its purpose.
-          if (hasServerDraft) void backend.clearRichInteractionDraft({ environmentId, interactionId: request.interactionId }).catch(() => undefined);
+          if (hasServerDraft)
+            void backend
+              .clearRichInteractionDraft({ environmentId, interactionId: request.interactionId })
+              .catch(() => undefined);
           draftRevision.current = 0;
         }
         const next: SubmitOutcome = { ok: true, receipt };
@@ -275,7 +345,12 @@ export function useInteractionController(environmentId: string | null, view: Ric
         // so the same key is kept for the retry.
         const definite = code !== null && code !== "unavailable";
         if (definite) pendingKey.current = null;
-        const next: SubmitOutcome = { ok: false, code, message: richInteractionErrorMessage(error), retryable: !definite };
+        const next: SubmitOutcome = {
+          ok: false,
+          code,
+          message: richInteractionErrorMessage(error),
+          retryable: !definite,
+        };
         setOutcome(next);
         if (code === "stale" || code === "closed") void refresh();
         return next;
@@ -289,7 +364,11 @@ export function useInteractionController(environmentId: string | null, view: Ric
   const dismiss = useCallback(async () => {
     if (!request || !environmentId) return;
     try {
-      await backend.dismissRichInteraction({ environmentId, interactionId: request.interactionId, expectedRevision: request.revision });
+      await backend.dismissRichInteraction({
+        environmentId,
+        interactionId: request.interactionId,
+        expectedRevision: request.revision,
+      });
     } finally {
       await refresh();
     }
@@ -307,7 +386,17 @@ export function useInteractionController(environmentId: string | null, view: Ric
     [backend, environmentId, refresh],
   );
 
-  return { draft, setDraft, draftConflict, staleDraft, submitting, outcome, submit, dismiss, retryDelivery };
+  return {
+    draft,
+    setDraft,
+    draftConflict,
+    staleDraft,
+    submitting,
+    outcome,
+    submit,
+    dismiss,
+    retryDelivery,
+  };
 }
 
 export type InteractionController = ReturnType<typeof useInteractionController>;

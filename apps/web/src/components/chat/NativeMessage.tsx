@@ -144,7 +144,8 @@ export const NativeMessage = memo(function NativeMessage({
     ? message.parts
         .flatMap((part) => {
           if (part.type === "text" || part.type === "async-question") return [part.content];
-          if (part.type === "interaction-receipt") return [`${part.interaction.title}: ${part.content}`];
+          if (part.type === "interaction-receipt")
+            return [`${part.interaction.title}: ${part.content}`];
           if (part.type !== "transcript-reference") return [];
           return [
             [

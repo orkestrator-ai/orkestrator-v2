@@ -6,7 +6,11 @@ import { ChartSelectionCard } from "./kinds/ChartSelectionCard";
 import { ChoiceCard } from "./kinds/ChoiceCard";
 import { CodeReviewCard } from "./kinds/CodeReviewCard";
 import { CollectionCard } from "./kinds/CollectionCard";
-import { ContextPacketCard, DemonstrationCard, VoiceRequestCard } from "./kinds/ComposedRequestCards";
+import {
+  ContextPacketCard,
+  DemonstrationCard,
+  VoiceRequestCard,
+} from "./kinds/ComposedRequestCards";
 import { CriteriaCard } from "./kinds/CriteriaCard";
 import { DiagnosticsCard } from "./kinds/DiagnosticsCard";
 import { DiagramCard } from "./kinds/DiagramCard";

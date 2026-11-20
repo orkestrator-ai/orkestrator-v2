@@ -1,4 +1,7 @@
-import type { BrowserPreviewTraceResult, BrowserPreviewTraceStatus } from "@orkestrator/protocol/browser-preview";
+import type {
+  BrowserPreviewTraceResult,
+  BrowserPreviewTraceStatus,
+} from "@orkestrator/protocol/browser-preview";
 import { BrowserPreviewTraceSessions, type TraceWebContents } from "./browser-preview-trace.js";
 import { appShortcut, type AppShortcutId } from "@orkestrator/protocol/keyboard-shortcuts";
 import type {
@@ -234,7 +237,12 @@ export class BrowserPreviewManager {
   private readonly traces = new BrowserPreviewTraceSessions({
     preview: (tabId) => {
       const preview = this.previews.get(tabId);
-      return preview ? { contents: preview.view.webContents as unknown as TraceWebContents, generation: preview.documentGeneration } : null;
+      return preview
+        ? {
+            contents: preview.view.webContents as unknown as TraceWebContents,
+            generation: preview.documentGeneration,
+          }
+        : null;
     },
   });
   private readonly pins: BrowserPreviewPinSessions;

@@ -91,6 +91,7 @@ export interface OpenCode2BackgroundWorkDependencies {
   /** The server's running sessions; `fresh` skips any cache. */
   running(fresh: boolean): Promise<ReadonlySet<string>>;
   now(): number;
+  monotonicNow?(): number;
   sleep?(ms: number): Promise<void>;
 }
 
@@ -216,6 +217,8 @@ export class OpenCode2BackgroundWork {
     const controller = new AbortController();
     this.stops.add(controller);
     const signal = controller.signal;
+    const monotonicNow = this.deps.monotonicNow ?? (() => performance.now());
+    const settleUntil = monotonicNow() + OPENCODE2_STOP_SETTLE_MS;
     const timeout = setTimeout(() => controller.abort(), OPENCODE2_STOP_CLEANUP_MS);
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     const inputHead = async () => {
@@ -231,14 +234,11 @@ export class OpenCode2BackgroundWork {
         !signal.aborted && (await inputHead()) === initialInput && !signal.aborted;
       await interruptParent?.(signal);
       const attempted = new Set<string>();
-      let quiet = false;
-      // The window is a duration, not a poll count. Each poll's reads add to
-      // its length, so on a slow server a fixed count ran past the cleanup
-      // abort and every stop reported pending. This is wall-clock time, like
-      // that abort; an injected `sleep` still ends at the count.
-      const settleUntil = performance.now() + OPENCODE2_STOP_SETTLE_MS;
       const lastPoll = OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS;
-      for (let poll = 0; ; poll += 1) {
+      let pollCost = 0;
+      for (let poll = 0; poll <= lastPoll; poll += 1) {
+        const pollStarted = monotonicNow();
+        if (pollStarted >= settleUntil || pollStarted + pollCost > settleUntil) break;
         const descendants = await this.descendants(sessionId, signal);
         const jobs = await this.stopJobs(sessionId, signal);
         const running = await this.client.activeSessions(signal);
@@ -259,14 +259,16 @@ export class OpenCode2BackgroundWork {
           );
         }
 
-        // Keep polling empty snapshots too. A command can cross its timeout
-        // during interruption or its report may still be on the way.
-        quiet =
-          !!jobs && !jobs.some((job) => pendingShell(job, this.deps.now())) && active.length === 0;
-        if (poll >= lastPoll || performance.now() >= settleUntil) break;
-        await sleep(STOP_POLL_MS);
+        // Keep polling even after an empty scan, but budget for another poll
+        // before sleeping so slow reads leave time for reconciliation.
+        const now = monotonicNow();
+        pollCost = now - pollStarted;
+        const sleepBudget = settleUntil - now - pollCost;
+        if (poll === lastPoll || sleepBudget <= 0) break;
+        await sleep(Math.min(STOP_POLL_MS, sleepBudget));
       }
-      if (!quiet || !(await ownsStop())) return false;
+      // An interrupt or shell removal in the last poll can change its snapshot.
+      if (!(await ownsStop())) return false;
       const descendants = await this.descendants(sessionId, signal);
       const sessions = [sessionId, ...descendants];
       const jobs = await this.stopJobs(sessionId, signal);

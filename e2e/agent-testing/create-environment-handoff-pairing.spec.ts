@@ -49,15 +49,18 @@ function createDialog(page: Page) {
   return page.getByRole("dialog", { name: /Create Ork \(environment\)/ });
 }
 
-async function openSourceForm(page: Page) {
-  await page.goto(loginUrl(profile));
-  const open = page.getByRole("button", { name: `New environment in ${repository}`, exact: true });
-  const hostWarning = page.getByRole("dialog", { name: /Docker containers can't reach/ });
-  await expect(open.or(hostWarning).first()).toBeVisible();
-  if (await hostWarning.isVisible()) {
-    await hostWarning.getByRole("button", { name: "Close", exact: true }).first().click();
+async function openSourceForm(page: Page, url: string) {
+  for (const name of ["Continue without Docker", "Continue without GitHub CLI"]) {
+    const dismiss = page.getByRole("button", { name, exact: true });
+    await page.addLocatorHandler(dismiss, (button) => button.click());
   }
-  await open.click();
+  const hostWarning = page.getByRole("dialog", { name: /Docker containers can't reach/ });
+  await page.addLocatorHandler(hostWarning, (dialog) =>
+    dialog.getByRole("button", { name: "Close", exact: true }).first().click(),
+  );
+  await page.goto(url);
+  const open = page.getByRole("button", { name: `New environment in ${repository}`, exact: true });
+  await open.click({ timeout: 30_000 });
   const dialog = createDialog(page);
   await dialog.getByRole("button", { name: "Local", exact: true }).click();
   return dialog;
@@ -130,7 +133,7 @@ test("Create Environment switches to and submits on a backend one release behind
     });
     await attachLeaf(command, leaf);
 
-    const dialog = await openSourceForm(page);
+    const dialog = await openSourceForm(page, loginUrl(profile));
     const environmentName = "mixed-release-handoff";
     await dialog.getByLabel("Environment name (optional)").fill(environmentName);
     await dialog.getByRole("button", { name: "Interactive", exact: true }).click();
@@ -196,9 +199,9 @@ test("Create Environment switches to and submits on a backend one release behind
       storageState: await page.context().storageState(),
       viewport: { width: 1440, height: 940 },
     });
-    await fetchModulesOutsideChromium(recoveryContext);
-    const recoveryPage = await recoveryContext.newPage();
     try {
+      await fetchModulesOutsideChromium(recoveryContext);
+      const recoveryPage = await recoveryContext.newPage();
       await recoveryPage.route("**/__orkestrator/invoke", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
@@ -214,7 +217,7 @@ test("Create Environment switches to and submits on a backend one release behind
         const body = await response.json();
         await route.fulfill({ response, json: { ...body, result: [] } });
       });
-      const recovered = await openSourceForm(recoveryPage);
+      const recovered = await openSourceForm(recoveryPage, status.browserUrl);
       await recovered.getByLabel("Environment name (optional)").fill("Keep my draft");
       await recovered.getByRole("checkbox", { name: "Launch agent" }).uncheck();
       await chooseLeaf(recoveryPage, nodeId);

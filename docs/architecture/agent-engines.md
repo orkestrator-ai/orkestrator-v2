@@ -1087,12 +1087,14 @@ Claude turn released to background agents, and is reported the same way
   (`openCode2RequestRun`, `openCode2TurnTerminalError`).
 - Stop: 2.3.0 no longer stops a parent's children when the parent is
   interrupted, and a stopped child's `cancelled` report wakes the parent. A
-  stop (and so a close) interrupts the running descendants and then, for up
-  to 3 s, any run their reports wake, refreshing descendants even after a quiet
-  snapshot. Prompts and steers from any provider instance wait for the session's
-  Stop lock. A change to the parent's external input fences further cleanup,
-  and disposal cancels the phase. Revised launch cards retain folded results after reports
-  leave the head window, and older launches still consult live child state.
+  stop (and so a close) uses the first 3 s for the parent interrupt and polling
+  for running descendants and runs woken by their reports. It budgets for
+  another poll based on the last poll's duration and uses the 4 s cleanup
+  deadline for fresh reconciliation. Prompts and steers from any provider
+  instance wait for the session's Stop lock. A change to the parent's external
+  input fences further cleanup, and disposal cancels the phase. Revised launch
+  cards retain folded results after reports leave the head window, and older
+  launches still consult live child state.
 
 A child's own permission or question cards are not shown in the parent's tab
 (as on 2.2.6, where the parent waited on the child instead).

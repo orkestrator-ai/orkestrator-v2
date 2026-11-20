@@ -46,7 +46,11 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
       const root = await mkdtemp(join(tmpdir(), "ork-opencode-stop-"));
       const storage = await createStorage(root);
       await addEnvironment(storage);
-      const server = new FakeOpenCode2Server();
+      const delayed = outcome === "graceful" || outcome === "force-stop";
+      let stopping = false;
+      const server = new FakeOpenCode2Server(async () => {
+        if (delayed && stopping) await Bun.sleep(90);
+      });
       const provider = openCodeProvider(server);
       const calls: string[] = [];
       let polls = 0;
@@ -64,7 +68,12 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
       const abort = provider.abort.bind(provider);
       provider.abort = async (id) => {
         calls.push("abort");
-        return abort(id);
+        stopping = true;
+        try {
+          await abort(id);
+        } finally {
+          stopping = false;
+        }
       };
       let now = 0;
       const service = new NativeAgentService(storage, refusingInvoke, {
@@ -74,6 +83,7 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
       });
       try {
         const session = await service.ensureSession(identity);
+        if (delayed) server.addChildSession(session.providerSessionId, { running: false });
         server.sessions.get(session.providerSessionId)!.forms.push({
           id: "form-stopped",
           sessionID: session.providerSessionId,
@@ -84,6 +94,7 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
         calls.length = 0;
         polls = 0;
 
+        const firstStopCall = server.calls.length;
         const stopped = service.stopProjectionSession(identity);
         // Only the force-stop's own failure reaches the caller.
         let projection: Awaited<typeof stopped>;
@@ -98,6 +109,13 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
           projection = await stopped;
         }
 
+        if (delayed) {
+          const scans = server.calls
+            .slice(firstStopCall)
+            .filter((call) => call.path === "/api/experimental/job");
+          expect(scans.length).toBeGreaterThan(2);
+          expect(scans.length).toBeLessThan(31);
+        }
         expect(calls[0]).toBe("abort");
         expect(calls.filter((call) => call === "status").length).toBeGreaterThanOrEqual(2);
         expect(calls.includes("hard-abort")).toBe(

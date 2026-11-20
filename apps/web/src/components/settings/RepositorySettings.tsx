@@ -26,7 +26,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useConfigStore } from "@/stores";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import * as backend from "@/lib/backend";
+import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { getGitHubRepositoryUrl } from "@/lib/gitUrl";
 import {
   Loader2,
@@ -83,8 +83,10 @@ export function RepositorySettings({
   onOpenChange,
   onUpdateProject,
 }: RepositorySettingsProps) {
-  // Browses the host of the node this component renders in.
+  // The project's own node: the picker browses its host, and every file read,
+  // Git read and save below goes to the same node, never the command node.
   const pickHostPath = usePickHostPath();
+  const nodeBackend = useScopeBackend();
   const getRepositoryConfig = useConfigStore((state) => state.getRepositoryConfig);
   const setConfig = useConfigStore((state) => state.setConfig);
   const config = useConfigStore((state) => state.config);
@@ -222,7 +224,7 @@ export function RepositorySettings({
     const generation = ++remoteReadGeneration.current;
     setIsReadingRemote(true);
     try {
-      const remoteUrl = await backend.getGitRemoteUrl(path);
+      const remoteUrl = await nodeBackend.getGitRemoteUrl(path);
       if (generation !== remoteReadGeneration.current) return;
       if (remoteUrl) {
         setGitUrl(remoteUrl);
@@ -263,10 +265,10 @@ export function RepositorySettings({
     setIsConvertingIcon(true);
     try {
       if (!icon && root) {
-        const found = await backend.findProjectIcons(root).catch(() => [] as string[]);
+        const found = await nodeBackend.findProjectIcons(root).catch(() => [] as string[]);
         for (const candidate of found) {
           if (generation !== iconConversionGeneration.current) return;
-          const image = await backend.readHostImageFile(candidate).catch(() => null);
+          const image = await nodeBackend.readHostImageFile(candidate).catch(() => null);
           if (!image || generation !== iconConversionGeneration.current) continue;
           if (await tryIconFile(fileFromHostImage(image), generation, false)) {
             if (generation === iconConversionGeneration.current) {
@@ -287,7 +289,7 @@ export function RepositorySettings({
       });
       if (!selected || generation !== iconConversionGeneration.current) return;
       setIsConvertingIcon(true);
-      const image = await backend.readHostImageFile(selected);
+      const image = await nodeBackend.readHostImageFile(selected);
       if (generation !== iconConversionGeneration.current) return;
       await tryIconFile(fileFromHostImage(image), generation, true);
     } catch (err) {
@@ -494,7 +496,7 @@ export function RepositorySettings({
       // record, so another window's change to a different field is kept. An
       // empty patch still returns the authoritative record.
       const { updates, unset } = repositorySettingsPatch(repoConfig, baselineConfig);
-      const newConfig = await backend.patchRepositorySettings(project.id, updates, unset);
+      const newConfig = await nodeBackend.patchRepositorySettings(project.id, updates, unset);
       setConfig(newConfig);
 
       toast.success("Settings saved");

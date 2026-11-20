@@ -17,8 +17,27 @@ import {
   useHostPathPickerStore,
 } from "@/lib/host-path-picker";
 import { useScopesWithCommandFallback, useSignal } from "@/lib/node-scope/providers";
+import {
+  useFederation,
+  type FederationContextValue,
+} from "@/components/federation/FederationProvider";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
+
+/**
+ * The name of `nodeId`'s machine, only while this client shows more than one
+ * machine: the window's own machine, or another node from the portal.
+ */
+export function pickerMachineName(
+  federation: Pick<FederationContextValue, "enabled" | "bound" | "portalState">,
+  nodeId: BackendId | undefined,
+): string | null {
+  if (!federation.enabled || !nodeId) return null;
+  if (federation.bound?.backendId === nodeId) return federation.bound.name;
+  const node = federation.portalState.nodes.find((candidate) => candidate.nodeId === nodeId);
+  return node?.view.displayName || null;
+}
 
 /**
  * Mounted once at the app root; opened by `pickHostPath`. It lists directories
@@ -34,6 +53,7 @@ export function HostPathPickerDialog() {
   useSignal(windowScope.nodeScopes);
   const client = request ? (windowScope.get(request.nodeId)?.client ?? null) : null;
   const isFileMode = request?.mode === "file";
+  const machineName = pickerMachineName(useFederation(), request?.nodeId);
 
   const [listing, setListing] = useState<HostDirectoryListing | null>(null);
   const [addressInput, setAddressInput] = useState("");
@@ -210,7 +230,9 @@ export function HostPathPickerDialog() {
         <DialogHeader>
           <DialogTitle>{request?.title ?? `Choose a ${noun}`}</DialogTitle>
           <DialogDescription>
-            Browsing the machine running the Orkestrator backend.
+            {machineName
+              ? `Browsing files on ${machineName}.`
+              : "Browsing the machine running the Orkestrator backend."}
           </DialogDescription>
         </DialogHeader>
 

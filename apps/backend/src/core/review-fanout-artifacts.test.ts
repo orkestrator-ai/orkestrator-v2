@@ -11,6 +11,8 @@ import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
+import { CONSOLIDATED_REVIEW_EXAMPLE } from "./review-consolidation-example.js";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
 import { beginWorkflowArtifactTurn, type ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
@@ -203,3 +205,26 @@ describe("beginWorkflowArtifactTurn", () => {
     expect(turn?.agentMcp?.token).toBe(CONNECTION.token);
   });
 });
+
+test.each(["failed", "cancelled"] as const)(
+  "a %s middle reviewer blocks chunked fan-in",
+  async (status) => {
+    const { host, reviewer, sends } = harness("claude", "idle");
+    const report = CONSOLIDATED_REVIEW_EXAMPLE as unknown as StructuredReviewReport;
+    const reviewers: ReviewerRecord[] = [
+      { ...reviewer, id: "r1", status: "completed", report },
+      { ...reviewer, id: "r2", status },
+      { ...reviewer, id: "r3", status: "completed", report },
+    ];
+    await expect(
+      new ReviewFanoutRunner({ ...host, diffChunkCount: 6 }).advanceReviewers(reviewers),
+    ).resolves.toEqual({
+      kind: "no-reports",
+      error: "Diff review incomplete. No usable reviewer report covers parts 2, 5.",
+    });
+    await expect(
+      new ReviewFanoutRunner({ ...host, diffChunkCount: 1 }).advanceReviewers(reviewers),
+    ).resolves.toMatchObject({ kind: "ready" });
+    expect(sends).toEqual([]);
+  },
+);

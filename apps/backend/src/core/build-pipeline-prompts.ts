@@ -977,16 +977,18 @@ const FOLLOW_UP_LABELS: Record<PipelineFollowUpKind, string> = {
 function pullRequestFollowUpsSection(followUps: readonly PipelineFollowUp[] = []): string {
   if (followUps.length === 0) return "";
   const shown: Array<{ type: string; text: string; detail?: string }> = [];
-  let bytes = 0;
-  for (const { kind, text, detail } of followUps) {
+  // Put test evidence first so an oversized criterion cannot crowd it out.
+  const ordered = [
+    ...followUps.filter((item) => item.kind === "test"),
+    ...followUps.filter((item) => item.kind !== "test"),
+  ];
+  for (const { kind, text, detail } of ordered) {
     if (shown.length === MAX_PULL_REQUEST_FOLLOW_UPS) break;
     const item = { type: FOLLOW_UP_LABELS[kind], text, ...(detail ? { detail } : {}) };
-    const itemBytes = utf8Bytes(promptCarrierJson(item));
-    // The first item always goes in whole: a list that shows nothing would
-    // hide the one thing the person merging most needs to see.
-    if (shown.length > 0 && bytes + itemBytes > MAX_PULL_REQUEST_FOLLOW_UP_BYTES) break;
+    // The list has at most 30 items. Measure its actual serialized frame,
+    // including indentation, separators, and escaped characters.
+    if (utf8Bytes(promptCarrierJson([...shown, item])) > MAX_PULL_REQUEST_FOLLOW_UP_BYTES) continue;
     shown.push(item);
-    bytes += itemBytes;
   }
   const omitted = followUps.length - shown.length;
   return `

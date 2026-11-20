@@ -7,6 +7,9 @@ import {
   WORKFLOW_RESULT_MAX_ENTRIES,
   WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY,
 } from "@orkestrator/protocol/workflow-results";
+import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
+import { disputedCheckDigests } from "./review-disputed-checks.js";
+import { graphOutputSlotInput } from "./workflow-result-graph-output.js";
 import { StorageDatabase } from "./storage-database.js";
 import {
   readStoredValue,
@@ -1097,6 +1100,49 @@ describe("WorkflowResultService", () => {
       }),
     ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
   });
+
+  test.each(["consolidated-review", "graph-output"] as const)(
+    "%s refuses disputed outcomes before acceptance and accepts a correction",
+    async (kind) => {
+      const resultKey = crypto.randomUUID();
+      const command = "mise run test";
+      const digests = disputedCheckDigests(new Set([command]));
+      const identity = { ...scope, resultKey, provider: "codex" as const };
+      await service.prepare(
+        kind === "consolidated-review"
+          ? {
+              ...identity,
+              kind,
+              context: { type: kind, sources: {}, disputedCheckDigests: digests },
+            }
+          : graphOutputSlotInput(
+              identity,
+              { name: "report" },
+              graphBuiltInType("review-report@1")!,
+              {
+                disputedCheckDigests: digests,
+              },
+            ),
+      );
+      const corrected = structuredClone(emptyReport);
+      const invalid = structuredClone(corrected);
+      invalid.reviewScope.commandsRun = [
+        { command, result: "failed", summary: "Re-run during consolidation: one failed." },
+      ];
+      const rejection = {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          issues: [expect.objectContaining({ path: "$.reviewScope.commandsRun[0]" })],
+        },
+      };
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject(rejection);
+      expect(await service.submit(scope, resultKey, invalid)).toMatchObject(rejection);
+      expect(await service.projection(resultKey)).toBe("correcting");
+      expect(await service.submit(scope, resultKey, corrected)).toMatchObject({ ok: true });
+    },
+  );
 
   test("terminal slots discard bulky validation context and stay below the byte ceiling", async () => {
     const sources = Object.fromEntries(

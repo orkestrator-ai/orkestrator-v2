@@ -1,3 +1,4 @@
+import { reviewChunkCoverageFailure } from "./review-diff-artifact.js";
 /**
  * The reviewer fan-out, shared by Multi Review and the build pipeline.
  *
@@ -388,6 +389,7 @@ export interface ReviewFanoutHost {
   readonly reviewInstruction?: string;
   /** Names the owner in user-facing failure text. */
   readonly label: string;
+  readonly diffChunkCount?: number;
   /** The environment its reviewers run in. */
   readonly environmentId?: string;
   /** Package consumers use provider plan/read-only mode, including repair turns. */
@@ -708,6 +710,11 @@ export class ReviewFanoutRunner {
     await this.branches.flushObservations();
 
     if (!reviewersSettled(reviewers)) return { kind: "working" };
+    const coverageFailure = reviewChunkCoverageFailure(
+      this.host.diffChunkCount,
+      reviewers.map((reviewer) => reviewer.status === "completed" && reviewer.report !== undefined),
+    );
+    if (coverageFailure) return { kind: "no-reports", error: coverageFailure };
     const reports = usableReviewerReports(reviewers);
     if (reports.length >= REVIEW_FANOUT_FAN_IN.minSuccessful) return { kind: "ready", reports };
     // Reviewers fail locally, so an environment-wide cause (an unreachable

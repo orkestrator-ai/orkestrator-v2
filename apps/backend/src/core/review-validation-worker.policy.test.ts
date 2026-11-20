@@ -1,6 +1,6 @@
 // Review validation worker: worktree drift, repository profiles, coverage, host grants and on-demand suites.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -328,6 +328,66 @@ test("a command learns the wall-clock instant it will be killed", async () => {
   expect(deadline).toBeGreaterThanOrEqual(before + 7000);
   expect(deadline).toBeLessThanOrEqual(Date.now() + 7000);
 });
+
+test.each([
+  { mode: "timeout", exitCode: 130, status: "incomplete", output: "Timed out" },
+  { mode: "assertion", exitCode: 1, status: "failed", output: "Expected:" },
+] as const)(
+  "Playwright $mode is sealed with its distinct outcome",
+  async ({ mode, exitCode, status, output }) => {
+    const { root, run } = await fixture([
+      command("browser", "mise run test:browser", { timeoutMs: 10_000 }),
+    ]);
+    await writeFile(path.join(root, "package.json"), '{"type":"module"}');
+    const modules = path.resolve(import.meta.dir, "../../../../node_modules");
+    await symlink(modules, path.join(root, "node_modules"), "dir");
+    const cli = path.join(modules, "playwright", "cli.js");
+    const config = path.resolve(
+      import.meta.dir,
+      "../../../../tests/playwright-review-validation.ts",
+    );
+    await writeFile(
+      path.join(root, "playwright.config.ts"),
+      `
+    import { reviewValidationRunOptions } from ${JSON.stringify(config)};
+    export default {
+      ...reviewValidationRunOptions("line"),
+      ${mode === "timeout" ? "globalTimeout: 2_000," : ""}
+      testMatch: "fixture.spec.ts",
+      workers: 1,
+    };
+  `,
+    );
+    await writeFile(
+      path.join(root, "fixture.spec.ts"),
+      `
+    import { expect, test } from "@playwright/test";
+    test("fixture browser evidence", async () => {
+      ${mode === "timeout" ? "await new Promise(() => {});" : "expect(1).toBe(2);"}
+    });
+  `,
+    );
+    // Keep the worker command identity while exercising the actual Playwright CLI
+    // against a temporary, browser-free suite with no shared ports or services.
+    const wrapper = path.join(root, "mise-wrapper");
+    await writeFile(
+      wrapper,
+      'mise() { unset JEST_WORKER_ID; node "$ORK_TEST_PLAYWRIGHT_CLI" test; }\n',
+    );
+    const done = await waitFor(root, run, 12_000, {
+      BASH_ENV: wrapper,
+      ORK_TEST_PLAYWRIGHT_CLI: cli,
+    });
+    const result = done.results[0]!;
+    const stdout = await readFile(path.join(root, result.stdoutPath!), "utf8");
+    const stderr = await readFile(path.join(root, result.stderrPath!), "utf8");
+    expect({
+      status: result.status,
+      exitCode: result.exitCode,
+      log: stdout + stderr,
+    }).toMatchObject({ status, exitCode, log: expect.stringContaining(output) });
+  },
+);
 
 test("an unusable scheduling config degrades to plain scheduling instead of losing every result", async () => {
   const { root, run } = await fixture([

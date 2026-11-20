@@ -4113,6 +4113,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       },
       assertFence: () => this.assertFence(workflow.id, token),
       reviewerMode: reviewFanoutReviewerMode(workflow.reviewPackage),
+      diffChunkCount: workflow.reviewPackage?.diffChunkCount,
       ...(workflow.reviewPackage
         ? {
             beforeAdmission: () => this.verifyReviewEvidence(workflow, token, "fanout"),

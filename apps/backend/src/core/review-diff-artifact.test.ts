@@ -127,6 +127,8 @@ describe("sealReviewDiff", () => {
       "--no-ext-diff",
       "--no-textconv",
       "--no-renames",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
       "a...b",
     ]);
   });
@@ -153,10 +155,11 @@ describe("splitReviewDiff", () => {
     ]);
   });
 
-  test("keeps one oversized file diff whole and never makes more than 64 parts", () => {
+  test("splits one oversized file diff and never makes more than 64 parts", () => {
     const diff = `${fileDiff("big.ts", 400)}${fileDiff("small.ts", 2)}`;
     const parts = splitReviewDiff(diff, 100);
-    expect(parts.map((part) => part.files)).toEqual([["big.ts"], ["small.ts"]]);
+    expect(parts.filter((part) => part.files.includes("big.ts")).length).toBeGreaterThan(1);
+    expect(Buffer.concat(parts.map((part) => part.contents)).toString("utf8")).toBe(diff);
     const many = Array.from({ length: 200 }, (_, i) => fileDiff(`f${i}.ts`, 1)).join("");
     const bounded = splitReviewDiff(many, 1);
     expect(bounded.length).toBeLessThanOrEqual(64);
@@ -181,7 +184,7 @@ describe("sealReviewDiff parts", () => {
         writes.set(filePath, contents);
       },
       chunkThresholdBytes: 100,
-      chunkTargetBytes: 1_000,
+      chunkTargetBytes: 1_500,
     });
     expect(sealed.limitation).toBeUndefined();
     const chunks = sealed.chunks!;
@@ -198,7 +201,7 @@ describe("sealReviewDiff parts", () => {
     }
   });
 
-  test("a diff under the threshold, or of one file, has no parts", async () => {
+  test("only the diff under the threshold has no parts", async () => {
     const small = await sealReviewDiff({
       packageId: "p",
       diff: async () => fileDiff("a.ts", 3),
@@ -212,7 +215,8 @@ describe("sealReviewDiff parts", () => {
       chunkThresholdBytes: 10,
       chunkTargetBytes: 10,
     });
-    expect(single).toEqual({ artifact: single.artifact! });
+    expect(single.chunks!.length).toBeGreaterThan(1);
+    expect(single.chunks!.every((chunk) => chunk.files.includes("a.ts"))).toBe(true);
   });
 
   test("a part that cannot be written keeps the whole diff and says why", async () => {
@@ -320,7 +324,7 @@ describe("review package diff artifact", () => {
 
     expect(isReviewPackage(written, 1)).toBe(true);
     expect(written.diffCommand).toBe(
-      `git diff --no-color --no-ext-diff --no-textconv --no-renames ${written.baseRef}...${written.headRef}`,
+      `git diff --no-color --no-ext-diff --no-textconv --no-renames --src-prefix=a/ --dst-prefix=b/ ${written.baseRef}...${written.headRef}`,
     );
     const expected = await git(worktree, ...written.diffCommand.split(" ").slice(1));
     expect(expected).toContain("+export const value = 1;");
@@ -369,11 +373,12 @@ describe("review package diff artifact", () => {
 
 test("a very large diff is sealed in parts the package names and verification checks", async () => {
   const { worktree, context } = await reviewedEnvironment();
-  for (const name of ["one", "two", "three"]) {
-    const lines = Array.from({ length: 8_000 }, (_, i) => `export const ${name}${i} = ${i};`);
-    await fs.writeFile(path.join(worktree, `${name}.ts`), `${lines.join("\n")}\n`);
-  }
-  await git(worktree, "add", "one.ts", "two.ts", "three.ts");
+  await git(worktree, "config", "diff.noprefix", "true");
+  await git(worktree, "config", "core.quotePath", "true");
+  const name = "α large.ts";
+  const lines = Array.from({ length: 20_000 }, (_, i) => `export const line${i} = ${i};`);
+  await fs.writeFile(path.join(worktree, name), `${lines.join("\n")}\n`);
+  await git(worktree, "add", "--", name);
   await git(worktree, "commit", "-m", "feat: large change");
   const reference = await generateReviewPackage("env-1", "large", 1, "main", [], [], [], context);
   const written = JSON.parse(
@@ -389,8 +394,11 @@ test("a very large diff is sealed in parts the package names and verification ch
   );
   const whole = await fs.readFile(path.join(worktree, written.diffArtifact!.path));
   expect(Buffer.concat(parts).equals(whole)).toBe(true);
-  expect(chunks.flatMap((chunk) => chunk.files).sort()).toEqual(
-    ["added.ts", "one.ts", "three.ts", "tracked.txt", "two.ts"].sort(),
+  expect(reference.diffChunkCount).toBe(chunks.length);
+  expect(chunks.filter((chunk) => chunk.files.includes(name)).length).toBeGreaterThan(1);
+  expect(Math.max(...chunks.map((chunk) => chunk.bytes))).toBeLessThanOrEqual(256 * 1024);
+  expect(Array.from(new Set(chunks.flatMap((chunk) => chunk.files))).sort()).toEqual(
+    ["added.ts", "tracked.txt", name].sort(),
   );
   expect(await git(worktree, "status", "--porcelain")).toBe("");
   expect(await verifyEnvironmentReviewPackage("env-1", reference, context)).toMatchObject({

@@ -165,7 +165,7 @@ describe("mergeConsolidationScopeLists", () => {
     const atLimitReports = [reportWith({ commandsRun: passed.slice(0, -1) }), reports[1]!];
     const atLimit = mergeConsolidationScopeLists(atLimitReports);
     expect(atLimit?.commandsRun).toEqual([...passed.slice(0, -1), failing]);
-    // A disputed check is the consolidator's to re-run, so no slot carries it.
+    // Disputed panels supply full lists. The backend projects the unresolved checks.
     expect(consolidationScopeLists(atLimitReports)).toBeUndefined();
     expect(
       consolidationScopeLists([

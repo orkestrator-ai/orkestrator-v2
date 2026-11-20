@@ -116,6 +116,7 @@ export interface WorkflowGraphOutputContext {
    * and coverage-gap caps (`GraphTypeValidationContext.reviewLimits`).
    */
   reviewLimits?: { maxIssues: number; maxCoverageGaps: number };
+  disputedCheckDigests?: string[];
 }
 
 export const GRAPH_OUTPUT_CONTEXT_BOUNDS = Object.freeze({
@@ -174,6 +175,7 @@ export function graphOutputContextProblem(value: unknown): string | null {
     "criterionIds",
     "provenance",
     "reviewLimits",
+    "disputedCheckDigests",
   ]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) return `unknown field ${key}`;
   const port = graphOutputPortProblem(value.port);
@@ -207,6 +209,11 @@ export function graphOutputContextProblem(value: unknown): string | null {
     !stringList(value.criterionIds, B.maxCriterionIds, B.maxCriterionIdChars)
   )
     return "criterionIds is invalid";
+  if (
+    value.disputedCheckDigests !== undefined &&
+    (ref.name !== "review-report" || !isDisputedCheckDigests(value.disputedCheckDigests))
+  )
+    return "disputedCheckDigests is invalid";
   if (value.reviewLimits !== undefined) {
     const limits = value.reviewLimits as Record<string, unknown> | null;
     const bounded = (count: unknown) =>
@@ -236,3 +243,12 @@ export function graphOutputContextProblem(value: unknown): string | null {
 
 /** The workflow result kind graph output ports use. */
 export const GRAPH_OUTPUT_RESULT_KIND: WorkflowResultKind = "graph-output";
+
+/** A 32-reviewer panel can contribute at most 500 check entries per reviewer. */
+export function isDisputedCheckDigests(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 16_000 &&
+    value.every((entry) => typeof entry === "string" && /^[a-f0-9]{64}$/.test(entry))
+  );
+}

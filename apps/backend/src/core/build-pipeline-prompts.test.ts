@@ -1256,6 +1256,20 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Copy each text and detail in full");
   });
 
+  test("an oversized criterion cannot hide later failure evidence", () => {
+    const prompt = prPrompt("main", {
+      followUps: [
+        { kind: "not-done", text: "First criterion" },
+        { kind: "not-done", text: "x".repeat(MAX_PULL_REQUEST_FOLLOW_UP_BYTES) },
+        { kind: "test", text: "Component tests", detail: "See output/browser.log" },
+        { kind: "not-done", text: "Last criterion" },
+      ],
+    });
+    expect(prompt).toContain("See output/browser.log");
+    expect(prompt).toContain("Last criterion");
+    expect(prompt).toContain("1 more item is in the pipeline's notes");
+  });
+
   test("prPrompt has no follow-up section when nothing is outstanding", () => {
     expect(prPrompt("main", { followUps: [] })).not.toContain("Needs a look");
     expect(prPrompt("main")).toBe(prPrompt("main", { followUps: [] }));

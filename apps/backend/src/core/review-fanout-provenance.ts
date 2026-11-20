@@ -19,7 +19,11 @@ import {
 import type { ConsolidationScopeLists } from "@orkestrator/protocol/workflow-results";
 import type { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
 import { consolidationScopeLists } from "./review-consolidation-scope.js";
-import { disputedCheckResolutionIssues, disputedReviewChecks } from "./review-disputed-checks.js";
+import {
+  disputedCheckDigests,
+  disputedReviewChecks,
+  recordDisputedChecks,
+} from "./review-disputed-checks.js";
 
 export function reviewerProvenanceLabel(
   reviewer: Pick<ReviewerModelSelection, "agent" | "model">,
@@ -129,14 +133,18 @@ export function consolidationResultContext(reviewers: readonly ReviewerRecord[])
   type: "consolidated-review";
   sources: Record<string, SourceFindingKind>;
   scope?: ConsolidationScopeLists;
+  disputedCheckDigests?: string[];
 } {
-  const scope = consolidationScopeLists(completedReports(reviewers));
+  const reports = completedReports(reviewers);
+  const scope = consolidationScopeLists(reports);
+  const digests = disputedCheckDigests(disputedReviewChecks(reports));
   return {
     type: "consolidated-review",
     sources: Object.fromEntries(
       Array.from(provenanceSources(reviewers), ([sourceId, source]) => [sourceId, source.kind]),
     ),
     ...(scope ? { scope } : {}),
+    ...(digests.length ? { disputedCheckDigests: digests } : {}),
   };
 }
 
@@ -150,18 +158,15 @@ export function consolidationScopeFilledByBackend(reviewers: readonly ReviewerRe
 
 /**
  * The consolidated report with backend-derived review models, and every way it
- * breaks the consolidation contract: a finding that cites no valid source, or
- * a check the reviewers disagreed about that the report leaves unresolved
- * (`review-disputed-checks.ts`).
+ * breaks the finding provenance contract. Disputed validation evidence is
+ * projected by the backend for every transport.
  */
 export function deriveConsolidatedProvenance(
   report: StructuredReviewReport,
   reviewers: readonly ReviewerRecord[],
 ): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
-  const issues: ReviewContractValidationIssue[] = disputedCheckResolutionIssues(
-    report,
-    disputedReviewChecks(completedReports(reviewers)),
-  );
+  const issues: ReviewContractValidationIssue[] = [];
+  report = recordDisputedChecks(report, disputedReviewChecks(completedReports(reviewers)));
   const sources = provenanceSources(reviewers);
   const inspect = (
     reviewModels: string[] | undefined,

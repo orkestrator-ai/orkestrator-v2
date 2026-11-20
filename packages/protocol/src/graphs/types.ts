@@ -26,6 +26,7 @@ import {
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "../review-results.js";
 import {
+  REVIEW_PACKAGE_MAX_DIFF_CHUNKS,
   REVIEW_VALIDATION_PLAN_SCHEMA,
   REVIEW_VALIDATION_PLAN_V1_SCHEMA,
 } from "../review-workflow.js";
@@ -189,12 +190,13 @@ const stringField = (description: string): GraphJsonSchema => ({ type: "string",
 function objectSchema(
   properties: Record<string, GraphJsonSchema>,
   description?: string,
+  optional: readonly string[] = [],
 ): GraphJsonSchema {
   return {
     type: "object",
     ...(description ? { description } : {}),
     additionalProperties: false,
-    required: Object.keys(properties),
+    required: Object.keys(properties).filter((key) => !optional.includes(key)),
     properties,
   };
 }
@@ -627,20 +629,25 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
       "A sealed review package in the environment, by reference: the diff, validation output and context a reviewer reads.",
     family: "package",
     storage: "reference",
-    schema: objectSchema({
-      kind: { type: "string", const: "file" },
-      id: { type: "string" },
-      round: { type: "integer", minimum: 1 },
-      preparedAt: { type: "string" },
-      targetBranch: { type: "string" },
-      baseRef: { type: "string" },
-      headRef: { type: "string" },
-      filePath: { type: "string" },
-      sha256: { type: "string" },
-      bytes: { type: "integer", minimum: 1 },
-      changedFileCount: { type: "integer", minimum: 0 },
-      limitations: { type: "array", items: { type: "string" } },
-    }),
+    schema: objectSchema(
+      {
+        kind: { type: "string", const: "file" },
+        id: { type: "string" },
+        round: { type: "integer", minimum: 1 },
+        preparedAt: { type: "string" },
+        targetBranch: { type: "string" },
+        baseRef: { type: "string" },
+        headRef: { type: "string" },
+        filePath: { type: "string" },
+        sha256: { type: "string" },
+        bytes: { type: "integer", minimum: 1 },
+        changedFileCount: { type: "integer", minimum: 0 },
+        diffChunkCount: { type: "integer", minimum: 1, maximum: REVIEW_PACKAGE_MAX_DIFF_CHUNKS },
+        limitations: { type: "array", items: { type: "string" } },
+      },
+      undefined,
+      ["diffChunkCount"],
+    ),
     budgets: { maxBytes: REVIEW_PACKAGE_MAX_BYTES, maxItems: 128 },
     render: {
       markdown: "Review package `{{id}}` ({{changedFileCount}} files) at `{{filePath}}`",

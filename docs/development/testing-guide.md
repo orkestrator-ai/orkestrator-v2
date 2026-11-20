@@ -2023,7 +2023,9 @@ measured CPU use undercounts a suite that mostly waits on pages. Under review
 validation that suite also retries a failed test once. A test that passes on
 its retry is listed as flaky in the check's output; record it in the flake
 registry like any other. Both browser suites then also stream one line per test
-and stop themselves a minute before the command's deadline
+and stop themselves before the command's deadline with a margin of up to a
+minute. A Playwright global timeout keeps the interruption output and marks
+review validation incomplete
 ([review preparation](../architecture/review-preparation.md#validation-commands)).
 
 Use `workspace:` resource names for workspace-local directories and services, and

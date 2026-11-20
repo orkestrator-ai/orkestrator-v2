@@ -84,10 +84,7 @@ function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number
  *   the first spelling in each list for display.
  * - A command one reviewer ran is not also listed as not run.
  * - The same command run with the same outcome is listed once, with the first
- *   reviewer's summary; one that passed for one reviewer and failed for
- *   another is listed twice, so the disagreement stays visible. A slot never
- *   carries such a merge ({@link consolidationScopeLists}): the consolidator
- *   re-runs the disputed check and writes the lists itself.
+ *   reviewer's summary. Disputed outcomes are projected separately.
  */
 export function mergeConsolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
@@ -130,14 +127,13 @@ export function mergeConsolidationScopeLists(
 
 /**
  * A complete union that fits the slot and passes the result tool's scope checks.
- * Undefined while the reviewers disagree about a check
- * (`review-disputed-checks.ts`): the consolidator records its own re-run of
- * that check in `commandsRun`, so it writes the lists itself.
+ * Disputed panels submit full lists so the backend can project unresolved
+ * checks consistently across transports.
  */
 export function consolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
 ): ConsolidationScopeLists | undefined {
-  if (disputedReviewChecks(reports).length > 0) return undefined;
+  if (disputedReviewChecks(reports).size > 0) return undefined;
   const scope = mergeConsolidationScopeLists(reports);
   if (!scope || utf8Bytes(JSON.stringify(scope)) > CONSOLIDATION_SCOPE_MAX_BYTES) return undefined;
   const issues: WorkflowResultValidationIssue[] = [];

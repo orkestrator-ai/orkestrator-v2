@@ -120,8 +120,8 @@ export interface ReviewPackageDiffArtifact {
 
 /**
  * One part of a very large reviewed diff. The parts are consecutive slices of
- * the same bytes as {@link ReviewPackageDiffArtifact}, cut only between file
- * diffs, so together they are the whole diff in order. Each reviewer of a
+ * the same bytes as {@link ReviewPackageDiffArtifact}, preferring file and
+ * hunk boundaries, so together they are the whole diff in order. Each reviewer of a
  * panel reads its share of the parts in full instead of spot-checking a diff
  * too large to read in one pass.
  */
@@ -132,7 +132,7 @@ export interface ReviewPackageDiffChunk {
   path: string;
   bytes: number;
   sha256: string;
-  /** The changed paths whose diffs this part holds, in diff order. */
+  /** Changed paths covered in whole or in part, in diff order. */
   files: string[];
 }
 
@@ -228,6 +228,8 @@ export interface ReviewPackageReference {
   sha256: string;
   bytes: number;
   changedFileCount: number;
+  /** Number of verified parts assigned across the reviewer panel. */
+  diffChunkCount?: number;
   /** Only present on references generated before the package stopped carrying the diff. */
   diffCharacters?: number;
   limitations: string[];
@@ -566,6 +568,7 @@ export function isReviewPackageReference(
       "sha256",
       "bytes",
       "changedFileCount",
+      "diffChunkCount",
       "diffCharacters",
       "limitations",
       "failureSummary",
@@ -588,6 +591,9 @@ export function isReviewPackageReference(
     Number.isSafeInteger(value.bytes) &&
     (value.bytes as number) > 0 &&
     isNonNegativeInteger(value.changedFileCount) &&
+    (value.diffChunkCount === undefined ||
+      (isPositiveInteger(value.diffChunkCount) &&
+        Number(value.diffChunkCount) <= REVIEW_PACKAGE_MAX_DIFF_CHUNKS)) &&
     isStringArray(value.limitations)
   );
 }

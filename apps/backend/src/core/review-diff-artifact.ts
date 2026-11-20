@@ -28,7 +28,7 @@ import { CommandFailedError } from "./shell.js";
  * so: a reviewer that can run Git loses nothing, and one that cannot is told.
  *
  * A diff above {@link REVIEW_DIFF_CHUNK_THRESHOLD_BYTES} is also written as
- * parts cut between file diffs (`diffChunks`). A 2.9 MB diff could only be
+ * bounded, consecutive parts (`diffChunks`). A 2.9 MB diff could only be
  * spot-checked with searches (2026-11-10); with parts, each reviewer of a
  * panel reads its share in full (`PACKAGED_REVIEW_WORKING_RULES`).
  */
@@ -38,12 +38,21 @@ export const MAX_REVIEW_DIFF_ARTIFACT_BYTES = 16 * 1024 * 1024;
 
 /** The diff's options: no colour, no external diff or textconv helper, no rename detection. */
 export function reviewDiffArgs(range: string): string[] {
-  return ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", range];
+  return [
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    range,
+  ];
 }
 
 /** A diff larger than this is also sealed as parts a reviewer can read in full. */
 export const REVIEW_DIFF_CHUNK_THRESHOLD_BYTES = 512 * 1024;
-/** The size a part aims for; one file's diff larger than this is a part of its own. */
+/** The size a part aims for; the target grows when needed to respect the part count limit. */
 export const REVIEW_DIFF_CHUNK_TARGET_BYTES = 256 * 1024;
 
 export type SealedReviewDiff =
@@ -65,17 +74,42 @@ const FILE_HEADER = "diff --git ";
  * quotes unusual characters) yields its `b/` side unescaped where JSON can.
  */
 export function reviewDiffHeaderPath(header: string): string | undefined {
-  const rest = header.slice(FILE_HEADER.length).replace(/\r?$/, "");
+  const rest = header.slice(FILE_HEADER.length);
   if (rest.startsWith('"') || rest.endsWith('"')) {
     const quoted = /"((?:[^"\\]|\\.)*)"$/.exec(rest)?.[1];
     if (quoted === undefined) return undefined;
-    let path = quoted;
-    try {
-      path = JSON.parse(`"${quoted}"`) as string;
-    } catch {
-      // Octal escapes are not JSON; the raw spelling still names the file.
+    const escapes: Record<string, number> = {
+      a: 7,
+      b: 8,
+      t: 9,
+      n: 10,
+      v: 11,
+      f: 12,
+      r: 13,
+      '"': 34,
+      "\\": 92,
+    };
+    const bytes = Buffer.from(quoted, "utf8");
+    let write = 0;
+    for (let read = 0; read < bytes.length; read++) {
+      const byte = bytes[read]!;
+      if (byte !== 92) {
+        bytes[write++] = byte;
+        continue;
+      }
+      const escape = String.fromCharCode(bytes[++read]!);
+      if (escape >= "0" && escape <= "3") {
+        const octal = escape + String.fromCharCode(bytes[++read]!, bytes[++read]!);
+        if (!/^[0-3][0-7]{2}$/.test(octal)) return undefined;
+        bytes[write++] = Number.parseInt(octal, 8);
+      } else {
+        const decoded = escapes[escape];
+        if (decoded === undefined) return undefined;
+        bytes[write++] = decoded;
+      }
     }
-    return path.startsWith("b/") ? path.slice(2) : path;
+    const path = bytes.subarray(0, write).toString("utf8");
+    return path.startsWith("b/") ? path.slice(2) : undefined;
   }
   const length = (rest.length - 5) / 2;
   if (!Number.isInteger(length) || length <= 0) return undefined;
@@ -84,59 +118,67 @@ export function reviewDiffHeaderPath(header: string): string | undefined {
 }
 
 /**
- * Cuts a diff between file diffs into consecutive parts of about
- * `targetBytes`, at most {@link REVIEW_PACKAGE_MAX_DIFF_CHUNKS} of them (the
- * target grows when it would make more). The parts' bytes concatenate to the
- * input exactly; text before the first file header stays in the first part.
+ * Prefer file boundaries, then hunk boundaries for oversized files. An
+ * oversized hunk is sliced at a newline where possible, with a UTF-8 boundary
+ * fallback for an oversized line. Concatenating the parts reconstructs the diff.
  */
 export function splitReviewDiff(
   text: string,
   targetBytes = REVIEW_DIFF_CHUNK_TARGET_BYTES,
 ): Array<{ contents: Buffer; files: string[] }> {
-  const sections: Array<{ text: string; bytes: number; file?: string }> = [];
-  let start = 0;
-  const pushSection = (end: number) => {
-    if (end <= start) return;
-    const section = text.slice(start, end);
-    const headerEnd = section.indexOf("\n");
-    const header = section.startsWith(FILE_HEADER)
-      ? section.slice(0, headerEnd === -1 ? undefined : headerEnd)
-      : undefined;
-    const file = header ? reviewDiffHeaderPath(header) : undefined;
+  const bytes = Buffer.from(text, "utf8");
+  const sections = [];
+  const headers = Array.from(text.matchAll(/(?:^|(?<=\n))diff --git [^\n]*/g));
+  let offset = 0;
+  for (const [index, header] of headers.entries()) {
+    if (index === 0 && header.index > 0) {
+      offset = Buffer.byteLength(text.slice(0, header.index));
+      sections.push({ contents: bytes.subarray(0, offset) });
+    }
+    const end = headers[index + 1]?.index ?? text.length;
+    const length = Buffer.byteLength(text.slice(header.index, end));
     sections.push({
-      text: section,
-      bytes: Buffer.byteLength(section, "utf8"),
-      ...(file ? { file } : {}),
+      contents: bytes.subarray(offset, offset + length),
+      file: reviewDiffHeaderPath(header[0]),
     });
-    start = end;
-  };
-  let cursor = text.startsWith(FILE_HEADER) ? 1 : 0;
-  for (;;) {
-    const next = text.indexOf(`\n${FILE_HEADER}`, cursor);
-    if (next === -1) break;
-    pushSection(next + 1);
-    cursor = next + 1;
+    offset += length;
   }
-  pushSection(text.length);
-  const total = sections.reduce((sum, section) => sum + section.bytes, 0);
-  let target = Math.max(targetBytes, Math.ceil(total / REVIEW_PACKAGE_MAX_DIFF_CHUNKS));
+  if (headers.length === 0) sections.push({ contents: bytes });
+
+  let target = Math.max(4, targetBytes, Math.ceil(bytes.length / REVIEW_PACKAGE_MAX_DIFF_CHUNKS));
   for (;;) {
-    const parts: Array<{ sections: typeof sections; bytes: number }> = [];
-    for (const section of sections) {
-      const last = parts.at(-1);
-      if (last && last.bytes + section.bytes <= target) {
-        last.sections.push(section);
-        last.bytes += section.bytes;
-      } else {
-        parts.push({ sections: [section], bytes: section.bytes });
+    const parts: Array<{ contents: Buffer; files: string[] }> = [];
+    let buffers: Buffer[] = [];
+    let files = new Set<string>();
+    let size = 0;
+    const flush = () => {
+      if (size === 0) return;
+      parts.push({ contents: Buffer.concat(buffers, size), files: Array.from(files) });
+      buffers = [];
+      files = new Set();
+      size = 0;
+    };
+    for (const { contents, file } of sections) {
+      if (size + contents.length > target) flush();
+      let start = 0;
+      while (contents.length - start > target) {
+        const limit = start + target;
+        const hunk = contents.lastIndexOf("\n@@ ", limit - 1);
+        const newline = contents.lastIndexOf(10, limit - 1);
+        let end = hunk > start ? hunk + 1 : newline >= start ? newline + 1 : limit;
+        while ((contents[end]! & 0xc0) === 0x80) end--;
+        buffers.push(contents.subarray(start, end));
+        if (file) files.add(file);
+        size += end - start;
+        flush();
+        start = end;
       }
+      buffers.push(contents.subarray(start));
+      if (file) files.add(file);
+      size += contents.length - start;
     }
-    if (parts.length <= REVIEW_PACKAGE_MAX_DIFF_CHUNKS) {
-      return parts.map((part) => ({
-        contents: Buffer.from(part.sections.map((section) => section.text).join(""), "utf8"),
-        files: part.sections.flatMap((section) => (section.file ? [section.file] : [])),
-      }));
-    }
+    flush();
+    if (parts.length <= REVIEW_PACKAGE_MAX_DIFF_CHUNKS) return parts;
     target *= 2;
   }
 }
@@ -238,4 +280,17 @@ export async function verifyReviewDiffArtifact(
     return "Review diff SHA-256 changed";
   }
   return undefined;
+}
+
+/** Missing slot indexes leave every chunk assigned to that slot unreviewed. */
+export function reviewChunkCoverageFailure(
+  chunkCount: number | undefined,
+  slotHasReport: readonly boolean[],
+): string | undefined {
+  if (!chunkCount) return undefined;
+  const missing = Array.from({ length: chunkCount }, (_, index) => index + 1).filter(
+    (index) => !slotHasReport[(index - 1) % slotHasReport.length],
+  );
+  if (missing.length === 0) return undefined;
+  return `Diff review incomplete. No usable reviewer report covers parts ${missing.join(", ")}.`;
 }

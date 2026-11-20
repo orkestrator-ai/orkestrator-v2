@@ -1,3 +1,4 @@
+import { disputedCheckSubmissionIssues } from "./review-disputed-checks.js";
 import {
   autoPipelineResultSchema,
   parseAutoPipelineResult,
@@ -282,12 +283,15 @@ function validateConsolidationContext(
   value: Record<string, unknown>,
   context: ConsolidationContext,
 ): WorkflowResultValidationIssue[] {
-  return validateGraphProvenance(
-    value,
-    REVIEW_CONSOLIDATION_PROVENANCE,
-    context.sources,
-    REVIEW_CONSOLIDATION_WORDING,
-  ).slice(0, MAX_ISSUES);
+  return [
+    ...disputedCheckSubmissionIssues(value, context.disputedCheckDigests),
+    ...validateGraphProvenance(
+      value,
+      REVIEW_CONSOLIDATION_PROVENANCE,
+      context.sources,
+      REVIEW_CONSOLIDATION_WORDING,
+    ),
+  ].slice(0, MAX_ISSUES);
 }
 
 function validateReconciliationContext(

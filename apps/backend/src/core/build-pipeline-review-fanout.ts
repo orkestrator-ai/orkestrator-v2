@@ -758,6 +758,13 @@ export class BuildPipelineReviewFanout {
       // provider plan mode with the read-only mutation boundary, on every turn
       // including repairs. The read-only guard backs this on every provider.
       reviewerMode: reviewFanoutReviewerMode(pipeline.reviewPackage),
+      diffChunkCount:
+        pipeline.reviewPackage &&
+        ("diffChunkCount" in pipeline.reviewPackage
+          ? pipeline.reviewPackage.diffChunkCount
+          : "diffChunks" in pipeline.reviewPackage
+            ? pipeline.reviewPackage.diffChunks?.length
+            : undefined),
       ...(this.deps.pollGate ? { pollGate: this.deps.pollGate(pipeline) } : {}),
       sessionKeyFor: (reviewer) => reviewerSessionKey(pipeline, reviewer),
       sessionLabelFor: (_reviewer, index) => pipelineIndependentReviewLabel(index),

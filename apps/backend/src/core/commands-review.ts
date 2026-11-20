@@ -941,6 +941,12 @@ export async function verifyEnvironmentReviewPackage(
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
     const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
+    if (
+      reference.diffChunkCount !== undefined &&
+      reference.diffChunkCount !== pkg.diffChunks?.length
+    ) {
+      return { valid: false, reason: "Review package diff part count changed" };
+    }
     // The diff and each of its parts are evidence every reviewer reads.
     for (const artifact of [
       ...(pkg.diffArtifact ? [pkg.diffArtifact] : []),

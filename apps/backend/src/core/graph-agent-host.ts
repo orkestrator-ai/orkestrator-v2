@@ -1,3 +1,9 @@
+import {
+  disputedCheckDigests,
+  disputedReviewChecks,
+  recordDisputedChecks,
+} from "./review-disputed-checks.js";
+import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 /**
  * One graph agent activation as the shared agent branch runner's host
  * (item 204): identity and interaction context, the activation's compiled
@@ -10,7 +16,9 @@ import { randomUUID } from "node:crypto";
 import type { GraphPlanAgentNode } from "@orkestrator/protocol/graphs/compile";
 import {
   GRAPH_COMMIT_PATTERN,
+  graphRunNodeBranches,
   type GraphActivationBaseline,
+  type GraphArtifact,
   type GraphActivationWorktree,
   type GraphActivationSession,
   type GraphGuardResult,
@@ -26,10 +34,14 @@ import {
 } from "@orkestrator/protocol/graphs/prompts";
 import { graphPlanScopeParams } from "@orkestrator/protocol/graphs/subgraphs";
 import { GraphTypeLibrary, type GraphErrorCause } from "@orkestrator/protocol/graphs/types";
+import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
+import { reviewChunkCoverageFailure } from "./review-diff-artifact.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import {
   structuredReviewBlockedFailure,
+  isStructuredReviewReport,
+  type StructuredReviewReport,
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
 import {
@@ -170,7 +182,8 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
   private results: GraphAgentResults | undefined;
   private inputs: GraphAgentInputs | undefined;
   private lightSources:
-    Promise<{ sources: Record<string, string>; criterionIds?: string[] }> | undefined;
+    | Promise<{ sources: Record<string, string>; criterionIds?: string[]; disputes: Set<string> }>
+    | undefined;
 
   constructor(
     private readonly executor: GraphAgentHostOwner,
@@ -222,15 +235,24 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       activation: this.context.activation,
       service: this.dependencies.workflowResults,
       sources: light.sources,
+      disputedCheckDigests: disputedCheckDigests(light.disputes),
       ...(light.criterionIds ? { criterionIds: light.criterionIds } : {}),
     });
     return this.results;
   }
 
   /** Item ids and ticket criteria of the inputs, from the store (no file hashing). */
-  private light(): Promise<{ sources: Record<string, string>; criterionIds?: string[] }> {
+  private light(): Promise<{
+    sources: Record<string, string>;
+    criterionIds?: string[];
+    disputes: Set<string>;
+  }> {
     this.lightSources ??= (async () => {
       const sources: Record<string, string> = {};
+      const reports: StructuredReviewReport[] = [];
+      const reportProducers: GraphArtifact["producer"][] = [];
+      let diffChunkCount: number | undefined;
+      const consolidating = isGraphReviewConsolidationNode(this.input.node);
       let criterionIds: string[] | undefined;
       const { run, node, activation } = this.context;
       const inputs = node.inputs.flatMap((port) => {
@@ -250,6 +272,19 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       for (const { id, port } of entries) {
         const artifact = await this.context.artifacts.get(run.id, id);
         if (!artifact) continue;
+        if (
+          consolidating &&
+          port?.name === "reports" &&
+          "value" in artifact.body &&
+          isStructuredReviewReport(artifact.body.value)
+        ) {
+          reports.push(artifact.body.value);
+          reportProducers.push(artifact.producer);
+        }
+        if (consolidating && port?.name === "package") {
+          const reference = "value" in artifact.body ? artifact.body.value : undefined;
+          if (isReviewPackageReference(reference)) diffChunkCount = reference.diffChunkCount;
+        }
         // The ids the prompt showed (`graphAgentArtifactSources`), recorded or derived.
         const itemIds = port
           ? graphAgentArtifactSources(library, port, artifact, binding)
@@ -265,7 +300,30 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
           }
         }
       }
-      return { sources, ...(criterionIds ? { criterionIds } : {}) };
+      if (diffChunkCount && reportProducers.length > 0) {
+        const reviewNode = run.plan.nodes.find((entry) => entry.id === reportProducers[0]!.nodeId);
+        const branches = reviewNode
+          ? graphRunNodeBranches(run, reviewNode, activation.iteration)
+          : null;
+        if (branches) {
+          const producers = new Set(reportProducers.map((producer) => producer.activation));
+          const covered = new Set(
+            run.activations
+              .filter((entry) => producers.has(entry.key))
+              .map((entry) => entry.branchKey),
+          );
+          const failure = reviewChunkCoverageFailure(
+            diffChunkCount,
+            branches.map((branch) => covered.has(branch.key)),
+          );
+          if (failure) throw new Error(failure);
+        }
+      }
+      return {
+        sources,
+        disputes: disputedReviewChecks(reports),
+        ...(criterionIds ? { criterionIds } : {}),
+      };
     })();
     return this.lightSources;
   }
@@ -642,9 +700,16 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       : undefined;
     // An `items` branch's outputs stand for its item (item 401).
     const sourceItem = graphAgentItemBinding(run, this.input.node, activation)?.item.id;
+    const { disputes } = await this.light();
     for (const slot of results.slots) {
       if (!Object.hasOwn(values, slot.port.name)) continue;
-      const value = values[slot.port.name];
+      const submitted = values[slot.port.name];
+      const value =
+        disputes.size &&
+        slot.definition.name === "review-report" &&
+        isStructuredReviewReport(submitted)
+          ? recordDisputedChecks(submitted, disputes)
+          : submitted;
       const itemIds = graphAgentItemIds(slot.definition, value, activation);
       const validation = results.validation(slot);
       const artifact = await this.context.artifacts.putValue({

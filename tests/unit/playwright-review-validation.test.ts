@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   REVIEW_VALIDATION_DEADLINE_MARGIN_MS,
-  REVIEW_VALIDATION_MIN_GLOBAL_TIMEOUT_MS,
+  REVIEW_VALIDATION_REPORTER,
   reviewValidationRunOptions,
 } from "../playwright-review-validation";
 
@@ -25,29 +25,30 @@ describe("reviewValidationRunOptions", () => {
   });
 
   test("review validation streams one line per finished test", () => {
-    expect(reviewValidationRunOptions("line", review(), NOW)).toEqual({ reporter: "list" });
+    expect(reviewValidationRunOptions("line", review(), NOW)).toEqual({
+      reporter: REVIEW_VALIDATION_REPORTER,
+    });
   });
 
   test("a future deadline stops the run a margin before the worker kills it", () => {
     expect(reviewValidationRunOptions("line", review(String(NOW + 1_200_000)), NOW)).toEqual({
-      reporter: "list",
+      reporter: REVIEW_VALIDATION_REPORTER,
       globalTimeout: 1_200_000 - REVIEW_VALIDATION_DEADLINE_MARGIN_MS,
     });
   });
 
-  test("a deadline too close for the margin still leaves the minimum run", () => {
-    for (const remaining of [1, REVIEW_VALIDATION_DEADLINE_MARGIN_MS, 100_000]) {
-      expect(
-        reviewValidationRunOptions("line", review(String(NOW + remaining)), NOW).globalTimeout,
-      ).toBe(REVIEW_VALIDATION_MIN_GLOBAL_TIMEOUT_MS);
-    }
+  test("a short budget leaves a proportional margin, including the second suite", () => {
+    const env = review(String(NOW + 60_000));
+    expect(reviewValidationRunOptions("line", env, NOW).globalTimeout).toBe(48_000);
+    expect(reviewValidationRunOptions("line", env, NOW + 59_000).globalTimeout).toBe(800);
+    expect(reviewValidationRunOptions("line", env, NOW + 60_001).globalTimeout).toBe(1);
   });
 
-  test.each(["", "soon", "12.5", "-5", "1e15", "Infinity", String(NOW), String(NOW - 1)])(
-    "an unusable or past deadline %p sets no global timeout",
+  test.each(["", "soon", "12.5", "-5", "1e15", "Infinity"])(
+    "an unusable deadline %p sets no global timeout",
     (deadline) => {
       expect(reviewValidationRunOptions("line", review(deadline), NOW)).toEqual({
-        reporter: "list",
+        reporter: REVIEW_VALIDATION_REPORTER,
       });
     },
   );

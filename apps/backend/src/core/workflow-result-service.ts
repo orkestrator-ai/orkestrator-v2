@@ -5,6 +5,7 @@ import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-
 import {
   graphOutputContextProblem,
   graphOutputToolPort,
+  isDisputedCheckDigests,
 } from "@orkestrator/protocol/graphs/output-slots";
 import { graphTemplateResultContextProblem } from "@orkestrator/protocol/graphs/describe";
 import {
@@ -320,6 +321,8 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   return (
     value.type === "consolidated-review" &&
     (value.scope === undefined || isConsolidationScopeLists(value.scope)) &&
+    (value.disputedCheckDigests === undefined ||
+      isDisputedCheckDigests(value.disputedCheckDigests)) &&
     value.sources !== null &&
     typeof value.sources === "object" &&
     !Array.isArray(value.sources) &&

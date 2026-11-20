@@ -183,6 +183,7 @@ export interface WorkflowResultSlotInput {
          * A slot without merged scope takes the full report.
          */
         scope?: ConsolidationScopeLists;
+        disputedCheckDigests?: string[];
       }
     | WorkflowGraphOutputContext
     | GraphTemplateResultContext;

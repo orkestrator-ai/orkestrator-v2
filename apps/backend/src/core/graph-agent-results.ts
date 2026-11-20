@@ -118,6 +118,7 @@ export interface GraphAgentResultsInput {
   sources: GraphProvenanceSources;
   /** Acceptance criteria ids of the ticket input, for verdict ports. */
   criterionIds?: string[];
+  disputedCheckDigests?: string[];
 }
 
 function isWorkspaceType(definition: GraphTypeDefinition): boolean {
@@ -234,6 +235,9 @@ export class GraphAgentResults {
           ? { provenanceFields: reviewConsolidationProvenanceFields() }
           : {}),
         ...(this.reviewLimits(slot) ? { reviewLimits: this.reviewLimits(slot) } : {}),
+        ...(this.reviewConsolidation(slot) && this.input.disputedCheckDigests?.length
+          ? { disputedCheckDigests: this.input.disputedCheckDigests }
+          : {}),
       },
     );
   }

@@ -7,8 +7,19 @@ import type { RowUpdate, StoreLayout, StoreRowEntry } from "./storage-database.j
  * an array held whole. Nothing here touches SQLite.
  */
 
-/** One serialized row of a store held as rows. */
-export type StoreRow = { collection: string; key: string; position: number; value: string };
+/**
+ * One serialized row of a store held as rows. `owner` is the row's indexed
+ * owner column when the producer knows it (`null` for none); `undefined`
+ * means unknown, so an owner-scoped read of a cache holding the row asks
+ * the database instead (`StorageDatabase.readStoreRowsByOwner`).
+ */
+export type StoreRow = {
+  collection: string;
+  key: string;
+  position: number;
+  value: string;
+  owner?: string | null;
+};
 
 /** A value split by its layout: rows plus the envelope (or whole) document. */
 export type DecomposedStore = {
@@ -186,4 +197,32 @@ export function decompose(layout: StoreLayout, value: unknown): DecomposedStore 
     }
   }
   return { mode: "rows", document: JSON.stringify(envelope), rows };
+}
+
+/**
+ * The serialized values of a cached store's rows owned by `owner`, in the
+ * order `SELECT value FROM store_rows WHERE store = ? AND owner = ? ORDER BY
+ * position, key` returns them. `null` when any cached row's owner is unknown
+ * (`StoreRow.owner` undefined), so the caller asks the database instead of
+ * guessing.
+ */
+export function ownedCachedValues(
+  rows: ReadonlyMap<string, StoreRow>,
+  owner: string,
+): string[] | null {
+  const owned: StoreRow[] = [];
+  for (const row of rows.values()) {
+    if (row.owner === undefined) return null;
+    if (row.owner === owner) owned.push(row);
+  }
+  owned.sort((left, right) =>
+    left.position !== right.position
+      ? left.position - right.position
+      : left.key < right.key
+        ? -1
+        : left.key > right.key
+          ? 1
+          : 0,
+  );
+  return owned.map((row) => row.value);
 }

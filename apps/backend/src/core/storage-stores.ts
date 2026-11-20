@@ -52,6 +52,7 @@ import {
   type StoreLayout,
 } from "./storage-database.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { backgroundCheckpointsByDefault } from "./storage-checkpointer.js";
 
 const log = createLogger("storage");
 
@@ -758,9 +759,14 @@ const RECURRING_STORAGE_OBSERVERS: Required<
  */
 export function openBackendDatabase(
   dataDir: string,
-  options: Pick<StorageDatabaseOptions, "observe" | "observeFetch" | "cacheGaugeRegistry"> = {},
+  options: Pick<
+    StorageDatabaseOptions,
+    "observe" | "observeFetch" | "cacheGaugeRegistry" | "backgroundCheckpoint"
+  > = {},
 ): StorageDatabase {
   const database = new StorageDatabase(dataDir, {
+    // Checkpoints off the event loop (`storage-checkpointer.ts`).
+    backgroundCheckpoint: backgroundCheckpointsByDefault(),
     layoutFor: storeLayout,
     migrations: STORAGE_MIGRATIONS,
     unownedRowIndexes: [NATIVE_AGENT_SESSIONS_STORE],

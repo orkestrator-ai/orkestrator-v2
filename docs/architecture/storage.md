@@ -261,7 +261,16 @@ whole as a document; the row layout returns on the next keyable write.
 Rows carry an optional indexed `owner` (`projectId` for environments and
 Kanban, `environmentId` for sessions and native agent sessions).
 `loadStoreRowsByOwner` reads one project's environments or board, or one
-environment's sessions, without assembling the store. `loadStoreRow` reads one
+environment's sessions, without assembling the store. A connection that caches
+the whole store at the committed revision answers it from that cache and
+fetches nothing; the cached rows carry their owner column, which the
+connection's own whole-store and single-row writes keep current. Otherwise it
+selects only the owner's rows and leaves the cache alone. Either way the rows
+are parsed after the read snapshot ends. One project's board was 761 of 871
+Kanban rows (5.5 of 6.5 MB) on the maintainer's machine, and selecting it on
+every board read held the event loop 250–450 ms (`operation.slow`,
+`store=kanban`, 21 of the 67 lines of the 2026-11-20 self-improvement digest).
+`loadStoreRow` reads one
 row by key the same way. `listStoreRowKeysByOwner` lists one owner's keys
 without reading a value, plus the store's rows that have no owner, for the
 caller to check.
@@ -612,6 +621,27 @@ primitives above serialize their writes.
   (`DEFAULT_CKPTFULLFSYNC`); setting it keeps the ordering if the library or
   its build changes. It changes nothing on Linux, which has no such call.
   `fullfsync` (each commit) stays off.
+- The backend's two files (`orkestrator.sqlite` and the change ledger) are
+  checkpointed by a worker thread with its own connection
+  (`storage-checkpointer.ts`), not inside the backend's commits. SQLite's
+  automatic checkpoint runs in whichever commit pushes the WAL past
+  `wal_autocheckpoint` frames, and with the barrier sync above it took up to
+  seconds when other processes were syncing the same disk; that commit was
+  then reported as `operation.slow`. Commits at `synchronous = NORMAL` (lease
+  rows, the ledger), which sync nothing themselves, taking 0.3–2.2 s were the
+  sign. The worker runs a PASSIVE checkpoint every second, which never waits
+  for or blocks the backend's readers and writers, and the backend's
+  connection keeps `wal_autocheckpoint = 10000` (about 40 MB) as a bound if the
+  worker falls behind. If the worker cannot start or fails, the connection goes
+  back to SQLite's default of 1000 and logs `checkpoint.background-failed`.
+  Closing the database closes the worker's connection, never terminates it:
+  SQLite keeps every connection's locks in one table per process. Durability
+  is unchanged. Under `bun test` (`NODE_ENV=test`) the openers leave it off
+  (`backgroundCheckpointsByDefault`); its tests turn it on. A synthetic run on
+  mini (three processes writing and syncing 128 MB files, two committing with
+  `fullfsync`; 3000 single-row writes per run, four alternating runs each)
+  cut writes over 50 ms from 53 to 18 at NORMAL and from 786 to 489 at FULL,
+  where the WAL sync of each commit still waits on the busy disk.
 - `secure_delete = ON` zeroes the freed pages of deleted content.
   `scrubDeletedDatabaseContent()` (called where the JSON stores used to scrub
   their backups) runs a truncating WAL checkpoint so old frames do not keep
@@ -794,7 +824,9 @@ once:
   statement outside a transaction. A write transaction that changed nothing, and
   one that failed, are not counted.
 - `checkpoints`: explicit `wal_checkpoint` calls (the scrub's, the copies').
-  Automatic checkpoints run inside a commit and are in its time.
+  The background checkpointer's run on its own thread and are not counted; an
+  automatic checkpoint (only when it is off, failed or behind) runs inside a
+  commit and is in its time.
 - `reads`: every other transaction that ran a statement, and every SELECT outside
   one, timed by the time spent in SQLite statements (not the JavaScript that
   decodes rows), by store family as lease waits name them, or `table:<name>` when

@@ -34,7 +34,7 @@ import {
   AGENT_MAIL_MAX_VERIFY_ATTEMPTS,
   isRideAlongMessage,
 } from "./storage-agent-mail-injects.js";
-import type { PipelineWorkerMailPort } from "./build-pipeline-worker-mail.js";
+import type { PipelineWorkerMailPort } from "./build-pipeline/worker-mail.js";
 import { pipelineWorkerEnded } from "@orkestrator/protocol/pipeline-worker-mail";
 
 /** Why a pipeline worker's mail waits: the pipeline hands it over when the turn ends. */

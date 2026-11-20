@@ -1,0 +1,657 @@
+import { describe, expect, spyOn, test } from "bun:test";
+import type { BuildPipelineSupervisor } from "./service-supervisor.js";
+import { AmbiguousPromptDispatchError } from "./provider.js";
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review/validation-prompts.js";
+import { VERIFICATION_SCHEMA } from "./service-helpers.js";
+import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "../review/prompts.js";
+import { STRUCTURED_REVIEW_REPORT_JSON_SCHEMA } from "@orkestrator/protocol/structured-review";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import {
+  advanceUntil,
+  fourReviewers,
+  startInput,
+  rewritePipeline,
+  withPipeline,
+} from "./review-fanout-test-support.js";
+
+const scope = { environmentId: "env-1", projectId: "project-1" };
+
+function strictReport(value: unknown) {
+  const report = value as StructuredReviewReport;
+  return { ...report, issues: report.issues.map((issue) => ({ ...issue, alternativeFixes: [] })) };
+}
+
+describe("build pipeline stage result reminder", () => {
+  test.each(["delivers", "ignores"] as const)(
+    "a tool-mode stage that never submits gets one reminder and %s it",
+    async (outcome) => {
+      await withPipeline(
+        async ({ service, provider, read, workflowResults }) => {
+          const started = await service.start(startInput());
+          const building = await advanceUntil(service, read, started.id, "building");
+          const session = building.sessions[building.currentSessionIndex]!;
+          const firstRequestId = session.structuredRequestId!;
+          expect(session.resultTransport).toBe("tool-v1");
+          const result = await provider.structured<unknown>(session.sdkSessionId, firstRequestId);
+          if (!result?.ok) throw new Error("Missing fixture result");
+          // The turn ends without a submission.
+          spyOn(provider, "observeSession").mockImplementation(async () => ({ status: "idle" }));
+
+          // First idle pass starts the wait; the second is past a zero deadline.
+          await service.advanceNow(started.id);
+          expect((await read(started.id)).phase).toBe("building");
+          const sentBefore = provider.sent.length;
+          await service.advanceNow(started.id);
+
+          const reminded = await read(started.id);
+          expect(reminded.phase).toBe("building");
+          const remindedSession = reminded.sessions[reminded.currentSessionIndex]!;
+          expect(remindedSession).toMatchObject({
+            sdkSessionId: session.sdkSessionId,
+            resultReminderSent: true,
+          });
+          expect(remindedSession.restartContinuationSent).toBeUndefined();
+          expect(provider.sent).toHaveLength(sentBefore + 1);
+          const reminder = provider.sent.at(-1)!;
+          expect(reminder.sessionId).toBe(session.sdkSessionId);
+          expect(reminder.requestId).not.toBe(firstRequestId);
+          expect(remindedSession.structuredRequestId).toBe(reminder.requestId);
+          expect(reminder.prompt).toContain("has not received your review preparation");
+          expect(reminder.prompt).toContain("submit_review_preparation");
+          expect(reminder.prompt).toContain(reminder.requestId);
+          expect(await workflowResults!.status(scope, firstRequestId)).toMatchObject({
+            lifecycle: "superseded",
+          });
+
+          if (outcome === "delivers") {
+            await workflowResults!.submit(scope, reminder.requestId, result.value);
+            await service.advanceNow(started.id);
+            expect((await read(started.id)).phase).toBe("reviewing");
+            return;
+          }
+          // The reminder is spent: the next missed deadline fails the stage.
+          await service.advanceNow(started.id);
+          await service.advanceNow(started.id);
+          const failed = await read(started.id);
+          expect(failed.phase).toBe("failed");
+          expect(failed.error).toContain("finished without calling submit_review_preparation");
+          expect(provider.sent).toHaveLength(sentBefore + 1);
+        },
+        { toolMode: true, toolKinds: ["review-preparation"], structuredResultDeadlineMs: 0 },
+      );
+    },
+  );
+
+  test("Verify names the refusal on its replacement key when the reminder fails", async () => {
+    await withPipeline(
+      async ({ service, provider, read, workflowResults }) => {
+        const started = await service.start(startInput());
+        const verifying = await advanceUntil(service, read, started.id, "verifying");
+        expect(verifying.phase).toBe("verifying");
+        const first = verifying.sessions[verifying.currentSessionIndex]!;
+        const firstKey = first.structuredRequestId!;
+        expect(await workflowResults!.binding(scope, firstKey)).toMatchObject({
+          kind: "verification-result",
+        });
+        workflowResults!.recordRefusedCall(scope, firstKey, "First Verify refusal");
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        const reminded = await read(started.id);
+        expect(reminded.phase).toBe("verifying");
+        const next = reminded.sessions[reminded.currentSessionIndex]!;
+        expect(next.resultReminderSent).toBe(true);
+        const nextKey = next.structuredRequestId!;
+        expect(nextKey).not.toBe(firstKey);
+        expect(provider.sent.at(-1)?.prompt).toContain("First Verify refusal");
+        workflowResults!.recordRefusedCall(scope, nextKey, "Newest Verify refusal");
+        const failed = await advanceUntil(service, read, started.id, "failed", 5);
+        expect(failed.error).toContain(
+          "called submit_verification_result (or its validation tool) 2 times",
+        );
+        expect(failed.error).toContain("The last refusal: Newest Verify refusal");
+      },
+      { toolMode: true, toolKinds: ["verification-result"], structuredResultDeadlineMs: 0 },
+    );
+  });
+
+  test("a structured-output stage still fails without a reminder", async () => {
+    await withPipeline(
+      async ({ service, provider, read }) => {
+        const started = await service.start(startInput());
+        const building = await advanceUntil(service, read, started.id, "building");
+        const session = building.sessions[building.currentSessionIndex]!;
+        expect(session.resultTransport).not.toBe("tool-v1");
+        provider.structured = async () => null;
+        spyOn(provider, "observeSession").mockImplementation(async () => ({ status: "idle" }));
+        const sentBefore = provider.sent.length;
+        await service.advanceNow(started.id);
+        await service.advanceNow(started.id);
+        const failed = await read(started.id);
+        expect(failed.phase).toBe("failed");
+        expect(failed.sessions[failed.currentSessionIndex]?.resultReminderSent).toBeUndefined();
+        expect(provider.sent).toHaveLength(sentBefore);
+      },
+      { structuredResultDeadlineMs: 0 },
+    );
+  });
+});
+
+describe("build pipeline consolidation result reminder", () => {
+  test.each(["delivers", "ignores", "refuses-then-silent", "refuses-twice"] as const)(
+    "a tool-mode consolidation gets one reminder (%s)",
+    async (outcome) => {
+      await withPipeline(
+        async ({ service, provider, read, workflowResults }) => {
+          const refusedFirst = outcome === "refuses-then-silent" || outcome === "refuses-twice";
+          provider.runningConsolidation = refusedFirst;
+          const started = await service.start(startInput(fourReviewers()));
+          let current = await read(started.id);
+          if (refusedFirst) {
+            for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+              await service.advanceNow(started.id);
+              current = await read(started.id);
+            }
+            const first = current.reviewFanout!.consolidation!;
+            expect(first.state).toBe("sent");
+            workflowResults!.recordRefusedCall(
+              scope,
+              first.requestId,
+              "First consolidation refusal",
+            );
+            provider.runningConsolidation = false;
+          }
+          for (
+            let pass = 0;
+            pass < 40 && !current.reviewFanout?.consolidation?.resultReminderSent;
+            pass++
+          ) {
+            if (current.phase === "failed") break;
+            await service.advanceNow(started.id);
+            current = await read(started.id);
+          }
+          const consolidation = current.reviewFanout!.consolidation!;
+          expect(current.phase).toBe("reviewing");
+          expect(consolidation).toMatchObject({
+            resultTransport: "tool-v1",
+            resultReminderSent: true,
+            state: "prepared",
+          });
+          expect(consolidation.restartContinuationSent).toBeUndefined();
+          const firstSends = provider.sent.filter(
+            (entry) => entry.sessionId === consolidation.providerSessionId,
+          );
+          const firstRequestIds = firstSends.map((entry) => entry.requestId);
+          expect(firstRequestIds).toHaveLength(1);
+          // Each turn declares its own attempt, so a bridge that gates tools
+          // (Grok, Pi) lets only that attempt's result tools through.
+          expect(firstSends[0]).toMatchObject({
+            workflowResultTool: "submit_consolidated_review",
+            workflowResultKey: firstRequestIds[0],
+          });
+          expect(consolidation.requestId).not.toBe(firstRequestIds[0]);
+          expect(await workflowResults!.status(scope, firstRequestIds[0]!)).toMatchObject({
+            lifecycle: "superseded",
+          });
+
+          await service.advanceNow(started.id);
+          const reminder = provider.sent.at(-1)!;
+          expect(reminder).toMatchObject({
+            sessionId: consolidation.providerSessionId,
+            requestId: consolidation.requestId,
+            workflowResultTool: "submit_consolidated_review",
+            workflowResultKey: consolidation.requestId,
+          });
+          expect(reminder.prompt).toContain("has not received your consolidated report");
+          expect(reminder.prompt).toContain("submit_consolidated_review");
+          if (refusedFirst) {
+            expect(reminder.prompt).toContain("The last refusal said: First consolidation refusal");
+          }
+          if (outcome === "refuses-twice") {
+            workflowResults!.recordRefusedCall(
+              scope,
+              reminder.requestId,
+              "Newest consolidation refusal",
+            );
+          }
+
+          if (outcome === "delivers") {
+            const value = await provider.structured<unknown>(
+              consolidation.providerSessionId,
+              consolidation.requestId,
+            );
+            if (!value?.ok) throw new Error("Missing fixture result");
+            expect(
+              await workflowResults!.submit(
+                scope,
+                consolidation.requestId,
+                strictReport(value.value),
+              ),
+            ).toMatchObject({ ok: true });
+            const addressed = await advanceUntil(service, read, started.id, "addressing-findings");
+            expect(addressed.phase).toBe("addressing-findings");
+            expect(addressed.structuredReview).toBeDefined();
+            return;
+          }
+          const failed = await advanceUntil(service, read, started.id, "failed", 30);
+          expect(failed.phase).toBe("failed");
+          if (refusedFirst) {
+            const repeated = outcome === "refuses-twice";
+            expect(failed.error).toContain(
+              `called submit_consolidated_review (or its validation tool) ${repeated ? "2 times" : "once"}`,
+            );
+            expect(failed.error).toContain(
+              `The last refusal: ${repeated ? "Newest" : "First"} consolidation refusal`,
+            );
+          } else {
+            expect(failed.error).toContain(
+              "The consolidation session finished without calling submit_consolidated_review",
+            );
+          }
+          expect(
+            provider.sent.filter((entry) => entry.sessionId === consolidation.providerSessionId),
+          ).toHaveLength(2);
+        },
+        { toolMode: true },
+      );
+    },
+  );
+});
+
+// Exercise the stage reminder boundary with real slot preparation and dispatch.
+for (const [phase, kind, tool] of [
+  ["reworking", "validation-plan", "submit_validation_plan"],
+  ["reviewing", "review-report", "submit_review_report"],
+  ["addressing-findings", "address-findings-result", "submit_address_findings_result"],
+  ["verifying", "verification-result", "submit_verification_result"],
+] as const) {
+  test.each(["present", "missing", "throws", "mismatch"] as const)(
+    `${phase} reminder uses its ${kind} binding (%s)`,
+    async (bindingState) => {
+      await withPipeline(
+        async ({ service, provider, read, workflowResults }) => {
+          const started = await service.start(startInput());
+          const pipeline = await advanceUntil(service, read, started.id, "building");
+          const session = pipeline.sessions[pipeline.currentSessionIndex]!;
+          pipeline.phase = phase;
+          const binding = await workflowResults!.binding(scope, session.structuredRequestId!);
+          expect(binding).toBeDefined();
+          const lookup = spyOn(workflowResults!, "binding").mockImplementation(async () => {
+            if (bindingState === "throws") throw new Error("slot store unavailable");
+            if (bindingState === "missing") return null;
+            return {
+              ...binding!,
+              kind:
+                bindingState === "mismatch"
+                  ? kind === "address-findings-result"
+                    ? "pr-result"
+                    : "address-findings-result"
+                  : kind,
+            };
+          });
+          const prepare = spyOn(workflowResults!, "prepare");
+          const before = provider.sent.length;
+          const supervisor = (service as unknown as { stageSupervisor: BuildPipelineSupervisor })
+            .stageSupervisor;
+          try {
+            expect(await supervisor.remindMissingStageResult(pipeline, provider, session)).toBe(
+              bindingState === "present",
+            );
+            expect(provider.sent.length - before).toBe(bindingState === "present" ? 1 : 0);
+            if (bindingState === "present") {
+              expect(provider.sent.at(-1)!.prompt).toContain(tool);
+              expect(prepare.mock.calls.at(-1)![0].kind).toBe(kind);
+              expect(prepare.mock.calls.at(-1)![0].schema).toEqual(
+                kind === "validation-plan"
+                  ? REVIEW_VALIDATION_PLAN_SCHEMA
+                  : kind === "review-report"
+                    ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+                    : kind === "address-findings-result"
+                      ? REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA
+                      : VERIFICATION_SCHEMA,
+              );
+            } else {
+              expect(session.resultReminderSent).toBeUndefined();
+              expect(prepare).not.toHaveBeenCalled();
+            }
+          } finally {
+            lookup.mockRestore();
+            prepare.mockRestore();
+          }
+        },
+        { toolMode: true, toolKinds: ["review-preparation"] },
+      );
+    },
+  );
+}
+
+for (const owner of ["stage", "consolidation"] as const) {
+  test.each(["prepared", "ambiguous", "sent"] as const)(
+    `${owner} reminder survives service recreation at %s with its identity and one-shot budget`,
+    async (boundary) => {
+      await withPipeline(
+        async ({ service, createService, provider, read }) => {
+          const started = await service.start(
+            startInput(owner === "consolidation" ? fourReviewers() : undefined),
+          );
+          let current = await advanceUntil(
+            service,
+            read,
+            started.id,
+            owner === "stage" ? "building" : "reviewing",
+          );
+          if (owner === "stage")
+            spyOn(provider, "observeSession").mockResolvedValue({ status: "idle" });
+          // Stop immediately after the follow-up intent becomes durable.
+          const send = provider.send.bind(provider);
+          let failSend = owner === "stage" && boundary !== "sent";
+          const sendSpy = spyOn(provider, "send").mockImplementation(
+            async (sessionId, prompt, options) => {
+              if (failSend && prompt.includes("has not received")) {
+                if (boundary === "ambiguous") await send(sessionId, prompt, options);
+                throw new AmbiguousPromptDispatchError("acknowledgement lost");
+              }
+              await send(sessionId, prompt, options);
+            },
+          );
+          const record = () =>
+            owner === "stage"
+              ? current.sessions[current.currentSessionIndex]!
+              : current.reviewFanout!.consolidation!;
+          for (let pass = 0; pass < 40 && !record()?.resultReminderSent; pass++) {
+            await service.advanceNow(started.id);
+            current = await read(started.id);
+          }
+          expect(record().resultReminderSent).toBe(true);
+          if (owner === "consolidation" && boundary !== "prepared") {
+            failSend = boundary === "ambiguous";
+            await service.advanceNow(started.id);
+            current = await read(started.id);
+          }
+          const requestId =
+            owner === "stage"
+              ? current.sessions[current.currentSessionIndex]!.structuredRequestId!
+              : current.reviewFanout!.consolidation!.requestId;
+          const sessionId =
+            owner === "stage"
+              ? current.sessions[current.currentSessionIndex]!.sdkSessionId
+              : current.reviewFanout!.consolidation!.providerSessionId;
+          await service.shutdown();
+          failSend = false;
+          const restored = createService();
+          try {
+            await restored.init();
+            await restored.advanceNow(started.id);
+            const reloaded = await read(started.id);
+            expect(
+              owner === "stage"
+                ? reloaded.sessions[reloaded.currentSessionIndex]!.structuredRequestId
+                : reloaded.reviewFanout!.consolidation!.requestId,
+            ).toBe(requestId);
+            const failed = await advanceUntil(restored, read, started.id, "failed", 35);
+            expect(failed.phase).toBe("failed");
+            const sentIds = provider.sent
+              .filter((entry) => entry.sessionId === sessionId)
+              .map((entry) => entry.requestId);
+            expect(new Set(sentIds).size).toBe(2);
+            // A stable ID reconciles or deduplicates a lost acknowledgement.
+            expect(sentIds).toHaveLength(2);
+          } finally {
+            sendSpy.mockRestore();
+            await restored.shutdown();
+          }
+        },
+        {
+          toolMode: true,
+          toolKinds: owner === "stage" ? ["review-preparation"] : ["consolidated-review"],
+          structuredResultDeadlineMs: 0,
+        },
+      );
+    },
+  );
+}
+
+test.each(["structured", "received", "needs-attention", "restart-spent"] as const)(
+  "consolidation reminder eligibility: %s",
+  async (scenario) => {
+    await withPipeline(
+      async ({ service, provider, storage, read, workflowResults }) => {
+        provider.runningConsolidation = true;
+        const started = await service.start(startInput(fourReviewers()));
+        let current = await read(started.id);
+        for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+          await service.advanceNow(started.id);
+          current = await read(started.id);
+        }
+        const consolidation = current.reviewFanout!.consolidation!;
+        expect(consolidation.state).toBe("sent");
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          if (scenario === "restart-spent")
+            pipeline.reviewFanout!.consolidation!.restartContinuationSent = true;
+        });
+        const projection =
+          workflowResults &&
+          spyOn(workflowResults, "projection").mockResolvedValue(
+            scenario === "restart-spent"
+              ? undefined
+              : scenario === "structured"
+                ? undefined
+                : scenario,
+          );
+        const structured =
+          workflowResults && spyOn(workflowResults, "structured").mockResolvedValue(null);
+        provider.missingConsolidationResult = true;
+        provider.runningConsolidation = false;
+        try {
+          const failed = await advanceUntil(service, read, started.id, "failed", 35);
+          expect(failed.phase).toBe("failed");
+          expect(failed.reviewFanout!.consolidation!.resultReminderSent).toBe(
+            scenario === "restart-spent" ? true : undefined,
+          );
+          expect(
+            provider.sent.filter((entry) => entry.sessionId === consolidation.providerSessionId),
+          ).toHaveLength(scenario === "restart-spent" ? 2 : 1);
+        } finally {
+          projection?.mockRestore();
+          structured?.mockRestore();
+        }
+      },
+      { toolMode: scenario !== "structured" },
+    );
+  },
+);
+
+test("consolidation re-sends a recovered dispatch the provider proves never arrived, once", async () => {
+  await withPipeline(
+    async ({ service, createService, storage, provider, read }) => {
+      provider.runningConsolidation = true;
+      const started = await service.start(startInput(fourReviewers()));
+      let current = await read(started.id);
+      for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+        await service.advanceNow(started.id);
+        current = await read(started.id);
+      }
+      const original = current.reviewFanout!.consolidation!;
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        const request = pipeline.reviewFanout!.consolidation!;
+        request.requestId = "never-arrived";
+        request.state = "dispatching";
+        request.continuationPrompt = "Continue the consolidation";
+      });
+      await service.shutdown();
+      const restored = createService();
+      try {
+        await restored.init();
+        const before = provider.sent.length;
+        // `absent`: back to prepared without sending in the same pass.
+        await restored.advanceNow(started.id);
+        expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("prepared");
+        expect(provider.sent).toHaveLength(before);
+        await restored.advanceNow(started.id);
+        const resent = provider.sent.filter((entry) => entry.requestId === "never-arrived");
+        expect(resent).toHaveLength(1);
+        expect(resent[0]?.sessionId).toBe(original.providerSessionId);
+        expect(resent[0]?.prompt).toContain("Continue the consolidation");
+        expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("sent");
+        // The old owner's send finally lands: the provider's duplicate.
+        await provider.send(original.providerSessionId, "Continue the consolidation", {
+          requestId: "never-arrived",
+        });
+        expect(provider.sent.filter((entry) => entry.requestId === "never-arrived")).toHaveLength(
+          1,
+        );
+      } finally {
+        await restored.shutdown();
+      }
+    },
+    { toolMode: true },
+  );
+});
+
+test.each([false, true])(
+  "consolidation parks an unaccepted recovered dispatch (continuation %s)",
+  async (continuation) => {
+    await withPipeline(
+      async ({ service, createService, storage, provider, read }) => {
+        provider.runningConsolidation = true;
+        // A provider that cannot prove the id never arrived.
+        provider.journalIncomplete = true;
+        const started = await service.start(startInput(fourReviewers()));
+        let current = await read(started.id);
+        for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+          await service.advanceNow(started.id);
+          current = await read(started.id);
+        }
+        const original = current.reviewFanout!.consolidation!;
+        // Durable dispatch intent before send, or before a continuation lands.
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          const request = pipeline.reviewFanout!.consolidation!;
+          request.requestId = "not-yet-accepted";
+          request.state = "dispatching";
+          request.continuationPrompt = "Continue the consolidation";
+          if (continuation) request.restartContinuationSent = true;
+        });
+        await service.shutdown();
+        const restored = createService();
+        const observe = spyOn(provider, "observeSession").mockResolvedValue({
+          status: "error",
+          interruption: "restart",
+        } as Awaited<ReturnType<NonNullable<typeof provider.observeSession>>>);
+        try {
+          await restored.init();
+          const before = provider.sent.length;
+          await restored.advanceNow(started.id);
+          const parked = (await read(started.id)).reviewFanout!.consolidation!;
+          expect(parked).toMatchObject({
+            requestId: "not-yet-accepted",
+            state: "dispatching",
+            continuationPrompt: "Continue the consolidation",
+          });
+          expect(parked.resultReminderSent).toBeUndefined();
+          expect(provider.sent).toHaveLength(before);
+          expect(observe).not.toHaveBeenCalled();
+          // The old owner's in-flight continuation finally arrives with the same ID.
+          await provider.send(original.providerSessionId, "Continue the consolidation", {
+            requestId: parked.requestId,
+          });
+          observe.mockResolvedValue({ status: "running" });
+          await restored.advanceNow(started.id);
+          expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("sent");
+          expect((await read(started.id)).phase).toBe("reviewing");
+        } finally {
+          observe.mockRestore();
+          await restored.shutdown();
+        }
+      },
+      { toolMode: true },
+    );
+  },
+);
+
+for (const toolMode of [false, true]) {
+  test.each(["absent", "lost"] as const)(
+    `consolidation accepts a saved ${toolMode ? "tool-v1" : "structured"} result over %s`,
+    async (answer) => {
+      await withPipeline(
+        async ({ service, createService, storage, provider, read, workflowResults }) => {
+          provider.runningConsolidation = true;
+          const started = await service.start(startInput(fourReviewers()));
+          let current = await read(started.id);
+          for (let pass = 0; pass < 30 && !current.reviewFanout?.consolidation; pass++) {
+            await service.advanceNow(started.id);
+            current = await read(started.id);
+          }
+          const request = current.reviewFanout!.consolidation!;
+          if (toolMode) {
+            const result = await provider.structured<unknown>(
+              request.providerSessionId,
+              request.requestId,
+            );
+            if (!result?.ok) throw new Error("Missing consolidation fixture result");
+            await workflowResults!.submit(scope, request.requestId, strictReport(result.value));
+          }
+          await rewritePipeline(storage, started.id, (pipeline) => {
+            pipeline.reviewFanout!.consolidation!.state = "dispatching";
+          });
+          await service.shutdown();
+          const dispatch = spyOn(provider, "dispatchStatus").mockResolvedValue(answer);
+          const before = provider.sent.length;
+          const restored = createService();
+          try {
+            await restored.init();
+            await restored.advanceNow(started.id);
+            expect((await read(started.id)).reviewFanout!.consolidation!.state).toBe("sent");
+            expect(provider.sent).toHaveLength(before);
+            expect(dispatch).toHaveBeenCalledWith(request.providerSessionId, request.requestId);
+          } finally {
+            dispatch.mockRestore();
+            await restored.shutdown();
+          }
+        },
+        { toolMode },
+      );
+    },
+  );
+}
+
+test.each(["absent", "lost"] as const)(
+  "a stage accepts a saved tool-v1 result over %s dispatch status",
+  async (answer) => {
+    await withPipeline(
+      async ({ service, storage, provider, read, workflowResults }) => {
+        const started = await service.start(startInput());
+        const building = await advanceUntil(service, read, started.id, "building");
+        const session = building.sessions[building.currentSessionIndex]!;
+        const requestId = session.structuredRequestId!;
+        const result = await provider.structured<unknown>(session.sdkSessionId, requestId);
+        if (!result?.ok) throw new Error("Missing stage fixture result");
+        await workflowResults!.submit(scope, requestId, result.value);
+        await rewritePipeline(storage, started.id, (pipeline) => {
+          pipeline.pendingPromptAttempt = {
+            id: "recovered-stage",
+            sessionId: session.sdkSessionId,
+            requestId,
+            phase: "building",
+            prompt: "Review preparation",
+            useTaskImages: false,
+            structuredReview: true,
+            resultTransport: "tool-v1",
+            dispatchVersion: 1,
+            startedAt: new Date().toISOString(),
+            dispatchingAt: new Date().toISOString(),
+          };
+        });
+        const dispatch = spyOn(provider, "dispatchStatus").mockResolvedValue(answer);
+        const before = provider.sent.length;
+        try {
+          await service.advanceNow(started.id);
+          expect((await read(started.id)).pendingPromptAttempt).toBeUndefined();
+          expect((await read(started.id)).phase).toBe("building");
+          expect(provider.sent).toHaveLength(before);
+        } finally {
+          dispatch.mockRestore();
+        }
+      },
+      { toolMode: true, toolKinds: ["review-preparation"] },
+    );
+  },
+);

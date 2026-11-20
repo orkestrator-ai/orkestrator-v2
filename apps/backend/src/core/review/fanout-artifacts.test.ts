@@ -10,7 +10,7 @@ import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-pol
 import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";
 import {

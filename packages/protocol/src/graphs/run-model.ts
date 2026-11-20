@@ -519,7 +519,7 @@ export interface GraphRewind {
 
 /**
  * What a code rewind did to the branch (P2.10). Item 210 records it before
- * the reset, as `build-pipeline-code-rewind.ts` does for the pipeline. The
+ * the reset, as `build-pipeline/code-rewind.ts` does for the pipeline. The
  * upstream fields decide the next push (item 207): a rewind that dropped
  * commits the upstream already had makes the next push of the run's branch
  * use `--force-with-lease`, once; every other push is a plain push.

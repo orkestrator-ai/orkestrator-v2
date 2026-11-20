@@ -220,7 +220,7 @@ platforms than Claude and Codex.
 - **One runner, two owners.** `ReviewFanoutRunner`
   (`apps/backend/src/core/review/fanout.ts`) drives standalone Multi Review
   (`review/service.ts`) and Build Pipeline review stages
-  (`build-pipeline-review-fanout.ts`). Each unsettled reviewer is one task in
+  (`build-pipeline/review-fanout.ts`). Each unsettled reviewer is one task in
   `runBoundedTasks` (`review/fanout-scheduler.ts`). The limits are
   `DEFAULT_REVIEW_ADMISSION_CONCURRENCY` 4,
   `DEFAULT_REVIEW_OBSERVATION_CONCURRENCY` 8 and
@@ -759,7 +759,7 @@ Code:
 
 Tests:
 
-- `build-pipeline-result-reminder.test.ts` (5 tests): a tool-mode stage that
+- `build-pipeline/result-reminder.test.ts` (5 tests): a tool-mode stage that
   never submits gets one reminder in the same session under a new key and
   either delivers or fails at the next deadline; a structured-output stage
   still fails without one; a tool-mode consolidation gets one and either
@@ -775,7 +775,7 @@ Tests:
 - `recurring-baseline.test.ts`: the multi-review rollback scans every 15 s,
   reads providers as often as the keyed driver, and stays within 10 storage
   reads per attempt.
-- `build-pipeline-artifact-turns.test.ts`: both consolidation turns (the
+- `build-pipeline/artifact-turns.test.ts`: both consolidation turns (the
   original and the reminder) get and settle their own artifact grant.
 
 Large evidence, real hashing (`review/large-evidence.bench.test.ts`,

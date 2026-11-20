@@ -60,8 +60,8 @@ import {
   type AgentBranchWording,
 } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import { structuredReportRepairPrompt } from "./build-pipeline/index.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { AppConfig, Environment } from "./models.js";
 import { MultiReviewProgressTracker } from "./review/index.js";

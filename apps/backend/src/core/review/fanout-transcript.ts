@@ -19,7 +19,7 @@
  * The reader lives for one reviewer advance and is then dropped, so transcript
  * content is never retained beyond the pass.
  */
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import {
   recordEfficiency,
   type EfficiencyOwner,

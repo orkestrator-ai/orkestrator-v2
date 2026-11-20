@@ -1,4 +1,4 @@
-import { connectionDefaultsFor } from "./build-pipeline-service-helpers.js";
+import { type CompletedBuildAttempt, connectionDefaultsFor } from "./build-pipeline/index.js";
 /** Manual-only promotion. The tab's own agent drafts; the user confirms. */
 import { randomUUID, createHash } from "node:crypto";
 import {
@@ -13,7 +13,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
 import type { CommandContext } from "./commands-context.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   assertNoOtherWorkflowWriting,
   withWorkspaceCodeRewindReservation,
@@ -22,10 +22,9 @@ import {
 import { multiReviewWorkspaceUse } from "./workspace-writers.js";
 import { paneLayoutLeaves } from "./storage-shared.js";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
-import { buildPipelineStartWithSavedDefaults } from "./build-pipeline-launch.js";
+import { buildPipelineStartWithSavedDefaults } from "./build-pipeline/launch.js";
 import { boundAdoptedTranscript } from "./auto-pipeline-transcript.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
-import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 
 export interface AutoPipelinePorts {
   provider(

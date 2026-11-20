@@ -17,32 +17,28 @@ import {
 } from "./storage-shared.js";
 import {
   BUILD_PIPELINE_TRANSCRIPT_DIRECTORY,
-  BuildPipelineTranscriptStore,
-  transcriptPipelineTag,
-  transcriptSessionKey,
-  type BuildPipelineTranscriptFaultStage,
+  buildPipelineDetailFingerprint,
   type BuildPipelineTranscriptFaults,
+  type BuildPipelineTranscriptFaultStage,
   type BuildPipelineTranscriptLimits,
-  type BuildPipelineTranscriptStats,
-  type StagedTranscript,
-  type TranscriptCommitInput,
-  type TranscriptCommitResult,
-  type TranscriptRead,
-  type TranscriptReadWindow,
-} from "./build-pipeline-transcript-store.js";
-import {
-  LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES,
-  readInlineTranscript,
-} from "./build-pipeline-transcripts.js";
-import {
-  migrateInlineBuildPipelineTranscripts,
   type BuildPipelineTranscriptMigrationReport,
+  type BuildPipelineTranscriptStats,
+  BuildPipelineTranscriptStore,
   type InlineImportBatchEntry,
   type InlineImportBatchOutcome,
-} from "./build-pipeline-transcript-migration.js";
+  LEGACY_BUILD_PIPELINE_SNAPSHOT_LIMIT_BYTES,
+  migrateInlineBuildPipelineTranscripts,
+  readInlineTranscript,
+  type StagedTranscript,
+  ticketsHeldByBuilds,
+  type TranscriptCommitInput,
+  type TranscriptCommitResult,
+  transcriptPipelineTag,
+  type TranscriptRead,
+  type TranscriptReadWindow,
+  transcriptSessionKey,
+} from "./build-pipeline/index.js";
 import { StoreCorruptError } from "./storage-database.js";
-import { buildPipelineDetailFingerprint } from "./build-pipeline-detail-fingerprint.js";
-import { ticketsHeldByBuilds } from "./build-pipeline-ticket-hold.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -589,7 +585,7 @@ export class BuildPipelinesRepository {
 
   /**
    * The Kanban tickets whose column an unfinished build holds
-   * (`build-pipeline-ticket-hold.ts`). Read in place, without copying a record:
+   * (`build-pipeline/ticket-hold.ts`). Read in place, without copying a record:
    * the Kanban store asks on every status change it did not get from a build.
    */
   async ticketsHeldByBuilds(): Promise<Set<string>> {

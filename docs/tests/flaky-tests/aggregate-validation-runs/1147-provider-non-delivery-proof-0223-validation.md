@@ -1,8 +1,13 @@
 # Provider non-delivery proof (todo 0223) branch validation
 
-Relocated tests from the recorded commands now live at
-`apps/backend/src/core/review/fanout-dispatch.test.ts` and
-`apps/backend/src/core/review/fanout-interleaving.test.ts`.
+Current paths for the relocated files:
+
+- `apps/backend/src/core/review/fanout-dispatch.test.ts`
+- `apps/backend/src/core/review/fanout-interleaving.test.ts`
+- `apps/backend/src/core/build-pipeline/result-reminder.test.ts`
+- `apps/backend/src/core/build-pipeline/review-fanout.test.ts`
+- `apps/backend/src/core/build-pipeline/service-recovery.test.ts`
+- `apps/backend/src/core/build-pipeline/steps.test.ts`
 
 Current path for the recorded account file is `apps/backend/src/core/agent-accounts/active.test.ts`.
 

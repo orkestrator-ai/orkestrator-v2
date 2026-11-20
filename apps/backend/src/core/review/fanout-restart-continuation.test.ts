@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import { ProviderSessionFailedError } from "../agent-provider-contract.js";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";
-import { reportFor } from "../build-pipeline-review-fanout-test-support.js";
+import { reportFor } from "../build-pipeline/review-fanout-test-support.js";
 
 const RESTARTED =
   "Codex restarted before this turn finished, so its work stopped partway. Send a message to continue.";

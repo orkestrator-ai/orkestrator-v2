@@ -43,7 +43,7 @@ import type {
   AgentBranchWording,
 } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { Environment } from "./models.js";
 import type { MultiReviewProgressTracker } from "./review/index.js";

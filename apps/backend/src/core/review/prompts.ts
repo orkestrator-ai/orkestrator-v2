@@ -11,7 +11,7 @@ import {
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
 } from "@orkestrator/protocol/review-artifacts";
-import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "../build-pipeline-prompts.js";
+import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "../build-pipeline/index.js";
 
 // Fix and PR results are shared with graph types; their home is the protocol.
 export {

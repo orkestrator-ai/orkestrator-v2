@@ -41,7 +41,7 @@ import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
   type ProviderSendOptions,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import { efficiencyPlatform } from "./efficiency.js";
 import { MultiReviewProgressTracker } from "./progress.js";
 import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";

@@ -36,8 +36,8 @@ import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
   ProviderSendOptions,
-} from "../build-pipeline-provider.js";
-import { testGeneratedReviewPackage } from "../build-pipeline-test-fixtures.js";
+} from "../build-pipeline/provider.js";
+import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
 import { syntheticReport } from "./efficiency-fixtures.js";
 import { parseReviewPackageReference } from "./package.js";
 import { MultiReviewService } from "./service.js";

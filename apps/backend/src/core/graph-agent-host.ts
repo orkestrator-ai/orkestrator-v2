@@ -47,8 +47,8 @@ import type {
 } from "./agent-branch-types.js";
 import { readProviderStatus } from "./agent-provider-contract.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import { structuredReportRepairPrompt } from "./build-pipeline/index.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   GraphAgentGuardError,
   mergeGraphGuardResults,

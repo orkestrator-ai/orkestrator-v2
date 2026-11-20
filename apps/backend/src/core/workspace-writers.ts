@@ -39,7 +39,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
-import { buildPipelineSessionStage } from "./build-pipeline-stages.js";
+import { buildPipelineSessionStage } from "./build-pipeline/index.js";
 import type { PersistedBuildPipeline, PersistedMultiReviewWorkflow } from "./models.js";
 
 /** How another engine uses a checkout: the same vocabulary as a graph node's access. */

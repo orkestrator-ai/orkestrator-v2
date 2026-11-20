@@ -1,5 +1,7 @@
 # Build pipeline abort-intent test exceeded its deadline in a parallel backend run
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/service-supervisor.test.ts`.
+
 - **ID:** 0956
 - **Status:** resolved
 - **Date observed:** 2026-10-26

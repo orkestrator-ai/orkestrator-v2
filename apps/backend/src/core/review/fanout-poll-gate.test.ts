@@ -9,7 +9,7 @@ import {
 } from "@orkestrator/protocol/review-fanout";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { WorkflowResultSubmissionState } from "@orkestrator/protocol/workflow-results";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
 import { ManualTime } from "../recurring-test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";

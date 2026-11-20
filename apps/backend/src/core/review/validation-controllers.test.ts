@@ -4,8 +4,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { StorageService } from "../storage.js";
 import { MultiReviewService } from "./service.js";
-import { BuildPipelineSupervisor } from "../build-pipeline-service-supervisor.js";
-import { BuildPipelineService } from "../build-pipeline-service.js";
+import { BuildPipelineSupervisor } from "../build-pipeline/service-supervisor.js";
+import { BuildPipelineService } from "../build-pipeline/service.js";
 import {
   REVIEW_PACKAGE_PREPARATION_USER_INSTRUCTION,
   SYSTEM_INSTRUCTIONS_FRAME_OPEN,
@@ -14,12 +14,12 @@ import {
   reviewValidationDiscoveryPrompt,
   REVIEW_VALIDATION_PLAN_SCHEMA,
 } from "./validation-prompts.js";
-import type { BuildPipelineProvider, ProviderSendOptions } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider, ProviderSendOptions } from "../build-pipeline/provider.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
-import { testGeneratedReviewPackage } from "../build-pipeline-test-fixtures.js";
-import { rewritePipeline } from "../build-pipeline-review-fanout-test-support.js";
+import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
+import { rewritePipeline } from "../build-pipeline/review-fanout-test-support.js";
 
 async function harness(validationCommand = "project-check") {
   const directory = await mkdtemp(path.join(tmpdir(), "validation-controllers-"));

@@ -13,9 +13,9 @@ import {
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
-import type { BuildPipelineProvider } from "../src/core/build-pipeline-provider.js";
-import { BuildPipelineService } from "../src/core/build-pipeline-service.js";
-import { testGeneratedReviewPackage } from "../src/core/build-pipeline-test-fixtures.js";
+import type { BuildPipelineProvider } from "../src/core/build-pipeline/provider.js";
+import { BuildPipelineService } from "../src/core/build-pipeline/service.js";
+import { testGeneratedReviewPackage } from "../src/core/build-pipeline/test-fixtures.js";
 import { FeaturePlanningService } from "../src/core/features/index.js";
 import { MultiReviewService } from "../src/core/review/service.js";
 import { parseReviewPackageReference } from "../src/core/review/index.js";

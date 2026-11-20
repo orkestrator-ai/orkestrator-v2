@@ -7,7 +7,7 @@
  *   (`git/pr-monitor.ts`, the `status` reconciliation step);
  * - a build pipeline that ends after its pull request merged, which would
  *   otherwise move the ticket back to review or backlog
- *   (`build-pipeline-service-recovery.ts`, `updateKanbanLifecycle`);
+ *   (`build-pipeline/service-recovery.ts`, `updateKanbanLifecycle`);
  * - a startup sweep for tickets whose merge was recorded but never applied,
  *   including every ticket an older build left behind (`git/pr-monitor-runtime.ts`).
  *
@@ -19,7 +19,7 @@
  * the backlog (`kanbanTaskReturnsForClosedPullRequest`), through
  * `KanbanRepository.returnKanbanTaskForClosedPullRequest`, called by the PR
  * monitor and by a build that detects the closure itself
- * (`build-pipeline-service-recovery.ts`, `persistPullRequest`). Each closed
+ * (`build-pipeline/service-recovery.ts`, `persistPullRequest`). Each closed
  * pull request is decided once (`prClosedReturnUrl`).
  */
 import type { KanbanTask } from "./storage-shared.js";

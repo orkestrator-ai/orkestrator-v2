@@ -36,7 +36,7 @@ import {
   type WorkspaceGitBaseline,
 } from "@orkestrator/protocol/workspace-guard";
 import type { WorkflowResultError } from "@orkestrator/protocol/workflow-results";
-import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import type { ObservedWorktreeSnapshot, ReviewWorktreeSnapshot } from "./build-pipeline/index.js";
 import { probeReviewWorktree, type ReviewWorktreeProbeInvoker } from "./review/index.js";
 import type { WorkflowResultAcceptanceCheck, WorkflowResultAttempt } from "./workflows/index.js";
 

@@ -34,7 +34,7 @@ import { revisedRowsReconciliationToken } from "@orkestrator/protocol/node/revis
  * renderer always receives a complete bounded snapshot for the new session.
  */
 import { createHash } from "node:crypto";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import {
   NATIVE_AGENT_REVISED_MESSAGES_MAX,
   type NativeAgentToolDetails,

@@ -63,7 +63,7 @@ export interface OpenCode2WorkerMailboxDependencies {
   getEnvironment(
     environmentId: string,
   ): Promise<Pick<Environment, "id" | "projectId" | "environmentType"> | null>;
-  /** The worker's mailbox the capability names, or null (`pipeline-worker-identity.ts`). */
+  /** The worker's mailbox the capability names, or null (`build-pipeline/pipeline-worker-identity.ts`). */
   authenticate(
     capability: string,
   ): { environmentId: string; projectId: string; tabId: string } | null;

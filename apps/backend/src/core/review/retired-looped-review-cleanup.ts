@@ -1,4 +1,4 @@
-import { createBuildPipelineProvider } from "../build-pipeline-provider.js";
+import { createBuildPipelineProvider } from "../build-pipeline/provider.js";
 import type { PlanUsageState } from "../plan-usage/index.js";
 import type { StorageService } from "../storage.js";
 

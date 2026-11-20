@@ -77,11 +77,11 @@ import {
   addressFindingsValidationGuidance,
   buildPipelineReviewPackageContext,
   buildTaskPrompt,
-  reworkTaskPrompt,
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,
+  reworkTaskPrompt,
   verificationTaskPrompt,
-} from "./build-pipeline-prompts.js";
+} from "./build-pipeline/index.js";
 import {
   ConsolidationBudgetError,
   createDiscoveryPrompt,
@@ -485,7 +485,7 @@ function verifyText(inputs: BuiltInInputs, notes: string, target: string): strin
 /**
  * The feedback a pipeline Fix reads, from a verdict: the rationale, then the
  * failed criteria by id. The Build Pipeline's `feedbackWithUnmetCriteria`
- * (build-pipeline-service-recovery.ts) writes the same text.
+ * (build-pipeline/service-recovery.ts) writes the same text.
  */
 function verificationFeedback(
   verdict: VerificationVerdict,

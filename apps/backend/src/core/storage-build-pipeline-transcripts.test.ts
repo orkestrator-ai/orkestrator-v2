@@ -13,11 +13,11 @@ import { StorageService } from "./storage.js";
 import {
   BUILD_PIPELINE_TRANSCRIPT_DIRECTORY,
   transcriptPipelineTag,
-} from "./build-pipeline-transcript-store.js";
-import { BUILD_PIPELINE_TRANSCRIPT_MANIFEST_STORE } from "./build-pipeline-transcript-layout.js";
-import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline-transcript-checkpoints.js";
-import { writeLegacyTranscriptSession } from "./build-pipeline-transcript-test-fixtures.js";
-import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
+} from "./build-pipeline/transcript-store.js";
+import { BUILD_PIPELINE_TRANSCRIPT_MANIFEST_STORE } from "./build-pipeline/transcript-layout.js";
+import { BuildPipelineTranscriptCheckpoints } from "./build-pipeline/transcript-checkpoints.js";
+import { writeLegacyTranscriptSession } from "./build-pipeline/transcript-test-fixtures.js";
+import { transcriptFingerprint } from "./build-pipeline/service-helpers.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import {
   readStoredValue,
@@ -280,7 +280,7 @@ describe("build pipeline transcript migration", () => {
     await withStorage(async (storage, dataDir) => {
       const bodies = await seedLegacy(storage);
       const { BuildPipelineTranscriptCheckpoints } =
-        await import("./build-pipeline-transcript-checkpoints.js");
+        await import("./build-pipeline/transcript-checkpoints.js");
       const checkpoints = new BuildPipelineTranscriptCheckpoints(storage);
       const record = (await storage.getBuildPipeline("p2"))!;
       const pipeline = record.snapshot as Parameters<typeof checkpoints.prepare>[0];

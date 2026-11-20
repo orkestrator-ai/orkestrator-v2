@@ -7,7 +7,7 @@ import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./validation-prompts.js";
 import { randomUUID } from "node:crypto";
 import { captureReviewWorktreeSnapshot } from "./fanout.js";
-import { testGeneratedReviewPackage } from "../build-pipeline-test-fixtures.js";
+import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
 import { expect, jest, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,12 +31,12 @@ import type {
   BuildPipelineProvider,
   ProviderSendOptions,
   ProviderStatus,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import type {
   ReviewValidationPlan,
   ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
-import { AmbiguousPromptDispatchError } from "../build-pipeline-provider.js";
+import { AmbiguousPromptDispatchError } from "../build-pipeline/provider.js";
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
 import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./prompts.js";
 import { StorageService } from "../storage.js";

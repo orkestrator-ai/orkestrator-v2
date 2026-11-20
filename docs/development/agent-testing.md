@@ -2482,7 +2482,7 @@ follow-up prompts may intentionally read an earlier stop again.
   build prompt is journaled (`pendingPromptAttempt`), the mid-dispatch window;
   the prompt must reach the provider once, on the same session. Acceptance may
   race this live crash. The deterministic pre-acceptance case lives in
-  `apps/backend/src/core/build-pipeline-service-recovery.test.ts`: a subprocess
+  `apps/backend/src/core/build-pipeline/service-recovery.test.ts`: a subprocess
   holds `send` after durable admission, is killed with SIGKILL, and a fresh
   service/storage pair must retry the same request id and session exactly once.
   A second pipeline is restarted mid-turn after a persist boundary: its committed history must read
@@ -3490,7 +3490,7 @@ against both log formats), writes them to
 one read of each input per pass. Only a panel of two or more reviewers uses
 the fan-out (`usesReviewFanout`); the default single reviewer runs as one stage
 session and logs no line, so the spec requires the lines only for
-`--reviewers 2` and above. `build-pipeline-review-fanout-prompts.test.ts`
+`--reviewers 2` and above. `build-pipeline/review-fanout-prompts.test.ts`
 guards the same line in the unit suite, and
 `apps/desktop/scripts/dev/auto-pipeline-arguments.test.ts` the runner's
 `--reviewers` parsing and log-level merge. The live count, taken on beelink2 on

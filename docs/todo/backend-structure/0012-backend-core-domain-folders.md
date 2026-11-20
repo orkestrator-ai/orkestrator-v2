@@ -4,12 +4,12 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, and 2026-11-20 against `main` at `05f3db2d8` for the `review` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, and 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20), the `agent-accounts` move is done (2026-11-20), the `workflows` move is done (2026-11-20) and the `review` move is done (2026-11-20), one change each (see "Assumptions and decisions"); the other two (`build-pipeline`, `native-agent`) are open, one domain per change.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20), the `agent-accounts` move is done (2026-11-20), the `workflows` move is done (2026-11-20), the `review` move is done (2026-11-20) and the `build-pipeline` move is done (2026-11-20), one change each (see "Assumptions and decisions"); the last one (`native-agent`) is open.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; PR #2394 was then open and added merge notices alongside changes to the PR monitor. Re-measured 2026-11-20 on `0b778d995` for the sixth slice: `coordinator-*` was 58 source (one test-support file included) / 62 tests (the table's 7 / 5 was stale), with 42 production importers outside the domain in `apps/backend/src` (all in `core/`, nine of them in `control-mcp/`, `nodes/`, `opencode2/` and `public-api/`) using 106 symbols from 44 modules, plus two `apps/backend/scripts` files, one `apps/backend/tests` file, one `e2e/agent-testing` spec and one claude-bridge live test; no pull request was open. Re-measured 2026-11-20 on `e102a0dd5` for the seventh slice: `agent-accounts*` was 15 source / 23 tests (the table's 7 / 7 was stale), with 40 production importers outside the domain in `apps/backend/src` (all in `core/`, 13 of them in `capabilities/`, `coordinator/`, `git/`, `mcp-management/`, `opencode2/`, `permission-rules/` and `plan-usage/`) using 78 symbols from 12 modules, plus 21 tests in `apps/backend/src`, eight `apps/backend/tests` files and one `e2e/agent-testing` integration test; no open pull request touched the domain. Re-measured 2026-11-20 on `7fd328b8c` for the eighth slice: `workflow-*` was 17 source / 17 tests (the table's 9 / 7 was stale), with 42 production importers outside the domain in `apps/backend/src` (all in `core/`, two of them in `features/`) using 47 symbols from 13 modules, plus 29 tests and five test-support files in `apps/backend/src`, one `apps/backend/tests` file, two `e2e/agent-testing` tests and one string in `packages/protocol/src/graphs/type-validators.ts`; one of the 17 source files (`workflow-tab-actions.ts`) and three of the tests are not workflow machinery (see "Assumptions and decisions"). Re-measured 2026-11-20 on `05f3db2d8` for the ninth slice: the review prefixes were 48 source (seven test-support and fixture files included) / 55 tests (the table's 26 / 26 was stale), plus `workflow-tab-actions.ts` and the last looped-review file, `retired-looped-review-cleanup.ts` with its test (no `looped-review-*` file is left); with those, 50 production importers outside the domain in `apps/backend/src` (all in `core/`, eight of them in `coordinator/`, `public-api/` and `workflows/`) used 105 symbols from 27 modules, plus 29 tests in `apps/backend/src`, four `apps/backend/tests` files, one `apps/backend/scripts` file, three `e2e` files, two repository scripts and one `tests/unit` test; the only open pull request (a release version bump) does not touch the domain.
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; PR #2394 was then open and added merge notices alongside changes to the PR monitor. Re-measured 2026-11-20 on `0b778d995` for the sixth slice: `coordinator-*` was 58 source (one test-support file included) / 62 tests (the table's 7 / 5 was stale), with 42 production importers outside the domain in `apps/backend/src` (all in `core/`, nine of them in `control-mcp/`, `nodes/`, `opencode2/` and `public-api/`) using 106 symbols from 44 modules, plus two `apps/backend/scripts` files, one `apps/backend/tests` file, one `e2e/agent-testing` spec and one claude-bridge live test; no pull request was open. Re-measured 2026-11-20 on `e102a0dd5` for the seventh slice: `agent-accounts*` was 15 source / 23 tests (the table's 7 / 7 was stale), with 40 production importers outside the domain in `apps/backend/src` (all in `core/`, 13 of them in `capabilities/`, `coordinator/`, `git/`, `mcp-management/`, `opencode2/`, `permission-rules/` and `plan-usage/`) using 78 symbols from 12 modules, plus 21 tests in `apps/backend/src`, eight `apps/backend/tests` files and one `e2e/agent-testing` integration test; no open pull request touched the domain. Re-measured 2026-11-20 on `7fd328b8c` for the eighth slice: `workflow-*` was 17 source / 17 tests (the table's 9 / 7 was stale), with 42 production importers outside the domain in `apps/backend/src` (all in `core/`, two of them in `features/`) using 47 symbols from 13 modules, plus 29 tests and five test-support files in `apps/backend/src`, one `apps/backend/tests` file, two `e2e/agent-testing` tests and one string in `packages/protocol/src/graphs/type-validators.ts`; one of the 17 source files (`workflow-tab-actions.ts`) and three of the tests are not workflow machinery (see "Assumptions and decisions"). Re-measured 2026-11-20 on `05f3db2d8` for the ninth slice: the review prefixes were 48 source (seven test-support and fixture files included) / 55 tests (the table's 26 / 26 was stale), plus `workflow-tab-actions.ts` and the last looped-review file, `retired-looped-review-cleanup.ts` with its test (no `looped-review-*` file is left); with those, 50 production importers outside the domain in `apps/backend/src` (all in `core/`, eight of them in `coordinator/`, `public-api/` and `workflows/`) used 105 symbols from 27 modules, plus 29 tests in `apps/backend/src`, four `apps/backend/tests` files, one `apps/backend/scripts` file, three `e2e` files, two repository scripts and one `tests/unit` test; the only open pull request (a release version bump) does not touch the domain. Re-measured 2026-11-20 on `11fca66ca` for the tenth slice: `build-pipeline-*` was 57 source (seven test-support and fixture files included) / 66 tests (the table's 23 / 16 was stale), plus `control-workflow-summary.ts` and its test and the three `pipeline-worker-*` files (`pipeline-worker-identity.ts`, `pipeline-worker-mail-test-support.ts`, `pipeline-worker-mail.test.ts`); with those, 59 production importers outside the domain in `apps/backend/src` (all in `core/`, 23 of them in `review/`, `features/`, `coordinator/`, `control-mcp/`, `public-api/`, `workflows/` and `git/`) used 93 symbols from 27 modules, plus 63 tests and test-support files in `apps/backend/src`, three `apps/backend/tests` files, one `apps/backend/scripts` file, one repository script, one `tests/unit` test and one codex-bridge integration test; `native-agent-*` is now 79 source / 122 tests.
 
 **Decisions.**
 
@@ -250,8 +250,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
 - Done (task 1's `keyed-record-format.ts` placement, 2026-11-13, against
   `main` at `17d28238c`): it stays at the `core/` root as a shared-kernel
   module, because its production importers are in two domains
-  (`build-pipeline-transcript-store.ts`,
-  `build-pipeline-transcript-legacy-manifests.ts` and
+  (`build-pipeline/transcript-store.ts`,
+  `build-pipeline/transcript-legacy-manifests.ts` and
   `transcript-artifacts/store.ts`). No file moved and no import changed; its
   header comment, which still named the keyed record store removed with #969,
   now names its users and says why it is in the kernel. See "Assumptions and
@@ -417,11 +417,35 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `retired-looped-review-cleanup.js`, `fanout.js` and
   `validation-service.js`, which reach the graph runtime, the workflow result
   contracts and the coordinator's status wakes, and `validation-prompts.js`
-  and `consolidation-scope.js`, which `build-pipeline-prompts.ts` imports
+  and `consolidation-scope.js`, which `build-pipeline/prompts.ts` imports
   and `multi-review-prompts.ts` reaches. `validation-prompts.js` is also the
   one exception in the `tests/unit/**` pattern. The build pipeline's own
-  `build-pipeline-review-*` files, the review commands and the review stores
-  stay at the root. See "Assumptions and decisions".
+  `build-pipeline-review-*` files (since the `build-pipeline` slice,
+  `build-pipeline/review-*.ts`), the review commands and the review stores
+  stay outside `review/`. See "Assumptions and decisions".
+- Done (task 2's `build-pipeline` slice, 2026-11-20, against `main` at
+  `11fca66ca`): the 57 `build-pipeline-*` source files (seven test-support
+  and fixture files included) and their 66 tests, with
+  `control-workflow-summary.ts` and its test and the three
+  `pipeline-worker-*` files, are in `core/build-pipeline/`
+  (`build-pipeline/service.ts`, `build-pipeline/provider.ts`,
+  `build-pipeline/prompts.ts`, `build-pipeline/review-fanout.ts`,
+  `build-pipeline/transcript-store.ts`, …). The `build-pipeline-` prefix was
+  dropped; `control-workflow-summary.ts` and the `pipeline-worker-*` files
+  keep their names. `index.ts` re-exports 66 symbols from 20 modules, and 37
+  of the 59 production importers outside the folder import it. Seven modules
+  are named exceptions in the `apps/backend/src/**` pattern and are not
+  re-exported, because each reaches, at runtime, a module that imports one
+  of the modules re-exported there: `service.js`, `provider.js`,
+  `launch.js`, `worker-mail.js`, `transcript-projection.js`,
+  `key-information-tools.js` and `control-workflow-summary.js`. Under
+  `tests/unit/**`, `handoff.js` and `service-helpers.js` are exceptions for
+  the one `tests/unit` importer. The three review exceptions this slice was
+  to re-check (`review/fanout.js`, `review/validation-prompts.js`,
+  `review/consolidation-scope.js`) all still close a cycle and stay.
+  Auto-pipeline (`auto-pipeline*.ts`), the build-pipeline store and the
+  build commands stay at the root. Wave 2 has one domain left,
+  `native-agent`. See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -458,7 +482,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   holds 739 and 786, down from 754 and 809 just before it, and after the
   `workflows` slice on 2026-11-20 it holds 726 and 776, down from 742 and
   790 just before it, and after the `review` slice on 2026-11-20 it holds
-  679 and 723, down from 729 and 779 just before it).
+  679 and 723, down from 729 and 779 just before it, and after the
+  `build-pipeline` slice on 2026-11-20 it holds 619 and 655, down from 679
+  and 723 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -477,8 +503,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | git | `git-*`, `github*`, `pr-*` | done (31 / 28 moved, 2026-11-18) | |
   | workflows | `workflow-*` | done (16 / 14 moved, 2026-11-20) | |
   | review | `multi-review-*`, `review-*`, `retired-looped-review-cleanup.ts`, `workflow-tab-actions.ts` | done (50 / 56 moved, 2026-11-20) | |
-  | build-pipeline | `build-pipeline-*` | 23 | 16 |
-  | native-agent | `native-agent-*` | 30 | 40 |
+  | build-pipeline | `build-pipeline-*`, `control-workflow-summary.ts`, `pipeline-worker-*` | done (60 / 68 moved, 2026-11-20) | |
+  | native-agent | `native-agent-*` | 79 | 122 |
   | terminals | `terminal-*`, `transcript-*` | 3 | 3 |
   | tmux | `tmux*` | 10 | 0 |
   | recurring | `recurring-*` | 4 | 2 |
@@ -487,11 +513,12 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | storage | `storage*` | 25 | 30 |
   | commands | `commands*` | 51 | 35 |
   | (unplaced) | `pi-model-catalog-seeding.ts` | 1 | 1 |
+  | (unplaced) | `auto-pipeline*.ts` | 3 | 2 |
 
   These are file counts only. Importer and dependency counts go stale within a
   day, so each slice re-measures them (step 1 below).
 - `keyed-record-*` is now one file, `keyed-record-format.ts`: the keyed-record
-  engine went with #969. Its importers are two `build-pipeline-transcript-*`
+  engine went with #969. Its importers are two `build-pipeline/transcript-*.ts`
   files and `transcript-artifacts/store.ts`, so it stays in the shared kernel
   (2026-11-13).
 - Codemod: `bun scripts/move-backend-modules.ts --prefix <prefix> --into
@@ -526,9 +553,10 @@ before the busy ones move.
    `mcp-management/` and `public-api/`; the `http-bridge`,
    `web-annotations`, `control-mcp` and `opencode` moves;
    `keyed-record-format.ts` placed in the shared kernel.)
-2. **Wave 2 (mid-tier):** `build-pipeline`, `native-agent`.
+2. **Wave 2 (mid-tier):** `native-agent`.
    (Done: `plan-usage`, `features`, `previews`, `worktrees`, `git`,
-   `coordinator`, `agent-accounts`, `workflows`, `review`.)
+   `coordinator`, `agent-accounts`, `workflows`, `review`,
+   `build-pipeline`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
    `environments`, `storage`. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
@@ -612,9 +640,185 @@ task 1's `web-annotations` slice with the codemod fix from todo 7490
 task 2's `worktrees` slice (2026-11-17), task 2's `git` slice
 (2026-11-18), task 2's `coordinator` slice (2026-11-20), task 2's
 `agent-accounts` slice (2026-11-20), task 2's `workflows` slice
-(2026-11-20), and task 2's `review` slice (2026-11-20).
+(2026-11-20), task 2's `review` slice (2026-11-20), and task 2's
+`build-pipeline` slice (2026-11-20).
 The other moves in waves 2 to 4 (tasks 2 to 4) were left open on purpose:
 they move many files that other work in flight touches.
+
+### Task 2: `build-pipeline` as the tenth wave 2 slice
+
+- Chosen: one domain, `build-pipeline`, moved with
+  `bun scripts/move-backend-modules.ts --map <file>` against `main` at
+  `11fca66ca`. A map file was needed because the slice takes five files
+  outside the prefix. Every `build-pipeline-*` file dropped the prefix
+  (`build-pipeline-service.ts` → `build-pipeline/service.ts`,
+  `build-pipeline-review-fanout.ts` → `build-pipeline/review-fanout.ts`);
+  `control-workflow-summary.ts` and the `pipeline-worker-*` files keep their
+  names. Dropping `pipeline-` would have made `pipeline-worker-mail.test.ts`
+  collide with `build-pipeline-worker-mail.test.ts` (both
+  `worker-mail.test.ts`), and the kept names say what each file is about.
+  No backend import path had a `build-pipeline/` segment, so
+  `**/build-pipeline/*` catches nothing else:
+  `@orkestrator/protocol/build-pipeline` has no segment after it, and the
+  renderer's `components/build-pipeline/` is outside the
+  `apps/backend/src/**` override and does not match
+  `**/backend/src/core/build-pipeline/*`.
+- Membership: the build pipeline: its service and collaborators, stage
+  provider and prompt dispatch, stages and prompts, launch, scheduling,
+  restarts and rewinds, the review stage (`review-*.ts`,
+  `reviewer-rerun.ts`), validation, key information and reports, the Kanban
+  ticket lifecycle, the transcript store and its migration, and worker mail.
+  Edge cases, each decided here:
+  - `control-workflow-summary.ts` (with its test) moved. It summarizes a
+    build pipeline's workers for a coordinator (its header: "A build
+    pipeline's workers, each with the mailbox address a coordinator sends to
+    …"), and the `workflows` slice assigned it to this group. Options:
+    (a) build-pipeline (chosen): its subject is the pipeline snapshot;
+    (b) `control-mcp/`, where two of its three importers are: the public
+    review actions import it too, and it reads no MCP state.
+  - `pipeline-worker-identity.ts`, `pipeline-worker-mail-test-support.ts`
+    and `pipeline-worker-mail.test.ts` moved. They are about build pipeline
+    workers (which pipeline worker a turn credential belongs to, and the
+    workers' mailboxes end to end). Options: (a) build-pipeline (chosen);
+    (b) leave them for an agent-mail slice: no such slice is planned, and
+    the identity module reads the pipeline record.
+    `agent-tools-pipeline-worker-mail.test.ts` stays beside
+    `agent-tools.ts`, the module it tests.
+  - Auto-pipeline (`auto-pipeline.ts`, `auto-pipeline-transcript.ts`,
+    `auto-pipeline-wiring.ts`, their two tests and
+    `agent-tools-auto-pipeline.ts`) stays at the root, and is added to the
+    prefix table as unplaced. It promotes a prompt session's Build into a
+    pipeline, with its own drafts store (`storage-drafts.ts`) and command
+    domain, and is not a `build-pipeline-*` file. Options: (a) leave it
+    (chosen): the ticket names the `build-pipeline-*` files, and the
+    promotion feature is a separate subject; (b) move it in: it calls the
+    completed-build and launch modules, but so do the feature builds, which
+    have their own folder.
+  - Every `build-pipeline-*` test moved, including those that drive the
+    command registry (`coordinator-ticket.test.ts`, `detail-read.test.ts`,
+    `service-restart-in.test.ts`): what each checks is build pipeline
+    behaviour, and tests may reach the registry because they are exempt from
+    the domain patterns.
+  - Left at the root or in their folders: `storage-build-pipelines.ts`, its
+    tests and `storage-test-support-build-pipeline.test.ts` (storage),
+    `commands-registry-build.ts` (commands, last by plan),
+    `native-agent-job-pipeline-resolve.ts` (native-agent), and
+    `coordinator/build-pipeline-status.ts`, already in its folder.
+- Measured before the move: see task 2's investigation. The codemod moved
+  128 files and rewrote 276, including `tests/source-guards/baseline.json`
+  (its entries stayed in order: `mise run guards` passes),
+  `scripts/efficiency/workloads-supervision.ts`, flake records and to-do
+  0048. No moved test is in the slow tier (`scripts/test-tiers.ts` names
+  none), no worker or bundle entry point names a moved file, and no
+  `<revision>:<path>` string did.
+- `index.ts` holds 66 symbols from 20 modules: every symbol production
+  importers outside the folder use, other than the exceptions'. Modules
+  whose importers use only types are re-exported with `export type`, so they
+  add no runtime edge (`code-rewind.ts`, `completed-build.ts`, `context.ts`,
+  `key-information.ts`). 37 of the 59 production importers import it; each
+  importer's separate imports from re-exported modules became one import
+  (all-type imports stay `import type`). Tests and test support outside the
+  folder, the `apps/backend/tests` files, `apps/backend/scripts`, the
+  repository script and the codex-bridge test keep deep imports (procedure
+  step 3). The one `tests/unit` importer,
+  `user-prompt-display-contract.test.ts`, imports
+  `addressFindingsReportPrompt` through `index.js`, and `withUnattendedPolicy`
+  and the review handoff helpers deep from `service-helpers.js` and
+  `handoff.js`, the `tests/unit/**` exceptions: no production importer
+  outside the folder uses those symbols, so they are not in `index.ts`. Its
+  specifiers had no `.js` extension and now do, so the patterns match them.
+- Named exceptions: seven modules, the smallest set. Method: a graph of the
+  runtime import edges in `apps/backend/src` (type-only imports and
+  `export type` re-exports skipped, as `import/no-cycle` does); a set of
+  re-exported modules is valid when `index.ts` cannot reach itself once the
+  importers of those modules are routed through it. Only seven of the 27
+  imported modules reach, at runtime, any importer of the domain:
+  `service.ts`, `provider.ts`, `launch.ts`, `worker-mail.ts`,
+  `transcript-projection.ts`, `key-information-tools.ts` and
+  `control-workflow-summary.ts`. Every one of them reaches
+  `review/prompts.ts`, `review/multi-review-prompts.ts` and
+  `transcript-progress.ts`, which import `prompts.ts` and
+  `service-helpers.ts`, and most reach the storage layer, which imports the
+  transcript store and the ticket holds. So keeping any of the seven in
+  `index.ts` costs at least those two leaves, and re-exporting all seven
+  costs 13 leaves; a greedy pass and 3,000 randomised passes found nothing
+  smaller than seven. Options: (a) leave the seven reaching modules out
+  (chosen): the domain's main class, `BuildPipelineService`, and the stage
+  provider are imported deep, as the review slice did with
+  `MultiReviewService`; (b) re-export the reaching modules and make the
+  leaves exceptions: 13 exceptions, among them `prompts.ts`,
+  `service-helpers.ts`, `ticket-hold.ts` and the transcript store;
+  (c) break the edges from the review prompts and the storage layer, which
+  is not a pure move. The reasons are written in `index.ts`'s header and in
+  `docs/development/linting.md`. Checked with a probe: re-exporting even the
+  smallest of them, `workflowSummary`, makes `bunx oxlint` report ten
+  `import(no-cycle)` errors; with the chosen set it reports none.
+- The review slice's exceptions that name build-pipeline files, re-checked
+  now that those files are in `build-pipeline/`. None can be dropped:
+  re-exporting `consolidation-scope.ts` or `validation-prompts.ts` from
+  `review/index.ts` and routing `build-pipeline/prompts.ts`,
+  `review-fanout.ts` and `prompt-dispatch.ts` through it makes `bunx oxlint`
+  report 14 `import(no-cycle)` errors each (`build-pipeline/prompts.ts` →
+  `review/index.ts` → `multi-review-prompts.ts` → `build-pipeline/index.ts`
+  → `prompts.ts`), and doing the same for the `review/fanout.ts` imports of
+  `build-pipeline/review-fanout.ts` reports 97. `review/index.ts`'s header
+  names the new paths.
+- Paths built from a moved file's own location: no moved file climbs to the
+  repository root through `import.meta.dir`, but `service-recovery.test.ts`
+  spawned its sibling through
+  `path.join(import.meta.dirname, "build-pipeline-held-dispatch-test-support.ts")`,
+  a bare file name the codemod does not rewrite; it now names
+  `held-dispatch-test-support.ts`. `agent-provider-boundaries.test.ts` read
+  `build-pipeline-provider.ts` by name; it now reads
+  `build-pipeline/provider.ts`.
+- Hand fixes after the codemod: bare `build-pipeline-*`,
+  `control-workflow-summary.ts`, `pipeline-worker-identity.ts` and
+  `pipeline-worker-mail.test.ts` file names in source comments (the moved
+  files, which now name their siblings without a folder, and
+  `agent-tools.ts`, `agent-tools-messaging.ts`,
+  `control-mcp/pipeline-workers.test.ts`,
+  `coordinator/build-pipeline-status.ts`,
+  `environment-delete-tickets.test.ts`, `graph-agent-builtins.ts`,
+  `graph-run-transcripts.ts`, `graph-system-ticket.ts` and its test,
+  `kanban-merge-closure.ts`, `nodes/node-ticket-sync-lifecycle.test.ts`,
+  `opencode2/turn-connections.ts`, `review/index.ts`,
+  `storage-agent-settings.ts`, `storage-build-pipelines.ts`,
+  `storage-kanban.ts`, `storage-kanban-board.ts`, `storage-shared-core.ts`,
+  `workflows/result-service.ts`, `workspace-code-rewind.ts`,
+  `apps/backend/tests/pr-monitor-closed-ticket.test.ts`,
+  `e2e/agent-testing/cold-restart-live.spec.ts`,
+  `scripts/efficiency/workloads-supervision.ts`, and the protocol's
+  `agent-settings.ts`, `contract/domains/agent-servers/commands.ts`,
+  `graphs/builtins/build-pipeline.ts`, `graphs/prompt-built-ins.ts` and
+  `graphs/run-model.ts`), living docs (`agent-engines.md`,
+  `agent-messaging.md`, `build-pipeline-view.md`, `coordinator.md`,
+  `git-scan-caches.md`, `native-transcripts.md`, `recurring-work.md`,
+  `review-preparation.md`, `tickets.md`, `agent-testing.md`,
+  `effect-usage.md`) and to-dos (0001, 0025, 0027, 0048, 1010, 1090, 4740,
+  and this file's "Current state" and "Open questions") now read
+  `build-pipeline/<name>.ts`. Three mentions in the protocol's own
+  `build-pipeline.ts` were left alone, because the protocol has files of the
+  same names (`build-pipeline-key-information.ts`,
+  `build-pipeline-address-findings-report.ts`,
+  `build-pipeline-stage-instructions.ts`), as were the protocol's and the
+  renderer's own `build-pipeline-*` files, dated reports (`docs/handoff/`,
+  `docs/reports/`), flake-record prose, dated plan logs under `plans/`, and
+  the earlier slices' entries in this section. `docs/development/linting.md`'s
+  folder list and exception examples name the new folder, and the area
+  index's 0012 row lists `build-pipeline` as done. Store names
+  (`storage-build-pipelines.ts`, the `build-pipeline-transcripts` directory)
+  and `git show <revision>:` paths keep their names.
+- Lint patterns: `**/build-pipeline/*` with `!**/build-pipeline/index.js`
+  and the seven exceptions under `apps/backend/src/**`, and
+  `**/backend/src/core/build-pipeline/*` with `!…/index.js`,
+  `!…/handoff.js` and `!…/service-helpers.js` under `tests/unit/**`.
+  Checked with probe files (deleted): a deep import of `prompts.js` is
+  reported under both overrides, `index.js` under neither, `service.js` only
+  under `tests/unit/**`, and `service-helpers.js` only under
+  `apps/backend/src/**`.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, `verify:packaged-backend`) is agent work for the
+  validation stage, so nothing was added to the manual-test checklist (7568).
 
 ### Task 2: `review` as the ninth wave 2 slice
 
@@ -2068,7 +2272,7 @@ Rules that keep slices safe:
 
 - Where `keyed-record-format.ts` goes. Settled 2026-11-13: the shared kernel
   at the `core/` root, because `transcript-artifacts/store.ts` imports it as
-  well as two `build-pipeline-transcript-*` files (task 7).
+  well as two `build-pipeline/transcript-*.ts` files (task 7).
 - Where `pi-model-catalog-seeding.ts` belongs: next to the native-agent model
   catalogue code, or the kernel. Decide when it is touched.
 - Whether `storage` and `native-agent` should move before or after their

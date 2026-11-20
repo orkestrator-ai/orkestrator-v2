@@ -1,4 +1,4 @@
-import type { ReviewWorktreeSnapshot } from "../build-pipeline-prompts.js";
+import type { ReviewWorktreeSnapshot } from "../build-pipeline/index.js";
 import { reviewWorktreeProbeReasonCode } from "./worktree-fingerprint.js";
 
 /**

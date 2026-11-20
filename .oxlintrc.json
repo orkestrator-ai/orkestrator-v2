@@ -505,6 +505,20 @@
                   "!**/review/validation-service.js"
                 ],
                 "message": "Import the review domain through review/index.js."
+              },
+              {
+                "group": [
+                  "**/build-pipeline/*",
+                  "!**/build-pipeline/index.js",
+                  "!**/build-pipeline/control-workflow-summary.js",
+                  "!**/build-pipeline/key-information-tools.js",
+                  "!**/build-pipeline/launch.js",
+                  "!**/build-pipeline/provider.js",
+                  "!**/build-pipeline/service.js",
+                  "!**/build-pipeline/transcript-projection.js",
+                  "!**/build-pipeline/worker-mail.js"
+                ],
+                "message": "Import the build-pipeline domain through build-pipeline/index.js."
               }
             ]
           }
@@ -682,6 +696,15 @@
                   "!**/backend/src/core/review/validation-prompts.js"
                 ],
                 "message": "Import the review domain through review/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/build-pipeline/*",
+                  "!**/backend/src/core/build-pipeline/index.js",
+                  "!**/backend/src/core/build-pipeline/handoff.js",
+                  "!**/backend/src/core/build-pipeline/service-helpers.js"
+                ],
+                "message": "Import the build-pipeline domain through build-pipeline/index.js."
               }
             ]
           }

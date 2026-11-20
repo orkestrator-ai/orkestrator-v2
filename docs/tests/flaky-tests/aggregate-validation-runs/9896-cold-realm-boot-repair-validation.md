@@ -1,5 +1,7 @@
 # Cold realm boot repair aggregate timeout cluster
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/review-fanout.test.ts`.
+
 - **ID:** 9896
 - **Status:** resolved
 - **Date observed:** 2026-11-06

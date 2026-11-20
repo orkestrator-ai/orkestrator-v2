@@ -3,8 +3,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   BUILD_ENVIRONMENT_DELETED_COMMENT,
   settleTicketsOfDeletedEnvironment,
-} from "../build-pipeline-kanban-environment-deleted.js";
-import { lifecycleMachine, PR_URL } from "../build-pipeline-kanban-transitions-test-support.js";
+} from "../build-pipeline/kanban-environment-deleted.js";
+import { lifecycleMachine, PR_URL } from "../build-pipeline/kanban-transitions-test-support.js";
 import { cleanupFleets, fleet, LEAF_ID, type Fleet } from "./node-ticket-sync-test-support.js";
 
 /**
@@ -91,7 +91,7 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
-    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    // A hand move waits for the build to end (`build-pipeline/ticket-hold.ts`).
     await life.ended(pipeline, "complete");
     await board();
     await f.command.kanban.updateKanbanTask(ticket.id, { status: "in-progress" });
@@ -105,7 +105,7 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
-    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    // A hand move waits for the build to end (`build-pipeline/ticket-hold.ts`).
     await life.ended(pipeline, "complete");
     // The leaf's own move, seen back from the command node, is still the build's.
     expect((await board())?.status).toBe("review");
@@ -123,7 +123,7 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
-    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    // A hand move waits for the build to end (`build-pipeline/ticket-hold.ts`).
     await life.ended(pipeline, "complete");
     await board();
     await f.command.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
@@ -139,7 +139,7 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
-    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    // A hand move waits for the build to end (`build-pipeline/ticket-hold.ts`).
     await life.ended(pipeline, "complete");
     await board();
     await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "backlog" });

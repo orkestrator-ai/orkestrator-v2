@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   VERIFICATION_OUTPUT_CONTRACT,
   verificationPrompt,
-} from "../src/core/build-pipeline-prompts";
+} from "../src/core/build-pipeline/prompts";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 
 function pipeline(): BuildPipeline {

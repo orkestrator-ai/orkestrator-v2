@@ -295,6 +295,27 @@ mise run test:logged -- --name merge-1d1931cf-linear-alone -- \
   bun --cwd=apps/web test src/components/linear/LinearTicketsView.test.tsx --parallel=1 --only-failures
 ```
 
+## Build-pipeline folder move review preparation — 2026-11-20
+
+Preparation at `7540947220583f6d58a0987a021b240e002fae06`, based on
+`11fca66ca0e11706aee69cc7ebd848ec10db5755`, ran
+`mise run test:logged -- --name review-default-tests -- mise run test`.
+The root group used one isolated Bun worker and reported 4,934 passes, 29
+skips and 18 failures across 290 files.
+
+`activity sweep bridge ownership > readiness timeout reaps the child and
+removes copied credentials (ignores TERM: %s)` failed in
+`tests/unit/activity-sweep-bridge.test.ts:111` after 155.35 ms when a
+process-group signal returned `EPERM`. The aggregate runner retried the
+complete file with one worker (`bun test ./tests/unit/activity-sweep-bridge.test.ts
+--parallel=1 --only-failures`), and it passed in 266 ms with five passes.
+The root group and isolated retry logs are in
+`orkestrator-test-run.fnD5yk` under the host temporary directory.
+
+`mise run flaky:recurrence -- 6063 --base 11fca66ca0e11706aee69cc7ebd848ec10db5755 --registry-ref origin/main`
+confirmed the case is open. Preparation triage reported
+`undetermined` (`dependency-graph-incomplete`). The cause remains open.
+
 Aggregate group logs are under `orkestrator-test-run.9scwJV` in the host
 temporary directory. The observations did not require changes to the
 implementation or assertions of either test.

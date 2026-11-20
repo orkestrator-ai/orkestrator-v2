@@ -4,7 +4,7 @@ import { describe, list, str, strictObject, toolInput } from "../tool-schema.js"
 import { coordinatorReplayFields } from "./results.js";
 import type { CoordinatorControlScope, ControlMcpInvoker } from "./server.js";
 import { COORDINATOR_WORKFLOW_STATUS_WAKE } from "@orkestrator/protocol/coordinator";
-import { workflowSummary } from "../control-workflow-summary.js";
+import { workflowSummary } from "../build-pipeline/control-workflow-summary.js";
 import { reviewLensSchema, selectedLens } from "./tool-support.js";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import type { MultiReviewActionResult } from "@orkestrator/protocol/multi-review";

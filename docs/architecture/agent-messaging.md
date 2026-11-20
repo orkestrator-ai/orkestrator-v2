@@ -867,4 +867,4 @@ capability row says so.
 | Coordinator notices (who hears one, usage-limit stops) | `apps/backend/src/core/coordinator/notice-router.ts`, `coordinator/usage-limit-notices.ts`, `@orkestrator/protocol/coordinator-notices` |
 | Coordinator ↔ coordinator node mail | `apps/backend/src/core/coordinator/node-coordinator-mail.ts`, `node-mail-reply-target.ts`; scenarios in `coordinator/node-coordinator-mail.test.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |
-| Build pipeline workers | `packages/protocol/src/pipeline-worker-mail.ts`, `apps/backend/src/core/build-pipeline-worker-mail.ts`, `pipeline-worker-identity.ts`, `build-pipeline-worker-transcript.ts` |
+| Build pipeline workers | `packages/protocol/src/pipeline-worker-mail.ts`, `apps/backend/src/core/build-pipeline/worker-mail.ts`, `build-pipeline/pipeline-worker-identity.ts`, `build-pipeline/worker-transcript.ts` |

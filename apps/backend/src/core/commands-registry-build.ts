@@ -64,15 +64,15 @@ import {
   startFeaturePlanBuild,
 } from "./features/index.js";
 import { createPublicActionContext } from "./public-api/dispatch.js";
-import { launchBuildPipeline } from "./build-pipeline-launch.js";
+import { launchBuildPipeline } from "./build-pipeline/launch.js";
 import {
   conditionalBuildPipelineRead,
   detailResponseFields,
   projectRendererRecord,
   withoutTranscriptBodies,
   type DetailReadInput,
-} from "./build-pipeline-transcript-projection.js";
-import { readPipelineWorkerTranscript } from "./build-pipeline-worker-transcript.js";
+} from "./build-pipeline/transcript-projection.js";
+import { readPipelineWorkerTranscript } from "./build-pipeline/index.js";
 import type { PersistedBuildPipeline } from "./models.js";
 
 export function registerBuildPipelineCommands(

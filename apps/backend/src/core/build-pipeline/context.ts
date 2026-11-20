@@ -1,0 +1,649 @@
+/** The environment's current branch and commit, and origin's copy of that branch. */
+export interface BranchPushState {
+  branch: string;
+  head: string;
+  /** Null when origin has no such branch. */
+  remoteHead: string | null;
+}
+
+/**
+ * State and persistence shared by every build pipeline collaborator.
+ *
+ * Built once by `BuildPipelineService` (`service.ts`) and handed
+ * to each part: agent resolution (`-agents`), recovery and terminal
+ * reconciliation (`-recovery`), interaction enforcement and failure handling
+ * (`-interactions`), the stage supervisor (`-supervisor`) and the public
+ * lifecycle operations (`-lifecycle`). It holds the in-memory maps and timers
+ * that used to live on the base class of an `extends` chain, plus the
+ * operations every part needs: the control-record save, the locked mutation
+ * and the workflow-result helpers.
+ */
+import { workerMailTurnFor } from "./pipeline-worker-identity.js";
+import {
+  type MultiReviewEfficiencyObserver,
+  ProvisionalFindingInbox,
+  type ReviewFanoutConcurrency,
+} from "../review/index.js";
+import { randomUUID } from "node:crypto";
+import {
+  type BuildPipeline,
+  type BuildPipelineAgent,
+  type PipelineSession,
+  type ResumableBuildPhase,
+  isBuildPipeline,
+  BUILD_PIPELINE_VERSION,
+} from "@orkestrator/protocol/build-pipeline";
+import type {
+  StructuredOutputProvider,
+  StructuredOutputResult,
+} from "@orkestrator/protocol/structured-output";
+import type { PersistedBuildPipeline } from "../models.js";
+import type { StorageService } from "../storage.js";
+import type { AgentToolConnection } from "../agent-tools.js";
+import {
+  type ArtifactLedgerSource,
+  type ArtifactTurnDispatch,
+  beginWorkflowArtifactTurn,
+  ElapsedPollGate,
+  keyedSchedulingEnabled,
+  type KeyedWorkflowServiceOptions,
+  KeyedWorkflowSupervisor,
+  type PollTrigger,
+  settleArtifactDispatchTurn,
+  type WorkflowArtifactTurnOptions,
+  WorkflowResultRollout,
+  type WorkflowResultService,
+} from "../workflows/index.js";
+import { BuildPipelineTranscriptCheckpoints } from "./transcript-checkpoints.js";
+import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
+import { type PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
+import {
+  buildPipelineSessionStage,
+  buildPipelineStage,
+  sessionPhaseForBuildPhase,
+} from "./stages.js";
+import type { BuildPipelineProvider, ProviderDependencies } from "./provider.js";
+import {
+  errorMessage,
+  resumablePhase,
+  DEFAULT_RECONNECT_DEADLINE_MS,
+  DEFAULT_STRUCTURED_RESULT_DEADLINE_MS,
+  DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
+  type CommandInvoker,
+} from "./service-helpers.js";
+import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
+import {
+  buildPipelineObligation,
+  buildPipelineTarget,
+  type BuildPipelineObligation,
+} from "./scheduling.js";
+import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import {
+  assertNoOtherWorkflowWriting,
+  resetWorktreeToCommit,
+  withWorkspaceCodeRewindReservation,
+  type EnvironmentGit,
+} from "../workspace-code-rewind.js";
+import type { WorkspaceWriters } from "../workspace-writers.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("build-pipeline");
+
+/** The previous supervisor interval; the keyed driver's per-pipeline fallback cadence. */
+export const BUILD_PIPELINE_PROGRESS_MS = 1_500;
+
+export type BuildPipelineServiceOptions = {
+  autoAdvance?: boolean;
+  provider?: (pipeline: BuildPipeline, agent: BuildPipelineAgent) => Promise<BuildPipelineProvider>;
+  reconnectDeadlineMs?: number;
+  structuredResultDeadlineMs?: number;
+  transcriptPersistIntervalMs?: number;
+  /** Narrow production-provider seam used by deterministic backend tests. */
+  providerDependencies?: Pick<
+    ProviderDependencies,
+    "planUsage" | "usageLimitStops" | "openCodeWorkflow"
+  >;
+  workflowResults?: WorkflowResultService;
+  workflowResultRollout?: WorkflowResultRollout;
+  resolveAgentToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    resultKey: string,
+    provider?: StructuredOutputProvider,
+  ) => AgentToolConnection;
+  /**
+   * A tab-scoped Agent Tools connection for one pipeline worker's mailbox
+   * (`pipelineWorkerTabId`), for turns that carry no workflow-result
+   * capability: the worker's own mail identity. Absent: such turns keep the
+   * bridge's environment connection.
+   */
+  resolveWorkerToolConnection?: (
+    environmentId: string,
+    projectId: string,
+    target: "host" | "container",
+    tabId: string,
+  ) => AgentToolConnection;
+  /** Rejects when the environment's container cannot reach the agent tools server. */
+  assertAgentToolsReachable?: (environmentId: string, stage: string) => Promise<void>;
+  /** Multi-reviewer stage concurrency; clamped by the shared fan-out runner. */
+  reviewFanoutConcurrency?: Partial<ReviewFanoutConcurrency>;
+  /** Content-free fan-out measurements (tests and benchmarks). */
+  efficiency?: MultiReviewEfficiencyObserver;
+  /** Stage turns' transcript-artifact grants (`workflows/artifact-turns.ts`). */
+  artifactDispatch?: ArtifactTurnDispatch;
+  /** Publication ledger; stage transcripts place each publication beside its call. */
+  artifactLedger?: ArtifactLedgerSource;
+  /**
+   * Git in an environment's worktree, for "Rewind code to here". Not a backend
+   * command on purpose: a renderer must not be able to reset a branch without
+   * the pipeline's own checks. Absent, the action reports itself unavailable.
+   */
+  environmentGit?: EnvironmentGit;
+  /**
+   * Reads whether origin's copy of the environment's branch has its HEAD, for
+   * a `push-no-pr` Ship, with the credentials an agent there would use. Absent:
+   * the push session's own report is taken as it stands.
+   */
+  branchPushState?: (environmentId: string) => Promise<BranchPushState>;
+  /**
+   * The build found its pull request merged (`persistPullRequest`): queues the
+   * `merged` label for a Linear-sourced build's issue (`linear-merged-label.ts`).
+   * Must not throw or wait on Linear. Absent: the PR monitor and the startup
+   * sweep still queue it.
+   */
+  onPullRequestMerged?: (pipeline: BuildPipeline, prUrl: string) => void;
+  /** The backend fence shared by file writes, commands and agent dispatch. */
+  environmentFence?: EnvironmentMutationFence;
+  /** Checks native/background writers while new work is excluded by the fence. */
+  assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
+  /**
+   * D3 across engines (`workspace-writers.ts`): a stage start claims the
+   * checkout against graph runs, and every record read or saved is noted so
+   * graph runs see what the pipeline holds. Absent: not consulted.
+   */
+  workspaceWriters?: WorkspaceWriters;
+} & KeyedWorkflowServiceOptions;
+
+/**
+ * The agent mail side of a worker's turn boundary: claims the mail queued for
+ * one worker mailbox as a single carrier, and settles that claim once the
+ * pipeline has journaled it as the worker's next turn (`AgentMailService`).
+ */
+export interface PipelineWorkerMailbox {
+  claim(
+    environmentId: string,
+    tabId: string,
+    requestId: string,
+  ): Promise<{ text: string; messageIds: string[] } | null>;
+  settle(
+    environmentId: string,
+    tabId: string,
+    messageIds: readonly string[],
+    outcome: "accepted" | "returned",
+  ): Promise<void>;
+}
+
+export class BuildPipelineContext {
+  timer: ReturnType<typeof setInterval> | null = null;
+
+  /** Bound by the backend once agent mail exists; null in narrow tests. */
+  workerMailbox: PipelineWorkerMailbox | null = null;
+  /** Findings live reviewers report; a pass moves them onto the reviewer record. */
+  readonly provisionalFindings: ProvisionalFindingInbox;
+
+  /** The keyed driver (step 08); `null` on the rollback tick or before init. */
+  supervisor: KeyedWorkflowSupervisor<BuildPipelineObligation> | null = null;
+
+  unsubscribeStorage: (() => void) | null = null;
+
+  /**
+   * How the pass now running for each pipeline was triggered, so
+   * attempt-counted deadlines can tell a wakeup burst from a cadence poll.
+   */
+  readonly passTriggers = new Map<string, PollTrigger>();
+
+  /** Elapsed-time gate for reviewer idle/final-usage poll counts. */
+  readonly reviewerPollGate = new ElapsedPollGate(BUILD_PIPELINE_PROGRESS_MS);
+
+  private readonly rewindFence = new EnvironmentMutationFence();
+
+  readonly locks = new Map<string, Promise<void>>();
+
+  readonly providers = new Map<string, BuildPipelineProvider>();
+
+  /** In-flight creations by provider key, so concurrent callers share one instance. */
+  readonly providerCreations = new Map<string, Promise<BuildPipelineProvider>>();
+
+  /**
+   * The harness whose provider each pipeline last resolved.
+   *
+   * A stage transition resolves and caches the *next* step's provider before it
+   * records that step's session, so a failure there cannot be attributed by
+   * reading the stored snapshot — it still describes the previous stage. Passes
+   * are serialised per pipeline by the supervisor's `runLocked`, so the last
+   * agent handed to `BuildPipelineAgents.provider` is the one that failed.
+   */
+  readonly lastProviderAgent = new Map<string, BuildPipelineAgent>();
+
+  readonly provisioningPrompts = new Map<string, string | undefined>();
+
+  /** Fences provider responses across backend processes sharing one journal. */
+  readonly interactionOwnerId = randomUUID();
+
+  tickPromise: Promise<void> | null = null;
+  tickRequested = false;
+  stopped = false;
+
+  constructor(
+    readonly storage: StorageService,
+    readonly invoke: CommandInvoker,
+    readonly options: BuildPipelineServiceOptions = {},
+  ) {
+    this.provisionalFindings = new ProvisionalFindingInbox({
+      slotOpen: async (scope, resultKey) =>
+        (await options.workflowResults?.status(scope, resultKey))?.lifecycle === "open",
+      // The supervisor's next tick collects them, as it does an accepted result.
+      wake: () => {},
+    });
+    this.keyed = options.keyedScheduling ?? keyedSchedulingEnabled("build-pipeline");
+  }
+
+  /** Selected once at construction: the keyed driver or the whole-store tick, never both. */
+  readonly keyed: boolean;
+
+  get reconnectDeadlineMs(): number {
+    return this.options.reconnectDeadlineMs ?? DEFAULT_RECONNECT_DEADLINE_MS;
+  }
+
+  get structuredResultDeadlineMs(): number {
+    return this.options.structuredResultDeadlineMs ?? DEFAULT_STRUCTURED_RESULT_DEADLINE_MS;
+  }
+
+  get transcriptPersistIntervalMs(): number {
+    return this.options.transcriptPersistIntervalMs ?? DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS;
+  }
+
+  private cachedTranscriptCheckpoints: BuildPipelineTranscriptCheckpoints | null = null;
+
+  /**
+   * Newest observed transcripts and their checkpointing into the transcript
+   * store ahead of each control-record save. Lazy for the same reason as the
+   * rollout below: parameter properties are assigned after field initializers.
+   */
+  get transcriptCheckpoints(): BuildPipelineTranscriptCheckpoints {
+    this.cachedTranscriptCheckpoints ??= new BuildPipelineTranscriptCheckpoints(this.storage);
+    return this.cachedTranscriptCheckpoints;
+  }
+
+  /** Background legacy-transcript migration and orphan sweep started by `init`. */
+  transcriptMaintenance: Promise<void> | null = null;
+
+  private cachedWorkflowRollout: WorkflowResultRollout | null = null;
+
+  /**
+   * Falls back to the qualified defaults when no rollout is injected, so a
+   * directly constructed service behaves like the shipped configuration.
+   * Resolved lazily because parameter properties are assigned after class
+   * field initializers run.
+   */
+  get workflowRollout(): WorkflowResultRollout {
+    this.cachedWorkflowRollout ??=
+      this.options.workflowResultRollout ?? new WorkflowResultRollout(async () => undefined);
+    return this.cachedWorkflowRollout;
+  }
+
+  workflowResultKind(
+    phase: ResumableBuildPhase,
+    validationPlan = false,
+  ): WorkflowResultKind | undefined {
+    // The turns that prepare the review package submit what their schema
+    // asks for: the validation plan (package preparation), or review
+    // preparation (Build, Rework, and a preparation turn sent again after a
+    // message discarded its plan).
+    if (phase === "building" || phase === "reworking" || phase === "preparing-package") {
+      return buildPipelineStage(validationPlan ? "preparation" : "rework").result ?? undefined;
+    }
+    const sessionPhase = sessionPhaseForBuildPhase(phase);
+    return sessionPhase ? (buildPipelineSessionStage(sessionPhase).result ?? undefined) : undefined;
+  }
+
+  /** The current tool slot's result kind, if it belongs to this stage. */
+  async boundWorkflowResultKind(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+  ): Promise<WorkflowResultKind | undefined> {
+    const phase = resumablePhase(pipeline.phase);
+    const resultKey = session.structuredRequestId;
+    if (!phase || !resultKey || session.resultTransport !== "tool-v1") return undefined;
+    const binding = await this.options.workflowResults
+      ?.binding({ environmentId: pipeline.environmentId, projectId: pipeline.projectId }, resultKey)
+      .catch(() => null);
+    const kind = binding?.kind;
+    return kind === this.workflowResultKind(phase, kind === "validation-plan") ? kind : undefined;
+  }
+
+  async workflowAgentMcp(
+    pipeline: BuildPipeline,
+    resultKey: string,
+    provider: StructuredOutputProvider | undefined,
+    stage: string,
+  ): Promise<AgentToolConnection | undefined> {
+    if (!this.options.resolveAgentToolConnection) return undefined;
+    if (pipeline.environmentType !== "local") {
+      await this.options.assertAgentToolsReachable?.(pipeline.environmentId, stage);
+    }
+    return this.options.resolveAgentToolConnection(
+      pipeline.environmentId,
+      pipeline.projectId,
+      pipeline.environmentType === "local" ? "host" : "container",
+      resultKey,
+      provider,
+    );
+  }
+
+  /**
+   * The worker's own mail identity for a turn with no workflow-result
+   * connection, so it sends, replies and acks as itself and no other worker
+   * can use that mailbox. A bridge agent gets a credential scoped to its
+   * mailbox. OpenCode keeps one environment-wide registration and takes no
+   * per-turn connection, so it gets a signed capability naming the mailbox,
+   * delivered as a trusted instruction (`pipeline-worker-identity.ts`).
+   */
+  workerMailTurn(
+    pipeline: BuildPipeline,
+    sessionKey: string,
+    agent: string | undefined,
+  ): PipelineWorkerMailTurn | undefined {
+    return workerMailTurnFor({
+      environmentId: pipeline.environmentId,
+      projectId: pipeline.projectId,
+      target: pipeline.environmentType === "local" ? "host" : "container",
+      sessionKey,
+      agent,
+      signer: this.options.workflowResults,
+      resolveConnection: this.options.resolveWorkerToolConnection,
+    });
+  }
+
+  /**
+   * A stage turn's transcript-artifact authority, owned by the stage
+   * session's own key in the pipeline's environment, or undefined when the
+   * provider has no path for it (`workflows/artifact-turns.ts`).
+   */
+  beginArtifactTurn(
+    pipeline: BuildPipeline,
+    session: Pick<PipelineSession, "sessionKey" | "sdkSessionId"> | undefined,
+    requestId: string,
+    agent: string | undefined,
+    agentMcp: AgentToolConnection | undefined,
+  ): WorkflowArtifactTurnOptions | undefined {
+    if (!session || !agent) return undefined;
+    return beginWorkflowArtifactTurn(this.options.artifactDispatch, {
+      environmentId: pipeline.environmentId,
+      projectId: pipeline.projectId,
+      conversationKey: session.sessionKey,
+      turnId: requestId,
+      providerSessionId: session.sdkSessionId,
+      agent,
+      ...(agentMcp ? { agentMcp } : {}),
+    });
+  }
+
+  /** Ends a stage turn's artifact grant (turn settled, or its send refused). */
+  settleArtifactTurn(
+    pipeline: BuildPipeline,
+    session: Pick<PipelineSession, "sessionKey"> | undefined,
+    requestId: string | undefined,
+  ): void {
+    if (!session || !requestId) return;
+    settleArtifactDispatchTurn(
+      this.options.artifactDispatch,
+      pipeline.environmentId,
+      session.sessionKey,
+      requestId,
+    );
+  }
+
+  /**
+   * Admission gate, evaluated once per attempt. The rollout snapshot is read
+   * synchronously because several admission points sit inside storage mutation
+   * callbacks; {@link refreshWorkflowRollout} refreshes it just before those.
+   */
+  workflowToolEnabled(agent: BuildPipelineAgent, kind: WorkflowResultKind): boolean {
+    return (
+      this.options.workflowResults !== undefined &&
+      this.options.resolveAgentToolConnection !== undefined &&
+      this.workflowRollout.allows(agent, kind)
+    );
+  }
+
+  async refreshWorkflowRollout(): Promise<void> {
+    await this.workflowRollout.refresh();
+  }
+
+  /** Background sessions receive the same trusted environment policy as native tabs. */
+  async executionPolicy(
+    pipeline: BuildPipeline,
+    origin: "build-pipeline" | "automated-review" = "build-pipeline",
+  ): Promise<NativeAgentExecutionPolicy> {
+    const environment = await this.storage.getEnvironment(pipeline.environmentId);
+    if (!environment) throw new Error("Pipeline environment no longer exists");
+    return resolveEnvironmentExecutionPolicy(environment, origin);
+  }
+
+  async consumeWorkflowResult(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    resultKey: string,
+  ): Promise<void> {
+    if (session.resultTransport === "tool-v1") {
+      try {
+        await this.options.workflowResults?.consume(resultKey);
+        // Consumption ends the submission's own lifecycle. Completion is a
+        // separate stage transition the supervisor still owns.
+        delete session.resultSubmission;
+        const pending = (pipeline.pendingResultConsumptions ?? []).filter(
+          (candidate) => candidate !== resultKey,
+        );
+        if (pending.length > 0) pipeline.pendingResultConsumptions = pending;
+        else delete pipeline.pendingResultConsumptions;
+        await this.save(pipeline, pipeline.backendRevision);
+      } catch (error) {
+        // The already-saved outbox marker is authoritative. A later supervisor
+        // pass retries cleanup without turning an applied domain transition
+        // into a workflow failure.
+        this.stageWorkflowResultConsumption(pipeline, session, resultKey);
+        log.warn("result.consume-deferred", {
+          pipelineId: pipeline.id,
+          error: formatLogError(error),
+        });
+      }
+    }
+  }
+
+  stageWorkflowResultConsumption(
+    pipeline: BuildPipeline,
+    session: PipelineSession,
+    resultKey: string,
+  ): void {
+    if (session.resultTransport !== "tool-v1") return;
+    pipeline.pendingResultConsumptions = Array.from(
+      new Set([...(pipeline.pendingResultConsumptions ?? []), resultKey]),
+    );
+  }
+
+  async readWorkflowResult<T>(
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+    resultKey: string,
+  ): Promise<StructuredOutputResult<T> | null> {
+    if (session.resultTransport === "tool-v1") {
+      if (!this.options.workflowResults) throw new Error("Workflow result store is unavailable");
+      // Refreshed on the same poll that reads the result, so the projected
+      // status a renderer rehydrates from is written by the authoritative
+      // controller rather than derived in the renderer.
+      session.resultSubmission = await this.options.workflowResults.projection(resultKey);
+      return this.options.workflowResults.structured<T>(resultKey);
+    }
+    return provider.structured<T>(session.sdkSessionId, resultKey);
+  }
+
+  /** Keeps the keyed index current after an authoritative read or durable write. */
+  noteRecord(pipelineId: string, snapshot: unknown, revision?: number): void {
+    if (revision !== undefined) {
+      this.options.workspaceWriters?.notePipeline(pipelineId, snapshot, revision);
+    }
+    this.supervisor?.note(
+      pipelineId,
+      buildPipelineObligation(snapshot),
+      buildPipelineTarget(snapshot),
+    );
+  }
+
+  /** Trigger of the pass now running for a pipeline; explicit when not keyed. */
+  passTrigger(pipelineId: string): PollTrigger {
+    return this.passTriggers.get(pipelineId) ?? "explicit";
+  }
+
+  async requireRecord(pipelineId: string): Promise<PersistedBuildPipeline> {
+    const record = await this.storage.getBuildPipeline(pipelineId);
+    this.noteRecord(pipelineId, record?.snapshot, record?.revision);
+    if (!record || !isBuildPipeline(record.snapshot)) {
+      throw new Error(`Build pipeline not found: ${pipelineId}`);
+    }
+    return record;
+  }
+
+  async save(pipeline: BuildPipeline, expectedRevision: number): Promise<PersistedBuildPipeline> {
+    pipeline.controller = "backend";
+    // Transcript bodies commit first (chunks, then manifest) so the control
+    // record below only ever references durable data. A checkpoint failure
+    // keeps the previous reference and never blocks this control write.
+    const checkpoint = await this.transcriptCheckpoints.prepare(pipeline);
+    pipeline.backendRevision = expectedRevision + 1;
+    // Storage validates only serializability and size, and `requireRecord`
+    // rejects a snapshot that fails `isBuildPipeline` — so committing an
+    // invariant violation would hide the pipeline from every later read,
+    // including the supervisor tick, permanently. Fail the pass instead: the
+    // last durable revision stays readable and the next tick can retry.
+    const structurallyValid: boolean = isBuildPipeline(pipeline);
+    if (!structurallyValid) {
+      pipeline.backendRevision = expectedRevision;
+      throw new Error(`Refusing to persist an invalid build pipeline snapshot: ${pipeline.id}`);
+    }
+    await this.storage.buildPipelineTranscriptFault("before-control-save", pipeline.id);
+    const saved = await this.storage.saveBuildPipeline(
+      pipeline.id,
+      pipeline.projectId,
+      pipeline.environmentId,
+      BUILD_PIPELINE_VERSION,
+      pipeline,
+      expectedRevision,
+    );
+    this.provisionalFindings.track({
+      id: pipeline.id,
+      environmentId: pipeline.environmentId,
+      projectId: pipeline.projectId,
+      phase: pipeline.phase,
+      reviewers: pipeline.reviewFanout?.reviewers ?? [],
+    });
+    await this.storage.buildPipelineTranscriptFault("after-control-save", pipeline.id);
+    if (saved.id === pipeline.id) {
+      checkpoint.settle();
+    } else {
+      // Admission returned an equivalent pipeline instead of creating this
+      // one, so transcripts committed under this id have no owner.
+      this.transcriptCheckpoints.forget(pipeline.sessions);
+      await this.storage.deleteBuildPipelineTranscriptsFor(pipeline.id).catch(() => undefined);
+    }
+    pipeline.backendRevision = saved.revision;
+    this.noteRecord(pipeline.id, pipeline, saved.revision);
+    return saved;
+  }
+
+  async withCodeRewindReservation<T>(pipeline: BuildPipeline, run: () => Promise<T>): Promise<T> {
+    return withWorkspaceCodeRewindReservation({
+      fence: this.options.environmentFence ?? this.rewindFence,
+      storage: this.storage,
+      environmentId: pipeline.environmentId,
+      assertQuiet: async () => {
+        await assertNoOtherWorkflowWriting(this.storage, pipeline.environmentId, {
+          pipelineId: pipeline.id,
+        });
+        await this.options.assertEnvironmentQuiescent?.(pipeline.environmentId);
+      },
+      run,
+    });
+  }
+
+  /** Resume an admitted reset before any control or supervisor can start work. */
+  async finishPendingCodeRewind(pipeline: BuildPipeline): Promise<void> {
+    const code = pipeline.rewinds?.at(-1)?.code;
+    if (!code?.pending) return;
+    const git = this.options.environmentGit;
+    if (!git) throw new Error("Rewinding code is not available on this backend.");
+    await this.withCodeRewindReservation(pipeline, async () => {
+      try {
+        await resetWorktreeToCommit(git, pipeline.environmentId, code);
+      } catch (error) {
+        // Every action on this pipeline waits for the reset, so say so.
+        throw new Error(
+          `The code rewind to ${code.to.slice(0, 12)} has not finished, so this build cannot continue yet. ${errorMessage(error)}`,
+          { cause: error },
+        );
+      }
+      delete code.pending;
+      try {
+        await this.save(pipeline, pipeline.backendRevision);
+      } catch (error) {
+        code.pending = true;
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Runs `work` under the pipeline's lock, after any pass or mutation already
+   * holding it, without finishing a pending code rewind first. Everything that
+   * continues the build goes through `mutate` instead; this is for work that
+   * ends it, such as deleting a pipeline whose reset can never finish.
+   */
+  async withLock<T>(pipelineId: string, work: () => Promise<T>): Promise<T> {
+    const previous = this.locks.get(pipelineId) ?? Promise.resolve();
+    let result: T | undefined;
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        result = await work();
+      })
+      .finally(() => {
+        if (this.locks.get(pipelineId) === next) this.locks.delete(pipelineId);
+      });
+    this.locks.set(pipelineId, next);
+    await next;
+    return result as T;
+  }
+
+  async mutate(
+    pipelineId: string,
+    mutation: (pipeline: BuildPipeline) => void | Promise<void>,
+    reserveCodeRewind?: (pipeline: BuildPipeline) => boolean,
+  ): Promise<BuildPipeline> {
+    return this.withLock(pipelineId, async () => {
+      const record = await this.requireRecord(pipelineId);
+      const pipeline = record.snapshot as BuildPipeline;
+      pipeline.backendRevision = record.revision;
+      await this.finishPendingCodeRewind(pipeline);
+      const commit = async () => {
+        await mutation(pipeline);
+        await this.save(pipeline, pipeline.backendRevision);
+        await this.finishPendingCodeRewind(pipeline);
+      };
+      if (reserveCodeRewind?.(pipeline)) await this.withCodeRewindReservation(pipeline, commit);
+      else await commit();
+      return pipeline;
+    });
+  }
+}

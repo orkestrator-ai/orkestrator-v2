@@ -1,4 +1,4 @@
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 
 interface ProviderLifetime {
   retain(): () => void;

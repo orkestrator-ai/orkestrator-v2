@@ -25,12 +25,12 @@ import type {
   WorkflowResultTransport,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { PipelineWorkerMailTurn } from "./pipeline-worker-identity.js";
+import type { PipelineWorkerMailTurn } from "./build-pipeline/index.js";
 import type {
   BuildPipelineProvider,
   ProviderPrepareDispatchOptions,
   ProviderSendOptions,
-} from "./build-pipeline-provider.js";
+} from "./build-pipeline/provider.js";
 import type {
   EfficiencyOwner,
   EfficiencyPhase,

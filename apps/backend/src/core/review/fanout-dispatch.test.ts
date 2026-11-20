@@ -4,9 +4,9 @@ import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-policy.js";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
-import { ProviderDispatchPreparationError } from "../build-pipeline-provider.js";
+import { ProviderDispatchPreparationError } from "../build-pipeline/provider.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";
 
 const policy = resolveNativeAgentExecutionPolicy(

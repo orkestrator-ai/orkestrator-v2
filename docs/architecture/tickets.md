@@ -54,7 +54,7 @@ references to files the work deletes, moves or renames, or descriptions (a
 status scheme, a layout example) the work makes untrue. The sections guidance
 in the ticket tools tells ticket writers to say so, and every build, rework
 and address prompt tells the worker to repair such references and
-descriptions anyway (`REFERENCE_UPDATE_RULE` in `build-pipeline-prompts.ts`;
+descriptions anyway (`REFERENCE_UPDATE_RULE` in `build-pipeline/prompts.ts`;
 root `AGENTS.md`, "Keep references current"). Edit bans had left `AGENTS.md`
 naming deleted to-dos and an outdated status rule, with the work reported
 incomplete.
@@ -317,8 +317,8 @@ stays with that pipeline, and its completion comment says how it was delivered.
 
 A ticket linked to a build pipeline moves through the board on its own. The
 events and their columns are one table,
-`apps/backend/src/core/build-pipeline-kanban-lifecycle.ts`, read by the
-pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
+`apps/backend/src/core/build-pipeline/kanban-lifecycle.ts`, read by the
+pipeline (`build-pipeline/service-supervisor.ts`, `-recovery.ts`) and the graph
 `update-ticket` node (`graph-system-ticket.ts`):
 
 | Event | Column | Writer |
@@ -333,12 +333,12 @@ pipeline (`build-pipeline-service-supervisor.ts`, `-recovery.ts`) and the graph
 | The pull request merges | Done | PR monitor, a build ending, startup sweep (below) |
 | The pull request closes without merging | Backlog, unless moved by hand since the build or a newer build owns the ticket; while the build still runs, when it ends | PR monitor, or `reconcileTerminalState` when the build found it closed (below) |
 | The build ends after its pull request closed | Backlog | `reconcileTerminalState` |
-| The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline-kanban-environment-deleted.ts` |
+| The build's environment is deleted before the build finished | Backlog, with a comment | `build-pipeline/kanban-environment-deleted.ts` |
 | The build's environment is deleted after its PR merged | Done | the same |
 
 **The build holds the column.** From admission until the build ends
 (`complete` or `failed`; a paused build has not ended), only these lifecycle
-events move the ticket (`build-pipeline-ticket-hold.ts`). Any other status
+events move the ticket (`build-pipeline/ticket-hold.ts`). Any other status
 change is left out of the write while the rest of it applies, so the ticket
 can still be edited, commented on and labelled: a drag on the board (which
 snaps back with a toast), an agent's `update_ticket`, the public API,
@@ -421,7 +421,7 @@ every writer applies it through one storage method,
 | PR monitor (`git/pr-monitor.ts`, the `status` reconciliation step) | It sees the environment's pull request merge, or repairs a merge it recorded before a restart. |
 | Build pipeline (`updateKanbanLifecycle`, terminal events) | The build completes, fails, is cancelled or deleted after its Ship opened a pull request that has since merged. Without this the `complete` and `failed` events would move the ticket back to review or backlog. |
 | Build pipeline (`persistPullRequest`) | Ship or conflict resolution finds the pull request already merged. |
-| Environment deletion (`build-pipeline-kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
+| Environment deletion (`build-pipeline/kanban-environment-deleted.ts`) | The environment being deleted records its pull request as merged. |
 | Startup sweep (`git/pr-monitor-runtime.ts`, the first sync of each backend process) | A merge recorded on a ticket that never closed it: one an older build left in backlog or review, or one whose environment was deleted before the monitor applied the merge. |
 
 A merge is recorded when the ticket links a pull request in state `merged`;

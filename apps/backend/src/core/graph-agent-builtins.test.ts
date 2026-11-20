@@ -39,7 +39,7 @@ import {
   resolveConflictsPrompt,
   VERIFICATION_OUTPUT_CONTRACT,
   verificationPrompt,
-} from "./build-pipeline-prompts.js";
+} from "./build-pipeline/prompts.js";
 import {
   GraphBuiltInPromptError,
   graphBuiltInPromptText,

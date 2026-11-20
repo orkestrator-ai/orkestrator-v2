@@ -1,5 +1,11 @@
 # Pending code rewind delete (todo 2120) branch validation
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/build-pipeline/context.ts`
+- `apps/backend/src/core/build-pipeline/service-lifecycle.ts`
+- `apps/backend/src/core/build-pipeline/service-rewind-follow-ups.test.ts`
+
 - **ID:** 2710
 - **Status:** open
 - **Date observed:** 2026-11-02

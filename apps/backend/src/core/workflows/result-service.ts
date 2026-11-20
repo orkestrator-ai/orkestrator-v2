@@ -2075,7 +2075,7 @@ export class WorkflowResultService {
 
   /**
    * The signature of a build pipeline worker's mail capability
-   * (`pipeline-worker-identity.ts`). Domain-separated from every result
+   * (`build-pipeline/pipeline-worker-identity.ts`). Domain-separated from every result
    * capability, and keyed by the same durable identity, so it survives a
    * backend restart and is never a bearer credential.
    */

@@ -25,7 +25,7 @@
  */
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import type { WorkflowResultValidationIssue } from "@orkestrator/protocol/workflow-results";
-import type { EnvironmentGit } from "../build-pipeline-code-rewind.js";
+import type { EnvironmentGit } from "../build-pipeline/index.js";
 import type {
   WorkflowResultEnvironmentRequest,
   WorkflowResultEnvironmentValidator,

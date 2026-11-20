@@ -5,7 +5,7 @@ import {
 import {
   AmbiguousPromptDispatchError,
   ProviderDispatchPreparationError,
-} from "./build-pipeline-provider.js";
+} from "./build-pipeline/provider.js";
 import { projectMultiReviewGraphRun } from "./review/graph-projection.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";

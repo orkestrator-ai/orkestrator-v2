@@ -626,7 +626,7 @@ These reads already had timeouts; on a timeout each now retries once with
   the index tree snapshot is idempotent; it leaves checkout contents intact;
 - the cleanliness checks before a code rewind, through the environment's Git
   port (`workspace-code-rewind.ts` `readWorktreeStatus`, also used by
-  `build-pipeline-service-lifecycle.ts`), a graph agent's branch worktree
+  `build-pipeline/service-lifecycle.ts`), a graph agent's branch worktree
   (`graph-agent-guards.ts`) and a graph select's branch move
   (`graph-system-select.ts`);
 - the scratch-repository resume check (`commands-projects.ts`, 10 s);

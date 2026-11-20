@@ -12,7 +12,7 @@ import {
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { AgentToolsServer } from "./agent-tools.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   FakeAgentProvider,
   toolContent,

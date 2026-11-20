@@ -1,5 +1,10 @@
 # Coordinator tools list test times out under load
 
+Current paths for the relocated files:
+
+- `apps/backend/src/core/build-pipeline/transcript-checkpoints.test.ts`
+- `apps/backend/src/core/build-pipeline/transcript-store.test.ts`
+
 - **ID:** 1651
 - **Status:** resolved
 - **Date observed:** 2026-11-01

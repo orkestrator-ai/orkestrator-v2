@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { reportFor } from "../build-pipeline-review-fanout-test-support.js";
+import { reportFor } from "../build-pipeline/review-fanout-test-support.js";
 import { validateWorkflowResult } from "./result-contracts.js";
 
 /** A clean report with neither `reviewScope.outcome` nor `blockedReason`. */

@@ -1,5 +1,7 @@
 # Looped-review persisted-fixture equivalence times out in the aggregate
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/scheduling.test.ts`.
+
 - **ID:** 0189
 - **Status:** resolved
 - **Date observed:** 2026-10-11

@@ -1,5 +1,7 @@
 # Build pipeline scheduling timeouts under aggregate load
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/scheduling.test.ts`.
+
 - **ID:** 0205
 - **Status:** open
 - **Date observed:** 2026-10-13

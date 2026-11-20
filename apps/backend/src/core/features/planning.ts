@@ -33,7 +33,7 @@ import {
   createBuildPipelineProvider,
   readProviderStatus,
   type BuildPipelineProvider,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import {
   FeaturePlanningFenceError,
   type FeaturePlan,
@@ -59,10 +59,7 @@ import {
 } from "../workflows/index.js";
 import type { PlanUsageState } from "../plan-usage/index.js";
 import { resolveEnvironmentExecutionPolicy } from "../native-agent-execution-policy.js";
-import {
-  createAgentModelCatalogReader,
-  resolveFastMode,
-} from "../build-pipeline-service-helpers.js";
+import { createAgentModelCatalogReader, resolveFastMode } from "../build-pipeline/index.js";
 import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 import {
   discoverFeaturePlanning,

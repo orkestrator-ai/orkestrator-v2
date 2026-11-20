@@ -15,7 +15,7 @@ import {
   type AgentBranchRecord,
   AGENT_BRANCH_LOG_OWNER,
 } from "./agent-branch-types.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,

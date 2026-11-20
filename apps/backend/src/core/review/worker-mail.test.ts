@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { MultiReviewWorkerMail } from "./worker-mail.js";
 import {
   combineWorkerMailPorts,
   type PipelineWorkerMailPort,
-} from "../build-pipeline-worker-mail.js";
+} from "../build-pipeline/worker-mail.js";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 
 test("mail ports route every operation to the owning pipeline or Multi Review", async () => {

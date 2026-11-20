@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { lifecycleMachine } from "./build-pipeline-kanban-transitions-test-support.js";
+import { lifecycleMachine } from "./build-pipeline/kanban-transitions-test-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import {

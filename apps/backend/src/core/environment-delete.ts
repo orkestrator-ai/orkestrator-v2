@@ -17,7 +17,7 @@ import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-
 import { drainContainerProcesses } from "./container-readiness.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
-import { settleTicketsOfDeletedEnvironment } from "./build-pipeline-kanban-environment-deleted.js";
+import { settleTicketsOfDeletedEnvironment } from "./build-pipeline/index.js";
 import { scheduleEnvironmentCleanupReconcile } from "./environment-cleanup-reconciler.js";
 import { removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
 import { removeEnvironmentGraphBranchWorktrees } from "./graph-branch-worktrees.js";

@@ -24,7 +24,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import {
   readReviewerTranscript,
   readReviewerToolDetails,

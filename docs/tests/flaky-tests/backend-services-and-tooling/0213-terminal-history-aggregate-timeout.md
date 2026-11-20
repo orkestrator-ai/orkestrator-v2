@@ -1,5 +1,7 @@
 # Terminal history normalization exceeds the aggregate deadline
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/scheduling.test.ts`.
+
 - **ID:** 0213
 - **Status:** resolved
 - **Date observed:** 2026-10-15

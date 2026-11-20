@@ -1,4 +1,4 @@
-import { ticketHeldByBuild } from "./build-pipeline-ticket-hold.js";
+import { ticketHeldByBuild } from "./build-pipeline/index.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { PrState } from "./models.js";
 import {

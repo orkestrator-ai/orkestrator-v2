@@ -6,8 +6,8 @@ import {
   capacityRetriesExhaustedError,
 } from "../../../../../bridges/codex-bridge/src/sessions/capacity-retry.js";
 import { multiReviewStatus } from "../coordinator/status-wakes.js";
-import { multiReviewAutomation } from "../control-workflow-summary.js";
-import { TEST_REVIEW_PREPARATION } from "../build-pipeline-test-fixtures.js";
+import { multiReviewAutomation } from "../build-pipeline/control-workflow-summary.js";
+import { TEST_REVIEW_PREPARATION } from "../build-pipeline/test-fixtures.js";
 import { expect, jest, test } from "bun:test";
 import {
   STRUCTURED_REVIEW_MAX_TEXT_BYTES,
@@ -21,9 +21,9 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { ProviderStatus } from "../build-pipeline-provider.js";
+import type { ProviderStatus } from "../build-pipeline/provider.js";
 import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
-import { AmbiguousPromptDispatchError } from "../build-pipeline-provider.js";
+import { AmbiguousPromptDispatchError } from "../build-pipeline/provider.js";
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
 import {
   MissingMultiReviewAddressFindingsSessionError,

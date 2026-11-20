@@ -2,18 +2,18 @@
 // `bun test --parallel` can spread it across workers. Shared helpers live in
 // review/service-test-support.ts.
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
-import { pipelineWorkerTabForResultKey } from "../pipeline-worker-identity.js";
+import { pipelineWorkerTabForResultKey } from "../build-pipeline/pipeline-worker-identity.js";
 import { multiReviewNativeAddressFindingsOptions } from "./native-address-findings.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import type { NativeAgentRuntimeProvider } from "../native-agent-provider.js";
 import { dispatchMultiReviewAddressFindingsPrompt } from "./address-findings-dispatch.js";
-import { TEST_REVIEW_PREPARATION } from "../build-pipeline-test-fixtures.js";
+import { TEST_REVIEW_PREPARATION } from "../build-pipeline/test-fixtures.js";
 import { expect, jest, test } from "bun:test";
 import {
   isMultiReviewWorkflow,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { StorageService } from "../storage.js";
 import { MultiReviewService } from "./service.js";
 import {

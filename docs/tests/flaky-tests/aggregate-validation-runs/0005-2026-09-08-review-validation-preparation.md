@@ -1,8 +1,10 @@
 # 2026-09-08 review validation preparation
 
-Relocated tests from the recorded commands now live at
-`apps/backend/src/core/review/validation-service.test.ts` and
-`apps/backend/src/core/review/validation-controllers.test.ts`.
+Current paths for the relocated files:
+
+- `apps/backend/src/core/review/validation-service.test.ts`
+- `apps/backend/src/core/review/validation-controllers.test.ts`
+- `apps/backend/src/core/build-pipeline/review-fanout.test.ts`
 
 - **ID:** 0005
 - **Status:** open

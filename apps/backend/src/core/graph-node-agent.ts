@@ -54,7 +54,7 @@ import { isAgentBranchFenceError } from "./agent-branch-commits.js";
 import { AgentBranchRunner } from "./agent-branch-runner.js";
 import type { AgentBranchPollGate, AgentBranchRecord } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import type { EnvironmentGit } from "./build-pipeline/index.js";
 import { defaultCoordinatorHostCapabilities } from "./coordinator/index.js";
 import {
   GraphAgentGuardError,

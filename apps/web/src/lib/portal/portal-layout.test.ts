@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
-import { waitFor } from "@testing-library/react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { fromWire, toWire, unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import {
@@ -14,6 +14,7 @@ import {
   startPortalLayout,
   updatePortalLayout,
   updateRepositoryEnvironmentOrder,
+  useManualOrderAvailability,
 } from "./portal-layout";
 
 let handlers: Map<string, (payload: unknown) => void>;
@@ -48,6 +49,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  cleanup();
   stop?.();
   stop = undefined;
   invoke.mockReset();
@@ -123,24 +125,30 @@ for (const [label, answer] of [
   ["legacy text", (command: string) => new Error(unknownBackendCommandMessage(command))],
 ] as const)
   test(`only unknown-command reads enable the in-page fallback (${label})`, async () => {
+    const { result } = renderHook(useManualOrderAvailability);
+    expect(result.current).toBe("loading");
     invoke.mockImplementation(async (command: string) => {
       throw answer(command);
     });
     await start();
+    expect(result.current).toBe("unsupported");
     await updatePortalLayout({ machineOrder: ["bk_local"] });
     expect(getPortalLayout().machineOrder).toEqual(["bk_local"]);
   });
 
 test("storage or transport read failure stays unloaded and prevents writes until reconnect succeeds", async () => {
+  const { result } = renderHook(useManualOrderAvailability);
+  expect(result.current).toBe("loading");
   invoke.mockRejectedValue(new Error("storage unavailable"));
   stop = startPortalLayout();
-  await waitFor(() => expect(portalLayoutStore.getState().error).not.toBeNull());
+  await waitFor(() => expect(result.current).toBe("error"));
   expect(portalLayoutStore.getState().loaded).toBe(false);
   await expect(updatePortalLayout({ machineOrder: [] })).rejects.toThrow("has not loaded");
   expect(invoke.mock.calls.every(([command]) => command === "get_portal_layout")).toBe(true);
-  invoke.mockResolvedValue(layout(5));
+  invoke.mockResolvedValue({ ...layout(5), manualOrderSupported: true });
   handlers.get(NATIVE_EVENT_STREAM_CONNECTED_EVENT)?.({});
-  await waitFor(() => expect(portalLayoutStore.getState().loaded).toBe(true));
+  await waitFor(() => expect(result.current).toBe("supported"));
+  expect(portalLayoutStore.getState().loaded).toBe(true);
   expect(portalLayoutStore.getState().error).toBeNull();
 });
 

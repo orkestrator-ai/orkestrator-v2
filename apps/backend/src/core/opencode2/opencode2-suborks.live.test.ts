@@ -32,7 +32,7 @@ import {
 } from "../../../../../scripts/opencode2-steer-probe.js";
 import { AgentMailService } from "../agent-mail-service.js";
 import { SUBORK_TOOL_DESCRIPTION } from "../agent-tools-subork-schema.js";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { GraphAgentProviders } from "../graph-agent-providers.js";
 import { CATALOG, suborkWorld, type SuborkWorld } from "../native-agent-suborks-test-support.js";
 import { OpenCodeEnvironmentProvider } from "./environment-provider.js";

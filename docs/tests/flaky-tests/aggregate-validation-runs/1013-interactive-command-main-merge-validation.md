@@ -1,5 +1,7 @@
 # Interactive command main merge validation
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/service-interactions.test.ts`.
+
 - **ID:** 1013
 - **Status:** open
 - **Date observed:** 2026-10-26

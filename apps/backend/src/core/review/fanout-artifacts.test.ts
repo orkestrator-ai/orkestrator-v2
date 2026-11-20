@@ -11,7 +11,7 @@ import { resolveNativeAgentExecutionPolicy } from "../native-agent-execution-pol
 import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import { CONSOLIDATED_REVIEW_EXAMPLE } from "./consolidation-example.js";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MultiReviewProgressTracker } from "./progress.js";

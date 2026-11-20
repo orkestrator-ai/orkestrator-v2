@@ -209,7 +209,7 @@ test("launch policy writes do not notify the previous build and deletion retains
     const seen: string[] = [];
     storage.kanban.onDeliveryPolicyChange(() => seen.push("changed"));
     const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
-    const { saveTicketDeliveryPolicy } = await import("./build-pipeline-launch.js");
+    const { saveTicketDeliveryPolicy } = await import("./build-pipeline/launch.js");
     await saveTicketDeliveryPolicy(storage, task, "push-no-pr");
     expect(seen).toEqual([]);
     await storage.kanban.updateKanbanTask(task.id, {

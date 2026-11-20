@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import type { ReviewWorktreeSnapshot } from "./build-pipeline/prompts.js";
 import type { FakeAgentScript } from "./graph-agent-test-support.js";
 import {
   answering,

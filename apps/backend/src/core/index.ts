@@ -23,7 +23,7 @@ import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
 import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
 import { closeContainerTerminalShell } from "./container-terminal-shell.js";
-import { combineWorkerMailPorts } from "./build-pipeline-worker-mail.js";
+import { combineWorkerMailPorts } from "./build-pipeline/worker-mail.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
@@ -248,7 +248,7 @@ import { isDefaultDataDir } from "../data-dir.js";
 import { installStorageEventFanout } from "./backend-event-fanout.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
-import { BuildPipelineService } from "./build-pipeline-service.js";
+import { BuildPipelineService } from "./build-pipeline/service.js";
 import {
   isAgentTurnEndTransition,
   nativeAgentSessionStorageKey,
@@ -257,7 +257,11 @@ import {
 import { openCode2EnvironmentServer } from "./opencode2/container-server-lifecycle.js";
 import { openCode2WorkerMailbox } from "./opencode2/index.js";
 import { openCodeWorkflowDependencies } from "./native-agent-opencode-server.js";
-import { authenticatePipelineWorkerMailCapability } from "./pipeline-worker-identity.js";
+import {
+  authenticatePipelineWorkerMailCapability,
+  BuildPipelineActivity,
+  readEnvironmentBranchPushState,
+} from "./build-pipeline/index.js";
 import {
   createSessionTitleService,
   sessionTitleGenerationEnabled,
@@ -302,7 +306,6 @@ import { createGraphGateExecutor } from "./graph-node-gate.js";
 import { createGraphMergeExecutor } from "./graph-node-merge.js";
 import { createGraphHumanExecutor, GraphHumanAnswers } from "./graph-node-human.js";
 import { GraphRunAttention } from "./graph-run-attention.js";
-import { BuildPipelineActivity } from "./build-pipeline-activity.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
 import { configuredMultiReviewEngine, MultiReviewGraphEngine } from "./review/graph-engine.js";
@@ -317,7 +320,6 @@ import { GraphNodeSystemExecutor } from "./graph-node-system.js";
 import { resolveTabsSettled } from "./git/pr-auto-merge-resolve-settled.js";
 import { PrAutoMergeController } from "./git/pr-auto-merge.js";
 import { createGraphEnvironmentShell } from "./graph-system-environment.js";
-import { readEnvironmentBranchPushState } from "./build-pipeline-branch-push.js";
 import { graphPushedCommitOfEffectKey } from "./graph-system-push.js";
 import { GraphRunEnvironmentProvisioner } from "./graph-system-prepare.js";
 import { installGraphAgentExecutor, type GraphAgentWiring } from "./graph-agent-wiring.js";

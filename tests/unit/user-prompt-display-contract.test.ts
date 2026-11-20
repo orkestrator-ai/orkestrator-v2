@@ -17,13 +17,13 @@ import {
   createCoordinatorDelegatedPrompt,
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
-import { addressFindingsReportPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
-import { withUnattendedPolicy } from "../../apps/backend/src/core/build-pipeline-service-helpers";
+import { addressFindingsReportPrompt } from "../../apps/backend/src/core/build-pipeline/index.js";
+import { withUnattendedPolicy } from "../../apps/backend/src/core/build-pipeline/service-helpers.js";
 import { reviewValidationDiscoveryPrompt } from "../../apps/backend/src/core/review/validation-prompts.js";
 import {
   buildReviewHandoffPrompt,
   prependReviewHandoff,
-} from "../../apps/backend/src/core/build-pipeline-handoff";
+} from "../../apps/backend/src/core/build-pipeline/handoff.js";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import {
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,

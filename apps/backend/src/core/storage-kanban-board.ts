@@ -4,7 +4,7 @@ import { normalizeTicketContent } from "@orkestrator/protocol/ticket-sections";
 import { parseTicketSyncItem, ticketUpdatedAt } from "@orkestrator/protocol/ticket-sync";
 import { createLogger } from "@orkestrator/protocol/logger";
 
-import { NO_BUILD_TICKET_HOLDS, type BuildTicketHolds } from "./build-pipeline-ticket-hold.js";
+import { type BuildTicketHolds, NO_BUILD_TICKET_HOLDS } from "./build-pipeline/index.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import { KanbanProjectRemovalStore } from "./storage-kanban-project-removal.js";
@@ -51,7 +51,7 @@ export class KanbanBoardStore {
     private readonly files: StorageFiles,
     /**
      * The tickets whose column an unfinished build holds
-     * (`build-pipeline-ticket-hold.ts`). Read without a lease, so it is safe
+     * (`build-pipeline/ticket-hold.ts`). Read without a lease, so it is safe
      * inside `enqueue`.
      */
     readonly ticketsHeldByBuilds: BuildTicketHolds = NO_BUILD_TICKET_HOLDS,

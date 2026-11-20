@@ -19,7 +19,7 @@ Analysed 2026-11-11 against `main` at `498b68766`.
 
 **Context.** The README says to update or remove an item in the change that finishes it. Struck-through items with evidence are allowed and are how this file records them.
 
-**Investigation.** All still present at HEAD. `consolidationOverlap` is at `apps/backend/src/core/review/fanout-provenance.ts:204` and is stored at `apps/backend/src/core/review/service.ts:4327`, with `build-pipeline-review-fanout.ts:88` importing it for the Consolidation session. `cacheReadTokens` is kept as a running maximum in `refreshReviewerUsage` (`apps/backend/src/core/review/fanout.ts:1563`, max at `:1587`). The nine corpus cases are at `apps/backend/src/core/review/evaluation-corpus.ts:177` to `:525`, and `late-unique` now expects `with-fixes` (`:286`). The only commit touching this code since the check is `b9522a87` (#1176), which is the one that built it.
+**Investigation.** All still present at HEAD. `consolidationOverlap` is at `apps/backend/src/core/review/fanout-provenance.ts:204` and is stored at `apps/backend/src/core/review/service.ts:4327`, with `build-pipeline/review-fanout.ts:88` importing it for the Consolidation session. `cacheReadTokens` is kept as a running maximum in `refreshReviewerUsage` (`apps/backend/src/core/review/fanout.ts:1563`, max at `:1587`). The nine corpus cases are at `apps/backend/src/core/review/evaluation-corpus.ts:177` to `:525`, and `late-unique` now expects `with-fixes` (`:286`). The only commit touching this code since the check is `b9522a87` (#1176), which is the one that built it.
 
 **Decisions.**
 
@@ -71,7 +71,7 @@ Analysed 2026-11-11 against `main` at `498b68766`.
 
 **Split 2026-11-10.** The real Claude and Codex panels are on the manual-test checklist (7568, 0025 task 3). What stayed here was the working-directory check the Investigation names, which reads code only.
 
-**Done 2026-11-11: they share one.** Every reviewer of a Multi Review gets its provider from `MultiReviewService.providerInstance` (`apps/backend/src/core/review/service.ts`), keyed by the workflow and the reviewer's platform and connected to the review environment's bridge for that platform. Build Pipeline reviewers get theirs from `provider(pipeline, agent)` (`build-pipeline-review-fanout.ts`), the pipeline environment's bridge. `ProviderCreateSessionOptions` carries no directory, and each bridge runs every session in its one process-wide workspace (`claudeWorkspaceCwd` in the Claude bridge, the app-server child's `cwd` in the Codex bridge, `workingDirectory` in the Pi bridge). So two same-platform reviewers of one review run in the same directory, and the directory alone does not break the Claude hit. Anything else the CLI puts before the prompt (for Claude Code, a snapshot of `git status`) is the same for reviewers that start on an unchanged worktree, which read-only reviewers do not change; that part is an inference, not a measurement.
+**Done 2026-11-11: they share one.** Every reviewer of a Multi Review gets its provider from `MultiReviewService.providerInstance` (`apps/backend/src/core/review/service.ts`), keyed by the workflow and the reviewer's platform and connected to the review environment's bridge for that platform. Build Pipeline reviewers get theirs from `provider(pipeline, agent)` (`build-pipeline/review-fanout.ts`), the pipeline environment's bridge. `ProviderCreateSessionOptions` carries no directory, and each bridge runs every session in its one process-wide workspace (`claudeWorkspaceCwd` in the Claude bridge, the app-server child's `cwd` in the Codex bridge, `workingDirectory` in the Pi bridge). So two same-platform reviewers of one review run in the same directory, and the directory alone does not break the Claude hit. Anything else the CLI puts before the prompt (for Claude Code, a snapshot of `git status`) is the same for reviewers that start on an unchanged worktree, which read-only reviewers do not change; that part is an inference, not a measurement.
 
 **Problem.** The stable prompt prefix was meant to make reviewers share prompt-cache reads. On Claude the consolidation measurements suggest it cannot, because Claude Code caches only at message boundaries and each reviewer prompt is a single user message. Real reviewer prompts have never been measured, so whether the prefix saves anything is unknown.
 
@@ -161,7 +161,7 @@ providers, and a cache measurement of real reviewer panels.
   `MultiReviewLaunchDialog.tsx` shows the warning in a polite live region
   without blocking or changing the launch.
 - **Telemetry.** Both owners record `launch.duplicate_reviewers`
-  (`review/service.ts`, `build-pipeline-review-fanout.ts`), so
+  (`review/service.ts`, `build-pipeline/review-fanout.ts`), so
   coordinator and MCP launches are counted too. In production this goes to the
   no-op observer.
 - **Overlap metric (done).** `consolidationOverlap`
@@ -230,7 +230,7 @@ providers, and a cache measurement of real reviewer panels.
    a late unique finding, configured positions with failed reviewers, invalid
    and dropped citations, no text in the output). Persistence is covered by
    `review/service-part-2.test.ts` ("derives all provenance labels from cited
-   source IDs") and `build-pipeline-review-fanout.test.ts` (Consolidation
+   source IDs") and `build-pipeline/review-fanout.test.ts` (Consolidation
    session `reviewOverlap`). The validator is covered by
    `packages/protocol/src/review-fanout.test.ts`.
 2. ~~**Checked-in evaluation corpus.**~~ Done. Cases: `severity-disagreement`,
@@ -247,7 +247,7 @@ providers, and a cache measurement of real reviewer panels.
    frame and every source ID.
 3. ~~**Per-reviewer cache-read capture.**~~ Done. Evidence:
    `review/fanout-efficiency.test.ts` (recorded beside `tokenCount`, never
-   lowered, absent when not reported), `build-pipeline-review-fanout.test.ts`
+   lowered, absent when not reported), `build-pipeline/review-fanout.test.ts`
    (mirrored to reviewer sessions), and `review-fanout.test.ts` (validator).
 
 ### Qualification

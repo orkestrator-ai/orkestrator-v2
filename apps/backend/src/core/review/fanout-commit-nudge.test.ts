@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
 import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,

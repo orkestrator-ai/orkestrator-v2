@@ -13,7 +13,7 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
-} from "./build-pipeline-provider.js";
+} from "./build-pipeline/provider.js";
 import type { Environment } from "./models.js";
 import { managedProvider, retireProvider } from "./provider-retirement.js";
 

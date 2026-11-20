@@ -51,14 +51,14 @@ import {
   type WorkflowResultSubmissionState,
 } from "@orkestrator/protocol/workflow-results";
 import type { AgentToolConnection } from "../agent-tools.js";
-import type { PipelineWorkerMailTurn } from "../pipeline-worker-identity.js";
+import {
+  type PipelineWorkerMailTurn,
+  type ReviewWorktreeSnapshot,
+  structuredReportRepairPrompt,
+} from "../build-pipeline/index.js";
 import type { ArtifactTurnDispatch, WorkflowResultRefusals } from "../workflows/index.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
-import {
-  structuredReportRepairPrompt,
-  type ReviewWorktreeSnapshot,
-} from "../build-pipeline-prompts.js";
+import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewerPrompt,

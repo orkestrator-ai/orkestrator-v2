@@ -51,15 +51,15 @@ import {
   usesPackagePreparationSession,
   type BuildPipelineStage,
   type BuildPipelineStageKey,
-} from "./build-pipeline-stages.js";
-import { readsReviewPackage } from "./build-pipeline-prompt-dispatch.js";
+} from "./build-pipeline/stages.js";
+import { readsReviewPackage } from "./build-pipeline/prompt-dispatch.js";
 import {
   executionModeOverrideForPhase,
   pullRequestNeedsConflictResolution,
   PULL_REQUEST_DETECTION_STATES,
   stageAfterReview,
   verificationPassed,
-} from "./build-pipeline-service-helpers.js";
+} from "./build-pipeline/service-helpers.js";
 import { multiReviewDefaultRows } from "./coordinator/launch-defaults.js";
 import {
   addressFindingsResultCompletes,

@@ -26,7 +26,7 @@ import { loseBunExitEvents } from "@orkestrator/protocol/testing/lost-exit";
 import { runCommand } from "./command-capture.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 import * as shell from "./shell.js";
-import { validationStallReason } from "./build-pipeline-validation-stall.js";
+import { validationStallReason } from "./build-pipeline/validation-stall.js";
 import { CHANGED_TESTS_NOTE_NO_PLAN } from "@orkestrator/protocol/validation-report";
 
 const temporaryDirectories: string[] = [];

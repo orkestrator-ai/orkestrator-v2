@@ -30,7 +30,7 @@ import {
   type StartFeaturePlanBuildResult,
 } from "@orkestrator/protocol/feature-build";
 import { formatFeatureStoriesForBuild } from "@orkestrator/protocol/feature-planning";
-import { launchBuildPipeline } from "../build-pipeline-launch.js";
+import { launchBuildPipeline } from "../build-pipeline/launch.js";
 import type { CommandContext } from "../commands-context.js";
 import type { FeaturePlan, KanbanTask } from "../storage-shared.js";
 

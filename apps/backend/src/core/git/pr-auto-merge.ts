@@ -9,7 +9,7 @@ import {
 import type { PrMonitorEnvironmentState, PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import { createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
 import { resolveEnvironmentActionDefault } from "../action-default-selection.js";
-import type { CommandInvoker } from "../build-pipeline-service-helpers.js";
+import type { CommandInvoker } from "../build-pipeline/index.js";
 import type { Environment } from "../models.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import type { StorageService } from "../storage.js";

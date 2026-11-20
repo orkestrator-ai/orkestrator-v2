@@ -34,8 +34,8 @@ import type {
   AgentBranchWording,
 } from "./agent-branch-types.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
-import { readProviderStatus, type BuildPipelineProvider } from "./build-pipeline-provider.js";
+import { structuredReportRepairPrompt } from "./build-pipeline/index.js";
+import { readProviderStatus, type BuildPipelineProvider } from "./build-pipeline/provider.js";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { GraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import type { Environment } from "./models.js";

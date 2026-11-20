@@ -1,6 +1,6 @@
 /**
  * Resetting a workflow's worktree to an earlier commit: the pieces the Build
- * Pipeline's "Rewind code to here" (`build-pipeline-code-rewind.ts`) and a
+ * Pipeline's "Rewind code to here" (`build-pipeline/code-rewind.ts`) and a
  * graph run's code rewind (`graph-run-rewind.ts`, item 210) share.
  *
  * - {@link inspectCodeRewind} reads what a reset would drop (the preview) and

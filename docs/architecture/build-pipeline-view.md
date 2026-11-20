@@ -92,7 +92,7 @@ Startup, retry after failure, and the 30-second sweep reconcile all records.
 An event that arrives before startup reconciliation succeeds runs the full pass.
 
 To-do 8308 task 1 is done (retired 2026-11-18). In the
-[100-environment SQLite fixture](../../apps/backend/src/core/build-pipeline-activity.test.ts),
+[100-environment SQLite fixture](../../apps/backend/src/core/build-pipeline/activity.test.ts),
 one pipeline change fetched one record and read one environment, down from
 100 environment reads. A change to working made no pipeline listing. A change
 to complete listed only the affected environment's pipelines. The separate
@@ -111,13 +111,13 @@ the rest in one place:
 
 | Launcher | Command | What it sends |
 | --- | --- | --- |
-| Build buttons (Kanban, Linear, GitHub) | `launch_build_pipeline` (`build-pipeline-launch.ts`) | The ticket and any step, reviewer, agent or "When verified" choice the launcher set |
+| Build buttons (Kanban, Linear, GitHub) | `launch_build_pipeline` (`build-pipeline/launch.ts`) | The ticket and any step, reviewer, agent or "When verified" choice the launcher set |
 | Features view | `start_feature_plan_build` (`features/plan-build.ts`) | The feature plan id |
 | CLI `build launch`, coordinator | `build.launch`, `start_coordinator_build_pipeline` / `start_controller_build_pipeline` | Their request; a coordinator build must name a ticket in the project and is linked to it (`source: kanban`, [coordinator](coordinator.md#launch-defaults)) |
 
 All of them apply `buildPipelineInputWithDefaults`
 (`coordinator/launch-defaults.ts`), which is documented at the top of
-`build-pipeline-launch.ts`: an explicit step replaces the saved one, a step with
+`build-pipeline/launch.ts`: an explicit step replaces the saved one, a step with
 no agent keeps the saved selection, and the review step is always the first
 reviewer. A saved row pins only a model its action or saved reviewer names
 itself; a model inherited from the platform's own setting is left out, so the
@@ -264,7 +264,7 @@ a transcript.
   never dimmed; they appear when they start. A finished or cancelled pipeline
   has nothing ahead.
 - **After review.** One rule routes both review paths (`stageAfterReview` in
-  `build-pipeline-service-helpers.ts`): the accepted report, a single
+  `build-pipeline/service-helpers.ts`): the accepted report, a single
   reviewer's or the panel's consolidated one, goes to Address Findings when it has
   issues or test coverage gaps, and straight to Verify when it has neither. So
   a clean pass is followed by Verify on the line, with no Address Findings node. The
@@ -556,7 +556,7 @@ once it is 480 characters or longer, so it still does not read as one block;
 text with any line break is shown as written.
 
 Stage agents keep it through two agent tools, `get_key_information` and
-`update_key_information` (`build-pipeline-key-information-tools.ts`). They are
+`update_key_information` (`build-pipeline/key-information-tools.ts`). They are
 listed only to a credential whose environment a build pipeline owns, on the
 general agent server and on a stage turn's workflow-result server, so a stage
 reaches them on whichever connection its turn runs. Codex approves them
@@ -623,7 +623,7 @@ old outcome: further implementation must report a fresh stop before it can
 skip review.
 
 When the Build turn ends, the supervisor reads the report before package
-preparation starts (`build-pipeline-build-stop.ts`), so no preparation,
+preparation starts (`build-pipeline/build-stop.ts`), so no preparation,
 validation, review, Address, Verify or Ship session is opened:
 
 - `no-work-needed` (the default kind) completes the pipeline. The ticket moves
@@ -739,7 +739,7 @@ Once a pass has consolidated, one reviewer slot can still run again on its own
 (to-do 8103 (retired)). "Restart reviewer" on any reviewer of the pass, or
 "Retry reviewer" on a failed one while the consolidated pass is still live,
 rewinds the round to the panel instead of rerunning it
-(`build-pipeline-reviewer-rerun.ts`, through `restartLocatedStage` with
+(`build-pipeline/reviewer-rerun.ts`, through `restartLocatedStage` with
 `rerunReviewer`):
 
 - **The other slots are kept.** Their sessions are not superseded and their
@@ -801,8 +801,8 @@ Rework, Prepare or its validation, a reviewer (the whole review pass reruns),
 consolidation (it alone reruns while its round's reports survive, otherwise the
 whole pass), Review, Address Findings, Verify, Ship or conflict resolution — rewinds
 the pipeline to that step's own round and position and runs it again. The
-backend (`restartLocatedStage` in `build-pipeline-service-lifecycle.ts`, rules
-in `build-pipeline-rewind.ts`):
+backend (`restartLocatedStage` in `build-pipeline/service-lifecycle.ts`, rules
+in `build-pipeline/rewind.ts`):
 
 - **Rewinds the round.** `iteration` becomes the step's own, so the rounds
   after it are available again: restarting round 1's Verify after round 4
@@ -897,7 +897,7 @@ sessions by `supersededBy` and read `rewinds`).
 ### Rewinding the code
 
 "Rewind code to here…" (`rewind_build_pipeline_code`, logic in
-`build-pipeline-code-rewind.ts`) resets the branch to the commit a step started
+`build-pipeline/code-rewind.ts`) resets the branch to the commit a step started
 from, then restarts the pipeline from that step exactly as "Restart from here"
 does. Every stage session started by the supervisor records `headAtStart`
 (Verify and a packaged single Review reuse their read-only guard baseline;
@@ -964,7 +964,7 @@ describes; "Restart from here" on a reviewer still reruns the whole panel.
 
 ## Delivery after Verify
 
-`deliverVerifiedWork` (`build-pipeline-service-recovery.ts`) acts on the ticket's
+`deliverVerifiedWork` (`build-pipeline/service-recovery.ts`) acts on the ticket's
 policy when Verify passes or is skipped; the policies and who chooses them are
 in [tickets.md](tickets.md#delivery). The decision is saved before creating a
 Ship session, so a failed session creation and retry keep the same policy.
@@ -1127,7 +1127,7 @@ What the pipeline does for mail:
 
 ## Stage table and the built-in template
 
-`BUILD_PIPELINE_STAGES` (`apps/backend/src/core/build-pipeline-stages.ts`)
+`BUILD_PIPELINE_STAGES` (`apps/backend/src/core/build-pipeline/stages.ts`)
 lists the stages in the order a run meets them, each with its place in the
 rounds, its workspace boundary (`write`, `read-only`, `guarded`, `system`)
 and the result it submits. The supervisor takes session labels, phases,

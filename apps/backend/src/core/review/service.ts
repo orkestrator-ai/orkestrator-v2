@@ -1,10 +1,18 @@
 import { MultiReviewWorkerMail } from "./worker-mail.js";
-import { workerMailTurnFor } from "../pipeline-worker-identity.js";
+import {
+  addressFindingsReportPrompt,
+  type AgentModelCatalogReader,
+  connectionDefaultsFor,
+  createAgentModelCatalogReader,
+  type PipelineWorkerMailbox,
+  resolveFastMode,
+  structuredReportRepairPrompt,
+  workerMailTurnFor,
+} from "../build-pipeline/index.js";
 import {
   multiReviewWorkers,
   pipelineWorkerTabId,
 } from "@orkestrator/protocol/pipeline-worker-mail";
-import type { PipelineWorkerMailbox } from "../build-pipeline-context.js";
 import {
   assertNoOtherWorkflowWriting,
   inspectCodeRewind,
@@ -120,18 +128,8 @@ import {
   type ProviderDependencies,
   type ProviderSessionObservation,
   type ProviderStatus,
-} from "../build-pipeline-provider.js";
+} from "../build-pipeline/provider.js";
 import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./consolidation-scope.js";
-import {
-  addressFindingsReportPrompt,
-  structuredReportRepairPrompt,
-} from "../build-pipeline-prompts.js";
-import {
-  connectionDefaultsFor,
-  createAgentModelCatalogReader,
-  resolveFastMode,
-  type AgentModelCatalogReader,
-} from "../build-pipeline-service-helpers.js";
 import {
   parseReviewPreparationResult,
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,

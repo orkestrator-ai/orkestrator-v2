@@ -24,7 +24,7 @@ Analysed 2026-10-30 against `main` at `361dc0a6e`.
 - **No way to retry or resume a turn.** The pinned protocol has `turn/start`, `turn/steer` and `turn/interrupt`, and no turn retry or resume. `thread/resume` reattaches a thread and starts nothing. `turn/start` rejects an empty `input` ("input must not be empty" in the 0.164.0 binary), so continuing needs some input.
 - **How the backend reads a failure.** It never sees the code. Every unattended workflow polls `readProviderStatus` and fails on the first read of `status: "error"` that is not a restart interruption:
   - Multi Review steps: `review/service.ts:4311`, and reviewers through `agent-branch-runner.ts:704`;
-  - build stages: `build-pipeline-service-supervisor.ts:690`.
+  - build stages: `build-pipeline/service-supervisor.ts:690`.
 
   Only the message text crosses the bridge (`throwExplainedTurnFailure`, `http-bridge-transport.ts:282`). A brief `failed` → `running` flip would fail the step if any poll landed in the gap.
 - **Result credit.** A workflow result is keyed by the dispatch request id (`workflowResults.prepare({ resultKey: requestId })`). The submit tool checks only that key. Structured output is matched by `session.structuredOutputRequestId === turn.requestId` (`app-server-runtime-lifecycle.ts`, `finalizeTurn`).

@@ -3,7 +3,7 @@
     "apps/backend/src/core/agent-accounts/login.test.ts": 1,
     "apps/backend/src/core/agent-mail-service.test.ts": 1,
     "apps/backend/src/core/backend-runtime.test.ts": 2,
-    "apps/backend/src/core/build-pipeline-key-information.test.ts": 2,
+    "apps/backend/src/core/build-pipeline/key-information.test.ts": 2,
     "apps/backend/src/core/change-tracking/object-store-write-path.test.ts": 2,
     "apps/backend/src/core/change-tracking/review-regressions.test.ts": 1,
     "apps/backend/src/core/commands-environment-cleanup.test.ts": 1,

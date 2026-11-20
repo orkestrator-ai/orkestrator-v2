@@ -141,7 +141,20 @@ export const EnvironmentItem = memo(function EnvironmentItem({
         // Toggle individual item selection (Cmd/Ctrl+Click behavior).
         onToggle: () => onSelect(environment.id, { metaKey: true }),
       }}
-      onActivate={(modifiers) => onSelect(environment.id, modifiers)}
+      onActivate={(modifiers, openUnreadResult) => {
+        onSelect(environment.id, modifiers);
+        if (openUnreadResult) {
+          openCoordinatorWorkTarget(
+            {
+              type: "unread-result",
+              projectId: environment.projectId,
+              environmentId: environment.id,
+            },
+            undefined,
+            scope,
+          );
+        }
+      }}
       actions={{
         // Opens the environment and then the action bar's own merge dialog,
         // exactly as clicking its Merge PR button would.

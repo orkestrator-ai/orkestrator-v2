@@ -144,8 +144,7 @@ export interface EnvironmentRowAttention {
 
 /**
  * Words for unread work the agent is no longer blocked on. `null` draws no
- * line: a plain finish is marked by the unread bell beside the name alone, and
- * clicking the row opens it as the line did.
+ * line: a plain finish is marked by the unread bell beside the name alone.
  */
 const UNREAD_TEXT: Record<
   NodeUnreadReason,

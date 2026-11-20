@@ -3,6 +3,8 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { appCommandScope } from "@/lib/node-scope-slots";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
+import { clientEnvironmentFixture } from "@/test/environments-results";
+import { environmentStore } from "@/stores/environmentStore";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { uiStore } from "@/stores/uiStore";
 import { onGraphRunViewRequested, takePendingGraphRunView } from "./graph-run-navigation";
@@ -11,6 +13,7 @@ import {
   type CoordinatorWorkNavigation,
 } from "./coordinator-work-navigation";
 import { appCommandStore } from "@/test/app-command-store";
+import { createSessionKey } from "./utils";
 
 function seedLayout() {
   appCommandStore(paneLayoutStore).setState({
@@ -109,6 +112,39 @@ describe("openCoordinatorWorkTarget", () => {
     expect(activeTab("pane-2")).toBe("worker-tab");
     expect(appCommandStore(paneLayoutStore).getState().getActivePaneId("env-1")).toBe("pane-2");
   });
+
+  test.each([false, true])(
+    "resolves an unread result from the restored layout and current record (cleared=%s)",
+    (cleared) => {
+      const environments = appCommandStore(environmentStore);
+      const previous = environments.getState().environments;
+      const panes = appCommandStore(paneLayoutStore);
+      const tabKeys = ["worker-tab", "closed-tab"].map((tabId) => createSessionKey("env-1", tabId));
+      try {
+        environments.setState({
+          environments: [
+            clientEnvironmentFixture({
+              hasUnreadWork: true,
+              unreadReason: "agent_finished",
+              unreadSessionKeys: tabKeys,
+            }),
+          ],
+        });
+        appCommandStore(uiStore).getState().selectProjectAndEnvironment("project-1", "env-1");
+        panes.setState({ hydration: new Map([["env-1", "pending"]]) });
+        openCoordinatorWorkTarget(
+          { type: "unread-result", projectId: "project-1", environmentId: "env-1" },
+          navigation(),
+        );
+        expect(activeTab("pane-2")).toBe("review-reviewer");
+        if (cleared) environments.getState().updateEnvironment("env-1", { hasUnreadWork: false });
+        panes.getState().finishHydration("env-1");
+        expect(activeTab("pane-2")).toBe(cleared ? "review-reviewer" : "worker-tab");
+      } finally {
+        environments.setState({ environments: previous });
+      }
+    },
+  );
 
   test("a Multi Review row focuses the review's own tab, not a reviewer's", () => {
     openCoordinatorWorkTarget(

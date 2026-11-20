@@ -20,14 +20,73 @@ test("each waiting or unread row says what it needs, and only those rows", async
   await expect(page.getByText("Finished · result unread")).toHaveCount(0);
 });
 
-test("a finished unread row keeps its bell and opens from the row", async ({ page }) => {
-  await page.goto("/environment-attention");
-  const row = page.getByTestId("attention-sidebar").locator('[role="button"]', {
-    hasText: "billing-export",
+for (const kind of ["agent", "terminal-keyed"] as const) {
+  test(`a finished ${kind} tab opens from its unread row and clears after render`, async ({
+    page,
+  }, testInfo) => {
+    await page.goto(`/sidebar-drag?unread-result=${kind}`);
+    const tab = page.getByRole("region", { name: "Selected tab" });
+    const row = page.getByRole("button", { name: /^p-env-1,/ });
+    const bell = row.getByLabel("New completed activity");
+    await expect(tab).toHaveText("Sibling tab");
+    await expect(bell).toBeVisible();
+    await expect(page.getByText("Finished · result unread")).toHaveCount(0);
+    if (kind === "agent") {
+      await page.locator("main").screenshot({
+        path: path.resolve(
+          "output/visual-previews",
+          `sidebar-before-opening-unread-result-${testInfo.project.name}.png`,
+        ),
+      });
+    }
+
+    await page.getByRole("button", { name: /^p-env-2,/ }).click();
+    await expect(tab).toHaveText("Another environment");
+    if (kind === "agent") await bell.click();
+    else await row.press("Enter");
+    const render = tab.getByRole("button", { name: "Render finished result" });
+    await expect(render).toBeVisible();
+    await expect(bell).toBeVisible();
+    await expect(page.getByTestId("sidebar-writes")).not.toContainText("set_environment_unread");
+    if (kind === "agent") {
+      await page.locator("main").screenshot({
+        path: path.resolve(
+          "output/visual-previews",
+          `sidebar-awaiting-result-render-${testInfo.project.name}.png`,
+        ),
+      });
+    }
+    await render.click();
+    await expect(tab).toHaveText("Completed result");
+    await expect(bell).toHaveCount(0);
+    await expect(page.getByTestId("sidebar-writes")).toContainText(
+      '"sessionKeys":["env-p-env-1:finished-result"]',
+    );
+    if (kind === "agent") {
+      await page.locator("main").screenshot({
+        path: path.resolve(
+          "output/visual-previews",
+          `sidebar-after-rendering-unread-result-${testInfo.project.name}.png`,
+        ),
+      });
+    }
+
+    await page.reload();
+    await expect(tab).toHaveText("Sibling tab");
+    await expect(row).toBeVisible();
+    await expect(bell).toHaveCount(0);
   });
-  await expect(row.locator('[aria-label="New completed activity"]')).toBeVisible();
+}
+
+test("an environment-wide terminal finish opens the restored sibling tab", async ({ page }) => {
+  await page.goto("/sidebar-drag?unread-result=terminal");
+  const row = page.getByRole("button", { name: /^p-env-1,/ });
+  const bell = row.getByLabel("New completed activity");
+  await expect(bell).toBeVisible();
+  await expect(page.getByText("Finished · result unread")).toHaveCount(0);
   await row.click();
-  await expect(page.getByTestId("attention-opened")).toHaveText("billing-export: row");
+  await expect(page.getByRole("region", { name: "Selected tab" })).toHaveText("Sibling tab");
+  await expect(bell).toHaveCount(0);
 });
 
 test("clicking a line opens the tab holding the request, not just the row", async ({ page }) => {

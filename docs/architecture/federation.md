@@ -970,7 +970,11 @@ with `MachinesFilter`:
   the like, from the record's `unreadReason` (relayed for another machine as
   the summary's `unreadReason`). A plain unread finish (`agent_finished`,
   `terminal_finished`) has no line: the amber bell beside the name marks it,
-  and clicking the row opens the environment as the line did. A waiting
+  and activating the row or clicking its bell opens the newest matching unread
+  tab still in the owning machine's restored layout. A session's bell clears
+  after its result renders. If the finish only identifies the environment,
+  as current terminal completions do, the row opens the environment on its
+  restored tab. A waiting
   native tab gets a line even while a sibling keeps the environment working.
   Project-home activity buttons show the same request summary in activity
   view and in their compact tooltip. Clicking selects the environment,

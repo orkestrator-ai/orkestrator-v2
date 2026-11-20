@@ -448,13 +448,26 @@ export function recordKeyInformationVerdict(
           const status = oneOf(KEY_INFORMATION_CHECK_STATUSES, criterion.status)
             ? criterion.status
             : "failed";
+          const details =
+            criterion.evidence.trim() ||
+            (status === "not-checked"
+              ? "Verify did not record why this criterion was not checked."
+              : "");
           return {
             check: criterion.text,
             passed: status === "passed",
             status,
-            ...(criterion.evidence ? { details: criterion.evidence } : {}),
+            ...(details ? { details } : {}),
           };
         });
+  if (!previous?.checks.length && checks.length > KEY_INFORMATION_LIMITS.checks) {
+    // Preserve checked evidence when unrun criteria would otherwise crowd it out.
+    const priority = { failed: 0, passed: 1, "not-checked": 2 };
+    checks.sort(
+      (left, right) =>
+        priority[keyInformationCheckStatus(left)] - priority[keyInformationCheckStatus(right)],
+    );
+  }
   next.verifications = boundVerifications([
     ...next.verifications.filter((entry) => entry.round !== round),
     {

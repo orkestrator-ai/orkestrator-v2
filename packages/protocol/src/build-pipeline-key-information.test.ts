@@ -10,7 +10,11 @@ import {
   recordKeyInformationVerdict,
   type BuildPipelineKeyInformation,
 } from "./build-pipeline-key-information.js";
-import { isBuildPipeline, type BuildPipeline } from "./build-pipeline.js";
+import {
+  isBuildPipeline,
+  verificationCriterionResults,
+  type BuildPipeline,
+} from "./build-pipeline.js";
 
 const AT = "2026-11-01T10:00:00.000Z";
 const LATER = "2026-11-01T11:00:00.000Z";
@@ -291,6 +295,62 @@ describe("recordKeyInformationVerdict", () => {
             details: "No Linux host",
           },
         ],
+      },
+    ]);
+  });
+
+  test("retains a trailing failed criterion and its evidence when unrun checks fill the brief", () => {
+    const skipped = Array.from({ length: KEY_INFORMATION_LIMITS.checks }, (_, index) => ({
+      text: `Unrun criterion ${index + 1}`,
+      status: "not-checked",
+      evidence: "No test account",
+    }));
+    const info = recordKeyInformationVerdict(
+      undefined,
+      {
+        passed: false,
+        rationale: "Sign-in failed.",
+        criteria: [...skipped, { text: "Sign-in", status: "failed", evidence: "HTTP 500" }],
+      },
+      { at: AT, round: 1 },
+    );
+
+    const checks = info.verifications[0]?.checks ?? [];
+    expect(checks).toHaveLength(KEY_INFORMATION_LIMITS.checks);
+    expect(checks[0]).toEqual({
+      check: "Sign-in",
+      passed: false,
+      status: "failed",
+      details: "HTTP 500",
+    });
+    expect(checks.slice(1).map(({ check }) => check)).toEqual(
+      skipped.slice(0, -1).map(({ text }) => text),
+    );
+  });
+
+  test.each(["", " \t\n"])("explains a not-checked verdict with blank evidence %j", (evidence) => {
+    const criterion = { id: "ac-1", text: "Live sign-in" };
+    const results = verificationCriterionResults([criterion], {
+      complete: true,
+      rationale: "Live sign-in could not run.",
+      acceptanceCriteria: [{ id: criterion.id, status: "not-checked", evidence }],
+    });
+    const info = recordKeyInformationVerdict(
+      undefined,
+      {
+        passed: true,
+        rationale: "Live sign-in could not run.",
+        criteria: results.map((result) => ({ ...result, text: criterion.text })),
+      },
+      { at: AT, round: 1 },
+    );
+
+    expect(info.verifications[0]?.checks).toEqual([
+      {
+        check: "Live sign-in",
+        passed: false,
+        status: "not-checked",
+        details: "Verify did not record why this criterion was not checked.",
       },
     ]);
   });

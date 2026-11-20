@@ -106,12 +106,15 @@ function wrongType(value: unknown): JsonTextResultDecode {
  * column C) <problem>.", followed by any advice for that fault, and a short
  * excerpt around it.
  */
-export function describeJsonTextFault(text: string): {
+export function describeJsonTextFault(
+  text: string,
+  expected: "array" | "object" = "object",
+): {
   location: string;
   advice?: string;
   excerpt: string;
 } {
-  const fault = findJsonTextFault(text) ?? {
+  const fault = findJsonTextFault(text, expected) ?? {
     offset: text.length,
     problem: "the text is not valid JSON",
   };
@@ -180,7 +183,10 @@ function pathOf(stack: readonly Frame[], omitLastKey = false): string {
  * The first point at which `text` stops being one JSON value, or null when it
  * is valid. Iterative, so a deeply nested text cannot exhaust the stack.
  */
-export function findJsonTextFault(text: string): JsonTextFault | null {
+export function findJsonTextFault(
+  text: string,
+  expected: "array" | "object" = "object",
+): JsonTextFault | null {
   const stack: Frame[] = [];
   let pos = 0;
   let started = false;
@@ -326,7 +332,7 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
     return {
       offset: pos,
       problem: "more text follows a complete JSON value",
-      advice: "Pass exactly one JSON object.",
+      advice: `Pass exactly one JSON ${expected}.`,
     };
   };
 

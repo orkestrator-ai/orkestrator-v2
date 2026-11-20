@@ -245,22 +245,19 @@ function toCheck(input: CheckInput): KeyInformationCheck {
   };
 }
 
-const CHECK_SHAPE = `{"check": "...", "status": ${KEY_INFORMATION_CHECK_STATUSES.map((value) => `"${value}"`).join(" | ")}, "details": "what failed, or why it was not checked"}`;
-
 /**
  * Appended to every refusal of `update_key_information`: the arguments it
  * takes, so a model that sent a malformed call can repair it in one step.
  */
-export const KEY_INFORMATION_UPDATE_SHAPE = [
-  "Expected arguments: one JSON object; every field is optional and is itself a JSON value (an array or object, never a string holding JSON).",
-  `{"framing": ${KEY_INFORMATION_FRAMINGS.map((value) => `"${value}"`).join(" | ")},`,
-  '"summary" | "statement" | "context" | "solution": "text",',
-  '"workDone": ["..."], "notDone": ["..."],',
-  '"decisions": [{"decision": "...", "options": [{"option": "...", "pros": ["..."], "cons": ["..."]}], "chosen": "...", "rationale": "..."}],',
-  `"tests": [{"name": "...", "result": ${KEY_INFORMATION_TEST_RESULTS.map((value) => `"${value}"`).join(" | ")}, "details": "..."}],`,
-  `"issues": [{"issue": "...", "severity": "...", "resolution": "...", "status": ${KEY_INFORMATION_ISSUE_STATUSES.map((value) => `"${value}"`).join(" | ")}}],`,
-  `"verification": {"passed": true, "summary": "...", "checks": [${CHECK_SHAPE}]}}`,
-].join(" ");
+const KEY_INFORMATION_UPDATE_SHAPE = [
+  "Expected arguments are one JSON object. Include only sections you want to replace. Send structured fields as arrays or objects directly.",
+  `Use ${KEY_INFORMATION_FRAMINGS.join(" or ")} for framing. Use strings for summary, statement, context and solution, and arrays of strings for workDone and notDone.`,
+  "Each decisions entry needs decision, options (entries with option, pros and cons), and chosen. You may add rationale.",
+  `Each tests entry needs name and result (${KEY_INFORMATION_TEST_RESULTS.join(", ")}). You may add details.`,
+  `Each issues entry needs issue, resolution and status (${KEY_INFORMATION_ISSUE_STATUSES.join(", ")}). You may add severity.`,
+  `A verification needs summary and a checks array. You may add a round-level passed boolean. Each check entry needs check and status (${KEY_INFORMATION_CHECK_STATUSES.join(", ")}). Use details to explain a failed check or give the required reason for a not-checked check. Older calls may use a passed boolean for each check.`,
+  'Example verification update\n{"verification":{"summary":"Live sign-in could not run","checks":[{"check":"Live sign-in","status":"not-checked","details":"No test account was available"}]}}',
+].join("\n");
 
 /** The fields a model may send as a string of JSON instead of the value. */
 const JSON_TEXT_FIELDS = [
@@ -287,28 +284,29 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseJsonTextField(
   raw: string,
   path: PropertyKey[],
+  expected: "array" | "object",
 ): { ok: true; value: unknown } | { ok: false; issue: { message: string; path: PropertyKey[] } } {
-  const trimmed = raw.trim();
-  if (!/^[[{"]/.test(trimmed)) return { ok: true, value: raw };
-  let value: unknown;
+  if (!/^[[{"]/.test(raw.trimStart())) return { ok: true, value: raw };
+  let text = raw;
   try {
-    value = JSON.parse(trimmed) as unknown;
+    let value: unknown = JSON.parse(text);
+    if (typeof value === "string" && /^[[{]/.test(value.trimStart())) {
+      text = value;
+      value = JSON.parse(text);
+    }
+    return { ok: true, value };
   } catch {
-    const fault = describeJsonTextFault(trimmed);
+    const fault = describeJsonTextFault(text, expected);
+    const decoded = text === raw ? "" : " after decoding the outer JSON string";
     const message = [
-      `was sent as a string of JSON text, and it is not valid JSON: ${fault.location}`,
+      `was sent as a string of JSON text, and it is not valid JSON${decoded}: ${fault.location}`,
       fault.advice,
-      `Near the fault: ${fault.excerpt}. Fix that point and send the value itself, not a string.`,
+      `Near the fault: ${fault.excerpt}. Fix that point and send the JSON ${expected} directly.`,
     ]
       .filter(Boolean)
       .join(" ");
     return { ok: false, issue: { message, path } };
   }
-  // A value encoded twice is unwrapped once.
-  if (typeof value === "string" && /^[[{]/.test(value.trim())) {
-    return parseJsonTextField(value, path);
-  }
-  return { ok: true, value };
 }
 
 /**
@@ -323,13 +321,13 @@ export function prepareKeyInformationInput(input: unknown): PreparedInput {
   for (const field of JSON_TEXT_FIELDS) {
     const raw = next[field];
     if (typeof raw !== "string") continue;
-    const parsed = parseJsonTextField(raw, [field]);
+    const parsed = parseJsonTextField(raw, [field], field === "verification" ? "object" : "array");
     if (parsed.ok) next[field] = parsed.value;
     else issues.push(parsed.issue);
   }
   const verification = next.verification;
   if (isRecord(verification) && typeof verification.checks === "string") {
-    const parsed = parseJsonTextField(verification.checks, ["verification", "checks"]);
+    const parsed = parseJsonTextField(verification.checks, ["verification", "checks"], "array");
     if (parsed.ok) next.verification = { ...verification, checks: parsed.value };
     else issues.push(parsed.issue);
   }

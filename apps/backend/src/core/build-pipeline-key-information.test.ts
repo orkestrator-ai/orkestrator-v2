@@ -629,6 +629,95 @@ describe("the key information tools", () => {
     expect(prose.text).not.toContain("JSON text");
     expect(host.patches).toHaveLength(1);
   });
+
+  test("a verification refusal includes an example that can be submitted as JSON", async () => {
+    const host = fixedHost(view);
+    const factory = toolFactory(host);
+    const refused = await callToolInProcess(factory, "update_key_information", {
+      verification: { summary: "s", checks: [{ check: "Live sign-in", status: "not-checked" }] },
+    });
+    expect(refused.isError).toBe(true);
+    expect(host.patches).toHaveLength(0);
+
+    const example = refused.text.split("Example verification update\n")[1] ?? "";
+    const repaired = await callToolInProcess(
+      factory,
+      "update_key_information",
+      JSON.parse(example),
+    );
+    expect(repaired.isError).toBe(false);
+    expect(host.patches).toEqual([
+      {
+        verification: {
+          summary: "Live sign-in could not run",
+          checks: [
+            {
+              check: "Live sign-in",
+              passed: false,
+              status: "not-checked",
+              details: "No test account was available",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  const checksText = JSON.stringify([{ check: "Lint", status: "passed" }]);
+  const verification = { summary: "Checks ran", checks: checksText };
+  test.each([
+    ["inside an object", verification],
+    ["inside a JSON-text section", JSON.stringify(verification)],
+    ["inside a double-encoded JSON-text section", JSON.stringify(JSON.stringify(verification))],
+  ])("accepts verification.checks sent as JSON text %s", async (_case, verificationInput) => {
+    const host = fixedHost(view);
+    const result = await callToolInProcess(toolFactory(host), "update_key_information", {
+      verification: verificationInput,
+    });
+    expect(result.isError).toBe(false);
+    expect(host.patches).toEqual([
+      {
+        verification: {
+          summary: "Checks ran",
+          checks: [{ check: "Lint", status: "passed", passed: true }],
+        },
+      },
+    ]);
+  });
+
+  test.each([
+    ["source text", (value: string) => value, "it is not valid JSON:"],
+    ["double-encoded text", JSON.stringify, "after decoding the outer JSON string:"],
+  ] as const)(
+    "points to the exact character in malformed verification %s",
+    async (_case, encode, locationPrefix) => {
+      const host = fixedHost(view);
+      const result = await callToolInProcess(toolFactory(host), "update_key_information", {
+        verification: encode('\n\n  {"summary": }'),
+      });
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain(`${locationPrefix} at character 16 (line 3, column 15)`);
+      expect(result.text).toContain("⟪HERE⟫}");
+      expect(host.patches).toHaveLength(0);
+    },
+  );
+
+  test.each([
+    ["workDone", { workDone: '["ran tests"] extra' }],
+    ["verification.checks", { verification: { summary: "s", checks: '["ran tests"] extra' } }],
+  ])("gives array repair guidance for trailing text in %s", async (path, args) => {
+    const host = fixedHost(view);
+    const result = await callToolInProcess(toolFactory(host), "update_key_information", args);
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain(`${path}: was sent as a string of JSON text`);
+    expect(result.text).toContain(
+      "at character 14 (line 1, column 15) more text follows a complete JSON value",
+    );
+    expect(result.text).toContain("Pass exactly one JSON array.");
+    expect(result.text).toContain("⟪HERE⟫extra");
+    expect(result.text).not.toContain("Pass exactly one JSON object.");
+    expect(host.patches).toHaveLength(0);
+  });
 });
 
 describe("AgentToolsServer with a key information host", () => {

@@ -523,11 +523,16 @@ written:
   dashed icon and a "Not checked" label, never the failure cross. The record
   keeps `passed: false` beside `status: "not-checked"` for readers that
   predate `status`, which show such a check as failed.
+  When checks come from the verdict and exceed the brief's 30-row limit, the
+  brief retains failed checks first, then passed checks, then unrun checks.
+  If an unrun criterion has blank evidence, the brief says Verify did not
+  record a reason.
 
-`update_key_information` refuses an ill-formed call with what was wrong and
-the arguments it expects, so a stage can repair the call in one step. A
-section sent as a string of JSON text is accepted when the text parses; when
-it does not, the refusal names the character, line and column where it breaks.
+`update_key_information` refuses an ill-formed call with what was wrong,
+the fields it expects, and a valid JSON verification example. A section sent
+as JSON text is accepted if it decodes to the expected shape. For broken JSON,
+the refusal gives the character, line and column within that text and names the
+object or array the caller should send.
 
 The panel lists the written sections' headings in a column on its left, or in
 a row above the brief when the panel is narrower than 32rem. The list sits

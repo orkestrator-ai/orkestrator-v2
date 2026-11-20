@@ -1,4 +1,4 @@
-import { describe as group, expect, test } from "bun:test";
+import { describe as group, expect, mock, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { toDesignFailure } from "./design/errors.js";
@@ -302,6 +302,32 @@ group("toolInput", () => {
     const standard = toolInput(input)["~standard"];
     expect(standard.jsonSchema.input({ target: "draft-2020-12" })).toEqual(toolJsonSchema(input));
     expect(standard.validate({ id: "x" })).toEqual({ value: { id: "x", limit: 20 } });
+  });
+
+  test("validates the prepared value and sends both kinds of refusal with the appended note", () => {
+    const preparedIssue = { path: ["id"], message: "Could not prepare the ID" };
+    const refusalNote = "Send an ID of at most ten characters.";
+    const onRefused = mock();
+    const { validate } = toolInput(input, {
+      prepare: (value) =>
+        typeof value === "string" ? { value: { id: value } } : { issues: [preparedIssue] },
+      refusalNote,
+      onRefused,
+    })["~standard"];
+
+    expect(validate("  a  ")).toEqual({ value: { id: "a", limit: 20 } });
+    expect(onRefused).not.toHaveBeenCalled();
+
+    const unprepared = { id: "a" };
+    const preparedRefusal = [preparedIssue, { message: refusalNote }];
+    expect(validate(unprepared)).toEqual({ issues: preparedRefusal });
+    expect(onRefused).toHaveBeenNthCalledWith(1, unprepared, preparedRefusal);
+
+    const tooLong = "too-long-id";
+    const schemaRefusal = [...issues(input, { id: tooLong }), { message: refusalNote }];
+    expect(validate(tooLong)).toEqual({ issues: schemaRefusal });
+    expect(onRefused).toHaveBeenNthCalledWith(2, tooLong, schemaRefusal);
+    expect(onRefused).toHaveBeenCalledTimes(2);
   });
 });
 

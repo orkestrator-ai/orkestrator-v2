@@ -644,16 +644,18 @@ they move many files that other work in flight touches.
 - Hand fixes after the codemod: bare `agent-accounts*` file names in source
   comments (`commands-context.ts`, `commands-registry-accounts.ts`,
   `git/index.ts`, `opencode2/index.ts`, `opencode2/credentials.ts`,
-  `capabilities/scoped-delivery.ts`, `apps/backend/tests/container-benchmarks.test.ts`),
+  `capabilities/scoped-delivery.ts`, `apps/backend/tests/container-benchmarks.test.ts`,
+  `apps/backend/tests/commands-registry-docker.test.ts`),
   living docs (`agent-accounts.md`, `agent-capabilities-management.md`,
   `backend-runtime.md`, `coordinator.md`,
   `coordinator-timers-and-accounts-decisions.md`) and to-dos (7543, 8314,
   0039, and this file's "Current state") now read
   `agent-accounts/<name>.ts`. `docs/development/linting.md`'s folder list
-  and exception examples name the new folder. Flake records keep the
-  codemod's path rewrites and their bare names, the earlier slices' records
-  below keep the names they measured, and dated plan logs under `plans/`
-  are left as written. `@orkestrator/protocol`'s own `agent-accounts.ts` and
+  and exception examples name the new folder. Flake case files preserve the
+  paths used at the recorded revisions and list the current equivalents.
+  Flake indexes use the current paths. Earlier slices' records keep the names
+  they measured, as do dated plan logs under `plans/`.
+  `@orkestrator/protocol`'s own `agent-accounts.ts` and
   `agent-account-*.ts` modules, the renderer's `lib/backend/agent-accounts.ts`
   and the `agent-accounts` data directory are other things with the same
   names and are untouched.

@@ -15,7 +15,8 @@ import { viewFromNodeSummary } from "./useMachineViews";
 /**
  * Plan item 5006: a machine's tile names its version in its tooltip when it
  * differs from the command node's, with the domains it lacks, and marks a
- * machine whose update is offered with an amber dot; a typed incompatibility
+ * machine whose update is offered with a green up arrow outlined in black; a
+ * typed incompatibility
  * error leads to the update.
  */
 
@@ -75,6 +76,22 @@ describe("the machine tile", () => {
       "Machine A runs Orkestrator 2.38.0, older than the command node's 2.40.0. It lacks nodes, terminals.",
     ]);
     expect(screen.getByTestId("machine-tile-update")).toBeTruthy();
+  });
+
+  test("the update mark is a green up arrow outlined in black, hidden from assistive technology", () => {
+    const element = tile({ version: "2.38.0", domains: { git: { min: 1, max: 1 } } });
+    const mark = screen.getByTestId("machine-tile-update");
+    expect(mark.tagName.toLowerCase()).toBe("svg");
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
+    const classes = (mark.getAttribute("class") ?? "").split(/\s+/);
+    expect(classes).toContain("fill-success");
+    expect(classes).toContain("stroke-zinc-950");
+    expect(classes).not.toContain("bg-amber-300");
+    // Top-right corner, clear of the initials and the CPU reading.
+    expect(classes).toEqual(expect.arrayContaining(["absolute", "top-px", "right-px", "size-2"]));
+    // The tile's own name still carries the machine and its CPU; the tooltip the version.
+    expect(element.getAttribute("aria-label")).toContain("Machine A");
+    expect(element.getAttribute("title")).toContain("older than the command node's 2.40.0");
   });
 
   test("a pre-contract machine says it predates contracts", () => {

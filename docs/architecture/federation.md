@@ -814,7 +814,7 @@ with `MachinesFilter`:
   A machine that is not connected or has no current sample is dimmed and
   shows "—", never an old figure. A tile is a toggle button whose name gives
   the machine, its CPU and "shown" or "hidden"; its tooltip adds the status and
-  any version skew (an amber dot marks an update on offer). The tiles drive
+  any version skew (a green up arrow outlined in black marks an update on offer). The tiles drive
   the same filter as the menu (`toggleMachineFilter`): with every machine
   shown a click shows only that machine, which stays highlighted while the
   others fade; after that each click adds or removes one machine, and turning
@@ -1146,7 +1146,7 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
   exists only where that dialog can act.
 - A machine tile's tooltip gives the machine's version when it differs from
-  the command node's, with the domains it lacks, and an amber dot marks an
+  the command node's, with the domains it lacks, and a green up arrow outlined in black marks an
   update on offer, which the machines menu and Settings > Machines start
   (`MachineView.release`, which every adapter supplies from the command
   node's summaries; see

@@ -214,13 +214,35 @@ function MachineTile({
       >
         {reading}
       </span>
-      {currency && currencyOffersUpdate(currency) ? (
-        <span
-          aria-hidden="true"
-          data-testid="machine-tile-update"
-          className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-amber-300 ring-1 ring-zinc-950"
-        />
-      ) : null}
+      {currency && currencyOffersUpdate(currency) ? <UpdateArrow /> : null}
     </button>
+  );
+}
+
+/**
+ * The tile's "update on offer" mark: a small green up arrow outlined in black,
+ * so it reads against every machine colour. It sits in the top-right corner,
+ * clear of the initials and the CPU reading; the tile's name and tooltip carry
+ * the version difference in words.
+ */
+function UpdateArrow() {
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      data-testid="machine-tile-update"
+      viewBox="0 0 10 10"
+      className={cn(
+        "pointer-events-none absolute top-px right-px size-2 fill-success stroke-zinc-950",
+        "forced-colors:fill-[Highlight] forced-colors:stroke-[CanvasText]",
+      )}
+    >
+      <path
+        d="M5 1.3 L8.7 5.1 H6.5 V8.7 H3.5 V5.1 H1.3 Z"
+        strokeWidth={2.4}
+        strokeLinejoin="round"
+        paintOrder="stroke"
+      />
+    </svg>
   );
 }

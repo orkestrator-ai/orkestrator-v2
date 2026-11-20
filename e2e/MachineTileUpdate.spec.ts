@@ -22,15 +22,16 @@ async function arrowPaint(tile: Locator) {
       initials.selectNodeContents(button.firstElementChild!);
 
       const canvas = document.createElement("canvas");
-      canvas.width = 8;
-      canvas.height = 8;
+      const side = Math.ceil(markBox.width);
+      canvas.width = side;
+      canvas.height = side;
       const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
       async function pixels(base64: string) {
         const image = new Image();
         image.src = `data:image/png;base64,${base64}`;
         await image.decode();
         ctx.drawImage(image, -x, -y);
-        return ctx.getImageData(0, 0, 8, 8).data;
+        return ctx.getImageData(0, 0, side, side).data;
       }
       const painted = await pixels(withArrow);
       const background = await pixels(withoutArrow);
@@ -138,8 +139,8 @@ for (const forcedColors of ["none", "active"] as const) {
         await expect(mark).toBeVisible();
         await expect(mark).toHaveAttribute("aria-hidden", "true");
         const paint = await arrowPaint(tile);
-        expect(paint.size).toEqual([8, 8]);
-        expect(paint.corner).toEqual([1 + paint.border, 1 + paint.border]);
+        expect(paint.size).toEqual([10, 10]);
+        expect(paint.corner).toEqual([2.5 + paint.border, 2.5 + paint.border]);
         expect(paint.initialsClear).toBe(true);
         expect(paint.cpuClear).toBe(true);
         expect(paint.shape).toEqual([

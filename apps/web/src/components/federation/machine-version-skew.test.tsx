@@ -58,6 +58,7 @@ describe("the machine tile", () => {
   test("shows nothing for a machine on the command node's version", () => {
     const element = tile(COMMAND_RELEASE);
     expectDomAbsent(screen.queryByTestId("machine-tile-update"));
+    expect(element.firstElementChild?.getAttribute("class")).not.toContain("pr-2");
     expect(versionLines(element)).toEqual([]);
   });
 
@@ -88,7 +89,11 @@ describe("the machine tile", () => {
     expect(classes).toContain("stroke-zinc-950");
     expect(classes).not.toContain("bg-amber-300");
     // Top-right corner, clear of the initials and the CPU reading.
-    expect(classes).toEqual(expect.arrayContaining(["absolute", "top-px", "right-px", "size-2"]));
+    expect(classes).toEqual(
+      expect.arrayContaining(["absolute", "top-[2.5px]", "right-[2.5px]", "size-2.5"]),
+    );
+    // The initials move left to make room for it.
+    expect(element.firstElementChild?.getAttribute("class")).toContain("pr-2");
     // The tile's own name still carries the machine and its CPU; the tooltip the version.
     expect(element.getAttribute("aria-label")).toContain("Machine A");
     expect(element.getAttribute("title")).toContain("older than the command node's 2.40.0");

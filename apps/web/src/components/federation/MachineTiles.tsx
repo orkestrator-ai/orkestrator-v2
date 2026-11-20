@@ -123,6 +123,7 @@ function MachineTile({
   });
   const commandRelease = useStore(portalStore.store, (portal) => portal.commandRelease);
   const currency = machineViewCurrency(machine, { commandRelease });
+  const offersUpdate = currency !== null && currencyOffersUpdate(currency);
   // Only the pointer listeners: the sortable's keyboard attributes would
   // rename the toggle a "sortable" and take Space and Enter from it.
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -199,6 +200,8 @@ function MachineTile({
         aria-hidden="true"
         className={cn(
           "flex h-1/2 items-center justify-center font-mono text-[11px] leading-none font-bold tracking-tight text-zinc-950",
+          // Move the initials 4px left so wide ones (WWW, MMM) clear the update arrow.
+          offersUpdate && "pr-2",
           colors.top,
         )}
       >
@@ -214,15 +217,17 @@ function MachineTile({
       >
         {reading}
       </span>
-      {currency && currencyOffersUpdate(currency) ? <UpdateArrow /> : null}
+      {offersUpdate ? <UpdateArrow /> : null}
     </button>
   );
 }
 
 /**
  * The tile's "update on offer" mark: a small green up arrow outlined in black,
- * so it reads against every machine colour. It sits in the top-right corner,
- * clear of the initials and the CPU reading. The tile's tooltip also serves as
+ * so it reads against every machine colour. It sits 2.5px in from the tile's
+ * top-right corner, away from the rounded edge; the initials move 4px left
+ * while it is shown, which leaves at least 1px between them and the arrow, and
+ * it stays above the CPU reading. The tile's tooltip also serves as
  * its accessible description and gives the version difference in words.
  */
 function UpdateArrow() {
@@ -233,7 +238,7 @@ function UpdateArrow() {
       data-testid="machine-tile-update"
       viewBox="0 0 10 10"
       className={cn(
-        "pointer-events-none absolute top-px right-px size-2 fill-success stroke-zinc-950",
+        "pointer-events-none absolute top-[2.5px] right-[2.5px] size-2.5 fill-success stroke-zinc-950",
         "forced-colors:fill-[Canvas] forced-colors:stroke-[CanvasText]",
       )}
     >

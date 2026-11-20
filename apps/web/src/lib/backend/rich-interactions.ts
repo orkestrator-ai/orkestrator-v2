@@ -55,6 +55,7 @@ export function createRichInteractionsApi(client: BackendClient) {
     environmentId: string;
     interactionId: string;
     expectedRevision: number;
+    expectedDraftRevision?: number;
     actionId: string;
     idempotencyKey: string;
     result: unknown;

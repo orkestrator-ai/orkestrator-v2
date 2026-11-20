@@ -185,7 +185,7 @@ export type BrowserPreviewController = {
   startTrace?(tabId: string, label: string): Promise<BrowserPreviewTraceStatus>;
   traceStatus?(tabId: string): BrowserPreviewTraceStatus;
   markTrace?(tabId: string, observation: string): BrowserPreviewTraceStatus;
-  stopTrace?(tabId: string): Promise<BrowserPreviewTraceResult>;
+  stopTrace?(tabId: string, retain?: boolean): Promise<BrowserPreviewTraceResult>;
   /** Clear one service's partition (cookies, storage, cache). */
   resetServiceSiteData?(target: BrowserPreviewServiceTarget): Promise<void>;
   openServiceExternally?(target: BrowserPreviewServiceTarget): Promise<void>;
@@ -883,9 +883,9 @@ export function registerMainIpc({
       return traceController(event, tab).markTrace(tab, traceText(observation, 2_000));
     },
   );
-  handle("orkestrator:browser-preview:trace-stop", (event, tabId: unknown) => {
+  handle("orkestrator:browser-preview:trace-stop", (event, tabId: unknown, retain: unknown) => {
     const tab = browserPreviewTabId(tabId);
-    return traceController(event, tab).stopTrace(tab);
+    return traceController(event, tab).stopTrace(tab, retain === true);
   });
   handle("orkestrator:browser-preview:destroy", (event, tabId: unknown) => {
     const tab = browserPreviewTabId(tabId);

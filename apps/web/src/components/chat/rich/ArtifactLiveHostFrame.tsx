@@ -1,4 +1,7 @@
-import { publishArtifactResultCandidate } from "@/lib/chat/artifact-result-candidates";
+import {
+  clearArtifactResultCandidates,
+  publishArtifactResultCandidate,
+} from "@/lib/chat/artifact-result-candidates";
 import { useEffect, useMemo, useRef, useLayoutEffect } from "react";
 import type { ArtifactLiveSessionResponse } from "@orkestrator/protocol/transcript-artifact-commands";
 import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-policy";
@@ -109,6 +112,8 @@ export function ArtifactLiveHostFrame({
 
   useEffect(() => {
     if (!shell) return;
+    const clearCandidates = () =>
+      clearArtifactResultCandidates(session.artifactId, session.revision, session.generation);
     const onMessage = (event: MessageEvent) => {
       const outcome = channel.handle(
         { source: event.source, data: event.data, origin: event.origin },
@@ -137,6 +142,7 @@ export function ArtifactLiveHostFrame({
           });
           break;
         case "disposed":
+          clearCandidates();
           // The shell already tore the artifact frame down; show the saved preview.
           reportRef.current({
             phase: "navigation-blocked",
@@ -161,8 +167,17 @@ export function ArtifactLiveHostFrame({
       clearTimeout(readyTimer);
       window.removeEventListener("message", onMessage);
       channel.invalidate();
+      clearCandidates();
     };
-  }, [channel, readyTimeoutMs, sendTheme, shell]);
+  }, [
+    channel,
+    readyTimeoutMs,
+    sendTheme,
+    session.artifactId,
+    session.generation,
+    session.revision,
+    shell,
+  ]);
 
   // Theme changes are presentation only; they never claim verification.
   useEffect(() => {
@@ -204,6 +219,7 @@ export function ArtifactLiveHostFrame({
         if (loads.current > 1) {
           // The shell itself reloaded or navigated: this channel is over.
           channel.invalidate();
+          clearArtifactResultCandidates(session.artifactId, session.revision, session.generation);
           reportRef.current({
             phase: "navigation-blocked",
             message: NAVIGATION_STOPPED,

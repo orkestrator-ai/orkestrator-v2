@@ -144,6 +144,7 @@ export const richInteractionSubmitCommand = defineCommand({
     environmentId: Id,
     interactionId: Id,
     expectedRevision: Revision,
+    expectedDraftRevision: Schema.optionalKey(Revision),
     actionId: Id,
     idempotencyKey: Key,
     result: Schema.Unknown,

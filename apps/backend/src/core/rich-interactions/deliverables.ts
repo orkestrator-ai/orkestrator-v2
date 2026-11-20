@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import type { ResultReviewResult, ResultReviewSpec } from "@orkestrator/protocol/rich-interactions";
+import type {
+  ContentRef,
+  ResultReviewResult,
+  ResultReviewSpec,
+} from "@orkestrator/protocol/rich-interactions";
+import { RichInteractionError } from "./errors.js";
 import type { RichInteractionTx, StoredDeliverable, StoredRequest } from "./store.js";
 
 /**
@@ -55,7 +60,8 @@ export function applyDeliverablePatch(
     tx.listDeliverables(input.environmentId, input.logicalSessionKey).length >=
       DELIVERABLE_LIMITS.perConversation
   ) {
-    throw new Error(
+    throw new RichInteractionError(
+      "capacity",
       `A conversation keeps metadata for at most ${DELIVERABLE_LIMITS.perConversation} deliverables`,
     );
   }
@@ -99,14 +105,21 @@ export function recordAcceptedArtifacts(
   actionId: string,
   result: unknown,
   now: string,
+  isPublished: (ref: Extract<ContentRef, { kind: "artifact" }>) => boolean,
 ): void {
   if (request.kind !== "result-review" || (actionId !== "accept" && actionId !== "accept-selected"))
     return;
   const decision = result as ResultReviewResult;
-  if (decision.decision !== "accept") return;
+
   const spec = request.spec as ResultReviewSpec;
   for (const comparison of spec.comparisons) {
     if (comparison.after?.kind !== "artifact") continue;
+    if (!isPublished(comparison.after))
+      throw new RichInteractionError(
+        "unavailable",
+        "A reviewed artifact revision is unavailable in this conversation.",
+      );
+    if (decision.decision !== "accept") continue;
     const { artifactId, revision } = comparison.after;
     const deliverableId = deliverableIdFor(
       request.owner.environmentId,
@@ -114,17 +127,22 @@ export function recordAcceptedArtifacts(
       artifactId,
     );
     const current = tx.getDeliverable(deliverableId);
-    tx.putDeliverable({
-      ...(current ?? {
-        deliverableId,
+    const metadata =
+      current ??
+      applyDeliverablePatch(tx, {
         environmentId: request.owner.environmentId,
         logicalSessionKey: request.owner.logicalSessionKey,
         artifactId,
-        pinned: false,
-        revision: 0,
-      }),
+        expectedRevision: 0,
+        patch: {},
+        now,
+      });
+    if ("conflict" in metadata)
+      throw new RichInteractionError("conflict", "The deliverable changed during acceptance.");
+    tx.putDeliverable({
+      ...metadata,
       acceptedRevision: revision,
-      revision: (current?.revision ?? 0) + 1,
+      revision: current ? current.revision + 1 : metadata.revision,
       updatedAt: now,
     });
   }

@@ -7,6 +7,7 @@ import {
   ProvenanceBadge,
   Section,
   textareaClass,
+  useReferencedPublications,
   type KindProps,
 } from "../shared";
 
@@ -32,12 +33,36 @@ export function ResultReviewCard({
 }: KindProps<ResultReviewSpec>) {
   const value = (draft as ReviewDraft | undefined) ?? { criterionIds: [] };
   const [layout, setLayout] = useState<"side" | "stacked">("side");
-  const decided = view.receipts.find(
-    (r) =>
-      r.actionId === "accept" ||
-      r.actionId === "accept-selected" ||
-      r.actionId === "request-changes",
+  const afterReferences = spec.comparisons.flatMap((comparison) =>
+    comparison.after?.kind === "artifact" ? [comparison.after] : [],
   );
+  const { publications, loaded } = useReferencedPublications(afterReferences);
+  const canAccept = afterReferences.every((ref) =>
+    publications.some(
+      (publication) =>
+        publication.ref.artifactId === ref.artifactId &&
+        publication.ref.revision === ref.revision &&
+        publication.availability === "available",
+    ),
+  );
+  const reviewActions = actions.map((action) =>
+    action.id.startsWith("accept") && !canAccept
+      ? {
+          ...action,
+          available: false,
+          unavailableReason: loaded
+            ? "A reviewed artifact revision is unavailable."
+            : "Checking reviewed artifact revisions…",
+        }
+      : action,
+  );
+  const decisions = new Map<number, (typeof view.receipts)[number]>();
+  for (const receipt of view.receipts) {
+    if (["accept", "accept-selected", "request-changes"].includes(receipt.actionId)) {
+      const revision = (receipt.result as ResultReviewResult).expectedResultRevision;
+      if (Number.isSafeInteger(revision)) decisions.set(revision, receipt);
+    }
+  }
   const result = (decision: ResultReviewResult["decision"]): ResultReviewResult => ({
     expectedResultRevision: spec.resultRevision,
     decision,
@@ -157,11 +182,11 @@ export function ResultReviewCard({
           </ul>
         </Section>
       ) : null}
-      {decided ? (
-        <p className="text-xs text-muted-foreground">
-          Your decision: {decided.actionLabel} (result revision {spec.resultRevision}).
+      {[...decisions.entries()].reverse().map(([revision, decision]) => (
+        <p key={revision} className="text-xs text-muted-foreground">
+          Your decision: {decision.actionLabel} (result revision {revision}).
         </p>
-      ) : null}
+      ))}
       {!disabled ? (
         <>
           <textarea
@@ -173,7 +198,7 @@ export function ResultReviewCard({
             onChange={(e) => setDraft({ ...value, comment: e.target.value })}
           />
           <ActionBar
-            actions={actions}
+            actions={reviewActions}
             disabled={disabled}
             onAction={(a) => {
               if (a.id === "accept-selected" && value.criterionIds.length === 0) return;

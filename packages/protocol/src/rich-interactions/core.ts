@@ -290,6 +290,7 @@ function readActionSelection(module: AnyKindModule, value: unknown, path: string
   return selections.map((selection, index) => {
     const registered = module.actions.find((action) => action.id === selection.id);
     if (registered) {
+      if (registered.commandId === "workflow.stop") return registered;
       return {
         ...registered,
         ...(selection.label ? { label: selection.label } : {}),
@@ -352,7 +353,11 @@ export function readCreateInput(
     fail("$.kind", `${kind} requests are created by an agent`);
   }
   const module = RICH_KIND_MODULES[kind];
-  const spec = readKindSpec(kind, record.spec);
+  const parsedSpec = readKindSpec(kind, record.spec);
+  const spec =
+    kind === "criteria" && options.origin === "agent"
+      ? { ...(parsedSpec as object), phase: "proposed", assessments: {}, walkthrough: {} }
+      : parsedSpec;
   const body = optStr(record.body, "$.body", RICH_INTERACTION_LIMITS.bodyChars);
   const expiresInSeconds = optNum(record.expiresInSeconds, "$.expiresInSeconds", {
     min: 30,
@@ -487,7 +492,7 @@ export function parseRichInteractionPrompt(
 ): { summary: string; envelope: RichInteractionEnvelope } | null {
   const start = prompt.lastIndexOf(ENVELOPE_OPEN);
   const end = prompt.lastIndexOf(ENVELOPE_CLOSE);
-  if (start < 0 || end < start) return null;
+  if (start < 0 || end < start || prompt.slice(end + ENVELOPE_CLOSE.length).trim()) return null;
   const inner = prompt.slice(start + ENVELOPE_OPEN.length, end).trim();
   if (!inner.startsWith(ENVELOPE_INSTRUCTION)) return null;
   try {

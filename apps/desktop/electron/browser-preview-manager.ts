@@ -65,6 +65,20 @@ import {
 } from "./preview-session-import.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
+// A node preview runtime can be disposed when its last tab closes. Retained
+// traces belong to the window so later review can still resolve the closed tab.
+const retainedTracesByWindow = new WeakMap<BrowserWindow, Map<string, BrowserPreviewTraceResult>>();
+
+function retainedTraces(window: BrowserWindow | null) {
+  if (!window || window.isDestroyed()) return undefined;
+  let traces = retainedTracesByWindow.get(window);
+  if (!traces) {
+    traces = new Map();
+    retainedTracesByWindow.set(window, traces);
+  }
+  return traces;
+}
+
 const dialogLog = createLogger("desktop.dialog");
 
 type WebContentsViewConstructor = new (
@@ -235,6 +249,7 @@ export class BrowserPreviewManager {
   } | null = null;
   private readonly captures: BrowserPreviewCaptureSessions;
   private readonly traces = new BrowserPreviewTraceSessions({
+    retained: () => retainedTraces(this.options.getWindow()),
     preview: (tabId) => {
       const preview = this.previews.get(tabId);
       return preview
@@ -914,9 +929,9 @@ export class BrowserPreviewManager {
     return this.traces.mark(tabId, observation);
   }
 
-  stopTrace(tabId: string): Promise<BrowserPreviewTraceResult> {
+  stopTrace(tabId: string, retain?: boolean): Promise<BrowserPreviewTraceResult> {
     assertTabId(tabId);
-    return this.traces.stop(tabId);
+    return this.traces.stop(tabId, retain);
   }
 
   destroy(tabId: string): void {

@@ -79,6 +79,9 @@ export function registerRichInteractionCommands(register: CommandRegistrar): voi
       service(context).submit(args.environmentId, {
         interactionId: args.interactionId,
         expectedRevision: args.expectedRevision,
+        ...(args.expectedDraftRevision === undefined
+          ? {}
+          : { expectedDraftRevision: args.expectedDraftRevision }),
         actionId: args.actionId,
         idempotencyKey: args.idempotencyKey,
         result: args.result,

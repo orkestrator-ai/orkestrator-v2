@@ -128,57 +128,113 @@ export function RefChip({ reference }: { reference: ContentRef }) {
 // ---------------------------------------------------------------------------
 // Artifact references resolved through the conversation's publication ledger
 
-const LEDGER_CACHE = new Map<string, ArtifactPublicationView[]>();
-const LEDGER_PAGES = 5;
-
-/**
- * The conversation's published artifacts, read from the authoritative
- * publication ledger (bounded pages) and re-read on its change hint.
- */
-export function useConversationPublications(): {
-  publications: ArtifactPublicationView[];
-  loaded: boolean;
-} {
+/** Reads one page of the publication ledger, newest first. */
+export function useConversationPublications(beforeSequence?: number) {
   const scope = useRichTranscriptScope();
   const backend = useScopeBackend();
-  const key = scope ? `${scope.backendId}\0${scope.environmentId}\0${scope.logicalSessionKey}` : "";
+  const environmentId = scope?.environmentId;
+  const logicalSessionKey = scope?.logicalSessionKey;
+  const key = JSON.stringify([scope?.backendId, environmentId, logicalSessionKey, beforeSequence]);
   const [state, setState] = useState<{
     key: string;
     publications: ArtifactPublicationView[];
+    nextSequence: number | null;
     loaded: boolean;
-  }>(() => ({ key, publications: LEDGER_CACHE.get(key) ?? [], loaded: LEDGER_CACHE.has(key) }));
+    failed: boolean;
+  } | null>(null);
   useEffect(() => {
-    if (!scope) return;
-    let disposed = false;
-    const read = async () => {
-      const all: ArtifactPublicationView[] = [];
-      let after: number | undefined;
-      for (let page = 0; page < LEDGER_PAGES; page += 1) {
-        const result = await backend.listTranscriptArtifactPublications({
-          environmentId: scope.environmentId,
-          logicalSessionKey: scope.logicalSessionKey,
-          ...(after === undefined ? {} : { afterSequence: after }),
+    if (!environmentId || !logicalSessionKey) return;
+    let sequence = 0;
+    const read = () => {
+      const requested = ++sequence;
+      void backend
+        .listTranscriptArtifactPublications({
+          environmentId,
+          logicalSessionKey,
+          newestFirst: true,
+          ...(beforeSequence === undefined ? {} : { beforeSequence }),
+        })
+        .then((page) => {
+          if (requested === sequence) setState({ key, ...page, loaded: true, failed: false });
+        })
+        .catch(() => {
+          if (requested === sequence)
+            setState({ key, publications: [], nextSequence: null, loaded: true, failed: true });
         });
-        all.push(...result.publications);
-        if (result.nextSequence === null) break;
-        after = result.nextSequence;
-      }
-      if (disposed) return;
-      LEDGER_CACHE.set(key, all);
-      setState({ key, publications: all, loaded: true });
     };
-    void read().catch(() => {
-      if (!disposed) setState((current) => ({ ...current, key, loaded: true }));
-    });
-    const off = onResourceChanged("transcript-artifact", () => void read().catch(() => undefined));
+    read();
+    const off = onResourceChanged("transcript-artifact", read);
     return () => {
-      disposed = true;
+      sequence += 1;
       off();
     };
-  }, [backend, key, scope]);
-  return state.key === key
-    ? { publications: state.publications, loaded: state.loaded }
-    : { publications: LEDGER_CACHE.get(key) ?? [], loaded: false };
+  }, [backend, beforeSequence, environmentId, key, logicalSessionKey]);
+  return state?.key === key
+    ? state
+    : { publications: [], nextSequence: null, loaded: false, failed: false };
+}
+
+type ArtifactReference = Extract<ContentRef, { kind: "artifact" }>;
+
+/** Resolves only the named revisions in the current conversation. */
+export function useReferencedPublications(references: readonly ArtifactReference[]) {
+  const scope = useRichTranscriptScope();
+  const backend = useScopeBackend();
+  const environmentId = scope?.environmentId;
+  const logicalSessionKey = scope?.logicalSessionKey;
+  const targets = JSON.stringify(
+    references.map(({ artifactId, revision }) => [artifactId, revision]),
+  );
+  const key = JSON.stringify([scope?.backendId, environmentId, logicalSessionKey, targets]);
+  const [state, setState] = useState<{
+    key: string;
+    publications: ArtifactPublicationView[];
+  } | null>(null);
+  useEffect(() => {
+    if (!environmentId || !logicalSessionKey || targets === "[]") return;
+    let sequence = 0;
+    const pairs = JSON.parse(targets) as [string, number][];
+    const read = () => {
+      const requested = ++sequence;
+      void Promise.all(
+        pairs.map(async ([artifactId, revision]) => {
+          try {
+            const args = { environmentId, logicalSessionKey };
+            const page = await backend.listTranscriptArtifactPublications({
+              ...args,
+              artifactId,
+              revision,
+              limit: 1,
+            });
+            const match = page.publications.find(
+              (p) => p.ref.artifactId === artifactId && p.ref.revision === revision,
+            );
+            return (
+              match &&
+              (await backend.getTranscriptArtifactPublication({
+                ...args,
+                publicationId: match.ref.publicationId,
+              }))
+            );
+          } catch {
+            return undefined;
+          }
+        }),
+      ).then((matches) => {
+        if (requested === sequence)
+          setState({ key, publications: matches.filter((match) => match !== undefined) });
+      });
+    };
+    read();
+    const off = onResourceChanged("transcript-artifact", read);
+    return () => {
+      sequence += 1;
+      off();
+    };
+  }, [backend, environmentId, key, logicalSessionKey, targets]);
+  return state?.key === key
+    ? { publications: state.publications, loaded: true }
+    : { publications: [], loaded: targets === "[]" || !environmentId || !logicalSessionKey };
 }
 
 /**
@@ -196,10 +252,15 @@ export function ContentRefPreview({
   description: string;
   compact?: boolean;
 }) {
-  const { publications, loaded } = useConversationPublications();
+  const { publications, loaded } = useReferencedPublications(
+    reference.kind === "artifact" ? [reference] : [],
+  );
   if (reference.kind === "artifact") {
     const publication = publications.find(
-      (p) => p.ref.artifactId === reference.artifactId && p.ref.revision === reference.revision,
+      (p) =>
+        p.ref.artifactId === reference.artifactId &&
+        p.ref.revision === reference.revision &&
+        p.availability === "available",
     );
     if (publication) {
       return (
@@ -219,7 +280,7 @@ export function ContentRefPreview({
     return (
       <PreviewUnavailable description={description}>
         {loaded
-          ? `Revision ${reference.revision} of ${reference.artifactId} is not published in this conversation.`
+          ? `Revision ${reference.revision} of ${reference.artifactId} is unavailable in this conversation.`
           : "Loading preview…"}
       </PreviewUnavailable>
     );

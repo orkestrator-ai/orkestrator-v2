@@ -644,5 +644,5 @@ export interface BrowserPreviewTraceApi {
   start(tabId: string, label: string): Promise<BrowserPreviewTraceStatus>;
   status(tabId: string): Promise<BrowserPreviewTraceStatus>;
   mark(tabId: string, observation: string): Promise<BrowserPreviewTraceStatus>;
-  stop(tabId: string): Promise<BrowserPreviewTraceResult>;
+  stop(tabId: string, retain?: boolean): Promise<BrowserPreviewTraceResult>;
 }

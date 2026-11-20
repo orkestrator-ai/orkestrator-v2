@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import type { ChartSpecV1 } from "../chart-spec.js";
 import { RICH_KIND_FIXTURES } from "../testing/rich-interaction-fixtures.js";
 import { RICH_KIND_MODULES, type RichInteractionKind } from "./core.js";
 import { initialFormValues, pruneHiddenValues, readFormSpec, readFormValues } from "./form.js";
 import type { RichActionDef } from "./kind-module.js";
 import { documentBlockHash, type DocumentSpec } from "./kinds-feedback.js";
 import { criterionHash, currentAssessment, type CriteriaSpec } from "./kinds-operations.js";
-import { chartSelectionMembers, type ChartSelectionSpec } from "./kinds-results.js";
+import {
+  candidateHash,
+  chartPointIds,
+  chartSelectionMembers,
+  type ChartSelectionSpec,
+} from "./kinds-results.js";
 import {
   applyPlanChanges,
   compareCollectionCells,
@@ -436,7 +442,7 @@ describe("12 widget result", () => {
 });
 
 describe("16 criteria", () => {
-  test("human decisions are only recorded by the user and become historical when the criterion changes", () => {
+  test("human decisions are recorded by the user and agreed definitions are immutable to agents", () => {
     const module = RICH_KIND_MODULES.criteria;
     const agreed = module.applyRevision!(
       spec("criteria"),
@@ -465,12 +471,16 @@ describe("16 criteria", () => {
       ...reviewed,
       assessments: {},
       criteria: reviewed.criteria.map((c) =>
-        c.id === "narrow" ? { ...c, requirement: "Usable at 320px" } : c,
+        c.id === "narrow" ? { ...c, threshold: "Usable at 320px" } : c,
       ),
     };
-    const merged = module.mergeAgentUpdate!(reviewed, changed, "$") as CriteriaSpec;
-    expect(currentAssessment(merged, "narrow")).toBeUndefined();
-    expect(merged.assessments.narrow?.[0]?.historical).toBe(true);
+    expect(() => module.mergeAgentUpdate!(reviewed, changed, "$")).toThrow("immutable");
+    const merged = module.mergeAgentUpdate!(
+      reviewed,
+      { ...reviewed, assessments: {} },
+      "$",
+    ) as CriteriaSpec;
+    expect(currentAssessment(merged, "narrow")?.decision).toBe("accepted");
     expect(criterionHash(merged.criteria[1]!)).toBe(criterionHash(reviewed.criteria[1]!));
   });
   test("a waiver needs a rationale", () => {
@@ -540,4 +550,83 @@ describe("20 demonstration", () => {
       false,
     );
   });
+});
+
+test("text formats reject custom patterns and validate with bounded presets", () => {
+  const field = { id: "code", type: "text", label: "Code", required: true };
+  expect(() => readFormSpec({ fields: [{ ...field, pattern: "^(a+)+$" }] }, "$")).toThrow(
+    "unsupported",
+  );
+  const form = readFormSpec({ fields: [{ ...field, format: "slug" }] }, "$");
+  expect(readFormValues(form, { code: "build-cache" }, "$")).toEqual({ code: "build-cache" });
+  expect(() => readFormValues(form, { code: "build cache" }, "$")).toThrow("required format");
+});
+
+test("bar series and category identities cannot alias through colons", () => {
+  const chart = {
+    schemaVersion: 1,
+    kind: "bar",
+    title: "Chart",
+    description: "",
+    xAxis: { kind: "category", label: "Category" },
+    yAxis: { label: "Value" },
+    categories: [
+      { id: "b:c", label: "First" },
+      { id: "c", label: "Second" },
+    ],
+    series: [
+      {
+        id: "a",
+        label: "A",
+        points: [
+          { categoryId: "b:c", value: 1 },
+          { categoryId: "c", value: 2 },
+        ],
+      },
+      {
+        id: "a:b",
+        label: "B",
+        points: [
+          { categoryId: "b:c", value: 3 },
+          { categoryId: "c", value: 4 },
+        ],
+      },
+    ],
+  } satisfies ChartSpecV1;
+  const points = chartPointIds(chart);
+  expect(points.size).toBe(4);
+  const selected = chartSelectionMembers(chart, {
+    kind: "chart-categories",
+    categoryIds: ["b:c"],
+    seriesIds: [],
+  });
+  expect(selected.map((key) => points.get(key)?.y)).toEqual([1, 3]);
+});
+
+test("widget digest includes nested values and is validated on submission", () => {
+  const first = { group: { workers: 2 } };
+  const second = { group: { workers: 3 } };
+  expect(candidateHash(first)).not.toBe(candidateHash(second));
+  const output = {
+    fields: [
+      {
+        id: "group",
+        type: "group",
+        label: "Settings",
+        fields: [{ id: "workers", type: "number", label: "Workers", required: true }],
+      },
+    ],
+  };
+  const widget = { artifactId: "example", revision: 1, intent: "Workers", output };
+  const metadata = {
+    candidateId: "candidate",
+    generation: "viewer",
+    candidateHash: candidateHash(first),
+  };
+  expect(result("widget-result", "send-result", { ...metadata, value: first }, widget).ok).toBe(
+    true,
+  );
+  expect(result("widget-result", "send-result", { ...metadata, value: second }, widget).ok).toBe(
+    false,
+  );
 });

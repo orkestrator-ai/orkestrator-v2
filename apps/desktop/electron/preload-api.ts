@@ -764,8 +764,8 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
           ipcRenderer.invoke("orkestrator:browser-preview:trace-status", tabId),
         mark: (tabId: string, observation: string) =>
           ipcRenderer.invoke("orkestrator:browser-preview:trace-mark", tabId, observation),
-        stop: (tabId: string) =>
-          ipcRenderer.invoke("orkestrator:browser-preview:trace-stop", tabId),
+        stop: (tabId: string, retain?: boolean) =>
+          ipcRenderer.invoke("orkestrator:browser-preview:trace-stop", tabId, retain),
       },
       destroy(tabId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);

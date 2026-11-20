@@ -16,6 +16,11 @@ import {
   RICH_INTERACTION_LIMITS,
   RICH_KIND_MODULES,
   type RichInteractionReceipt,
+  type ContextPacketSpec,
+  type DemonstrationResult,
+  type DemonstrationSpec,
+  type VoiceRequestResult,
+  type VoiceRequestSpec,
 } from "@orkestrator/protocol/rich-interactions";
 import { int, list, looseObject, str, strictObject, toolInput } from "../tool-schema.js";
 import {
@@ -98,6 +103,36 @@ function agentReceipt(receipt: RichInteractionReceipt) {
   };
 }
 
+function agentSpec({ request, receipts }: RichInteractionView): unknown {
+  const sent = receipts.find((receipt) => receipt.actionId === "send");
+  switch (request.kind) {
+    case "context-packet":
+      return {
+        items: sent
+          ? (request.spec as ContextPacketSpec).items.filter((item) => item.included)
+          : [],
+      };
+    case "voice-request": {
+      const spec = request.spec as VoiceRequestSpec;
+      return sent ? { ...spec, recognized: (sent.result as VoiceRequestResult).text } : null;
+    }
+    case "demonstration": {
+      if (!sent) return null;
+      const { steps, gaps, ...metadata } = request.spec as DemonstrationSpec;
+      const { stepIds, expectedOutcome } = sent.result as DemonstrationResult;
+      const kept = new Set(stepIds);
+      return {
+        ...metadata,
+        expectedOutcome,
+        steps: steps.filter((step) => kept.has(step.stepId)),
+        gaps: gaps.filter((gap) => !gap.afterStepId || kept.has(gap.afterStepId)),
+      };
+    }
+    default:
+      return request.spec;
+  }
+}
+
 function agentView(view: RichInteractionView, options: { full: boolean }) {
   const { request } = view;
   return {
@@ -117,7 +152,7 @@ function agentView(view: RichInteractionView, options: { full: boolean }) {
     })),
     submissions: request.submissions,
     ...(options.full
-      ? { spec: request.spec, receipts: view.receipts.map(agentReceipt) }
+      ? { spec: agentSpec(view), receipts: view.receipts.map(agentReceipt) }
       : { lastReceipt: view.receipts.at(-1) ? agentReceipt(view.receipts.at(-1)!) : null }),
   };
 }

@@ -12,15 +12,23 @@ afterEach(() => {
 
 /** A preview whose page queue the test fills; `executeJavaScript` drains it like the real recorder. */
 function fakePreview(url = "http://localhost:5173/items") {
-  const state = { url, generation: 1, installed: 0, queue: [] as unknown[], destroyed: false };
+  const state = {
+    url,
+    generation: 1,
+    installed: 0,
+    installing: null as Promise<void> | null,
+    queue: [] as unknown[],
+    destroyed: false,
+  };
   const handle = (): TracePreviewHandle => ({
     generation: state.generation,
     contents: {
       getURL: () => state.url,
       isDestroyed: () => state.destroyed,
       executeJavaScript: async (code: string) => {
-        if (code.includes("__orkestratorTrace()"))
+        if (code.includes("window.__orkestratorTrace?.token"))
           return state.installed ? state.queue.splice(0) : null;
+        await state.installing;
         state.installed += 1;
         return undefined;
       },
@@ -69,7 +77,7 @@ describe("demonstration recorder (feature 20)", () => {
     });
   });
 
-  test("a new document is a new segment and the recorder reinstalls", async () => {
+  test("stopping after a new document records the navigation without installing fresh listeners", async () => {
     const preview = fakePreview();
     const traces = recorder(preview);
     await traces.start("browser-1", "Web app");
@@ -81,7 +89,7 @@ describe("demonstration recorder (feature 20)", () => {
       route: "/items/7",
       documentSegment: 1,
     });
-    expect(preview.state.installed).toBe(2);
+    expect(preview.state.installed).toBe(1);
   });
 
   test("leaving the recorded origin stops recording and keeps earlier steps", async () => {
@@ -130,4 +138,50 @@ describe("demonstration recorder (feature 20)", () => {
       stopReason: "preview-closed",
     });
   });
+});
+
+test("an overlapping start is refused and stop owns the pending installation", async () => {
+  const preview = fakePreview();
+  const traces = recorder(preview);
+  const installation = Promise.withResolvers<void>();
+  preview.state.installing = installation.promise;
+  const start = traces.start("tab", "First");
+  await expect(traces.start("tab", "Overlapping")).rejects.toThrow("existing recording");
+  const stop = traces.stop("tab", true);
+  preview.state.generation += 1;
+  installation.resolve();
+  await start;
+  const completed = await stop;
+  expect(completed.stopReason).toBe("user");
+  expect(traces.status("tab").recording).toBe(false);
+  expect(await traces.stop("tab")).toEqual(completed);
+  expect((await traces.start("tab", "Second")).recording).toBe(true);
+  expect(preview.state.installed).toBe(2);
+});
+
+test("a closed preview can be reviewed after its runtime is released", async () => {
+  const preview = fakePreview();
+  const retained = new Map();
+  const oldRuntime = new BrowserPreviewTraceSessions({
+    preview: preview.handle,
+    retained: () => retained,
+  });
+  const windowRuntime = new BrowserPreviewTraceSessions({
+    preview: () => null,
+    retained: () => retained,
+  });
+  sessions.push(oldRuntime, windowRuntime);
+  await oldRuntime.start("preview", "Fixture");
+  oldRuntime.mark("preview", "Retained observation");
+  oldRuntime.previewClosed("preview");
+  oldRuntime.dispose();
+  expect(windowRuntime.status("preview")).toMatchObject({
+    recording: false,
+    stopReason: "preview-closed",
+    steps: 1,
+  });
+  expect((await windowRuntime.stop("preview")).steps[0]?.userObservation).toBe(
+    "Retained observation",
+  );
+  expect(windowRuntime.status("preview").stopReason).toBeNull();
 });

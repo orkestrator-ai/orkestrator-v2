@@ -48,7 +48,7 @@ the decision into readable text, and may produce a new spec revision (a
 user edit, a thread entry). There is no general component language.
 
 Actions are registered per kind. An agent chooses which registered actions to
-offer and may relabel them; the route and effect of an action id come from the
+offer and may relabel them except for the whole-run stop control. The route and effect of an action id come from the
 registry, never from the request or the client. Kinds that accept custom
 intents (collection, chart selection, diagram) map them only to the ordinary
 `agent-followup` route.
@@ -97,7 +97,10 @@ them.
   (`interaction-receipt` part) instead of raw text.
 - **product-command.** The action's `commandId` names a registered operation
   (`ProductCommandRegistry`). It rechecks live state before acting (a graph run
-  must still be at the snapshot revision and the named attempt) and reports
+  must still belong to the conversation's environment and match the snapshot
+  revision and activation under the mutation lock). The committed receipt pins
+  the run ID. Stop covers the entire run and requires explicit confirmation.
+  The operation reports
   `applied`, `failed` or `unknown`; a stop that does not report `cancelled` is
   `unknown`, never "stopped". An operation is claimed before it runs and is
   never re-run automatically. Registered today: `workflow.retry` and
@@ -115,7 +118,8 @@ them.
    resync and on the view safety check. A virtualized row remount restores the
    last snapshot from a bounded display cache, then re-reads.
 2. Drafts are local first and synced after a pause with the expected draft
-   revision; a conflict keeps the local draft and shows it.
+   revision. A submission clears the exact draft revision it consumed within
+   its receipt transaction. A conflict keeps the local draft and shows it.
 3. Submit validates shape, action, revision, expiry and capacity
    (`readSubmission`), then commits once per `(interactionId, idempotencyKey)`.
    The receipt id is a digest of the two, so an identical retry returns the
@@ -124,8 +128,9 @@ them.
    outcome is known (lost responses, double clicks and reconnects reuse it);
    a new deliberate action gets a new key.
 5. Delivery runs after the commit; a sweep (`RichInteractionService.start`,
-   every 5 s and at startup) resumes `pending` and `queued` receipts, so a
-   backend restart between commit and dispatch resumes delivery. After five
+   every 5 s and at startup) pages `pending` and `queued` receipts separately.
+   A backend restart between commit and dispatch resumes delivery. An item
+   removed from the session queue is reported as failed. After five
    failed enqueue attempts a follow-up becomes `unknown` and is never resent
    automatically; the person may retry it explicitly, which re-enqueues the
    identical bytes under the same request id.
@@ -135,15 +140,21 @@ them.
 A request changed by the agent (`update_interaction`) or by a user revision
 bumps its revision; a submission against an older revision is `stale`, and
 the draft is kept. Superseded and expired requests refuse submissions.
-Deleting an environment removes its requests, receipts, drafts and
-deliverable metadata (owner sweep in `environment-delete.ts`).
+Deleting an environment removes its requests, retired request IDs, receipts,
+drafts and deliverable metadata (owner sweep in `environment-delete.ts`).
 
 ## Budgets
 
 `RICH_INTERACTION_LIMITS`: result 64 KiB, summary 16 KiB (cut with an omission
 notice), inline spec 512 KiB, draft 64 KiB, 100 open requests per conversation,
-2,000 per environment, 200 receipts per request. Forms: 64 fields, depth 3,
-100 repeat items. Selections: 2,000 explicit ids. A capacity refusal keeps the
+2,000 retained requests per environment, 200 receipts per request. The same
+limits apply to agent and user creation. At capacity, creation retires the
+oldest settled closed, expired or superseded requests with their drafts and
+receipts. A content-free record of each retired ID prevents replay from
+creating a second request. Open cards and outstanding deliveries retain
+their slots. Forms support 64 fields, depth 3 and 100 repeat items.
+Text constraints include length and the built-in `digits`, `alphanumeric` and
+`slug` formats. Custom expressions are refused. Selections: 2,000 explicit ids. A capacity refusal keeps the
 person's selection. These are starting budgets, not measured limits.
 
 ## Agent tools
@@ -153,6 +164,8 @@ person's selection. These are starting budgets, not measured limits.
 tab-scoped credentials only, and auto-approved by every bridge
 (`RICH_INTERACTION_TOOL_NAMES`). Authoring guidance is in the
 [agent tool guide](transcript-artifacts-agent-guide.md#interactive-cards).
+Readback includes only the selected context references and demonstration
+steps, and uses reviewed text for speech.
 
 ## Authored widget results (feature 12)
 
@@ -187,11 +200,11 @@ not inside the artifact's verified source.
 | 13 | Deliverables panel | Ledger-backed list, versions, pins, labels, accepted revision, discuss/comment, open interactions | No drag grouping UI (group field only) |
 | 14 | Evidence cards | Claims, evidence with provenance, asserted relevance, challenges | — |
 | 15 | Context tray | Files (live or excerpt), excerpts, artifact revisions, image regions, notes, order, budgets, send | Tray is per window session, not persisted across reloads |
-| 16 | Acceptance criteria | Agree/edit, evidence, human decisions bound to criterion hash, historical decisions, guided walkthrough with saved progress | — |
+| 16 | Acceptance criteria | Agree/edit, evidence, human decisions bound to criterion hash, historical decisions, guided walkthrough with saved progress, immutable agreed definitions for agent edits | — |
 | 17 | Alternatives | Criterion-aligned comparison, unknown measurements, prefer/request evidence/prepare adoption at exact commit | No product command adopts code; adoption asks the agent for a reviewable change |
-| 18 | Workflow controls | Graph-run retry/stop with live revision and attempt checks | Only graph runs have registered commands |
+| 18 | Workflow controls | Graph-run retry and confirmed whole-run stop with locked revision, owner and activation checks | Only graph runs have registered commands |
 | 19 | Point and talk | Web Speech engine where available, frozen targets, editable text, typed fallback | No spoken replies; engine availability depends on the client |
-| 20 | Demonstrations | Desktop recorder (semantic steps, never values, path-only routes, origin scope, bounds), review/trim, expected outcome | No keyframe screenshots; desktop only |
+| 20 | Demonstrations | Desktop recorder (semantic steps, never values, path-only routes, origin scope, bounds), retained review after a stop, trim, expected outcome | No keyframe screenshots; desktop only |
 
 ## Not done
 

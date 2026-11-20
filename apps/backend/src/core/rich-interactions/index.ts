@@ -1,3 +1,4 @@
+import type { TranscriptArtifactService } from "../transcript-artifacts/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { nativeAgentSessionStorageKey } from "../native-agent-session-key.js";
 import type { StorageService } from "../storage.js";
@@ -22,6 +23,7 @@ export function createRichInteractionService(options: {
   storage: StorageService;
   nativeAgents: { notifyPromptQueueChanged(queueKey: string): void } | undefined;
   graphRuns: () => GraphRunControls | undefined;
+  transcriptArtifacts?: TranscriptArtifactService;
 }): RichInteractionService {
   const { storage } = options;
   const delivery: FollowupDelivery = {
@@ -55,6 +57,10 @@ export function createRichInteractionService(options: {
     notify(queueKey) {
       options.nativeAgents?.notifyPromptQueueChanged(queueKey);
     },
+    async removed(queueKey, requestId) {
+      const queue = await storage.getPromptQueue(queueKey);
+      return queue?.removedOrigins?.some((entry) => entry.requestId === requestId) ?? false;
+    },
     async dispatched(environmentId, agent, logicalSessionKey, requestId) {
       const session = await storage.getNativeAgentSession(
         nativeAgentSessionStorageKey(environmentId, agent as BuildPipelineAgent, logicalSessionKey),
@@ -69,5 +75,20 @@ export function createRichInteractionService(options: {
     store: () => storage.richInteractionStore(),
     delivery,
     commands,
+    hasPublishedArtifact: (owner, ref) =>
+      options.transcriptArtifacts
+        ?.listPublications(owner, {
+          artifactId: ref.artifactId,
+          revision: ref.revision,
+          limit: 1,
+        })
+        .publications.some((entry) => entry.availability === "available") ?? false,
+    hasLiveWidget: (owner, spec, generation) =>
+      options.transcriptArtifacts?.hasLiveGeneration(
+        owner,
+        spec.artifactId,
+        spec.revision,
+        generation,
+      ) ?? false,
   });
 }

@@ -169,9 +169,14 @@ export function useRichInteractionList(
           setState({ key: `${environmentId}\0${logicalSessionKey}`, views, status: "ready" });
       })
       .catch(() => {
-        if (request === sequence.current) setState((current) => ({ ...current, status: "error" }));
+        if (request === sequence.current)
+          setState((current) => ({
+            key,
+            views: current.key === key ? current.views : [],
+            status: "error",
+          }));
       });
-  }, [backend, environmentId, logicalSessionKey]);
+  }, [backend, environmentId, key, logicalSessionKey]);
   useEffect(() => {
     if (!key) return;
     refresh();
@@ -222,7 +227,6 @@ export function useInteractionController(
 ) {
   const backend = useScopeBackend();
   const request = view?.request ?? null;
-  const hasServerDraft = Boolean(view?.draft);
   const serverDraft =
     view?.draft && request && view.draft.requestRevision === request.revision ? view.draft : null;
   const [local, setLocal] = useState<{
@@ -313,6 +317,7 @@ export function useInteractionController(
           environmentId,
           interactionId: request.interactionId,
           expectedRevision: request.revision,
+          ...(!options.keepDraft ? { expectedDraftRevision: draftRevision.current } : {}),
           actionId,
           idempotencyKey: pendingKey.current.key,
           result,
@@ -327,17 +332,14 @@ export function useInteractionController(
         } else {
           if (saveTimer.current) clearTimeout(saveTimer.current);
           setLocal(null);
-          // The decision is committed; its draft has served its purpose.
-          if (hasServerDraft)
-            void backend
-              .clearRichInteractionDraft({ environmentId, interactionId: request.interactionId })
-              .catch(() => undefined);
-          draftRevision.current = 0;
         }
         const next: SubmitOutcome = { ok: true, receipt };
         setOutcome(next);
         const fresh = await refresh();
-        if (fresh) onView(fresh);
+        if (fresh) {
+          draftRevision.current = fresh.draft?.revision ?? 0;
+          onView(fresh);
+        }
         return next;
       } catch (error) {
         const code = richInteractionErrorCode(error);
@@ -358,7 +360,7 @@ export function useInteractionController(
         setSubmitting(false);
       }
     },
-    [backend, environmentId, hasServerDraft, onView, refresh, request],
+    [backend, environmentId, onView, refresh, request],
   );
 
   const dismiss = useCallback(async () => {

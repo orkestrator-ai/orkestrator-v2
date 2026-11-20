@@ -10,6 +10,8 @@ import type { StoreLayout } from "../storage-database.js";
 
 /** One row per request, keyed by interaction id. */
 export const RICH_INTERACTION_REQUESTS_STORE = "rich-interaction-requests";
+/** Content-free creation keys of retired requests, so their retries cannot create new work. */
+export const RICH_INTERACTION_RETIRED_STORE = "rich-interaction-retired";
 /**
  * One row per committed action, keyed by receipt id. The receipt id is a
  * digest of the interaction id and the client's idempotency key, so a retry
@@ -37,6 +39,7 @@ function ownerOf(field: string) {
 }
 
 export const RICH_INTERACTION_STORE_LAYOUTS: Record<string, StoreLayout> = {
+  [RICH_INTERACTION_RETIRED_STORE]: { kind: "record", owner: ownerOf("environmentId") },
   [RICH_INTERACTION_REQUESTS_STORE]: { kind: "record", owner: ownerOf("environmentId") },
   [RICH_INTERACTION_RECEIPTS_STORE]: { kind: "record", owner: ownerOf("environmentId") },
   [RICH_INTERACTION_DRAFTS_STORE]: { kind: "record", owner: ownerOf("environmentId") },

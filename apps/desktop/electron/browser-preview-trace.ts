@@ -12,6 +12,7 @@
  * the preview, or reaching a step or time bound stops recording with the
  * reason, keeping every step captured so far.
  */
+import { randomUUID } from "node:crypto";
 import type {
   BrowserPreviewTraceResult,
   BrowserPreviewTraceStatus,
@@ -23,6 +24,7 @@ export const TRACE_BOUNDS = {
   durationMs: 5 * 60_000,
   pollMs: 500,
   labelChars: 120,
+  retainedPreviews: 64,
 } as const;
 
 export interface TraceWebContents {
@@ -40,11 +42,15 @@ export interface TracePreviewHandle {
  * Installed in the page as a literal script (never a serialized function, so
  * bundler helpers cannot leak into the page). It never reads a field value.
  */
-const TRACE_SCRIPT = String.raw`(() => {
+const traceInstallScript = (token: string, origin: string) => String.raw`(() => {
+  const token = ${JSON.stringify(token)};
+  if (location.origin !== ${JSON.stringify(origin)}) return;
   const key = "__orkestratorTrace";
-  if (window[key]) return;
+  if (window[key]?.token === token) return;
+  window[key]?.finish?.();
+  const controller = new AbortController();
+  const listener = { capture: true, signal: controller.signal };
   const queue = [];
-  const started = performance.now();
   const clip = (text, max) => (typeof text === "string" ? text.replace(/\s+/g, " ").trim().slice(0, max) : "");
   const roleOf = (element) => {
     const explicit = element.getAttribute("role");
@@ -56,38 +62,49 @@ const TRACE_SCRIPT = String.raw`(() => {
     if (element instanceof HTMLInputElement) return element.type === "checkbox" ? "checkbox" : element.type === "radio" ? "radio" : element.type === "submit" || element.type === "button" ? "button" : "textbox";
     return element.tagName.toLowerCase();
   };
+  const editableSelector = 'input,textarea,select,[contenteditable],[role="textbox"]';
+  const containsEditable = (element) =>
+    element.isContentEditable || element.closest(editableSelector) || element.querySelector(editableSelector);
   const describe = (node) => {
     const element = node instanceof Element ? (node.closest("button,a,input,select,textarea,[role],label,summary") || node) : null;
     if (!element) return {};
+    const role = clip(roleOf(element), 40);
+    if (containsEditable(element) || (node instanceof Element && containsEditable(node))) return { role };
     let label = element.getAttribute("aria-label");
     if (!label && element.id) {
       const owner = document.querySelector('label[for="' + CSS.escape(element.id) + '"]');
-      label = owner ? owner.textContent : null;
+      label = owner && !containsEditable(owner) ? owner.textContent : null;
     }
     if (!label) label = element.getAttribute("title") || element.getAttribute("placeholder");
-    const entry = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
-    return { role: clip(roleOf(element), 40), label: clip(label, 120), text: entry ? "" : clip(element.innerText, 80) };
+    return { role, label: clip(label, 120), text: clip(element.innerText, 80) };
   };
   const push = (action, target, extra) => {
     if (queue.length >= 200) return;
     queue.push(Object.assign({ action, target: describe(target), route: location.pathname }, extra || {}));
   };
-  document.addEventListener("click", (event) => { if (event.isTrusted) push("click", event.target); }, true);
+  document.addEventListener("click", (event) => { if (event.isTrusted) push("click", event.target); }, listener);
   document.addEventListener("change", (event) => {
     if (!event.isTrusted) return;
     const target = event.target;
     const choice = target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && (target.type === "checkbox" || target.type === "radio"));
     if (choice) push("select", target);
     else push("input", target, { valueOmitted: true });
-  }, true);
-  document.addEventListener("submit", (event) => { if (event.isTrusted) push("submit", event.target); }, true);
+  }, listener);
+  document.addEventListener("submit", (event) => { if (event.isTrusted) push("submit", event.target); }, listener);
   document.addEventListener("keydown", (event) => {
     if (event.isTrusted && !event.repeat && (event.key === "Enter" || event.key === "Escape")) push("keypress", event.target);
-  }, true);
-  Object.defineProperty(window, key, { value: () => queue.splice(0), configurable: false, enumerable: false });
-  void started;
+  }, listener);
+  const drain = () => queue.splice(0);
+  const finish = () => {
+    controller.abort();
+    delete window[key];
+    return drain();
+  };
+  Object.defineProperty(window, key, { value: { token, drain, finish }, configurable: true });
+
 })();`;
-const DRAIN_SCRIPT = `typeof window.__orkestratorTrace === "function" ? window.__orkestratorTrace() : null`;
+const traceDrainScript = (token: string, finish: boolean) =>
+  `window.__orkestratorTrace?.token === ${JSON.stringify(token)} ? window.__orkestratorTrace.${finish ? "finish" : "drain"}() : null`;
 
 const ACTIONS = new Set(["click", "input", "select", "submit", "keypress"]);
 
@@ -119,6 +136,11 @@ function text(value: unknown, max: number): string | undefined {
 
 interface TraceSession {
   tabId: string;
+  token: string;
+  contents: TraceWebContents;
+  installing: Promise<unknown>;
+  polling: Promise<void> | null;
+  stopping: Promise<BrowserPreviewTraceResult> | null;
   label: string;
   origin: string;
   startedAt: number;
@@ -138,6 +160,8 @@ export class BrowserPreviewTraceSessions {
     private readonly options: {
       preview: (tabId: string) => TracePreviewHandle | null;
       now?: () => number;
+      /** Shared by preview runtimes owned by the same desktop window. */
+      retained?: () => Map<string, BrowserPreviewTraceResult> | undefined;
     },
   ) {}
 
@@ -146,13 +170,19 @@ export class BrowserPreviewTraceSessions {
   }
 
   async start(tabId: string, label: string): Promise<BrowserPreviewTraceStatus> {
+    if (this.sessions.has(tabId) || this.options.retained?.()?.has(tabId))
+      throw new Error("Stop and review the existing recording before starting another.");
     const handle = this.options.preview(tabId);
     if (!handle || handle.contents.isDestroyed()) throw new Error("The preview is not open.");
     const origin = originOf(handle.contents.getURL());
     if (!origin) throw new Error("Only an http(s) preview can be recorded.");
-    this.stopTimer(tabId);
     const session: TraceSession = {
       tabId,
+      token: randomUUID(),
+      contents: handle.contents,
+      installing: Promise.resolve(),
+      polling: null,
+      stopping: null,
       label: label.slice(0, 120) || origin,
       origin,
       startedAt: this.now(),
@@ -165,15 +195,38 @@ export class BrowserPreviewTraceSessions {
       lastRoute: pathOf(handle.contents.getURL()),
     };
     this.sessions.set(tabId, session);
-    await handle.contents.executeJavaScript(TRACE_SCRIPT, false);
-    session.timer = setInterval(() => void this.poll(session), TRACE_BOUNDS.pollMs);
+    session.installing = this.install(session, handle);
+    try {
+      await session.installing;
+    } catch (error) {
+      this.finish(session, "user");
+      if (this.sessions.get(tabId) === session && !session.stopping) this.sessions.delete(tabId);
+      throw error;
+    }
+    if (session.stopReason || session.stopping || this.sessions.get(tabId) !== session)
+      return this.status(tabId);
+    session.timer = setInterval(
+      () => void this.poll(session).catch(() => undefined),
+      TRACE_BOUNDS.pollMs,
+    );
     session.timer.unref?.();
     return this.status(tabId);
   }
 
   status(tabId: string): BrowserPreviewTraceStatus {
     const session = this.sessions.get(tabId);
-    if (!session) return { recording: false, steps: 0, elapsedMs: 0, stopReason: null };
+    if (!session) {
+      const retained = this.options.retained?.()?.get(tabId);
+      return retained
+        ? {
+            recording: false,
+            steps: retained.steps.length,
+            elapsedMs: retained.durationMs,
+            stopReason: retained.stopReason,
+            origin: retained.service.origin,
+          }
+        : { recording: false, steps: 0, elapsedMs: 0, stopReason: null };
+    }
     return {
       recording: session.stopReason === null,
       steps: session.steps.length,
@@ -197,14 +250,37 @@ export class BrowserPreviewTraceSessions {
     return this.status(tabId);
   }
 
-  async stop(tabId: string): Promise<BrowserPreviewTraceResult> {
+  async stop(tabId: string, retain = false): Promise<BrowserPreviewTraceResult> {
     const session = this.sessions.get(tabId);
-    if (!session) throw new Error("No recording exists for this preview.");
+    if (!session) {
+      const retained = this.options.retained?.();
+      const result = retained?.get(tabId);
+      if (!result) throw new Error("No recording exists for this preview.");
+      if (!retain) retained?.delete(tabId);
+      return result;
+    }
+    session.stopping ??= this.stopSession(session);
+    const result = await session.stopping;
+    if (!retain) {
+      if (this.sessions.get(tabId) === session) this.sessions.delete(tabId);
+      const retained = this.options.retained?.();
+      if (retained?.get(tabId)?.steps === session.steps) retained.delete(tabId);
+    }
+    return result;
+  }
+
+  private async stopSession(session: TraceSession): Promise<BrowserPreviewTraceResult> {
+    this.stopTimer(session);
+    await session.installing.catch(() => undefined);
+    await session.polling?.catch(() => undefined);
     if (!session.stopReason) {
-      await this.poll(session);
+      await this.readPage(session, true);
       this.finish(session, session.stopReason ?? "user");
     }
-    this.sessions.delete(tabId);
+    return this.result(session);
+  }
+
+  private result(session: TraceSession): BrowserPreviewTraceResult {
     return {
       service: { label: session.label, origin: session.origin },
       startedAt: new Date(session.startedAt).toISOString(),
@@ -221,26 +297,62 @@ export class BrowserPreviewTraceSessions {
   /** The preview closed: stop, keeping the steps for review. */
   previewClosed(tabId: string): void {
     const session = this.sessions.get(tabId);
-    if (session && !session.stopReason) this.finish(session, "preview-closed");
+    if (!session) return;
+    if (!session.stopReason) this.finish(session, "preview-closed");
+    const retained = this.options.retained?.();
+    if (!retained) return;
+    retained.set(tabId, this.result(session));
+    while (retained.size > TRACE_BOUNDS.retainedPreviews) {
+      const oldest = retained.keys().next().value;
+      if (oldest === undefined) break;
+      retained.delete(oldest);
+    }
+    this.sessions.delete(tabId);
   }
 
   dispose(): void {
-    for (const tabId of this.sessions.keys()) this.stopTimer(tabId);
+    for (const session of this.sessions.values()) this.finish(session, "preview-closed");
     this.sessions.clear();
   }
 
-  private stopTimer(tabId: string): void {
-    const session = this.sessions.get(tabId);
-    if (session?.timer) clearInterval(session.timer);
-    if (session) session.timer = null;
+  private stopTimer(session: TraceSession): void {
+    if (session.timer) clearInterval(session.timer);
+    session.timer = null;
+  }
+
+  private async removeListeners(session: TraceSession, contents: TraceWebContents): Promise<void> {
+    try {
+      if (!contents.isDestroyed())
+        await contents.executeJavaScript(traceDrainScript(session.token, true), false);
+    } catch {
+      // The preview may have navigated or closed before main removed the listeners.
+    }
+  }
+
+  private async install(session: TraceSession, handle: TracePreviewHandle): Promise<void> {
+    session.contents = handle.contents;
+    await handle.contents.executeJavaScript(
+      traceInstallScript(session.token, session.origin),
+      false,
+    );
+    if (session.stopReason || this.sessions.get(session.tabId) !== session)
+      await this.removeListeners(session, handle.contents);
   }
 
   private finish(session: TraceSession, reason: NonNullable<TraceSession["stopReason"]>): void {
-    session.stopReason = reason;
-    this.stopTimer(session.tabId);
+    session.stopReason ??= reason;
+    this.stopTimer(session);
+    void this.removeListeners(session, session.contents);
   }
 
-  private async poll(session: TraceSession): Promise<void> {
+  private poll(session: TraceSession): Promise<void> {
+    session.polling ??= this.readPage(session, false).finally(() => {
+      session.polling = null;
+    });
+    return session.polling;
+  }
+
+  private async readPage(session: TraceSession, stopping: boolean): Promise<void> {
     if (session.stopReason) return;
     if (this.now() - session.startedAt >= TRACE_BOUNDS.durationMs)
       return this.finish(session, "time-limit");
@@ -262,8 +374,9 @@ export class BrowserPreviewTraceSessions {
       session.lastRoute = pathOf(url);
       this.append(session, { action: "navigate", target: undefined, route: session.lastRoute });
       try {
-        await handle.contents.executeJavaScript(TRACE_SCRIPT, false);
+        if (!session.stopReason && !stopping) await this.install(session, handle);
       } catch {
+        if (session.stopReason) return;
         session.gaps.push({
           afterStepId: session.steps.at(-1)?.stepId,
           reason: "The recorder could not attach to the new page.",
@@ -273,13 +386,22 @@ export class BrowserPreviewTraceSessions {
     }
     let drained: unknown;
     try {
-      drained = await handle.contents.executeJavaScript(DRAIN_SCRIPT, false);
+      drained = await handle.contents.executeJavaScript(
+        traceDrainScript(session.token, stopping),
+        false,
+      );
     } catch {
       return;
     }
+    if (
+      session.stopReason ||
+      this.sessions.get(session.tabId) !== session ||
+      this.options.preview(session.tabId)?.generation !== handle.generation
+    )
+      return;
     if (drained === null) {
       // The script is gone without a generation change (an in-page reset): reinstall.
-      await handle.contents.executeJavaScript(TRACE_SCRIPT, false).catch(() => undefined);
+      if (!stopping) await this.install(session, handle).catch(() => undefined);
       return;
     }
     if (!Array.isArray(drained)) return;

@@ -86,6 +86,7 @@ import {
   type ReviewFanoutConcurrency,
 } from "./review-fanout-scheduler.js";
 import type { ResourceChangeListener } from "./storage-shared.js";
+import type { GraphCardExpectation } from "./rich-interactions/product-commands.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { WorkflowResultAcceptance } from "./workflow-result-service.js";
 import {
@@ -717,9 +718,31 @@ export class GraphRunService implements KeyedWorkflowOwner {
     return inputs;
   }
 
+  private checkCardExpectation(current: GraphRun, expected?: GraphCardExpectation): void {
+    if (!expected) return;
+    if (current.environmentId !== expected.environmentId)
+      throw new GraphRunServiceError("invalid-state", "The run belongs to another environment");
+    if (current.revision !== expected.revision)
+      throw new GraphRunServiceError(
+        "invalid-state",
+        "The run advanced; refresh the card before acting",
+      );
+    if (
+      !current.activations.some(
+        (activation) =>
+          activation.key === expected.activationKey && activation.nodeId === expected.nodeId,
+      )
+    )
+      throw new GraphRunServiceError(
+        "invalid-state",
+        "The selected graph activation is unavailable",
+      );
+  }
+
   /** Requests cancellation: admitted work is stopped by its executors on the next pass. */
-  async cancel(runId: string): Promise<GraphRun> {
+  async cancel(runId: string, expected?: GraphCardExpectation): Promise<GraphRun> {
     const run = await this.mutate(runId, (current, at) => {
+      this.checkCardExpectation(current, expected);
       if (isGraphRunTerminal(current.status) || current.status === "cancelling") return null;
       return transitionGraphRun(current, "cancelling", at);
     });
@@ -760,11 +783,18 @@ export class GraphRunService implements KeyedWorkflowOwner {
    * `graph-run-user-actions.ts`): a `restart` rewind the user requested,
    * saved with its artifact marks in one transaction, then the run is woken.
    */
-  async retry(runId: string, activationKey: string): Promise<GraphRun> {
+  async retry(
+    runId: string,
+    activationKey: string,
+    expected?: GraphCardExpectation,
+  ): Promise<GraphRun> {
     const artifacts = await this.options.artifacts.list(runId);
     const run = await this.withLock(runId, async () => {
       const current = await this.storage.graphRuns.getGraphRun(runId);
       if (!current) throw new GraphRunServiceError("not-found", "The graph run does not exist");
+      this.checkCardExpectation(current, expected);
+      if (expected && expected.activationKey !== activationKey)
+        throw new GraphRunServiceError("invalid-state", "The selected graph activation changed");
       const planned = planGraphRunRetry(current, artifacts, activationKey, {
         rewindId: randomUUID(),
         at: this.passDeps.clock().toISOString(),

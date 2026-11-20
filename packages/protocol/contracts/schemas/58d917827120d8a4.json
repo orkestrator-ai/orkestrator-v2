@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:58d917827120d8a4a0fed58f8283a601f06a00586e24c6db8f00e579a5f84184",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "afterSequence": {},
+        "artifactId": {
+          "type": "string"
+        },
+        "beforeSequence": {},
+        "environmentId": {},
+        "limit": {},
+        "logicalSessionKey": {},
+        "newestFirst": {
+          "type": "boolean"
+        },
+        "revision": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerTranscriptArtifactCommands } from "./commands.js";
+import { TranscriptArtifactStore } from "./store.js";
 import { registerTranscriptArtifactPdfCommands } from "./commands-pdf.js";
 import {
   CONVERSATION,
@@ -250,4 +251,58 @@ describe("transcript artifact commands", () => {
     await invoke(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession, { generation: "gen-7" });
     expect(h.content.revoked).toEqual(["gen-7"]);
   });
+});
+
+test("publication paging starts at the newest output and exact references bypass older pages", async () => {
+  const publicationId = await publishChart();
+  const store = new TranscriptArtifactStore({ dataDir: h.dataDir });
+  try {
+    const records = store.records(ENV);
+    const publication = records.get("publication", publicationId)!;
+    store.transact(ENV, (tx) => {
+      for (let sequence = 2; sequence <= 532; sequence++) {
+        const id = `pub_page_fixture_${sequence}`;
+        tx.put(
+          "publication",
+          id,
+          {
+            ...publication,
+            publicationId: id,
+            ref: { ...publication.ref, publicationId: id },
+            conversationSequence: sequence,
+          },
+          CONVERSATION,
+        );
+      }
+    });
+    const scope = { environmentId: ENV, logicalSessionKey: CONVERSATION };
+    const newest = await invoke(TRANSCRIPT_ARTIFACT_COMMANDS.listPublications, {
+      ...scope,
+      newestFirst: true,
+    });
+    expect(newest.publications[0]?.conversationSequence).toBe(532);
+    expect(newest.nextSequence).toBe(433);
+    const older = await invoke(TRANSCRIPT_ARTIFACT_COMMANDS.listPublications, {
+      ...scope,
+      newestFirst: true,
+      beforeSequence: newest.nextSequence,
+    });
+    expect(older.publications[0]?.conversationSequence).toBe(432);
+    const exact = await invoke(TRANSCRIPT_ARTIFACT_COMMANDS.listPublications, {
+      ...scope,
+      artifactId: publication.artifactId,
+      revision: 1,
+      limit: 1,
+    });
+    expect(exact.publications[0]?.ref.publicationId).toBe(publicationId);
+    const missing = await invoke(TRANSCRIPT_ARTIFACT_COMMANDS.listPublications, {
+      ...scope,
+      artifactId: publication.artifactId,
+      revision: 2,
+      limit: 1,
+    });
+    expect(missing.publications).toEqual([]);
+  } finally {
+    store.close();
+  }
 });

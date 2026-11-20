@@ -22,6 +22,8 @@ import type { Environment } from "@/types";
 import { ArtifactLiveHost, ArtifactLivePlaceholder } from "./ArtifactLiveHost";
 import { appCommandStore } from "@/test/app-command-store";
 
+import { latestArtifactResultCandidate } from "@/lib/chat/artifact-result-candidates";
+
 const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 /** The scope every request here comes from: the app's command scope. */
@@ -312,6 +314,33 @@ describe("ArtifactLiveHost (browser mode)", () => {
     );
   });
 
+  test("browser teardown removes the current generation's proposed values", async () => {
+    await startA();
+    const source = { postMessage: mock(() => {}) };
+    Object.defineProperty(frame(), "contentWindow", { configurable: true, value: source });
+    post(source, {
+      channel: ARTIFACT_FRAME_CHANNEL,
+      v: 1,
+      type: "ready",
+      protocolVersion: 1,
+      nonce: "nonce-12345678",
+    });
+    post(source, {
+      channel: ARTIFACT_FRAME_CHANNEL,
+      v: 1,
+      type: "result-candidate",
+      protocolVersion: 2,
+      artifactId: "art_aabcdefgh",
+      revision: 1,
+      generation: "live-gen-1",
+      candidateId: "answer-1",
+      value: { group: { value: 12 } },
+    });
+    expect(latestArtifactResultCandidate("art_aabcdefgh", 1)?.candidateId).toBe("answer-1");
+    act(() => useArtifactLiveHostStore.getState().stop());
+    expect(latestArtifactResultCandidate("art_aabcdefgh", 1)).toBeNull();
+  });
+
   test("an unexpected reload invalidates the channel and shows the saved preview with Reset", async () => {
     await startA();
     act(() => {
@@ -489,9 +518,26 @@ describe("ArtifactLiveHost (desktop host)", () => {
       listeners.forEach((listener) => listener({ hostId: "other", type: "crashed", reason: "x" })),
     );
     expect(useArtifactLiveHostStore.getState().active?.phase).toBe("ready");
+    act(() =>
+      listeners.forEach((listener) =>
+        listener({
+          hostId,
+          type: "result-candidate",
+          candidateId: "native-answer",
+          value: { value: 12 },
+        }),
+      ),
+    );
+    expect(latestArtifactResultCandidate("art_aabcdefgh", 1)?.candidateId).toBe("native-answer");
     act(() => listeners.forEach((listener) => listener({ hostId, type: "unresponsive" })));
     await waitFor(() =>
       expect(useArtifactLiveHostStore.getState().active?.phase).toBe("unresponsive"),
+    );
+    expect(latestArtifactResultCandidate("art_aabcdefgh", 1)).toBeNull();
+    await waitFor(() =>
+      expect(calls(TRANSCRIPT_ARTIFACT_COMMANDS.closeLiveSession)).toContainEqual({
+        generation: "live-gen-1",
+      }),
     );
     await waitFor(() => expect(api.close).toHaveBeenCalledWith(hostId));
     expect(buttonWithText("Reset (new interaction session)")).toBeTruthy();

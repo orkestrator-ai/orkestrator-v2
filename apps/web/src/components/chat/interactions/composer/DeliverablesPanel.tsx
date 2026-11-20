@@ -43,8 +43,11 @@ export function DeliverablesPanel({
 }) {
   const backend = useScopeBackend();
   const scope = useNodeScope();
-  const { publications, loaded } = useConversationPublications();
-  const { views } = useRichInteractionList(environmentId, logicalSessionKey);
+  const [pageStarts, setPageStarts] = useState<number[]>([]);
+  const { publications, loaded, nextSequence, failed } = useConversationPublications(
+    pageStarts.at(-1),
+  );
+  const { views, status, refresh } = useRichInteractionList(environmentId, logicalSessionKey);
   const [meta, setMeta] = useState<RichDeliverableRecord[]>([]);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -133,6 +136,14 @@ export function DeliverablesPanel({
 
   return (
     <div className="flex flex-col gap-4">
+      {status === "error" ? (
+        <p className="text-xs text-failure" role="alert">
+          Could not load conversation interactions.{" "}
+          <Button size="sm" variant="link" onClick={refresh}>
+            Retry
+          </Button>
+        </p>
+      ) : null}
       {open.length ? (
         <section aria-label="Open interactions" className="flex flex-col gap-1">
           <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -167,6 +178,10 @@ export function DeliverablesPanel({
         ) : null}
         {!loaded ? (
           <p className="text-xs text-muted-foreground">Loading…</p>
+        ) : failed ? (
+          <p className="text-xs text-failure" role="alert">
+            Could not load published outputs.
+          </p>
         ) : groups.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             No published outputs in this conversation yet.
@@ -196,7 +211,9 @@ export function DeliverablesPanel({
                     ) : null}
                   </button>
                   <span className="text-muted-foreground">{latest.ref.kind}</span>
-                  <span className="text-muted-foreground">latest rev {latest.ref.revision}</span>
+                  <span className="text-muted-foreground">
+                    {pageStarts.length ? "rev" : "latest rev"} {latest.ref.revision}
+                  </span>
                   {group.meta?.selectedRevision !== undefined &&
                   group.meta.selectedRevision !== latest.ref.revision ? (
                     <span className="text-primary">showing rev {group.meta.selectedRevision}</span>
@@ -238,10 +255,17 @@ export function DeliverablesPanel({
                             })
                           }
                         >
+                          {!group.publications.some(
+                            (item) => item.ref.revision === shownRevision,
+                          ) ? (
+                            <option value={shownRevision}>rev {shownRevision} (selected)</option>
+                          ) : null}
                           {group.publications.map((p) => (
                             <option key={p.ref.revision} value={p.ref.revision}>
                               rev {p.ref.revision}
-                              {p.ref.revision === latest.ref.revision ? " (latest)" : ""}
+                              {!pageStarts.length && p.ref.revision === latest.ref.revision
+                                ? " (latest)"
+                                : ""}
                               {p.ref.revision === group.meta?.acceptedRevision ? " (accepted)" : ""}
                             </option>
                           ))}
@@ -255,9 +279,7 @@ export function DeliverablesPanel({
                         size="sm"
                         variant="outline"
                         className="h-7"
-                        onClick={() =>
-                          addToTray(group.artifactId, shown.ref.revision, shown.ref.title)
-                        }
+                        onClick={() => addToTray(group.artifactId, shownRevision, shown.ref.title)}
                       >
                         <PlusSquare className="size-3.5" aria-hidden />
                         Discuss this version
@@ -269,7 +291,7 @@ export function DeliverablesPanel({
                         onClick={() =>
                           setCommenting({
                             artifactId: group.artifactId,
-                            revision: shown.ref.revision,
+                            revision: shownRevision,
                           })
                         }
                       >
@@ -281,7 +303,7 @@ export function DeliverablesPanel({
                       reference={{
                         kind: "artifact",
                         artifactId: group.artifactId,
-                        revision: shown.ref.revision,
+                        revision: shownRevision,
                       }}
                       description={shown.ref.summary}
                       compact
@@ -301,8 +323,30 @@ export function DeliverablesPanel({
             );
           })}
         </ul>
+        {pageStarts.length || nextSequence !== null ? (
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!pageStarts.length}
+              onClick={() => setPageStarts((current) => current.slice(0, -1))}
+            >
+              Newer outputs
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={nextSequence === null}
+              onClick={() => {
+                if (nextSequence !== null) setPageStarts((current) => [...current, nextSequence]);
+              }}
+            >
+              Older outputs
+            </Button>
+          </div>
+        ) : null}
       </section>
-      <ThreadsSection environmentId={environmentId} logicalSessionKey={logicalSessionKey} />
+      <ThreadsSection environmentId={environmentId} views={views} />
     </div>
   );
 }
@@ -336,12 +380,11 @@ function LabelEditor({ value, onSave }: { value: string; onSave: (value: string)
 /** Persistent comment threads of this conversation (feature 6). */
 function ThreadsSection({
   environmentId,
-  logicalSessionKey,
+  views,
 }: {
   environmentId: string;
-  logicalSessionKey: string;
+  views: ReturnType<typeof useRichInteractionList>["views"];
 }) {
-  const { views } = useRichInteractionList(environmentId, logicalSessionKey);
   const [showResolved, setShowResolved] = useState(false);
   const threads = views.filter(
     (view) =>

@@ -125,3 +125,55 @@ describe("rich interaction agent tools", () => {
     expect(stale).toMatchObject({ isError: true });
   });
 });
+
+test("the agent tools return only reviewed user context", async () => {
+  const { service, handlers } = await tools();
+  const caller = { environmentId: "env-1", tabId: "tab-1" };
+  for (const kind of ["context-packet", "voice-request", "demonstration"] as const) {
+    const fixture = RICH_KIND_FIXTURES[kind];
+    const spec = structuredClone(fixture.spec) as Record<string, unknown>;
+    let result = fixture.result;
+    if (kind === "context-packet") {
+      const items = spec.items as Record<string, unknown>[];
+      items.push({
+        ...items[0],
+        itemId: "private-item",
+        included: false,
+        label: "withheld-marker",
+        excerpt: "withheld-marker",
+        source: { kind: "file", path: "private.ts", live: true },
+      });
+    } else if (kind === "voice-request") {
+      spec.recognized = "withheld-marker";
+    } else {
+      const steps = spec.steps as Record<string, unknown>[];
+      steps[2]!.userObservation = "withheld-marker";
+      steps[2]!.route = "/withheld-marker";
+      result = { stepIds: ["step-1"], expectedOutcome: "The menu remains visible" };
+    }
+    const composed = await service.compose(caller.environmentId, {
+      tabId: caller.tabId,
+      kind,
+      title: fixture.title,
+      spec,
+      actionId: fixture.actionId,
+      idempotencyKey: kind,
+      result,
+    });
+    expect(
+      JSON.stringify(
+        service.get(caller.environmentId, composed.request.interactionId).request.spec,
+      ),
+    ).toContain("withheld-marker");
+    const read = await handlers.get("read_interaction_result")!({
+      interactionId: composed.request.interactionId,
+    });
+    const listed = await handlers.get("list_interactions")!({});
+    expect(read.structuredContent.ok).toBe(true);
+    expect(JSON.stringify(read)).not.toContain("withheld-marker");
+    expect(JSON.stringify(listed)).not.toContain("withheld-marker");
+    if (kind === "voice-request")
+      expect(JSON.stringify(read)).toContain("Explain why this changed");
+    if (kind === "demonstration") expect(JSON.stringify(read)).toContain("step-1");
+  }
+});

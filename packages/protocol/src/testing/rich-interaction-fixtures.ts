@@ -3,6 +3,7 @@
  * by protocol, backend and renderer tests. Each fixture names an action the
  * result is valid for.
  */
+import { candidateHash } from "../rich-interactions/kinds-results.js";
 import type { RichInteractionKind } from "../rich-interactions/core.js";
 
 export interface RichKindFixture {
@@ -377,7 +378,7 @@ export const RICH_KIND_FIXTURES: Record<RichInteractionKind, RichKindFixture> = 
     actionId: "send-result",
     result: {
       candidateId: "candidate_12",
-      candidateHash: "fnv1a:0000",
+      candidateHash: candidateHash({ workers: 4, memoryPerWorkerMiB: 2048 }),
       generation: "gen-1",
       value: { workers: 4, memoryPerWorkerMiB: 2048 },
     },

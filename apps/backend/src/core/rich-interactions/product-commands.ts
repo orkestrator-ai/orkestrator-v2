@@ -34,10 +34,17 @@ export interface ProductCommand {
 }
 
 /** The graph-run operations the workflow card's commands need (`GraphRunService`). */
+export interface GraphCardExpectation {
+  environmentId: string;
+  revision: number;
+  nodeId: string;
+  activationKey: string;
+}
+
 export interface GraphRunControls {
   get(runId: string): Promise<GraphRun | null | undefined>;
-  retry(runId: string, activationKey: string): Promise<GraphRun>;
-  cancel(runId: string): Promise<GraphRun>;
+  retry(runId: string, activationKey: string, expected: GraphCardExpectation): Promise<GraphRun>;
+  cancel(runId: string, expected: GraphCardExpectation): Promise<GraphRun>;
 }
 
 function message(error: unknown): string {
@@ -66,13 +73,19 @@ export function graphWorkflowCommands(
       return { available: false as const, reason: "Graph runs are unavailable on this backend." };
     return { available: true as const };
   };
-  const live = async (request: StoredRequest, result: WorkflowActionsResult) => {
+  const live = async (
+    request: StoredRequest,
+    receipt: StoredReceipt,
+    result: WorkflowActionsResult,
+  ) => {
     const controls = graphRuns();
     if (!controls) return { error: "Graph runs are unavailable on this backend." } as const;
-    const spec = request.spec as WorkflowActionsSpec;
-    const run = await controls.get(spec.runId);
+    const runId = receipt.operationRunId;
+    if (!runId || !result.attemptId)
+      return { error: "The approved operation has no recorded graph target." } as const;
+    const run = await controls.get(runId);
     if (!run) return { error: "The graph run no longer exists." } as const;
-    if (run.environmentId && run.environmentId !== request.owner.environmentId) {
+    if (run.environmentId !== request.owner.environmentId) {
       return { error: "The graph run belongs to another environment." } as const;
     }
     if (run.revision !== result.snapshotRevision) {
@@ -80,20 +93,31 @@ export function graphWorkflowCommands(
         error: `The run advanced (revision ${run.revision}, card showed ${result.snapshotRevision}); refresh the card before acting.`,
       } as const;
     }
-    return { controls, run, spec } as const;
+    return {
+      controls,
+      runId,
+      expected: {
+        environmentId: request.owner.environmentId,
+        revision: result.snapshotRevision,
+        nodeId: result.nodeId,
+        activationKey: result.attemptId,
+      },
+    } as const;
   };
   return [
     {
       id: "workflow.retry",
       availability,
-      async run({ request, result }) {
+      async run({ request, receipt, result }) {
         const typed = result as WorkflowActionsResult;
-        const checked = await live(request, typed);
+        const checked = await live(request, receipt, typed);
         if ("error" in checked) return { state: "failed", detail: checked.error ?? "Refused" };
-        if (!typed.attemptId)
-          return { state: "failed", detail: "The node has no attempt to retry." };
         try {
-          const run = await checked.controls.retry(checked.spec.runId, typed.attemptId);
+          const run = await checked.controls.retry(
+            checked.runId,
+            checked.expected.activationKey,
+            checked.expected,
+          );
           return {
             state: "applied",
             detail: `Retry accepted; run is now at revision ${run.revision}.`,
@@ -106,11 +130,17 @@ export function graphWorkflowCommands(
     {
       id: "workflow.stop",
       availability,
-      async run({ request, result }) {
-        const checked = await live(request, result as WorkflowActionsResult);
+      async run({ request, receipt, result }) {
+        const typed = result as WorkflowActionsResult;
+        if (typed.confirmWholeRun !== true)
+          return {
+            state: "failed",
+            detail: "Stopping the entire workflow run requires confirmation.",
+          };
+        const checked = await live(request, receipt, typed);
         if ("error" in checked) return { state: "failed", detail: checked.error ?? "Refused" };
         try {
-          const run = await checked.controls.cancel(checked.spec.runId);
+          const run = await checked.controls.cancel(checked.runId, checked.expected);
           // A cancel request is not proof work stopped: report the run's own status.
           return run.status === "cancelled"
             ? { state: "applied", detail: "The run reports cancelled." }

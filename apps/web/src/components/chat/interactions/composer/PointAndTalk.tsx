@@ -7,7 +7,10 @@ import {
 } from "@orkestrator/protocol/rich-interactions";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
+import {
+  richInteractionErrorCode,
+  richInteractionErrorMessage,
+} from "@/lib/chat/rich-interaction-errors";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
 import { cn } from "@/lib/utils";
 import { textareaClass } from "../shared";
@@ -77,21 +80,21 @@ export function PointAndTalk({
 }) {
   const backend = useScopeBackend();
   const [engine] = useState(() => speechRecognitionEngine());
+  const pointer = useRef<number | null>(null);
   const recognition = useRef<RecognitionLike | null>(null);
   const [recording, setRecording] = useState(false);
   const [frozen, setFrozen] = useState<RichAnchor[] | null>(null);
-  const [recognized, setRecognized] = useState("");
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const sendKey = useRef<string | null>(null);
+  const sendKey = useRef<{ fingerprint: string; key: string } | null>(null);
 
   useEffect(() => () => recognition.current?.abort(), []);
 
   const start = () => {
     setError(null);
     const speech = engine;
-    if (!speech || recording) return;
+    if (!speech || recognition.current) return;
     setFrozen(targets);
     const instance = speech.create();
     instance.continuous = true;
@@ -106,7 +109,6 @@ export function PointAndTalk({
         else interim += result[0]!.transcript;
       }
       const combined = `${finalText}${interim}`.trim();
-      setRecognized(combined);
       setText(combined);
     };
     instance.onerror = (event) =>
@@ -122,13 +124,18 @@ export function PointAndTalk({
       instance.start();
       setRecording(true);
     } catch {
+      recognition.current = null;
       setError("Speech recognition could not start.");
     }
   };
   const stop = () => recognition.current?.stop();
+  const endPointer = (pointerId: number) => {
+    if (pointer.current !== pointerId) return;
+    pointer.current = null;
+    stop();
+  };
   const cancel = () => {
     recognition.current?.abort();
-    setRecognized("");
     setText("");
     setFrozen(null);
   };
@@ -136,7 +143,9 @@ export function PointAndTalk({
     const pointed = frozen ?? targets;
     setSending(true);
     setError(null);
-    sendKey.current ??= newIdempotencyKey();
+    const fingerprint = JSON.stringify([pointed, text.trim()]);
+    if (sendKey.current?.fingerprint !== fingerprint)
+      sendKey.current = { fingerprint, key: newIdempotencyKey() };
     try {
       await backend.composeRichInteraction({
         environmentId,
@@ -145,17 +154,19 @@ export function PointAndTalk({
         title: text.trim().slice(0, 80) || "Spoken request",
         spec: {
           targets: pointed,
-          recognized: recognized || text.trim(),
+          recognized: text.trim(),
           engine: { name: engine?.name ?? "typed", processing: "unknown" },
         },
         actionId: "send",
-        idempotencyKey: sendKey.current,
+        idempotencyKey: sendKey.current.key,
         result: { text: text.trim() },
       });
       sendKey.current = null;
       cancel();
       onSent?.();
     } catch (cause) {
+      const code = richInteractionErrorCode(cause);
+      if (code && code !== "unavailable") sendKey.current = null;
       setError(`${richInteractionErrorMessage(cause)} It is safe to retry.`);
     } finally {
       setSending(false);
@@ -199,10 +210,15 @@ export function PointAndTalk({
             variant={recording ? "destructive" : "outline"}
             aria-pressed={recording}
             onPointerDown={(e) => {
+              if (e.button !== 0 || pointer.current !== null || recognition.current) return;
               e.preventDefault();
+              e.currentTarget.setPointerCapture(e.pointerId);
+              pointer.current = e.pointerId;
               start();
             }}
-            onPointerUp={stop}
+            onPointerUp={(event) => endPointer(event.pointerId)}
+            onPointerCancel={(event) => endPointer(event.pointerId)}
+            onLostPointerCapture={(event) => endPointer(event.pointerId)}
             onKeyDown={(e) => {
               if ((e.key === " " || e.key === "Enter") && !e.repeat) {
                 e.preventDefault();

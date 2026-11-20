@@ -5,6 +5,8 @@
  *
  * Browser-safe.
  */
+import { sha256Hex } from "../graphs/sha256.js";
+import { canonicalJson } from "../canonical-json.js";
 import { validateChartSpec, type ChartSpecV1 } from "../chart-spec.js";
 import {
   readFormSpec,
@@ -313,6 +315,13 @@ export interface ChartSelectionResult {
 }
 
 /** Stable point ids: `${seriesId}:${categoryId}` for bars, `${seriesId}#${ordinal}` for continuous series, slice id for donuts. */
+function escapeBarPointId(id: string): string {
+  return id
+    .replaceAll("%", "%25")
+    .replaceAll(":", "%3A")
+    .replace(/^\s+|\s+$/gu, (text) => encodeURIComponent(text));
+}
+
 export function chartPointIds(
   chart: ChartSpecV1,
 ): Map<string, { seriesId: string; x: number | string; y: number | null; label: string }> {
@@ -325,7 +334,7 @@ export function chartPointIds(
       for (const series of chart.series) {
         for (const point of series.points) {
           const category = chart.categories.find((c) => c.id === point.categoryId);
-          ids.set(`${series.id}:${point.categoryId}`, {
+          ids.set(`${escapeBarPointId(series.id)}:${escapeBarPointId(point.categoryId)}`, {
             seriesId: series.id,
             x: point.categoryId,
             y: point.value,
@@ -668,6 +677,11 @@ export interface WidgetResultResult {
   value: FormValues;
 }
 
+/** Digest of the complete, validated result shown to the user. */
+export function candidateHash(value: FormValues): string {
+  return `sha256:${sha256Hex(canonicalJson(value))}`;
+}
+
 export const widgetResultKind: RichKindModule<WidgetResultSpec, WidgetResultResult> = {
   kind: "widget-result",
   features: [12],
@@ -688,11 +702,15 @@ export const widgetResultKind: RichKindModule<WidgetResultSpec, WidgetResultResu
   },
   readResult(spec, _action, value, path) {
     const r = obj(value, path, ["candidateId", "candidateHash", "generation", "value"]);
+    const reviewed = readFormValues(spec.output, r.value, `${path}.value`);
+    const hash = candidateHash(reviewed);
+    if (r.candidateHash !== hash)
+      fail(`${path}.candidateHash`, "does not match the reviewed values");
     return {
       candidateId: id(r.candidateId, `${path}.candidateId`),
-      candidateHash: str(r.candidateHash, `${path}.candidateHash`, 128, 1),
+      candidateHash: hash,
       generation: id(r.generation, `${path}.generation`),
-      value: readFormValues(spec.output, r.value, `${path}.value`),
+      value: reviewed,
     };
   },
   summarize(spec, _action, result) {

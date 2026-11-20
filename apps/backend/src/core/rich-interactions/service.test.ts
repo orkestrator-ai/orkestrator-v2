@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { parseRichInteractionPrompt } from "@orkestrator/protocol/rich-interactions";
+import {
+  RICH_INTERACTION_LIMITS,
+  parseRichInteractionPrompt,
+} from "@orkestrator/protocol/rich-interactions";
 import { RICH_KIND_FIXTURES } from "@orkestrator/protocol/testing/rich-interaction-fixtures";
 import { StorageService } from "../storage.js";
 import {
@@ -64,12 +67,13 @@ async function setup(options: { graphRuns?: GraphRunControls; now?: () => Date }
   const commands = new ProductCommandRegistry();
   for (const command of graphWorkflowCommands(() => options.graphRuns)) commands.register(command);
   const service = new RichInteractionService({
+    hasPublishedArtifact: (_owner, ref) => ref.artifactId === "shot-after" && ref.revision === 1,
     store: () => storage.richInteractionStore(),
     delivery: queue.delivery,
     commands,
     ...(options.now ? { now: options.now } : {}),
   });
-  return { storage, service, queue };
+  return { storage, service, queue, commands };
 }
 
 const caller = { environmentId: "env-1", tabId: "tab-1" };
@@ -500,6 +504,92 @@ describe("product commands", () => {
     expect(calls).toHaveLength(1);
   });
 
+  test("a committed operation recovers against its original run after a card update", async () => {
+    const targets: string[] = [];
+    const controls: GraphRunControls = {
+      get: async (id) => ({ ...graphRun(4), id }),
+      retry: async (id) => {
+        targets.push(id);
+        return graphRun(5);
+      },
+      cancel: async () => graphRun(5),
+    };
+    const { storage, service, queue, commands } = await setup({ graphRuns: controls });
+    const spec = {
+      ...(RICH_KIND_FIXTURES["workflow-actions"].spec as object),
+      workflowId: "graph",
+    };
+    const { request } = await present(service, "workflow-actions", "recover", { spec });
+    const store = storage.richInteractionStore();
+    const atomic = store.atomic.bind(store);
+    const interrupt = spyOn(store, "atomic").mockImplementationOnce((work) => {
+      atomic(work);
+      throw new Error("interrupted after commit");
+    });
+    try {
+      await expect(
+        service.submit("env-1", {
+          interactionId: request.interactionId,
+          expectedRevision: 1,
+          actionId: "retry-node",
+          idempotencyKey: "recover",
+          result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 },
+        }),
+      ).rejects.toThrow("interrupted after commit");
+    } finally {
+      interrupt.mockRestore();
+    }
+    expect(targets).toEqual([]);
+    await service.update(caller, {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      spec: { ...spec, runId: "replacement-run" },
+    });
+    const restarted = new RichInteractionService({
+      store: () => store,
+      commands,
+      delivery: queue.delivery,
+    });
+    await restarted.sweep();
+    expect(targets).toEqual(["run-3"]);
+    expect(restarted.get("env-1", request.interactionId).receipts[0]?.delivery).toBe("applied");
+  });
+
+  test("graph operations refuse a run without an owning environment", async () => {
+    let calls = 0;
+    const { service } = await setup({
+      graphRuns: {
+        get: async () => {
+          const { environmentId: _environmentId, ...run } = graphRun(4);
+          return run;
+        },
+        retry: async () => {
+          calls += 1;
+          return graphRun(5);
+        },
+        cancel: async () => {
+          calls += 1;
+          return graphRun(5);
+        },
+      },
+    });
+    const spec = {
+      ...(RICH_KIND_FIXTURES["workflow-actions"].spec as object),
+      workflowId: "graph",
+    };
+    const { request } = await present(service, "workflow-actions", "unowned", { spec });
+    const receipt = await service.submit("env-1", {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      actionId: "retry-node",
+      idempotencyKey: "unowned",
+      result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 },
+    });
+    expect(receipt.delivery).toBe("failed");
+    expect(receipt.deliveryDetail).toContain("belongs to another environment");
+    expect(calls).toBe(0);
+  });
+
   test("a stop that does not report cancelled stays unknown", async () => {
     const graphRuns: GraphRunControls = {
       get: async () => graphRun(4),
@@ -524,7 +614,12 @@ describe("product commands", () => {
       expectedRevision: 1,
       actionId: "stop-node",
       idempotencyKey: "s1",
-      result: { nodeId: "validation", attemptId: "attempt-3", snapshotRevision: 4 },
+      result: {
+        nodeId: "validation",
+        attemptId: "attempt-3",
+        snapshotRevision: 4,
+        confirmWholeRun: true,
+      },
     });
     expect(receipt.delivery).toBe("unknown");
   });
@@ -591,5 +686,243 @@ describe("deliverables and deletion", () => {
       "not-found",
     );
     expect(service.listForConversation("env-1", undefined)).toEqual([]);
+  });
+});
+
+describe("review regressions", () => {
+  const environmentId = "env-1";
+  const voice = {
+    tabId: caller.tabId,
+    kind: "voice-request" as const,
+    title: "Reviewed speech",
+    spec: RICH_KIND_FIXTURES["voice-request"].spec,
+    actionId: "send",
+    idempotencyKey: "compose",
+    result: { text: "Reviewed message" },
+  };
+
+  test("invalid compose leaves no request and a corrected draft can reuse its key", async () => {
+    const { service } = await setup();
+    expect(
+      (await rejection(() => service.compose(environmentId, { ...voice, result: { text: 1 } })))
+        .code,
+    ).toBe("invalid");
+    expect(service.listForConversation(environmentId, undefined)).toHaveLength(0);
+    const sent = await service.compose(environmentId, { ...voice, title: "Corrected" });
+    expect(sent.receipt.delivery).toBe("queued");
+    expect(
+      (await service.compose(environmentId, { ...voice, title: "Corrected" })).receipt.receiptId,
+    ).toBe(sent.receipt.receiptId);
+  });
+
+  test("compose and present share capacity and supersession frees its predecessor's slot", async () => {
+    const { service, storage } = await setup();
+    const first = await present(service, "choice");
+    const store = storage.richInteractionStore();
+    store.atomic((tx) => {
+      const template = tx.getRequest(first.request.interactionId)!;
+      for (let index = 1; index < RICH_INTERACTION_LIMITS.openPerConversation; index++)
+        tx.putRequest({ ...template, interactionId: `seed-${index}` });
+    });
+    expect((await rejection(() => service.compose(environmentId, voice))).code).toBe("capacity");
+    expect((await rejection(() => present(service, "choice", "extra"))).code).toBe("capacity");
+    expect(
+      (await present(service, "choice", "replacement", { supersedes: first.request.interactionId }))
+        .created,
+    ).toBe(true);
+    store.atomic((tx) => {
+      const template = tx.getRequest(first.request.interactionId)!;
+      for (const row of tx.listRequests(environmentId))
+        tx.putRequest({
+          ...row,
+          state: "closed",
+          ...(row.interactionId === first.request.interactionId
+            ? { updatedAt: "2000-01-01T00:00:00Z" }
+            : {}),
+        });
+      for (let index = 0; index < RICH_INTERACTION_LIMITS.perEnvironment; index++)
+        tx.putRequest({ ...template, interactionId: `closed-${index}`, state: "closed" });
+    });
+    expect((await service.compose(environmentId, voice)).receipt.delivery).toBe("queued");
+    expect((await present(service, "choice", "extra")).created).toBe(true);
+    expect(store.read((tx) => tx.listRequests(environmentId))).toHaveLength(
+      RICH_INTERACTION_LIMITS.perEnvironment,
+    );
+    expect(store.read((tx) => tx.getRequest(first.request.interactionId))).toBeNull();
+    expect((await rejection(() => present(service, "choice"))).code).toBe("closed");
+  });
+
+  test("title and body updates only replay an identical intent", async () => {
+    const { service } = await setup();
+    const { request } = await present(service, "choice");
+    const update = {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      title: "New title",
+      body: "New body",
+    };
+    expect((await service.update(caller, update)).revision).toBe(2);
+    expect((await service.update(caller, update)).title).toBe("New title");
+    expect(
+      (await rejection(() => service.update(caller, { ...update, title: "Other" }))).code,
+    ).toBe("stale");
+    expect((await rejection(() => service.update(caller, { ...update, body: "Other" }))).code).toBe(
+      "stale",
+    );
+  });
+
+  test("agent criteria cannot claim agreement, and an identical Agree replays after revision advancement", async () => {
+    const { service } = await setup();
+    const forged = {
+      ...(RICH_KIND_FIXTURES.criteria.spec as object),
+      phase: "agreed",
+      walkthrough: { narrow: [0] },
+    };
+    const forgedCreate = {
+      ...forged,
+      assessments: {
+        narrow: [
+          {
+            decision: "accepted",
+            criterionHash: "forged",
+            assessedAt: "2026-01-01T00:00:00Z",
+            observations: [],
+          },
+        ],
+      },
+    };
+    const { request } = await present(service, "criteria", "forged", { spec: forgedCreate });
+    expect(request.spec).toMatchObject({ phase: "proposed", assessments: {}, walkthrough: {} });
+    const updated = await service.update(caller, {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      spec: forged,
+    });
+    expect(updated.spec).toMatchObject({ phase: "proposed", assessments: {}, walkthrough: {} });
+    const submit = {
+      interactionId: request.interactionId,
+      expectedRevision: 2,
+      actionId: "agree",
+      idempotencyKey: "agree",
+      result: {},
+    };
+    const receipt = await service.submit(environmentId, submit);
+    expect(receipt.resultingRevision).toBe(3);
+    expect(await service.submit(environmentId, submit)).toEqual(receipt);
+  });
+
+  test("submission clears only the draft revision it consumed", async () => {
+    const { service } = await setup();
+    const { request } = await present(service, "criteria");
+    const target = { interactionId: request.interactionId, requestRevision: 1 };
+    service.saveDraft(environmentId, {
+      ...target,
+      expectedDraftRevision: 0,
+      value: { first: true },
+    });
+    service.saveDraft(environmentId, {
+      ...target,
+      expectedDraftRevision: 1,
+      value: { second: true },
+    });
+    await service.submit(environmentId, {
+      interactionId: request.interactionId,
+      expectedRevision: 1,
+      expectedDraftRevision: 1,
+      actionId: "agree",
+      idempotencyKey: "agree",
+      result: {},
+    });
+    expect(service.get(environmentId, request.interactionId).draft).toMatchObject({
+      revision: 2,
+      value: { second: true },
+    });
+  });
+
+  test("late enqueue failures cannot restore receipts deleted with the environment", async () => {
+    const { service, storage, queue } = await setup();
+    const entered = Promise.withResolvers<void>();
+    const blocked = Promise.withResolvers<"queued">();
+    queue.delivery.enqueue = () => {
+      entered.resolve();
+      return blocked.promise;
+    };
+    const pending = service.compose(environmentId, voice);
+    await entered.promise;
+    service.environmentDeleted(environmentId);
+    blocked.reject(new Error("environment is being deleted"));
+    await pending.catch(() => undefined);
+    expect(storage.richInteractionStore().read((tx) => tx.listReceipts(environmentId))).toEqual([]);
+  });
+
+  test("pending receipts progress past stalled queued receipts and removals settle", async () => {
+    const { service, storage, queue } = await setup();
+    const sent = await service.compose(environmentId, voice);
+    const store = storage.richInteractionStore();
+    store.atomic((tx) => {
+      const receipt = tx.getReceipt(sent.receipt.receiptId)!;
+      for (let index = 0; index < 200; index++)
+        tx.putReceipt({ ...receipt, receiptId: `a-${index}`, dispatchRequestId: `a-${index}` });
+      tx.putReceipt({
+        ...receipt,
+        receiptId: "z-pending",
+        dispatchRequestId: "z-pending",
+        delivery: "pending",
+      });
+    });
+    queue.delivery.removed = async (_key, id) => id === sent.receipt.receiptId;
+    await service.sweep();
+    expect(queue.queued.has("z-pending")).toBe(true);
+    await service.sweep();
+    expect(store.read((tx) => tx.getReceipt(sent.receipt.receiptId)?.delivery)).toBe("failed");
+  });
+
+  test("acceptance requires a published revision and deliverable capacity has a stable code", async () => {
+    const { service, storage } = await setup();
+    const spec = structuredClone(RICH_KIND_FIXTURES["result-review"].spec) as {
+      comparisons: { after?: { revision: number } }[];
+    };
+    const after = spec.comparisons.find((comparison) => comparison.after)!.after!;
+    after.revision += 1;
+    const { request } = await present(service, "result-review", "missing", { spec });
+    expect(
+      (
+        await rejection(() =>
+          service.submit(environmentId, {
+            interactionId: request.interactionId,
+            expectedRevision: 1,
+            actionId: "accept",
+            idempotencyKey: "a",
+            result: { expectedResultRevision: 5, decision: "accept" },
+          }),
+        )
+      ).code,
+    ).toBe("unavailable");
+    expect(service.get(environmentId, request.interactionId).receipts).toHaveLength(0);
+    const logicalSessionKey = request.owner.logicalSessionKey;
+    storage.richInteractionStore().atomic((tx) => {
+      for (let index = 0; index < 500; index++)
+        tx.putDeliverable({
+          deliverableId: `dl-${index}`,
+          environmentId,
+          logicalSessionKey,
+          artifactId: `art-${index}`,
+          pinned: false,
+          revision: 1,
+          updatedAt: request.updatedAt,
+        });
+    });
+    expect(
+      (
+        await rejection(() =>
+          service.updateDeliverable(environmentId, {
+            logicalSessionKey,
+            artifactId: "extra",
+            expectedRevision: 0,
+            patch: { pinned: true },
+          }),
+        )
+      ).code,
+    ).toBe("capacity");
   });
 });

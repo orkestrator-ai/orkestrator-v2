@@ -158,6 +158,10 @@ export function registerTranscriptArtifactCommands(register: CommandRegistrar): 
     guarded(() =>
       service(context).listPublications(scope(args), {
         afterSequence: optionalInteger(args.afterSequence, "afterSequence"),
+        beforeSequence: optionalInteger(args.beforeSequence, "beforeSequence"),
+        newestFirst: args.newestFirst,
+        artifactId: args.artifactId,
+        revision: optionalInteger(args.revision, "revision"),
         limit: optionalInteger(args.limit, "limit"),
       }),
     ),

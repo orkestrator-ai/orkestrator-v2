@@ -1801,6 +1801,7 @@ export class OrkestratorBackend {
       storage,
       nativeAgents: this.nativeAgents,
       graphRuns: () => this.graphRuns,
+      transcriptArtifacts: this.transcriptArtifacts,
     });
     context.richInteractions = this.richInteractions;
     (

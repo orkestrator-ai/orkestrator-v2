@@ -15,6 +15,7 @@
  *
  * Browser-safe.
  */
+import { CHART_POLICY } from "../rich-content-policy.js";
 import {
   arr,
   bool,
@@ -318,8 +319,8 @@ function readRect(value: unknown, path: string): NormalizedRect {
   return rect;
 }
 
-const ids = (value: unknown, path: string, min = 1) =>
-  arr(value, path, RICH_REF_LIMITS.anchorIds, (item, itemPath) => id(item, itemPath), min);
+const ids = (value: unknown, path: string, min = 1, max = 200) =>
+  arr(value, path, RICH_REF_LIMITS.anchorIds, (item, itemPath) => id(item, itemPath, max), min);
 
 export function readAnchorLocation(value: unknown, path: string): AnchorLocation {
   const record = obj(value, path, [
@@ -409,7 +410,12 @@ export function readAnchorLocation(value: unknown, path: string): AnchorLocation
       return {
         kind,
         seriesIds: ids(record.seriesIds, `${path}.seriesIds`),
-        pointIds: ids(record.pointIds, `${path}.pointIds`),
+        pointIds: ids(
+          record.pointIds,
+          `${path}.pointIds`,
+          1,
+          CHART_POLICY.maxIdCharacters * 18 + 1,
+        ),
       };
     case "chart-range": {
       const from = num(record.from, `${path}.from`);

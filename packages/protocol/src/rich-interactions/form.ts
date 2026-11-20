@@ -90,7 +90,9 @@ export type FormField =
       type: "text";
       minLength?: number;
       maxLength?: number;
+      /** Legacy data is refused without evaluating its expression. */
       pattern?: string;
+      format?: keyof typeof TEXT_FORMATS;
       default?: string;
     })
   | (FieldBase & { type: "multiline"; maxLength?: number; default?: string })
@@ -165,6 +167,7 @@ const FIELD_KEYS = [
   "minLength",
   "maxLength",
   "pattern",
+  "format",
   "default",
   "unit",
   "integer",
@@ -271,27 +274,25 @@ function readField(value: unknown, path: string, depth: number, counter: FieldCo
   let field: FormField;
   switch (type) {
     case "text": {
-      allowOnly(["minLength", "maxLength", "pattern"]);
+      allowOnly(["minLength", "maxLength", "pattern", "format"]);
       const minLength = optNum(record.minLength, `${path}.minLength`, { min: 0, integer: true });
       const maxLength = optNum(record.maxLength, `${path}.maxLength`, {
         min: 0,
         max: FORM_LIMITS.textChars,
         integer: true,
       });
-      const pattern = optStr(record.pattern, `${path}.pattern`, 500);
-      if (pattern !== undefined) {
-        try {
-          new RegExp(pattern, "u");
-        } catch {
-          fail(`${path}.pattern`, "is not a valid regular expression");
-        }
-      }
+      if (record.pattern !== undefined)
+        fail(`${path}.pattern`, "custom regular expressions are unsupported; use a text format");
+      const format =
+        record.format === undefined
+          ? undefined
+          : oneOf(record.format, `${path}.format`, ["digits", "alphanumeric", "slug"] as const);
       field = {
         ...base,
         type,
         ...(minLength === undefined ? {} : { minLength }),
         ...(maxLength === undefined ? {} : { maxLength }),
-        ...(pattern === undefined ? {} : { pattern }),
+        ...(format === undefined ? {} : { format }),
       };
       break;
     }
@@ -489,6 +490,12 @@ export function isFieldVisible(field: FormField, siblings: FormValues): boolean 
   return !field.visibleWhen || conditionHolds(field.visibleWhen, siblings);
 }
 
+const TEXT_FORMATS = {
+  digits: /^[0-9]+$/u,
+  alphanumeric: /^[a-zA-Z0-9]+$/u,
+  slug: /^[a-z0-9]+(?:-[a-z0-9]+)*$/u,
+};
+
 function readFieldValue(field: FormField, value: unknown, path: string): FormValue {
   if (value === null) {
     if (!field.nullable) fail(path, "must not be null");
@@ -499,7 +506,9 @@ function readFieldValue(field: FormField, value: unknown, path: string): FormVal
       const text = str(value, path, field.maxLength ?? FORM_LIMITS.textChars);
       if (field.minLength !== undefined && Array.from(text).length < field.minLength)
         fail(path, `must be at least ${field.minLength} characters`);
-      if (field.pattern !== undefined && text !== "" && !new RegExp(field.pattern, "u").test(text))
+      if (field.pattern !== undefined)
+        fail(path, "this field uses an unsupported regular expression; ask for an updated form");
+      if (field.format !== undefined && text !== "" && !TEXT_FORMATS[field.format].test(text))
         fail(path, "does not match the required format");
       return text;
     }

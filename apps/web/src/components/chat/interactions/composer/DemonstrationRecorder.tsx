@@ -6,13 +6,20 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
+import {
+  richInteractionErrorCode,
+  richInteractionErrorMessage,
+} from "@/lib/chat/rich-interaction-errors";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
 import { browserPreviewTraceApi } from "@/lib/native/browser-preview";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { cn } from "@/lib/utils";
 import { paneLayoutStore } from "@/stores/paneLayoutStore";
 import { inputClass, textareaClass } from "../shared";
+
+// A preview can close before its retained recording is reviewed.
+const lastRecordedTab = new Map<string, string>();
+const MAX_REMEMBERED_TABS = 64;
 
 function traceApi() {
   return typeof window === "undefined" ? undefined : browserPreviewTraceApi();
@@ -47,7 +54,11 @@ export function DemonstrationRecorder({
     .getState()
     .getAllTabs(environmentId)
     .filter((tab) => tab.type === "browser" && tab.browserData);
-  const [tabId, setTabId] = useState<string>(tabs[0]?.id ?? "");
+  const conversation = JSON.stringify([scope.nodeId, environmentId, logicalSessionKey]);
+  const [tabId, setTabId] = useState<string>(
+    () => lastRecordedTab.get(conversation) ?? tabs[0]?.id ?? "",
+  );
+  const [checking, setChecking] = useState(true);
   const [status, setStatus] = useState<BrowserPreviewTraceStatus | null>(null);
   const [trace, setTrace] = useState<BrowserPreviewTraceResult | null>(null);
   const [kept, setKept] = useState<Set<string>>(new Set());
@@ -55,21 +66,47 @@ export function DemonstrationRecorder({
   const [expected, setExpected] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const sendKey = useRef<string | null>(null);
-  const traceId = useRef(`trace-${newIdempotencyKey().slice(3, 15)}`);
+  const reviewed = useRef<string | null>(null);
+  const sendKey = useRef<{ fingerprint: string; key: string } | null>(null);
 
   useEffect(() => {
-    if (!api || !status?.recording || !tabId) return;
-    const timer = setInterval(
-      () =>
-        void api
-          .status(tabId)
-          .then(setStatus)
-          .catch(() => undefined),
-      1_000,
-    );
-    return () => clearInterval(timer);
-  }, [api, status?.recording, tabId]);
+    if (!api || !tabId) return;
+    let active = true;
+    let reading = false;
+    const read = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        const current = await api.status(tabId);
+        if (current.stopReason && !reviewed.current) {
+          const result = await api.stop(tabId, true);
+          if (!active) return;
+          if (reviewed.current === result.startedAt) return;
+          reviewed.current = result.startedAt;
+          setTrace((previous) => (previous?.startedAt === result.startedAt ? previous : result));
+          setKept(new Set(result.steps.map((step) => step.stepId)));
+        }
+        if (active) setStatus(current);
+      } catch (cause) {
+        if (active)
+          setError(cause instanceof Error ? cause.message : "Could not read the recording.");
+      } finally {
+        reading = false;
+        if (active) setChecking(false);
+      }
+    };
+    const timer = setInterval(() => void read(), 1_000);
+    void read();
+    return () => {
+      active = false;
+      clearInterval(timer);
+      // Closing the sheet stops capture, while the preview retains the trace for review.
+      void api
+        .status(tabId)
+        .then((current) => (current.recording ? api.stop(tabId, true) : undefined))
+        .catch(() => undefined);
+    };
+  }, [api, tabId]);
 
   if (!api) {
     return (
@@ -82,7 +119,12 @@ export function DemonstrationRecorder({
   const start = async () => {
     setError(null);
     setTrace(null);
+    setChecking(true);
     try {
+      lastRecordedTab.delete(conversation);
+      lastRecordedTab.set(conversation, tabId);
+      if (lastRecordedTab.size > MAX_REMEMBERED_TABS)
+        lastRecordedTab.delete(lastRecordedTab.keys().next().value!);
       const tab = tabs.find((t) => t.id === tabId);
       setStatus(
         await api.start(
@@ -92,11 +134,14 @@ export function DemonstrationRecorder({
       );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Recording could not start.");
+    } finally {
+      setChecking(false);
     }
   };
   const stop = async () => {
     try {
-      const result = await api.stop(tabId);
+      const result = await api.stop(tabId, true);
+      reviewed.current = result.startedAt;
       setTrace(result);
       setKept(new Set(result.steps.map((s) => s.stepId)));
       setStatus(null);
@@ -104,37 +149,49 @@ export function DemonstrationRecorder({
       setError(cause instanceof Error ? cause.message : "Recording could not stop.");
     }
   };
+  const discard = async () => {
+    await api.stop(tabId).catch(() => undefined);
+    lastRecordedTab.delete(conversation);
+    setTrace(null);
+    setStatus(null);
+    setExpected("");
+    setTabId(tabs.some((tab) => tab.id === tabId) ? tabId : (tabs[0]?.id ?? ""));
+    sendKey.current = null;
+    reviewed.current = null;
+  };
   const send = async () => {
     if (!trace) return;
     setSending(true);
     setError(null);
-    sendKey.current ??= newIdempotencyKey();
+    const steps = trace.steps.filter((step) => kept.has(step.stepId));
+    const spec = {
+      ...trace,
+      traceId: `trace-${trace.startedAt}`,
+      revision: 1,
+      steps: steps.map((step) => ({ ...step, captureRefs: [] })),
+      gaps: trace.gaps.filter((gap) => !gap.afterStepId || kept.has(gap.afterStepId)),
+      expectedOutcome: expected.trim(),
+    };
+    const result = { stepIds: steps.map((step) => step.stepId), expectedOutcome: expected.trim() };
+    const fingerprint = JSON.stringify([tabId, spec, result]);
+    if (sendKey.current?.fingerprint !== fingerprint)
+      sendKey.current = { fingerprint, key: newIdempotencyKey() };
     try {
       await backend.composeRichInteraction({
         environmentId,
         tabId: logicalSessionKey.slice(logicalSessionKey.indexOf(":") + 1),
         kind: "demonstration",
         title: `Demonstration: ${expected.trim().slice(0, 60) || trace.service.label}`,
-        spec: {
-          traceId: traceId.current,
-          revision: 1,
-          ...trace,
-          steps: trace.steps.map((s) => ({ ...s, captureRefs: [] })),
-          expectedOutcome: expected.trim(),
-        },
+        spec,
         actionId: "send",
-        idempotencyKey: sendKey.current,
-        result: {
-          stepIds: trace.steps.filter((s) => kept.has(s.stepId)).map((s) => s.stepId),
-          expectedOutcome: expected.trim(),
-        },
+        idempotencyKey: sendKey.current.key,
+        result,
       });
-      sendKey.current = null;
-      setTrace(null);
-      setExpected("");
-      traceId.current = `trace-${newIdempotencyKey().slice(3, 15)}`;
+      await discard();
       onSent?.();
     } catch (cause) {
+      const code = richInteractionErrorCode(cause);
+      if (code && code !== "unavailable") sendKey.current = null;
       setError(`${richInteractionErrorMessage(cause)} The recording is kept; it is safe to retry.`);
     } finally {
       setSending(false);
@@ -151,9 +208,16 @@ export function DemonstrationRecorder({
               className={cn(inputClass, "w-auto py-1 text-xs")}
               value={tabId}
               disabled={Boolean(status?.recording)}
-              onChange={(e) => setTabId(e.target.value)}
+              onChange={(e) => {
+                setChecking(true);
+                setStatus(null);
+                setTabId(e.target.value);
+              }}
             >
               {tabs.length === 0 ? <option value="">No browser preview is open</option> : null}
+              {tabId && !tabs.some((tab) => tab.id === tabId) ? (
+                <option value={tabId}>Closed preview</option>
+              ) : null}
               {tabs.map((tab) => (
                 <option key={tab.id} value={tab.id}>
                   {tab.browserData?.url || tab.id}
@@ -207,7 +271,7 @@ export function DemonstrationRecorder({
               size="sm"
               variant="outline"
               className="self-start"
-              disabled={!tabId}
+              disabled={!tabId || checking || !tabs.some((tab) => tab.id === tabId)}
               onClick={() => void start()}
             >
               <Circle className="size-3.5 text-red-500" aria-hidden />
@@ -283,7 +347,7 @@ export function DemonstrationRecorder({
             onChange={(e) => setExpected(e.target.value)}
           />
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setTrace(null)}>
+            <Button size="sm" variant="ghost" onClick={() => void discard()} disabled={sending}>
               Discard
             </Button>
             <Button

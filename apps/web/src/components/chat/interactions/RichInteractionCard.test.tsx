@@ -214,3 +214,50 @@ describe("RichInteractionCard", () => {
     await screen.findByText("This interaction is no longer available.");
   });
 });
+
+test("a repeatable submission never clears a newer draft saved while its response is delayed", async () => {
+  const current = view("workflow-actions");
+  const pending = Promise.withResolvers<typeof receipt>();
+  let saved = {
+    interactionId: current.request.interactionId,
+    requestRevision: 1,
+    revision: 1,
+    value: { nodeId: "validation", note: "First window" },
+    updatedAt: "first",
+  };
+  const client = new FakeNodeClient({
+    invoke: {
+      rich_interaction_get: () => ({ ...current, draft: saved }),
+      rich_interaction_submit: () => pending.promise,
+      rich_interaction_clear_draft: () => {
+        throw new Error("Unconditional draft clear");
+      },
+    },
+  });
+  renderInNodeScope(
+    <RichInteractionCard interactionId={current.request.interactionId} environmentId="env-1" />,
+    { client },
+  );
+  const explain = await screen.findByRole("button", { name: "Explain failure" });
+  await waitFor(() => expect(explain).toHaveProperty("disabled", false));
+  fireEvent.click(explain);
+  await waitFor(() => {
+    expect(
+      client.invocations.find((call) => call.command === "rich_interaction_submit")?.args
+        .expectedDraftRevision,
+    ).toBe(1);
+  });
+  saved = {
+    ...saved,
+    revision: 2,
+    updatedAt: "second",
+    value: { ...saved.value, note: "Second window" },
+  };
+  await act(async () => pending.resolve(receipt));
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "Note" })).toHaveProperty("value", "Second window"),
+  );
+  expect(client.invocations.some((call) => call.command === "rich_interaction_clear_draft")).toBe(
+    false,
+  );
+});

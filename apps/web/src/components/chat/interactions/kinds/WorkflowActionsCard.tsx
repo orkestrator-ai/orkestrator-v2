@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { WorkflowActionsSpec } from "@orkestrator/protocol/rich-interactions";
 import { cn } from "@/lib/utils";
 import { ActionBar, RefChip, textareaClass, type KindProps } from "../shared";
@@ -28,13 +29,16 @@ export function WorkflowActionsCard({
   disabled,
   actions,
 }: KindProps<WorkflowActionsSpec>) {
+  const confirmationKey = JSON.stringify([spec.runId, spec.snapshotRevision]);
+  const [confirmed, setConfirmed] = useState<string | null>(null);
+  const confirmWholeRun = confirmed === confirmationKey;
   const value = (draft as WorkflowDraft | undefined) ?? {};
   const node = spec.nodes.find((n) => n.id === value.nodeId);
   const eligible = (actionId: string) =>
     actionId === "retry-node"
-      ? node && (node.state === "failed" || node.state === "cancelled")
+      ? node?.attemptId && (node.state === "failed" || node.state === "cancelled")
       : actionId === "stop-node"
-        ? node && (node.state === "running" || node.state === "waiting")
+        ? node?.attemptId && confirmWholeRun
         : Boolean(node);
   return (
     <div className="flex flex-col gap-2">
@@ -97,10 +101,20 @@ export function WorkflowActionsCard({
             value={value.note ?? ""}
             onChange={(e) => setDraft({ ...value, note: e.target.value })}
           />
+          {node?.attemptId && actions.some((a) => a.id === "stop-node" && a.available) ? (
+            <label className="flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={confirmWholeRun}
+                onChange={(event) => setConfirmed(event.target.checked ? confirmationKey : null)}
+              />
+              Confirm stopping the entire workflow run, including all active stages
+            </label>
+          ) : null}
           {actions.map((a) => (
             <ActionBar
               key={a.id}
-              actions={actions}
+              actions={a.id === "stop-node" ? [{ ...a, label: "Stop workflow run" }] : [a]}
               only={[a.id]}
               disabled={disabled}
               primaryDisabledReason={
@@ -110,13 +124,16 @@ export function WorkflowActionsCard({
                     : null
                   : eligible(a.id)
                     ? null
-                    : `${a.label} is not available for a ${node.state} node.`
+                    : a.id === "stop-node"
+                      ? "Confirm the whole-run stop to continue."
+                      : `${a.label} is not available for a ${node.state} node.`
               }
               onAction={(x) =>
                 node &&
                 act(x.id, {
                   nodeId: node.id,
                   snapshotRevision: spec.snapshotRevision,
+                  ...(x.id === "stop-node" && confirmWholeRun ? { confirmWholeRun: true } : {}),
                   ...(node.attemptId ? { attemptId: node.attemptId } : {}),
                   ...(value.note?.trim() ? { note: value.note.trim() } : {}),
                 })

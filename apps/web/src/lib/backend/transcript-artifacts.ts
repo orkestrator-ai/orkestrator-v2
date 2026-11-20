@@ -46,7 +46,14 @@ export function createTranscriptArtifactsApi(client: BackendClient) {
   }
 
   async function listTranscriptArtifactPublications(
-    input: ArtifactConversationScope & { afterSequence?: number; limit?: number },
+    input: ArtifactConversationScope & {
+      afterSequence?: number;
+      beforeSequence?: number;
+      limit?: number;
+      newestFirst?: boolean;
+      artifactId?: string;
+      revision?: number;
+    },
   ): Promise<{ publications: ArtifactPublicationView[]; nextSequence: number | null }> {
     const page = await artifacts().listPublications({ ...input });
     return { publications: [...page.publications], nextSequence: page.nextSequence };

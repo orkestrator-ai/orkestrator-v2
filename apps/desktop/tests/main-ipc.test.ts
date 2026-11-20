@@ -22,6 +22,7 @@ function createHarness(
     backend?: { invoke: ReturnType<typeof mock> } | null;
     window?: unknown;
     browserPreviews?: boolean;
+    routeBrowserPreviews?: boolean;
     debugTools?: RendererDebugTools;
     lookupRenderer?: (id: number) => DebugRenderer | undefined;
   } = {},
@@ -181,8 +182,13 @@ function createHarness(
     getCaptureDiagnostics: mock(async () => ({}) as never),
     showOnPage: mock(async () => ({}) as never),
     captureResponsiveSet: mock(async () => ({}) as never),
+    startTrace: mock(async () => ({ recording: true, steps: 0, elapsedMs: 0, stopReason: null })),
+    traceStatus: mock(() => ({ recording: true, steps: 1, elapsedMs: 1, stopReason: null })),
+    markTrace: mock(() => ({ recording: true, steps: 2, elapsedMs: 2, stopReason: null })),
+    stopTrace: mock(async () => ({}) as never),
     destroy: mock(() => undefined),
   };
+  const routedPreview = mock(() => browserPreviews);
 
   registerMainIpc({
     getBackend: () => backend,
@@ -213,6 +219,16 @@ function createHarness(
     forgetConnection,
     openConnectionWindow,
     browserPreviews: options.browserPreviews === false ? undefined : browserPreviews,
+    ...(options.routeBrowserPreviews
+      ? {
+          browserPreviewRouting: {
+            forAttach: async () => browserPreviews,
+            forTab: routedPreview,
+            forNode: async () => browserPreviews,
+            destroy: () => undefined,
+          },
+        }
+      : {}),
     setRendererDebugLogging,
     trustedRendererUrl,
   });
@@ -276,6 +292,7 @@ function createHarness(
     forgetConnection,
     openConnectionWindow,
     browserPreviews,
+    routedPreview,
     setRendererDebugLogging,
   };
 }
@@ -1354,4 +1371,23 @@ test("trusted debug IPC resolves webContents, rebuilds menu, and prefers the foc
   const disabledHelp = template.find((item) => item.label === "Help")!
     .submenu as MenuItemConstructorOptions[];
   expect(disabledHelp.some((item) => item.label === "Open Developer Tools")).toBe(false);
+});
+
+test("trace IPC routes the authorized tab, bounds text, and rejects untrusted senders", async () => {
+  const h = createHarness({ routeBrowserPreviews: true });
+  const tab = "browser-1";
+  await h.invoke("orkestrator:browser-preview:trace-start", tab, "x".repeat(500));
+  await h.invoke("orkestrator:browser-preview:trace-status", tab);
+  await h.invoke("orkestrator:browser-preview:trace-mark", tab, "y".repeat(3000));
+  await h.invoke("orkestrator:browser-preview:trace-stop", tab, true);
+  expect(h.routedPreview).toHaveBeenCalledTimes(4);
+  expect(h.browserPreviews.startTrace).toHaveBeenCalledWith(tab, "x".repeat(120));
+  expect(h.browserPreviews.traceStatus).toHaveBeenCalledWith(tab);
+  expect(h.browserPreviews.markTrace).toHaveBeenCalledWith(tab, "y".repeat(2000));
+  expect(h.browserPreviews.stopTrace).toHaveBeenCalledWith(tab, true);
+  for (const action of ["start", "status", "mark", "stop"])
+    await expect(
+      h.invokeFrom("https://untrusted.example", `orkestrator:browser-preview:trace-${action}`, tab),
+    ).rejects.toThrow("untrusted renderer");
+  expect(h.routedPreview).toHaveBeenCalledTimes(4);
 });

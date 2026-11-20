@@ -42,6 +42,7 @@ export function publishArtifactResultCandidate(
     const oldest = latest.keys().next().value;
     if (oldest === undefined) break;
     latest.delete(oldest);
+    notify(oldest, null);
   }
   notify(key, next);
 }
@@ -75,6 +76,7 @@ export function subscribeArtifactResultCandidates(
   let set = listeners.get(key);
   if (!set) listeners.set(key, (set = new Set()));
   set.add(listener);
+  listener(latest.get(key) ?? null);
   return () => {
     set.delete(listener);
     if (set.size === 0) listeners.delete(key);

@@ -9,6 +9,7 @@ import {
   RICH_INTERACTION_DRAFTS_STORE,
   RICH_INTERACTION_RECEIPTS_STORE,
   RICH_INTERACTION_REQUESTS_STORE,
+  RICH_INTERACTION_RETIRED_STORE,
 } from "./layout.js";
 
 /**
@@ -25,6 +26,9 @@ import {
 export interface StoredRequest extends RichInteractionRequest {
   /** Digest of the create input, for requestKey replay/conflict. */
   createFingerprint: string;
+  updateFingerprint?: string;
+  /** Monotonic even when the current draft is cleared. */
+  draftSequence?: number;
 }
 
 export interface StoredReceipt extends RichInteractionReceipt {
@@ -33,6 +37,9 @@ export interface StoredReceipt extends RichInteractionReceipt {
   /** For follow-ups: the exact prompt text queued, so a retry re-enqueues identical bytes. */
   dispatchText?: string;
   dispatchAttempts: number;
+  inputFingerprint?: string;
+  submissionOrdinal?: number;
+  operationRunId?: string;
 }
 
 export interface StoredDraft extends RichInteractionDraft {
@@ -136,9 +143,28 @@ export class RichInteractionTx {
     this.announce(request.owner.environmentId, request.interactionId);
   }
 
-  deleteRequest(request: StoredRequest): void {
-    this.database.rows(RICH_INTERACTION_REQUESTS_STORE).delete(request.interactionId);
-    this.announce(request.owner.environmentId, request.interactionId);
+  requestRetired(interactionId: string): boolean {
+    return (
+      this.exists(RICH_INTERACTION_RETIRED_STORE) &&
+      this.database.rows(RICH_INTERACTION_RETIRED_STORE).has(interactionId)
+    );
+  }
+
+  retireRequest(request: StoredRequest, receipts: readonly StoredReceipt[]): void {
+    const {
+      interactionId,
+      owner: { environmentId },
+    } = request;
+    this.database
+      .rows(RICH_INTERACTION_RETIRED_STORE)
+      .put(interactionId, JSON.stringify({ environmentId }));
+    this.database.rows(RICH_INTERACTION_REQUESTS_STORE).delete(interactionId);
+    this.deleteDraft(environmentId, interactionId);
+    if (receipts.length) {
+      const rows = this.database.rows(RICH_INTERACTION_RECEIPTS_STORE);
+      for (const receipt of receipts) rows.delete(receipt.receiptId);
+    }
+    this.announce(environmentId, interactionId);
   }
 
   getReceipt(receiptId: string): StoredReceipt | null {
@@ -166,19 +192,26 @@ export class RichInteractionTx {
     }
     return out.sort(
       (a, b) =>
-        a.submittedAt.localeCompare(b.submittedAt) || a.receiptId.localeCompare(b.receiptId),
+        a.submittedAt.localeCompare(b.submittedAt) ||
+        a.interactionId.localeCompare(b.interactionId) ||
+        (a.submissionOrdinal ?? 0) - (b.submissionOrdinal ?? 0) ||
+        a.receiptId.localeCompare(b.receiptId),
     );
   }
 
   /** Every receipt in a delivery state that still needs work, across environments. */
-  listOutstandingReceipts(states: ReadonlySet<string>, limit: number): StoredReceipt[] {
+  listOutstandingReceipts(state: string, afterId: string, limit: number): StoredReceipt[] {
     if (!this.exists(RICH_INTERACTION_RECEIPTS_STORE)) return [];
+    const rows = this.database.rows(RICH_INTERACTION_RECEIPTS_STORE);
+    const keys = rows
+      .list({ values: false })
+      .map(({ key }) => key)
+      .sort();
     const out: StoredReceipt[] = [];
-    for (const entry of this.database
-      .rows(RICH_INTERACTION_RECEIPTS_STORE)
-      .list({ values: true })) {
-      const receipt = parse<StoredReceipt>(entry.value ?? undefined, isReceipt);
-      if (receipt && states.has(receipt.delivery)) out.push(receipt);
+    for (const key of keys) {
+      if (key <= afterId) continue;
+      const receipt = this.getReceipt(key);
+      if (receipt?.delivery === state) out.push(receipt);
       if (out.length >= limit) break;
     }
     return out;
@@ -240,6 +273,10 @@ export class RichInteractionTx {
 
   deleteEnvironment(environmentId: string): number {
     let removed = 0;
+    if (this.exists(RICH_INTERACTION_RETIRED_STORE))
+      removed += this.database
+        .rows(RICH_INTERACTION_RETIRED_STORE)
+        .deleteWhere({ owner: environmentId });
     if (this.exists(RICH_INTERACTION_REQUESTS_STORE))
       removed += this.database
         .rows(RICH_INTERACTION_REQUESTS_STORE)

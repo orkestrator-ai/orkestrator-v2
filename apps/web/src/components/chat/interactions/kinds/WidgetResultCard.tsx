@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  candidateHash,
   formErrors,
+  readFormValues,
   summarizeFormValues,
   type FormValues,
   type WidgetResultSpec,
@@ -14,17 +16,6 @@ import {
 import { ContentRefPreview, type KindProps } from "../shared";
 import { FormFields } from "./FormFields";
 
-/** FNV-1a over the canonical JSON of the reviewed value: binds the receipt to what was shown. */
-export function candidateHash(value: unknown): string {
-  const text = JSON.stringify(value, Object.keys(value as object).sort());
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return `fnv1a:${hash.toString(16).padStart(8, "0")}`;
-}
-
 /**
  * Feature 12: an explorer's result submission. The authored frame may only
  * propose values (`orkestratorArtifact.proposeResult`); this host-owned card
@@ -33,7 +24,17 @@ export function candidateHash(value: unknown): string {
  * freezes what they reviewed. Only the "Send result" click here submits; a
  * newer candidate never replaces values under an open review.
  */
-export function WidgetResultCard({
+export function WidgetResultCard(props: KindProps<WidgetResultSpec>) {
+  const { artifactId, revision } = props.spec;
+  return (
+    <BoundWidgetResultCard
+      key={JSON.stringify([artifactId, revision, props.view.request.revision])}
+      {...props}
+    />
+  );
+}
+
+function BoundWidgetResultCard({
   view,
   spec,
   act,
@@ -48,7 +49,13 @@ export function WidgetResultCard({
     values: FormValues;
   } | null>(null);
   useEffect(
-    () => subscribeArtifactResultCandidates(spec.artifactId, spec.revision, setCandidate),
+    () =>
+      subscribeArtifactResultCandidates(spec.artifactId, spec.revision, (next) => {
+        setCandidate(next);
+        setReview((current) =>
+          next && current?.candidate.generation === next.generation ? current : null,
+        );
+      }),
     [spec.artifactId, spec.revision],
   );
   const candidateErrors = useMemo(
@@ -135,11 +142,14 @@ export function WidgetResultCard({
                 size="sm"
                 disabled={disabled || Object.keys(reviewErrors).length > 0}
                 onClick={() => {
+                  const latest = latestArtifactResultCandidate(spec.artifactId, spec.revision);
+                  if (latest?.generation !== review.candidate.generation) return;
+                  const value = readFormValues(spec.output, review.values, "$.value");
                   act(send.id, {
                     candidateId: review.candidate.candidateId,
-                    candidateHash: candidateHash(review.values),
+                    candidateHash: candidateHash(value),
                     generation: review.candidate.generation,
-                    value: review.values,
+                    value,
                   });
                   setReview(null);
                 }}

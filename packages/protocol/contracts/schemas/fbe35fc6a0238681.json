@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "digest": "sha256:b418b8f4e1f35737569f867219f9f2edb02d8d11bf74d21c00bd1f0f7ecd1f99",
+  "digest": "sha256:fbe35fc6a02386811d1e032dceaa707b5190588c2ba3492ef859d8765c296603",
   "document": {
     "definitions": {},
     "dialect": "draft-2020-12",
@@ -16,6 +16,11 @@
           "maxLength": 200,
           "minLength": 1,
           "type": "string"
+        },
+        "expectedDraftRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
         },
         "expectedRevision": {
           "maximum": 9007199254740990,

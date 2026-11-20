@@ -7725,7 +7725,7 @@
       "access": "workspace",
       "read": false,
       "critical": ["expectedRevision", "idempotencyKey"],
-      "argsDigest": "sha256:b418b8f4e1f35737569f867219f9f2edb02d8d11bf74d21c00bd1f0f7ecd1f99",
+      "argsDigest": "sha256:fbe35fc6a02386811d1e032dceaa707b5190588c2ba3492ef859d8765c296603",
       "resultDigest": "sha256:b1fba7b2cc30fe791904cd3c6aafc6f4ecf20572c6b483024ccbda8bfe466bdc"
     },
     "rich_interactions_list": {
@@ -9147,7 +9147,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:bfb3f577ecd3deac856d3252fabe073a1327b1fc9fdc9cb9e68532a7adbd9e16",
+      "argsDigest": "sha256:58d917827120d8a4a0fed58f8283a601f06a00586e24c6db8f00e579a5f84184",
       "resultDigest": "sha256:ed79516d7644d35e1c7c819d7ca96bf1845f409dfc10192c303e7dda5ce0f28d"
     },
     "transcript_artifact_open_live_session": {

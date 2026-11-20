@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalJson } from "@orkestrator/protocol/canonical-json";
+import { CanonicalJsonError, canonicalJson } from "@orkestrator/protocol/canonical-json";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   RICH_INTERACTION_LIMITS,
@@ -22,6 +22,10 @@ import {
   type RichInteractionReceipt,
   type RichInteractionRequest,
   type RichInteractionSnapshot,
+  type WorkflowActionsSpec,
+  type ContentRef,
+  type WidgetResultSpec,
+  type WidgetResultResult,
 } from "@orkestrator/protocol/rich-interactions";
 import {
   applyDeliverablePatch,
@@ -37,29 +41,11 @@ import type {
   StoredRequest,
 } from "./store.js";
 
+import { RichInteractionError } from "./errors.js";
+
 const log = createLogger("rich-interactions");
 
-export type RichInteractionErrorCode =
-  | "invalid"
-  | "capacity"
-  | "not-found"
-  | "forbidden"
-  | "stale"
-  | "closed"
-  | "conflict"
-  | "unavailable";
-
-/** A refusal with a stable code and a readable, content-free message. */
-export class RichInteractionError extends Error {
-  constructor(
-    readonly code: RichInteractionErrorCode,
-    message: string,
-    readonly path?: string,
-  ) {
-    super(message);
-    this.name = "RichInteractionError";
-  }
-}
+export { RichInteractionError, type RichInteractionErrorCode } from "./errors.js";
 
 function fromValidation<T>(work: () => T): T {
   try {
@@ -72,6 +58,8 @@ function fromValidation<T>(work: () => T): T {
         error.path,
       );
     }
+    if (error instanceof CanonicalJsonError)
+      throw new RichInteractionError("invalid", error.message, error.path);
     throw error;
   }
 }
@@ -111,6 +99,15 @@ export interface RichInteractionView extends RichInteractionSnapshot {
   open: boolean;
 }
 
+interface SubmissionInput {
+  interactionId: string;
+  expectedRevision: number;
+  actionId: string;
+  idempotencyKey: string;
+  result: unknown;
+  expectedDraftRevision?: number;
+}
+
 export interface FollowupDelivery {
   /** Resolves the tab's agent platform from its native session. */
   resolveAgent(environmentId: string, logicalSessionKey: string): Promise<string | undefined>;
@@ -123,6 +120,7 @@ export interface FollowupDelivery {
     origin: { kind: "rich-interaction"; interactionId: string; receiptId: string };
   }): Promise<"queued" | "present" | "consumed" | "conflict">;
   notify(queueKey: string): void;
+  removed?(queueKey: string, requestId: string): Promise<boolean>;
   /** Whether the session dispatched this request id (undefined: cannot tell). */
   dispatched(
     environmentId: string,
@@ -137,15 +135,26 @@ export interface RichInteractionServiceOptions {
   delivery: FollowupDelivery;
   commands: ProductCommandRegistry;
   now?: () => Date;
+  hasPublishedArtifact?: (
+    owner: RichInteractionOwner,
+    ref: Extract<ContentRef, { kind: "artifact" }>,
+  ) => boolean;
+  hasLiveWidget?: (
+    owner: RichInteractionOwner,
+    spec: WidgetResultSpec,
+    generation: string,
+  ) => boolean;
 }
 
 /** Delivery attempts before an un-enqueueable follow-up is reported as unknown. */
 const MAX_DISPATCH_ATTEMPTS = 5;
-const OUTSTANDING_STATES: ReadonlySet<RichDeliveryState> = new Set(["pending", "queued"]);
+const OUTBOX_PAGE_SIZE = 200;
+const OPERATION_STARTED = "Operation started; awaiting its outcome.";
 
 export class RichInteractionService {
   private readonly now: () => Date;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly sweepCursors = { pending: "", queued: "" };
   private sweeping: Promise<void> | null = null;
   private readonly inFlight = new Map<string, Promise<StoredReceipt>>();
 
@@ -194,24 +203,7 @@ export class RichInteractionService {
         }
         return { created: false, request: publicRequest(existing) };
       }
-      const conversation = tx.listRequests(caller.environmentId);
-      if (conversation.length >= RICH_INTERACTION_LIMITS.perEnvironment) {
-        throw new RichInteractionError(
-          "capacity",
-          `This environment holds ${RICH_INTERACTION_LIMITS.perEnvironment} interactions; close or supersede older ones.`,
-        );
-      }
-      const open = conversation.filter(
-        (r) =>
-          r.owner.logicalSessionKey === logicalSessionKey &&
-          isRichInteractionOpen(r, now.getTime()),
-      );
-      if (open.length >= RICH_INTERACTION_LIMITS.openPerConversation) {
-        throw new RichInteractionError(
-          "capacity",
-          `At most ${RICH_INTERACTION_LIMITS.openPerConversation} interactions may be open per conversation; close finished ones with update_interaction.`,
-        );
-      }
+      this.assertCreationKeyNotRetired(tx, interactionId);
       if (validated.supersedes) {
         const previous = tx.getRequest(validated.supersedes);
         if (!previous || previous.owner.logicalSessionKey !== logicalSessionKey) {
@@ -230,6 +222,7 @@ export class RichInteractionService {
           });
         }
       }
+      this.checkCapacity(tx, owner, now);
       const request: StoredRequest = {
         schemaVersion: 1,
         interactionId,
@@ -257,6 +250,63 @@ export class RichInteractionService {
       tx.putRequest(request);
       return { created: true, request: publicRequest(request) };
     });
+  }
+
+  private assertCreationKeyNotRetired(tx: RichInteractionTx, interactionId: string): void {
+    if (tx.requestRetired(interactionId))
+      throw new RichInteractionError(
+        "closed",
+        "This key belongs to a retired interaction. Start a new interaction to send a new request.",
+      );
+  }
+
+  private checkCapacity(tx: RichInteractionTx, owner: RichInteractionOwner, now: Date): void {
+    const requests = tx.listRequests(owner.environmentId);
+    const open = requests.filter(
+      (request) =>
+        request.owner.logicalSessionKey === owner.logicalSessionKey &&
+        isRichInteractionOpen(request, now.getTime()),
+    );
+    if (open.length >= RICH_INTERACTION_LIMITS.openPerConversation) {
+      throw new RichInteractionError(
+        "capacity",
+        `At most ${RICH_INTERACTION_LIMITS.openPerConversation} interactions may be open per conversation; close finished ones.`,
+      );
+    }
+    let needed = requests.length - RICH_INTERACTION_LIMITS.perEnvironment + 1;
+    if (needed <= 0) return;
+    const receipts = new Map<string, StoredReceipt[]>();
+    for (const receipt of tx.listReceipts(owner.environmentId)) {
+      const group = receipts.get(receipt.interactionId);
+      if (group) group.push(receipt);
+      else receipts.set(receipt.interactionId, [receipt]);
+    }
+    const retained = requests
+      .slice()
+      .sort(
+        (a, b) =>
+          a.updatedAt.localeCompare(b.updatedAt) || a.interactionId.localeCompare(b.interactionId),
+      );
+    for (const request of retained) {
+      if (isRichInteractionOpen(request, now.getTime())) continue;
+      const group = receipts.get(request.interactionId) ?? [];
+      if (
+        group.some(
+          (receipt) =>
+            receipt.delivery === "pending" ||
+            receipt.delivery === "queued" ||
+            this.inFlight.has(receipt.receiptId) ||
+            (receipt.route === "product-command" && receipt.deliveryDetail === OPERATION_STARTED),
+        )
+      )
+        continue;
+      tx.retireRequest(request, group);
+      if (--needed === 0) return;
+    }
+    throw new RichInteractionError(
+      "capacity",
+      `This environment holds ${RICH_INTERACTION_LIMITS.perEnvironment} interactions. Close finished cards or wait for pending delivery.`,
+    );
   }
 
   /**
@@ -293,15 +343,6 @@ export class RichInteractionService {
       );
     }
     const module = RICH_KIND_MODULES[current.kind];
-    const nextSpec =
-      input.spec === undefined
-        ? undefined
-        : fromValidation(() => {
-            const read = readKindSpec(current.kind, input.spec);
-            return module.mergeAgentUpdate
-              ? module.mergeAgentUpdate(current.spec, read, "$.spec")
-              : read;
-          });
     const title =
       input.title === undefined
         ? undefined
@@ -311,19 +352,24 @@ export class RichInteractionService {
         ? undefined
         : String(input.body).trim().slice(0, RICH_INTERACTION_LIMITS.bodyChars);
     const close = input.close === true;
+    const readSpec =
+      input.spec === undefined
+        ? undefined
+        : fromValidation(() => readKindSpec(current.kind, input.spec));
+    const updateFingerprint = digest(
+      canonicalJson({
+        expectedRevision,
+        title: title ?? null,
+        body: body ?? null,
+        close,
+        spec: readSpec ?? null,
+      }),
+    );
     const now = this.now().toISOString();
     return this.store().atomic((tx) => {
       const latest = tx.getRequest(interactionId);
       if (!latest) throw new RichInteractionError("not-found", "The interaction no longer exists.");
-      // Replay: the previous call already produced exactly this revision.
-      if (
-        latest.revision === expectedRevision + 1 &&
-        latest.revisionAuthor === "agent" &&
-        (nextSpec === undefined || canonicalJson(latest.spec) === canonicalJson(nextSpec)) &&
-        (!close || latest.state === "closed")
-      ) {
-        return publicRequest(latest);
-      }
+      if (latest.updateFingerprint === updateFingerprint) return publicRequest(latest);
       if (latest.revision !== expectedRevision) {
         throw new RichInteractionError(
           "stale",
@@ -332,14 +378,19 @@ export class RichInteractionService {
       }
       if (latest.state !== "open")
         throw new RichInteractionError("closed", `The interaction is ${latest.state}.`);
+      const nextSpec =
+        readSpec !== undefined && module.mergeAgentUpdate
+          ? fromValidation(() => module.mergeAgentUpdate!(latest.spec, readSpec, "$.spec"))
+          : readSpec;
       if (close && nextSpec === undefined && title === undefined && body === undefined) {
-        const closed = { ...latest, state: "closed" as const, updatedAt: now };
+        const closed = { ...latest, state: "closed" as const, updatedAt: now, updateFingerprint };
         tx.putRequest(closed);
         return publicRequest(closed);
       }
       const next: StoredRequest = {
         ...latest,
         revision: latest.revision + 1,
+        updateFingerprint,
         revisionAuthor: "agent",
         updatedAt: now,
         ...(nextSpec === undefined
@@ -479,10 +530,11 @@ export class RichInteractionService {
         environmentId,
         interactionId: input.interactionId,
         requestRevision: input.requestRevision,
-        revision: currentRevision + 1,
+        revision: Math.max(currentRevision, request.draftSequence ?? 0) + 1,
         value: input.value ?? null,
         updatedAt: now,
       };
+      tx.putRequest({ ...request, draftSequence: draft.revision });
       tx.putDraft(draft);
       const { environmentId: _env, ...rest } = draft;
       return rest;
@@ -507,149 +559,182 @@ export class RichInteractionService {
    * the receipt. An identical retry returns the original receipt; a changed
    * payload under the same key is a conflict.
    */
-  async submit(
-    environmentId: string,
-    input: {
-      interactionId: string;
-      expectedRevision: number;
-      actionId: string;
-      idempotencyKey: string;
-      result: unknown;
-    },
-  ): Promise<RichInteractionReceipt> {
+  async submit(environmentId: string, input: SubmissionInput): Promise<RichInteractionReceipt> {
+    const committed = this.store().atomic((tx) => {
+      const request = tx.getRequest(input.interactionId);
+      if (!request || request.owner.environmentId !== environmentId)
+        throw new RichInteractionError(
+          "not-found",
+          "The interaction does not exist in this environment.",
+        );
+      return this.commitSubmission(tx, request, input, this.now());
+    });
+    return this.finishSubmission(committed);
+  }
+
+  private commitSubmission(
+    tx: RichInteractionTx,
+    request: StoredRequest,
+    input: SubmissionInput,
+    now: Date,
+  ): { receipt: StoredReceipt; replay: boolean } {
     const idempotencyKey = fromValidation(() =>
       readIdempotencyKey(input.idempotencyKey, "$.idempotencyKey"),
     );
-    const receiptId = receiptIdFor(input.interactionId, idempotencyKey);
-    const snapshot = this.store().read((tx) => ({
-      request: tx.getRequest(input.interactionId),
-      receipt: tx.getReceipt(receiptId),
-    }));
-    if (!snapshot.request || snapshot.request.owner.environmentId !== environmentId) {
+    const receiptId = receiptIdFor(request.interactionId, idempotencyKey);
+    const existing = tx.getReceipt(receiptId);
+    if (utf8Bytes(JSON.stringify(input.result ?? null)) > RICH_INTERACTION_LIMITS.resultBytes)
       throw new RichInteractionError(
-        "not-found",
-        "The interaction does not exist in this environment.",
+        "capacity",
+        "The submission exceeds the result size limit.",
+        "$.result",
       );
+    const inputFingerprint = fromValidation(() =>
+      digest(
+        submissionFingerprintInput({
+          interactionId: request.interactionId,
+          requestRevision: input.expectedRevision,
+          actionId: input.actionId,
+          result: input.result ?? null,
+        }),
+      ),
+    );
+    if (existing) {
+      this.assertReplay(existing, request, input, inputFingerprint);
+      return { receipt: existing, replay: true };
     }
-    // A retry of a committed submission is answered from its receipt, even
-    // after the request closed or moved on.
-    if (snapshot.receipt) {
-      return this.replayOrConflict(snapshot.receipt, snapshot.request, input);
-    }
-    // Validate against the revision the person saw, never a newer one.
-    if (snapshot.request.revision !== input.expectedRevision) {
+    if (request.revision !== input.expectedRevision) {
       throw new RichInteractionError(
         "stale",
-        `This request changed (now revision ${snapshot.request.revision}). Review the update; your draft is kept.`,
+        `This request changed (now revision ${request.revision}). Review the update; your draft is kept.`,
       );
     }
     const { action, result } = fromValidation(() =>
-      readSubmission(snapshot.request!, { actionId: input.actionId, result: input.result }),
+      readSubmission(request, { actionId: input.actionId, result: input.result }),
     );
     if (action.route === "product-command") {
-      const availability = this.options.commands.availability(action.commandId, snapshot.request);
+      const availability = this.options.commands.availability(action.commandId, request);
       if (!availability.available)
         throw new RichInteractionError("unavailable", availability.reason);
     }
+    if (
+      request.kind === "widget-result" &&
+      !this.options.hasLiveWidget?.(
+        request.owner,
+        request.spec as WidgetResultSpec,
+        (result as WidgetResultResult).generation,
+      )
+    )
+      throw new RichInteractionError(
+        "stale",
+        "The explorer viewer is no longer active. Open it again and review a new result.",
+      );
     const fingerprint = digest(
       submissionFingerprintInput({
-        interactionId: input.interactionId,
+        interactionId: request.interactionId,
         requestRevision: input.expectedRevision,
         actionId: action.id,
         result,
       }),
     );
-    const now = this.now();
-    const committed = this.store().atomic((tx) => {
-      const existing = tx.getReceipt(receiptId);
-      const request = tx.getRequest(input.interactionId);
-      if (!request)
-        throw new RichInteractionError("not-found", "The interaction no longer exists.");
-      if (existing) return { receipt: existing, replay: true };
-      if (request.revision !== input.expectedRevision) {
-        throw new RichInteractionError(
-          "stale",
-          `This request changed (now revision ${request.revision}). Review the update; your draft is kept.`,
-        );
-      }
-      if (!isRichInteractionOpen(request, now.getTime())) {
-        throw new RichInteractionError(
-          "closed",
-          request.state === "open"
-            ? "This request expired."
-            : `This request is ${request.state}${request.supersededBy ? "; open the current request" : ""}.`,
-        );
-      }
-      if (request.submissions >= RICH_INTERACTION_LIMITS.receiptsPerRequest) {
-        throw new RichInteractionError(
-          "capacity",
-          "This request has reached its submission limit.",
-        );
-      }
-      const module = RICH_KIND_MODULES[request.kind];
-      const summary = summarizeSubmission(request, action, result);
-      const revisedSpec =
-        module.applyRevision?.(request.spec, result, action, {
-          now: now.toISOString(),
-          actionRecordId: receiptId,
-        }) ?? null;
-      const closes = actionClosesRequest(request, action);
-      const nextRevision = revisedSpec ? request.revision + 1 : request.revision;
-      const delivery: RichDeliveryState = action.route === "record-only" ? "recorded" : "pending";
-      const receipt: StoredReceipt = {
-        receiptId,
-        interactionId: request.interactionId,
-        environmentId: request.owner.environmentId,
-        logicalSessionKey: request.owner.logicalSessionKey,
-        requestRevision: request.revision,
-        actionId: action.id,
-        actionLabel: action.label,
-        route: action.route,
-        idempotencyKey,
-        fingerprint,
-        result,
-        summary,
-        submittedAt: now.toISOString(),
-        delivery,
-        deliveryUpdatedAt: now.toISOString(),
-        dispatchAttempts: 0,
-        ...(revisedSpec ? { resultingRevision: nextRevision } : {}),
-        ...(action.commandId ? { commandId: action.commandId } : {}),
-        ...(action.route === "agent-followup"
-          ? {
-              dispatchRequestId: receiptId,
-              dispatchText: buildRichInteractionPrompt(summary, {
-                interactionId: request.interactionId,
-                revision: request.revision,
-                receiptId,
-                actionId: action.id,
-                kind: request.kind,
-                title: request.title,
-              }),
-            }
-          : {}),
-      };
-      tx.putReceipt(receipt);
-      tx.putRequest({
-        ...request,
-        submissions: request.submissions + 1,
-        updatedAt: now.toISOString(),
-        ...(revisedSpec
-          ? {
-              spec: revisedSpec,
-              revision: nextRevision,
-              revisionAuthor: "user" as const,
-              fallbackText: module.fallback(revisedSpec),
-            }
-          : {}),
-        ...(closes ? { state: "closed" as const } : {}),
-      });
-      if (closes || revisedSpec) tx.deleteDraft(request.owner.environmentId, request.interactionId);
-      recordAcceptedArtifacts(tx, request, action.id, result, now.toISOString());
-      return { receipt, replay: false };
+    if (!isRichInteractionOpen(request, now.getTime())) {
+      throw new RichInteractionError(
+        "closed",
+        request.state === "open"
+          ? "This request expired."
+          : `This request is ${request.state}${request.supersededBy ? "; open the current request" : ""}.`,
+      );
+    }
+    if (request.submissions >= RICH_INTERACTION_LIMITS.receiptsPerRequest) {
+      throw new RichInteractionError("capacity", "This request has reached its submission limit.");
+    }
+    const module = RICH_KIND_MODULES[request.kind];
+    const summary = summarizeSubmission(request, action, result);
+    const revisedSpec =
+      module.applyRevision?.(request.spec, result, action, {
+        now: now.toISOString(),
+        actionRecordId: receiptId,
+      }) ?? null;
+    const closes = actionClosesRequest(request, action);
+    const nextRevision = revisedSpec ? request.revision + 1 : request.revision;
+    const delivery: RichDeliveryState = action.route === "record-only" ? "recorded" : "pending";
+    const receipt: StoredReceipt = {
+      receiptId,
+      interactionId: request.interactionId,
+      environmentId: request.owner.environmentId,
+      logicalSessionKey: request.owner.logicalSessionKey,
+      requestRevision: request.revision,
+      actionId: action.id,
+      actionLabel: action.label,
+      route: action.route,
+      idempotencyKey,
+      fingerprint,
+      inputFingerprint,
+      submissionOrdinal: request.submissions + 1,
+      result,
+      summary,
+      submittedAt: now.toISOString(),
+      delivery,
+      deliveryUpdatedAt: now.toISOString(),
+      dispatchAttempts: 0,
+      ...(revisedSpec ? { resultingRevision: nextRevision } : {}),
+      ...(action.commandId ? { commandId: action.commandId } : {}),
+      ...(action.route === "product-command" && request.kind === "workflow-actions"
+        ? { operationRunId: (request.spec as WorkflowActionsSpec).runId }
+        : {}),
+      ...(action.route === "agent-followup"
+        ? {
+            dispatchRequestId: receiptId,
+            dispatchText: buildRichInteractionPrompt(summary, {
+              interactionId: request.interactionId,
+              revision: request.revision,
+              receiptId,
+              actionId: action.id,
+              kind: request.kind,
+              title: request.title,
+            }),
+          }
+        : {}),
+    };
+    tx.putReceipt(receipt);
+    tx.putRequest({
+      ...request,
+      submissions: request.submissions + 1,
+      updatedAt: now.toISOString(),
+      ...(revisedSpec
+        ? {
+            spec: revisedSpec,
+            revision: nextRevision,
+            revisionAuthor: "user" as const,
+            updateFingerprint: undefined,
+            fallbackText: module.fallback(revisedSpec),
+          }
+        : {}),
+      ...(closes ? { state: "closed" as const } : {}),
     });
-    if (committed.replay) return this.replayOrConflict(committed.receipt, snapshot.request, input);
-    if (committed.receipt.delivery === "pending") {
+    const draft = tx.getDraft(request.interactionId);
+    if (
+      draft &&
+      draft.requestRevision === request.revision &&
+      draft.revision === input.expectedDraftRevision
+    )
+      tx.deleteDraft(request.owner.environmentId, request.interactionId);
+    recordAcceptedArtifacts(
+      tx,
+      request,
+      action.id,
+      result,
+      now.toISOString(),
+      (ref) => this.options.hasPublishedArtifact?.(request.owner, ref) ?? false,
+    );
+    return { receipt, replay: false };
+  }
+
+  private async finishSubmission(committed: {
+    receipt: StoredReceipt;
+    replay: boolean;
+  }): Promise<RichInteractionReceipt> {
+    if (!committed.replay && committed.receipt.delivery === "pending") {
       // One immediate attempt; the sweep retries anything left pending.
       return publicReceipt(
         await this.deliver(committed.receipt.receiptId).catch(() => committed.receipt),
@@ -658,11 +743,13 @@ export class RichInteractionService {
     return publicReceipt(committed.receipt);
   }
 
-  private replayOrConflict(
+  private assertReplay(
     receipt: StoredReceipt,
     request: StoredRequest,
-    input: { interactionId: string; expectedRevision: number; actionId: string; result: unknown },
-  ): RichInteractionReceipt {
+    input: SubmissionInput,
+    inputFingerprint: string,
+  ): void {
+    if (receipt.inputFingerprint === inputFingerprint) return;
     let fingerprint: string | null = null;
     try {
       const { action, result } = readSubmission(request, {
@@ -684,6 +771,7 @@ export class RichInteractionService {
     const sameIntent =
       receipt.requestRevision === input.expectedRevision &&
       receipt.actionId === input.actionId &&
+      receipt.inputFingerprint === undefined &&
       (fingerprint === receipt.fingerprint ||
         canonicalJson(receipt.result) === canonicalJson(input.result));
     if (!sameIntent) {
@@ -692,7 +780,6 @@ export class RichInteractionService {
         "This idempotency key already committed a different submission. Start a new submission to send a different decision.",
       );
     }
-    return publicReceipt(receipt);
   }
 
   /**
@@ -742,8 +829,8 @@ export class RichInteractionService {
         sourceRefs: validated.sourceRefs,
       }),
     );
-    const now = this.now().toISOString();
-    this.store().atomic((tx) => {
+    const now = this.now();
+    const committed = this.store().atomic((tx) => {
       const existing = tx.getRequest(interactionId);
       if (existing) {
         if (existing.createFingerprint !== createFingerprint)
@@ -751,9 +838,11 @@ export class RichInteractionService {
             "conflict",
             "This idempotency key already composed a different request.",
           );
-        return;
+      } else {
+        this.assertCreationKeyNotRetired(tx, interactionId);
+        this.checkCapacity(tx, { environmentId, tabId, logicalSessionKey }, now);
       }
-      tx.putRequest({
+      const request: StoredRequest = existing ?? {
         schemaVersion: 1,
         interactionId,
         revision: 1,
@@ -767,19 +856,25 @@ export class RichInteractionService {
         state: "open",
         fallbackText: validated.fallbackText,
         owner: { environmentId, tabId, logicalSessionKey, ...(agent ? { agent } : {}) },
-        createdAt: now,
-        updatedAt: now,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
         submissions: 0,
         createFingerprint,
-      });
+      };
+      return this.commitSubmission(
+        tx,
+        request,
+        {
+          interactionId,
+          expectedRevision: 1,
+          actionId: input.actionId,
+          idempotencyKey,
+          result: input.result,
+        },
+        now,
+      );
     });
-    const receipt = await this.submit(environmentId, {
-      interactionId,
-      expectedRevision: 1,
-      actionId: input.actionId,
-      idempotencyKey,
-      result: input.result,
-    });
+    const receipt = await this.finishSubmission(committed);
     return { request: this.get(environmentId, interactionId).request, receipt };
   }
 
@@ -842,7 +937,7 @@ export class RichInteractionService {
         const next = {
           ...latest,
           delivery: "unknown" as const,
-          deliveryDetail: "Operation started; awaiting its outcome.",
+          deliveryDetail: OPERATION_STARTED,
           deliveryUpdatedAt: this.now().toISOString(),
           dispatchAttempts: latest.dispatchAttempts + 1,
         };
@@ -895,6 +990,11 @@ export class RichInteractionService {
           delivery: "delivered",
           deliveryDetail: "Delivered to the session.",
         });
+      if (await this.options.delivery.removed?.(queueKey, receipt.dispatchRequestId))
+        return this.mark(receipt, {
+          delivery: "failed",
+          deliveryDetail: "The follow-up was removed from the session queue.",
+        });
       return receipt;
     }
     if (receipt.delivery !== "pending") return receipt;
@@ -930,6 +1030,11 @@ export class RichInteractionService {
       });
     }
     if (status === "consumed") {
+      if (await this.options.delivery.removed?.(queueKey, receipt.dispatchRequestId))
+        return this.mark(receipt, {
+          delivery: "failed",
+          deliveryDetail: "The follow-up was removed from the session queue.",
+        });
       const dispatched = await this.options.delivery
         .dispatched(
           receipt.environmentId,
@@ -977,7 +1082,13 @@ export class RichInteractionService {
     patch: Partial<Pick<StoredReceipt, "delivery" | "deliveryDetail" | "dispatchAttempts">>,
   ): StoredReceipt {
     return this.store().atomic((tx) => {
-      const latest = tx.getReceipt(receipt.receiptId) ?? receipt;
+      const latest = tx.getReceipt(receipt.receiptId);
+      if (!latest || !tx.getRequest(latest.interactionId)) return receipt;
+      if (
+        latest.delivery !== receipt.delivery ||
+        latest.dispatchAttempts !== receipt.dispatchAttempts
+      )
+        return latest;
       const next: StoredReceipt = {
         ...latest,
         ...patch,
@@ -1025,7 +1136,15 @@ export class RichInteractionService {
     if (this.sweeping) return this.sweeping;
     this.sweeping = (async () => {
       const outstanding = this.store().read((tx) =>
-        tx.listOutstandingReceipts(OUTSTANDING_STATES, 200),
+        (["pending", "queued"] as const).flatMap((state) => {
+          const page = tx.listOutstandingReceipts(
+            state,
+            this.sweepCursors[state],
+            OUTBOX_PAGE_SIZE,
+          );
+          this.sweepCursors[state] = page.length === OUTBOX_PAGE_SIZE ? page.at(-1)!.receiptId : "";
+          return page;
+        }),
       );
       for (const receipt of outstanding) {
         await this.deliver(receipt.receiptId).catch((error: unknown) =>
@@ -1097,7 +1216,12 @@ export class RichInteractionService {
 export function publicRequest(
   request: StoredRequest | RichInteractionRequest,
 ): RichInteractionRequest {
-  const { createFingerprint: _fingerprint, ...rest } = request as StoredRequest;
+  const {
+    createFingerprint: _fingerprint,
+    updateFingerprint: _update,
+    draftSequence: _draftSequence,
+    ...rest
+  } = request as StoredRequest;
   return rest;
 }
 
@@ -1109,6 +1233,9 @@ export function publicReceipt(
     logicalSessionKey: _l,
     dispatchText: _t,
     dispatchAttempts: _a,
+    inputFingerprint: _input,
+    submissionOrdinal: _ordinal,
+    operationRunId: _run,
     ...rest
   } = receipt as StoredReceipt;
   return rest;

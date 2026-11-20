@@ -10,6 +10,7 @@
  *
  * Browser-safe.
  */
+import { canonicalJson } from "../canonical-json.js";
 import { followup, revise, type RichKindModule } from "./kind-module.js";
 import {
   clip,
@@ -277,6 +278,7 @@ export function criterionHash(
     criterion.threshold ?? null,
     criterion.verification.kind,
     criterion.verification.steps,
+    ...(criterion.verification.checkRef === undefined ? [] : [criterion.verification.checkRef]),
   ]);
   let hash = 0x811c9dc5;
   for (let i = 0; i < content.length; i += 1) {
@@ -531,7 +533,7 @@ export const criteriaKind: RichKindModule<CriteriaSpec, CriteriaResult> = {
         if (spec.phase === "agreed")
           fail(
             path,
-            "these criteria were agreed; editing them creates a new revision through the agent",
+            "these criteria were agreed; ask the agent to present a new set for agreement",
           );
         if (!edits.length && !added.length) fail(`${path}.edits`, "changes nothing");
         if (decisions.length) fail(`${path}.decisions`, "decisions are recorded during review");
@@ -613,8 +615,21 @@ export const criteriaKind: RichKindModule<CriteriaSpec, CriteriaResult> = {
     ) {
       fail(`${path}.assessments`, "human decisions are recorded only by the user");
     }
-    if (previous.phase === "agreed" && next.phase === "proposed")
-      fail(`${path}.phase`, "agreed criteria cannot be reopened by an agent");
+    const definition = (spec: CriteriaSpec) =>
+      canonicalJson({
+        setId: spec.setId,
+        criteria: spec.criteria.map(({ id, requirement, threshold, verification }) => ({
+          id,
+          requirement,
+          threshold: threshold ?? null,
+          verification,
+        })),
+      });
+    if (previous.phase === "agreed" && definition(previous) !== definition(next))
+      fail(
+        `${path}.criteria`,
+        "agreed criteria definitions are immutable; present a new set for agreement",
+      );
     const assessments: Record<string, CriterionAssessment[]> = {};
     for (const [criterionId, list] of Object.entries(previous.assessments)) {
       const criterion = next.criteria.find((c) => c.id === criterionId);
@@ -625,7 +640,7 @@ export const criteriaKind: RichKindModule<CriteriaSpec, CriteriaResult> = {
     }
     return {
       ...next,
-      phase: previous.phase === "agreed" ? "agreed" : next.phase,
+      phase: previous.phase,
       assessments,
       walkthrough: previous.walkthrough,
     };
@@ -883,6 +898,7 @@ export interface WorkflowActionsSpec {
 
 export interface WorkflowActionsResult {
   nodeId: string;
+  confirmWholeRun?: true;
   attemptId?: string;
   snapshotRevision: number;
   note?: string;
@@ -905,7 +921,7 @@ export const workflowActionsKind: RichKindModule<WorkflowActionsSpec, WorkflowAc
     },
     {
       id: "stop-node",
-      label: "Stop",
+      label: "Stop workflow run",
       route: "product-command",
       effect: "command",
       commandId: "workflow.stop",
@@ -968,7 +984,13 @@ export const workflowActionsKind: RichKindModule<WorkflowActionsSpec, WorkflowAc
     };
   },
   readResult(spec, action, value, path) {
-    const r = obj(value, path, ["nodeId", "attemptId", "snapshotRevision", "note"]);
+    const r = obj(value, path, [
+      "nodeId",
+      "attemptId",
+      "snapshotRevision",
+      "note",
+      "confirmWholeRun",
+    ]);
     const nodeId = id(r.nodeId, `${path}.nodeId`);
     const node = spec.nodes.find((n) => n.id === nodeId);
     if (!node) fail(`${path}.nodeId`, "is not a node of this workflow snapshot");
@@ -983,12 +1005,15 @@ export const workflowActionsKind: RichKindModule<WorkflowActionsSpec, WorkflowAc
       fail(`${path}.snapshotRevision`, "the workflow advanced; refresh before acting");
     if (action.id === "retry-node" && node.state !== "failed" && node.state !== "cancelled")
       fail(`${path}.nodeId`, `a ${node.state} node cannot be retried`);
-    if (action.id === "stop-node" && node.state !== "running" && node.state !== "waiting")
-      fail(`${path}.nodeId`, `a ${node.state} node cannot be stopped`);
+    if (action.id === "stop-node" && r.confirmWholeRun !== true)
+      fail(`${path}.confirmWholeRun`, "confirm stopping the entire workflow run");
+    if ((action.id === "stop-node" || action.id === "retry-node") && !attemptId)
+      fail(`${path}.attemptId`, "must identify a live graph activation");
     const note = optStr(r.note, `${path}.note`, TEXT);
     return {
       nodeId,
       snapshotRevision,
+      ...(action.id === "stop-node" ? { confirmWholeRun: true as const } : {}),
       ...(attemptId === undefined ? {} : { attemptId }),
       ...(note?.trim() ? { note: note.trim() } : {}),
     };

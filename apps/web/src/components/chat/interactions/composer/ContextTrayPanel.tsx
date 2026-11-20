@@ -10,7 +10,10 @@ import { useNodeScope } from "@/lib/node-scope/providers";
 import { contextTrayKey, contextTrayStore, useContextTrayStore } from "@/stores/contextTrayStore";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
-import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
+import {
+  richInteractionErrorCode,
+  richInteractionErrorMessage,
+} from "@/lib/chat/rich-interaction-errors";
 import { cn } from "@/lib/utils";
 import { ContentRefPreview, RefChip, inputClass, textareaClass } from "../shared";
 import { ImageRegionPicker, newContextItemId } from "./composer-shared";
@@ -42,7 +45,7 @@ export function ContextTrayPanel({
   const [preview, setPreview] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sendKey, setSendKey] = useState<string | null>(null);
+  const [sendKey, setSendKey] = useState<{ fingerprint: string; key: string } | null>(null);
   const tray = () => scope.store(contextTrayStore).getState();
   const included = items.filter((item) => item.included);
   const excerptChars = included.reduce((n, item) => n + (item.excerpt?.length ?? 0), 0);
@@ -53,15 +56,16 @@ export function ContextTrayPanel({
     setSending(true);
     setError(null);
     // One key per deliberate send, reused if this attempt has to be retried.
-    const idempotencyKey = sendKey ?? newIdempotencyKey();
-    setSendKey(idempotencyKey);
+    const fingerprint = JSON.stringify([included, prompt.trim()]);
+    const idempotencyKey = sendKey?.fingerprint === fingerprint ? sendKey.key : newIdempotencyKey();
+    setSendKey({ fingerprint, key: idempotencyKey });
     try {
       await backend.composeRichInteraction({
         environmentId,
         tabId,
         kind: "context-packet",
         title: prompt.trim().slice(0, 80) || `Request with ${included.length} reference(s)`,
-        spec: { items },
+        spec: { items: included },
         actionId: "send",
         idempotencyKey,
         result: { prompt: prompt.trim() },
@@ -71,6 +75,8 @@ export function ContextTrayPanel({
       setSendKey(null);
       onSent?.();
     } catch (cause) {
+      const code = richInteractionErrorCode(cause);
+      if (code && code !== "unavailable") setSendKey(null);
       setError(`${richInteractionErrorMessage(cause)} Your tray is kept; it is safe to retry.`);
     } finally {
       setSending(false);

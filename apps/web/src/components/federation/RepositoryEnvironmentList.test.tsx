@@ -30,6 +30,7 @@ import {
 import { repositoryCollapseKey } from "./useRevealMachineProject";
 
 const REPO = "github.com/acme/app";
+const MACHINE_VIEW_STORAGE_KEY = "machine-view-storage";
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
 
@@ -86,7 +87,7 @@ function bound(overrides: Partial<BoundEnvironmentRendering> = {}): BoundEnviron
 }
 
 beforeEach(async () => {
-  localStorage.removeItem("machine-view-storage");
+  localStorage.removeItem(MACHINE_VIEW_STORAGE_KEY);
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
   installDesktopFake({
@@ -371,13 +372,12 @@ test("the chevron only toggles: it neither opens, drags nor creates, and they ne
   expect(screen.getAllByTestId("federated-environment-row")).toHaveLength(3);
 });
 
-test("the chevron, the context menu, the keyboard and the saved state agree", async () => {
+test("the chevron, the context menu and the heading's arrow keys agree", async () => {
   const { folder, heading, chevron } = renderFleet();
   const key = repositoryCollapseKey(folder.getAttribute("data-project-folder")!);
 
   fireEvent.click(chevron());
   expect(useMachineViewStore.getState().collapsedFolderKeys).toContain(key);
-  expect(localStorage.getItem("machine-view-storage")).toContain(JSON.stringify(key));
   await act(async () => {
     fireEvent.contextMenu(heading());
   });
@@ -397,10 +397,25 @@ test("the chevron, the context menu, the keyboard and the saved state agree", as
   menu = await screen.findByRole("menu");
   expect(within(menu).getByRole("menuitem", { name: "Expand" })).toBeTruthy();
   expect(within(menu).queryByRole("menuitem", { name: "Collapse" }) === null).toBe(true);
+});
 
-  // A fresh mount (as after a reload) reads the saved state.
+test("rehydrates a collapse saved by the repository chevron", async () => {
+  const { folder, chevron } = renderFleet();
+  const key = repositoryCollapseKey(folder.getAttribute("data-project-folder")!);
+  fireEvent.click(chevron());
+  const snapshot = localStorage.getItem(MACHINE_VIEW_STORAGE_KEY)!;
+  expect(JSON.parse(snapshot).state.collapsedFolderKeys).toContain(key);
+
+  // Discard in-memory collapse state and restore the snapshot overwritten by the reset.
   cleanup();
+  useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
+  expect(useMachineViewStore.getState().collapsedFolderKeys).not.toContain(key);
+  localStorage.setItem(MACHINE_VIEW_STORAGE_KEY, snapshot);
+  await useMachineViewStore.persist.rehydrate();
+
   const again = renderFleet();
+  expect(again.heading()).toBeTruthy();
+  expect(again.chevron().getAttribute("aria-label")).toBe("Expand project acme/app");
   expect(again.chevron().getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryAllByTestId("federated-environment-row")).toHaveLength(0);
 });

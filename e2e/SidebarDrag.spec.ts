@@ -173,6 +173,38 @@ const repositoryHeading = (page: Page, label: string) =>
 const repositoryFolder = (page: Page, label: string) =>
   page.locator(`[data-project-folder="github.com/acme/${label}"]`);
 
+test("a pointer gesture from the repository chevron leaves repository order alone", async ({
+  page,
+}) => {
+  await page.goto("/sidebar-drag?groups=1&merged=1");
+  const source = repositoryHeading(page, "source");
+  const target = repositoryHeading(page, "target");
+  const chevron = repositoryFolder(page, "source").getByTestId("repository-collapse-toggle");
+  await expect(chevron).toBeVisible();
+  const start = (await chevron.boundingBox())!;
+  const end = (await target.boundingBox())!;
+
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  try {
+    // Cross the same activation distance as a drag from the heading.
+    await page.mouse.move(start.x + start.width / 2 - 12, start.y + start.height / 2, {
+      steps: 3,
+    });
+    await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 12 });
+    await expect(source).not.toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("sidebar-drag-overlay")).toHaveCount(0);
+  } finally {
+    await page.mouse.up();
+  }
+
+  await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+  await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+    "data-project-folder",
+    "github.com/acme/source",
+  );
+});
+
 test("repository heading drop on an expanded repository's row moves the whole group", async ({
   page,
 }) => {

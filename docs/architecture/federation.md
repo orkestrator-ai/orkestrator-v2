@@ -875,8 +875,10 @@ with `MachinesFilter`:
   A **+** button labelled "New environment in <repository>" follows them,
   always visible, and opens the New Environment dialog of the
   member the heading opens (this window's own dialog for its own copy).
-  A chevron sits to its right at the row's right edge, the same button and
-  style as a folder heading's: it is labelled "Collapse project <repository>"
+  A chevron sits to its right at the row's right edge, with the same icon
+  and desktop styling as a folder heading's. On narrow viewports or with
+  a coarse primary pointer, both repository actions are 40 × 40 px. The
+  chevron is labelled "Collapse project <repository>"
   or "Expand project <repository>", reports `aria-expanded`, and only shows
   or hides the repository's environment rows (it never opens, drags or
   creates). The heading itself, which opens, carries no `aria-expanded`. The

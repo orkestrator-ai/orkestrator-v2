@@ -212,6 +212,7 @@ export function SortableProjectFolder({
   const hasMenu = Boolean(onRename || onSort || onUngroup || repositoryMenu);
   // A repository heading collapses a project's environments; a folder its projects.
   const kind = repository ? "project" : "folder";
+  const repositoryActionSize = "max-sm:size-10 pointer-coarse:size-10";
 
   // The whole heading is the drag handle. A repository heading also opens on
   // click, so its keyboard drag starts on Space only and Enter keeps the
@@ -366,7 +367,10 @@ export function SortableProjectFolder({
             title={addAction.title}
             disabled={addAction.disabled}
             data-testid="repository-new-environment"
-            className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            className={cn(
+              "grid shrink-0 place-items-center rounded-md p-1 text-muted-foreground transition-colors hover:bg-white/[0.07] hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+              repositoryActionSize,
+            )}
             onClick={(event) => {
               event.stopPropagation();
               addAction.onAdd();
@@ -382,7 +386,10 @@ export function SortableProjectFolder({
           aria-expanded={!isCollapsed}
           aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${kind} ${label}`}
           data-testid={repository ? "repository-collapse-toggle" : undefined}
-          className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+          className={cn(
+            "grid shrink-0 place-items-center rounded-md p-1 transition-colors hover:bg-white/[0.07]",
+            repository && repositoryActionSize,
+          )}
           onClick={(event) => {
             event.stopPropagation();
             onToggleCollapse();

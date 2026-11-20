@@ -539,9 +539,10 @@ async function startCommandNode(dataDir: string, token: string) {
   }
 }
 
-// The fixture resets collapse state on load; RepositoryEnvironmentList.test.tsx
-// covers the saved state across a remount.
-test("the chevron right of the + collapses and expands a repository", async ({ page }) => {
+test("the chevron right of the + collapses and expands a repository", async ({
+  page,
+  hasTouch,
+}) => {
   await page.goto("/repository-environment-list");
   const add = page.getByRole("button", {
     name: "New environment in acme/orkestrator-v2",
@@ -555,6 +556,12 @@ test("the chevron right of the + collapses and expands a repository", async ({ p
   // Immediately right of the +, at the row's right edge.
   const addBox = (await add.boundingBox())!;
   const chevronBox = (await collapse.boundingBox())!;
+  if (hasTouch) {
+    for (const { width, height } of [addBox, chevronBox]) {
+      expect(width).toBeGreaterThanOrEqual(40);
+      expect(height).toBeGreaterThanOrEqual(40);
+    }
+  }
   expect(Math.abs(chevronBox.x - (addBox.x + addBox.width))).toBeLessThan(1);
   expect(Math.abs(chevronBox.y - addBox.y)).toBeLessThan(1);
   // Flush with the row's inner edge, inside its 1px border.
@@ -563,7 +570,7 @@ test("the chevron right of the + collapses and expands a repository", async ({ p
 
   const rows = folder(page, ORK).getByTestId("federated-environment-row");
   await expect(rows.first()).toBeVisible();
-  await collapse.click();
+  await (hasTouch ? collapse.tap() : collapse.click());
   await expect(rows).toHaveCount(0);
   const expand = page.getByRole("button", {
     name: "Expand project acme/orkestrator-v2",
@@ -576,7 +583,44 @@ test("the chevron right of the + collapses and expands a repository", async ({ p
   await expect(page.getByTestId("opened")).toHaveText("");
   await expect(page.getByTestId("intent")).toHaveText("");
 
-  await expand.click();
+  await page.reload();
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(rows).toHaveCount(0);
+
+  await (hasTouch ? expand.tap() : expand.click());
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
   await expect(rows.first()).toBeVisible();
+
+  await (hasTouch ? add.tap() : add.click());
+  await expect(page.getByTestId("opened")).toHaveText("bk_mini");
+  await expect(page.getByTestId("intent")).toContainText('"createEnvironmentProjectId":"ork"');
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await expect(rows.first()).toBeVisible();
+});
+
+test("the repository chevron receives tab focus and toggles with Enter and Space", async ({
+  page,
+}) => {
+  await page.goto("/repository-environment-list");
+  const repository = folder(page, ORK);
+  const add = repository.getByTestId("repository-new-environment");
+  const chevron = repository.getByTestId("repository-collapse-toggle");
+  const rows = repository.getByTestId("federated-environment-row");
+  await heading(page, "acme/orkestrator-v2").focus();
+  await page.keyboard.press("Tab");
+  await expect(add).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(chevron).toBeFocused();
+
+  await page.keyboard.press("Enter");
+  await expect(chevron).toHaveAttribute("aria-expanded", "false");
+  await expect(rows).toHaveCount(0);
+  await expect(chevron).toBeFocused();
+
+  await page.keyboard.press("Space");
+  await expect(chevron).toHaveAttribute("aria-expanded", "true");
+  await expect(rows.first()).toBeVisible();
+  await expect(page.getByTestId("sidebar-drag-overlay")).toHaveCount(0);
+  await expect(page.getByTestId("opened")).toHaveText("");
+  await expect(page.getByTestId("intent")).toHaveText("");
 });

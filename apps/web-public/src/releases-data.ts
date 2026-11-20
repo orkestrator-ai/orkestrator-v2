@@ -51,6 +51,23 @@ export function releaseNotesUrl(release: Pick<ReleaseSummary, "tag">): string {
 
 export const RELEASES: readonly ReleaseSummary[] = [
   {
+    version: "2.39.11-beta",
+    tag: "v2.39.11-beta",
+    date: "2026-11-20",
+    channel: "beta",
+    intro: "Changes since 2.39.10-beta.",
+    new: [],
+    improved: [
+      "Sidebar search sits on the header line, and the command node switcher moves to the title bar.",
+      "A machine with an update available shows a green up arrow on its sidebar tile, and the tooltip names the versions.",
+      "The sidebar no longer adds a separate line for an unread result; the bell marks it, and opening the row takes you to the tab with that result.",
+      "The composer's session tools now offer the deliverables panel and demonstration recording only; the context tray and point-and-talk buttons are gone.",
+    ],
+    fixed: [
+      "A project on another machine reads its icon, Git remote and settings from that machine, and the folder picker says which machine it is browsing.",
+    ],
+  },
+  {
     version: "2.37.6-beta",
     tag: "v2.37.6-beta",
     date: "2026-11-11",
@@ -157,37 +174,6 @@ export const RELEASES: readonly ReleaseSummary[] = [
       "On Linux, file watching recovers after a folder is deleted and recreated.",
       "Notices at the bottom of the chat no longer cover the end of the transcript.",
       "Auto-pipeline launches are more reliable, keep your draft edits and open agent tabs in the right environment.",
-    ],
-  },
-  {
-    version: "2.37.1-beta",
-    tag: "v2.37.1-beta",
-    date: "2026-11-09",
-    channel: "beta",
-    intro: "Brings the 2.37.0 preview to the Beta channel, with more fixes on top.",
-    new: [
-      "Work across several machines from one window, with each machine keeping its own state. The window also starts faster.",
-      "Updated Claude Code, Codex, Cursor, Pi and Grok Build. Every agent now shows when its sign-in ends, flags prompts you must answer yourself, labels MCP tools as read-only or destructive and shows estimated costs.",
-      "Hand interactive work over to an Auto-pipeline review in one step.",
-      "The coordinator gains an Actions panel with cards for pull requests and questions, suggests saving instructions you keep repeating, and hears back when a build finishes.",
-      "Talk to agents by voice, including interrupting the project coordinator.",
-      "Label Kanban tickets, with labels synced across machines.",
-      "Update several machines at once, delete the focused environment with Cmd/Ctrl+Backspace, and rewind a Pi conversation to an earlier message.",
-    ],
-    improved: [
-      "Automatic account switching uses fresh usage data and explains why no account is available.",
-      'Pipeline Notes open with a collapsible "Needs a look" section, and prompts waiting for you are easier to spot.',
-      "Transcripts redraw less and keep your place while tools stream, with less background polling.",
-      "Storage housekeeping no longer holds up saving on a busy disk, and change history keeps 30 days of archived content.",
-    ],
-    fixed: [
-      "Claude sign-in recovery and switching accounts across agent tabs are more reliable.",
-      "Container terminals recover better, and closing one also closes its shell.",
-      "OpenCode no longer fails on an incompatible database left on the computer.",
-      "Kanban tickets move to Done when their pull request merges, and auto-merge re-checks a pull request when it wakes and says what it is waiting for.",
-      "Question notifications play their sound and show a desktop notification again, and their settings work.",
-      "Host update errors explain what went wrong, and falling back to the Stable update works.",
-      "Security advisories in third-party dependencies are resolved.",
     ],
   },
 ];

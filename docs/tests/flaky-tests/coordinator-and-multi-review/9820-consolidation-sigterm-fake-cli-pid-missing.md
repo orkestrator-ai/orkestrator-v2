@@ -36,3 +36,20 @@ is still timed out and killed) and the test's premise, that the fake records
 its pid within 300 ms, is what fails. Not shown. No deadline, assertion or
 implementation changed. Evidence: `orkestrator-test-run.DsnGMR` under the
 host temporary directory.
+
+## Agent-accounts folder validation (2026-11-20)
+
+- **Reviewed commit:** `8d3a72226b0c87a5bc32bb73ad068e784b982344`, base
+  `e102a0dd55fc6360de61959c4ff843c9032cadfe`. The recurrence check against
+  `origin/main` confirmed the case was open.
+- **Original command:** `mise run test:logged -- --name review-default-tests -- mise run test`,
+  with backend package tests using two isolated Bun workers.
+- **Failure:** the Codex case in `apps/backend/src/core/multi-review-evaluation-drivers.test.ts`
+  failed at 404.10 ms with `ENOENT` reading the fake CLI's `pid` file.
+  Backend reported 19,725 passed, 212 skipped and four failed across 1,400 files.
+- **Complete owner rerun:** from `apps/backend`,
+  `bun test ./src/core/multi-review-evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
+  passed 22 tests (2.6 s logged). The fake process's start-up timing remains
+  a possible cause.
+- **Evidence:** `orkestrator-test-run.HiqeYP` in the host temporary directory,
+  including the workspace log and `rerun-apps-backend-src-core-multi-review-evaluation-drivers-test-ts.log.gz`.

@@ -154,6 +154,9 @@ describe("a closed pull request", () => {
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
     await life.prDetected(pipeline, "closed");
+    // The column waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    expect((await read(id))?.status).toBe("review");
+    await life.ended(pipeline, "complete");
     expect((await read(id))?.status).toBe("backlog");
     await storage.kanban.updateKanbanTask(id, { status: "in-progress" });
     await monitor(storage).reconcileTerminal(target("env-1"), closed());
@@ -170,6 +173,7 @@ describe("a closed pull request", () => {
     await newer.started(second);
     await newer.prDetected(second, "open", PR_B_URL);
     expect((await read(id))?.status).toBe("review");
+    await newer.ended(second, "complete");
 
     // The first environment's monitor finds the ticket through its saved
     // pipeline and sees PR A close.

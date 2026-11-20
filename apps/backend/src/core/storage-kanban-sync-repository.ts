@@ -22,6 +22,7 @@ import {
   acceptsFieldChange,
   assignTicketContent,
   attributeFields,
+  journalTicketOp,
   mergeSnapshotImages,
   pendingTicketFields,
   recordConflict,
@@ -161,6 +162,8 @@ export class KanbanSyncRepository {
       const removedImages: string[] = [];
       let applied = 0;
       let next = tasks;
+      let held: Promise<ReadonlySet<string>> | undefined;
+      const heldByBuilds = () => (held ??= this.board.ticketsHeldByBuilds());
       const ofThisController = (task: KanbanTask) =>
         task.projectId === input.projectId &&
         task.sync?.replica?.controllerId === input.controllerId;
@@ -254,7 +257,18 @@ export class KanbanSyncRepository {
           assignTicketContent(updated, content);
         }
         if (!pending.fields.has("status")) {
-          if (updated.status !== item.status) {
+          if (updated.status !== item.status && (await heldByBuilds()).has(row.id)) {
+            // A build on this machine owns the column (`build-pipeline-ticket-hold.ts`):
+            // keep it, and send it back so the command node's board follows.
+            journalTicketOp(
+              store,
+              input.controllerId,
+              row.id,
+              input.sourceProjectId,
+              { kind: "set-status", value: row.status, baseRev: item.revs.status ?? 0 },
+              now,
+            );
+          } else if (updated.status !== item.status) {
             updated.status = item.status;
             updated.order = orderIn(item.status, row.id);
             // Moved on the command node: no longer the build lifecycle's column.
@@ -505,6 +519,10 @@ export class KanbanSyncRepository {
       const createdAs = new Map<string, KanbanTask>();
       const attributed = new Map<string, Set<TicketSyncField>>();
       const workChanged = new Set<string>();
+      // Tickets whose snapshot goes to the leaves again though nothing changed.
+      const resend = new Set<string>();
+      let held: Promise<ReadonlySet<string>> | undefined;
+      const heldByBuilds = () => (held ??= this.board.ticketsHeldByBuilds());
       const conflicts: TicketSyncConflict[] = [];
       const removedImages: string[] = [];
       let applied = 0;
@@ -637,6 +655,17 @@ export class KanbanSyncRepository {
               op.prMergeDoneUrl !== undefined &&
               row.prMergeDoneUrl !== op.prMergeDoneUrl;
             if (JSON.stringify(current) === JSON.stringify(incoming) && !mergeChanged) break;
+            if (
+              op.kind === "set-status" &&
+              row.status !== op.value &&
+              (await heldByBuilds()).has(row.id)
+            ) {
+              // A build on this machine owns the column (`build-pipeline-ticket-hold.ts`).
+              // The board's column is sent to the leaf again in place of the move.
+              track(row);
+              resend.add(row.id);
+              break;
+            }
             if (!acceptsFieldChange(row.sync, field, op.baseRev, input.nodeId)) {
               conflict(
                 item,
@@ -760,8 +789,13 @@ export class KanbanSyncRepository {
         });
         if (!change.stored) continue;
         attributeFields(change.stored, [...(attributed.get(change.stored.id) ?? [])], input.nodeId);
-        // Work on another machine is shown everywhere, so it is a synced change here.
-        if (workChanged.has(change.stored.id) && change.stored.sync?.seq === seqBefore) {
+        // Work on another machine is shown everywhere, so it is a synced change
+        // here; so is a leaf's move a build here held back, so the leaf gets
+        // the board's column again.
+        if (
+          (workChanged.has(change.stored.id) || resend.has(change.stored.id)) &&
+          change.stored.sync?.seq === seqBefore
+        ) {
           change.stored.sync = {
             ...(change.stored.sync ?? { revs: {} }),
             seq: store.nextSeq,

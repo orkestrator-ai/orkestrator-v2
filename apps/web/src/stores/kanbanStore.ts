@@ -257,6 +257,13 @@ export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (
         set((state) => ({
           tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
         }));
+        // The backend keeps the column of a ticket that is still being built:
+        // only the build moves it until the build ends.
+        if (updated.status !== newStatus) {
+          toast.info("This ticket is still being built", {
+            description: "Its column follows the build until the build ends.",
+          });
+        }
       } catch (error) {
         log.error("task.move-failed", { taskId, error: formatLogError(error) });
         // Rollback on failure

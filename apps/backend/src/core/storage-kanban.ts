@@ -334,6 +334,17 @@ export class KanbanRepository {
         const { status: _status, ...remaining } = updates;
         updates = remaining;
       }
+      // An unfinished build owns the column (`build-pipeline-ticket-hold.ts`):
+      // only its lifecycle moves the ticket. The rest of the edit applies.
+      if (
+        !lifecycle &&
+        updates.status !== undefined &&
+        updates.status !== task.status &&
+        (await this.board.ticketsHeldByBuilds()).has(task.id)
+      ) {
+        const { status: _held, ...remaining } = updates;
+        updates = remaining;
+      }
       // The markers are the lifecycle's and the closure's alone, whatever a
       // caller sends.
       const {
@@ -515,6 +526,10 @@ export class KanbanRepository {
       const tasks = await this.board.loadTasks();
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task || task.prClosedReturnUrl === prUrl) return false;
+      // Left undecided while an unfinished build holds the column: the build
+      // reads its own pull request's state when it ends, and the monitor's
+      // next replay decides it then.
+      if ((await this.board.ticketsHeldByBuilds()).has(task.id)) return false;
       const before = normalizeKanbanTask(structuredClone(task));
       const returns = kanbanTaskReturnsForClosedPullRequest(task, prUrl);
       task.prClosedReturnUrl = prUrl;

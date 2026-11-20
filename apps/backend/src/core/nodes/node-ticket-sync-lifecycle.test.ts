@@ -91,6 +91,8 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
+    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    await life.ended(pipeline, "complete");
     await board();
     await f.command.kanban.updateKanbanTask(ticket.id, { status: "in-progress" });
     await f.sync.sync(LEAF_ID);
@@ -103,6 +105,8 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
+    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    await life.ended(pipeline, "complete");
     // The leaf's own move, seen back from the command node, is still the build's.
     expect((await board())?.status).toBe("review");
     expect((await f.leafTicket(ticket.id))?.lifecycleStatus).toBe("review");
@@ -119,6 +123,8 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
+    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    await life.ended(pipeline, "complete");
     await board();
     await f.command.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
     await f.command.kanban.updateKanbanTask(ticket.id, { status: "review" });
@@ -133,6 +139,8 @@ describe("a build on a leaf moves the command node's ticket", () => {
     const { ticket, life, pipeline, board } = await leafBuild(f);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
+    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    await life.ended(pipeline, "complete");
     await board();
     await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
     await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "review" });
@@ -153,6 +161,48 @@ describe("a build on a leaf moves the command node's ticket", () => {
     expect(after?.comments.map((comment) => comment.text)).toContain(
       BUILD_ENVIRONMENT_DELETED_COMMENT,
     );
+  });
+});
+
+describe("a build holds its ticket's column across machines", () => {
+  test("a move on the command node while the leaf builds returns to the build's column", async () => {
+    const f = await fleet();
+    const { ticket, life, pipeline, board } = await leafBuild(f);
+    await f.leaf.saveBuildPipeline(pipeline.id, pipeline.projectId, "leaf-env", 1, pipeline);
+    await life.started(pipeline);
+    expect((await board())?.status).toBe("in-progress");
+
+    await f.command.kanban.updateKanbanTask(ticket.id, { status: "backlog", title: "Renamed" });
+    // The leaf keeps its column and sends it back; the edit itself stays.
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.status).toBe("in-progress");
+    expect(await board()).toMatchObject({ status: "in-progress", title: "Renamed" });
+    expect((await f.sync.sync(LEAF_ID)).conflicts).toBe(0);
+
+    // Once the build ends, the column is the user's again.
+    await life.ended(pipeline, "failed");
+    expect((await board())?.status).toBe("backlog");
+    await f.command.kanban.updateKanbanTask(ticket.id, { status: "review" });
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.status).toBe("review");
+  });
+
+  test("a move on a leaf while the command node builds returns to the build's column", async () => {
+    const f = await fleet();
+    const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Local", "Body");
+    await f.sync.sync(LEAF_ID);
+    const life = await lifecycleMachine(f.command, "command-env", f.commandProject.id);
+    const pipeline = life.pipeline(ticket.id);
+    await f.command.saveBuildPipeline(pipeline.id, pipeline.projectId, "command-env", 1, pipeline);
+    await life.started(pipeline);
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.status).toBe("in-progress");
+
+    await f.leaf.kanban.updateKanbanTask(ticket.id, { status: "backlog" });
+    await f.sync.sync(LEAF_ID);
+    expect((await f.commandTicket(ticket.id))?.status).toBe("in-progress");
+    await f.sync.sync(LEAF_ID);
+    expect((await f.leafTicket(ticket.id))?.status).toBe("in-progress");
   });
 });
 

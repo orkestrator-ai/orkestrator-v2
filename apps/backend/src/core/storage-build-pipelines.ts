@@ -42,6 +42,7 @@ import {
 } from "./build-pipeline-transcript-migration.js";
 import { StoreCorruptError } from "./storage-database.js";
 import { buildPipelineDetailFingerprint } from "./build-pipeline-detail-fingerprint.js";
+import { ticketsHeldByBuilds } from "./build-pipeline-ticket-hold.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -584,6 +585,15 @@ export class BuildPipelinesRepository {
       });
     }
     return result;
+  }
+
+  /**
+   * The Kanban tickets whose column an unfinished build holds
+   * (`build-pipeline-ticket-hold.ts`). Read in place, without copying a record:
+   * the Kanban store asks on every status change it did not get from a build.
+   */
+  async ticketsHeldByBuilds(): Promise<Set<string>> {
+    return ticketsHeldByBuilds(Object.values(await this.loadBuildPipelines()));
   }
 
   /** Backend supervisors use this to re-arm every active pipeline on startup. */

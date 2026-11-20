@@ -565,7 +565,9 @@ export class BuildPipelineRecovery {
     // Closed without merging, found by the build itself (a conflict
     // resolution's re-detection): the same return the PR monitor applies,
     // decided once per pull request, so the monitor seeing the closed link
-    // later neither skips it nor repeats it.
+    // later neither skips it nor repeats it. While the build still runs it
+    // holds the column (`build-pipeline-ticket-hold.ts`), so this leaves the
+    // closure undecided and the build's ending returns the ticket.
     if (detection.state === "closed") await this.returnTicketForClosedPr(pipeline, detection.url);
     await this.ctx.invoke("pr_monitor_watch", {
       environmentId: pipeline.environmentId,
@@ -724,6 +726,24 @@ export class BuildPipelineRecovery {
       });
     } catch {
       log.warn("criteria.record-failed");
+    }
+  }
+
+  /**
+   * A ticket shows a build as In progress from the moment it is admitted, not
+   * only once its environment is ready and the build stage starts; from here
+   * until the build ends only the lifecycle moves it
+   * (`build-pipeline-ticket-hold.ts`). Best effort: the build stage's own
+   * `build-started` update makes the same move, so a failure here costs only
+   * the early column.
+   */
+  async moveTicketOnAdmission(pipeline: BuildPipeline): Promise<void> {
+    try {
+      await this.updateKanbanLifecycle(pipeline, {
+        status: buildPipelineKanbanUpdate("build-started").status,
+      });
+    } catch (error) {
+      log.warn("kanban.status-failed", { pipelineId: pipeline.id, error: formatLogError(error) });
     }
   }
 

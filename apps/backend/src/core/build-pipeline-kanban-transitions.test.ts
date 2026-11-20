@@ -180,6 +180,8 @@ describe("a pull request closed without merging", () => {
     const pipeline = life.pipeline(id);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
+    // A hand move waits for the build to end (`build-pipeline-ticket-hold.ts`).
+    await life.ended(pipeline, "complete");
     await storage.kanban.updateKanbanTask(id, { status: "in-progress" });
     expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
     expect((await read(id))?.status).toBe("in-progress");
@@ -191,6 +193,7 @@ describe("a pull request closed without merging", () => {
     const pipeline = life.pipeline(id);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
+    await life.ended(pipeline, "complete");
     await storage.kanban.updateKanbanTask(id, { status: "backlog" });
     await storage.kanban.updateKanbanTask(id, { status: "review" });
     expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
@@ -213,6 +216,7 @@ describe("a pull request closed without merging", () => {
     expect((await read(id))?.status).toBe("in-progress");
     await newer.prDetected(second, "open", PR_B_URL);
     expect((await read(id))?.status).toBe("review");
+    await newer.ended(second, "complete");
     // The first build's pull request closing, through the monitor of its
     // environment, is not the newer build's to act on.
     expect(await storage.kanban.returnKanbanTaskForClosedPullRequest(id, PR_URL)).toBe(false);
@@ -222,21 +226,19 @@ describe("a pull request closed without merging", () => {
     expect((await read(id))?.status).toBe("backlog");
   });
 
-  test("found by the build itself returns the ticket, once, before the monitor sees it", async () => {
+  test("found by the build itself returns the ticket when the build ends, once", async () => {
     const { storage, life, ticket, read } = await machine();
     const id = await ticket();
     const pipeline = life.pipeline(id);
     await life.started(pipeline);
     await life.prDetected(pipeline, "open");
     // A conflict resolution re-detects the pull request, now closed: the
-    // closed link is recorded and the ticket returns in the same step.
+    // closed link is recorded, and the column waits for the build to end
+    // (`build-pipeline-ticket-hold.ts`).
     await life.prDetected(pipeline, "closed");
-    expect(await read(id)).toMatchObject({
-      status: "backlog",
-      prUrl: PR_URL,
-      prState: "closed",
-      prClosedReturnUrl: PR_URL,
-    });
+    expect(await read(id)).toMatchObject({ status: "review", prUrl: PR_URL, prState: "closed" });
+    await life.ended(pipeline, "complete");
+    expect((await read(id))?.status).toBe("backlog");
     // The user picks it up again; the monitor's observation of the same
     // closure (or a replay after a restart) keeps that move.
     await storage.kanban.updateKanbanTask(id, { status: "review" });

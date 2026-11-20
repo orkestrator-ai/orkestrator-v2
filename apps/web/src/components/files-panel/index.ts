@@ -7,4 +7,5 @@ export { FileTreeNode } from "./FileTreeNode";
 export { FileIcon } from "./FileIcon";
 export { FileActionDialog } from "./FileActionDialog";
 export { CreateFolderDialog } from "./CreateFolderDialog";
+export { CreateFileDialog } from "./CreateFileDialog";
 export { RenameFileDialog } from "./RenameFileDialog";

@@ -60,7 +60,7 @@ import {
   stageAfterReview,
   verificationPassed,
 } from "./build-pipeline-service-helpers.js";
-import { multiReviewDefaultRows } from "./coordinator-launch-defaults.js";
+import { multiReviewDefaultRows } from "./coordinator/launch-defaults.js";
 import {
   addressFindingsResultCompletes,
   multiReviewAutoAddressFindingsDue,

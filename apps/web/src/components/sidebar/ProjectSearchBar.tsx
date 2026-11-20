@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import type { ComponentProps, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { FolderGit2, ListFilter, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,6 @@ import {
   useShimmerRequiresChecks,
 } from "@/hooks/useEnvironmentNameSignal";
 import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
-import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import { useConfigStore } from "@/stores/configStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
@@ -36,17 +35,13 @@ import { ALL_MACHINES, type MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { projectLandingBoardTab, windowGroupingFor } from "@/lib/federation/window-grouping";
 import {
-  localSearchSource,
   machineAvailability,
-  machineSearchSource,
   parseProjectSearchQuery,
-  searchProjectsAndEnvironments,
   THIS_MACHINE,
   type ProjectSearchAvailability,
   type ProjectSearchFilter,
   type ProjectSearchHit,
   type ProjectSearchMachineFilter,
-  type ProjectSearchResults,
 } from "@/lib/project-search";
 import { COMMAND_CATALOG, commandById } from "@/lib/command-palette/catalog";
 import {
@@ -92,16 +87,11 @@ import { MachineBadge, MachineDot, machineStatusText } from "@/components/federa
 import { useExpandMachineProject } from "@/components/federation/useRevealMachineProject";
 import { useMachineViews } from "@/components/federation/useMachineViews";
 import type { Environment, Project } from "@/types";
+import { useProjectSearchResults } from "./useProjectSearchResults";
 
 const RESULTS_LIST_ID = "project-search-results";
 const MACHINE_FILTER_THIS_LABEL = "This machine";
 const NO_HANDLERS: CommandPaletteHandlers = {};
-const NO_DESTINATIONS: ProjectSearchResults = {
-  projects: [],
-  environments: [],
-  incomplete: false,
-  projectCount: 0,
-};
 
 /** The destination search a palette filter runs, or none for a command group. */
 function destinationFilter(filter: PaletteFilter): ProjectSearchFilter | null {
@@ -308,6 +298,32 @@ function ProjectSearchRow({
   );
 }
 
+// Presence may retain the dialog for an exit animation. Keep the committed
+// content in that dialog instance as the live search clears its inputs.
+const SearchDialogBody = memo(
+  function SearchDialogBody({ children }: { open: boolean; children: ReactNode }) {
+    return children;
+  },
+  (_previous, next) => !next.open,
+);
+
+function SearchDialogContent({
+  open,
+  children,
+  ...props
+}: ComponentProps<typeof DialogContent> & { open: boolean }) {
+  return (
+    <DialogContent
+      {...props}
+      inert={!open}
+      onKeyDownCapture={open ? undefined : (event) => event.stopPropagation()}
+      onClickCapture={open ? undefined : (event) => event.stopPropagation()}
+    >
+      <SearchDialogBody open={open}>{children}</SearchDialogBody>
+    </DialogContent>
+  );
+}
+
 export function ProjectSearchBar({
   projects,
   environments,
@@ -384,59 +400,22 @@ export function ProjectSearchBar({
       ? machineFilterChoice
       : ALL_MACHINES;
 
-  const defaultBranches = useMemo(() => {
-    const branches = new Map<string, string>();
-    for (const project of projects) {
-      branches.set(project.id, repositories[project.id]?.defaultBranch ?? "main");
-    }
-    return branches;
-  }, [projects, repositories]);
-
-  const sources = useMemo(
-    () => [
-      localSearchSource({
-        machine: boundMachine,
-        backendId,
-        projects,
-        environments,
-        defaultBranches,
-      }),
-      ...remoteMachines.map((machine) => machineSearchSource(machine, requireChecks)),
-    ],
-    [
-      backendId,
-      boundMachine,
-      defaultBranches,
-      environments,
-      projects,
-      remoteMachines,
-      requireChecks,
-    ],
-  );
-  // Recently used on any machine, newest first, then this machine's older
-  // recent projects (recorded before cross-machine recents existed).
-  const searchRecentKeys = useMemo(
-    () => [
-      ...recentKeys,
-      ...recentProjectIds.map((id) => (backendId ? projectKey(projectRef(backendId, id)) : id)),
-    ],
-    [backendId, recentKeys, recentProjectIds],
-  );
-
   const projectFilter = destinationFilter(filter);
-  const results = useMemo(
-    () =>
-      projectFilter
-        ? searchProjectsAndEnvironments({
-            query,
-            filter: projectFilter,
-            machineFilter,
-            sources,
-            recentKeys: searchRecentKeys,
-          })
-        : NO_DESTINATIONS,
-    [query, projectFilter, machineFilter, sources, searchRecentKeys],
-  );
+  const { results, hasProjects } = useProjectSearchResults({
+    open,
+    query,
+    filter: projectFilter,
+    machineFilter,
+    boundMachine,
+    backendId,
+    projects,
+    environments,
+    repositories,
+    remoteMachines,
+    requireChecks,
+    recentKeys,
+    recentProjectIds,
+  });
 
   const {
     context,
@@ -858,10 +837,14 @@ export function ProjectSearchBar({
   const destinationCount = results.projects.length + results.environments.length;
   // In All, a query that matches only commands shows them without a
   // destination "no match" line above; the line stays when nothing matches.
+  // Closed (the dialog's exit motion), nothing was ranked: no empty line.
   const destinationEmptyText =
-    !showsDestinations || destinationCount > 0 || (filter === "all" && hasQuery && rows.length > 0)
+    !open ||
+    !showsDestinations ||
+    destinationCount > 0 ||
+    (filter === "all" && hasQuery && rows.length > 0)
       ? null
-      : sources.every((source) => source.projects.length === 0)
+      : !hasProjects
         ? "No projects yet"
         : hasQuery
           ? "No projects or environments match that search."
@@ -939,7 +922,8 @@ export function ProjectSearchBar({
       </button>
 
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent
+        <SearchDialogContent
+          open={open}
           showCloseButton={false}
           data-testid="project-search-dialog"
           size="2xl"
@@ -1196,7 +1180,7 @@ export function ProjectSearchBar({
               </>
             )}
           </div>
-        </DialogContent>
+        </SearchDialogContent>
       </Dialog>
     </div>
   );

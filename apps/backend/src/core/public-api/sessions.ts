@@ -13,7 +13,7 @@ import {
 import {
   coordinatorRuntimeEnvironment,
   openCoordinatorConversation,
-} from "../coordinator-runtime.js";
+} from "../coordinator/index.js";
 import type { Environment, PersistedNativeAgentSession } from "../models.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service-shared.js";
 import { PublicActionError } from "./errors.js";

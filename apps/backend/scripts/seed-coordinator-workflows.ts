@@ -5,11 +5,11 @@ import {
   coordinatorMainConversation,
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
-import { CoordinatorService } from "../src/core/coordinator-service.js";
+import { CoordinatorService } from "../src/core/coordinator/service.js";
 import {
   COORDINATOR_WORKFLOW_NEAR_LIMIT,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
-} from "../src/core/coordinator-workflow-retention.js";
+} from "../src/core/coordinator/workflow-retention.js";
 import { runCommand } from "../src/core/shell.js";
 import { createProject, StorageService } from "../src/core/storage.js";
 import { isDefaultDataDir } from "../src/data-dir.js";

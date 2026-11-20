@@ -120,7 +120,7 @@ changed for this merge.
 | merge-worktree-location-owner | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | Seven passed, two failed, one error, 25.5 s; start and alias-retarget deadlines persist, with SQLite follow-on errors. Evidence: `orkestrator-test-run.9TcLI4`. |
 | merge-acceptance-sharing-owner | `apps/backend/src/core/change-tracking/acceptance-sharing.test.ts` | 14 passed, one failed, one error, 25.5 s; V09 hook deadline and condition-not-reached error persist. Evidence: `orkestrator-test-run.RHqOyx`. |
 | merge-worktree-watcher-owner | `apps/backend/tests/worktree-watcher.test.ts` | 33 passed, one failed, 3.7 s logged; real-file write still receives zero changes (2008.43 ms). Evidence: `orkestrator-test-run.tts7bt`. |
-| merge-coordinator-owner | `apps/backend/src/core/coordinator-service.test.ts` | Passed, exit 0, 15.3 s; aggregate dirty-submodule deadline was 5113.39 ms. See 0945. |
+| merge-coordinator-owner | `apps/backend/src/core/coordinator/service.test.ts` | Passed, exit 0, 15.3 s; aggregate dirty-submodule deadline was 5113.39 ms. See 0945. |
 | merge-environment-fork-owner | `apps/backend/tests/commands-environment-fork.test.ts` | Passed, exit 0, 3.5 s; aggregate local-fork deadline was 26779.98 ms. See 1105. |
 | merge-worktree-snapshots-owner | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | Passed, exit 0, 6.1 s; aggregate unnamed hook deadline was 5000.79 ms. See 0957. |
 

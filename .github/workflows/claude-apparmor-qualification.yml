@@ -25,7 +25,7 @@ on:
       - "bridges/claude-bridge/src/services/claude-execution-sandbox.ts"
       - "bridges/claude-bridge/src/services/read-only-policy.ts"
       - "packages/protocol/src/node/claude-linux-sandbox.ts"
-      - "apps/backend/src/core/coordinator-providers.ts"
+      - "apps/backend/src/core/coordinator/providers.ts"
       - "packages/toolchain/src/manifest.ts"
 
 # Only pull request runs supersede each other. Scheduled and manual runs need

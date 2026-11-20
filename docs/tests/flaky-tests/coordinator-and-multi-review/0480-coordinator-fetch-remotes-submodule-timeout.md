@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `project coordinator > fetch covers every configured remote and a dirty submodule needs enhanced confirmation`
-- **File:** `apps/backend/src/core/coordinator-service.test.ts`
+- **File:** `apps/backend/src/core/coordinator/service.test.ts`
 - **Original command:** `mise run test:logged -- --name full-test -- mise run test`
   on branch `qualify-transcript-paging-live-mr-c2fa28c0ecdd` (live transcript
   paging qualification; the change touches only the web transcript views and

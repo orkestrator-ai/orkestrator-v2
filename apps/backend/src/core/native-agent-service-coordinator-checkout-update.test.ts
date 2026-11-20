@@ -22,7 +22,7 @@ import {
   refusingInvoke,
 } from "./native-agent-service-projection-test-support.js";
 import { ProjectGitService, type CheckoutChanges } from "./project-git-service.js";
-import { fastForwardBeforeCoordinatorMail } from "./coordinator-mail-upstream.js";
+import { fastForwardBeforeCoordinatorMail } from "./coordinator/mail-upstream.js";
 import type { NativeAgentServiceOptions } from "./native-agent-service-shared.js";
 import { createProject } from "./storage.js";
 

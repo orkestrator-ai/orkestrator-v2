@@ -1,5 +1,5 @@
 /** The shared agent mail tools: mailboxes, sending, reading and acknowledging. */
-import { coordinatorDeliverNowResult } from "../coordinator-deliver-now.js";
+import { coordinatorDeliverNowResult } from "../coordinator/index.js";
 import { nodeMailReplyTarget } from "../node-mail-reply-target.js";
 import type { McpServer } from "@modelcontextprotocol/server";
 import {

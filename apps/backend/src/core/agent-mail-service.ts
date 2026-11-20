@@ -18,7 +18,7 @@ import {
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 import { randomUUID } from "node:crypto";
-import { coordinatorPlatformAllowed } from "./coordinator-runtime.js";
+import { coordinatorPlatformAllowed } from "./coordinator/index.js";
 import type { NativeAgentService } from "./native-agent-service.js";
 import type { MailSteerDispatchOutcome } from "./native-agent-service-shared.js";
 import type { StorageService } from "./storage.js";

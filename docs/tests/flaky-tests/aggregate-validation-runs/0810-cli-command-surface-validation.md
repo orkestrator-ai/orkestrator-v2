@@ -7,7 +7,7 @@
 - **Original command:** `mise run test` (default reservations; other worktrees validating concurrently on the same host, 17–18 of 18 slots reserved).
 - **Aggregate result:** failed after 1951.5 s. One failure was caused by the change and fixed in it: `apps/backend/tests/commands-registry-environments.test.ts` `marks local environment errored when the project repository has no origin remote` (the local-only start point now applies only to `project init` projects; the owner passes, 75 with the new tests). The rest were in files the change does not touch:
   - `apps/backend/src/core/terminal-history.test.ts`: `terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` (5001.17 ms).
-  - `apps/backend/src/core/coordinator-service.test.ts`: `project coordinator > a dirty submodule needs enhanced confirmation before a discarding switch` (5119.15 ms).
+  - `apps/backend/src/core/coordinator/service.test.ts`: `project coordinator > a dirty submodule needs enhanced confirmation before a discarding switch` (5119.15 ms).
   - `bridges/pi-bridge/src/prompt-cancel-preflight.test.ts`: `concurrent cancels for one claim > repeat cancels of an accepted run share one abort` (47.80 ms).
   - `bridges/codex-bridge/src/commands/codex-command-catalogue.test.ts`: `a cold app-server child > its first answer is stale until a settling re-read confirms the plugin skills` (2176.95 ms, its own 2 s `waitFor`).
   - `apps/desktop/scripts/dev/coordinator-live.test.ts`: `fixture tree digest > names every class of change a coordinator could make` (5021.43 ms; also in [9888](9888-settings-machine-strip-validation.md)).

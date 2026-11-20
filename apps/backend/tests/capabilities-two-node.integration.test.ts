@@ -30,6 +30,7 @@ import type {
 
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 import { OrkestratorBackend } from "../src/core/index.js";
+import { capabilityLaunchKey } from "../src/core/capabilities/launch-records.js";
 import type { CapabilityService } from "../src/core/capabilities/service.js";
 
 /** Events go to the gateway in front of the backend, as `main.ts` wires them. */
@@ -176,7 +177,11 @@ test("capabilities across two real backends: delivery, offline catch-up, leaf la
         };
       }
     ).context.storage.capabilities.loadCapabilityState();
-    expect(commandState.launches[`${leafId}|leaf-session-1`]).toMatchObject({
+    const launchKey = capabilityLaunchKey(
+      { nodeId: leafId, environmentId: "env-1", provider: "cursor" },
+      "leaf-session-1",
+    );
+    expect(commandState.launches[launchKey]).toMatchObject({
       resolvedBy: (await command.invoke<{ nodeId: string }>("get_node_status")).nodeId,
     });
 

@@ -16,7 +16,7 @@ import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-res
 import { rpc } from "./test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "./server.js";
 import { coordinatorRoleCapabilities } from "./tools.js";
-import { CoordinatorService } from "../coordinator-service.js";
+import { CoordinatorService } from "../coordinator/service.js";
 import { copyCommittedCheckout } from "../git/checkout-template-test-support.js";
 import { nativeAgentSessionStorageKey } from "../native-agent-service.js";
 import { cleanupSessionHarnesses, setup } from "../public-api/test-provider.js";

@@ -19,7 +19,7 @@ These 16 were triaged `related` because a doc comment naming `apps/web` in `pack
 | apps/backend/tests/portable-inputs-shared-skills.test.ts | `shared skills root (task 1) > the entrypoint imports it into ~/.agents/skills, from the relay when node cannot read the mount` | 5 s timeout |
 | apps/backend/tests/portable-inputs-stamps.test.ts | `a changed input is reflected at the next start > changing one file in a tree copies that tree alone`, `> a file that never came from an input is never removed` | 60 s timeout, `entrypoint failed:` with empty stderr (the pattern of case [5561](../environments-and-containers/5561-portable-input-stamps-spawn-latency-deadline.md)) |
 | apps/backend/tests/portable-inputs-user-extensions.test.ts | `user skills and commands in containers > withholds nested credentials before staging and import while preserving safe resources`, `> the entrypoint imports them where Claude and Grok read user resources` | 5 s timeout |
-| apps/backend/src/core/coordinator-worker-turns.test.ts | `stop_worker_turn > an idle tab answers plainly, and nothing is marked or stopped` | 5 s timeout; `git` in the fixture ended by SIGTERM |
+| apps/backend/src/core/coordinator/worker-turns.test.ts | `stop_worker_turn > an idle tab answers plainly, and nothing is marked or stopped` | 5 s timeout; `git` in the fixture ended by SIGTERM |
 
 ## Runs alone at `a4eba4a9d`
 

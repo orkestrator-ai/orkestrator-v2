@@ -693,7 +693,7 @@ no Cursor- or Grok-specific inject implementation.
 `packages/protocol/src/agent-mail.ts` is the single source. Native entries
 are also published as `NATIVE_AGENT_MAIL_CAPABILITIES`. Coordinator
 delegation is `mcpClient && canInject`
-(`coordinator-providers.ts`).
+(`coordinator/providers.ts`).
 
 | Context | canPull | canSend | canInject |
 | --- | --- | --- | --- |
@@ -856,15 +856,15 @@ capability row says so.
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
 | Control MCP mail | `apps/backend/src/core/control-mcp/server.ts` |
-| Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator-providers.ts` |
+| Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator/providers.ts` |
 | UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
 | Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |
 | Settings / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
 | Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/lib/chat/agent-mail-tool-call.ts` (mail tool calls), `apps/web/src/components/chat/MailTile.tsx`, `MailToolPart.tsx` |
-| Main / side coordinator, respawn | `apps/backend/src/core/coordinator-service.ts`, `packages/protocol/src/coordinator.ts` |
-| Coordinator status wakes | `apps/backend/src/core/coordinator-status-wakes.ts` |
+| Main / side coordinator, respawn | `apps/backend/src/core/coordinator/service.ts`, `packages/protocol/src/coordinator.ts` |
+| Coordinator status wakes | `apps/backend/src/core/coordinator/status-wakes.ts` |
 | Node mail (leaf side, outbox, collection) | `apps/backend/src/core/nodes/node-mail.ts`, `node-mail-collector.ts`, `node-coordination.ts` |
-| Coordinator notices (who hears one, usage-limit stops) | `apps/backend/src/core/coordinator-notice-router.ts`, `coordinator-usage-limit-notices.ts`, `@orkestrator/protocol/coordinator-notices` |
-| Coordinator ↔ coordinator node mail | `apps/backend/src/core/coordinator-node-coordinator-mail.ts`, `node-mail-reply-target.ts`; scenarios in `coordinator-node-coordinator-mail.test.ts` |
+| Coordinator notices (who hears one, usage-limit stops) | `apps/backend/src/core/coordinator/notice-router.ts`, `coordinator/usage-limit-notices.ts`, `@orkestrator/protocol/coordinator-notices` |
+| Coordinator ↔ coordinator node mail | `apps/backend/src/core/coordinator/node-coordinator-mail.ts`, `node-mail-reply-target.ts`; scenarios in `coordinator/node-coordinator-mail.test.ts` |
 | Multi-actor scenarios | `apps/backend/src/core/agent-mail-scenarios.test.ts` on `agent-mail-world-test-support.ts` |
 | Build pipeline workers | `packages/protocol/src/pipeline-worker-mail.ts`, `apps/backend/src/core/build-pipeline-worker-mail.ts`, `pipeline-worker-identity.ts`, `build-pipeline-worker-transcript.ts` |

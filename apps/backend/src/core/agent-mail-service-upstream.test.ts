@@ -8,7 +8,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
 import { fixture } from "./agent-mail-service-test-support.js";
-import { fastForwardBeforeCoordinatorMail } from "./coordinator-mail-upstream.js";
+import { fastForwardBeforeCoordinatorMail } from "./coordinator/mail-upstream.js";
 
 test("a coordinator fetch cannot hold delivery to a worker mailbox", async () => {
   const { storage, dataDir } = await fixture();

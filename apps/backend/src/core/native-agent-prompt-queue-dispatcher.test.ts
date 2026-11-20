@@ -19,7 +19,7 @@ import {
   coordinatorConversationSessionKey,
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
-import { coordinatorRuntimeEnvironment, resolveCoordinatorRuntime } from "./coordinator-runtime.js";
+import { coordinatorRuntimeEnvironment, resolveCoordinatorRuntime } from "./coordinator/runtime.js";
 import { seedLegacyPromptQueueClaim } from "./storage-test-support.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";

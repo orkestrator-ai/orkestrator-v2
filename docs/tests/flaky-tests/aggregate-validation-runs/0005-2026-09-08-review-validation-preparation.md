@@ -50,7 +50,7 @@
   `/tmp/orkestrator-test-run.hgVYD0/summary.json`.
 - The known attachment case timed out again (5005.46ms), as did
   `project coordinator > retention never removes an open conversation` in
-  `apps/backend/src/core/coordinator-service.test.ts` (5169.03ms). The latter
+  `apps/backend/src/core/coordinator/service.test.ts` (5169.03ms). The latter
   is also recorded in the coordinator timeout cluster below.
 - `ACP bridge > reaps a session process when the creating HTTP client
   disconnects`, in `bridges/acp-bridge/src/acp-http.test.ts`, reported

@@ -1,6 +1,6 @@
 import type { CoordinatorSurfaceAction } from "@orkestrator/protocol/coordinator-surfaces";
 import type { CommandContext } from "./commands-context.js";
-import { withCoordinatorReceipt } from "./coordinator-action-scope.js";
+import { withCoordinatorReceipt } from "./coordinator/index.js";
 
 /** Owning-node results must replay before mutable worker admission checks.
  * Reuse the bounded, durable action journal in a namespace separate from callers.

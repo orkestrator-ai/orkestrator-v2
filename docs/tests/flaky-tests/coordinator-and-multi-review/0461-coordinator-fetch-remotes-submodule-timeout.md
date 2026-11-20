@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `project coordinator > fetch covers every configured remote and a dirty submodule needs enhanced confirmation`
-- **File:** `apps/backend/src/core/coordinator-service.test.ts`
+- **File:** `apps/backend/src/core/coordinator/service.test.ts`
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test` on
   branch `qualify-annotation-live-implement-0330a0bacc01` (`50c26708`; the
   coordinator is not changed by this branch)

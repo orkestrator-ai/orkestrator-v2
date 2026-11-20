@@ -520,7 +520,7 @@ export interface CoordinatorPullRequestFollow {
 
 /**
  * How a coordinator-owned worker ended up: its pull request merged or closed,
- * or the environment deleted (`coordinator-worker-outcomes.ts`).
+ * or the environment deleted (`coordinator/worker-outcomes.ts`).
  *
  * Kept on one association per coordinator, worker and node: the earliest
  * `environment` or `build-pipeline` association that names the worker. The
@@ -600,7 +600,7 @@ export interface CoordinatorWorkflowAssociation {
   terminalNotifiedAt?: string;
   /** Durable restart episode; absent on follows created before the first restart. */
   statusWakeEpisode?: string;
-  /** Last status wake sent for this resource; see `coordinator-status-wakes.ts`. */
+  /** Last status wake sent for this resource; see `coordinator/status-wakes.ts`. */
   statusNotice?: CoordinatorStatusNoticeRecord;
   adoptedByConversationId?: string;
   /** Present on `environment` associations that a coordinator is waiting on. */
@@ -859,7 +859,7 @@ export const COORDINATOR_VALIDATION_RULE =
  * applies only then, and the block is paid for on every turn. The facts it
  * asks for are in the same notice (a completed or failed build names each
  * criterion's result and the commit Verify judged,
- * `coordinator-build-pipeline-status.ts`) and in `get_build_pipeline`, so the
+ * `coordinator/build-pipeline-status.ts`) and in `get_build_pipeline`, so the
  * model reports rather than guesses.
  */
 export const COORDINATOR_HANDOFF_RULE =
@@ -981,7 +981,7 @@ export interface CoordinatorSnapshot {
   workflows: CoordinatorWorkflowAssociation[];
   /**
    * How close the shared workflow store is to refusing new records
-   * (`coordinator-workflow-retention.ts`). Absent from a backend older than
+   * (`coordinator/workflow-retention.ts`). Absent from a backend older than
    * this field, which says nothing about the store.
    */
   workflowStore?: CoordinatorWorkflowStoreState;

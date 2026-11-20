@@ -130,7 +130,7 @@ allowed again.
 
 Every project shares one list of at most 2,000 workflow associations
 (`MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`,
-`apps/backend/src/core/coordinator-workflow-retention.ts`). Launches,
+`apps/backend/src/core/coordinator/workflow-retention.ts`). Launches,
 delegations, review and pipeline runs, graph runs, pull-request follows and
 feature-plan requests each add one. When adding a record would go over the limit, the store first removes
 a batch of up to 200 of the oldest finished records in the same locked write,
@@ -272,7 +272,7 @@ A node is released when this command node stops controlling it: the user
 forgets it (`forgetNode`), or a handover gives it, or the handover target, to
 another command node. `NodeService` calls `onNodesReleased` after the registry
 write, and `CoordinatorService.nodesReleased` closes the work there in one
-store write (`releaseCoordinatorNodeWorkflows`, `coordinator-node-release.ts`):
+store write (`releaseCoordinatorNodeWorkflows`, `coordinator/node-release.ts`):
 
 - each running delegation closes as `stopped` with `wokenAt` set, so no
   per-worker wake follows;
@@ -376,7 +376,7 @@ are kept but hidden behind a warning in the project's Coordinator tab.
 
 Status, pull request, automatic switch and usage-limit notices are addressed to
 *the repository's coordinator*, not to one conversation. They all go through
-`CoordinatorNoticeRouter` (`coordinator-notice-router.ts`), which applies one rule
+`CoordinatorNoticeRouter` (`coordinator/notice-router.ts`), which applies one rule
 (`routeCoordinatorNotice` in `@orkestrator/protocol/coordinator-notices`), so a
 notice reaches exactly one coordinator:
 
@@ -465,7 +465,7 @@ carries on does not fail the turn, so it sends nothing. Native tabs report from
 account the turn ran on, read before any move. A stop that waits counts once, when the
 wait starts.
 
-`CoordinatorUsageLimitNotices` (`coordinator-usage-limit-notices.ts`) keeps a durable
+`CoordinatorUsageLimitNotices` (`coordinator/usage-limit-notices.ts`) keeps a durable
 ledger (the `coordinator-usage-limit-notices` store):
 
 - **Raising.** A stop has an id derived from its environment and request, recorded in
@@ -517,7 +517,7 @@ machines, the same check is on the manual-test checklist.
 
 A command node's main coordinator and a leaf's main coordinator for the same
 repository exchange ordinary node mail
-(`coordinator-node-coordinator-mail.ts`; transport in
+(`coordinator/node-coordinator-mail.ts`; transport in
 [agent-messaging.md](agent-messaging.md#node-mail)):
 
 - **Down.** `send_message` with `nodeId` and `toEnvironmentId: "coordinator"`
@@ -671,7 +671,7 @@ activity it shows the leaf's coordinator directly
 The project's Kanban board is the command node's, and every leaf with a copy
 of the repository holds a synced copy of it under the same ticket ids
 ([tickets.md](tickets.md#sync-across-machines)). The ticket tools take an
-optional `nodeId` (`coordinator-node-tickets.ts`):
+optional `nodeId` (`coordinator/node-tickets.ts`):
 
 | Tool with `nodeId` | Leaf that syncs tickets | Older leaf (no `ticket-sync`) |
 | --- | --- | --- |
@@ -711,7 +711,7 @@ again (the same transition that collects its mail and syncs its tickets,
 `NodeCoordination.onNodeConnected`), each coordinator that tried it gets one
 system message in its main conversation, "Machine … reconnected", saying
 nothing was started or queued and to take a fresh base from
-`get_launch_options` before retrying (`coordinator-node-reconnect-wakes.ts`).
+`get_launch_options` before retrying (`coordinator/node-reconnect-wakes.ts`).
 The record is in memory and bounded (64 nodes, 32 coordinators each); an
 attempt older than 24 hours is dropped unannounced, and a restart forgets
 them, since the coordinator already holds the refusal it was given.
@@ -751,7 +751,7 @@ reads **Start Coordinator**.
 Reading a coordinator (`CoordinatorService.get`, so `get_project_coordinator`,
 the panel's view and every coordinator `read_messages`) repairs nothing and
 writes nothing. The work and mail closed conversations leave behind move to the
-main at three points instead (`coordinator-closed-conversations.ts`): when a main
+main at three points instead (`coordinator/closed-conversations.ts`): when a main
 opens, when a conversation closes, and on the 60-second `coordinator-repair`
 sweep. Every path that opens a main goes through `ensureMainConversation`: mail,
 wakes and notices directly, and a new coordinator in `ensure` and
@@ -759,7 +759,7 @@ wakes and notices directly, and a new coordinator in `ensure` and
 the new main unassigned and leaves open side conversations their own work. The
 sweep syncs mailboxes and reads the owed delegations once for every coordinator,
 not once each, and re-reads the open delegations only after the store has
-changed (`coordinator-open-delegations.ts`). A main that appears any other way
+changed (`coordinator/open-delegations.ts`). A main that appears any other way
 (a legacy record given a role on read, a restored store) takes the mail over on
 that sweep, up to a minute later.
 
@@ -973,7 +973,7 @@ places the user acts:
 Coordinator runs against the project's real checkout, so how strongly a
 platform holds the read-only boundary is named rather than flattened to
 available/unavailable. The single table is
-`apps/backend/src/core/coordinator-providers.ts`. Every gate — workspace
+`apps/backend/src/core/coordinator/providers.ts`. Every gate — workspace
 service, runtime resolver, bridge launcher, trusted session input — consults
 it. Its tier and reason come from the shared enforcement matrix
 (`agentPolicyEnforcement` in `packages/protocol/src/graphs/capability-enforcement.ts`)
@@ -1661,8 +1661,8 @@ is what previously let a platform be half-qualified, allowed to hold a
 conversation but refused a bridge.
 
 Change a tier in the read-only boundary of `capability-enforcement.ts`, never
-in `coordinator-providers.ts`: the coordinator and graph nodes share it, and
-`coordinator-providers.test.ts` fails if the two disagree.
+in `coordinator/providers.ts`: the coordinator and graph nodes share it, and
+`coordinator/providers.test.ts` fails if the two disagree.
 
 Moving a platform to `enforced` is a claim that the provider or the OS blocks
 the mutation whatever the agent attempts. It requires both:
@@ -1680,7 +1680,7 @@ another. Use `capabilityPolicy`, which names the operation rather than the tool.
 Before moving a platform to `enforced`, run the live read-only suite for it
 (`mise run test:agent:coordinator --credential-source <platform>`) and keep the
 summary it writes. The unit tests show that the bridge translates the policy.
-Only a live run shows that the provider holds it. `coordinator-conformance.test.ts`
+Only a live run shows that the provider holds it. `coordinator/conformance.test.ts`
 fails if a platform the coordinator offers, enforced ones included, is missing
 from the live suite's platform list (`COORDINATOR_LIVE_PLATFORMS`).
 
@@ -1721,7 +1721,7 @@ transcripts remove it and draw the file.
 
 A coordinator is read-only, so it cannot save a pasted image somewhere another
 agent can read it. It names the image instead, and the backend does the copying
-(`coordinator-mail-attachments.ts`, `mail-attachments.ts`). There is no new write
+(`coordinator/mail-attachments.ts`, `mail-attachments.ts`). There is no new write
 access, tool permission or sandbox change on the coordinator's side.
 
 - **`send_message` takes `attachments`**: the paths it was given (a bare file
@@ -1785,12 +1785,12 @@ directory.
 
 How it is verified, with no provider turn:
 
-- `coordinator-mail-attachments.test.ts` and
-  `coordinator-mail-attachments-nodes.test.ts` run the real send commands, mail
+- `coordinator/mail-attachments.test.ts` and
+  `coordinator/mail-attachments-nodes.test.ts` run the real send commands, mail
   store, transfer framework and Git worktrees, for every recipient kind and both
   node directions; containers there are a fake `docker exec` running the real
   writer script.
-- `coordinator-mail-attachments-docker.test.ts` sends into a real container
+- `coordinator/mail-attachments-docker.test.ts` sends into a real container
   (opt-in: `ORKESTRATOR_TEST_DOCKER_IMAGE=orkestrator-v2:latest`; it runs with
   `--network none`). It checks the image's `node` user can read the file, that
   Git ignores it even after `git add -A`, and that a retry adds nothing.
@@ -1798,7 +1798,7 @@ How it is verified, with no provider turn:
   source, each blind to the other's files, links them over the real gateway and
   runs every route with no agent
   ([command-nodes.md](command-nodes.md#images-between-nodes)).
-- `coordinator-mail-attachments-read-live.test.ts` (slow tier) has the
+- `coordinator/mail-attachments-read-live.test.ts` (slow tier) has the
   recipient's own agent open the file. It sends through the real commands and
   injection drain, then hands the exact delivered prompt to the pinned Claude
   CLI and the pinned Codex CLI, each pointed at a scripted loopback model. The
@@ -1824,13 +1824,13 @@ How it is verified, with no provider turn:
   worker and for a coordinator (copy in `ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT`);
   a file beside that directory is refused, so the grant covers it alone. Run
   on macOS on 2026-11-14 with Codex 0.167.0.
-- `coordinator-mail-attachments-docker-read-live.test.ts` (slow tier; opt-in:
+- `coordinator/mail-attachments-docker-read-live.test.ts` (slow tier; opt-in:
   `ORKESTRATOR_TEST_DOCKER_IMAGE=<image>`, `--network none`) has a
   containerized worker's own agent open the file inside a real container. The
   real send writes the copy with `docker exec`, the real drain delivers the
   prompt, and the image's own `claude` CLI, run as `node` in `/workspace`,
   takes that prompt against a scripted Messages endpoint on the container's
-  loopback (`coordinator-mail-attachments-container-model-test-support.ts`,
+  loopback (`coordinator/mail-attachments-container-model-test-support.ts`,
   started with the image's `bun`). The model asks for `Read` on the path it
   found in the prompt, and the test checks the CLI returned the same bytes as
   image content. Passed on beelink on 2026-11-17 with Claude Code 2.1.319, on
@@ -1892,7 +1892,7 @@ Each change is also recorded as a repository context event
 from and its source: `upstream` for a fast-forward, `switch` for the branch
 picker, `external` for anything Orkestrator did not do itself. A conversation's
 first turn after the checkout moved gets a **checkout update** notice inside its
-context block (`coordinator-checkout-update.ts`), whatever started the turn (a
+context block (`coordinator/checkout-update.ts`), whatever started the turn (a
 typed message, mail, a timer): what moved it, the old and new commit, and up to
 20 new commits (subject lines) and 40 changed paths from
 `ProjectGitService.checkoutChanges`, with totals. It tells the coordinator its
@@ -1922,7 +1922,7 @@ at most five seconds). The backend answers without fetching while the
 checkout cannot change, and otherwise runs the cooldown-bound fetch and
 answers a mergeable checkout `{ offer: true, automatic: true }`. The panel
 then fast-forwards with `syncProjectGit` and sends. The backend waits for the
-fetch for at most three seconds (`coordinator-message-upstream.ts`). When it
+fetch for at most three seconds (`coordinator/message-upstream.ts`). When it
 is slower, or fails, the backend fast-forwards the checkout itself to the
 upstream commit it has already fetched (`fastForwardToFetchedUpstream`, a
 local `git merge --ff-only` under the same rules) and answers
@@ -1941,7 +1941,7 @@ from an older backend that would have asked, is merged.
 
 **Before agent mail wakes the main coordinator** (a worker's report, a side
 agent's question, a status notice), the backend does the same itself, since no
-client is involved (`coordinator-mail-upstream.ts`, the `beforeMailInject`
+client is involved (`coordinator/mail-upstream.ts`, the `beforeMailInject`
 hook of `NativeAgentService.dispatchMailInject`). It runs before the mail turn
 enters the session's dispatch fence, so the coordinator context block of that
 turn names the merged commit. Independent environments drain mail concurrently
@@ -1998,7 +1998,7 @@ the first check.
 
 The backend refuses to change the checkout while any turn holds it: a turn in
 any open conversation or in the project home
-(`findCoordinatorCheckoutTurn`, `coordinator-checkout-turn.ts`). The toolbar
+(`findCoordinatorCheckoutTurn`, `coordinator/checkout-turn.ts`). The toolbar
 disables the branch picker and Sync for the same reason and names who holds it
 ("Coordinator is running a turn…", or "Home"), so a user with a side agent
 focused is not refused only after confirming a discard. Refresh stays enabled,
@@ -2203,7 +2203,7 @@ with a pull request carry, besides `prUrl` and `prState`,
 `prHasMergeConflicts`, `prMergeability` (`clean`, `blocked`, `dirty`,
 `behind`, `unstable`, `unknown`, `unavailable`), `prChecks` (`passed`,
 `failed`, `pending` and `total` counts, plus `requiredFailed`, or null) and `prReadyToMerge` with
-`prNotReadyReason` when false (`coordinator-pr-status.ts`). Readiness is
+`prNotReadyReason` when false (`coordinator/pr-status.ts`). Readiness is
 `evaluatePrMergeReadiness` (`packages/protocol/src/pr-merge-readiness.ts`),
 the rule behind the sidebar's shimmer, with checks always required (the
 coordinator ignores the auto-merge setting) and the PR monitor's confirmation as
@@ -2256,7 +2256,7 @@ decisions:
 Every coordinator turn, including mail wakes, starts with a context block built
 by the pure `buildCoordinatorContext`
 (`packages/protocol/src/coordinator-context.ts`). The service does the reads
-(`coordinator-context-reads.ts` and the existing helpers) and passes the answers
+(`coordinator/context-reads.ts` and the existing helpers) and passes the answers
 in, so a test can check the block's content and size without a service. A test
 holds a main coordinator's block, before the research, node and checkout lines,
 under 9,300 characters (including a 300-character increase for pattern-spotting
@@ -2289,7 +2289,7 @@ invoker's refused list. The refusal
 can tell the user what to do.
 
 Each refusal is counted, content-free, in `coordinatorEnvironmentRefusals` of
-`/__orkestrator/metrics` (`coordinator-environment-refusals.ts`): by what was
+`/__orkestrator/metrics` (`coordinator/environment-refusals.ts`): by what was
 refused (`tool`, `mail`, `mail-reply`, `node-mail`, `node-mail-reply`,
 `review-address`, `workflow-control`), by node (`local` or `remote`) and, for a
 Control MCP tool, by the tool's name. No id or input is kept, and the counts
@@ -2301,7 +2301,7 @@ choosing whether replies get an exception, is an item in the
 agent builds the exception only if that is the choice.
 
 The answer comes from `coordinatorCreatedEnvironment`
-(`coordinator-environment-scope.ts`), and it is per coordinator, not per
+(`coordinator/environment-scope.ts`), and it is per coordinator, not per
 conversation: every worker belongs to the main coordinator, so a takeover from a
 side agent, a new main after a closed one and an adopted workflow all keep their
 workers. An environment counts when this coordinator has, on the same node
@@ -2365,7 +2365,7 @@ coordinator, the command node's) are not environments and are not checked.
 
 Every other coordinator action refuses the project home (see
 [Project home](#project-home)). `send_message` to it is allowed but gated by
-`send_coordinator_agent_mail` (`apps/backend/src/core/coordinator-worker-mail.ts`):
+`send_coordinator_agent_mail` (`apps/backend/src/core/coordinator/worker-mail.ts`):
 
 - **A reason is required.** Without `projectHomeReason` (why an isolated
   environment will not do) the call is refused with an error that names
@@ -2481,7 +2481,7 @@ the process-env token is only the fallback. Grok still needs the host
 safety setting to admit `advisory`.
 
 **It also needs agent messaging on.** `coordinatorDelegationAvailable`
-(`coordinator-context-reads.ts`) reads the setting on each turn. With it off, no
+(`coordinator/context-reads.ts`) reads the setting on each turn. With it off, no
 surface promises a wake: the context prompt drops the delegation rules and says
 why (`COORDINATOR_MESSAGING_OFF_NOTE`), the Control MCP instructions carry that
 note instead of the contract, and `withoutWakePromise` replaces the `wake` field
@@ -2589,7 +2589,7 @@ Orkestrator (see [Worker surfaces](#worker-surfaces)); approvals stay with the
 person in the worker's tab.
 
 Whether a delegation has finished is decided in one place, `decideDelegation`
-(`coordinator-delegation-decision.ts`), for the turn-end edge, the sweep and
+(`coordinator/delegation-decision.ts`), for the turn-end edge, the sweep and
 workers on other nodes alike. Its comment has the table and says why those three
 differ where they do.
 
@@ -2852,7 +2852,7 @@ mutes, inject policy, the unattended budget, the hourly limit and
 an admitted message skip the wait for idle. The command then waits for one
 drain pass (outside the worker admission lock, as `retry_agent_mail_inject`
 does) and returns `deliverNow` with a `deliverNowNote`
-(`coordinator-deliver-now.ts`):
+(`coordinator/deliver-now.ts`):
 
 | `deliverNow` | Meaning |
 | --- | --- |
@@ -3108,7 +3108,7 @@ words, and lasts two hours after the timer fires.
 
 Besides the delegation wake, a coordinator is woken when other work it started
 or prompted **settles**, so it can keep track and respond without polling
-(`apps/backend/src/core/coordinator-status-wakes.ts`).
+(`apps/backend/src/core/coordinator/status-wakes.ts`).
 
 **Ownership.** Only resources with a coordinator workflow association: the
 durable record written at launch or prompt time with the coordinator and
@@ -3127,7 +3127,7 @@ a new event starts one. A sweep starts nothing: it waits, and sends the state cu
 when one opens. The one exception is the backfill rule, for work older than status
 wakes: a non-terminal status with no earlier notice, unchanged for over 24 hours, on
 an association over 14 days old is recorded without a wake
-(`coordinator-status-backfill.ts`), so a project idle for longer than that does lose
+(`coordinator/status-backfill.ts`), so a project idle for longer than that does lose
 such a notice. The rule and its module are deleted once a count of the user's real
 coordinator stores finds no association older than status wakes (to-do 4860
 (retired) task 1, on the
@@ -3172,7 +3172,7 @@ only delay. `launch_graph` takes no `nodeId`, and the observer skips a
 `graph-run` association that has one.
 
 A feature plan is reduced by `featurePlanCoordinatorStatus`
-(`coordinator-feature-plan-status.ts`). A `feature-plan` association names
+(`coordinator/feature-plan-status.ts`). A `feature-plan` association names
 one planning exchange (`featurePlan.operationId`); the plan takes many
 messages from the user and the coordinator. Launch reserves a pending follow
 before starting the planner, then activates it after startup succeeds or an
@@ -3191,7 +3191,7 @@ the failure message, never the reply or the user's message;
 `get_feature_plan` reads those. Feature plans are this node's only.
 
 **Criteria and the handoff.** A completed or failed build's notice
-(`coordinator-build-pipeline-status.ts`) says how its newest live Verify judged
+(`coordinator/build-pipeline-status.ts`) says how its newest live Verify judged
 the acceptance criteria and on which commit: a tally ("Acceptance criteria:
 4/5 passed, 1 failed; Verify judged commit abc1234."), then each failed or
 not-checked criterion's id and text, within the eight-line detail cap and
@@ -3258,7 +3258,7 @@ then lists the PR outcome in its details.
 
 **Pull requests.** A `pull-request` association (`resourceId` the worker,
 `pullRequest` the follow) is the coordinator's claim on one worker's PR,
-reduced by `pullRequestStatus` in `coordinator-pr-status.ts`. It is written by
+reduced by `pullRequestStatus` in `coordinator/pr-status.ts`. It is written by
 `create_pr` when the PR tab launched (a skipped one raised nothing), by
 `resolve_conflicts` (pinned to the PR it resolves), and by the review
 observer once a coordinator-launched review with auto-PR has reported
@@ -3379,7 +3379,7 @@ and `resolve_conflicts` return `COORDINATOR_PR_STATUS_WAKE`.
 A coordinator also hears when a worker it owns is merged, closed or deleted,
 whoever did it: a pipeline environment's PR the user merged, a PR the user
 raised on a launched worker, Merge and Cleanup, or a plain deletion
-(`apps/backend/src/core/coordinator-worker-outcomes.ts`). The notice is for
+(`apps/backend/src/core/coordinator/worker-outcomes.ts`). The notice is for
 awareness. It says what happened and ends with a line that nothing is
 expected of the coordinator unless it affects work it is tracking: dependent
 tasks, tickets, branches built on the worker, or work it meant to send there.
@@ -3424,7 +3424,7 @@ notice.
 ### Watched pull requests
 
 A coordinator also hears, for awareness only, when a pull request it has
-merely *shown* changes state (`apps/backend/src/core/coordinator-pr-watches.ts`).
+merely *shown* changes state (`apps/backend/src/core/coordinator/pr-watches.ts`).
 This covers pull requests nobody asked it to follow: one the user pasted, one
 a worker mentioned, one it linked in its own reply.
 
@@ -3569,7 +3569,7 @@ and `reviewPreparation` take none. Explicit rows replace the saved rows and thei
 saved focus. The coordinator is told to set a lens only when the user asks for
 a focus.
 
-Multi Review rows resolve in `apps/backend/src/core/coordinator-launch-defaults.ts`
+Multi Review rows resolve in `apps/backend/src/core/coordinator/launch-defaults.ts`
 over the worker's model catalogue through `resolveLaunchSelection`
 (`packages/protocol/src/launch-selection.ts`), the resolver the launch dialogs
 call too, which documents the rules: an unset or
@@ -3756,7 +3756,7 @@ idempotency design.
 The main coordinator can also drive a worker's own surfaces, as the user
 would in that worker's window. Every one targets a disposable worker
 environment of the bound project: the backend command
-(`coordinator-surface-actions.ts`) revalidates the credential's scope and
+(`coordinator/surface-actions.ts`) revalidates the credential's scope and
 refuses the project home, the checkout the coordinator may only read. Side
 agents have none of them (their capabilities are `discovery`, `mail` and
 `schedules`), except `get_worker_changes`, which only reads and is
@@ -3777,7 +3777,7 @@ the work through a controller command (`launch_controller_terminal`,
 `fork_controller_environment`, or the `reviewer` and `custom-address` surfaces of `controller_multi_review_surface`
 in `commands-registry-controller-workflows.ts`; `stop_controller_worker_turn`,
 `list_controller_worker_commands` and `run_controller_worker_command` in
-`coordinator-worker-turn-actions.ts`). Those are node-link only,
+`coordinator/worker-turn-actions.ts`). Those are node-link only,
 never reachable with a workspace grant. Job, tab and navigation IDs on that
 node derive from the command node's receipt key. So when the node link loses
 an answer, the tool returns outcome-unknown and asks for a retry with the same
@@ -3803,7 +3803,7 @@ node and only the approved answer crosses the link
 | `open_multi_review` with `reviewerId` | Opens one reviewer's read-only transcript subtab (`multi-review:<id>:reviewer:<reviewer>`). | Focuses the same tab. | Same tab the reviewer node opens in the review. A reviewer without a session yet returns `partial` with the reason. |
 | `custom_address_multi_review` | The review tab's custom Address Findings prompt: an Address Findings run with the caller's instruction and, optionally, another model (`addressFindingsModel`; `MultiReviewService.customAddressFindings`). | Replays the outcome and re-reads the workflow; while the handoff is pending the service itself also replays. | The Address Findings tab, as for `address_multi_review`; a custom Address Findings never starts an automatic PR. Status wakes follow as for a default one. |
 | `create_pr` | The **Create PR** button: the worker's `PR` tab, with the Create PR prompt and the `pr` action default, against `targetBranch` or the repository's PR base branch (`launchPrAgent` in `multi-review-auto-pr.ts`, shared with auto-PR). Pass `nodeId` for a remote worker, using that node's repository and agent defaults. Refused while the worker's pipeline still owns publication; skipped when the worker already has a PR. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same PR agent. | The `PR` tab, opened without taking focus. A launched PR is followed: status wakes when it opens, conflicts, fails a check, is ready to merge, merges or closes ([Status wakes](#status-wakes)). |
-| `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else its default branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator-pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus; an open Resolve tab, or a finished pipeline's Resolve Conflicts session, is reused instead of opening another ([Resolve launches](github-pull-requests.md#resolve-launches)). One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
+| `resolve_conflicts` | The **Resolve Conflicts** button: the worker's `Resolve` tab, with the Resolve Conflicts prompt, the `resolve` action default and the button's completion action (the PR monitor rechecks the PR when the agent finishes), against `targetBranch`, else the PR's own base branch, else the repository's PR base branch, else its default branch, else `main`, as `pr.resolve` does (`launchWorkerResolve` in `coordinator/pr.ts`, `launchResolveConflictsAgent` in `multi-review-auto-pr.ts`). The button's precondition applies: refused when the worker has no PR, when it is merged or closed, or when GitHub reports no conflicts (an unknown mergeability is allowed), and while the worker's pipeline owns it. Pass `nodeId` for a remote worker. | Replays; the native-agent job's request ID derives from the request, so a retry joins the same Resolve agent. | The `Resolve` tab, opened without taking focus; an open Resolve tab, or a finished pipeline's Resolve Conflicts session, is reused instead of opening another ([Resolve launches](github-pull-requests.md#resolve-launches)). One status wake when it finishes, with the refreshed PR state; the PR stays followed. |
 | `launch_feature_plan`, `get_feature_plan` | **New feature** and **Send** on the Features board: a planning agent in its own environment turns the message into a summary and stories. Building from a plan stays the user's Build button. | Replays; a retry after a crash finds the plan that attempt created. | The plan on the Features board. A `feature-plan` association, written before planning starts: status wakes when the reply is ready and when planning fails ([Status wakes](#status-wakes)); `list_workflows` lists it. |
 | `request_root_changes` | Asks the user to apply some of the checkout's uncommitted changes to a worker (below). Takes `nodeId` for a worker on a connected node. | Replays the same approval request. | An approval dialog listing the checkout's changed files, naming the worker's node when it is another one. |
 | `get_worker_changes` | Reads what a worker changed, local or container, without fetching its branch (below). Read-only, capability `discovery`. | No receipt: a read. | Nothing; it changes nothing. |
@@ -3842,7 +3842,7 @@ reclaimed by the next retry, which reattaches as the table says.
 
 **Reading a worker's changes.** `get_worker_changes` answers from backend
 change tracking, through the same `changes_*` commands the Changes panel and
-the public `changes.view` read (`coordinator-worker-changes.ts`), so it works
+the public `changes.view` read (`coordinator/worker-changes.ts`), so it works
 for container workers the coordinator cannot fetch from. It returns the
 worker's branch and base (`createdFromCommit`, or the user's chosen diff base),
 the commits since the base (a bounded log of `<base>..HEAD` through the
@@ -4001,7 +4001,7 @@ through the composer or public API. A coordinator goal ends as an unverified cla
 The durable delegation record says so, the same ownership status wakes use, and
 it outlasts the delegation that made it. A tab a person opened in the same worker
 stays theirs until the coordinator delegates to it, under the existing rules. The
-backend commands (`coordinator-goal-actions.ts`) revalidate the scope and refuse
+backend commands (`coordinator/goal-actions.ts`) revalidate the scope and refuse
 the project home, and side agents have no goal tools.
 
 **No resume.** Resuming can raise a limit, which is widening what a goal may spend.
@@ -4039,7 +4039,7 @@ output. The result says it is evidence and not instructions. Fields are named on
 one, so a field added to the goal stays out until someone judges it.
 
 **Qualification does not change.** These tools change no platform's tier, boundary
-or delegation, so `coordinator-providers.ts` has nothing to add: any platform that
+or delegation, so `coordinator/providers.ts` has nothing to add: any platform that
 can delegate can call them. Whether a *worker* can hold a goal is its own
 `actions.goal` capability, which a refusal reports.
 
@@ -4056,7 +4056,7 @@ A live run is the `goal` scenario of `mise run test:agent:coordinator`, describe
 The main coordinator runs saved graph templates
 ([graphs.md](graphs.md#launching)); it never authors them (D6). Four tools
 (`control-mcp/graph-tools.ts`, over the commands in
-`coordinator-graph-actions.ts`) need the `graphs` capability, which only the
+`coordinator/graph-actions.ts`) need the `graphs` capability, which only the
 main role holds (`COORDINATOR_TOOL_CAPABILITY` in `control-mcp/tools.ts`).
 They are in `COORDINATOR_CONTROL_TOOL_NAMES`, the allowlist Pi's read-only
 gate and OpenCode's coordinator permission rules (`orkestrator_<tool>`, by
@@ -4228,37 +4228,37 @@ guarantee, not by one end-to-end scenario replayed per platform:
 
 - coordinator presence and the turn-end edge:
   `native-agent-service-reconciliation.test.ts`
-- one-wake invariant and crash recovery: `coordinator-service.test.ts`
+- one-wake invariant and crash recovery: `coordinator/service.test.ts`
 - the workflow record limit (cleanup when full, protected records, batch
   removal, recent-request replay, the all-in-use refusal, the `workflowStore`
   state, released-node records, the shared request-alias lookup):
-  `coordinator-workflow-retention.test.ts`; its banner:
+  `coordinator/workflow-retention.test.ts`; its banner:
   `CoordinatorWorkflowStoreBanner.test.tsx`; the `send_message` warning:
-  `coordinator-worker-mail.test.ts`, `control-mcp/server-messaging.test.ts`
+  `coordinator/worker-mail.test.ts`, `control-mcp/server-messaging.test.ts`
 - work on a forgotten, handed-over, unregistered or long-unreachable node:
-  `coordinator-node-release.test.ts`; the release hooks:
+  `coordinator/node-release.test.ts`; the release hooks:
   `nodes/node-service.test.ts`, `nodes/node-handover.test.ts`
 - status wakes (ownership, one wake per settled transition per resource kind,
-  coalescing, budgets, restart, bounds): `coordinator-status-wakes.test.ts`;
+  coalescing, budgets, restart, bounds): `coordinator/status-wakes.test.ts`;
   graph runs: `graph-run-coordinator-status.test.ts`,
-  `coordinator-status-wakes-graph.test.ts`; feature plans and kinds a reader
-  does not know: `coordinator-status-wakes-feature-plan.test.ts`,
+  `coordinator/status-wakes-graph.test.ts`; feature plans and kinds a reader
+  does not know: `coordinator/status-wakes-feature-plan.test.ts`,
   `control-mcp/feature-plan-workflows.test.ts`; pull requests (the reducer and
-  environment PR fields: `coordinator-pr-status.test.ts`; follows, Resolve
-  tabs, review handoff: `coordinator-status-wakes-pr.test.ts`; a remote
-  worker's Resolve tab and follow: `coordinator-pr-remote.test.ts`)
+  environment PR fields: `coordinator/pr-status.test.ts`; follows, Resolve
+  tabs, review handoff: `coordinator/status-wakes-pr.test.ts`; a remote
+  worker's Resolve tab and follow: `coordinator/pr-remote.test.ts`)
 - the workers' prompts banner, local and remote, and Open from it
   (`CoordinatorPanel.test.tsx`, `CoordinatorPanel.render-cost.test.tsx`);
   `workerTabTarget` (`apps/web/src/lib/coordinator-work-items.test.ts`); Open
   navigation (`coordinator-work-navigation.test.ts`); `graph_run_get` as a
   routed read (`packages/protocol/src/command-nodes.test.ts`)
 - `create_pr` and `resolve_conflicts` admission, preconditions and follows:
-  `coordinator-surface-actions.test.ts`
+  `coordinator/surface-actions.test.ts`
 - `restart_build_pipeline_step`: step resolution, kept rounds, selection and
   refusals at the service (`build-pipeline-service-coordinator-restart.test.ts`);
   local and remote restarts, receipts and replays, the older-node refusal,
   follow reopening and the `resume_build_pipeline` refusal
-  (`coordinator-pipeline-step-actions.test.ts`); the fake model's script
+  (`coordinator/pipeline-step-actions.test.ts`); the fake model's script
   (`e2e/agent-testing/coordinator-restart-fake-model.test.ts`) and, on demand,
   the two-profile run (`e2e/agent-testing/coordinator-restart-fake.spec.ts`)
 - saved graphs: the four tools and no authoring tool, admission before
@@ -4290,12 +4290,12 @@ guarantee, not by one end-to-end scenario replayed per platform:
   (`WorkerQuestionApprovalDialog.test.tsx`)
 - project-home messages: a reason required, held outside the 3-hour window,
   approve, decline, replay, the window opened only by sent mail, and ordinary
-  workers unchanged (`coordinator-worker-mail.test.ts`); the tool result
+  workers unchanged (`coordinator/worker-mail.test.ts`); the tool result
   shapes (`control-mcp/server-messaging.test.ts`); the dialog
   (`node-action-requests.test.tsx`)
 - no-waiting-tools boundary, tier table, hosted network tools removed on
   every platform, and search without fetch when research is on:
-  `coordinator-conformance.test.ts`
+  `coordinator/conformance.test.ts`
 - hosted web search against the real pinned Codex, read from the model request
   on a loopback endpoint (gated on `RUN_LIVE_CODEX_APP_SERVER=1`), plus a
   canary that proves `cached` refuses a fresh page `live` opens and that a
@@ -4362,26 +4362,26 @@ guarantee, not by one end-to-end scenario replayed per platform:
   the dialog (`AgentsMdApprovalDialog.test.tsx`, web, and
   `e2e/AgentsMdApproval.spec.ts` in a real browser)
 - worker surfaces (terminal, browser, tab edits, feature plans, custom fix, reviewer tabs, the root-changes request and receipts):
-  `coordinator-surface-actions.test.ts`; the patch and the untouched
+  `coordinator/surface-actions.test.ts`; the patch and the untouched
   checkout against real Git repositories: `root-changes.test.ts`; the
   approval dialog: `node-action-requests.test.tsx` (web); scope forwarding
   and side agents: `control-mcp/server-coordinator-workflows.test.ts`
 - `get_worker_changes` bounds, paging, path filters, uncommitted marks and
   diff rendering over fake `changes_*` answers:
-  `coordinator-worker-changes.test.ts`; `fork_worker`'s base, association,
+  `coordinator/worker-changes.test.ts`; `fork_worker`'s base, association,
   delegation, receipt replay, pipeline unlinking and project-home refusal
-  against a real Git checkout: `coordinator-fork-worker.test.ts` (slow tier)
+  against a real Git checkout: `coordinator/fork-worker.test.ts` (slow tier)
 - worker turns (`stop_worker_turn`, `list_worker_commands`,
   `run_worker_command`) over the real registry, native-agent service and
   delegations: the stopped run settling as cancelled, the one stop-aware wake,
   a later prompt not refused, idle and terminal tabs, the project home,
-  `session.command`'s refusals and side agents (`coordinator-worker-turns.test.ts`);
-  on a connected node, with lost answers (`coordinator-worker-turns-remote.test.ts`)
+  `session.command`'s refusals and side agents (`coordinator/worker-turns.test.ts`);
+  on a connected node, with lost answers (`coordinator/worker-turns-remote.test.ts`)
 
 - worker goals: the tools, the schema limit pinned to the constant, refusals for
   tabs the coordinator does not own, replay and framing:
   `control-mcp/coordinator-goals.test.ts`; many iterations, one wake, for each way a
-  goal stops, and the sweep's hold: `coordinator-goal-wake.test.ts`
+  goal stops, and the sweep's hold: `coordinator/goal-wake.test.ts`
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
   `commands-servers-coordinator-opencode.test.ts`

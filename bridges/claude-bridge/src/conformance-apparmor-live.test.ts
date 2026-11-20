@@ -18,6 +18,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { CoordinatorProviderQualification } from "@orkestrator/protocol/coordinator";
 import {
   APPARMOR_BWRAP_PROFILE,
   probeClaudeLinuxSandbox,
@@ -84,6 +85,31 @@ async function sysctl(name: string): Promise<string | null> {
 
 afterEach(() => setClaudeLinuxSandboxStatusForTests({ available: true }));
 
+function readBackendTiers(): {
+  normal: CoordinatorProviderQualification;
+  strict: CoordinatorProviderQualification;
+} {
+  // The backend runs in its own Bun process, with no test preload or bridge mocks.
+  const providers = fileURLToPath(
+    new URL("../../../apps/backend/src/core/coordinator/providers.ts", import.meta.url),
+  );
+  const backend = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `import { coordinatorProviderQualification } from ${JSON.stringify(providers)};
+        console.log(JSON.stringify({
+          normal: coordinatorProviderQualification("claude"),
+          strict: coordinatorProviderQualification("claude", { tierSetting: "enforced" })
+        }));`,
+    ],
+    { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 },
+  );
+  expect(backend.error).toBeUndefined();
+  expect(backend.status).toBe(0);
+  return JSON.parse(backend.stdout);
+}
+
 describe("AppArmor phase expectations", () => {
   const nested = {
     available: false,
@@ -110,6 +136,14 @@ describe("AppArmor phase expectations", () => {
     }
     expect(() => apparmorPhaseExpectation("other", { available: true })).toThrow(/Unknown/);
   });
+});
+
+test.skipIf(Boolean(phase))("the backend tier probe resolves without a live AppArmor phase", () => {
+  const { normal, strict } = readBackendTiers();
+  expect(["enforced", "provider-configured"]).toContain(normal.tier);
+  expect(normal.available).toBe(true);
+  expect(strict.tier).toBe(normal.tier);
+  expect(strict.available).toBe(normal.tier === "enforced");
 });
 
 test.skipIf(!phase)(
@@ -198,25 +232,7 @@ async function qualifyPhase(
   }
 
   enter("backend tier");
-  // The backend runs in its own Bun process, with no test preload or bridge mocks.
-  const providers = fileURLToPath(
-    new URL("../../../apps/backend/src/core/coordinator-providers.ts", import.meta.url),
-  );
-  const backend = spawnSync(
-    process.execPath,
-    [
-      "-e",
-      `import { coordinatorProviderQualification } from ${JSON.stringify(providers)};
-        console.log(JSON.stringify({
-          normal: coordinatorProviderQualification("claude"),
-          strict: coordinatorProviderQualification("claude", { tierSetting: "enforced" })
-        }));`,
-    ],
-    { encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 },
-  );
-  expect(backend.error).toBeUndefined();
-  expect(backend.status).toBe(0);
-  const tiers = JSON.parse(backend.stdout);
+  const tiers = readBackendTiers();
   evidence.tiers = tiers;
   expect(tiers.normal).toMatchObject({
     tier: restricted ? "provider-configured" : "enforced",

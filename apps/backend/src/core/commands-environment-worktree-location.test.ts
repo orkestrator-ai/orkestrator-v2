@@ -13,7 +13,7 @@ import { createProject, StorageService } from "./storage.js";
 import { coordinatorAttachmentsRoot } from "./storage-coordinators.js";
 import { updateWorktreeLocations } from "./worktrees/index.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { CoordinatorService } from "./coordinator-service.js";
+import { CoordinatorService } from "./coordinator/service.js";
 
 // This slow-tier file creates real repositories/worktrees and waits for
 // subprocess cleanup. The shared preload's hang watchdog

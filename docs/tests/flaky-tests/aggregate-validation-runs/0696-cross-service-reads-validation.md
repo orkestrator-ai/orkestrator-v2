@@ -54,7 +54,7 @@ Complete unit-owner reruns used `mise run test:logged`, explicit paths and `--pa
 | `tests/unit/preview-latency-baseline.test.ts` | `releases private-origin attachments after handoff failure (att-missing-url)` timed out in `get_preview_capabilities`. | Passed unchanged (5.8 s logged). |
 | `apps/backend/src/core/opencode-host-start.test.ts` | Shutdown between database-lock attempts observed early process exit. | Passed unchanged (13.2 s logged). |
 | `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | Firefox setup hook exceeded five seconds. | Passed unchanged in all installed engines (293.6 s logged). |
-| `apps/backend/src/core/coordinator-service.test.ts` | Two Git branch/discard cases timed out. | Passed unchanged (37.4 s logged). |
+| `apps/backend/src/core/coordinator/service.test.ts` | Two Git branch/discard cases timed out. | Passed unchanged (37.4 s logged). |
 | `apps/backend/src/core/public-api/public-api-exec.test.ts` | Process exit-status/stream separation case failed. | Passed unchanged (17.3 s logged). |
 | `apps/web/src/App.test.tsx` | Failed-retry Docker warning case failed. | First rerun: 114 passed and one different startup-probe case failed (22.7 s logged; evidence `orkestrator-test-run.CvOUQr`). The complete unchanged owner passed after the browser runs ended (6.1 s logged). |
 | `apps/backend/src/core/environment-move.test.ts` | Nested-submodule move and recovery cases exceeded five seconds. | First rerun: 36 passed, one recovery timeout and one associated late error (66.8 s logged; evidence `orkestrator-test-run.6c9J0C`). The complete unchanged owner passed after the browser runs ended (30.6 s logged). |

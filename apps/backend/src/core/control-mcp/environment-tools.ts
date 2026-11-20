@@ -50,7 +50,7 @@ import {
   prReadingFrom,
   summaryPrHealth,
   thisNodePrHealth,
-} from "../coordinator-pr-status.js";
+} from "../coordinator/index.js";
 import {
   MAX_PROMPT_LENGTH,
   COORDINATOR_WORKER_PROMPT_NOTE,

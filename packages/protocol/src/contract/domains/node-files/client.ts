@@ -10,7 +10,7 @@
  * `begin_node_file_write` is critical); version 0, for a pre-contract node,
  * sends today's `{ command, args }`. The `mailAttachments` scope is gated by
  * the `node-mail-attachments` capability where the images are pushed
- * (`coordinator-mail-attachments.ts`), not here.
+ * (`coordinator/mail-attachments.ts`), not here.
  *
  * Retirement: adapter 0 goes when the support floor passes the first Stable
  * release that advertises the `node-files` domain.

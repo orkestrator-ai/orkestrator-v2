@@ -3,18 +3,16 @@ import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { RESOURCE_CHANGED_EVENT, type ResourceChange } from "@orkestrator/protocol/resource-events";
 
 import { nativeTab } from "../control-shared-actions.js";
-import { prReadingFrom } from "../coordinator-pr-status.js";
-import type {
-  CoordinatorRemoteAccess,
-  RemotePullRequestReading,
-  RemoteWorkerState,
-  RemoteWorkflowRecord,
-} from "../coordinator-remote.js";
 import {
-  lastAssistantText,
-  waitingBlocker,
+  type CoordinatorRemoteAccess,
   type CoordinatorWaitingBlocker,
-} from "../coordinator-status-wakes.js";
+  lastAssistantText,
+  prReadingFrom,
+  type RemotePullRequestReading,
+  type RemoteWorkerState,
+  type RemoteWorkflowRecord,
+  waitingBlocker,
+} from "../coordinator/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");

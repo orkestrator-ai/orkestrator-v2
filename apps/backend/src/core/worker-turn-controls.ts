@@ -17,7 +17,7 @@ import type { SurfaceCommandRunner } from "./worker-surface-runs.js";
 /**
  * A worker's native agent turn, as it runs on the node that owns the worker:
  * stop the running turn, list the tab's slash commands, run one. A coordinator
- * on this node reaches them through `coordinator-worker-turn-actions.ts`; a
+ * on this node reaches them through `coordinator/worker-turn-actions.ts`; a
  * command node's coordinator through the `*_controller_*` commands there.
  * Each caller checks its own scope and refuses the project home; these act
  * on one native tab, through the same code as `session.stop`,

@@ -11,7 +11,7 @@ import {
   listProjectCopyFilesCommand,
   startProjectCloneCommand,
 } from "@orkestrator/protocol/contract/domains/projects";
-import { sanitizeCoordinatorError } from "./coordinator-service.js";
+import { sanitizeCoordinatorError } from "./coordinator/index.js";
 import { listProjectCopyCandidates, listProjectCopyFiles } from "./nodes/index.js";
 import type { StorageService } from "./storage.js";
 

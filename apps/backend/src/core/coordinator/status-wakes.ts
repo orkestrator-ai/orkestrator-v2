@@ -1,0 +1,1863 @@
+/**
+ * Status wakes: a coordinator hears when work it started settles.
+ *
+ * A delegated tab's turn ending already wakes the coordinator (the delegation
+ * wake in `service.ts`). This module covers everything else a
+ * coordinator creates or prompts and then waits on: a Multi Review reaching a
+ * state that needs a decision, a build pipeline ending or stopping on an
+ * error (the reduction is in `build-pipeline-status.ts`), a run
+ * that stalls, a delegated tab blocked on an approval or a
+ * question (named from its pending interactions when they can be read), a
+ * graph run that waits on a person or ends (item 208; the reduction is in
+ * `graph-run-coordinator-status.ts`, one notice per wait), and a worker's
+ * pull request the coordinator raised, resolved or got from its review's
+ * auto-PR (a `pull-request` association; the reduction is in
+ * `pr-status.ts`), including its Resolve tab finishing, and a
+ * feature plan's planning reply it asked for being ready or failing (a
+ * `feature-plan` association; the reduction is in
+ * `feature-plan-status.ts`). A worker it owns being merged,
+ * closed or deleted is `worker-outcomes.ts`. An association kind
+ * this backend does not know (one a newer backend on the same data directory
+ * wrote) is skipped, never observed as another kind.
+ *
+ * Ownership is the durable workflow association recorded when the coordinator
+ * launched or prompted the resource, never anything the user started. Each
+ * resource's state is reduced to one settled status with a stable key; a key
+ * is sent once (the association records it), as an ordinary workflow notice
+ * through the mail store, so delivery, batching, read/ack and restart
+ * recovery are the mail store's. Notices about one resource are budgeted as
+ * one routed pair (`statusBudgetKey`), and every notice opens or joins a short
+ * coalescing window so several settling together arrive as one wake.
+ *
+ * Progress is not a status: individual reviewers finishing never wake anyone,
+ * and build-pipeline stages only do under the opt-in `stages` mode.
+ */
+import { coordinatorRequestAlias } from "./workflow-retention.js";
+import { needsPipelineCreationRepair, reconcilePipelineCreation } from "./pipeline-origin.js";
+import {
+  observePublicationAttempt,
+  prAttemptActivity,
+  publicationFailedStatus,
+  updateResolve,
+} from "./pr-attempt.js";
+import { CoordinatorNoticeRouter } from "./notice-router.js";
+import { multiReviewAddressFindingsIdentity } from "../multi-review-address-findings-identity.js";
+import {
+  agentMailStatusBudgetKey,
+  normalizeAgentMessagingSettings,
+  type AgentMailNotice,
+  type AgentMailPullRequest,
+  type AgentMailNoticeResource,
+  type AgentMailNoticeTone,
+  type CoordinatorStatusWakeMode,
+} from "@orkestrator/protocol/agent-mail";
+import {
+  COORDINATOR_HANDOFF_RULE,
+  type CoordinatorWorkflowAssociation,
+  type CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
+import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
+import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
+import type { ResourceChange } from "@orkestrator/protocol/resource-events";
+import type { StorageService } from "../storage.js";
+import { observeCoordinatorFeaturePlan } from "./feature-plan-status.js";
+import {
+  graphRunCoordinatorStatus,
+  graphRunWaitNoticeIsNew,
+} from "../graph-run-coordinator-status.js";
+import type { CoordinatorRemoteAccess } from "./remote.js";
+import {
+  prKeyTag,
+  prReadingFrom,
+  pullRequestStatus,
+  resolveFinishedStatus,
+  type CoordinatorPrHealth,
+  type CoordinatorPrReading,
+  type PullRequestStatus,
+} from "./pr-status.js";
+import { boundedLine, waitingStatus, type CoordinatorWaitingBlocker } from "./waiting-status.js";
+import { isStatusBackfill } from "./status-backfill.js";
+import { CoordinatorWorkerOutcomes } from "./worker-outcomes.js";
+import type { Environment } from "../models.js";
+import { buildPipelineStatus } from "./build-pipeline-status.js";
+export { buildPipelineStatus };
+import { hash, MAX_DETAILS, record, stalledSession, text } from "./status-support.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
+
+export {
+  boundedLine,
+  lastAssistantText,
+  waitingBlocker,
+  waitingStatus,
+  type CoordinatorWaitingBlocker,
+} from "./waiting-status.js";
+
+/** How long a notice waits for others before waking the coordinator. */
+export const COORDINATOR_STATUS_COALESCE_MS = 10_000;
+/** How long a delegated tab must stay waiting before the coordinator hears about it. */
+export const COORDINATOR_WAITING_DEBOUNCE_MS = 20_000;
+/**
+ * Workflow saves arrive in bursts (a running review saves on every progress
+ * probe); observe each resource at most this often. Well inside the
+ * coalescing window, so it adds nothing a coordinator would notice.
+ */
+const RESOURCE_CHANGE_DEBOUNCE_MS = 2_000;
+/**
+ * A Resolve tab read idle this long after its launch, never seen working,
+ * has finished: its turn was too short for any observation to catch it.
+ */
+export const COORDINATOR_RESOLVE_START_GRACE_MS = 60_000;
+/**
+ * How long a finished Resolve tab's report waits for the PR monitor's
+ * recheck before it reports the latest reading anyway.
+ */
+export const COORDINATOR_RESOLVE_REFRESH_WAIT_MS = 60_000;
+const MAX_LABEL_CHARS = 80;
+
+const MODE_ORDER: Record<CoordinatorStatusWakeMode, number> = { off: 0, settled: 1, stages: 2 };
+
+/** One settled state of a resource, reduced to what a coordinator needs to decide. */
+export interface CoordinatorStatus {
+  /** Stable for one settled state; the same key is never sent twice. */
+  key: string;
+  /** The notice's machine state. */
+  state: string;
+  tone: AgentMailNoticeTone;
+  /** The resource will not change again (completed, failed, cancelled). */
+  terminal: boolean;
+  /** Completes the subject after the resource name: "is ready to address". */
+  headline: string;
+  /** Bounded facts: counts, an error, an excerpt. */
+  details: string[];
+  /** Calls that read more or act, written out with their arguments. */
+  tools: string[];
+  /** The least inclusive setting that still sends this status. */
+  mode: CoordinatorStatusWakeMode;
+}
+
+export interface CoordinatorStatusResource {
+  kind: AgentMailNoticeResource;
+  id: string;
+  environmentId?: string;
+  tabId?: string;
+  /** The connected node a worker runs on, so its tile can open it there. */
+  nodeId?: string;
+  label?: string;
+}
+
+function count(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+/** "2 P0, 1 P1" for a structured review report's issues. */
+function findingCounts(report: unknown): { line: string; total: number } {
+  if (!record(report)) return { line: "no structured report", total: 0 };
+  const issues = Array.isArray(report.issues) ? report.issues : [];
+  const bySeverity = new Map<string, number>();
+  for (const issue of issues) {
+    const severity = record(issue) && typeof issue.severity === "string" ? issue.severity : "?";
+    bySeverity.set(severity, (bySeverity.get(severity) ?? 0) + 1);
+  }
+  const gaps = count(report.testCoverageGaps);
+  const parts = [...bySeverity.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([severity, total]) => `${total} ${severity}`);
+  const findings =
+    issues.length === 0
+      ? "no findings"
+      : `${issues.length} finding${issues.length === 1 ? "" : "s"} (${parts.join(", ")})`;
+  const coverage = gaps ? `, ${gaps} test-coverage gap${gaps === 1 ? "" : "s"}` : "";
+  const verdict =
+    record(report.verdict) && typeof report.verdict.ready === "string"
+      ? `; verdict: ${report.verdict.ready}`
+      : "";
+  return { line: `${findings}${coverage}${verdict}`, total: issues.length + gaps };
+}
+
+/**
+ * What a cancelled Multi Review's notice tells its coordinator; the build
+ * pipeline's counterpart is `BUILD_CANCELLED_NOTICE`. A cancel is someone's
+ * decision to stop the work, whoever sent it (to-do 7545 (retired) task 4, #2057).
+ */
+export const MULTI_REVIEW_CANCELLED_NOTICE =
+  "It was stopped on purpose, not by an error. If you did not cancel it yourself, the user did: that is their decision to stop this review. Do not launch it again unless the user asks you to.";
+
+/**
+ * The settled status of a Multi Review snapshot, or null while it is just
+ * making progress.
+ *
+ * Reviewers finishing one by one is progress and never wakes anyone; under
+ * `stages` the coordinator hears once when all of them are done and
+ * consolidation starts.
+ *
+ * Auto-address findings and auto-PR advance the review on their own, so a state the
+ * workflow is about to leave is not news: consolidation with findings goes
+ * straight to Address Findings (no `ready`), and a finished Address Findings with a queued PR is held
+ * until the PR launch settles. A clean report with auto-PR on is held the same
+ * way, then reported through the same PR states. The coordinator then hears `pr-started`, then
+ * `pr-opened` once the environment reports an open pull request (URL and
+ * state, read on the next observation), or `pr-failed`. Closed, merged and
+ * unknown PR states are reported as such. A skipped PR is reported on
+ * `fix-done` with its reason.
+ */
+export function multiReviewStatus(
+  snapshot: unknown,
+  workflowId: string,
+  environment: { prUrl?: unknown; prState?: unknown } = {},
+): CoordinatorStatus | null {
+  if (!record(snapshot)) return null;
+  const phase = text(snapshot.phase);
+  const read = `get_multi_review { "workflowId": "${workflowId}" }`;
+  const errorLine = text(snapshot.error) ? [`Error: ${boundedLine(snapshot.error as string)}`] : [];
+  const fixSession = record(snapshot.addressFindingsSession)
+    ? snapshot.addressFindingsSession
+    : undefined;
+  const autoPr = snapshot.autoPr === true;
+  // On the graph engine (item 301) a system step opens the pull request.
+  const graphEngine = snapshot.engine === "graph";
+  const recordedPrLaunch =
+    autoPr && record(snapshot.autoPrLaunch) ? snapshot.autoPrLaunch : undefined;
+  // A clean report's PR speaks for the review only while it rests on that
+  // report. Old launched records cannot prove which Address Findings they contain. Other
+  // legacy states keep their existing handoff behavior until a new Address Findings
+  // supersedes them.
+  const cleanReviewPr = recordedPrLaunch?.basis === "clean-review";
+  const prLaunch =
+    recordedPrLaunch &&
+    (cleanReviewPr
+      ? phase === "ready" &&
+        record(snapshot.consolidatedReport) &&
+        findingCounts(snapshot.consolidatedReport).total === 0
+      : recordedPrLaunch.addressFindingsIdentity === undefined
+        ? recordedPrLaunch.state !== "launched"
+        : recordedPrLaunch.addressFindingsIdentity ===
+          multiReviewAddressFindingsIdentity(fixSession))
+      ? recordedPrLaunch
+      : undefined;
+  const prLaunchMessage = text(prLaunch?.message)
+    ? boundedLine(prLaunch!.message as string)
+    : undefined;
+  const prUrl = text(environment.prUrl);
+  /** The PR step's own status once it settled, keyed to Address Findings or clean report that queued it. */
+  const prStatus = (addressFindingsKey: string): CoordinatorStatus | null => {
+    const finished = cleanReviewPr ? "found nothing to fix" : "fix finished";
+    if (prLaunch?.state === "launched") {
+      const tab = text(prLaunch.tabId);
+      const tools = [
+        read,
+        ...(tab && text(snapshot.environmentId)
+          ? [
+              `get_tab_state { "environmentId": "${snapshot.environmentId as string}", "tabId": "${tab}" }`,
+            ]
+          : []),
+      ];
+      if (prUrl) {
+        const state =
+          environment.prState === "open" ||
+          environment.prState === "closed" ||
+          environment.prState === "merged"
+            ? environment.prState
+            : "unknown";
+        const noticeState = state === "open" ? "pr-opened" : `pr-${state}`;
+        return {
+          key: `${noticeState}:${addressFindingsKey}`,
+          state: noticeState,
+          tone: state === "open" || state === "merged" ? "success" : "attention",
+          terminal: false,
+          headline:
+            state === "open"
+              ? `${finished} and its pull request is open`
+              : state === "unknown"
+                ? `${finished}; its pull request state is unknown`
+                : `${finished}; its pull request is ${state}`,
+          details: [`Pull request: ${boundedLine(prUrl)}`, "The coordinator does not merge it."],
+          tools,
+          mode: "settled",
+        };
+      }
+      return {
+        key: `pr-started:${addressFindingsKey}`,
+        state: "pr-started",
+        tone: "info",
+        terminal: false,
+        headline: graphEngine
+          ? `${finished}; the graph run opened the pull request`
+          : `${finished}; PR session started`,
+        details: [
+          graphEngine
+            ? "The graph run's pull request step pushed the branch and opened the pull request. Another update follows once the environment reports it."
+            : `The PR session${tab ? ` (tab ${tab})` : ""} pushes the branch and opens the pull request. Another update follows once the environment reports it.`,
+        ],
+        tools,
+        mode: "settled",
+      };
+    }
+    if (prLaunch?.state === "failed")
+      return {
+        key: `pr-failed:${addressFindingsKey}`,
+        state: "pr-failed",
+        tone: "failure",
+        terminal: false,
+        headline: graphEngine
+          ? `${finished} but the graph run did not open the pull request`
+          : `${finished} but its PR session could not start`,
+        details: prLaunchMessage ? [`Error: ${prLaunchMessage}`] : [],
+        tools: cleanReviewPr
+          ? [read]
+          : [read, `open_multi_review_address_findings { "workflowId": "${workflowId}" }`],
+        mode: "settled",
+      };
+    return null;
+  };
+  const reviewSession = record(snapshot.reviewSession)
+    ? snapshot.reviewSession
+    : snapshot.reviewModel || snapshot.consolidationModel
+      ? undefined
+      : fixSession;
+  const reviewAttempt = `${text(reviewSession?.sessionKey) ?? ""}:${text(reviewSession?.startedAt) ?? ""}`;
+  if (phase === "completed") {
+    // A structured Address Findings completes the review and queues its PR in the same save.
+    if (prLaunch?.state === "pending") return null;
+    const fix = record(snapshot.addressFindingsResult) ? snapshot.addressFindingsResult : undefined;
+    return {
+      key: "completed",
+      state: "completed",
+      tone: "success",
+      terminal: true,
+      headline: "completed",
+      details: [
+        ...(fix && text(fix.summary)
+          ? [`Address Findings: ${boundedLine(fix.summary as string)}`]
+          : []),
+        ...(fix ? [`Files changed: ${count(fix.filesChanged)}`] : []),
+        ...(prLaunch?.state === "launched"
+          ? [
+              graphEngine
+                ? "The graph run opened the pull request."
+                : `PR session started${text(prLaunch.tabId) ? ` in tab ${prLaunch.tabId as string}` : ""}.`,
+            ]
+          : prLaunch
+            ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
+            : []),
+      ],
+      tools: [read],
+      mode: "off",
+    };
+  }
+  if (phase === "failed") {
+    return {
+      key: "failed",
+      state: "failed",
+      tone: "failure",
+      terminal: true,
+      headline: "failed",
+      details: errorLine,
+      tools: [read],
+      mode: "off",
+    };
+  }
+  if (phase === "cancelled") {
+    return {
+      key: "cancelled",
+      state: "cancelled",
+      tone: "info",
+      terminal: true,
+      headline: "was cancelled",
+      details: [MULTI_REVIEW_CANCELLED_NOTICE],
+      tools: [read],
+      mode: "off",
+    };
+  }
+  const stalled = stalledSession([
+    ...(Array.isArray(snapshot.reviewers)
+      ? snapshot.reviewers.map(
+          (reviewer, index) =>
+            [
+              `reviewer ${record(reviewer) && text(reviewer.model) ? reviewer.model : index + 1}`,
+              reviewer,
+            ] as [string, unknown],
+        )
+      : []),
+    ["consolidation", reviewSession],
+    ["fix", fixSession],
+  ]);
+  if (
+    stalled &&
+    ["preparing", "reviewing", "consolidating", "addressing-findings", "interactive"].includes(
+      phase ?? "",
+    )
+  ) {
+    return {
+      key: `stalled:${hash(`${stalled.key}:${stalled.since}`)}`,
+      state: "stalled",
+      tone: "attention",
+      terminal: false,
+      headline: `stalled (${stalled.label})`,
+      details: [`No activity from the ${stalled.label} session since ${stalled.since}.`],
+      tools: [read],
+      mode: "settled",
+    };
+  }
+  if (phase === "ready") {
+    const findings = findingCounts(snapshot.consolidatedReport);
+    const readyKey = hash(`${reviewAttempt}:${text(reviewSession?.completedAt) ?? ""}`);
+    if (cleanReviewPr && prLaunch) {
+      // Auto-PR moves a clean report straight on; report the PR, not the pause.
+      if (prLaunch.state === "pending") return null;
+      const pr = prStatus(readyKey);
+      if (pr) return pr;
+    }
+    return {
+      // A restarted consolidation reaches `ready` again with a new report.
+      key: `ready:${readyKey}`,
+      state: "ready",
+      tone: findings.total > 0 ? "attention" : "success",
+      terminal: false,
+      headline: findings.total > 0 ? "is ready to address" : "found nothing to fix",
+      details: [
+        `Consolidated report: ${findings.line}.`,
+        ...(cleanReviewPr && prLaunch
+          ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
+          : recordedPrLaunch?.state === "launched"
+            ? [
+                "An earlier PR session started; review and update it manually after this Address Findings.",
+              ]
+            : snapshot.autoAddressFindings === true && findings.total === 0
+              ? [
+                  "Auto-address findings is on, but there was nothing to fix, so no Address Findings or PR session started.",
+                ]
+              : autoPr
+                ? [
+                    "Auto-PR is on: once an Address Findings run started with address_multi_review completes, a PR session starts automatically.",
+                  ]
+                : []),
+      ],
+      tools: [read, `address_multi_review { "workflowId": "${workflowId}" }`],
+      mode: "settled",
+    };
+  }
+  if (phase === "interactive" && snapshot.addressPromptPending !== true && fixSession) {
+    const addressFindingsKey = hash(
+      `${text(fixSession.sessionKey) ?? ""}:${text(fixSession.startedAt) ?? ""}`,
+    );
+    if (fixSession.status === "idle") {
+      // The PR is next; report how it went rather than an Address Findings run the coordinator need not act on.
+      if (prLaunch?.state === "pending") return null;
+      const pr = prStatus(addressFindingsKey);
+      if (pr) return pr;
+      return {
+        key: `fix-done:${addressFindingsKey}`,
+        state: "fix-done",
+        tone: "success",
+        terminal: false,
+        headline: "Address Findings session finished its turn",
+        details: [
+          "The interactive Address Findings turn ended. Read its tab to confirm every finding was addressed.",
+          ...(recordedPrLaunch?.state === "launched" && !prLaunch
+            ? [
+                "An earlier PR session started; its pull request does not confirm inclusion of this Address Findings run's changes. Review Address Findings and update the PR manually.",
+              ]
+            : []),
+          ...(prLaunch?.state === "skipped"
+            ? [`No PR session started${prLaunchMessage ? `: ${prLaunchMessage}` : "."}`]
+            : []),
+        ],
+        tools: [read, `open_multi_review_address_findings { "workflowId": "${workflowId}" }`],
+        mode: "settled",
+      };
+    }
+    if (fixSession.status === "failed") {
+      return {
+        key: `fix-failed:${addressFindingsKey}`,
+        state: "fix-failed",
+        tone: "failure",
+        terminal: false,
+        headline: "Address Findings session failed",
+        details: [
+          ...(text(fixSession.error) ? [`Error: ${boundedLine(fixSession.error as string)}`] : []),
+          ...(autoPr ? ["No PR session will start."] : []),
+        ],
+        tools: [read, `open_multi_review_address_findings { "workflowId": "${workflowId}" }`],
+        mode: "settled",
+      };
+    }
+  }
+  if (phase === "consolidating") {
+    const reviewers = Array.isArray(snapshot.reviewers) ? snapshot.reviewers : [];
+    const completed = reviewers.filter(
+      (reviewer) => record(reviewer) && reviewer.status === "completed",
+    ).length;
+    return {
+      key: `consolidating:${hash(reviewAttempt)}`,
+      state: "reviews-finished",
+      tone: "info",
+      terminal: false,
+      headline: "reviewers finished; consolidating",
+      details: [`${completed} of ${reviewers.length} reviewers produced a report.`],
+      tools: [read],
+      mode: "stages",
+    };
+  }
+  return null;
+}
+
+/** Subject, Markdown body and structured notice for one status, all bounded. */
+export function renderCoordinatorStatusNotice(
+  resource: CoordinatorStatusResource,
+  status: CoordinatorStatus,
+  pullRequest?: AgentMailPullRequest,
+): { subject: string; body: string; notice: AgentMailNotice } {
+  const name =
+    resource.kind === "multi-review"
+      ? "Multi Review"
+      : resource.kind === "build-pipeline"
+        ? "Build pipeline"
+        : resource.kind === "graph-run"
+          ? "Graph run"
+          : resource.kind === "pull-request"
+            ? "Pull request"
+            : resource.kind === "environment"
+              ? "Environment"
+              : resource.kind === "feature-plan"
+                ? "Feature plan"
+                : "Worker";
+  const label = resource.label ? ` ${boundedLine(resource.label, MAX_LABEL_CHARS)}` : "";
+  const subject = boundedLine(`${name}${label} ${status.headline}`, 160);
+  const where =
+    resource.kind === "agent-tab"
+      ? `tab \`${resource.tabId ?? resource.id}\` in environment \`${resource.environmentId ?? "?"}\``
+      : resource.kind === "pull-request"
+        ? `of environment \`${resource.environmentId ?? resource.id}\``
+        : `\`${resource.id}\`${resource.environmentId ? ` in environment \`${resource.environmentId}\`` : ""}`;
+  const body = [
+    `${name} ${where} ${status.headline}.`,
+    ...status.details.slice(0, MAX_DETAILS).map((detail) => `- ${boundedLine(detail)}`),
+    "",
+    `Read more: ${status.tools.map((tool) => `\`${tool}\``).join(", ")}.`,
+    // A build or review that has ended is closed with a handoff to the user;
+    // anything else may need nothing at all.
+    status.terminal && (resource.kind === "build-pipeline" || resource.kind === "multi-review")
+      ? `This is a status update for work this conversation started. ${COORDINATOR_HANDOFF_RULE}`
+      : "This is a status update for work this conversation started. Decide whether it needs anything from you; if not, acknowledge it and finish the turn.",
+  ].join("\n");
+  return {
+    subject,
+    body,
+    notice: {
+      ...(pullRequest ? { pullRequest } : {}),
+      resource: {
+        kind: resource.kind,
+        id: resource.id,
+        ...(resource.environmentId ? { environmentId: resource.environmentId } : {}),
+        ...(resource.tabId ? { tabId: resource.tabId } : {}),
+        ...(resource.nodeId ? { nodeId: resource.nodeId } : {}),
+        ...(resource.label ? { label: boundedLine(resource.label, MAX_LABEL_CHARS) } : {}),
+      },
+      state: status.state,
+      tone: status.tone,
+    },
+  };
+}
+
+export interface CoordinatorStatusWakeTimers {
+  now(): number;
+  setTimeout(callback: () => void, delayMs: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+const SYSTEM_TIMERS: CoordinatorStatusWakeTimers = {
+  now: () => Date.now(),
+  setTimeout: (callback, delayMs) => {
+    const handle = setTimeout(callback, delayMs);
+    handle.unref?.();
+    return handle;
+  },
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+export interface CoordinatorStatusWakeOptions {
+  /** Who hears a notice; without one, this machine's coordinator and no new sessions. */
+  noticeRouter?: CoordinatorNoticeRouter;
+  /** Fresh turn activity of a worker tab, for waiting episodes. */
+  workerActivity?: (
+    environmentId: string,
+    tabId: string,
+  ) => Promise<AgentActivityState | "unknown">;
+  /** The worker's last assistant text, best effort; omitted when unavailable. */
+  lastAssistantExcerpt?: (environmentId: string, tabId: string) => Promise<string | undefined>;
+  /** What the worker's pending interactions block it on, best effort. */
+  waitingBlocker?: (
+    environmentId: string,
+    tabId: string,
+  ) => Promise<CoordinatorWaitingBlocker | undefined>;
+  /**
+   * This node's PR monitor health for a followed pull request (its check
+   * rollup, merge permission, confirmation and last answer), from announced
+   * state only. Without it a local PR is never "ready" and has no checks.
+   */
+  prMonitorHealth?: (environment: Environment) => CoordinatorPrHealth;
+  /** Best-effort PR identity from the host GitHub reader, also for remote workers. */
+  pullRequestMetadata?: (url: string) => Promise<AgentMailPullRequest | undefined>;
+  timers?: CoordinatorStatusWakeTimers;
+  coalesceMs?: number;
+  waitingDebounceMs?: number;
+}
+
+/**
+ * The same status for a resource on another node: every suggested call names
+ * that node, and the first detail says where the work runs.
+ */
+export function statusOnNode(
+  status: CoordinatorStatus,
+  nodeId: string,
+  nodeName: string,
+): CoordinatorStatus {
+  return {
+    ...status,
+    details: [`Runs on ${nodeName} (nodeId ${nodeId}).`, ...status.details],
+    tools: status.tools.map((tool) =>
+      tool.replace(
+        /^(\w+) \{\s*/,
+        (_match, name: string) =>
+          `${name} { "nodeId": ${JSON.stringify(nodeId)}${/^\w+ \{\s*\}/.test(tool) ? " " : ", "}`,
+      ),
+    ),
+  };
+}
+
+function followKey(environmentId: string, nodeId: string | undefined): string {
+  return `${nodeId ?? ""}\0${environmentId}`;
+}
+
+/** The `pull-request` association a review's auto-PR is handed over to. */
+function reviewFollowRequestId(reviewAssociationId: string): string {
+  return `pr-follow:review:${reviewAssociationId}`;
+}
+
+/** Whether a follow was made by, or joined by, this request (`requestAliases`). */
+function hasFollowRequest(
+  workflows: CoordinatorWorkflowAssociation[],
+  coordinatorId: string,
+  requestId: string,
+): boolean {
+  return workflows.some(
+    (item) =>
+      item.coordinatorId === coordinatorId &&
+      (item.requestId === requestId ||
+        (item.kind === "pull-request" && coordinatorRequestAlias(item, requestId) !== undefined)),
+  );
+}
+
+/** A review's reports of its auto-PR's own state, which a follow takes over. */
+const REVIEW_PR_STATES: ReadonlySet<string> = new Set([
+  "pr-opened",
+  "pr-closed",
+  "pr-merged",
+  "pr-unknown",
+]);
+
+/** Sends status wakes for coordinator-owned resources; see the module comment. */
+export class CoordinatorStatusWakes {
+  private readonly timers: CoordinatorStatusWakeTimers;
+  private readonly coalesceMs: number;
+  private readonly waitingDebounceMs: number;
+  private readonly changeTimers = new Map<string, unknown>();
+  private readonly waitingTimers = new Map<string, unknown>();
+  /** A finished Resolve tab's report, held for the PR monitor's recheck. */
+  private readonly resolveTimers = new Map<string, unknown>();
+  /**
+   * Workers whose pull request a coordinator follows (`nodeId\0environmentId`),
+   * so the frequent environment saves of everyone else cost nothing. Null
+   * until the first sweep: every change is then observed.
+   */
+  private followed: Set<string> | null = null;
+  /**
+   * Follows noted since the last sweep, with a sequence number, so a sweep or
+   * observation that read the store before a follow was written does not
+   * drop it from `followed`. Pruned by each sweep.
+   */
+  private followNotes = 0;
+  private readonly recentFollows = new Map<string, number>();
+  private unsubscribe: (() => void) | null = null;
+  /** One pass at a time, so two observers of one state cannot both send it. */
+  private queue: Promise<unknown> = Promise.resolve();
+  /** Reads of workflows and workers on other nodes, once the node services exist. */
+  private remote: CoordinatorRemoteAccess | null = null;
+  private readonly outcomes: CoordinatorWorkerOutcomes;
+  private readonly router: CoordinatorNoticeRouter;
+  /** The running pass is a sweep of stored state, not a new event. */
+  private sweeping = false;
+
+  constructor(
+    private readonly storage: StorageService,
+    private readonly options: CoordinatorStatusWakeOptions = {},
+  ) {
+    this.router = options.noticeRouter ?? new CoordinatorNoticeRouter(storage);
+    this.timers = options.timers ?? SYSTEM_TIMERS;
+    this.coalesceMs = options.coalesceMs ?? COORDINATOR_STATUS_COALESCE_MS;
+    this.waitingDebounceMs = options.waitingDebounceMs ?? COORDINATOR_WAITING_DEBOUNCE_MS;
+    this.outcomes = new CoordinatorWorkerOutcomes({
+      storage,
+      now: () => this.timers.now(),
+      remote: () => this.remote,
+      statusOnNode,
+      deliver: (workspaces, association, resource, status) =>
+        this.deliver(workspaces, association, resource, status),
+    });
+  }
+
+  setRemoteAccess(remote: CoordinatorRemoteAccess): void {
+    this.remote = remote;
+  }
+
+  /**
+   * A workflow on another node was saved (its node's relayed event). Debounced
+   * like a local save; cheap when no coordinator here owns it.
+   */
+  noteRemoteWorkflowChange(
+    nodeId: string,
+    kind: "multi-review" | "build-pipeline",
+    id: string,
+  ): void {
+    const key = `${nodeId}\0${kind}\0${id}`;
+    if (this.changeTimers.has(key)) return;
+    this.changeTimers.set(
+      key,
+      this.timers.setTimeout(() => {
+        this.changeTimers.delete(key);
+        void this.observeWorkflow(kind, id, nodeId).catch((error: unknown) => {
+          log.warn("wake.observe-remote-workflow-failed", { error: formatLogError(error) });
+        });
+      }, RESOURCE_CHANGE_DEBOUNCE_MS),
+    );
+  }
+
+  /** Observe workflow saves so a settled state is reported within seconds, not on the sweep. */
+  start(): void {
+    this.unsubscribe ??= this.storage.addResourceChangeListener((change) =>
+      this.onResourceChange(change),
+    );
+  }
+
+  stop(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    for (const handle of [
+      ...this.changeTimers.values(),
+      ...this.waitingTimers.values(),
+      ...this.resolveTimers.values(),
+    ]) {
+      this.timers.clearTimeout(handle);
+    }
+    this.changeTimers.clear();
+    this.waitingTimers.clear();
+    this.resolveTimers.clear();
+  }
+
+  /**
+   * A worker's record or PR monitor health changed (here, or relayed from
+   * its node): observe the pull requests followed there, debounced like a
+   * workflow save. Free when nobody follows that worker's PR.
+   */
+  notePullRequestChange(environmentId: string, nodeId?: string): void {
+    if (
+      this.followed &&
+      !this.followed.has(followKey(environmentId, nodeId)) &&
+      !this.outcomes.watches(environmentId, nodeId)
+    )
+      return;
+    const key = `pull-request\0${nodeId ?? ""}\0${environmentId}`;
+    if (this.changeTimers.has(key)) return;
+    this.changeTimers.set(
+      key,
+      this.timers.setTimeout(() => {
+        this.changeTimers.delete(key);
+        void this.observePullRequests(environmentId, nodeId).catch((error: unknown) => {
+          log.warn("wake.observe-pull-request-failed", { error: formatLogError(error) });
+        });
+      }, RESOURCE_CHANGE_DEBOUNCE_MS),
+    );
+  }
+
+  /** A coordinator started following this worker's pull request. */
+  notePullRequestFollowed(environmentId: string, nodeId?: string): void {
+    const key = followKey(environmentId, nodeId);
+    this.followNotes += 1;
+    this.recentFollows.set(key, this.followNotes);
+    this.followed?.add(key);
+    this.notePullRequestChange(environmentId, nodeId);
+  }
+
+  /** Observe the pull requests followed on one worker, and its outcome watches, now. */
+  observePullRequests(environmentId: string, nodeId?: string): Promise<void> {
+    return this.serialize(async () => {
+      const since = this.followNotes;
+      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+      const owned = state.workflows.filter(
+        (association) =>
+          association.kind === "pull-request" &&
+          association.resourceId === environmentId &&
+          association.nodeId === nodeId &&
+          !association.pending &&
+          !association.terminalNotifiedAt,
+      );
+      const key = followKey(environmentId, nodeId);
+      // Unless it was followed after the read began.
+      if (owned.length === 0 && (this.recentFollows.get(key) ?? 0) <= since)
+        this.followed?.delete(key);
+      const mode = await this.mode();
+      for (const association of owned) {
+        await this.observePullRequest(state.workspaces, association, mode);
+      }
+      // After the follows, from the same read: a follow live in it covers its own merge.
+      await this.outcomes.observeWorker(
+        state.workspaces,
+        state.workflows,
+        environmentId,
+        nodeId,
+        mode,
+      );
+    });
+  }
+
+  private onResourceChange(change: ResourceChange): void {
+    if (change.resource === "environment" || change.resource === "environment-pr-health") {
+      this.notePullRequestChange(change.id);
+      return;
+    }
+    if (change.resource === "feature-plan") {
+      this.noteFeaturePlanChange(change.id);
+      return;
+    }
+    if (
+      change.resource !== "multi-review" &&
+      change.resource !== "build-pipeline" &&
+      change.resource !== "graph-run"
+    )
+      return;
+    if (change.deleted) return;
+    const kind = change.resource;
+    const key = `${kind}\0${change.id}`;
+    if (this.changeTimers.has(key)) return;
+    this.changeTimers.set(
+      key,
+      this.timers.setTimeout(() => {
+        this.changeTimers.delete(key);
+        void this.observeWorkflow(kind, change.id).catch((error: unknown) => {
+          log.warn("wake.observe-workflow-failed", { error: formatLogError(error) });
+        });
+      }, RESOURCE_CHANGE_DEBOUNCE_MS),
+    );
+  }
+
+  /**
+   * A project's feature plans were saved (the change's id is the project id):
+   * observe the planning exchanges its coordinators started there, debounced
+   * like a workflow save. Cheap when none is followed.
+   */
+  private noteFeaturePlanChange(projectId: string): void {
+    const key = `feature-plan\0${projectId}`;
+    if (this.changeTimers.has(key)) return;
+    this.changeTimers.set(
+      key,
+      this.timers.setTimeout(() => {
+        this.changeTimers.delete(key);
+        void this.observeFeaturePlans(projectId).catch((error: unknown) => {
+          log.warn("wake.observe-feature-plan-failed", { error: formatLogError(error) });
+        });
+      }, RESOURCE_CHANGE_DEBOUNCE_MS),
+    );
+  }
+
+  /** Observe the planning exchanges coordinators started in one project, now. */
+  observeFeaturePlans(projectId: string): Promise<void> {
+    return this.serialize(async () => {
+      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+      const owned = state.workflows.filter(
+        (association) =>
+          association.kind === "feature-plan" &&
+          association.projectId === projectId &&
+          !association.terminalNotifiedAt,
+      );
+      if (owned.length === 0) return;
+      const mode = await this.mode();
+      for (const association of owned) {
+        await this.observeFeaturePlan(state.workspaces, association, mode);
+      }
+    });
+  }
+
+  /** Resolves once every observation queued so far has finished. */
+  settled(): Promise<void> {
+    return this.queue.then(() => undefined);
+  }
+
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(work, work);
+    this.queue = next.catch(() => undefined);
+    return next;
+  }
+
+  private async mode(): Promise<CoordinatorStatusWakeMode> {
+    const settings = normalizeAgentMessagingSettings(
+      (await this.storage.loadConfig()).global.agentMessaging,
+    );
+    return settings.coordinatorStatusWakes;
+  }
+
+  /** Observe one workflow now (on `nodeId`, or this node). Cheap when no coordinator owns it. */
+  observeWorkflow(
+    kind: "multi-review" | "build-pipeline" | "graph-run",
+    resourceId: string,
+    nodeId?: string,
+  ): Promise<void> {
+    return this.serialize(async () => {
+      const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+      const owned = state.workflows.filter(
+        (association) =>
+          association.kind === kind &&
+          association.resourceId === resourceId &&
+          association.nodeId === nodeId &&
+          !association.pending &&
+          (!association.terminalNotifiedAt || needsPipelineCreationRepair(association)),
+      );
+      if (owned.length === 0) return;
+      const mode = await this.mode();
+      for (const association of owned) {
+        await this.observeAssociation(state.workspaces, association, mode, state.workflows);
+      }
+    });
+  }
+
+  /**
+   * Every owned workflow and every open delegation's waiting episode, read
+   * from storage. The recovery path: a missed save event, a timer lost to a
+   * restart, or a notice whose bookkeeping write never landed.
+   */
+  reconcile(): Promise<void> {
+    return this.serialize(async () => {
+      this.sweeping = true;
+      try {
+        await this.reconcilePass();
+      } finally {
+        this.sweeping = false;
+      }
+    });
+  }
+
+  private async reconcilePass(): Promise<void> {
+    const since = this.followNotes;
+    const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+    const mode = await this.mode();
+    // Follows noted while the store was being read may be missing from it.
+    const noted = [...this.recentFollows].filter(([, seq]) => seq > since).map(([key]) => key);
+    this.followed = new Set([
+      ...state.workflows
+        .filter(
+          (association) =>
+            association.kind === "pull-request" &&
+            !association.pending &&
+            !association.terminalNotifiedAt,
+        )
+        .map((association) => followKey(association.resourceId, association.nodeId)),
+      ...noted,
+    ]);
+    for (const [key, seq] of Array.from(this.recentFollows))
+      if (seq <= since) this.recentFollows.delete(key);
+    for (const association of state.workflows) {
+      if (
+        (association.kind === "multi-review" ||
+          association.kind === "build-pipeline" ||
+          association.kind === "graph-run" ||
+          association.kind === "pull-request" ||
+          association.kind === "feature-plan") &&
+        (!association.pending || association.kind === "feature-plan") &&
+        (!association.terminalNotifiedAt || needsPipelineCreationRepair(association))
+      ) {
+        await this.observeAssociation(state.workspaces, association, mode, state.workflows).catch(
+          (error: unknown) => {
+            log.warn("wake.deliver-failed", { error: formatLogError(error) });
+          },
+        );
+      }
+    }
+    await this.outcomes
+      .reconcile(state.workspaces, state.workflows, mode)
+      .catch((error: unknown) => {
+        log.warn("wake.worker-outcomes-failed", { error: formatLogError(error) });
+      });
+    if (MODE_ORDER[mode] < MODE_ORDER.settled) return;
+    for (const association of state.workflows) {
+      if (association.kind !== "environment" || association.delegation?.state !== "running") {
+        continue;
+      }
+      await this.reconcileWaiting(state.workspaces, association).catch((error: unknown) => {
+        log.warn("wake.waiting-check-failed", { error: formatLogError(error) });
+      });
+    }
+  }
+
+  /**
+   * The environment of a review whose PR session started, so its pull request
+   * can be reported once the PR monitor records it. Nothing else reads it.
+   */
+  private async launchedPrEnvironment(
+    snapshot: unknown,
+    nodeId?: string,
+  ): Promise<{ prUrl?: unknown; prState?: unknown }> {
+    if (
+      !record(snapshot) ||
+      snapshot.autoPr !== true ||
+      !record(snapshot.autoPrLaunch) ||
+      snapshot.autoPrLaunch.state !== "launched" ||
+      !text(snapshot.environmentId)
+    )
+      return {};
+    if (nodeId) {
+      return (
+        (await this.remote
+          ?.environmentPr(nodeId, snapshot.environmentId as string)
+          .catch(() => ({}))) ?? {}
+      );
+    }
+    return (await this.storage.getEnvironment(snapshot.environmentId as string)) ?? {};
+  }
+
+  private async observeAssociation(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+    workflows: CoordinatorWorkflowAssociation[] = [],
+  ): Promise<void> {
+    if (association.kind === "graph-run") {
+      await this.observeGraphRun(workspaces, association, mode);
+      return;
+    }
+    if (association.kind === "pull-request") {
+      await this.observePullRequest(workspaces, association, mode);
+      return;
+    }
+    if (association.kind === "feature-plan") {
+      await this.observeFeaturePlan(workspaces, association, mode);
+      return;
+    }
+    // A kind a newer backend wrote is not a Multi Review: skip it.
+    if (association.kind !== "build-pipeline" && association.kind !== "multi-review") return;
+    const kind = association.kind;
+    const remote = association.nodeId ? this.remote : null;
+    if (association.nodeId && !remote) return;
+    const read = remote
+      ? await remote
+          .workflow(association.nodeId!, kind, association.resourceId)
+          .catch(() => "unavailable" as const)
+      : kind === "build-pipeline"
+        ? await this.storage.getBuildPipeline(association.resourceId)
+        : await this.storage.getMultiReviewWorkflow(association.resourceId);
+    // Reconcile creation even with notices disabled or already delivered.
+    if (
+      read !== "unavailable" &&
+      remote &&
+      association.kind === "build-pipeline" &&
+      association.createsEnvironment &&
+      !association.createdEnvironmentId
+    )
+      await reconcilePipelineCreation(
+        this.storage,
+        association,
+        read === null ? null : read?.snapshot,
+        this.timers.now(),
+      );
+    if (!read || read === "unavailable") return;
+    const persisted = read as {
+      snapshot: unknown;
+      revision?: number;
+      updatedAt?: string;
+      environmentId?: string;
+    };
+    const prEnvironment =
+      kind === "multi-review"
+        ? await this.launchedPrEnvironment(persisted.snapshot, association.nodeId)
+        : {};
+    const reduced =
+      kind === "build-pipeline"
+        ? buildPipelineStatus(persisted.snapshot, association.resourceId)
+        : multiReviewStatus(persisted.snapshot, association.resourceId, prEnvironment);
+    const nodeName =
+      remote && association.nodeId
+        ? await remote.nodeName(association.nodeId).catch(() => association.nodeId!)
+        : null;
+    const status =
+      reduced && nodeName ? statusOnNode(reduced, association.nodeId!, nodeName) : reduced;
+    if (!status || MODE_ORDER[mode] < MODE_ORDER[status.mode]) return;
+    const revision = typeof persisted.revision === "number" ? persisted.revision : 0;
+    if (association.statusNotice?.key === status.key) {
+      // Already sent; only the bookkeeping that follows a send may be missing.
+      await this.followReviewPullRequest(
+        association,
+        status,
+        persisted.snapshot,
+        prEnvironment,
+        workflows,
+      );
+      if (status.terminal)
+        await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, revision);
+      return;
+    }
+    if (
+      kind === "multi-review" &&
+      REVIEW_PR_STATES.has(status.state) &&
+      hasFollowRequest(workflows, association.coordinatorId, reviewFollowRequestId(association.id))
+    ) {
+      // The pull request is followed now; it reports its own changes once.
+      await this.recordNotice(association.id, status.key);
+      return;
+    }
+    if (
+      isStatusBackfill({
+        now: this.timers.now(),
+        associationCreatedAt: association.createdAt,
+        resourceUpdatedAt: Date.parse(text(persisted.updatedAt) ?? ""),
+        terminal: status.terminal,
+        alreadyNoticed: association.statusNotice !== undefined,
+      })
+    ) {
+      await this.recordNotice(association.id, status.key);
+      return;
+    }
+    const snapshot = record(persisted.snapshot) ? persisted.snapshot : {};
+    const environmentId = text(snapshot.environmentId) ?? text(persisted.environmentId);
+    const label =
+      remote && association.nodeId && environmentId
+        ? await remote
+            .workerState(association.nodeId, environmentId, "")
+            .then((state) => (state === "unavailable" ? undefined : state.name))
+            .catch(() => undefined)
+        : environmentId
+          ? (await this.storage.getEnvironment(environmentId))?.name
+          : undefined;
+    const delivered = await this.deliver(
+      workspaces,
+      association,
+      {
+        kind,
+        id: association.resourceId,
+        ...(environmentId ? { environmentId } : {}),
+        ...(label || nodeName
+          ? { label: `${label ?? association.resourceId}${nodeName ? ` on ${nodeName}` : ""}` }
+          : {}),
+      },
+      status,
+    );
+    if (!delivered) return;
+    await this.recordNotice(association.id, status.key);
+    await this.followReviewPullRequest(
+      association,
+      status,
+      persisted.snapshot,
+      prEnvironment,
+      workflows,
+    );
+    if (status.terminal)
+      await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, revision);
+  }
+
+  /**
+   * Hand a review's automatic pull request over to a `pull-request`
+   * association once the review has reported it, so the coordinator also
+   * hears its later changes (conflicts, checks, ready, merged, closed). The
+   * review's `pr-opened` is recorded as already told, so it is not repeated;
+   * a review that completed with only "PR session started" leaves the opening
+   * to be reported by the follow. `pr-merged` and `pr-closed` leave nothing
+   * to follow.
+   */
+  private async followReviewPullRequest(
+    association: CoordinatorWorkflowAssociation,
+    status: CoordinatorStatus,
+    snapshot: unknown,
+    prEnvironment: { prUrl?: unknown },
+    workflows: CoordinatorWorkflowAssociation[],
+  ): Promise<void> {
+    if (association.kind !== "multi-review" || !record(snapshot)) return;
+    const launched = record(snapshot.autoPrLaunch) && snapshot.autoPrLaunch.state === "launched";
+    if (
+      !launched ||
+      !(
+        status.state === "pr-opened" ||
+        status.state === "pr-unknown" ||
+        status.state === "completed"
+      )
+    )
+      return;
+    const environmentId = text(snapshot.environmentId);
+    if (!environmentId) return;
+    const requestId = reviewFollowRequestId(association.id);
+    if (hasFollowRequest(workflows, association.coordinatorId, requestId)) return;
+    const prUrl = text(prEnvironment.prUrl);
+    const followed = await this.storage.coordinators.followCoordinatorPullRequest({
+      projectId: association.projectId,
+      coordinatorId: association.coordinatorId,
+      ...(association.conversationId ? { conversationId: association.conversationId } : {}),
+      environmentId,
+      ...(association.nodeId ? { nodeId: association.nodeId } : {}),
+      requestId,
+      source: "multi-review",
+      reviewAssociationId: association.id,
+      ...(prUrl ? { prUrl } : {}),
+      ...(prUrl && status.state === "pr-opened"
+        ? { seedNoticeKey: `opened:${prKeyTag(prUrl)}` }
+        : {}),
+    });
+    // A live follow this joined may still be observed later in this pass:
+    // it must see the seed and alias, not the snapshot from before them.
+    const index = workflows.findIndex((item) => item.id === followed.id);
+    if (index >= 0) workflows[index] = followed;
+    this.notePullRequestFollowed(environmentId, association.nodeId);
+  }
+
+  /**
+   * A worker's pull request this coordinator follows: one wake per state
+   * change (see `pullRequestStatus`), and one when a Resolve tab it started
+   * finishes. A worker that is gone, a PR that merged or closed, or another
+   * PR on the worker ends the follow.
+   */
+  private async observePullRequest(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+  ): Promise<void> {
+    const environmentId = association.resourceId;
+    const nodeId = association.nodeId;
+    const remote = nodeId ? this.remote : null;
+    if (nodeId && !remote?.pullRequestReading) return;
+    let reading: CoordinatorPrReading;
+    let name: string | undefined;
+    let deleting = false;
+    if (remote) {
+      const read = await remote.pullRequestReading!(nodeId!, environmentId).catch(
+        () => "unavailable" as const,
+      );
+      // An unreachable node is no news; the sweep asks again.
+      if (read === "unavailable") return;
+      if (!read) {
+        await this.endFollow(association);
+        return;
+      }
+      reading = read.reading;
+      name = read.name;
+      deleting = read.deleting === true;
+    } else {
+      const environment = await this.storage.getEnvironment(environmentId);
+      const final = association.pullRequest?.final;
+      if (environment) {
+        reading = prReadingFrom(
+          environment as unknown as Record<string, unknown>,
+          this.options.prMonitorHealth?.(environment),
+        );
+        name = environment.name;
+        // Merge and Cleanup deletes the worker after the merge: report the merge first.
+        deleting = Boolean(
+          environment.deletionRequestedAt || environment.lifecycleOperation === "deleting",
+        );
+      } else if (final?.prUrl && (final.prState === "merged" || final.prState === "closed")) {
+        // Deleted before an observation ran: its last reading, captured at deletion.
+        reading = prReadingFrom({ prUrl: final.prUrl, prState: final.prState });
+        name = final.name;
+        deleting = true;
+      } else {
+        await this.endFollow(association);
+        return;
+      }
+    }
+    let follow = association.pullRequest ?? { source: "create-pr" as const };
+    if (follow.prUrl && reading.prUrl && reading.prUrl !== follow.prUrl) {
+      // Another pull request on the worker is not the one this conversation follows.
+      await this.endFollow(association);
+      return;
+    }
+    if (!follow.prUrl && reading.prUrl) {
+      const prUrl = reading.prUrl;
+      follow = { ...follow, prUrl };
+      await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (current) => {
+          if (current.pullRequest?.prUrl) return false;
+          current.pullRequest = { ...(current.pullRequest ?? { source: "create-pr" }), prUrl };
+          return true;
+        },
+      );
+    }
+    const nodeName = remote && nodeId ? await remote.nodeName(nodeId).catch(() => nodeId) : null;
+    const resource: CoordinatorStatusResource = {
+      kind: "pull-request",
+      id: environmentId,
+      environmentId,
+      label: `${name ?? environmentId}${nodeName ? ` on ${nodeName}` : ""}`,
+    };
+    const onNode = (status: CoordinatorStatus) =>
+      nodeName && nodeId ? statusOnNode(status, nodeId, nodeName) : status;
+    const settled = MODE_ORDER[mode] >= MODE_ORDER.settled;
+    const pr = pullRequestStatus(reading, environmentId, association.statusNotice?.key, deleting);
+    const resolve = follow.resolve;
+    // While a Resolve tab runs, its own report says how the PR ended up.
+    if (resolve && !resolve.notifiedAt && !pr?.status.terminal) {
+      await this.observeResolve(workspaces, association, resolve, reading, pr, {
+        resource,
+        onNode,
+        settled,
+      });
+      if (deleting) await this.endFollow(association);
+      return;
+    }
+    if (!pr) {
+      await observePublicationAttempt(
+        this.storage,
+        remote,
+        this.options.workerActivity,
+        association,
+        this.timers.now(),
+        COORDINATOR_RESOLVE_START_GRACE_MS,
+        async () => {
+          if (!settled) return true;
+          return this.deliver(
+            workspaces,
+            association,
+            resource,
+            onNode(publicationFailedStatus(environmentId, follow.publication!.tabId)),
+          );
+        },
+      );
+      if (deleting) await this.endFollow(association);
+      return;
+    }
+    const status = onNode(pr.status);
+    if (association.statusNotice?.key === status.key) {
+      if (status.terminal || deleting) await this.endFollow(association);
+      return;
+    }
+    if (!settled) {
+      if (status.terminal || deleting) await this.endFollow(association);
+      return;
+    }
+    if (pr.wake) {
+      // The episode number makes a recurring state (conflicts again after a
+      // fix) a new message; it only advances when a state is recorded, so a
+      // retry of this episode replays the same request id.
+      const episode = (association.pullRequest?.notices ?? 0) + 1;
+      const delivered = await this.deliver(workspaces, association, resource, {
+        ...status,
+        key: `${status.key}#${episode}`,
+      });
+      if (!delivered) return;
+    }
+    await this.recordPullRequestNotice(association.id, status.key);
+    if (status.terminal || deleting) await this.endFollow(association);
+  }
+
+  /** Record a followed PR's state, counting it as one more episode. */
+  private async recordPullRequestNotice(associationId: string, key: string): Promise<void> {
+    const notifiedAt = new Date(this.timers.now()).toISOString();
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        if (current.statusNotice?.key === key) return false;
+        current.statusNotice = { key, notifiedAt };
+        const follow = current.pullRequest ?? { source: "create-pr" as const };
+        current.pullRequest = { ...follow, notices: (follow.notices ?? 0) + 1 };
+        return true;
+      },
+    );
+  }
+
+  /**
+   * Keep a worker's last PR reading on its follows just before the worker's
+   * record is deleted, so a merge observed by the write path (Merge and
+   * Cleanup deletes right after persisting `merged`) is still reported once.
+   * A follow that already ended on that PR keeps it too: the Work panel has no
+   * other reading of the PR once the worker is gone.
+   */
+  async captureFinalPullRequest(environment: Environment): Promise<void> {
+    const prState =
+      environment.prState === "open" ||
+      environment.prState === "closed" ||
+      environment.prState === "merged"
+        ? environment.prState
+        : null;
+    const at = new Date(this.timers.now()).toISOString();
+    const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+    const follows = state.workflows.filter(
+      (association) =>
+        association.kind === "pull-request" &&
+        !association.nodeId &&
+        association.resourceId === environment.id &&
+        !association.pending,
+    );
+    for (const association of follows) {
+      await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (current) => {
+          if (!current.pullRequest) return false;
+          if (current.terminalNotifiedAt && current.pullRequest.prUrl !== environment.prUrl)
+            return false;
+          current.pullRequest = {
+            ...current.pullRequest,
+            final: { prUrl: environment.prUrl ?? null, prState, name: environment.name, at },
+          };
+          return true;
+        },
+      );
+    }
+    // The outcome watches of the coordinators that own the worker hear the deletion.
+    const watched = await this.outcomes.captureDeleted(environment);
+    if (follows.some((association) => !association.terminalNotifiedAt) || watched)
+      this.notePullRequestChange(environment.id);
+  }
+
+  /**
+   * One finished Resolve tab: seen working, then idle or gone (or so past a
+   * grace, for a turn too short to see), then held until the PR monitor's recheck
+   * lands or a bounded wait passes, then reported once with the PR's state.
+   */
+  private async observeResolve(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    resolve: NonNullable<NonNullable<CoordinatorWorkflowAssociation["pullRequest"]>["resolve"]>,
+    reading: CoordinatorPrReading,
+    pr: PullRequestStatus | null,
+    report: {
+      resource: CoordinatorStatusResource;
+      onNode: (status: CoordinatorStatus) => CoordinatorStatus;
+      settled: boolean;
+    },
+  ): Promise<void> {
+    const environmentId = association.resourceId;
+    const remote = association.nodeId ? this.remote : null;
+    const activity = await prAttemptActivity(
+      this.storage,
+      remote,
+      this.options.workerActivity,
+      association,
+      resolve.tabId,
+    );
+    if (activity === "unavailable" || activity === "pending") return;
+    if (activity === "working" || activity === "waiting") {
+      await updateResolve(this.storage, association.id, resolve.tabId, {
+        ...(!resolve.seenWorkingAt
+          ? { seenWorkingAt: new Date(this.timers.now()).toISOString() }
+          : {}),
+        finishedAt: undefined,
+      });
+      return;
+    }
+    const now = this.timers.now();
+    let finishedAt = resolve.finishedAt;
+    if (!finishedAt) {
+      // A tab whose session is gone (`unknown`) is not running a turn either;
+      // both need the turn seen working, or the grace, before they count.
+      const sinceLaunch = now - Date.parse(resolve.requestedAt);
+      if (!resolve.seenWorkingAt && !(sinceLaunch >= COORDINATOR_RESOLVE_START_GRACE_MS)) {
+        this.scheduleResolveCheck(
+          association,
+          Math.max(
+            1,
+            COORDINATOR_RESOLVE_START_GRACE_MS - (Number.isFinite(sinceLaunch) ? sinceLaunch : 0),
+          ),
+        );
+        return;
+      }
+      finishedAt = new Date(now).toISOString();
+      await updateResolve(this.storage, association.id, resolve.tabId, { finishedAt });
+    }
+    const finished = Date.parse(finishedAt);
+    const refreshed =
+      !reading.recheckArmed ||
+      (reading.lastCheckAt !== undefined && reading.lastCheckAt >= finished);
+    const waited = now - finished;
+    if (!refreshed && waited < COORDINATOR_RESOLVE_REFRESH_WAIT_MS) {
+      this.scheduleResolveCheck(association, COORDINATOR_RESOLVE_REFRESH_WAIT_MS - waited);
+      return;
+    }
+    if (report.settled) {
+      const status = report.onNode(
+        resolveFinishedStatus(reading, environmentId, resolve, refreshed),
+      );
+      const delivered = await this.deliver(workspaces, association, report.resource, status);
+      if (!delivered) return;
+    }
+    const notifiedAt = new Date(now).toISOString();
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      association.id,
+      (current) => {
+        const latest = current.pullRequest?.resolve;
+        if (!current.pullRequest || latest?.tabId !== resolve.tabId || latest.notifiedAt)
+          return false;
+        current.pullRequest = {
+          ...current.pullRequest,
+          resolve: { ...latest, finishedAt, notifiedAt },
+        };
+        // The report described this state; it is not news a second time.
+        if (pr && current.statusNotice?.key !== pr.status.key) {
+          current.statusNotice = { key: pr.status.key, notifiedAt };
+          current.pullRequest.notices = (current.pullRequest.notices ?? 0) + 1;
+        }
+        return true;
+      },
+    );
+  }
+
+  private scheduleResolveCheck(association: CoordinatorWorkflowAssociation, delayMs: number): void {
+    if (this.resolveTimers.has(association.id)) return;
+    this.resolveTimers.set(
+      association.id,
+      this.timers.setTimeout(() => {
+        this.resolveTimers.delete(association.id);
+        void this.observePullRequests(association.resourceId, association.nodeId).catch(
+          (error: unknown) => {
+            log.warn("wake.resolve-report-failed", { error: formatLogError(error) });
+          },
+        );
+      }, delayMs),
+    );
+  }
+
+  /** The follow is over (merged, closed, another PR, the worker gone): never observed again. */
+  private async endFollow(association: CoordinatorWorkflowAssociation): Promise<void> {
+    await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, 0);
+  }
+
+  /**
+   * A graph run the coordinator launched (item 208): it waits on a person (one
+   * notice per wait) or it ended. Graph runs on other nodes are not observed
+   * yet; a node-held run's association is skipped until the relay carries them.
+   */
+  private async observeGraphRun(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+  ): Promise<void> {
+    if (association.nodeId) return;
+    const run = await this.storage.graphRuns.getGraphRun(association.resourceId);
+    if (!run) return;
+    const status = graphRunCoordinatorStatus(run);
+    if (!status || MODE_ORDER[mode] < MODE_ORDER[status.mode]) return;
+    if (association.statusNotice?.key === status.key) {
+      if (status.terminal)
+        await this.storage.coordinators.markCoordinatorWorkflowNotified(
+          association.id,
+          run.revision,
+        );
+      return;
+    }
+    // A wait already reported stays reported while a newer one is answered.
+    if (!graphRunWaitNoticeIsNew(status.key, association.statusNotice?.key)) return;
+    const label = run.environmentId
+      ? (await this.storage.getEnvironment(run.environmentId))?.name
+      : undefined;
+    const delivered = await this.deliver(
+      workspaces,
+      association,
+      {
+        kind: "graph-run",
+        id: run.id,
+        ...(run.environmentId ? { environmentId: run.environmentId } : {}),
+        label: `${run.plan.template.name}${label ? ` in ${label}` : ""}`,
+      },
+      status,
+    );
+    if (!delivered) return;
+    await this.recordNotice(association.id, status.key);
+    if (status.terminal)
+      await this.storage.coordinators.markCoordinatorWorkflowNotified(association.id, run.revision);
+  }
+
+  /**
+   * A planning exchange the coordinator started (to-do 0395 (retired) task 3): its reply
+   * is ready (once, terminal) or it failed (once per failure). Feature plans
+   * live on this node only; a cancelled exchange or a deleted plan ends the
+   * association without a wake.
+   */
+  private observeFeaturePlan(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    mode: CoordinatorStatusWakeMode,
+  ): Promise<void> {
+    return observeCoordinatorFeaturePlan(association, {
+      storage: this.storage,
+      send: async (resource, status) =>
+        MODE_ORDER[mode] >= MODE_ORDER[status.mode] &&
+        (await this.deliver(workspaces, association, resource, status)),
+      recordNotice: (key) => this.recordNotice(association.id, key),
+    });
+  }
+
+  /**
+   * Note an observed activity change of a worker tab.
+   *
+   * Only tabs with an open delegation matter: a waiting episode starts with a
+   * durable `since`, and the notice follows once it has lasted past the
+   * debounce, so an approval answered within seconds never wakes anyone.
+   * Any edge that leaves waiting ends the episode, so a later wait is a new one.
+   */
+  noteWorkerActivity(event: {
+    environmentId: string;
+    tabId: string;
+    state: AgentActivityState | "unknown";
+  }): Promise<void> {
+    // A followed PR's Resolve tab starting or ending its turn.
+    this.notePullRequestChange(event.environmentId);
+    return this.serialize(async () => {
+      const open = (await this.storage.coordinators.listOpenCoordinatorDelegations()).filter(
+        (association) =>
+          !association.nodeId &&
+          association.resourceId === event.environmentId &&
+          association.delegation?.workerTabId === event.tabId,
+      );
+      for (const association of open) {
+        if (event.state === "waiting") {
+          if (association.delegation?.waiting) continue;
+          const since = new Date(this.timers.now()).toISOString();
+          await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+            association.id,
+            (current) => {
+              if (current.delegation?.state !== "running" || current.delegation.waiting)
+                return false;
+              current.delegation = { ...current.delegation, waiting: { since } };
+              return true;
+            },
+          );
+          this.scheduleWaitingCheck(association.id);
+        } else if (event.state !== "unknown" && association.delegation?.waiting) {
+          await this.endWaitingEpisode(association.id);
+        }
+      }
+    });
+  }
+
+  private async endWaitingEpisode(associationId: string): Promise<void> {
+    this.clearWaitingTimer(associationId);
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        if (!current.delegation?.waiting) return false;
+        const { waiting: _waiting, ...rest } = current.delegation;
+        current.delegation = rest;
+        return true;
+      },
+    );
+  }
+
+  private scheduleWaitingCheck(associationId: string): void {
+    this.clearWaitingTimer(associationId);
+    this.waitingTimers.set(
+      associationId,
+      this.timers.setTimeout(() => {
+        this.waitingTimers.delete(associationId);
+        void this.serialize(async () => {
+          const state = await this.storage.coordinators.getCoordinatorReconciliationState();
+          const association = state.workflows.find((item) => item.id === associationId);
+          if (association?.delegation?.state !== "running") return;
+          if (MODE_ORDER[await this.mode()] < MODE_ORDER.settled) return;
+          await this.reconcileWaiting(state.workspaces, association);
+        }).catch((error: unknown) => {
+          log.warn("wake.waiting-report-failed", { error: formatLogError(error) });
+        });
+      }, this.waitingDebounceMs),
+    );
+  }
+
+  private clearWaitingTimer(associationId: string): void {
+    const handle = this.waitingTimers.get(associationId);
+    if (handle === undefined) return;
+    this.timers.clearTimeout(handle);
+    this.waitingTimers.delete(associationId);
+  }
+
+  /**
+   * Start, end or report one delegation's waiting episode from a fresh
+   * activity read. Runs on the debounce timer and on the sweep, which is what
+   * finds an episode whose edge or timer a restart lost.
+   */
+  private async reconcileWaiting(
+    workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+  ): Promise<void> {
+    const delegation = association.delegation;
+    if (!delegation || delegation.state !== "running") return;
+    const remote = association.nodeId ? this.remote : null;
+    if (association.nodeId ? !remote : !this.options.workerActivity) return;
+    const activity: AgentTabState = remote
+      ? await remote
+          .workerState(association.nodeId!, association.resourceId, delegation.workerTabId)
+          .then((state) =>
+            state === "unavailable"
+              ? ("unknown" as const)
+              : state.environment === "stopped"
+                ? ("stopped" as const)
+                : state.tab,
+          )
+          .catch(() => "unknown" as const)
+      : (await this.storage.getEnvironment(association.resourceId))?.status === "stopped"
+        ? "stopped"
+        : await this.options.workerActivity!(association.resourceId, delegation.workerTabId);
+    if (activity !== "waiting") {
+      // An unreadable state must not end an episode and re-notify.
+      if (delegation.waiting && activity !== "unknown") {
+        await this.endWaitingEpisode(association.id);
+      }
+      return;
+    }
+    if (!delegation.waiting) {
+      const since = new Date(this.timers.now()).toISOString();
+      await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+        association.id,
+        (current) => {
+          if (current.delegation?.state !== "running" || current.delegation.waiting) return false;
+          current.delegation = { ...current.delegation, waiting: { since } };
+          return true;
+        },
+      );
+      this.scheduleWaitingCheck(association.id);
+      return;
+    }
+    if (delegation.waiting.notifiedAt) return;
+    const elapsed = this.timers.now() - Date.parse(delegation.waiting.since);
+    if (!(elapsed >= this.waitingDebounceMs)) {
+      if (!this.waitingTimers.has(association.id)) this.scheduleWaitingCheck(association.id);
+      return;
+    }
+    const environmentName = remote
+      ? await remote
+          .workerState(association.nodeId!, association.resourceId, delegation.workerTabId)
+          .then((state) => (state === "unavailable" ? undefined : state.name))
+          .catch(() => undefined)
+      : (await this.storage.getEnvironment(association.resourceId))?.name;
+    const [excerpt, blocker] = await Promise.all([
+      remote
+        ? remote
+            .lastAssistantExcerpt(
+              association.nodeId!,
+              association.resourceId,
+              delegation.workerTabId,
+            )
+            .catch(() => undefined)
+        : this.options
+            .lastAssistantExcerpt?.(association.resourceId, delegation.workerTabId)
+            .catch(() => undefined),
+      remote
+        ? remote
+            .waitingBlocker?.(association.nodeId!, association.resourceId, delegation.workerTabId)
+            .catch(() => undefined)
+        : this.options
+            .waitingBlocker?.(association.resourceId, delegation.workerTabId)
+            .catch(() => undefined),
+    ]);
+    const nodeName = remote
+      ? await remote.nodeName(association.nodeId!).catch(() => association.nodeId!)
+      : null;
+    const waiting = waitingStatus(
+      delegation,
+      association.resourceId,
+      delegation.workerTabId,
+      excerpt,
+      blocker,
+    );
+    const status =
+      waiting && nodeName ? statusOnNode(waiting, association.nodeId!, nodeName) : waiting;
+    if (!status) return;
+    const delivered = await this.deliver(
+      workspaces,
+      association,
+      {
+        kind: "agent-tab",
+        id: delegation.workerTabId,
+        environmentId: association.resourceId,
+        tabId: delegation.workerTabId,
+        ...(environmentName || nodeName
+          ? {
+              label: `${environmentName ?? association.resourceId}${nodeName ? ` on ${nodeName}` : ""}`,
+            }
+          : {}),
+      },
+      status,
+    );
+    if (!delivered) return;
+    const notifiedAt = new Date(this.timers.now()).toISOString();
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      association.id,
+      (current) => {
+        if (current.delegation?.waiting?.since !== delegation.waiting!.since) return false;
+        current.delegation = {
+          ...current.delegation,
+          waiting: { ...current.delegation.waiting, notifiedAt },
+        };
+        current.statusNotice = { key: status.key, notifiedAt };
+        return true;
+      },
+    );
+  }
+
+  private async recordNotice(associationId: string, key: string): Promise<void> {
+    const notifiedAt = new Date(this.timers.now()).toISOString();
+    await this.storage.coordinators.updateCoordinatorWorkflowAssociation(
+      associationId,
+      (current) => {
+        if (current.statusNotice?.key === key) return false;
+        current.statusNotice = { key, notifiedAt };
+        return true;
+      },
+    );
+  }
+
+  /**
+   * Put one status notice with the coordinator that should hear it; see
+   * `CoordinatorNoticeRouter`. With none running a new event starts one. A sweep
+   * of older state does not: it finds nobody and returns false, and the next
+   * sweep sends the state current when one opens. The request id is fixed by
+   * association, conversation and state, so a retry after a crash finds the
+   * message already placed.
+   */
+  private async deliver(
+    _workspaces: CoordinatorWorkspace[],
+    association: CoordinatorWorkflowAssociation,
+    resource: CoordinatorStatusResource,
+    status: CoordinatorStatus,
+  ): Promise<boolean> {
+    // A worker on another node: the transcript tile opens it through that node.
+    const prUrl = status.details
+      .map((line) => line.match(/^Pull request: (https?:\/\/\S+)/)?.[1])
+      .find(Boolean);
+    const pullRequest = prUrl
+      ? await this.options.pullRequestMetadata?.(prUrl).catch(() => undefined)
+      : undefined;
+    const { subject, body, notice } = renderCoordinatorStatusNotice(
+      association.nodeId && (resource.kind === "agent-tab" || resource.kind === "environment")
+        ? { ...resource, nodeId: association.nodeId }
+        : resource,
+      status,
+      pullRequest,
+    );
+    return this.router.deliver({
+      projectId: association.projectId,
+      coordinatorId: association.coordinatorId,
+      // A coordinator waiting on its own worker hears about that worker itself.
+      audience: association.kind === "environment" ? "delegator" : "repository",
+      createSession: !this.sweeping,
+      resourceId: association.resourceId,
+      requestId: (mainId) =>
+        `status:${association.id}:${mainId}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
+      upwardRequestId: `status:${association.id}:${hash(status.key)}${association.statusWakeEpisode ? `:${association.statusWakeEpisode}` : ""}`,
+      subject,
+      body,
+      notice,
+      // A tab id is only unique within its environment.
+      statusBudgetKey: agentMailStatusBudgetKey(
+        resource.kind,
+        resource.kind === "agent-tab"
+          ? `${resource.environmentId ?? ""}/${resource.tabId ?? resource.id}`
+          : resource.id,
+      ),
+      coalesceMs: this.coalesceMs,
+    });
+  }
+}

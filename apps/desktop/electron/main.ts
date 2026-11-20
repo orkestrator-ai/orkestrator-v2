@@ -948,6 +948,14 @@ function createMenu(): void {
       if (context && !context.window.isDestroyed())
         requestAppShortcut(context.window.webContents, "open-settings");
     },
+    // The default browser, never an app window.
+    openExternal: (url) => {
+      shell
+        .openExternal(url)
+        .catch((error: unknown) =>
+          desktopLog.warn("menu.open-external-failed", { error: formatLogError(error) }),
+        );
+    },
     checkForUpdates: autoUpdate ? () => void autoUpdate?.checkNow() : undefined,
     // The focused renderer, then the window's own; then an opted-in
     // background renderer. Only opted-in contents are opened.

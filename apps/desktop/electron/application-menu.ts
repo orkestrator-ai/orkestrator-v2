@@ -4,6 +4,7 @@ import {
   SETTINGS_ACCELERATOR,
   type KeyboardShortcutsRequest,
 } from "@orkestrator/protocol/keyboard-shortcuts";
+import { RELEASE_NOTES_URL } from "./app-constants.js";
 
 export type ApplicationMenuWindow = {
   id: number;
@@ -24,6 +25,8 @@ export type ApplicationMenuActions = {
   showKeyboardShortcuts(request: KeyboardShortcutsRequest): void;
   /** Open global settings in the focused window's shell renderer. */
   openSettings(): void;
+  /** Open an http(s) URL in the user's default browser, never in an app window. */
+  openExternal(url: string): void;
   /** Present only when this install can update itself. */
   checkForUpdates?(): void;
   /**
@@ -90,8 +93,9 @@ function windowMenuItems(actions: ApplicationMenuActions): MenuItemConstructorOp
  * Linux therefore get the conventional layout instead: Settings… and Quit at
  * the end of File, About and updates under Help, and no Command accelerators.
  * On macOS Settings… sits in the app menu, where every Mac app keeps it.
- * Help is on every platform; Open Developer Tools appears in it only while a
- * renderer has debug logging on.
+ * Help is on every platform and always offers Release Notes, which opens the
+ * project's GitHub releases page in the default browser; Open Developer Tools
+ * appears in it only while a renderer has debug logging on.
  */
 export function createApplicationMenuTemplate(
   actions: ApplicationMenuActions,
@@ -103,6 +107,10 @@ export function createApplicationMenuTemplate(
   const developerTools: MenuItemConstructorOptions[] = actions.openDeveloperTools
     ? [{ label: "Open Developer Tools", click: actions.openDeveloperTools }]
     : [];
+  const releaseNotes: MenuItemConstructorOptions = {
+    label: "Release Notes",
+    click: () => actions.openExternal(RELEASE_NOTES_URL),
+  };
   const settings: MenuItemConstructorOptions = {
     label: "Settings…",
     accelerator: SETTINGS_ACCELERATOR,
@@ -213,14 +221,22 @@ export function createApplicationMenuTemplate(
     // Help is on every platform. On macOS the role adds the system's search
     // field, and About and updates stay in the app menu.
     isMac
-      ? { role: "help", submenu: developerTools }
+      ? {
+          role: "help",
+          submenu: [
+            ...developerTools,
+            ...(developerTools.length > 0 ? [{ type: "separator" } as const] : []),
+            releaseNotes,
+          ],
+        }
       : {
           label: "Help",
           submenu: [
             ...developerTools,
             ...(developerTools.length > 0 ? [{ type: "separator" } as const] : []),
+            releaseNotes,
             ...checkForUpdates,
-            ...(checkForUpdates.length > 0 ? [{ type: "separator" } as const] : []),
+            { type: "separator" },
             { role: "about" },
           ],
         },

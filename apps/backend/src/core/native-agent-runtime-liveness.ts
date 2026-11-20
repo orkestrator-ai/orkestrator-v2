@@ -10,7 +10,7 @@
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
 import { resolveBugReportRuntime } from "./bug-report-runtime.js";
-import { resolveCoordinatorRuntime } from "./coordinator-runtime.js";
+import { resolveCoordinatorRuntime } from "./coordinator/index.js";
 import type { StorageService } from "./storage.js";
 
 export async function runtimeStillLive(storage: StorageService, id: string): Promise<boolean> {

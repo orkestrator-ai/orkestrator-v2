@@ -35,7 +35,7 @@ import {
   coordinatorWorkflowStoreState,
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
   selectCoordinatorWorkflowsToClear,
-} from "./coordinator-workflow-retention.js";
+} from "./coordinator/index.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
@@ -159,7 +159,7 @@ export class CoordinatorsRepository {
   /**
    * Called under the store lock before a new workflow record is added. When
    * the store is at its limit, clears a batch of the oldest finished records
-   * (`coordinator-workflow-retention.ts` says which records count as
+   * (`coordinator/workflow-retention.ts` says which records count as
    * finished) and leaves the caller to write the result with its own record.
    * Returns a synchronous cleanup action to run immediately before the write,
    * so no await separates reading resource activity from saving the selection.
@@ -939,7 +939,7 @@ export class CoordinatorsRepository {
    * This node is no longer controlled from here (`CoordinatorNodeRelease`).
    * In one write, every record on it is marked released: a running delegation
    * closes as `stopped` with nothing further owed (one notice per coordinator
-   * replaces the per-worker wakes, `coordinator-node-release.ts`), an
+   * replaces the per-worker wakes, `coordinator/node-release.ts`), an
    * unreported workflow or pull-request follow is marked reported, and a live
    * worker outcome watch ends. A record with nothing live left is marked
    * notified at once, since there is nothing to tell. A pending reservation

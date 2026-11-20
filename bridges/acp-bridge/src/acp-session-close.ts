@@ -8,6 +8,7 @@ import {
   sessions,
 } from "./acp-context.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
+import { forgetSessionRevision } from "./acp-state-revision.js";
 
 export type RetainingCloseOutcome = "closed" | "pending";
 
@@ -140,6 +141,7 @@ async function runClose(state: SessionState): Promise<RetainingCloseOutcome> {
   // lookup still finds the session (closing), and from here on it is gone
   // from the registry and the file alike.
   if (sessions.get(state.id) === state) sessions.delete(state.id);
+  forgetSessionRevision(state);
   const clientKey = state.clientSessionKey;
   if (clientKey !== undefined && clientSessionKeys.get(clientKey) === state.id) {
     clientSessionKeys.delete(clientKey);

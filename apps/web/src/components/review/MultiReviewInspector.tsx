@@ -22,6 +22,13 @@ import { NativeMessage as NativeMessageView } from "@/components/chat/NativeMess
 import { ToolDetailLoaderContext } from "@/components/chat/NativeMessage.shared";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { useCoordinatedRead } from "@/hooks/useCoordinatedRead";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  PUSH_RECOVERY_POLL_MS,
+  REVIEW_TRANSCRIPT_PUSH_TOPIC,
+  formatReviewTranscriptPushKey,
+} from "@orkestrator/protocol/push-events";
 import { useScrollOffsetAcrossHide } from "@/hooks/useScrollOffsetAcrossHide";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
@@ -68,12 +75,14 @@ interface TranscriptTailSnapshot {
  * A transcript read model reduced to a bounded tail of display messages.
  *
  * Each read sends the last source token, so an unchanged transcript costs a
- * status projection; selection and every workflow checkpoint read at once,
- * and only a live node in an active tab is polled, through the read
- * coordinator. `read`, `merge` and `toMessages` must be stable.
+ * status projection; selection, every workflow checkpoint and every push
+ * frame for the tail read at once, and only a live node in an active tab is
+ * polled, through the read coordinator (at the recovery cadence while the
+ * push subscription is healthy). `read`, `merge` and `toMessages` must be stable.
  */
 function useTranscriptTail<T extends TranscriptTailSnapshot>({
   resource,
+  pushKey,
   workflowId,
   targetId,
   enabled,
@@ -83,6 +92,8 @@ function useTranscriptTail<T extends TranscriptTailSnapshot>({
   toMessages,
 }: {
   resource: string;
+  /** The tail's `review-transcript` push key. */
+  pushKey: string;
   workflowId: string;
   targetId: string;
   enabled: boolean;
@@ -160,12 +171,37 @@ function useTranscriptTail<T extends TranscriptTailSnapshot>({
     void refresh(true);
   }, [enabled, refresh, workflowRevision]);
 
+  /*
+   * Push (docs/architecture/push-events.md): while selected, the node
+   * announces each change of this reviewer's or step's record or transcript
+   * (the `review-transcript` topic) and the tail reads then; the backstop
+   * falls to the recovery cadence while that subscription is healthy.
+   */
+  const { scope } = useScopesWithCommandFallback();
+  const pushState = usePushSubscription(
+    scope,
+    REVIEW_TRANSCRIPT_PUSH_TOPIC,
+    pushKey,
+    enabled,
+    () => void refresh(true),
+  );
+  const pushHealthy = pushState === "healthy";
+  const pushWasHealthy = useRef(pushHealthy);
+  useEffect(() => {
+    if (pushWasHealthy.current && !pushHealthy && enabled) void refresh(true);
+    pushWasHealthy.current = pushHealthy;
+  }, [enabled, pushHealthy, refresh]);
+
   const pollInstance = useId();
   useCoordinatedRead<void>({
     key: { resource, target: viewKey, view: pollInstance },
     enabled,
     readOnSubscribe: false,
-    demand: { active: enabled && live, intervalMs: REFRESH_INTERVAL_MS, priority: "standard" },
+    demand: {
+      active: enabled && live,
+      intervalMs: pushHealthy ? PUSH_RECOVERY_POLL_MS : REFRESH_INTERVAL_MS,
+      priority: "standard",
+    },
     read: () => refresh(),
   });
 
@@ -334,6 +370,7 @@ export function ReviewerTranscriptTail({
   );
   const { snapshot, messages, error } = useTranscriptTail({
     resource: "multi-review-reviewer-transcript",
+    pushKey: formatReviewTranscriptPushKey({ workflowId, reviewerId }),
     workflowId,
     targetId: reviewerId,
     enabled: isActive && hasSession,
@@ -451,6 +488,7 @@ export function StepTranscriptTail({
   );
   const { snapshot, messages, error } = useTranscriptTail({
     resource: "multi-review-step-transcript",
+    pushKey: formatReviewTranscriptPushKey({ workflowId, step }),
     workflowId,
     targetId: step,
     enabled: isActive && access.kind === "own",

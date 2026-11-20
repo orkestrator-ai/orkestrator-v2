@@ -22,6 +22,8 @@ import type {
 import { relayedNodeEventNodeId } from "@orkestrator/protocol/node-events";
 import { createLogger } from "@orkestrator/protocol/logger";
 
+import { formatPushFrame } from "@orkestrator/protocol/push-events";
+
 const log = createLogger("gateway");
 
 function formatControlFrame(event: string, cursor: string | null, payload: unknown): string {
@@ -187,13 +189,32 @@ export class GatewayEvents {
     return true;
   }
 
+  /**
+   * Writes one push frame (`push.changed`, `push.resync`) to the connection
+   * it was numbered for. No `id`: push frames are per connection and recovered
+   * by re-subscribing, never by replay. `false` means the client is gone.
+   */
+  writePushFrame(
+    client: EventClientWriter,
+    state: GatewayEventClient,
+    event: string,
+    payload: unknown,
+  ): boolean {
+    if (this.ctx.clients.get(client) !== state) return false;
+    const message = formatPushFrame(event, payload);
+    const written = this.writeControlFrame(client, event, null, payload, message);
+    if (written) this.ctx.metrics.recordEvent(event, Buffer.byteLength(message));
+    return written;
+  }
+
   writeControlFrame(
     client: EventClientWriter,
     event: string,
     cursor: string | null,
     payload: unknown,
+    formatted?: string,
   ): boolean {
-    const message = formatControlFrame(event, cursor, payload);
+    const message = formatted ?? formatControlFrame(event, cursor, payload);
     const messageBytes = Buffer.byteLength(message);
     const projectedBytes = client.writableLength + messageBytes;
     if (projectedBytes > SSE_CLIENT_HARD_BUFFER_BYTES) {
@@ -359,6 +380,18 @@ export class GatewayEvents {
         revision: latestAtSubscribe,
         status: replayStatus,
         replayed: replayedFrames,
+        // The push layer's offer for this connection (push-events.ts). Its
+        // frames are this connection's alone and never enter the ring.
+        ...(state.pushStreamId && this.ctx.backend.push
+          ? {
+              push: {
+                versions: this.ctx.backend.push.versions,
+                streamId: state.pushStreamId,
+                // Sets for relayed nodes are accepted (design D10).
+                ...(this.ctx.backend.push.acceptsNodeSets ? { nodes: true } : {}),
+              },
+            }
+          : {}),
       })
     )
       return;

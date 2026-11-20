@@ -4,6 +4,7 @@ import {
   NATIVE_QUIET_BACKOFF_CONTENT_REVISION_PLATFORMS,
   NATIVE_QUIET_BACKOFF_QUALIFIED_PLATFORMS,
 } from "@orkestrator/protocol/native-agent-observation";
+import { PUSH_RECOVERY_POLL_MS } from "@orkestrator/protocol/push-events";
 import { DATA_SAVING_ACTIVE_PROJECTION_REFRESH_MS } from "@/lib/data-saving-policy";
 import type { ReadDemand } from "@/lib/read-coordinator";
 
@@ -72,8 +73,22 @@ export function nativeSessionReadDemand(
     observationEvents?: boolean;
     /** The session's `turn.quietObservation`: content changes are announced too. */
     quietObservation?: boolean;
+    /**
+     * The view's push subscription is healthy: the node announces every
+     * change, so the view reads on those and polls only as a safety net.
+     */
+    pushHealthy?: boolean;
   },
 ): Required<ReadDemand> {
+  if (options.pushHealthy === true) {
+    return {
+      active: options.active,
+      intervalMs: PUSH_RECOVERY_POLL_MS,
+      priority: "critical",
+      quietBackoffMs: null,
+      dataSaving: null,
+    };
+  }
   const responsive = isResponsiveNativeTurnPhase(phase);
   const qualified =
     options.observationEvents === true &&
@@ -163,6 +178,12 @@ export class NativeDiscoveryReadSchedule {
     if (phase !== undefined) this.phase = phase;
     this.due = false;
     this.lastReadAt = now;
+  }
+
+  /** Deadline for an unsettled or failed discovery read, independent of projection polling. */
+  followUpAt(): number | null {
+    const delay = this.due ? DISCOVERY_SETTLING_READ_MS : this.followUpMs;
+    return delay === null ? null : this.lastReadAt + delay;
   }
 
   /** The view this schedule's reads now hold, whichever status delivered it. */

@@ -9,12 +9,16 @@ import {
   type ContainerLifecycleSnapshot,
   type RebuildPreview,
 } from "@orkestrator/protocol/container-lifecycle";
+import type { PushKeyChange } from "@orkestrator/protocol/push-client";
+import { ENVIRONMENT_PUSH_TOPIC, PUSH_RECOVERY_POLL_MS } from "@orkestrator/protocol/push-events";
 import { Button } from "@/components/ui/button";
 import { listenAuthoritative } from "@/lib/native/authoritative-events";
 import type { Environment } from "@/types";
 import { RebuildConfirmDialog, reportRebuildOutcome } from "./RebuildConfirmDialog";
 import type * as backend from "@/lib/backend";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
+import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import { usePushSubscription } from "@/lib/push/push-subscriptions";
 
 /** Progress reads while a rebuild runs and no event subscription is live. */
 export const REBUILD_POLL_MS = 2_000;
@@ -64,6 +68,7 @@ export function EnvironmentRebuildSection({
   onClose,
 }: EnvironmentRebuildSectionProps) {
   const nodeBackend = useScopeBackend();
+  const { scope } = useScopesWithCommandFallback();
   const [preview, setPreview] = useState<RebuildPreview | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -137,6 +142,25 @@ export function EnvironmentRebuildSection({
     return () => controller.abort();
   }, [applySnapshot, environment.id, refreshSnapshot]);
 
+  // The node's `environment` push key announces each lifecycle write too
+  // (docs/architecture/push-events.md); while it is healthy a frame reads the
+  // snapshot and the backstop falls to the recovery poll.
+  const onPushChange = useCallback(
+    (change: PushKeyChange) => {
+      if (
+        change.parts === null ||
+        change.parts.length === 0 ||
+        change.parts.includes("lifecycle")
+      ) {
+        void refreshSnapshot();
+      }
+    },
+    [refreshSnapshot],
+  );
+  const pushHealthy =
+    usePushSubscription(scope, ENVIRONMENT_PUSH_TOPIC, environment.id, true, onPushChange) ===
+    "healthy";
+
   // While a rebuild runs, a slow read backs up the events; without a live
   // subscription it is the only source of progress, so it stays quick.
   useEffect(() => {
@@ -144,10 +168,14 @@ export function EnvironmentRebuildSection({
     return startCoordinatedPoll({
       resource: "environment-rebuild",
       target: environment.id,
-      intervalMs: eventsLive ? REBUILD_BACKSTOP_POLL_MS : REBUILD_POLL_MS,
+      intervalMs: pushHealthy
+        ? PUSH_RECOVERY_POLL_MS
+        : eventsLive
+          ? REBUILD_BACKSTOP_POLL_MS
+          : REBUILD_POLL_MS,
       read: refreshSnapshot,
     });
-  }, [environment.id, eventsLive, running, refreshSnapshot]);
+  }, [environment.id, eventsLive, pushHealthy, running, refreshSnapshot]);
 
   const openConfirm = async () => {
     setLoadingPreview(true);

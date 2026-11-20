@@ -572,22 +572,40 @@ export function toolInput<S extends Schema.Top>(
      * counted. Must not throw or block.
      */
     readonly onRefused?: (value: unknown, issues: ReadonlyArray<StandardIssue>) => void;
+    /**
+     * Runs before the schema: returns the value to check (for example with
+     * fields a model sent as JSON text parsed), or the issues that refuse it.
+     * Must not throw.
+     */
+    readonly prepare?: (
+      value: unknown,
+    ) => { readonly value: unknown } | { readonly issues: ReadonlyArray<StandardIssue> };
+    /**
+     * Appended to every refusal as a last issue, so the model reads what the
+     * tool expects next to what was wrong (for example an example call).
+     */
+    readonly refusalNote?: string;
   } = {},
 ): ToolInput<S["Encoded"], S["Type"]> {
+  const refuse = (value: unknown, found: ReadonlyArray<StandardIssue>) => {
+    const issues = options.refusalNote ? [...found, { message: options.refusalNote }] : found;
+    try {
+      options.onRefused?.(value, issues);
+    } catch {
+      // Counting a refusal must never change the answer.
+    }
+    return { issues };
+  };
   return {
     "~standard": {
       version: 1,
       vendor: "effect",
       validate: (value) => {
-        const result = decodeResult(schema, value);
+        const prepared = options.prepare ? options.prepare(value) : { value };
+        if ("issues" in prepared) return refuse(value, prepared.issues);
+        const result = decodeResult(schema, prepared.value);
         if (result.success) return { value: result.data };
-        const issues = schemaErrorIssues(result.error);
-        try {
-          options.onRefused?.(value, issues);
-        } catch {
-          // Counting a refusal must never change the answer.
-        }
-        return { issues };
+        return refuse(value, schemaErrorIssues(result.error));
       },
       jsonSchema: {
         input: () => toolJsonSchema(schema),

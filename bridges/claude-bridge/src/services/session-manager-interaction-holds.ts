@@ -14,6 +14,7 @@ import {
   getPendingPlanApprovals,
   getPendingQuestions,
 } from "./session-manager-interactions.js";
+import { eventEmitter } from "./event-emitter.js";
 
 // The deadlines of every parked request, beside the stores that hold the
 // requests themselves. They live apart so a request object stays plain JSON:
@@ -85,6 +86,8 @@ export function holdPendingRequest(
   if (result === "unavailable") return { status: "unavailable" };
   request.expiresAt = deadline.expiresAt;
   request.hold = deadline.hold();
+  // The side routes the backend reads with the state now show a new deadline.
+  if (result !== "unchanged") eventEmitter.announceState(sessionId);
   return { status: result, expiresAt: request.expiresAt, hold: request.hold };
 }
 

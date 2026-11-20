@@ -238,7 +238,7 @@ describe("frameSessionId", () => {
 });
 
 describe("HttpBridgeProvider observation stream", () => {
-  test("only Claude and Codex subscribe, on the observer's first ask, until disposed", async () => {
+  test("every managed bridge subscribes on the observer's first ask, until disposed", async () => {
     const requests: string[] = [];
     let aborted = 0;
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -248,31 +248,141 @@ describe("HttpBridgeProvider observation stream", () => {
     }) as typeof fetch;
     const hint = () => undefined;
 
-    const cursor = new HttpBridgeProvider(
-      { ...connection, agent: "cursor" },
-      fetchImpl,
-      undefined,
-      hint,
-    );
-    expect(cursor.observationStreamLive()).toBe(false);
     // Without a hint sink nothing would consume the stream.
     const unobserved = new HttpBridgeProvider(connection, fetchImpl);
     expect(unobserved.observationStreamLive()).toBe(false);
-    // A subscription is requested within the first ask (the Claude case below
-    // proves it), so none having been requested by now means none will be.
+    // A subscription is requested within the first ask (the cases below prove
+    // it), so none having been requested by now means none will be.
     expect(requests).toEqual([]);
 
     const claude = new HttpBridgeProvider(connection, fetchImpl, undefined, hint);
     expect(claude.observationStreamLive()).toBe(false);
-    expect(claude.observationStreamLive()).toBe(false);
+    expect(claude.observationStreamRevisions()).toBe(false);
     expect(requests).toEqual(["http://bridge.invalid/event/subscribe?observe=1"]);
     claude.dispose();
     expect(aborted).toBe(1);
+
+    // Cursor, Pi and the ACP bridge serve the same stream (to-do 8102 task 2).
+    for (const agent of ["cursor", "pi", "grok"] as const) {
+      const provider = new HttpBridgeProvider({ ...connection, agent }, fetchImpl, undefined, hint);
+      expect(provider.observationStreamRevisions()).toBe(false);
+      provider.dispose();
+    }
+    expect(requests).toHaveLength(4);
 
     // Disposed before the observer ever asked: never subscribes afterwards.
     const retired = new HttpBridgeProvider(connection, fetchImpl, undefined, hint);
     retired.dispose();
     expect(retired.observationStreamLive()).toBe(false);
-    expect(requests).toHaveLength(1);
+    expect(requests).toHaveLength(4);
+  });
+});
+
+describe("HttpBridgeObservationStream revisions", () => {
+  test("a revision-carrying stream hints only the parts that moved, and drops repeats", async () => {
+    const { observer, nextStream } = harness();
+    const parts: Array<[string | undefined, readonly string[] | undefined]> = [];
+    (observer as unknown as { options: { hint: unknown } }).options.hint = (
+      sessionId: string | undefined,
+      moved?: readonly string[],
+    ) => parts.push([sessionId, moved]);
+    try {
+      observer.start();
+      const stream = await nextStream(1);
+      stream.frame("connected", { status: "connected", observe: true, revisions: 1 }, "g:1");
+      await until(() => observer.revisionsLive);
+      expect(parts).toEqual([[undefined, undefined]]);
+
+      // The first frame for a session has nothing to compare against.
+      stream.frame(
+        "session.updated",
+        { sessionId: "s-1", stateRevision: "b:1", transcriptRevision: "t1" },
+        "g:2",
+      );
+      stream.frame(
+        "message.updated",
+        { sessionId: "s-1", stateRevision: "b:1", transcriptRevision: "t2" },
+        "g:3",
+      );
+      stream.frame(
+        "session.updated",
+        { sessionId: "s-1", stateRevision: "b:2", transcriptRevision: "t2" },
+        "g:4",
+      );
+      // Neither moved: dropped.
+      stream.frame(
+        "session.updated",
+        { sessionId: "s-1", stateRevision: "b:2", transcriptRevision: "t2" },
+        "g:5",
+      );
+      stream.frame(
+        "session.updated",
+        { sessionId: "s-1", stateRevision: "b:3", transcriptRevision: "t3" },
+        "g:6",
+      );
+      await until(() => observer.stats().cursor === "g:6");
+      expect(parts.slice(1)).toEqual([
+        ["s-1", undefined],
+        ["s-1", ["transcript"]],
+        ["s-1", ["state"]],
+        ["s-1", ["state", "transcript"]],
+      ]);
+      expect(observer.stats().dropped).toBe(1);
+
+      // A gap forgets the last revisions: the next frame hints without parts.
+      stream.frame("replay.required", { through: "g:9" }, "g:9");
+      stream.frame(
+        "session.updated",
+        { sessionId: "s-1", stateRevision: "b:3", transcriptRevision: "t3" },
+        "g:10",
+      );
+      await until(() => observer.stats().cursor === "g:10");
+      expect(parts.slice(-2)).toEqual([
+        [undefined, undefined],
+        ["s-1", undefined],
+      ]);
+    } finally {
+      observer.close();
+      await observer.stopped();
+    }
+  });
+
+  test("an older bridge's stream is live but not revision-carrying", async () => {
+    const { observer, hints, nextStream } = harness();
+    try {
+      observer.start();
+      const stream = await nextStream(1);
+      stream.frame("connected", { status: "connected", observe: true }, "g:1");
+      await until(() => observer.isLive);
+      expect(observer.revisionsLive).toBe(false);
+      stream.frame("session.updated", { sessionId: "s-1" }, "g:2");
+      stream.frame("session.updated", { sessionId: "s-1" }, "g:3");
+      await until(() => hints.length === 3);
+      expect(hints).toEqual([undefined, "s-1", "s-1"]);
+    } finally {
+      observer.close();
+      await observer.stopped();
+    }
+  });
+
+  test("a bridge without the route (404) stops asking", async () => {
+    let requests = 0;
+    const observer = new HttpBridgeObservationStream({
+      connection: { ...connection, agent: "pi" },
+      fetchImpl: (async () => {
+        requests += 1;
+        return new Response("not found", { status: 404 });
+      }) as unknown as typeof fetch,
+      hint: () => undefined,
+      retryInitialMs: 1,
+      retryMaxMs: 1,
+      random: () => 0,
+    });
+    observer.start();
+    await observer.stopped();
+    expect(observer.isUnsupported).toBe(true);
+    expect(observer.isLive).toBe(false);
+    expect(requests).toBe(1);
+    observer.close();
   });
 });

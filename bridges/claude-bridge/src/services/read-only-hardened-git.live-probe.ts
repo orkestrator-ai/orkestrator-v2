@@ -66,6 +66,14 @@ interface Scenario {
 const SCENARIOS: Scenario[] = [
   { name: "hardened-diff", command: "git diff HEAD~1..HEAD", hook: true },
   { name: "hardened-log-pipe", command: "git log -p -1 | head -40", hook: true },
+  // A reviewer's list with a variable, quotes and a pipe: what runs is the
+  // hook's serialization of the words it judged, not this text.
+  {
+    name: "hardened-quoted-list",
+    command:
+      'B=HEAD~1\ngit rev-parse --verify HEAD && git diff "$B..HEAD" -- a.txt | grep -n "^+two\\|^-one"',
+    hook: true,
+  },
   { name: "unhooked-control", command: "git diff HEAD~1..HEAD", hook: false },
 ];
 

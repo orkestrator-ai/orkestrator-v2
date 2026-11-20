@@ -52,6 +52,7 @@ const ADMIN = new Set([
   "get_recurring_work_diagnostics",
   "get_progressive_read_metrics",
   "get_artifact_metrics",
+  "get_push_metrics",
   "reconcile_workflow_scheduling",
 ]);
 
@@ -77,10 +78,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("system definitions", () => {
-  it("defines the domain's 54 commands once each, since version 1 unless recorded", () => {
+  it("defines the domain's 56 commands once each, since version 1 unless recorded", () => {
     const names = SYSTEM_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(54);
-    expect(new Set(names).size).toBe(54);
+    expect(names).toHaveLength(56);
+    expect(new Set(names).size).toBe(56);
     expect(systemDomain).toMatchObject({ name: "system", version: 2, min: 1 });
     for (const def of SYSTEM_COMMANDS) {
       expect(def.domain).toBe(systemDomain);

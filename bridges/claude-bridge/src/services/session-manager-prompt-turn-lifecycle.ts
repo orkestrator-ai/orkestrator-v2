@@ -254,6 +254,7 @@ export function releaseCompletedTurnToBackgroundTasks(
   session.turnStartedAt = undefined;
   session.abortController = undefined;
   session.completionBlockedByBackgroundTasks = false;
+  eventEmitter.announceState(session.id);
   if (session.queryControl === turn.queryIteratorControl) {
     session.queryControl = undefined;
   }
@@ -335,6 +336,7 @@ export function reclaimReleasedTurnForAssistant(turn: TurnState, message: SdkMes
   // the real idle edge.
   session.status = "running";
   session.turnStartedAt = turn.releasedTurnStartedAt ?? new Date().toISOString();
+  eventEmitter.announceState(session.id);
   session.abortController = turn.abortController;
   session.queryControl = turn.queryIteratorControl;
   // The continuation arrived, and the process holds the foreground again.

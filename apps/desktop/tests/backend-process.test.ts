@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import {
   access,
@@ -46,7 +46,31 @@ import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout";
 
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
+/**
+ * The supervisor talks to a real backend over loopback, as the Electron main
+ * process does, so it needs the runtime's own Web platform. A run from the
+ * repository root preloads Happy DOM (`tests/register-dom.ts`), whose window
+ * fetch applies browser CORS to the backend's answers and whose AbortSignal
+ * and Response Bun's fetch and server refuse. Pin the native constructors the
+ * preload captured for this file and give the DOM ones back when it finishes.
+ */
+type NativeWebPlatform = Pick<
+  typeof globalThis,
+  "fetch" | "AbortController" | "AbortSignal" | "Response"
+>;
+const NATIVE_WEB_PLATFORM_NAMES = ["fetch", "AbortController", "AbortSignal", "Response"] as const;
+const nativeWebPlatform = Reflect.get(
+  globalThis,
+  Symbol.for("orkestrator.tests.native-web-platform"),
+) as NativeWebPlatform | undefined;
+const domWebPlatform = Object.fromEntries(
+  NATIVE_WEB_PLATFORM_NAMES.map((name) => [name, globalThis[name]]),
+) as NativeWebPlatform;
+if (nativeWebPlatform) Object.assign(globalThis, nativeWebPlatform);
 const originalFetch = globalThis.fetch;
+afterAll(() => {
+  if (nativeWebPlatform) Object.assign(globalThis, domWebPlatform);
+});
 
 function stubFetch(
   implementation: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
@@ -1454,6 +1478,53 @@ sleep 5
       client.invoke("terminal_write", { sessionId: "remote-1", data: "c" }),
     ).resolves.toEqual({ delivered: true });
     expect(sent).toEqual(["a", "c"]);
+  });
+
+  test("IPC push viewers receive independent offers and reconnect on a dropped stream", async () => {
+    const streams: Array<ReadableStreamDefaultController<Uint8Array>> = [];
+    const pushId = (index: number) => `stream-desktop-${String(index).padStart(12, "0")}`;
+    const frame = (event: string, payload: unknown) =>
+      new TextEncoder().encode(`data: ${JSON.stringify({ event, payload })}\n\n`);
+    stubFetch(async (input) => {
+      expect(new URL(String(input)).searchParams.get("includeEvents")).toBe("push.");
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streams.push(controller);
+            controller.enqueue(
+              frame("gateway.connected", {
+                status: "fresh",
+                push: { versions: [1], streamId: pushId(streams.length) },
+              }),
+            );
+          },
+        }),
+      );
+    });
+    const client = new BackendHttpClient("http://127.0.0.1:34000/", "test-token-123456", {
+      eventReconnectDelayMs: 5,
+    });
+    const left: unknown[] = [];
+    const right: unknown[] = [];
+    const leftStop = client.listenPush((event, payload) => left.push({ event, payload }));
+    const rightStop = client.listenPush((event, payload) => right.push({ event, payload }));
+    try {
+      await waitUntil(() => left.length === 1 && right.length === 1, "two push offers");
+      expect(left[0]).toMatchObject({ payload: { offer: { streamId: pushId(1) } } });
+      expect(right[0]).toMatchObject({ payload: { offer: { streamId: pushId(2) } } });
+      streams[0]!.enqueue(frame("push.changed", { seq: 1 }));
+      await waitUntil(() => left.length === 2, "left push change");
+      expect(right).toHaveLength(1);
+      streams[0]!.close();
+      await waitUntil(() => left.length === 4, "left push reconnected");
+      expect(left[2]).toMatchObject({ payload: { state: "disconnected" } });
+      expect(left[3]).toMatchObject({ payload: { offer: { streamId: pushId(3) } } });
+      expect(right).toHaveLength(1);
+    } finally {
+      leftStop();
+      rightStop();
+      client.stopListening();
+    }
   });
 
   test("delivers a legitimate event frame larger than 1 MiB", async () => {

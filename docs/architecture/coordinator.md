@@ -1017,10 +1017,11 @@ What each enforced platform actually does:
   no plugin or skill hook and no skill inline shell (see [Skills](#skills)),
   and a bridge-owned `PreToolUse` hook. The hook is the real boundary for
   shell: it allows a fixed
-  list of reading commands (also as the stages of a plain pipe, each checked
-  on its own) and refuses redirection, substitution and
-  chaining, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
-  gawk's in-place and program options), path-qualified programs and the
+  list of reading commands (also as the commands of a `;`, `&&`, `||` list or
+  plain pipe, quoted or not, each checked on its own and run as the words
+  checked) and refuses redirection, substitution, globs, `cd` or `git -C`
+  outside the checkout, Git reads from nested repositories, writing arguments
+  (`uniq in out`, `sort -o`, `git diff --output`), path-qualified programs and the
   network-only `gh`, `curl` and `git ls-remote`. The SDK sandbox's default lets
   a command write its working directory, so the coordinator sandbox denies
   writes to the checkout (`filesystem.denyWrite`); before that, `uniq in.txt

@@ -456,6 +456,8 @@ const GAUGE_KEYS = [
   "directHistorySessions",
   "displayTailCheckpoints",
   "interactiveSnapshotShares",
+  "observedSessions",
+  "observedSettled",
   "pinnedToolDetails",
   "progressiveDirtyFollowUps",
   "progressiveDiscovery",

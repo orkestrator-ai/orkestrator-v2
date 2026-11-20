@@ -66,9 +66,12 @@ describe("a reviewer's Git reads", () => {
       "git log --oneline abc123..def456 -- apps",
       "git blame -L 10,20 def456 -- a.ts",
     ]) {
-      expect({ command, verdict: isReadOnlyShellCommand(command, sandboxed) }).toEqual({
+      const verdict = isReadOnlyShellCommand(command, sandboxed);
+      // Admitted and run as written.
+      expect({ command, allowed: verdict.allowed, runs: verdict.command }).toEqual({
         command,
-        verdict: { allowed: true, stages: [command] },
+        allowed: true,
+        runs: undefined,
       });
     }
     // Abbreviations of the writing options themselves are still refused.
@@ -127,7 +130,11 @@ describe("a reviewer's Git reads", () => {
         "deny",
       );
     }
-    expect(isReadOnlyShellCommand("ls || rm x", sandboxed).reason).toContain("command chaining");
+    // A list is judged command by command, so `||` reaches nothing new either.
+    expect(isReadOnlyShellCommand("ls || rm x", sandboxed).reason).toContain(
+      "`rm` is not available",
+    );
+    expect(isReadOnlyShellCommand("cat a |& wc", sandboxed).reason).toContain("background `&`");
   });
 
   test("without the sandbox, a reviewer's Git runs hardened against configured helpers", async () => {
@@ -172,9 +179,10 @@ describe("a reviewer's Git reads", () => {
     }
     // Reads that render no diff run as written.
     for (const command of ["git rev-parse HEAD", "git status --porcelain", "git ls-files"]) {
-      expect(isReadOnlyShellCommand(command, hardened)).toEqual({
+      const verdict = isReadOnlyShellCommand(command, hardened);
+      expect({ allowed: verdict.allowed, runs: verdict.command }).toEqual({
         allowed: true,
-        stages: [command],
+        runs: undefined,
       });
     }
   });

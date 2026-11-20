@@ -14,6 +14,12 @@
  * Negative answers still expire, because a bridge can be upgraded in place.
  */
 import {
+  TOOL_OUTPUT_ERROR_MAX_BYTES,
+  clampToolOutputLimit,
+  type NativeAgentToolOutputRead,
+  type ToolOutputReadRequest,
+} from "@orkestrator/protocol/native-agent-tool-output";
+import {
   BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES,
   bridgeTranscriptPageCursorFor,
   parseBridgeTranscriptDetailResponse,
@@ -39,7 +45,7 @@ const DETAIL_RESPONSE_MAX_BYTES = 16 * 1024 * 1024 + 64 * 1024;
 const PAGE_RESPONSE_MAX_BYTES = BRIDGE_PAGE_OVERSIZED_ROW_MAX_BYTES + 64 * 1024;
 const TRANSCRIPT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
-type Feature = "summaries" | "details" | "pages";
+type Feature = "summaries" | "details" | "pages" | "output";
 
 export class HttpBridgeTranscriptCapabilities {
   private readonly unsupportedUntil = new Map<Feature, number>();
@@ -211,6 +217,75 @@ export async function readHttpBridgeSummaryTranscript(
   return update.status === "unchanged"
     ? { kind: "summary", result: { unchanged: true, sourceToken: update.token } }
     : { kind: "summary", result: summarySnapshot(update) };
+}
+
+/** Older bridges return 404/405 for the optional range route. */
+export async function readHttpBridgeTranscriptOutput(
+  input: ReadInput & { locator: string; request: ToolOutputReadRequest },
+): Promise<NativeAgentToolOutputRead | undefined> {
+  const { request } = input;
+  const limit = clampToolOutputLimit(request.limit);
+  const query = new URLSearchParams({
+    locator: input.locator,
+    mode: request.mode,
+    limit: String(limit),
+  });
+  if (request.cursor !== undefined) query.set("cursor", String(request.cursor));
+  if (request.anchor !== undefined) query.set("anchor", request.anchor);
+  const response = await bridgeFetch(
+    input.connection,
+    `/session/${encodeURIComponent(input.sessionId)}/transcript/output?${query}`,
+    {},
+    input.fetchImpl,
+  );
+  if (response.status === 404 || response.status === 405) {
+    void response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  assertOk(response, `${input.agent} transcript output read`);
+  const body = asRecord(
+    await boundedJson(response, `${input.agent} transcript output read`, {
+      remaining: 6 * (limit + TOOL_OUTPUT_ERROR_MAX_BYTES) + 1024,
+    }),
+  );
+  if (body?.status === "missing" || body?.status === "expired") return { status: body.status };
+  if (
+    body?.status === "ok" &&
+    typeof body.text === "string" &&
+    typeof body.start === "number" &&
+    Number.isSafeInteger(body.start) &&
+    body.start >= 0 &&
+    typeof body.end === "number" &&
+    Number.isSafeInteger(body.end) &&
+    typeof body.totalBytes === "number" &&
+    Number.isSafeInteger(body.totalBytes) &&
+    body.start <= body.end &&
+    body.end <= body.totalBytes &&
+    body.end - body.start === Buffer.byteLength(body.text) &&
+    body.end - body.start <= limit &&
+    typeof body.startAnchor === "string" &&
+    body.startAnchor.length <= 32 &&
+    typeof body.endAnchor === "string" &&
+    body.endAnchor.length <= 32 &&
+    (body.toolError === undefined ||
+      (typeof body.toolError === "string" &&
+        Buffer.byteLength(body.toolError) <= TOOL_OUTPUT_ERROR_MAX_BYTES + 3))
+  ) {
+    return {
+      status: "ok",
+      complete: false,
+      text: body.text,
+      start: body.start,
+      end: body.end,
+      totalBytes: body.totalBytes,
+      truncatedBefore: body.start > 0,
+      startAnchor: body.startAnchor,
+      endAnchor: body.endAnchor,
+      ...(body.reset === true ? { reset: true } : {}),
+      ...(body.toolError === undefined ? {} : { toolError: body.toolError }),
+    };
+  }
+  throw new ProviderUnavailableError(`${input.agent} returned malformed transcript output`);
 }
 
 /** `undefined` means this bridge has no detail route. */

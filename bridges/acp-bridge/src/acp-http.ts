@@ -125,6 +125,13 @@ import {
 import { holdParkedRequest, type AcpHoldFamily } from "./acp-interaction-hold.js";
 import { CredentialError } from "./acp-credentials.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  acpStateReadContent,
+  markSessionChanged,
+  observationHub,
+  stateRevisions,
+} from "./acp-state-revision.js";
+import { BRIDGE_KNOWN_STATE_REVISION_PARAM } from "@orkestrator/protocol/bridge-state-revision";
 
 const TRANSCRIPT_GENERATION = randomBytes(16).toString("hex");
 const log = createLogger("bridge.acp");
@@ -148,6 +155,12 @@ export async function route(
   if (refused) return json(response, refused.status, refused.body);
   if (url.pathname === "/global/auth-check" && request.method === "GET") {
     return json(response, 200, { ok: true });
+  }
+  // The backend observer's content-free wakeup stream (`acp-state-revision.ts`).
+  // Like `/activity` it never touches, hydrates or re-attaches a session.
+  if (url.pathname === "/event/subscribe" && request.method === "GET") {
+    observationHub.serve(request, response, url);
+    return;
   }
   // Change evidence (docs/architecture/change-tracking.md). Reads never touch
   // a session; only the backend's durable ack releases entries and bodies.
@@ -386,7 +399,7 @@ export async function route(
       ...process.env,
       ...providerConfig.env,
     });
-    return json(response, 200, {
+    const body: JsonObject = {
       status: state.status,
       error: state.error,
       revision: state.revision,
@@ -401,7 +414,16 @@ export async function route(
       ...publicCommandRevision(state),
       runtime: publicRuntime(state),
       ...(readiness ? { readiness } : {}),
-    });
+    };
+    // The state revision covers this body and the `/approvals` and
+    // `/interactions` bodies the backend reads beside it (D7).
+    const answer = stateRevisions.answer(
+      state.id,
+      acpStateReadContent(body, publicApprovals(state), publicInteractions(state)),
+      url.searchParams.get(BRIDGE_KNOWN_STATE_REVISION_PARAM),
+    );
+    if (answer.unchanged) return json(response, 200, answer.body);
+    return json(response, 200, { ...body, stateRevision: answer.revision });
   }
   if (action === "config" && request.method === "GET") {
     return json(response, 200, state.sessionConfig.composer);
@@ -866,7 +888,7 @@ export async function route(
     state.currentTurnRequestId = requestId || undefined;
     state.currentTurnSawVendorUsage = false;
     state.currentTurnOutput = schema ? "" : null;
-    state.revision += 1;
+    markSessionChanged(state);
     boundTranscript(state);
     await persistState();
     if (state.closing) {
@@ -883,7 +905,7 @@ export async function route(
       state.currentTurnSawVendorUsage = undefined;
       state.currentTurnOutput = null;
       if (requestId) state.promptJournal.delete(requestId);
-      state.revision += 1;
+      markSessionChanged(state);
       schedulePersist();
       return json(response, 409, { error: SESSION_CLOSING_ERROR });
     }
@@ -1014,7 +1036,7 @@ export async function route(
         if (!state.outputTruncated && state.child === child && state.status !== "error") {
           state.status = "idle";
         }
-        state.revision += 1;
+        markSessionChanged(state);
         schedulePersist();
       },
       (error: unknown) => {
@@ -1037,7 +1059,7 @@ export async function route(
             acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
           });
         state.currentTurnOutput = null;
-        state.revision += 1;
+        markSessionChanged(state);
         schedulePersist();
       },
     );

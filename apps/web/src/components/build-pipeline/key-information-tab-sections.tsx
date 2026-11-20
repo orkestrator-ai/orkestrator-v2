@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { CheckCircle2, CircleDashed, CircleDot, Minus, Plus, XCircle } from "lucide-react";
 import {
   KEY_INFORMATION_TEST_RESULTS,
+  keyInformationCheckStatus,
   type BuildPipelineKeyInformation,
   type KeyInformationDecision,
   type KeyInformationIssue,
@@ -13,6 +14,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   KEY_INFORMATION_AUTHOR_LABELS,
+  KEY_INFORMATION_CHECK_STATUS,
   KEY_INFORMATION_ISSUE_STATUS,
   KEY_INFORMATION_SECTION_LABELS,
   KEY_INFORMATION_TEST_RESULT,
@@ -356,34 +358,42 @@ export function VerificationRounds({
           ) : null}
           {verification.checks.length > 0 ? (
             <ul className="mt-3 grid gap-2 @4xl:grid-cols-2">
-              {verification.checks.map((check, checkIndex) => (
-                <li
-                  key={checkIndex}
-                  className="flex items-start gap-2 rounded-md bg-muted/15 px-3 py-2"
-                >
-                  {check.passed ? (
-                    <CheckCircle2
-                      className="mt-0.5 size-3.5 shrink-0 text-success"
-                      aria-label="Passed"
+              {verification.checks.map((check, checkIndex) => {
+                const status = keyInformationCheckStatus(check);
+                const outcome = KEY_INFORMATION_CHECK_STATUS[status];
+                const Icon = outcome.icon;
+                return (
+                  <li
+                    key={checkIndex}
+                    className="flex items-start gap-2 rounded-md bg-muted/15 px-3 py-2"
+                  >
+                    <Icon
+                      className={cn("mt-0.5 size-3.5 shrink-0", outcome.className)}
+                      aria-label={outcome.label}
                     />
-                  ) : (
-                    <XCircle
-                      className="mt-0.5 size-3.5 shrink-0 text-failure"
-                      aria-label="Failed"
-                    />
-                  )}
-                  <div className="min-w-0 flex-1 text-sm leading-5">
-                    <div className="break-words">
-                      <KeyInformationText text={check.check} />
-                    </div>
-                    {check.details ? (
-                      <div className="mt-0.5 text-xs leading-5 break-words text-muted-foreground">
-                        <KeyInformationText text={check.details} />
+                    <div className="min-w-0 flex-1 text-sm leading-5">
+                      <div
+                        className={cn(
+                          "break-words",
+                          status === "not-checked" && "text-foreground/75",
+                        )}
+                      >
+                        <KeyInformationText text={check.check} />
                       </div>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
+                      {status === "not-checked" || check.details ? (
+                        <div className="mt-0.5 text-xs leading-5 break-words text-muted-foreground">
+                          {status === "not-checked" ? (
+                            <span className="font-medium">
+                              Not checked{check.details ? ": " : ""}
+                            </span>
+                          ) : null}
+                          {check.details ? <KeyInformationText text={check.details} /> : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
         </li>

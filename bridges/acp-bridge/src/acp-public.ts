@@ -16,6 +16,7 @@ import { acpSessionReportedPolicy } from "./acp-policy.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { boundTranscript } from "./acp-transcript.js";
 import { schedulePersist } from "./acp-persist-writer.js";
+import { markTranscriptChanged } from "./acp-state-revision.js";
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
@@ -83,7 +84,7 @@ export function boundTranscriptForRead(state: SessionState): void {
     state.droppedMessages !== previousBaseIndex ||
     nextPartCount !== previousPartCount
   ) {
-    state.revision += 1;
+    markTranscriptChanged(state);
     schedulePersist();
   }
 }

@@ -35,6 +35,7 @@ import { MACHINE_LOAD_COMMAND } from "../../../machine-load.js";
 import { RECORD_RENDERER_ERRORS_COMMAND } from "../../../renderer-errors.js";
 import { systemDomain } from "./domain.js";
 import { getFleetUpdatePolicyCommand, setFleetUpdatePolicyCommand } from "./fleet-update-policy.js";
+import { getPushMetricsCommand, pushSetSubscriptionsCommand } from "./push-subscriptions.js";
 import {
   ArtifactMetricsSchema,
   BugReportFileResultSchema,
@@ -70,6 +71,7 @@ import {
 
 export { recordDomainAdapterUsageCommand } from "../../client-usage.js";
 export * from "./fleet-update-policy.js";
+export * from "./push-subscriptions.js";
 export * from "./schemas.js";
 
 const optionalUnknown = Schema.optionalKey(Schema.Unknown);
@@ -826,4 +828,6 @@ export const SYSTEM_COMMANDS = [
   updateWorktreeLocationsCommand,
   getScopedResourceRevisionManifestCommand,
   getScopedResourceSnapshotsCommand,
+  pushSetSubscriptionsCommand,
+  getPushMetricsCommand,
 ] as const;

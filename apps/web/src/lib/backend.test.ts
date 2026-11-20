@@ -1799,6 +1799,8 @@ describe("backend command wrapper coverage", () => {
       // Validate the machine profile they return; covered below.
       "getBackendProfile",
       "updateBackendProfile",
+      // Its arguments are decoded against the command's schema; covered below.
+      "setPushSubscriptions",
       // Its last argument is a launch-base object, which a string cannot stand
       // in for; covered by the create-environment tests above.
       "createEnvironment",
@@ -1825,6 +1827,21 @@ describe("backend command wrapper coverage", () => {
       await wrapper(...args).catch(() => undefined);
       expect(invokeMock.mock.calls.length, `${name} must call invoke`).toBeGreaterThan(0);
     }
+  });
+
+  test("sends a push subscription set to the backend", async () => {
+    const args = {
+      streamId: "stream-aaaaaaaaaaaaaaaa",
+      setRevision: 2,
+      subscriptions: [{ topic: "native-session", key: "env-1/claude/tab-1" }],
+    };
+    invokeMock.mockResolvedValueOnce({ status: "refused", reason: "stream-unknown" });
+    await expect(backendWrappers.setPushSubscriptions(args)).resolves.toEqual({
+      status: "refused",
+      reason: "stream-unknown",
+    });
+    expect(invokeMock.mock.calls.at(-1)?.[0]).toBe("push_set_subscriptions");
+    expect(invokeMock.mock.calls.at(-1)?.[1]).toEqual(args);
   });
 
   test("resetGlobalSettings sends the guarded reset to the command node", async () => {

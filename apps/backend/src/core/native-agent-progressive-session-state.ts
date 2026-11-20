@@ -458,6 +458,7 @@ export class NativeAgentProgressiveSessionState {
               input.forceSnapshot === true,
               phases.own(() => this.readProgressiveSessionState(input, phases)),
               input.freshSource,
+              input.pushObservation,
             ),
           );
       if (!value) {

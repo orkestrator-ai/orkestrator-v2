@@ -1,3 +1,4 @@
+import type { ToolOutputReadRequest } from "@orkestrator/protocol/native-agent-tool-output";
 import type {
   NativeAgentToolDetails,
   StorageService,
@@ -35,6 +36,22 @@ export class NativeAgentToolDetailReads {
   constructor(private readonly context: NativeAgentProjectionContext) {
     this.host = context.host;
     this.storage = context.storage;
+  }
+
+  /** Read a provider-held range with the same ownership check as a detail read. */
+  async readRemoteOutput(
+    input: NativeAgentProjectionInput & { detailRef: string },
+    request: ToolOutputReadRequest,
+  ) {
+    if (!isRemoteDetailRef(input.detailRef)) return undefined;
+    const entry = await this.loadToolDetailEntry(input);
+    if (!entry.remote || entry.remote.resolved) return undefined;
+    const provider = await this.host.provider(input);
+    return provider.transcriptOutput?.(
+      entry.remote.providerSessionId,
+      entry.remote.locator,
+      request,
+    );
   }
 
   /** In-flight provider reads of remote tool details, one per reference. */
@@ -124,9 +141,9 @@ export class NativeAgentToolDetailReads {
     return this.context.parts.toolDetail(input.detailRef) ?? reregister();
   }
 
-  async getProjectionToolDetails(
+  private async loadToolDetailEntry(
     input: NativeAgentProjectionInput & { detailRef: string },
-  ): Promise<NativeAgentToolDetails> {
+  ): Promise<ToolDetailCacheEntry> {
     this.host.assertProjectionInput(input);
     if (!nonBlank(input.detailRef) || input.detailRef.length > 128) {
       throw new Error("Native agent tool detail reference is invalid");
@@ -169,6 +186,13 @@ export class NativeAgentToolDetailReads {
       );
     }
     this.context.parts.touchToolDetail(input.detailRef, entry);
+    return entry;
+  }
+
+  async getProjectionToolDetails(
+    input: NativeAgentProjectionInput & { detailRef: string },
+  ): Promise<NativeAgentToolDetails> {
+    const entry = await this.loadToolDetailEntry(input);
     if (entry.remote && !entry.remote.resolved) {
       // Two views expanding the same row share one provider read. The key is
       // the session-scoped reference, so sharing never crosses sessions.

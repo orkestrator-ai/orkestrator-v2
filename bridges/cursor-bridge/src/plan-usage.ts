@@ -20,6 +20,7 @@ import {
 } from "@orkestrator/protocol/node/cursor-plan-usage";
 import { CATALOG_TIMEOUT_MS } from "./config.js";
 import { resolveCredential } from "./credentials.js";
+import { everySessionStateChanged } from "./state-revision.js";
 
 export { accountWindowsFromPlanUsage, CURSOR_PLAN_WINDOW, DEFAULT_PLAN_LABELS, isPlanQuotaWindow };
 
@@ -107,7 +108,10 @@ async function loadPlanAccountWindows(options?: {
   const period = await dashboardRequest(token, "GetCurrentPeriodUsage", fetchImpl, timeoutMs);
   const windows = accountWindowsFromPlanUsage(period);
   if (windows.length > 0) {
+    const changed = JSON.stringify(windows) !== JSON.stringify(cachedPlan?.windows);
     cachedPlan = { windows, expiresAt: now() + ACCOUNT_USAGE_TTL_MS };
+    // Every session's `contextUsage.account` carries these windows.
+    if (changed) everySessionStateChanged();
     return windows;
   }
   return cachedPlan?.windows;

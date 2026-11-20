@@ -1,6 +1,7 @@
 import type { ParkedDeadline, SessionState } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { syncPromptTurnClock } from "./acp-prompt-clock.js";
+import { markSessionChanged } from "./acp-state-revision.js";
 
 /** The two families of parked request a user can pause. */
 export type AcpHoldFamily = "approvals" | "interactions";
@@ -51,7 +52,7 @@ export function holdParkedRequest(
   if (result === "applied") {
     syncPromptTurnClock(state);
     // The published `expiresAt` and `hold` moved; readers key on revision.
-    state.revision += 1;
+    markSessionChanged(state);
     schedulePersist();
   }
   return {

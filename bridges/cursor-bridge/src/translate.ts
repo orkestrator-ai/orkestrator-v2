@@ -32,6 +32,7 @@ import {
 } from "@orkestrator/protocol/node/transcript-budget";
 import { nextPartOrdinal } from "@orkestrator/protocol/transcript-part-ids";
 import { renderToolCall, type RenderedToolCall } from "./tool-rendering.js";
+import { sessionChanged, stateChanged, transcriptChanged } from "./state-revision.js";
 import {
   appendBounded,
   appendTurnOutput,
@@ -266,6 +267,8 @@ function applyUpdate(state: SessionState, update: unknown, context: UpdateContex
       state.health.recordUnknown(
         update.type in HANDLED_UPDATE_TYPES ? `unrendered:${update.type}` : update.type,
       );
+      // `/status` reports the drift (`runtime.drift`).
+      stateChanged(state);
       break;
   }
 }
@@ -366,6 +369,8 @@ function applyToolCall(
     // The list is session-wide, so hold the newest one for restart recovery
     // as well as stamping it on the card that carried it.
     state.todos = rendered.todos;
+    // `/status` reports the list's length (`runtime.todos`).
+    stateChanged(state);
   }
   if (rendered.subagent) applySubagentLifecycle(state, part, rendered, phase);
 
@@ -480,7 +485,7 @@ export function settleBackgroundChildren(state: SessionState): void {
       noteRowRevised(state, message.id);
     }
   }
-  state.revision += 1;
+  transcriptChanged(state);
 }
 
 /** What a card says once nothing can observe its child any more. */
@@ -559,7 +564,7 @@ export function settleAbandonedToolParts(state: SessionState): void {
       );
     }
   }
-  state.revision += 1;
+  transcriptChanged(state);
 }
 
 function applyShellOutputDelta(
@@ -998,7 +1003,7 @@ function applyTokenDelta(state: SessionState, value: unknown): void {
   state.currentRunUsageUpdatedAt = new Date().toISOString();
   // Like exact usage-only updates, a token estimate must advance the snapshot
   // revision so pollers can observe it even when no transcript text changed.
-  state.revision += 1;
+  sessionChanged(state);
 }
 
 const usageKeys = [
@@ -1052,7 +1057,7 @@ function publishRunUsage(state: SessionState): void {
   state.currentRunUsageUpdatedAt = new Date().toISOString();
   // Token-only updates otherwise leave the revision unchanged, so a consumer
   // watching snapshots by revision would not know that the live meter moved.
-  state.revision += 1;
+  sessionChanged(state);
 }
 
 /**

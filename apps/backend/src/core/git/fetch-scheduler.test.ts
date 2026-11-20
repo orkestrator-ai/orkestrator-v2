@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { quoteShell } from "../commands-agent-support.js";
+import { createGitFetchScheduler } from "../diff-stats-tracking.js";
+import { recurringWorkMetrics, RecurringWorkMetrics } from "../recurring-work-metrics.js";
 import { CommandFailedError, runCommand } from "../shell.js";
 import { backgroundFetchArgs } from "./background-fetch.js";
 import { GitFetchScheduler } from "./fetch-scheduler.js";
@@ -45,7 +47,7 @@ beforeEach(async () => {
   clone = path.join(root, "clone");
   const gitconfig = path.join(root, "gitconfig");
   await fs.writeFile(gitconfig, "");
-  env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: gitconfig };
+  env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: gitconfig, LC_ALL: "C" };
   await fs.mkdir(upstream);
   await git(["init", "-q", "-b", "main"], upstream);
   await commit("one");
@@ -87,7 +89,8 @@ describe("isRefLockContentionFailure", () => {
   });
 
   test("does not match a timed-out command or a plain error", () => {
-    const stderr = "error: cannot lock ref 'refs/remotes/origin/main'";
+    const stderr =
+      "error: cannot lock ref 'refs/remotes/origin/main': is at 1111111 but expected 2222222";
     expect(
       isRefLockContentionFailure(new CommandFailedError("t", { stderr, timedOut: true })),
     ).toBe(false);
@@ -96,33 +99,44 @@ describe("isRefLockContentionFailure", () => {
 });
 
 describe("GitFetchScheduler with a contended ref", () => {
-  test("a fetch that lost the ref to another process succeeds on its retry", async () => {
-    const metrics = new RecurringWorkMetrics();
-    const attempts: number[] = [];
+  test("the production scheduler retries a real lock failure under French locale settings", async () => {
     await fs.writeFile(lockPath(), "");
-    const scheduler = new GitFetchScheduler({
-      metrics,
-      lockRetryDelayMs: 0,
-      run: async (args, timeoutMs) => {
-        if (args[2] !== "fetch") return runCommand("git", args, { env, timeoutMs });
-        attempts.push(attempts.length);
-        try {
-          return await runCommand("git", args, { env, timeoutMs });
-        } finally {
-          // The competing process finishes and releases the ref.
-          await fs.rm(lockPath(), { force: true });
-        }
-      },
-    });
+    const attempts = path.join(root, "fetch-locales");
+    const uploadPack = path.join(root, "upload-pack");
+    // Release the competing lock when the second fetch reaches the remote.
+    await fs.writeFile(
+      uploadPack,
+      `if test -f ${quoteShell(attempts)}; then rm -f ${quoteShell(lockPath())}; fi\n` +
+        `printf '%s\\n' "$LC_ALL" >> ${quoteShell(attempts)}\n` +
+        'exec git-upload-pack "$@"\n',
+    );
+    await git(["config", "remote.origin.uploadpack", `sh ${quoteShell(uploadPack)}`], clone);
+    // LANGUAGE selects the French Git catalogue where it is installed. Inspect
+    // both commands' effective locale even on hosts without that catalogue.
+    const hostEnv = {
+      LC_ALL: "en_US.UTF-8",
+      LANGUAGE: "fr",
+      GIT_CONFIG_GLOBAL: env.GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_NOSYSTEM: env.GIT_CONFIG_NOSYSTEM,
+    };
+    const saved = { ...process.env };
+    const before = recurringWorkMetrics.snapshot().kinds["git-fetch-local"];
+    try {
+      Object.assign(process.env, hostEnv);
+      await createGitFetchScheduler().ensureFetched(clone, "main");
+    } finally {
+      for (const key of Object.keys(hostEnv)) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
 
-    await scheduler.ensureFetched(clone, "main");
-
-    expect(attempts).toHaveLength(2);
+    expect(await fs.readFile(attempts, "utf8")).toBe("C\nC\n");
     expect(await tip(clone, "refs/remotes/origin/main")).toBe(await tip(upstream, "HEAD"));
-    expect(metrics.snapshot().kinds["git-fetch-local"]).toMatchObject({
-      started: 1,
-      completed: 1,
-      failed: 0,
+    expect(recurringWorkMetrics.snapshot().kinds["git-fetch-local"]).toMatchObject({
+      started: (before?.started ?? 0) + 1,
+      completed: (before?.completed ?? 0) + 1,
+      failed: before?.failed ?? 0,
     });
   });
 
@@ -143,5 +157,29 @@ describe("GitFetchScheduler with a contended ref", () => {
 
     expect(fetches).toBe(2);
     expect(metrics.snapshot().kinds["git-fetch-local"]).toMatchObject({ started: 1, failed: 1 });
+  });
+
+  test("a stale parent tracking ref blocks the new child branch without a retry", async () => {
+    await git(["update-ref", "refs/remotes/origin/release", "HEAD"], clone);
+    await git(["branch", "release/v2"], upstream);
+    const metrics = new RecurringWorkMetrics();
+    let fetches = 0;
+    const scheduler = new GitFetchScheduler({
+      metrics,
+      lockRetryDelayMs: 0,
+      run: (args, timeoutMs) => {
+        if (args[2] === "fetch") fetches += 1;
+        return runCommand("git", args, { env, timeoutMs });
+      },
+    });
+
+    await scheduler.ensureFetched(clone, "release/v2");
+
+    expect(fetches).toBe(1);
+    expect(metrics.snapshot().kinds["git-fetch-local"]).toMatchObject({
+      started: 1,
+      completed: 0,
+      failed: 1,
+    });
   });
 });

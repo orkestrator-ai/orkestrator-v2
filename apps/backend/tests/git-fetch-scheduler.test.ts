@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import { GitFetchScheduler } from "../src/core/git/fetch-scheduler";
 import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
 import { CommandFailedError } from "../src/core/shell";
@@ -32,6 +33,8 @@ function createHarness(
     ttlMs?: number;
     fetchTimeoutMs?: number;
     resolveTimeoutMs?: number;
+    lockRetryDelayMs?: number;
+    fetchDurationsMs?: number[];
   } = {},
 ): Harness {
   const metrics = new RecurringWorkMetrics();
@@ -50,7 +53,7 @@ function createHarness(
     ttlMs: options.ttlMs,
     fetchTimeoutMs: options.fetchTimeoutMs,
     resolveTimeoutMs: options.resolveTimeoutMs,
-    lockRetryDelayMs: 0,
+    lockRetryDelayMs: options.lockRetryDelayMs ?? 0,
     metrics,
     now: () => clock.value,
     run: async (args, timeoutMs) => {
@@ -62,6 +65,7 @@ function createHarness(
         return { stdout: `${commonDirs.get(worktreePath) ?? "/repo/.git"}\n` };
       }
       fetches.push(args);
+      clock.value += options.fetchDurationsMs?.[fetches.length - 1] ?? 0;
       if (blockNext) {
         blockNext = false;
         await new Promise<void>((resolve) => {
@@ -252,6 +256,43 @@ describe("GitFetchScheduler", () => {
 
       expect(harness.fetches).toHaveLength(2);
     });
+
+    test.each([
+      { initialMs: 700, waitMs: 250, retryMs: 50 },
+      { initialMs: 700, waitMs: 300, retryMs: 0 },
+      { initialMs: 800, waitMs: 0, retryMs: 0 },
+    ])(
+      "shares the fetch deadline with a retry after $initialMs ms and a $waitMs ms wait",
+      async ({ initialMs, waitMs, retryMs }) => {
+        const clock = installControlledTimeout(250);
+        try {
+          const harness = createHarness({
+            fetchTimeoutMs: 1_000,
+            lockRetryDelayMs: 250,
+            fetchDurationsMs: [initialMs, retryMs],
+          });
+          harness.failNextFetches(
+            lockLost(),
+            new CommandFailedError("Command timed out", { timedOut: true }),
+          );
+          const pending = harness.scheduler.ensureFetched("/wt/a", "main");
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          harness.clock.value += waitMs;
+          expect(clock.advance()).toBe(waitMs > 0 ? 1 : 0);
+          await pending;
+
+          expect(harness.timeouts.slice(1)).toEqual(retryMs ? [1_000, retryMs] : [1_000]);
+          expect(harness.clock.value).toBeLessThanOrEqual(1_000);
+          expect(harness.metrics.snapshot().kinds["git-fetch-local"]).toMatchObject({
+            started: 1,
+            completed: 0,
+            failed: 1,
+          });
+        } finally {
+          clock.restore();
+        }
+      },
+    );
   });
 
   test("does not retry a fetch that failed for any other reason", async () => {
@@ -274,13 +315,31 @@ describe("GitFetchScheduler", () => {
     harness.failNextFetches(
       new CommandFailedError("Command timed out", {
         timedOut: true,
-        stderr: "error: cannot lock ref 'refs/remotes/origin/main'\n",
+        stderr:
+          "error: cannot lock ref 'refs/remotes/origin/main': is at 1111111 but expected 2222222\n",
       }),
     );
 
     await harness.scheduler.ensureFetched("/wt/a", "main");
 
     expect(harness.fetches).toHaveLength(1);
+  });
+
+  test("does not retry a generic local ref update failure", async () => {
+    const harness = createHarness();
+    harness.failNextFetches(
+      new CommandFailedError("Command failed: git fetch", {
+        exitCode: 1,
+        stderr:
+          "error: cannot lock ref 'refs/remotes/origin/main': Permission denied\n" +
+          " ! 2222222..3333333  main       -> origin/main  (unable to update local ref)\n",
+      }),
+    );
+
+    await harness.scheduler.ensureFetched("/wt/a", "main");
+
+    expect(harness.fetches).toHaveLength(1);
+    expect(harness.metrics.snapshot().kinds["git-fetch-local"]).toMatchObject({ failed: 1 });
   });
 
   test("resolves the common dir once per worktree", async () => {

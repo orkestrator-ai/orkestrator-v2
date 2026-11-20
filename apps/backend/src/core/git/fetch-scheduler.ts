@@ -25,9 +25,9 @@
  *
  * A fetch that loses a race for the ref it updates (another Git process in the
  * same repository moved or locked `origin/<ref>` at that moment, see
- * {@link isRefLockContentionFailure}) is retried once after a short pause. The
- * project's own refresh fetches `--prune origin` into the same shared refs, so
- * without the retry those collisions were most of the job's failures.
+ * {@link isRefLockContentionFailure}) can retry once after a short pause if the
+ * original fetch budget allows it. The project's own refresh fetches
+ * `--prune origin` into the same shared refs and can cause these collisions.
  */
 
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
@@ -79,7 +79,7 @@ export class GitFetchScheduler {
   constructor(options: GitFetchSchedulerOptions) {
     this.run = options.run;
     this.ttlMs = options.ttlMs ?? DEFAULT_GIT_FETCH_TTL_MS;
-    this.now = options.now ?? (() => Date.now());
+    this.now = options.now ?? (() => performance.now());
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? 60_000;
     this.resolveTimeoutMs = options.resolveTimeoutMs ?? 10_000;
     this.lockRetryDelayMs = options.lockRetryDelayMs ?? DEFAULT_GIT_FETCH_LOCK_RETRY_DELAY_MS;
@@ -140,12 +140,17 @@ export class GitFetchScheduler {
    */
   private async fetch(worktreePath: string, ref: string): Promise<void> {
     const args = ["-C", worktreePath, "fetch", ...backgroundFetchArgs(ref)];
+    const deadline = this.fetchTimeoutMs === 0 ? Infinity : this.now() + this.fetchTimeoutMs;
     try {
       await this.run(args, this.fetchTimeoutMs);
     } catch (error) {
       if (!isRefLockContentionFailure(error)) throw error;
+      // Reserve at least one millisecond for Git, where zero disables its timeout.
+      if (deadline - this.now() < this.lockRetryDelayMs + 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, this.lockRetryDelayMs));
-      await this.run(args, this.fetchTimeoutMs);
+      const remainingMs = Math.floor(deadline - this.now());
+      if (remainingMs < 1) throw error;
+      await this.run(args, deadline === Infinity ? 0 : remainingMs);
     }
   }
 

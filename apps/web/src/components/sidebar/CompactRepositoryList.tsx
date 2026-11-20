@@ -1,9 +1,18 @@
-import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { Loader2, Plus } from "lucide-react";
 import { useFederation } from "@/components/federation/FederationProvider";
 import { CommandNodeHomeIcon } from "@/components/federation/MachineDot";
 import { CoordinatorActivityIcon } from "@/components/projects/CoordinatorActivityIcon";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useHoverPopoverGroup, type HoverPopoverGroup } from "@/components/ui/hover-popover";
 import type { MachineView } from "@/lib/federation/aggregate";
 import { openMachineWorkspace, openRepository } from "@/lib/federation/open-workspace";
 import { projectLandingBoardTab } from "@/lib/federation/window-grouping";
@@ -27,6 +36,10 @@ import {
   type CompactRepository,
   type CompactRepositoryStatus,
 } from "./compact-repositories";
+import {
+  CompactRepositoryPopover,
+  type CompactEnvironmentRendering,
+} from "./CompactRepositoryPopover";
 
 const ICON_BUTTON_CLASS =
   "flex size-11 shrink-0 items-center justify-center rounded-lg outline-hidden hover:bg-hover focus-hairline";
@@ -120,71 +133,111 @@ function useCompactStatuses(
   ]);
 }
 
+/** Whether focus arrived from the keyboard; a click's focus opens nothing. */
+function focusVisible(element: HTMLElement): boolean {
+  try {
+    return element.matches(":focus-visible");
+  } catch {
+    return false;
+  }
+}
+
 function CompactRepositoryIcon({
   repository,
   status,
   selected,
+  popover,
+  popoverId,
+  popoverOpen,
   onOpen,
+  onOpenPopover,
+  buttonRef: registerButton,
+  takeSuppressedFocus,
 }: {
   repository: CompactRepository;
   status: CompactRepositoryStatus;
   selected: boolean;
+  popover: HoverPopoverGroup<string>;
+  popoverId: string;
+  popoverOpen: boolean;
   onOpen: () => void;
+  /** Opens the popover from the keyboard and moves focus into it. */
+  onOpenPopover: () => void;
+  buttonRef: (element: HTMLButtonElement | null) => void;
+  /** True once when focus returned here from the popover: that focus must not reopen it. */
+  takeSuppressedFocus: () => boolean;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (selected) buttonRef.current?.scrollIntoView?.({ block: "nearest" });
   }, [selected]);
+  const { key } = repository;
   return (
-    <li data-testid="compact-repository" data-repository={repository.key}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            ref={buttonRef}
-            type="button"
-            aria-label={[repository.name, ...status.labels].join(", ")}
-            aria-current={selected ? "page" : undefined}
-            data-selected={selected || undefined}
-            className={cn(
-              ICON_BUTTON_CLASS,
-              selected && "bg-linear-to-r from-selected to-selected-edge",
-            )}
-            onClick={onOpen}
-          >
-            {/* Everything but the tile sits outside the flow, so status never moves it. */}
-            <span className="relative inline-flex">
-              <CoordinatorActivityIcon state={status.ring} ringRadiusClassName="rounded-[11px]">
-                {/* The tile is translucent; this keeps the halo around it, not through it. */}
-                <span className="rounded-lg bg-sidebar">
-                  <CommandNodeHomeIcon
-                    colorToken={repository.colorToken}
-                    projectIcon={repository.icon}
-                  />
-                </span>
-              </CoordinatorActivityIcon>
-              {status.badge ? (
-                <span
-                  data-testid="compact-repository-badge"
-                  data-badge={status.badge}
-                  aria-hidden="true"
-                  className={cn(
-                    "absolute -top-1 -right-1 z-20 size-2.5 rounded-full ring-2 ring-sidebar",
-                    "forced-colors:bg-[CanvasText] bg-amber-400",
-                  )}
-                />
-              ) : null}
+    <li data-testid="compact-repository" data-repository={key}>
+      <button
+        ref={(element) => {
+          buttonRef.current = element;
+          registerButton(element);
+        }}
+        type="button"
+        aria-label={[repository.name, ...status.labels].join(", ")}
+        aria-current={selected ? "page" : undefined}
+        aria-haspopup="dialog"
+        aria-expanded={popoverOpen}
+        aria-controls={popoverOpen ? popoverId : undefined}
+        aria-keyshortcuts="ArrowRight"
+        data-selected={selected || undefined}
+        className={cn(
+          ICON_BUTTON_CLASS,
+          selected && "bg-linear-to-r from-selected to-selected-edge",
+        )}
+        onClick={onOpen}
+        onPointerEnter={() => popover.enter(key)}
+        onPointerLeave={() => popover.leave(key)}
+        onFocus={(event) => {
+          if (takeSuppressedFocus()) return;
+          if (focusVisible(event.currentTarget)) popover.openNow(key);
+        }}
+        onBlur={(event) => {
+          const next = event.relatedTarget as HTMLElement | null;
+          if (next && document.getElementById(popoverId)?.contains(next)) return;
+          popover.blurred(key);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight") {
+            event.preventDefault();
+            onOpenPopover();
+          } else if (event.key === "Escape" && popoverOpen) {
+            event.preventDefault();
+            event.stopPropagation();
+            popover.close();
+          }
+        }}
+      >
+        {/* Everything but the tile sits outside the flow, so status never moves it. */}
+        <span className="relative inline-flex">
+          <CoordinatorActivityIcon state={status.ring} ringRadiusClassName="rounded-[11px]">
+            {/* The tile is translucent; this keeps the halo around it, not through it. */}
+            <span className="rounded-lg bg-sidebar">
+              <CommandNodeHomeIcon
+                colorToken={repository.colorToken}
+                projectIcon={repository.icon}
+              />
             </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={6}>
-          <span className="font-medium">{repository.name}</span>
-          {status.labels.map((label) => (
-            <span key={label} className="block text-muted-foreground">
-              {label}
-            </span>
-          ))}
-        </TooltipContent>
-      </Tooltip>
+          </CoordinatorActivityIcon>
+          {status.badge ? (
+            <span
+              data-testid="compact-repository-badge"
+              data-badge={status.badge}
+              aria-hidden="true"
+              className={cn(
+                "absolute -top-1 -right-1 z-20 size-2.5 rounded-full ring-2 ring-sidebar",
+                "forced-colors:bg-[CanvasText] bg-amber-400",
+              )}
+            />
+          ) : null}
+        </span>
+      </button>
     </li>
   );
 }
@@ -211,8 +264,10 @@ function handleListKeyDown(event: KeyboardEvent<HTMLUListElement>) {
 
 /**
  * The sidebar's compact mode: one large icon per top-level repository, with no
- * text but the tooltips. Clicking one opens what its row or repository heading
- * opens; the sidebar stays compact.
+ * text of its own. Clicking one opens what its row or repository heading
+ * opens; the sidebar stays compact. Resting the pointer on one (or focusing it
+ * from the keyboard) slides out a popover listing its environments with the
+ * full sidebar's rows (`CompactRepositoryPopover`); only one is ever shown.
  */
 export function CompactRepositoryList({
   machines,
@@ -220,6 +275,7 @@ export function CompactRepositoryList({
   environments,
   loading,
   onAddProject,
+  rendering,
 }: {
   /** The machines the window names; empty uses `localProjects`. */
   machines: readonly MachineView[];
@@ -228,10 +284,13 @@ export function CompactRepositoryList({
   environments: readonly Environment[];
   loading: boolean;
   onAddProject: () => void;
+  /** How the popover lists a repository's environments. */
+  rendering: Omit<CompactEnvironmentRendering, "machines">;
 }) {
   const { portalState } = useFederation();
   const layout = usePortalLayout();
   const selectProject = useUIStore((state) => state.selectProject);
+  const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const remoteActive = useRemoteWorkspaceStore((state) => state.active);
 
@@ -243,6 +302,45 @@ export function CompactRepositoryList({
     [layout, localProjects, machines, portalState.selfId],
   );
   const statuses = useCompactStatuses(repositories, environments);
+
+  const popover = useHoverPopoverGroup<string>();
+  const popoverId = useId();
+  const buttons = useRef(new Map<string, HTMLButtonElement>());
+  const suppressFocusOpen = useRef(false);
+  const [focusPending, setFocusPending] = useState(false);
+  // The repository the popover shows, kept while it slides closed.
+  const [shownKey, setShownKey] = useState<string | null>(null);
+  if (popover.openKey !== null && popover.openKey !== shownKey) setShownKey(popover.openKey);
+  const shownRepository = repositories.find((repository) => repository.key === shownKey) ?? null;
+  const popoverOpen = popover.openKey !== null && shownRepository !== null;
+  const selectionKey = popoverOpen ? shownKey : null;
+  // Checked rows belong to the repository currently shown in the panel.
+  useEffect(() => {
+    if (selectionKey !== null) return clearMultiSelection;
+  }, [clearMultiSelection, selectionKey]);
+  const popoverRendering = useMemo(() => ({ ...rendering, machines }), [machines, rendering]);
+  const clearFocusPending = useCallback(() => setFocusPending(false), []);
+  const takeSuppressedFocus = () => {
+    const suppressed = suppressFocusOpen.current;
+    suppressFocusOpen.current = false;
+    return suppressed;
+  };
+  const getAnchor = useCallback(
+    () => (shownKey ? (buttons.current.get(shownKey) ?? null) : null),
+    [shownKey],
+  );
+
+  const dismissPopover = (returnFocus: boolean) => {
+    const button = shownKey ? buttons.current.get(shownKey) : undefined;
+    popover.close();
+    setFocusPending(false);
+    if (returnFocus && button) {
+      suppressFocusOpen.current = true;
+      button.focus();
+      // A focus that did not move (it was already there) leaves nothing to suppress.
+      suppressFocusOpen.current = false;
+    }
+  };
 
   const isSelected = (repository: CompactRepository) =>
     repository.members.some(({ machine, projectId }) =>
@@ -323,11 +421,46 @@ export function CompactRepositoryList({
               repository={repository}
               status={statuses.get(repository.key) ?? compactRepositoryStatus([])}
               selected={isSelected(repository)}
+              popover={popover}
+              popoverId={popoverId}
+              popoverOpen={popoverOpen && popover.openKey === repository.key}
               onOpen={() => open(repository)}
+              onOpenPopover={() => {
+                popover.openNow(repository.key);
+                setFocusPending(true);
+              }}
+              buttonRef={(element) => {
+                if (element) buttons.current.set(repository.key, element);
+                else buttons.current.delete(repository.key);
+              }}
+              takeSuppressedFocus={takeSuppressedFocus}
             />
           ))}
         </ul>
       )}
+      <CompactRepositoryPopover
+        id={popoverId}
+        repository={shownRepository}
+        status={shownKey ? statuses.get(shownKey) : undefined}
+        getAnchor={getAnchor}
+        open={popoverOpen}
+        rendering={popoverRendering}
+        autoFocus={focusPending}
+        onAutoFocused={clearFocusPending}
+        onPointerEnter={() => {
+          if (popover.openKey !== null) popover.enter(popover.openKey);
+        }}
+        onPointerLeave={() => {
+          if (shownKey !== null) popover.leave(shownKey);
+        }}
+        onDismiss={dismissPopover}
+        onFocusInside={() => {
+          if (popover.openKey !== null) popover.openNow(popover.openKey);
+        }}
+        onBlurOutside={() => {
+          if (shownKey !== null) popover.blurred(shownKey);
+        }}
+      />
     </nav>
   );
 }

@@ -540,15 +540,15 @@ export function HierarchicalSidebar() {
     [applySidebarView, isMobile],
   );
 
-  // Compact has no environment rows to act on.
+  // The compact list starts with its own selection, scoped to the open repository.
   useEffect(() => {
-    if (compactActive && isMultiSelectMode) clearMultiSelection();
-  }, [clearMultiSelection, compactActive, isMultiSelectMode]);
+    if (compactActive) clearMultiSelection();
+  }, [clearMultiSelection, compactActive]);
 
   // Handle Escape key to clear multi-selection
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && isMultiSelectMode) {
+      if (e.key === "Escape" && !e.defaultPrevented && isMultiSelectMode) {
         clearMultiSelection();
       }
     };
@@ -1423,6 +1423,11 @@ export function HierarchicalSidebar() {
           environments={allEnvironments}
           loading={projectsLoading}
           onAddProject={() => setShowAddProjectDialog(true)}
+          rendering={{
+            ordering: environmentOrdering,
+            bound: boundRendering,
+            projectEnvironments: getProjectEnvironments,
+          }}
         />
       ) : (
         <div ref={listScrollRef} data-sidebar-scroll className="min-h-0 flex-1 overflow-y-auto">

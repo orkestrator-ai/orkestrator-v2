@@ -8,6 +8,18 @@ import { sidebarPanelConstraints, type SidebarPanelMode } from "@/lib/sidebar-wi
 import { useUIStore } from "@/stores/uiStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 
+/** No environments: the compact popover shows its empty state. */
+const COMPACT_RENDERING = {
+  ordering: "machine",
+  bound: {
+    renderEnvironment: () => null,
+    selectedEnvironmentId: null,
+    onDragEnd: () => {},
+    onCreate: () => {},
+  },
+  projectEnvironments: () => [],
+} as const;
+
 /** Real panels with the shell's pinning and constraints, without backend dependencies. */
 export function SidebarMotionFixture() {
   const [mode, setMode] = useState<SidebarPanelMode>("full");
@@ -69,6 +81,7 @@ export function SidebarMotionFixture() {
                   environments={[]}
                   loading={false}
                   onAddProject={() => {}}
+                  rendering={COMPACT_RENDERING}
                 />
               </FederationProvider>
             ) : (

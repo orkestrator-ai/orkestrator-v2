@@ -99,8 +99,10 @@ export interface EnvironmentRowModel {
   deleteFailureText: string | null;
   /**
    * The line under the name saying what it needs from the user: waiting on
-   * them, or finished work nobody has seen. `null` while it works, while it is
-   * idle and seen, and while it is being deleted.
+   * them, or unread work that needs more than the bell to explain (a failure,
+   * a question, setup approval). `null` while it works, while it is idle and
+   * seen, while it is being deleted, and for a plain unread finish, which the
+   * bell beside the name marks on its own.
    */
   attention: EnvironmentRowAttention | null;
   /** Multi-select can take it: not a delete in flight. */
@@ -140,14 +142,17 @@ export interface EnvironmentRowAttention {
   readsPending: boolean;
 }
 
-/** Words for unread work the agent is no longer blocked on. */
+/**
+ * Words for unread work the agent is no longer blocked on. `null` draws no
+ * line: a plain finish is marked by the unread bell beside the name alone.
+ */
 const UNREAD_TEXT: Record<
   NodeUnreadReason,
-  { tone: EnvironmentRowAttention["tone"]; text: string }
+  { tone: EnvironmentRowAttention["tone"]; text: string } | null
 > = {
-  agent_finished: { tone: "unread", text: "Finished · result unread" },
+  agent_finished: null,
   agent_ready: { tone: "unread", text: "Ready for input · unread" },
-  terminal_finished: { tone: "unread", text: "Finished · result unread" },
+  terminal_finished: null,
   agent_failed: { tone: "failed", text: "Failed · error unread" },
   agent_waiting: { tone: "unread", text: "Stopped for input · unread" },
   agent_question: { tone: "unread", text: "Asked a question · unread" },
@@ -179,7 +184,7 @@ function rowAttention(facts: EnvironmentRowFacts): EnvironmentRowAttention | nul
   const unread = facts.unreadReason
     ? UNREAD_TEXT[facts.unreadReason]
     : { tone: "unread" as const, text: "New activity · unread" };
-  return { ...unread, since: null, readsPending: false };
+  return unread ? { ...unread, since: null, readsPending: false } : null;
 }
 
 const MINUTE_MS = 60_000;

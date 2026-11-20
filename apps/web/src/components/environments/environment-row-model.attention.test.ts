@@ -102,12 +102,11 @@ describe("a row's attention line", () => {
   test("unread work says what finished", () => {
     const text = (unreadReason: EnvironmentRowFacts["unreadReason"]) =>
       attention({ hasUnreadWork: true, unreadReason });
-    expect(text("agent_finished")).toMatchObject({
+    expect(text("agent_ready")).toMatchObject({
       tone: "unread",
-      text: "Finished · result unread",
+      text: "Ready for input · unread",
     });
-    expect(text("agent_ready")?.text).toBe("Ready for input · unread");
-    expect(text("terminal_finished")?.text).toBe("Finished · result unread");
+    expect(text("agent_waiting")?.text).toBe("Stopped for input · unread");
     expect(text("agent_failed")).toMatchObject({ tone: "failed", text: "Failed · error unread" });
     expect(text("agent_question")?.text).toBe("Asked a question · unread");
     expect(text("setup_approval")).toMatchObject({
@@ -117,9 +116,22 @@ describe("a row's attention line", () => {
     expect(text("marked_unread")?.text).toBe("Marked unread");
     expect(text(null)?.text).toBe("New activity · unread");
     // Pending detail never replaces unread wording.
-    expect(environmentAttentionText(text("agent_finished")!, pending, NOW)).toBe(
-      "Finished · result unread",
+    expect(environmentAttentionText(text("agent_ready")!, pending, NOW)).toBe(
+      "Ready for input · unread",
     );
+  });
+
+  test("a plain unread finish draws no line: the bell beside the name marks it", () => {
+    for (const unreadReason of ["agent_finished", "terminal_finished"] as const) {
+      expect(attention({ hasUnreadWork: true, unreadReason })).toBeNull();
+      // Stopped, or seen from an unreachable machine, it is still only the bell.
+      expect(attention({ hasUnreadWork: true, unreadReason, running: false })).toBeNull();
+      expect(attention({ hasUnreadWork: true, unreadReason, live: false })).toBeNull();
+    }
+    // Waiting on the user still says so, whatever finished before.
+    expect(
+      attention({ activity: "waiting", hasUnreadWork: true, unreadReason: "agent_finished" }),
+    ).toMatchObject({ tone: "waiting", text: "Waiting for you" });
   });
 
   test("a row being deleted, or whose delete failed, shows no line", () => {

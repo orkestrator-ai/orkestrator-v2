@@ -1,5 +1,6 @@
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
+import type { WorkspaceWorkTarget } from "@/lib/federation/workspace-request";
 import {
   claimSidebarAction,
   releaseSidebarAction,
@@ -27,6 +28,7 @@ export interface FederatedEnvironmentActions {
   writable: boolean;
   /** Selects a row of this window's machine; switches to another machine's workspace. */
   open: () => void;
+  openUnreadResult: () => void;
   /** As `open`, then shows one of its tabs (the one an attention line names). */
   openTab: (tabId: string, interactionId?: string) => void;
   copyLink: () => void;
@@ -112,36 +114,14 @@ export function useFederatedEnvironmentActions(
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const busy = useSidebarActionStore((state) => state.pending.has(environment.key));
 
-  const open = () => {
+  const openEnvironment = (workTarget?: WorkspaceWorkTarget) => {
     // The phone drawer closes even when this is the environment already shown.
     noteDrawerNavigation();
     if (machine.bound) {
       selectProjectAndEnvironment(environment.projectId, environment.ref.environmentId);
+      if (workTarget) openCoordinatorWorkTarget(workTarget);
       return;
     }
-    openMachineWorkspace({
-      connectionId: machine.connectionId,
-      projectId: environment.projectId,
-      environmentId: environment.ref.environmentId,
-      title: environment.name,
-    });
-  };
-
-  const openTab = (tabId: string, interactionId?: string) => {
-    const workTarget = {
-      type: "worker-tab" as const,
-      projectId: environment.projectId,
-      environmentId: environment.ref.environmentId,
-      tabId,
-      interactionId,
-    };
-    if (machine.bound) {
-      open();
-      // This window's machine is the command scope's node.
-      openCoordinatorWorkTarget(workTarget);
-      return;
-    }
-    noteDrawerNavigation();
     openMachineWorkspace({
       connectionId: machine.connectionId,
       projectId: environment.projectId,
@@ -190,8 +170,21 @@ export function useFederatedEnvironmentActions(
   return {
     busy,
     writable: isMachineWritable(machine),
-    open,
-    openTab,
+    open: () => openEnvironment(),
+    openUnreadResult: () =>
+      openEnvironment({
+        type: "unread-result",
+        projectId: environment.projectId,
+        environmentId: environment.ref.environmentId,
+      }),
+    openTab: (tabId, interactionId) =>
+      openEnvironment({
+        type: "worker-tab",
+        projectId: environment.projectId,
+        environmentId: environment.ref.environmentId,
+        tabId,
+        interactionId,
+      }),
     copyLink,
     start: () => void runFederatedEnvironmentPower(portal, machine, environment, "start"),
     stop: () => void runFederatedEnvironmentPower(portal, machine, environment, "stop"),

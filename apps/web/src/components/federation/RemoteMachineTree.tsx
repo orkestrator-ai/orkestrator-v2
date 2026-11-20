@@ -212,11 +212,12 @@ export function RemoteEnvironmentItem({
         checked,
         onToggle: () => applySidebarModifierSelection(selectionId, { metaKey: true }),
       }}
-      onActivate={(modifiers) => {
+      onActivate={(modifiers, openUnreadResult) => {
         if (applySidebarModifierSelection(selectionId, modifiers)) return;
         // As on this window's rows, a plain click ends a multi-selection and opens the row.
         clearMultiSelection();
-        actions.open();
+        if (openUnreadResult) actions.openUnreadResult();
+        else actions.open();
       }}
       actions={{
         open: actions.open,

@@ -58,6 +58,7 @@ import {
   projectionTitle,
 } from "@/lib/changes/labels";
 import { writeText } from "@/lib/native/clipboard";
+import { isUnreadFinishReason } from "@/lib/unread-result-view";
 import { useSidebarActionStore } from "@/stores/sidebarActionStore";
 import { cn } from "@/lib/utils";
 import type { FreshnessNotice } from "@/lib/view-freshness";
@@ -465,7 +466,10 @@ export interface EnvironmentRowProps {
   /** The sidebar's multi-select; `id` is this row's id in it (`lib/sidebar-selection.ts`). */
   multiSelect?: { id: string; active: boolean; checked: boolean; onToggle: () => void };
   /** Click or Enter/Space on the row. */
-  onActivate: (modifiers: { shiftKey: boolean; metaKey: boolean }) => void;
+  onActivate: (
+    modifiers: { shiftKey: boolean; metaKey: boolean },
+    openUnreadResult: boolean,
+  ) => void;
   actions: EnvironmentRowActions;
   changes: EnvironmentRowChanges | null;
   /** The adapter owns it, so it can read details only while the card is open. */
@@ -571,7 +575,16 @@ export function EnvironmentRow({
   const activate = (event: React.MouseEvent | React.KeyboardEvent) => {
     const modified = event.shiftKey || event.metaKey || event.ctrlKey;
     if (!model.selectable && modified) return;
-    onActivate({ shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey });
+    onActivate(
+      { shiftKey: event.shiftKey, metaKey: event.metaKey || event.ctrlKey },
+      !modified &&
+        facts.live &&
+        !facts.deleting &&
+        !facts.deleteFailure &&
+        !model.attention &&
+        facts.hasUnreadWork &&
+        isUnreadFinishReason(facts.unreadReason),
+    );
     disarmDeleteShortcut();
     if (!modified) onOpened?.();
     // The environment's terminal or composer takes focus next, so the chord

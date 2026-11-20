@@ -16,6 +16,9 @@ import { MobileAppShellLayout } from "@/components/layout/MobileAppShellLayout";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { TerminalProvider } from "@/contexts/TerminalContext";
+import { useUnreadEnvironmentSync } from "@/hooks/useUnreadEnvironmentSync";
+import { useRenderedUnreadResult } from "@/lib/unread-result-view";
+import { createSessionKey } from "@/lib/utils";
 import { environmentStore, projectStore, uiStore } from "@/stores";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
@@ -28,6 +31,12 @@ const ALIGNMENT_ICON =
 const ATTENTION_TAB = "waiting-agent";
 const ATTENTION_QUESTION = "Choose a deployment window";
 const HOME_QUESTION = "Choose the project review window";
+const UNREAD_ENVIRONMENT = "p-env-1";
+const RESULT_TAB = "finished-result";
+const SIBLING_TAB = "sibling-tab";
+const RESULT_AT = "2026-10-28T15:00:00.000Z";
+const RESULT_KEY = createSessionKey(UNREAD_ENVIRONMENT, RESULT_TAB);
+const RESULT_READ = { activityAt: RESULT_AT, sessionId: "finished-session" };
 
 function attentionRegistry(environmentId: string): AgentRegistrySnapshot {
   const detail = environmentId === "p-env-2" ? HOME_QUESTION : ATTENTION_QUESTION;
@@ -115,6 +124,7 @@ function install() {
   // and a project with no repository, which is a heading of its own.
   const alignment = params.has("alignment");
   const attentionTarget = params.has("attention-target");
+  const unreadResult = params.get("unread-result");
   const activitySort = params.has("activity-sort");
   const compactPopover = params.has("compact-popover");
   const scrollRail = compactPopover && params.has("scroll");
@@ -137,6 +147,22 @@ function install() {
             : ("blocked" as const),
         };
   const storageKey = `sidebar-drag-fixture:${location.search}`;
+  const resultSeenKey = `${storageKey}:result-seen`;
+  const unreadFields: Partial<Environment> = {};
+  if (unreadResult && !sessionStorage.getItem(resultSeenKey)) {
+    unreadFields.hasUnreadWork = true;
+    unreadFields.unreadReason = unreadResult === "agent" ? "agent_finished" : "terminal_finished";
+    if (unreadResult === "terminal") {
+      unreadFields.unreadEnvironmentReason = "terminal_finished";
+    } else {
+      unreadFields.unreadSessionKeys = [RESULT_KEY];
+      if (unreadResult === "agent") {
+        unreadFields.unreadSessionEntries = [
+          { sessionKey: RESULT_KEY, reason: "agent_finished", activityAt: RESULT_AT },
+        ];
+      }
+    }
+  }
   const saved = JSON.parse(sessionStorage.getItem(storageKey) ?? "null") as {
     projects: Project[];
     layout: PortalLayout;
@@ -184,7 +210,7 @@ function install() {
           projectId: project.id,
           branch: "main",
           containerId: null,
-          status: crossMachine ? "running" : "stopped",
+          status: crossMachine || unreadResult ? "running" : "stopped",
           ...prFor(`${project.id}-env-${index}`),
           createdAt: "2026-10-22T00:00:00Z",
           networkAccessMode: "restricted",
@@ -202,6 +228,9 @@ function install() {
                 hasWaitingNativeTab: true,
                 projectHome: index === 2,
               }
+            : {}),
+          ...(unreadResult && project.id === "p" && index === 1
+            ? { lastActivityAt: RESULT_AT, ...unreadFields }
             : {}),
         })),
       );
@@ -238,6 +267,28 @@ function install() {
           return projects as T;
         case "get_environments":
           return environments.filter((env) => env.projectId === args?.projectId) as T;
+        case "set_environment_unread": {
+          const target = environments.find((env) => env.id === args?.environmentId);
+          if (!target || !unreadResult) return undefined as T;
+          calls.setState((state) => ({ writes: [...state.writes, { command, args }] }));
+          if (
+            args?.unread === false &&
+            args.expectedLastActivityAt === target.lastActivityAt &&
+            (unreadResult === "terminal" ||
+              (args.sessionKeys as string[] | undefined)?.includes(RESULT_KEY))
+          ) {
+            sessionStorage.setItem(resultSeenKey, "true");
+            Object.assign(target, {
+              hasUnreadWork: false,
+              unreadReason: undefined,
+              unreadEnvironmentReason: undefined,
+              unreadSessionKeys: undefined,
+              unreadSessionEntries: undefined,
+              unreadRevision: 1,
+            });
+          }
+          return { ...target } as T;
+        }
         case "get_node_status":
           return { nodeId: "bk_self", mode: "command" } as T;
         case "get_node_summaries":
@@ -410,6 +461,30 @@ function install() {
     selectedProjectId: null,
     selectedEnvironmentId: null,
   });
+  if (unreadResult) {
+    const panes = appCommandStore(paneLayoutStore).getState();
+    panes.finishHydration(UNREAD_ENVIRONMENT, {
+      activePaneId: "unread-pane",
+      containerId: null,
+      root: {
+        kind: "leaf",
+        id: "unread-pane",
+        activeTabId: SIBLING_TAB,
+        tabs: [
+          { id: SIBLING_TAB, type: "plain" },
+          unreadResult === "agent"
+            ? {
+                id: RESULT_TAB,
+                type: "agent-native",
+                nativeAgentData: { environmentId: UNREAD_ENVIRONMENT, platform: "claude" },
+              }
+            : { id: RESULT_TAB, type: "claude" },
+        ],
+      },
+    });
+    if (unreadResult !== "terminal")
+      appCommandStore(uiStore).getState().selectProjectAndEnvironment("p", UNREAD_ENVIRONMENT);
+  }
   useUIChromeStore.setState({
     environmentSortMode: activitySort || crossMachine ? "activity" : "project",
     activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
@@ -423,6 +498,33 @@ function install() {
     collapsedFolderKeys: [],
   });
   return calls;
+}
+
+/** Fixture content reports into the same acknowledgement path as a native transcript. */
+function UnreadResultWorkspace() {
+  const selected = useUIStore((state) => state.selectedEnvironmentId);
+  const activeTabId = usePaneLayoutStore(
+    (state) => state.getActivePane(UNREAD_ENVIRONMENT)?.activeTabId,
+  );
+  const [renderResult, setRenderResult] = useState(false);
+  const resultActive = selected === UNREAD_ENVIRONMENT && activeTabId === RESULT_TAB;
+  useRenderedUnreadResult(RESULT_KEY, resultActive && renderResult ? RESULT_READ : undefined);
+  useUnreadEnvironmentSync();
+  return (
+    <section aria-label="Selected tab" className="m-2 rounded border border-border p-2">
+      {selected !== UNREAD_ENVIRONMENT ? (
+        <p>Another environment</p>
+      ) : !resultActive ? (
+        <p>Sibling tab</p>
+      ) : renderResult ? (
+        <p>Completed result</p>
+      ) : (
+        <button type="button" onClick={() => setRenderResult(true)}>
+          Render finished result
+        </button>
+      )}
+    </section>
+  );
 }
 
 function AttentionTargetTranscript() {
@@ -518,6 +620,7 @@ export function SidebarDragFixture() {
   const { writes } = useStore(calls);
   const params = new URLSearchParams(location.search);
   const attentionTarget = params.has("attention-target");
+  const unreadResult = params.has("unread-result");
   return (
     <DockerAvailabilityProvider available={false}>
       <TerminalProvider>
@@ -527,9 +630,15 @@ export function SidebarDragFixture() {
           ) : (
             <main className="h-screen max-w-sm bg-background text-foreground">
               {!attentionTarget && (
-                <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
+                <output
+                  data-testid="sidebar-writes"
+                  className={unreadResult ? "sr-only" : undefined}
+                >
+                  {JSON.stringify(writes)}
+                </output>
               )}
               {attentionTarget && <AttentionTargetTranscript />}
+              {unreadResult && <UnreadResultWorkspace />}
               <HierarchicalSidebar />
             </main>
           )}

@@ -83,9 +83,10 @@ function AttentionIcon({
 
 /**
  * The second line of an environment row that needs the user: what a waiting
- * agent waits on ("Needs approval: Run bun install · 8 min"), or finished work
- * nobody has opened ("Finished · result unread"). Clicking it opens the tab
- * holding the request, or the environment when no tab is known.
+ * agent waits on ("Needs approval: Run bun install · 8 min"), or unread work
+ * the bell alone does not explain ("Failed · error unread"). A plain unread
+ * finish has no line; its bell is enough. Clicking it opens the tab holding
+ * the request, or the environment when no tab is known.
  *
  * The request is read from the owning machine's agent registry only while the
  * agent waits (`attention.readsPending`), and kept current by the same events

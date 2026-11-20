@@ -231,6 +231,18 @@ test("a remote waiting row sends the named interaction to the owning workspace",
   });
 });
 
+test("a remote finished row asks its owning workspace to open the unread result", async () => {
+  const row = environment("feature", { hasUnreadWork: true, unreadReason: "agent_finished" });
+  renderWithFederation(<RemoteEnvironmentItem machine={machineView([row])} environment={row} />);
+  await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
+  fireEvent.click(screen.getByLabelText("New completed activity"));
+  expect(useRemoteWorkspaceStore.getState().requests.a?.request).toMatchObject({
+    projectId: "project-1",
+    environmentId: "feature",
+    workTarget: { type: "unread-result", environmentId: "feature" },
+  });
+});
+
 test("another machine's repository heading shows its home's activity and no mail count", async () => {
   const home = environment("home", {
     isProjectHome: true,

@@ -256,7 +256,7 @@ describe("EnvironmentAttentionLine", () => {
         environmentId="env-1"
         attention={{
           tone: "unread",
-          text: "Finished · result unread",
+          text: "Ready for input · unread",
           since: null,
           readsPending: false,
         }}
@@ -272,7 +272,7 @@ describe("EnvironmentAttentionLine", () => {
         onOpen={() => {}}
       />,
     );
-    expect(screen.getByRole("button", { name: "Finished · result unread" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Ready for input · unread" })).toBeTruthy();
     expect(screen.getByRole("button", { name: WAITING_GENERIC })).toBeTruthy();
     expect(read).not.toHaveBeenCalled();
   });

@@ -46,6 +46,8 @@ export type WorkspaceDialog = (typeof WORKSPACE_DIALOGS)[number];
 
 /** Work on one node, opened where it runs. */
 export type WorkspaceWorkTarget =
+  /** Resolve the finished result from the owning node's environment and layout. */
+  | { type: "unread-result"; projectId: string; environmentId: string }
   /** A worker environment, at the delegated tab when known. */
   | {
       type: "worker-tab";

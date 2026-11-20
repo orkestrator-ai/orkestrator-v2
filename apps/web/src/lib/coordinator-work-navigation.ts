@@ -18,6 +18,8 @@ import { openPullRequestUrl } from "@/lib/pull-request-opener";
 import { openConversationTab } from "@/lib/web-annotations/navigation";
 import { requestInteractionFocus } from "./native-interaction-navigation";
 import { paneLayoutStore, type PaneLayoutState } from "@/stores/paneLayoutStore";
+import { environmentStore } from "@/stores/environmentStore";
+import { finishedUnreadTabId } from "./unread-result-view";
 import type { StoreApi } from "zustand/vanilla";
 import { uiStore } from "@/stores/uiStore";
 import type { CoordinatorWorkTarget } from "./coordinator-work-items";
@@ -66,18 +68,19 @@ function focusTab(scope: NodeScope, environmentId: string, tabId: string): void 
 }
 
 type ReviewTarget = Extract<CoordinatorWorkTarget, { type: "review" }>;
+type PendingTab = { kind: "named"; tabId: string } | { kind: "unread-result" };
 
 /**
  * One node's open requests still waiting for their environment's layout:
- * worker tabs and reviews, by environment, and the layout subscriptions
+ * tab activations and reviews, by environment, and the layout subscriptions
  * while any is pending (plan item 3011). The layout they wait for is the
  * node's own pane-layout store (plan item 3013).
  */
 interface CoordinatorNavigationState {
   readonly scope: NodeScope;
   readonly layouts: StoreApi<PaneLayoutState>;
-  readonly pendingWorkers: Map<string, string>;
-  offWorkers: (() => void) | undefined;
+  readonly pendingTabs: Map<string, PendingTab>;
+  offTabs: (() => void) | undefined;
   // The layout can still be hydrating when Open selects another environment.
   // Keep the intent outside React and let the normal layout persistence publish
   // a restored tab only after the authoritative snapshot has been installed.
@@ -91,39 +94,55 @@ const navigationState = defineScopedSlot<CoordinatorNavigationState>(
     const state: CoordinatorNavigationState = {
       scope,
       layouts: scope.store(paneLayoutStore),
-      pendingWorkers: new Map(),
-      offWorkers: undefined,
+      pendingTabs: new Map(),
+      offTabs: undefined,
       pendingReviews: new Map(),
       offReviews: undefined,
     };
     scope.onDispose("coordinator-work-navigation", () => {
-      state.offWorkers?.();
-      state.offWorkers = undefined;
+      state.offTabs?.();
+      state.offTabs = undefined;
       state.offReviews?.();
       state.offReviews = undefined;
-      state.pendingWorkers.clear();
+      state.pendingTabs.clear();
       state.pendingReviews.clear();
     });
     return state;
   },
 );
 
-function reconcileWorkers(state: CoordinatorNavigationState): void {
-  const { pendingWorkers } = state;
-  for (const [environmentId, tabId] of Array.from(pendingWorkers)) {
+function reconcileTabs(state: CoordinatorNavigationState): void {
+  const { pendingTabs } = state;
+  for (const [environmentId, pending] of Array.from(pendingTabs)) {
     const store = state.layouts.getState();
-    if (
-      store.hydration.get(environmentId) !== "done" ||
-      !store.findPaneWithTab(tabId, environmentId)
-    )
-      continue;
-    pendingWorkers.delete(environmentId);
-    focusTab(state.scope, environmentId, tabId);
+    if (store.hydration.get(environmentId) !== "done") continue;
+    if (pending.kind === "named" && !store.findPaneWithTab(pending.tabId, environmentId)) continue;
+    pendingTabs.delete(environmentId);
+    if (pending.kind === "named") {
+      focusTab(state.scope, environmentId, pending.tabId);
+    } else if (state.scope.store(uiStore).getState().selectedEnvironmentId === environmentId) {
+      const environment = state.scope
+        .store(environmentStore)
+        .getState()
+        .getEnvironmentById(environmentId);
+      const tabId =
+        environment && finishedUnreadTabId(environment, store.getAllTabs(environmentId));
+      if (tabId) focusTab(state.scope, environmentId, tabId);
+    }
   }
-  if (!pendingWorkers.size) {
-    state.offWorkers?.();
-    state.offWorkers = undefined;
+  if (!pendingTabs.size) {
+    state.offTabs?.();
+    state.offTabs = undefined;
   }
+}
+
+function queueTabActivation(scope: NodeScope, environmentId: string, pending: PendingTab): void {
+  const state = navigationState(scope);
+  const { pendingTabs } = state;
+  pendingTabs.set(environmentId, pending);
+  while (pendingTabs.size > 64) pendingTabs.delete(pendingTabs.keys().next().value!);
+  state.offTabs ??= state.layouts.subscribe(() => reconcileTabs(state));
+  reconcileTabs(state);
 }
 
 function reconcileReviews(state: CoordinatorNavigationState): void {
@@ -171,6 +190,11 @@ export function openCoordinatorWorkTarget(
   scope: NodeScope = appCommandScope(),
 ): void {
   switch (target.type) {
+    case "unread-result":
+      // Sidebar selection has already run. Read the owning scope after hydration
+      // so a late clear or a closed tab cannot redirect the user.
+      queueTabActivation(scope, target.environmentId, { kind: "unread-result" });
+      return;
     case "worker-tab":
       requestInteractionFocus(
         scope,
@@ -184,12 +208,7 @@ export function openCoordinatorWorkTarget(
       );
       selectEnvironment(scope, target.projectId, target.environmentId);
       if (target.tabId) {
-        const state = navigationState(scope);
-        const { pendingWorkers } = state;
-        pendingWorkers.set(target.environmentId, target.tabId);
-        while (pendingWorkers.size > 64) pendingWorkers.delete(pendingWorkers.keys().next().value!);
-        state.offWorkers ??= state.layouts.subscribe(() => reconcileWorkers(state));
-        reconcileWorkers(state);
+        queueTabActivation(scope, target.environmentId, { kind: "named", tabId: target.tabId });
       }
       return;
     case "build":

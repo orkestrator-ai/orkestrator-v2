@@ -1201,6 +1201,19 @@ history (open tabs, loaded messages, past sessions) around these results ([comma
   environment opens as from the sidebar. While a machine
   in scope is unavailable, loading or truncated the dialog (including empty-query
   recents) says "Results may be incomplete".
+- **Only while open.** `useProjectSearchResults`
+  (`apps/web/src/components/sidebar/useProjectSearchResults.ts`) prepares the
+  sources, the recent keys and the ranking only while the dialog is open.
+  Closed (the dialog's exit motion included), it returns no rows and reads none
+  of its inputs, so a change to environments, machines or recents behind a
+  closed search costs only the search bar's own render; opening ranks the
+  inputs current at that moment. `e2e/perf/project-search-open-perf.ts`
+  measures it (from to-do 8311, retired 2026-11-20). On beelink (Intel Core
+  Ultra 9 285H, headless Chromium 158, production React, 50 projects), the
+  median closed update fell from 0.8 to 0.2 ms at 500 environments and from
+  2.1 to 0.2 ms at 2,000; first open, button press to the first result row,
+  went from 7.7 to 7.0 ms at 500 (inside the run-to-run spread) and from 6.4
+  to 7.9 ms at 2,000, the ranking it no longer does in the background.
 
 ## Storage namespacing
 

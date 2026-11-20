@@ -401,6 +401,14 @@ export class BuildPipelineSupervisor {
       return;
     }
 
+    if (pipeline.pendingKanbanAdmission) {
+      const revision = await this.recovery.moveTicketOnAdmission(pipeline, record.revision);
+      if (revision !== undefined) record.revision = revision;
+      // Provisioning can continue during a transient board failure. Hold stage
+      // dispatch, including adopted Build review, until the move settles.
+      else if (pipeline.phase === "waiting-for-setup" && pipeline.sourceLinkedAt) return;
+    }
+
     if (pipeline.environmentId && !pipeline.sourceLinkedAt) {
       await this.ensureSourceLink(pipeline);
       return;

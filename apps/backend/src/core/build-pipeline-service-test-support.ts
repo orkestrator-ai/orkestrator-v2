@@ -365,7 +365,7 @@ export async function withService(
       if (options.realKanban) {
         const { taskId: _taskId, preserveDoneStatus, ...updates } = args;
         return (await storage.kanban.updateKanbanTask(taskId, updates, undefined, {
-          preserveDoneStatus: preserveDoneStatus === true,
+          lifecycle: preserveDoneStatus === true,
         })) as T;
       }
       const task = kanbanTasks.get(taskId) ?? {

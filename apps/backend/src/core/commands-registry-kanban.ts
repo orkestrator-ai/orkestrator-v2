@@ -1,3 +1,4 @@
+import { ticketHeldByBuild } from "./build-pipeline-ticket-hold.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { PrState } from "./models.js";
 import {
@@ -122,7 +123,7 @@ export function registerKanbanCommands(
       ? storage.kanban.addKanbanTask(...required, initial)
       : storage.kanban.addKanbanTask(...required);
   });
-  register(updateKanbanTaskCommand, (args, { storage }) => {
+  register(updateKanbanTaskCommand, (args, { storage, buildKanbanWrite }) => {
     const {
       taskId,
       title,
@@ -135,6 +136,7 @@ export function registerKanbanCommands(
       prState,
       prMergeCommented,
     } = args;
+    const admissionPipelineId = buildKanbanWrite?.admissionPipelineId;
     return storage.kanban.updateKanbanTask(
       asString(taskId, "taskId"),
       {
@@ -153,7 +155,18 @@ export function registerKanbanCommands(
         ...(typeof prMergeCommented === "boolean" ? { prMergeCommented } : {}),
       },
       undefined,
-      { preserveDoneStatus: args.preserveDoneStatus === true },
+      {
+        preserveDoneStatus: args.preserveDoneStatus === true,
+        ...(buildKanbanWrite && args.preserveDoneStatus === true ? { lifecycle: true } : {}),
+        ...(admissionPipelineId
+          ? {
+              canMoveOnAdmission: async () => {
+                const record = await storage.getBuildPipeline(admissionPipelineId);
+                return Boolean(record && ticketHeldByBuild(record) === taskId);
+              },
+            }
+          : {}),
+      },
     );
   });
   // A ticket whose pull request merged moves to done, once per pull request

@@ -63,7 +63,7 @@ export async function lifecycleMachine(
       case "update_kanban_task": {
         const { taskId, preserveDoneStatus, ...updates } = args;
         return (await kanban.updateKanbanTask(String(taskId), updates, undefined, {
-          preserveDoneStatus: preserveDoneStatus === true,
+          lifecycle: preserveDoneStatus === true,
         })) as T;
       }
       case "add_kanban_comment":

@@ -69,7 +69,11 @@ const log = createLogger("build-pipeline");
  */
 export const WORKTREE_PROBE_ATTEMPTS = 3;
 
-export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+export type CommandInvoker = <T>(
+  command: string,
+  args?: Record<string, unknown>,
+  kanbanWrite?: { admissionPipelineId?: string },
+) => Promise<T>;
 
 // The transcript renderer recognizes a verification answer by the same contract
 // the turn is constrained to, and the protocol package derives both that schema

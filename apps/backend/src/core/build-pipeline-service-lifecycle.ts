@@ -542,6 +542,7 @@ export class BuildPipelineLifecycle {
       taskTitle: input.taskTitle,
       taskSnapshot,
       source: input.source,
+      ...(input.source?.type === "kanban" ? { pendingKanbanAdmission: true } : {}),
       ...(deliveryPolicy ? { deliveryPolicy } : {}),
       featurePlanId: input.featurePlanId?.trim() || undefined,
       admissionKey: buildAdmissionKey(input),

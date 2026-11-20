@@ -211,11 +211,16 @@ for (const collapsed of [false, true]) {
     const target = repositoryHeading(page, "target");
     await expect(source).toBeVisible();
     if (collapsed) {
-      // No chevron: Left collapses a heading from the keyboard.
-      for (const heading of [source, target]) {
+      // Left collapses a heading from the keyboard; its chevron agrees.
+      for (const [label, heading] of [
+        ["source", source],
+        ["target", target],
+      ] as const) {
         await heading.focus();
         await heading.press("ArrowLeft");
-        await expect(heading).toHaveAttribute("aria-expanded", "false");
+        await expect(
+          page.getByRole("button", { name: `Expand project acme/${label}`, exact: true }),
+        ).toHaveAttribute("aria-expanded", "false");
       }
       await expect(page.getByText("p-env-1", { exact: true })).toHaveCount(0);
     }

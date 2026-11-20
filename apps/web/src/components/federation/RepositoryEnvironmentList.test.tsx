@@ -27,6 +27,7 @@ import {
   repositorySubtitle,
   type BoundEnvironmentRendering,
 } from "./RepositoryEnvironmentList";
+import { repositoryCollapseKey } from "./useRevealMachineProject";
 
 const REPO = "github.com/acme/app";
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
@@ -158,7 +159,7 @@ test("a repository with no environments shows only its machine count", () => {
   expect(screen.queryByText(/0 environments/) === null).toBe(true);
 });
 
-test("the + button opens New environment for the repository; collapse is on the keyboard", () => {
+test("the + button opens New environment for the repository; the keyboard collapses too", () => {
   const machines = fleet();
   renderWithFederation(
     <RepositoryEnvironmentList
@@ -169,6 +170,7 @@ test("the + button opens New environment for the repository; collapse is on the 
     />,
   );
   const add = screen.getByRole("button", { name: "New environment in acme/app" });
+  // A repository heading's chevron is a project's, never a folder's.
   expect(screen.queryByRole("button", { name: /Collapse folder/ }) === null).toBe(true);
   fireEvent.click(add);
   // No command node copy here, so it opens on the first machine shown.
@@ -176,12 +178,16 @@ test("the + button opens New environment for the repository; collapse is on the 
   expect(request).toMatchObject({ createEnvironmentProjectId: "project-1" });
 
   const heading = screen.getByRole("button", { name: "Open acme/app on mini" });
-  expect(heading.getAttribute("aria-expanded")).toBe("true");
+  const chevron = screen.getByTestId("repository-collapse-toggle");
+  expect(chevron.getAttribute("aria-expanded")).toBe("true");
   fireEvent.keyDown(heading, { key: "ArrowLeft" });
   expect(screen.queryAllByTestId("federated-environment-row")).toHaveLength(0);
-  expect(heading.getAttribute("aria-expanded")).toBe("false");
+  // The keyboard and the chevron drive the same state.
+  expect(chevron.getAttribute("aria-expanded")).toBe("false");
+  expect(chevron.getAttribute("aria-label")).toBe("Expand project acme/app");
   fireEvent.keyDown(heading, { key: "ArrowRight" });
   expect(screen.getAllByTestId("federated-environment-row")).toHaveLength(3);
+  expect(chevron.getAttribute("aria-label")).toBe("Collapse project acme/app");
 });
 
 test("the + button of the window's own copy opens this window's dialog", () => {
@@ -292,4 +298,109 @@ test("the heading menu reaches each other machine's copy for a new environment",
   expect(useRemoteWorkspaceStore.getState().requests.bk_bee?.request).toMatchObject({
     createEnvironmentProjectId: "project-1",
   });
+});
+
+function renderFleet() {
+  renderWithFederation(
+    <RepositoryEnvironmentList
+      machines={fleet()}
+      shownIds={new Set(["bk_mini", "bk_bee"])}
+      ordering="machine"
+      bound={bound()}
+    />,
+  );
+  const folder = document.querySelector<HTMLElement>("[data-project-folder]")!;
+  return {
+    folder,
+    heading: () => screen.getByRole("button", { name: "Open acme/app on mini" }),
+    add: () => screen.getByRole("button", { name: "New environment in acme/app" }),
+    chevron: () => within(folder).getByTestId("repository-collapse-toggle"),
+  };
+}
+
+test("the chevron right of the + hides and shows the project's environments", () => {
+  const { folder, heading, add, chevron } = renderFleet();
+  // The chevron sits immediately after the +, last in the row.
+  expect(add().nextElementSibling).toBe(chevron());
+  expect(chevron().parentElement!.lastElementChild).toBe(chevron());
+  expect(chevron().getAttribute("aria-expanded")).toBe("true");
+  expect(chevron().getAttribute("aria-label")).toBe("Collapse project acme/app");
+  expect(chevron().querySelector("svg")!.getAttribute("class")).toContain("rotate-90");
+
+  fireEvent.click(chevron());
+  expect(screen.queryAllByTestId("federated-environment-row")).toHaveLength(0);
+  expect(chevron().getAttribute("aria-expanded")).toBe("false");
+  expect(chevron().getAttribute("aria-label")).toBe("Expand project acme/app");
+  expect(chevron().querySelector("svg")!.getAttribute("class")).not.toContain("rotate-90");
+  // The heading, its subtitle and its + stay.
+  expect(heading()).toBeTruthy();
+  expect(within(folder).getByText("2 machines · 3 environments")).toBeTruthy();
+  expect(add()).toBeTruthy();
+
+  fireEvent.click(chevron());
+  expect(screen.getAllByTestId("federated-environment-row")).toHaveLength(3);
+  expect(chevron().getAttribute("aria-expanded")).toBe("true");
+  expect(chevron().getAttribute("aria-label")).toBe("Collapse project acme/app");
+});
+
+test("the chevron only toggles: it neither opens, drags nor creates, and they never toggle", () => {
+  const { heading, add, chevron } = renderFleet();
+  expect(chevron().tagName).toBe("BUTTON");
+  expect(chevron().getAttribute("type")).toBe("button");
+  // Not the drag handle: the heading carries the sortable attributes.
+  expect(chevron().getAttribute("aria-roledescription")).toBe(null);
+  fireEvent.click(chevron());
+  expect(useRemoteWorkspaceStore.getState().requests).toEqual({});
+
+  fireEvent.click(chevron());
+  fireEvent.click(add());
+  expect(useRemoteWorkspaceStore.getState().requests.bk_mini?.request).toMatchObject({
+    createEnvironmentProjectId: "project-1",
+  });
+  expect(chevron().getAttribute("aria-expanded")).toBe("true");
+
+  useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
+  fireEvent.click(heading());
+  expect(useRemoteWorkspaceStore.getState().requests.bk_mini?.request).toMatchObject({
+    projectId: "project-1",
+  });
+  expect(useRemoteWorkspaceStore.getState().requests.bk_mini?.request).not.toHaveProperty(
+    "createEnvironmentProjectId",
+  );
+  expect(chevron().getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getAllByTestId("federated-environment-row")).toHaveLength(3);
+});
+
+test("the chevron, the context menu, the keyboard and the saved state agree", async () => {
+  const { folder, heading, chevron } = renderFleet();
+  const key = repositoryCollapseKey(folder.getAttribute("data-project-folder")!);
+
+  fireEvent.click(chevron());
+  expect(useMachineViewStore.getState().collapsedFolderKeys).toContain(key);
+  expect(localStorage.getItem("machine-view-storage")).toContain(JSON.stringify(key));
+  await act(async () => {
+    fireEvent.contextMenu(heading());
+  });
+  let menu = await screen.findByRole("menu");
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Expand" }));
+  expect(chevron().getAttribute("aria-expanded")).toBe("true");
+  expect(useMachineViewStore.getState().collapsedFolderKeys).not.toContain(key);
+
+  // Right on an expanded heading leaves it as it is; Left collapses it.
+  fireEvent.keyDown(heading(), { key: "ArrowRight" });
+  expect(chevron().getAttribute("aria-expanded")).toBe("true");
+  fireEvent.keyDown(heading(), { key: "ArrowLeft" });
+  expect(chevron().getAttribute("aria-expanded")).toBe("false");
+  await act(async () => {
+    fireEvent.contextMenu(heading());
+  });
+  menu = await screen.findByRole("menu");
+  expect(within(menu).getByRole("menuitem", { name: "Expand" })).toBeTruthy();
+  expect(within(menu).queryByRole("menuitem", { name: "Collapse" }) === null).toBe(true);
+
+  // A fresh mount (as after a reload) reads the saved state.
+  cleanup();
+  const again = renderFleet();
+  expect(again.chevron().getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryAllByTestId("federated-environment-row")).toHaveLength(0);
 });

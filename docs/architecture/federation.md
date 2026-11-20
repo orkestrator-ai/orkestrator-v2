@@ -872,11 +872,17 @@ with `MachinesFilter`:
   for its copy of the repository (none means the house, even when another
   machine has one), else, when the command node has no copy, the first icon in
   machine order. Its members' project-home activity buttons follow the name.
-  A **+** button labelled "New environment in <repository>" sits where the
-  chevron was, always visible, and opens the New Environment dialog of the
+  A **+** button labelled "New environment in <repository>" follows them,
+  always visible, and opens the New Environment dialog of the
   member the heading opens (this window's own dialog for its own copy).
-  Collapsing is in the context menu (Expand/Collapse) and on the keyboard:
-  Left collapses and Right expands the focused heading. Right-clicking the
+  A chevron sits to its right at the row's right edge, the same button and
+  style as a folder heading's: it is labelled "Collapse project <repository>"
+  or "Expand project <repository>", reports `aria-expanded`, and only shows
+  or hides the repository's environment rows (it never opens, drags or
+  creates). The heading itself, which opens, carries no `aria-expanded`. The
+  context menu's Expand/Collapse and the keyboard (Left collapses and Right
+  expands the focused heading) drive the same collapse state, which
+  `machineViewStore.collapsedFolderKeys` persists. Right-clicking the
   heading opens its menu, which acts on the member the heading opens and
   names its machine: Open Coordinator (absent where the coordinator is
   gated), Open board, Open repo on GitHub, Repository settings, New

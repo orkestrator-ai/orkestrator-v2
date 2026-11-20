@@ -659,14 +659,18 @@ describe("UI-01: machines with identical IDs and project names", () => {
       projectKey(projectRef("bk_a" as BackendId, "project-1")),
       projectKey(projectRef("bk_b" as BackendId, "project-1")),
     ]);
-    // No trailing dot and no chevron: the "+" comes last.
+    // No trailing dot: the "+" comes just before the chevron, which is last.
     for (const [index, name] of ["Machine A", "Machine B"].entries()) {
       const heading = projectHeading("app", name);
       expect(heading.closest("[data-project-folder]")).toBe(headings[index]!);
       expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);
       const add = within(headings[index] as HTMLElement).getByTestId("repository-new-environment");
       expect(add.getAttribute("aria-label")).toBe("New environment in app");
-      expect(add.parentElement!.lastElementChild).toBe(add);
+      const chevron = within(headings[index] as HTMLElement).getByTestId(
+        "repository-collapse-toggle",
+      );
+      expect(add.nextElementSibling).toBe(chevron);
+      expect(add.parentElement!.lastElementChild).toBe(chevron);
     }
   });
 });

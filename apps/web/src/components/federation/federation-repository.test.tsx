@@ -256,8 +256,11 @@ test("a repository heading summarizes machines and environments and lists every 
   const heading = screen.getByRole("button", {
     name: "Open acme/app on Machine A",
   });
-  // The "+" replaces the chevron, so the heading itself says it is expanded.
-  expect(heading.getAttribute("aria-expanded")).toBe("true");
+  // The heading opens; the chevron beside the "+" reports the disclosure.
+  expect(heading.getAttribute("aria-expanded")).toBe(null);
+  expect(
+    screen.getByRole("button", { name: "Collapse project acme/app" }).getAttribute("aria-expanded"),
+  ).toBe("true");
   expect(heading.getAttribute("title")).toBe(`Open ${hint} on Machine A`);
   // No trailing dot or member count: the leading box carries the colour.
   expect(within(heading).queryByTestId("machine-dot") === null).toBe(true);

@@ -1,10 +1,19 @@
-import { useManualOrderSupported } from "@/lib/portal/portal-layout";
+import { useManualOrderAvailability } from "@/lib/portal/portal-layout";
 import { MOBILE_SHELL_MEDIA_QUERY, noteDrawerNavigation } from "@/lib/mobile-shell";
 import { useSidebarHydration } from "./useSidebarHydration";
 import { useSelectedEnvironmentActions } from "./useSelectedEnvironmentActions";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { startsOnSelection } from "@/lib/environment-auto-start";
-import { lazy, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from "react";
+import {
+  lazy,
+  useId,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -375,7 +384,8 @@ export function HierarchicalSidebar() {
   const federation = useFederation();
   const machineViews = useMachineViews();
   const revealMachineProject = useRevealMachineProject();
-  const manualOrderSupported = useManualOrderSupported();
+  const manualOrderAvailability = useManualOrderAvailability();
+  const manualOrderNoteId = useId();
   const machineFilter = useMachineViewStore((state) => state.machineFilter);
   const machineGrouping = useMachineViewStore((state) => state.grouping);
   const setMachineGrouping = useMachineViewStore((state) => state.setGrouping);
@@ -1124,12 +1134,22 @@ export function HierarchicalSidebar() {
     compact: compactActive,
   });
   // The ordering choice exists only where environments of several machines share a list.
+  // It is offered even when the command node cannot keep a Manual order, so
+  // the choice is not silently missing: Manual is then disabled, says why,
+  // and the menu shows the By machine order the list falls back to.
   const showOrdering =
     federation.enabled &&
-    manualOrderSupported &&
     !compactActive &&
     environmentSortMode === "project" &&
     machineViews.length > 1;
+  const manualOrderSupported = manualOrderAvailability === "supported";
+  const shownOrdering = manualOrderSupported ? environmentOrdering : "machine";
+  const manualOrderNote = {
+    error: "Could not check Manual ordering. Reconnect to retry.",
+    loading: "Checking whether Manual ordering is available…",
+    supported: null,
+    unsupported: "Update the backend to order environments by hand.",
+  }[manualOrderAvailability];
   const groupingValue = groupingOptions.some((option) => option.value === machineGrouping)
     ? machineGrouping
     : "";
@@ -1195,17 +1215,36 @@ export function HierarchicalSidebar() {
                   Order environments
                 </DropdownMenuLabel>
                 <DropdownMenuRadioGroup
-                  value={environmentOrdering}
+                  value={shownOrdering}
                   onValueChange={(value) => {
-                    if (isEnvironmentOrdering(value)) setEnvironmentOrdering(value);
+                    if (
+                      manualOrderSupported &&
+                      isEnvironmentOrdering(value) &&
+                      value !== shownOrdering
+                    ) {
+                      setEnvironmentOrdering(value);
+                    }
                   }}
                 >
                   {ENVIRONMENT_ORDERING_OPTIONS.map((option) => (
-                    <DropdownMenuRadioItem key={option.value} value={option.value}>
+                    <DropdownMenuRadioItem
+                      key={option.value}
+                      value={option.value}
+                      disabled={option.value === "manual" && !manualOrderSupported}
+                      aria-describedby={manualOrderNote ? manualOrderNoteId : undefined}
+                    >
                       {option.label}
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
+                {manualOrderNote ? (
+                  <p
+                    id={manualOrderNoteId}
+                    className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground"
+                  >
+                    {manualOrderNote}
+                  </p>
+                ) : null}
               </>
             ) : null}
           </>

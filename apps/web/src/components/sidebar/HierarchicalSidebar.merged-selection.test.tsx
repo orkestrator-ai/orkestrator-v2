@@ -6,8 +6,10 @@
  * never this window's own project tree (to-do 2190 (retired), task 7). Also
  * the machine tiles that filter the list, and the sort menu's choices.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, type mock, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type NativeEvent } from "@/lib/native/events";
+import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { projectKey, projectRef } from "@orkestrator/protocol/federation";
 import type { PortalLayout } from "@orkestrator/protocol/portal-layout";
@@ -33,6 +35,8 @@ const initialUI = appCommandStore(uiStore).getState();
 const initialProjects = appCommandStore(projectStore).getState();
 const initialEnvironments = appCommandStore(environmentStore).getState();
 const initialRemote = useRemoteWorkspaceStore.getState();
+const nativeListen = listen as unknown as ReturnType<typeof mock>;
+const initialListen = nativeListen.getMockImplementation()!;
 
 const project = (id: string, order: number, repository: string): Project =>
   ({
@@ -74,17 +78,19 @@ function renderList(
     environments: {},
   },
   withPeer = true,
+  readLayout?: () => Promise<Partial<PortalLayout>>,
 ) {
   installDesktopFake({
     list: connectionList(withPeer ? [remoteConnection("a", "Machine A", "teal")] : []),
     datasets: { a: remote },
     layout,
-    respondPortal: (command, args) =>
-      command === "get_projects"
-        ? projects
-        : command === "get_environments" || command === "get_environment_snapshots"
-          ? environments.filter((entry) => entry.projectId === args.projectId)
-          : undefined,
+    respondPortal(command, args) {
+      if (command === "get_portal_layout") return readLayout?.();
+      if (command === "get_projects") return projects;
+      if (command === "get_environments" || command === "get_environment_snapshots") {
+        return environments.filter((entry) => entry.projectId === args.projectId);
+      }
+    },
   });
   appCommandStore(projectStore).getState().setProjects(projects);
   appCommandStore(environmentStore).getState().setEnvironments(environments);
@@ -132,6 +138,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   uninstallDesktopFake();
+  nativeListen.mockImplementation(initialListen);
+  portalLayoutStore.setState({ error: null });
   useMachineViewStore.setState(initialView, true);
   appCommandStore(uiStore).setState(initialUI, true);
   appCommandStore(projectStore).setState(initialProjects, true);
@@ -194,11 +202,14 @@ test("a shift-click range follows the repository order", async () => {
 });
 
 /** This window's machine with one environment and Machine A with one in the same repository. */
-function renderTwoMachines() {
+function renderTwoMachines(
+  layout: Partial<PortalLayout> = { manualOrderSupported: true },
+  readLayout?: () => Promise<Partial<PortalLayout>>,
+) {
   renderList(
     [project("p1", 0, "one")],
     [environment("a1", "p1", 0)],
-    { manualOrderSupported: true },
+    layout,
     [],
     {
       projects: [{ id: "rp", name: "one", gitUrl: "git@github.com:acme/one.git", order: 0 }],
@@ -206,6 +217,8 @@ function renderTwoMachines() {
         rp: [{ id: "r1", projectId: "rp", name: "Env r1", status: "running" }],
       },
     },
+    true,
+    readLayout,
   );
 }
 
@@ -289,6 +302,99 @@ test("the sort menu orders environments by machine or by hand, with no machine g
   await waitFor(() =>
     expect(screen.getByTestId("federated-repository-list").dataset.ordering).toBe("manual"),
   );
+});
+
+test("an older backend's sort menu still offers the ordering, with Manual disabled and why", async () => {
+  useMachineViewStore.setState({ environmentOrdering: "machine" });
+  renderTwoMachines({});
+  await bothMachinesListed();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Sort environments: By project" }), {
+    key: "ArrowDown",
+  });
+  const menu = await screen.findByRole("menu");
+  const byProject = within(menu).getByRole("menuitemradio", { name: "By project" });
+  const byActivity = within(menu).getByRole("menuitemradio", { name: "By activity" });
+  const byMachine = await within(menu).findByRole("menuitemradio", {
+    name: "By machine",
+    description: "Update the backend to order environments by hand.",
+  });
+  await waitFor(() => expect(document.activeElement).toBe(byProject));
+  fireEvent.keyDown(byProject, { key: "ArrowDown" });
+  await waitFor(() => expect(document.activeElement).toBe(byActivity));
+  fireEvent.keyDown(byActivity, { key: "ArrowDown" });
+  await waitFor(() => expect(document.activeElement).toBe(byMachine));
+  expect(byMachine.getAttribute("aria-checked")).toBe("true");
+  const manual = within(menu).getByRole("menuitemradio", { name: "Manual" });
+  expect(manual.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.keyDown(byMachine, { key: "ArrowDown" });
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      within(menu).getByRole("menuitemradio", { name: "Full list" }),
+    ),
+  );
+
+  fireEvent.click(manual);
+  expect(useMachineViewStore.getState().environmentOrdering).toBe("machine");
+  expect(screen.getByTestId("federated-repository-list").dataset.ordering).toBe("machine");
+});
+
+test("the menu explains pending and failed reads, and Manual resumes after reconnect", async () => {
+  const reconnects = new Set<(event: NativeEvent<unknown>) => unknown>();
+  nativeListen.mockImplementation(
+    async (event: string, listener: (event: NativeEvent<unknown>) => unknown) => {
+      if (event !== NATIVE_EVENT_STREAM_CONNECTED_EVENT) return () => {};
+      reconnects.add(listener);
+      return () => reconnects.delete(listener);
+    },
+  );
+  useMachineViewStore.setState({ environmentOrdering: "manual" });
+  const pending = Promise.withResolvers<Partial<PortalLayout>>();
+  let response = pending.promise;
+  renderTwoMachines({}, () => response);
+  await bothMachinesListed();
+  const trigger = screen.getByRole("button", { name: "Sort environments: By project" });
+  fireEvent.pointerDown(trigger);
+  const menu = await screen.findByRole("menu");
+  const byMachine = within(menu).getByRole("menuitemradio", {
+    name: "By machine",
+    description: "Checking whether Manual ordering is available…",
+  });
+  expect(byMachine.getAttribute("aria-checked")).toBe("true");
+  expect(
+    within(menu).getByRole("menuitemradio", { name: "Manual" }).getAttribute("aria-disabled"),
+  ).toBe("true");
+
+  fireEvent.click(byMachine);
+  expect(useMachineViewStore.getState().environmentOrdering).toBe("manual");
+  fireEvent.pointerDown(trigger);
+  const reopened = await screen.findByRole("menu");
+  await act(async () => pending.reject(new Error("storage unavailable")));
+  await within(reopened).findByRole("menuitemradio", {
+    name: "By machine",
+    description: "Could not check Manual ordering. Reconnect to retry.",
+  });
+  const manual = within(reopened).getByRole("menuitemradio", { name: "Manual" });
+  expect(manual.getAttribute("aria-disabled")).toBe("true");
+
+  response = Promise.resolve({ revision: 1, manualOrderSupported: true });
+  await act(async () => {
+    for (const reconnect of Array.from(reconnects)) reconnect({ payload: {} });
+  });
+  await waitFor(() => expect(manual.getAttribute("aria-checked")).toBe("true"));
+  expect(manual.hasAttribute("aria-disabled")).toBe(false);
+  expect(manual.hasAttribute("aria-describedby")).toBe(false);
+  expect(screen.getByTestId("federated-repository-list").dataset.ordering).toBe("manual");
+});
+
+test("a backend with Manual ordering shows no update note", async () => {
+  renderTwoMachines();
+  await bothMachinesListed();
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Sort environments: By project" }));
+  const menu = await screen.findByRole("menu");
+  const manual = within(menu).getByRole("menuitemradio", { name: "Manual" });
+  expect(manual.hasAttribute("aria-disabled")).toBe(false);
+  expect(manual.hasAttribute("aria-describedby")).toBe(false);
+  expect(within(menu).queryByText(/Update the backend/) === null).toBe(true);
 });
 
 test("a standalone full sidebar shows its bound CPU tile and has no Manual option", async () => {

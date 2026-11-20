@@ -846,7 +846,13 @@ with `MachinesFilter`:
   client. A drop replaces one repository’s order through
   `update_repository_environment_order`. The command node rejects an order
   that would exceed the storage limit and keeps all saved positions. A command
-  node that does not advertise Manual ordering uses By machine. A row can go
+  node that does not advertise Manual ordering uses By machine. The menu
+  keeps both choices visible and disables Manual while the capability check
+  is pending, after a failed check, or when the backend lacks support. Its
+  note is available from the focusable By machine option and explains the
+  state, including when to reconnect or update the backend. Activating the
+  checked fallback keeps the saved preference, so Manual resumes when
+  support returns. In Manual ordering, a row can go
   anywhere in its repository. Until the user arranges a
   repository it is the by-machine order; a new environment goes after the
   last one of its own machine there; a drag among the rows a filter shows

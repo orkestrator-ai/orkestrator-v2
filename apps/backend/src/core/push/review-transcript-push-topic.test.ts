@@ -217,13 +217,17 @@ describe("ReviewTranscriptPushTopic", () => {
 
   test("without bridge revisions a live reviewer is probed once for every viewer and announced when its token moves", async () => {
     const h = harness({ announces: false });
-    await h.subscribe(REVIEWER);
-    // The first probe sets the baseline at once.
+    h.topic.retain(REVIEWER);
+    await h.topic.resolve(REVIEWER);
+    // A viewer could have read t0 at mount, before the first probe.
+    h.tokens.set(REVIEWER, "final");
     await h.settle();
+    expect(h.published.map((entry) => entry.parts)).toEqual([["transcript"]]);
     expect(h.probes).toEqual([{ key: REVIEWER, token: undefined }]);
     await h.settle(REVIEW_TRANSCRIPT_PROBE_MS);
-    expect(h.probes.at(-1)).toEqual({ key: REVIEWER, token: "t0" });
-    expect(h.published).toEqual([]);
+    expect(h.probes.at(-1)).toEqual({ key: REVIEWER, token: "final" });
+    expect(h.published).toHaveLength(1);
+    h.published.length = 0;
     h.tokens.set(REVIEWER, "t1");
     await h.settle(REVIEW_TRANSCRIPT_PROBE_MS);
     expect(h.published).toEqual([

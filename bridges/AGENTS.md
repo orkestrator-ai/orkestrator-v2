@@ -37,6 +37,11 @@ calls them (`apps/backend/src/core/http-bridge/provider*.ts`,
   `/activity` it must not touch, hydrate or re-attach anything. Publishing a
   frame is synchronous and never awaits, so it is safe in an SDK listener; a
   subscriber that cannot drain is closed, not queued.
+- `GET /session/:id/transcript/output?locator=&mode=&limit=` slices the exact
+  body named by a transcript detail locator before sending it. It uses the same
+  transcript source and stale-locator checks as `/transcript/detail`, answers
+  an unknown session in band, and leaves completion to the backend projection.
+  Only 404/405 indicate a bridge that predates the range route.
 - `/session/:id/activity` answers an unknown session **in band** as
   `{"activity":"missing"}` and never 404s. The backend reads a 404 there as "this
   bridge predates the route" and fails the environment; if 404 also meant "session

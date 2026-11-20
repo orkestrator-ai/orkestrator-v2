@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import {
   TOOL_OUTPUT_PUSH_TOPIC,
@@ -28,6 +28,7 @@ export type ToolOutputSourceAnswer =
       detailRef?: string;
       toolState?: string;
       inlineOutput?: string;
+      inlineError?: string;
       complete: boolean;
     }
   | null;
@@ -49,7 +50,7 @@ interface Watch {
   parsed: ToolOutputPushKey;
   generation: string;
   revision: number;
-  /** Content-free fingerprint of the call's output: reference, state, inline length. */
+  /** Content-free fingerprint of the call's output: reference, state, inline digest. */
   fingerprint: string | undefined;
   release: (() => void) | null;
 }
@@ -66,11 +67,17 @@ export interface ToolOutputPushTopicMetrics {
 function fingerprintOf(source: ToolOutputSourceAnswer): string | undefined {
   if (source === null) return undefined;
   if (!source.located) return "absent";
-  // Lengths and references only: nothing here is output text (invariant 12).
+  // Track same-length rewrites without retaining inline content in the watch.
+  const inlineDigest =
+    source.inlineOutput !== undefined || source.inlineError !== undefined
+      ? createHash("sha256")
+          .update(JSON.stringify([source.inlineOutput, source.inlineError]))
+          .digest("base64url")
+      : "";
   return [
     source.detailRef ?? "",
     source.toolState ?? "",
-    source.inlineOutput?.length ?? -1,
+    inlineDigest,
     source.complete ? 1 : 0,
   ].join("\0");
 }
@@ -83,7 +90,7 @@ function fingerprintOf(source: ToolOutputSourceAnswer): string | undefined {
  * session through the `native-session` topic, so that session's one observer
  * keeps reading it, and on each change the observer announces it looks the
  * call up in the cached live view (memory only). When the call's reference,
- * state or inline length moved it announces `output`; the row then reads
+ * state or inline body moved it announces `output`; the row then reads
  * from its cursor with `get_native_agent_tool_output`. Once the call has
  * completed and that was announced, it lets go of the session: the output no
  * longer changes. Release stops everything and keeps nothing.

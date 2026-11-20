@@ -426,6 +426,7 @@ export function createWorkflowsApi(client: BackendClient) {
     agent: NativeAgentClientPlatform;
     logicalSessionKey: string;
     toolUseId: string;
+    messageId?: string;
     detailRef?: string;
     mode: ToolOutputReadMode;
     cursor?: number;

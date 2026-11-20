@@ -156,8 +156,8 @@ export class HttpBridgeStateReads {
     }
     const path = httpBridgeSessionStatePath(this.agent, sessionId);
     const encoded = encodeURIComponent(sessionId);
-    // Without a cached revision (first read, older bridge) the side reads go
-    // beside the state, as before; with one they wait for a moved state.
+    // Speculate on the cold path for legacy bridges. Once a bridge has
+    // advertised a revision, collect side responses after its state snapshot.
     const parallel = !cached;
     this.counters.reads += 1;
     const [response, parallelConfig, parallelQueue] = await Promise.all([
@@ -215,9 +215,18 @@ export class HttpBridgeStateReads {
         this.composers.delete(sessionId);
       }
     }
-    const [configResponse, queueResponse] = parallel
-      ? [parallelConfig, parallelQueue]
-      : await Promise.all([this.fetchConfig(encoded), this.fetchQueue(encoded)]);
+    const stateRevision = isBridgeStateRevision(body.stateRevision)
+      ? body.stateRevision
+      : undefined;
+    if (parallel && stateRevision) {
+      for (const side of [parallelConfig, parallelQueue]) {
+        void side?.body?.cancel().catch(() => undefined);
+      }
+    }
+    const [configResponse, queueResponse] =
+      parallel && !stateRevision
+        ? [parallelConfig, parallelQueue]
+        : await Promise.all([this.fetchConfig(encoded), this.fetchQueue(encoded)]);
     const config = configResponse ? await readHttpBridgeStateConfig(configResponse) : undefined;
     const queue = this.agent === "pi" ? await readHttpBridgeStateQueue(queueResponse) : undefined;
     const source: HttpBridgeSessionStateSource = {
@@ -225,11 +234,15 @@ export class HttpBridgeStateReads {
       ...(config === undefined ? {} : { config }),
       ...(queue === undefined ? {} : { queue }),
     };
-    const stateRevision = isBridgeStateRevision(body.stateRevision)
-      ? body.stateRevision
-      : undefined;
-    // Pi's state is only reusable once the queue read has also succeeded.
-    if (stateRevision && queue !== null) {
+    // A successful side read is reusable only when the same revision covers
+    // both ends of the read. Under continuous changes, return without caching.
+    const reusable =
+      stateRevision &&
+      config !== null &&
+      queue !== null &&
+      ((this.agent !== "codex" && this.agent !== "pi") ||
+        (await this.stillCurrent(path, stateRevision)));
+    if (stateRevision && reusable) {
       setBoundedMapEntry(
         this.states,
         sessionId,
@@ -247,6 +260,21 @@ export class HttpBridgeStateReads {
       this.lastRevision.delete(sessionId);
     }
     return source;
+  }
+
+  private async stillCurrent(path: string, revision: string): Promise<boolean> {
+    const query = new URLSearchParams({ [BRIDGE_KNOWN_STATE_REVISION_PARAM]: revision });
+    this.counters.reads += 1;
+    try {
+      const response = await bridgeFetch(this.connection, `${path}?${query}`, {}, this.fetchImpl);
+      const body = await readHttpBridgeStateBody(
+        { agent: this.agent, connection: this.connection, fetchImpl: this.fetchImpl },
+        response,
+      );
+      return isBridgeStateUnchanged(body) && body.stateRevision === revision;
+    } catch {
+      return false;
+    }
   }
 
   private fetchConfig(encodedSessionId: string): Promise<Response | undefined> {

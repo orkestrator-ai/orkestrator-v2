@@ -16,6 +16,10 @@ function toolPart(toolUseId: string, fields: Record<string, unknown> = {}) {
   return { type: "tool-invocation", toolName: "Bash", toolUseId, ...fields };
 }
 
+function withIds(messages: unknown[]) {
+  return messages.map((message) => ({ id: "row", ...(message as object) }));
+}
+
 function harness(
   options: {
     messages?: unknown[];
@@ -28,8 +32,8 @@ function harness(
   if (options.messages) {
     cache.set(VIEW_KEY, {
       value: {
-        messages: options.messages,
-        ...(options.revisedMessages ? { revisedMessages: options.revisedMessages } : {}),
+        messages: withIds(options.messages),
+        ...(options.revisedMessages ? { revisedMessages: withIds(options.revisedMessages) } : {}),
       },
     });
   }
@@ -42,12 +46,13 @@ function harness(
       getTranscriptUpdate: async () => {
         transcriptReads += 1;
         if (options.populateOnRead) {
-          cache.set(VIEW_KEY, { value: { messages: options.populateOnRead } });
+          cache.set(VIEW_KEY, { value: { messages: withIds(options.populateOnRead) } });
         }
         return {};
       },
     },
     toolDetails: {
+      readRemoteOutput: async () => undefined,
       getProjectionToolDetails: async (input: { detailRef: string }) => {
         detailReads.push(input.detailRef);
         const details = options.details?.[input.detailRef];
@@ -59,12 +64,14 @@ function harness(
   const reads = new NativeAgentToolOutputReads(context as never);
   return {
     reads,
+    cache,
     detailReads,
     transcriptReads: () => transcriptReads,
     read: (fields: Record<string, unknown>) =>
       reads.readToolOutput({
         ...SESSION,
         toolUseId: "call-1",
+        messageId: "row",
         mode: "tail",
         limit: 16,
         ...fields,
@@ -172,22 +179,40 @@ describe("NativeAgentToolOutputReads", () => {
     expect(await h.read({})).toMatchObject({ status: "ok", text: "revised", complete: false });
   });
 
-  test("outside the live view, the row's reference is read and is complete", async () => {
+  test("an older detail body keeps its occurrence pending until a revised row settles it", async () => {
     const h = harness({
       messages: [{ parts: [] }],
       details: { "ref-old": { toolOutput: "older" } },
     });
-    expect(await h.read({})).toEqual({ status: "missing" });
+    expect(await h.read({})).toEqual({ status: "pending" });
     expect(await h.read({ detailRef: "ref-old" })).toMatchObject({
       status: "ok",
       text: "older",
+      complete: false,
+    });
+    h.cache.set(VIEW_KEY, {
+      value: {
+        messages: [{ id: "later", parts: [toolPart("call-1", { toolOutput: "wrong" })] }],
+        revisedMessages: [
+          { id: "row", parts: [toolPart("call-1", { toolState: "success", toolOutput: "final" })] },
+        ],
+      },
+    });
+    expect(await h.read({ detailRef: "ref-old" })).toMatchObject({
+      status: "ok",
+      text: "final",
       complete: true,
+    });
+    expect(await h.read({ messageId: "later" })).toMatchObject({
+      status: "ok",
+      text: "wrong",
+      complete: false,
     });
   });
 
-  test("an evicted reference is expired", async () => {
+  test("an evicted reference for a settled call is expired", async () => {
     const h = harness({
-      messages: [{ parts: [toolPart("call-1", { detailRef: "gone", toolState: "pending" })] }],
+      messages: [{ parts: [toolPart("call-1", { detailRef: "gone", toolState: "success" })] }],
     });
     expect(await h.read({})).toEqual({ status: "expired" });
   });
@@ -206,8 +231,8 @@ describe("NativeAgentToolOutputReads", () => {
     expect(h.transcriptReads()).toBe(1);
   });
 
-  test("a session with no view at all is missing", async () => {
+  test("a session with no view at all does not establish completion", async () => {
     const h = harness();
-    expect(await h.read({})).toEqual({ status: "missing" });
+    expect(await h.read({})).toEqual({ status: "pending" });
   });
 });

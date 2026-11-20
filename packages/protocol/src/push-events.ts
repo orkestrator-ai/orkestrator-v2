@@ -252,6 +252,69 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** Decode a set acknowledgement before treating its stamps as authoritative. */
+export function parsePushSetSubscriptionsResult(value: unknown): PushSetSubscriptionsResult | null {
+  if (!isRecord(value)) return null;
+  if (value.status === "refused") {
+    return value.reason === "stream-unknown" || value.reason === "unavailable"
+      ? { status: "refused", reason: value.reason }
+      : null;
+  }
+  if (!isNonNegativeInteger(value.setRevision)) return null;
+  if (value.status === "superseded")
+    return { status: "superseded", setRevision: value.setRevision };
+  if (
+    value.status !== "applied" ||
+    !isNonNegativeInteger(value.seqBase) ||
+    !Array.isArray(value.subscriptions) ||
+    value.subscriptions.length > PUSH_LIMITS.maxSubscriptions
+  )
+    return null;
+  const subscriptions: PushSubscriptionAnswer[] = [];
+  for (const entry of value.subscriptions) {
+    if (
+      !isRecord(entry) ||
+      typeof entry.topic !== "string" ||
+      entry.topic.length > 64 ||
+      typeof entry.key !== "string" ||
+      pushUtf8Bytes(entry.key) > PUSH_LIMITS.maxKeyBytes
+    )
+      return null;
+    const { topic, key, status } = entry;
+    if (status === "ok") {
+      if (
+        typeof entry.generation !== "string" ||
+        !entry.generation ||
+        entry.generation.length > 128 ||
+        !isNonNegativeInteger(entry.revision)
+      )
+        return null;
+      subscriptions.push({
+        topic,
+        key,
+        status,
+        generation: entry.generation,
+        revision: entry.revision,
+      });
+    } else if (status === "missing") {
+      subscriptions.push({ topic, key, status });
+    } else if (
+      status === "denied" &&
+      (entry.reason === "limit" ||
+        entry.reason === "invalid-key" ||
+        entry.reason === "unknown-topic")
+    ) {
+      subscriptions.push({ topic, key, status, reason: entry.reason });
+    } else return null;
+  }
+  return {
+    status: "applied",
+    setRevision: value.setRevision,
+    seqBase: value.seqBase,
+    subscriptions,
+  };
+}
+
 /** UTF-8 byte length, browser-safe. */
 export function pushUtf8Bytes(value: string): number {
   let bytes = 0;
@@ -393,33 +456,39 @@ export const TOOL_OUTPUT_PUSH_TOOL_ID_MAX_BYTES = 256;
 
 export interface ToolOutputPushKey extends NativeSessionPushKey {
   toolUseId: string;
+  messageId?: string;
 }
 
 /**
- * `<environmentId>/<agent>/<logicalSessionKey>/<encoded toolUseId>`. The tool
- * call id is percent-encoded, so it holds no `/` and the last one splits it
- * from the session key (which may itself contain `/`).
+ * The last segment carries the call ID and, for occurrence-aware clients,
+ * the transcript row ID. A literal colon separates the encoded fields.
  */
 export function formatToolOutputPushKey(key: ToolOutputPushKey): string {
-  return `${formatNativeSessionPushKey(key)}/${encodeURIComponent(key.toolUseId)}`;
+  const occurrence = key.messageId === undefined ? "" : `:${encodeURIComponent(key.messageId)}`;
+  return `${formatNativeSessionPushKey(key)}/${encodeURIComponent(key.toolUseId)}${occurrence}`;
 }
 
 export function parseToolOutputPushKey(key: string): ToolOutputPushKey | null {
   if (pushUtf8Bytes(key) > PUSH_LIMITS.maxKeyBytes) return null;
   const last = key.lastIndexOf("/");
   if (last <= 0 || last === key.length - 1) return null;
-  const encoded = key.slice(last + 1);
+  const fields = key.slice(last + 1).split(":");
+  if (fields.length > 2) return null;
   let toolUseId: string;
+  let messageId: string | undefined;
   try {
-    toolUseId = decodeURIComponent(encoded);
+    toolUseId = decodeURIComponent(fields[0]!);
+    messageId = fields[1] === undefined ? undefined : decodeURIComponent(fields[1]);
   } catch {
     return null;
   }
-  // One spelling per call, so two keys never name the same output.
-  if (encodeURIComponent(toolUseId) !== encoded || toolUseId.trim().length === 0) return null;
-  if (pushUtf8Bytes(toolUseId) > TOOL_OUTPUT_PUSH_TOOL_ID_MAX_BYTES) return null;
+  if (!toolUseId.trim() || pushUtf8Bytes(toolUseId) > TOOL_OUTPUT_PUSH_TOOL_ID_MAX_BYTES)
+    return null;
+  if (messageId !== undefined && (!messageId.trim() || pushUtf8Bytes(messageId) > 512)) return null;
   const session = parseNativeSessionPushKey(key.slice(0, last));
-  return session ? { ...session, toolUseId } : null;
+  if (!session) return null;
+  const parsed = { ...session, toolUseId, ...(messageId === undefined ? {} : { messageId }) };
+  return formatToolOutputPushKey(parsed) === key ? parsed : null;
 }
 
 // ---------------------------------------------------------------------------

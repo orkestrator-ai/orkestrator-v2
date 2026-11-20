@@ -85,6 +85,19 @@ describe("sliceToolOutput", () => {
     expect(rewritten).toMatchObject({ reset: true, text: "fghi", start: 5, end: 9 });
   });
 
+  test("a rewrite before the last 64 bytes resets the displayed prefix", () => {
+    const suffix = "same adjacent bytes ".repeat(8);
+    const old = sliceToolOutput("old\n" + suffix, { mode: "tail", limit: 512 });
+    expect(
+      sliceToolOutput("new\n" + suffix + "final", {
+        mode: "range",
+        cursor: old.end,
+        anchor: old.endAnchor,
+        limit: 512,
+      }),
+    ).toMatchObject({ reset: true, text: "new\n" + suffix + "final" });
+  });
+
   test("a cursor past the end or without one resets", () => {
     expect(sliceToolOutput("abc", { mode: "range", cursor: 10, limit: 2 })).toMatchObject({
       reset: true,

@@ -345,18 +345,20 @@ in `apps/backend/src/core/multi-review-transcript-push.ts`).
   opens only when the topic first asks whether it announces revisions, so an
   unwatched review holds none. A hint for the key's provider session that
   names its transcript, or names nothing (lost continuity), publishes
-  `transcript` without any read: the viewers then make the conditional read
-  they already had. A state-only revision is ignored; the record's save
-  carries status.
+  `transcript` and invalidates the shared backend snapshot for that session.
+  The first reader refreshes it and other viewers of the same view shape
+  reuse that bounded answer. A state-only revision is ignored because the
+  record's save carries status.
 - **Spacing.** `transcript` goes out at most once a second per key
   (`REVIEW_TRANSCRIPT_MIN_PUBLISH_MS`), trailing edge included, so a
-  streaming reviewer costs each viewer about one conditional read a second
-  instead of one per token; `status` is urgent and never waits for it.
+  streaming reviewer needs about one provider transcript read per second
+  per view shape. `status` is urgent and never waits for the transcript.
 - **Fallback.** While the bridge does not announce revisions (its stream is
   down or still connecting, or the platform has none, as OpenCode), a live
-  key is probed with that same conditional read: once at once to set the
-  baseline, then every 4 s, once for all its viewers, publishing
-  `transcript` when the source token moved. Each tick first asks the bridge
+  key is probed with that same conditional read immediately, then every 4 s.
+  Its first successful probe publishes a reconciliation hint, and later probes
+  publish `transcript` when the source token moves. Viewers reuse the probe's
+  bounded snapshot. Each tick first asks the bridge
   again, so a stream that comes back stops the probing and one that drops
   resumes it. A settled reviewer is not probed.
 - **Resolve:** a workflow or reviewer that does not exist is `missing`; a
@@ -450,11 +452,13 @@ the output grew, an expanded row read the whole body again. The
 an expanded running row a tail that follows the call instead, and leave
 collapsed rows costing nothing.
 
-**Key.** `<environmentId>/<agent>/<logicalSessionKey>/<toolUseId>`, the call
-id percent-encoded (`formatToolOutputPushKey`), so the last `/` splits it off
-a session key that may itself hold `/`. Only one spelling of a call id is a
-key. The call id is at most 256 bytes and the key at most 1 KiB. The only
-part is `output`.
+**Key.** `<environmentId>/<agent>/<logicalSessionKey>/<toolUseId>:<messageId>`.
+The call and message IDs are percent-encoded separately. The last `/` separates
+them from the session key, which can contain slashes. The transcript row ID
+disambiguates calls whose provider reuses an ID in a later response.
+The call ID is at most 256 bytes, the row ID 512 bytes, and the whole key
+1 KiB. The only part is `output`. The client leaves out keys that exceed
+the subscription wire budget so the rest of the set can stay healthy.
 
 **Backend.** The topic reads nothing of its own:
 
@@ -465,22 +469,22 @@ part is `output`.
 - On each change the observer announces, the topic looks the call up in the
   session's cached live view (`NativeAgentToolOutputReads.toolOutputSource`,
   memory only, bounded search through nested tool groups) and compares a
-  content-free fingerprint: the call's detail reference, its state, the
-  length of any inline output, and whether it completed. When the fingerprint
+  content-free fingerprint: the call's detail reference, its state, a digest
+  of any inline output and error, and whether it completed. When the fingerprint
   moved it announces `output`.
 - Once completion is announced it lets go of the session: the output will not
-  grow. A call that leaves the live view is announced once (the row then
-  reads through the detail reference it holds).
+  grow. A call that leaves the live view stays under observation so a later
+  revised row can settle it.
 - `release` drops the watch and its hold; nothing is kept for the key.
 
 **Read.** `get_native_agent_tool_output` (`native-sessions` domain, since 5):
 
 ```text
-{ environmentId, agent, logicalSessionKey, toolUseId, detailRef?,
+{ environmentId, agent, logicalSessionKey, toolUseId, messageId, detailRef?,
   mode: "tail" | "range" | "before", cursor?, anchor?, limit? }
 → { status: "ok", text, start, end, totalBytes, truncatedBefore, complete,
     startAnchor, endAnchor, reset?, toolError? }
-  | { status: "missing" } | { status: "expired" }
+  | { status: "pending" } | { status: "missing" } | { status: "expired" }
 ```
 
 - Offsets are UTF-8 byte offsets into the whole output. `tail` answers the
@@ -490,19 +494,17 @@ part is `output`.
 - `limit` defaults to 32 KiB and is clamped to 64 KiB, so an answer carries
   at most 64 KiB of text; `toolError` is cut to 8 KiB. The call id, detail
   reference and anchor are bounded on input (invariant 11).
-- Each answer carries an opaque anchor per end (a length and an FNV-1a hash
-  of the 64 bytes beside it). A later read from that end sends it back; if
-  those bytes changed, or the cursor is past the end or inside a character,
-  the read answers the tail with `reset: true` and the row replaces what it
-  holds. Output therefore need not be append-only.
-- The call is found in the session's cached live view (its window rows and
-  revised rows); with no cached view the read performs one live-view read
-  first. The body comes through the call's detail reference
-  (`getProjectionToolDetails`), so it shares the detail cache and its provider
-  read with every other reader. A call outside the live view is read through
-  the `detailRef` the row sends and is `complete` (that reference names a
-  fixed body). `missing`: no such call (and no reference); `expired`: the
-  reference is no longer held.
+- The anchor covers the output prefix through the end of the held range.
+  If any held bytes change, or the cursor is past the end or inside a UTF-8
+  character, the read answers with the tail and `reset: true`. Appends leave
+  the anchor valid.
+- The call is found by row and call ID in the cached window and revised rows.
+  With no cached view the backend reads the live view once. Bridges that serve
+  `/transcript/output` slice the exact detail named by the locator before
+  serializing the response. Older bridges use the detail read. Outside the
+  live view the row can display an older detail while continuing to follow the
+  occurrence. A range answers `pending` when the live occurrence is absent,
+  and only a settled projection can mark the result complete.
 - Nothing logs output, ids or offsets; the topic's metrics are counts
   (`watches`, `holding`, `checks`, `changes`, `completions`).
 
@@ -510,7 +512,9 @@ part is `output`.
 native tab):
 
 - Expanding a call that is running (`toolState: "pending"`) reads its tail
-  and subscribes to its key. An arriving file diff switches the expanded row
+  and subscribes to its key while the tab is active. Switching away releases
+  the watch and pauses reads while keeping the row expanded. An arriving file
+  diff switches the expanded row
   to its detail read. A settled call expanded later and rows outside live
   tabs (reviews, exports) also use the detail read.
 - Each frame reads `range` from the held end and appends. Behind by more than

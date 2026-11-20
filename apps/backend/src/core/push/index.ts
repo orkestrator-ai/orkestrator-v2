@@ -111,6 +111,7 @@ export interface PushNativeAgents {
     agent: string,
     logicalSessionKey: string,
     toolUseId: string,
+    messageId?: string,
   ): ToolOutputSourceAnswer;
 }
 
@@ -233,6 +234,7 @@ export class BackendPush implements PushGatewayPort {
             key.agent,
             key.logicalSessionKey,
             key.toolUseId,
+            key.messageId,
           ) ?? null,
       sessionExists: (key) =>
         options.sessionExists(key.environmentId, key.agent, key.logicalSessionKey),

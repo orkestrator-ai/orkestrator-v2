@@ -283,6 +283,43 @@ describe("NativeSessionPushTopic", () => {
     topic.dispose();
   });
 
+  test("uses a hint received while the first read is establishing the bridge cadence", async () => {
+    const clock = new ManualClock();
+    const held = Promise.withResolvers<void>();
+    const model = { transcript: 1, state: 1, phase: "running" };
+    const published: string[][] = [];
+    let reads = 0;
+    const topic = new NativeSessionPushTopic({
+      timers: clock,
+      now: () => clock.now(),
+      sessionExists: async () => true,
+      canWakeFromBridge: () => "revisions",
+      publish: (_key, _stamp, parts) => published.push([...parts]),
+      readLiveUpdate: async (input) => {
+        const update = liveUpdate(model, input);
+        if (update.state.status === "snapshot") {
+          Object.assign(update.state.value, { identity: { providerSessionId: "provider-1" } });
+        }
+        if (++reads === 1) await held.promise;
+        return update;
+      },
+    });
+    try {
+      topic.retain(PUSH_KEY);
+      await clock.advanceAsync(0);
+      expect(reads).toBe(1);
+      model.state = 2;
+      topic.wakeProvider(KEY.environmentId, KEY.agent, "provider-1", ["state"]);
+      held.resolve();
+      await flushMicrotasks();
+      await clock.advanceAsync(NATIVE_SESSION_BRIDGE_WAKE_FLOOR_MS);
+      expect(reads).toBe(2);
+      expect(published.at(-1)).toEqual(["state"]);
+    } finally {
+      topic.dispose();
+    }
+  });
+
   test("an older bridge's live stream (hints) does not stop a running session's cadence", async () => {
     const clock = new ManualClock();
     const reads: number[] = [];

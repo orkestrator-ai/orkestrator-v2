@@ -152,7 +152,11 @@ test("expanded tool ranges converge under real socket backpressure across repeat
   const stack = await AcceptanceStack.start({ push: true, bridge: "revisions" });
   stacks.push(stack);
   stack.bridge.startTurn();
-  const key = formatToolOutputPushKey({ ...SESSION, toolUseId: TOOL_CALL_ID });
+  const key = formatToolOutputPushKey({
+    ...SESSION,
+    toolUseId: TOOL_CALL_ID,
+    messageId: stack.bridge.toolMessageId(),
+  });
   const noise = { blob: "n".repeat(16 * 1024) };
   let output = "start";
   stack.bridge.writeToolOutput(output);

@@ -7,6 +7,7 @@ import {
   PUSH_SET_SUBSCRIPTIONS_COMMAND,
   parsePushChangedPayload,
   parsePushResyncPayload,
+  parsePushSetSubscriptionsResult,
   pushSubscriptionId,
   type PushSetSubscriptionsResult,
   type PushStamp,
@@ -600,10 +601,12 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       this.counters.leafSetCalls += 1;
       let result: PushSetSubscriptionsResult | null = null;
       try {
-        result = await link.invoke<PushSetSubscriptionsResult>(
-          PUSH_SET_SUBSCRIPTIONS_COMMAND,
-          { streamId: upstream.streamId, setRevision, subscriptions },
-          { timeoutMs: this.leafCallTimeoutMs },
+        result = parsePushSetSubscriptionsResult(
+          await link.invoke<unknown>(
+            PUSH_SET_SUBSCRIPTIONS_COMMAND,
+            { streamId: upstream.streamId, setRevision, subscriptions },
+            { timeoutMs: this.leafCallTimeoutMs },
+          ),
         );
       } catch (error) {
         log.warn("node-subscriptions.leaf-set-failed", { error: formatLogError(error) });
@@ -614,7 +617,12 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
         node.dirty = true;
         continue;
       }
-      if (!result || result.status === "refused") {
+      if (
+        !result ||
+        result.status === "refused" ||
+        (result.status === "applied" && result.setRevision !== setRevision) ||
+        (result.status === "superseded" && result.setRevision < setRevision)
+      ) {
         this.counters.leafSetFailures += 1;
         node.dirty = true;
         node.failed = true;
@@ -624,10 +632,6 @@ export class NodePushSubscriptionController implements PushNodeSubscriptions, Re
       node.failed = false;
       if (result.status === "superseded") {
         upstream.setRevision = Math.max(upstream.setRevision, result.setRevision);
-        node.dirty = true;
-        continue;
-      }
-      if (result.setRevision !== setRevision) {
         node.dirty = true;
         continue;
       }

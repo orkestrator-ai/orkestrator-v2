@@ -2727,10 +2727,12 @@ export class NativeAgentService {
     agent: string,
     logicalSessionKey: string,
     toolUseId: string,
+    messageId?: string,
   ) {
     return this.projections.toolOutputSource(
       { environmentId, agent: agent as BuildPipelineAgent, logicalSessionKey },
       toolUseId,
+      messageId,
     );
   }
 

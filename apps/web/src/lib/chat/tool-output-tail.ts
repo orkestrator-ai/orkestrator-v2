@@ -3,6 +3,7 @@ import { isIncompatibilityError } from "@orkestrator/protocol/contract/errors";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   TOOL_OUTPUT_READ_MAX_BYTES,
+  TOOL_OUTPUT_TOOL_ID_MAX_BYTES,
   type NativeAgentToolOutputRead,
   type ToolOutputReadMode,
 } from "@orkestrator/protocol/native-agent-tool-output";
@@ -33,6 +34,7 @@ import { appCommandScope } from "@/lib/node-scope-slots";
 /** What a row needs to read its call's output on its node. */
 export interface ToolOutputTailSource {
   scope: NodeScope;
+  active?: boolean;
   environmentId: string;
   agent: AgentPlatform;
   logicalSessionKey: string;
@@ -41,6 +43,7 @@ export interface ToolOutputTailSource {
     agent: AgentPlatform;
     logicalSessionKey: string;
     toolUseId: string;
+    messageId?: string;
     detailRef?: string;
     mode: ToolOutputReadMode;
     cursor?: number;
@@ -122,6 +125,11 @@ function trimFront(held: Held): Held {
   };
 }
 
+function validOutputId(id: string, maxBytes: number): boolean {
+  // In Unicode mode this matches only lone surrogate code units.
+  return id.trim().length > 0 && !/[\uD800-\uDFFF]/u.test(id) && pushUtf8Bytes(id) <= maxBytes;
+}
+
 /**
  * The tail view of one call while `enabled`, or `null` when there is none to
  * show: no source (not a live tab), not enabled, or the node cannot serve it
@@ -132,10 +140,16 @@ export function useToolOutputTail(
   toolUseId: string | undefined,
   detailRef: string | undefined,
   enabled: boolean,
+  messageId?: string,
 ): ToolOutputTailView | null {
   // A test double of the session may provide nothing.
   const source = useContext(ToolOutputTailContext) ?? null;
-  const active = enabled && source !== null && toolUseId !== undefined;
+  const validIds =
+    toolUseId !== undefined &&
+    validOutputId(toolUseId, TOOL_OUTPUT_TOOL_ID_MAX_BYTES) &&
+    (messageId === undefined || validOutputId(messageId, 512));
+  const active =
+    validIds && enabled && source !== null && source.active !== false && toolUseId !== undefined;
   const [held, setHeld] = useState<Held | null>(null);
   const [fallback, setFallback] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
@@ -156,17 +170,18 @@ export function useToolOutputTail(
   }, []);
 
   const pushKey =
-    source && toolUseId !== undefined
+    active && source && toolUseId !== undefined
       ? formatToolOutputPushKey({
           environmentId: source.environmentId,
           agent: source.agent,
           logicalSessionKey: source.logicalSessionKey,
           toolUseId,
+          ...(messageId === undefined ? {} : { messageId }),
         })
       : "";
 
   const readForward = useCallback(async () => {
-    if (!source || toolUseId === undefined) return;
+    if (!active || !source || toolUseId === undefined) return;
     if (readingRef.current) {
       dirtyRef.current = true;
       return;
@@ -183,6 +198,7 @@ export function useToolOutputTail(
           agent: source.agent,
           logicalSessionKey: source.logicalSessionKey,
           toolUseId,
+          ...(messageId === undefined ? {} : { messageId }),
           ...(detailRefRef.current ? { detailRef: detailRefRef.current } : {}),
           ...(current
             ? {
@@ -194,6 +210,7 @@ export function useToolOutputTail(
           limit: TOOL_OUTPUT_TAIL_READ_BYTES,
         });
         if (epoch !== epochRef.current) return;
+        if (result.status === "pending") continue;
         if (result.status !== "ok") {
           setFallback(true);
           return;
@@ -239,7 +256,7 @@ export function useToolOutputTail(
     } finally {
       if (epoch === epochRef.current) readingRef.current = false;
     }
-  }, [commit, source, toolUseId]);
+  }, [active, commit, messageId, source, toolUseId]);
 
   // (De)activation: the first read on expanding; collapsing drops everything,
   // so the next expansion starts from the initial state.
@@ -290,7 +307,7 @@ export function useToolOutputTail(
 
   const loadEarlier = useCallback(() => {
     const current = heldRef.current;
-    if (!source || toolUseId === undefined || !current || current.start === 0) return;
+    if (!active || !source || toolUseId === undefined || !current || current.start === 0) return;
     if (pushUtf8Bytes(current.text) >= TOOL_OUTPUT_TAIL_MAX_HELD_BYTES) return;
     const epoch = epochRef.current;
     setLoadingEarlier(true);
@@ -300,14 +317,16 @@ export function useToolOutputTail(
         agent: source.agent,
         logicalSessionKey: source.logicalSessionKey,
         toolUseId,
+        ...(messageId === undefined ? {} : { messageId }),
         ...(detailRefRef.current ? { detailRef: detailRefRef.current } : {}),
         mode: "before",
         cursor: current.start,
-        ...(current.startAnchor ? { anchor: current.startAnchor } : {}),
+        ...(current.endAnchor ? { anchor: current.endAnchor } : {}),
         limit: TOOL_OUTPUT_HISTORY_READ_BYTES,
       })
       .then((result) => {
         if (epoch !== epochRef.current) return;
+        if (result.status === "pending") return;
         if (result.status !== "ok") {
           setFallback(true);
           return;
@@ -333,7 +352,7 @@ export function useToolOutputTail(
       .finally(() => {
         if (epoch === epochRef.current) setLoadingEarlier(false);
       });
-  }, [commit, readForward, source, toolUseId]);
+  }, [active, commit, messageId, readForward, source, toolUseId]);
 
   if (!active || fallback) return null;
   const heldBytes = held ? pushUtf8Bytes(held.text) : 0;

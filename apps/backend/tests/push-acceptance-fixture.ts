@@ -50,6 +50,7 @@ import {
 } from "@orkestrator/protocol/native-agent-observation";
 import {
   bridgeTranscriptDetailRouteBody,
+  bridgeTranscriptOutputRouteBody,
   bridgeTranscriptRouteBody,
 } from "@orkestrator/protocol/node/bridge-transcript-routes";
 import { RecentlyRevisedRows } from "@orkestrator/protocol/node/revised-rows";
@@ -159,6 +160,7 @@ export class FakeClaudeBridge {
   /** Moves on a state-only change (a question, an approval) the transcript does not show. */
   stateRevision = 1;
   private readonly routes = new Map<string, number>();
+  outputResponseBytes = 0;
   private tailIndex = -1;
   private tick = 0;
   /** Virtual time of each change, by revision, while recording. */
@@ -267,6 +269,10 @@ export class FakeClaudeBridge {
     return this.revision;
   }
 
+  toolMessageId(): string {
+    return this.messages[this.tailIndex]!.id;
+  }
+
   writeToolOutput(output: string): void {
     const row = this.messages[this.tailIndex]!;
     const part = {
@@ -323,7 +329,9 @@ export class FakeClaudeBridge {
 
   private answer(route: string, body: unknown, status = 200): Response {
     this.routes.set(route, (this.routes.get(route) ?? 0) + 1);
-    return new Response(JSON.stringify(body), {
+    const json = JSON.stringify(body);
+    if (route.endsWith("/transcript/output")) this.outputResponseBytes += Buffer.byteLength(json);
+    return new Response(json, {
       status,
       headers: { "content-type": "application/json" },
     });
@@ -398,7 +406,11 @@ export class FakeClaudeBridge {
       );
       return new Response(body, { headers: { "content-type": "text/event-stream" } });
     }
-    if (route === "GET /session/:id/transcript" || route === "GET /session/:id/transcript/detail") {
+    if (
+      route === "GET /session/:id/transcript" ||
+      route === "GET /session/:id/transcript/detail" ||
+      route === "GET /session/:id/transcript/output"
+    ) {
       const source = {
         messages: this.messages,
         sessionIdentity: "provider-session",
@@ -412,7 +424,9 @@ export class FakeClaudeBridge {
       const query = (name: string) => url.searchParams.get(name);
       const body = route.endsWith("/detail")
         ? bridgeTranscriptDetailRouteBody(source, query)
-        : bridgeTranscriptRouteBody(source, query);
+        : route.endsWith("/output")
+          ? bridgeTranscriptOutputRouteBody(source, query)
+          : bridgeTranscriptRouteBody(source, query);
       return this.answer(route, body);
     }
     if (route === "GET /session/:id/activity") {
@@ -1069,8 +1083,8 @@ export class AcceptanceStack {
             service.canWakePushObserverFromBridge(environmentId, agent),
           forgetPushSettled: (environmentId, agent, logicalSessionKey) =>
             service.forgetPushSettled(environmentId, agent, logicalSessionKey),
-          toolOutputSource: (environmentId, agent, logicalSessionKey, toolUseId) =>
-            service.toolOutputSource(environmentId, agent, logicalSessionKey, toolUseId),
+          toolOutputSource: (environmentId, agent, logicalSessionKey, toolUseId, messageId) =>
+            service.toolOutputSource(environmentId, agent, logicalSessionKey, toolUseId, messageId),
           notePushHint: (environmentId, agent, logicalSessionKey) =>
             service.notePushHint(environmentId, agent, logicalSessionKey),
         }),
@@ -1144,6 +1158,7 @@ export class AcceptanceStack {
     return this.invoke<NativeAgentToolOutputRead>("get_native_agent_tool_output", {
       ...SESSION,
       toolUseId: TOOL_CALL_ID,
+      messageId: this.bridge.toolMessageId(),
       mode,
       cursor,
       anchor,

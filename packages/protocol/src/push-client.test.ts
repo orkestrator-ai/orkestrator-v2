@@ -18,6 +18,8 @@ import { ManualClock, flushMicrotasks } from "./testing/manual-clock";
 const STREAM_A = "stream-aaaaaaaaaaaaaaaa";
 const STREAM_B = "stream-bbbbbbbbbbbbbbbb";
 const TOPIC = "native-session";
+const KEY = "env/codex/late";
+const OFFER = { versions: [1], streamId: STREAM_A };
 
 interface PendingCall {
   args: PushSetSubscriptionsArgs;
@@ -100,6 +102,56 @@ describe("PushSubscriptionClient", () => {
     expect(h.client.isHealthy(TOPIC, "k1")).toBe(true);
     // The first answer is read once: it covers the mount read's race.
     expect(h.changes).toEqual([{ topic: TOPIC, key: "k1", parts: null, reason: "subscribed" }]);
+  });
+
+  test("a late client starts at the acknowledged sequence baseline", async () => {
+    const first = harness();
+    first.listen(KEY);
+    first.client.streamConnected(OFFER);
+    await first.tick();
+    await first.applyLast({});
+    for (let seq = 1; seq <= 3; seq += 1) first.frame(seq, KEY, seq);
+
+    const late = harness();
+    late.listen(KEY);
+    late.client.streamConnected(OFFER);
+    await late.tick();
+    await late.applyLast({ [KEY]: { generation: "g1", revision: 3 } }, 3);
+    late.frame(4, KEY, 4);
+    await late.tick();
+    expect(late.client.diagnostics().seqGaps).toBe(0);
+    expect(late.changes.map((change) => change.reason)).toEqual(["subscribed", "frame"]);
+    expect(late.calls).toHaveLength(1);
+    first.client.dispose();
+    late.client.dispose();
+  });
+
+  test("checks a frame that overtakes the first answer against its baseline", async () => {
+    const h = harness();
+    h.listen(KEY);
+    h.client.streamConnected(OFFER);
+    await h.tick();
+    h.frame(5, KEY, 5);
+    await h.applyLast({}, 3);
+    expect(h.client.diagnostics().seqGaps).toBe(1);
+    expect(h.changes.map((change) => change.reason)).toEqual(["frame", "resync"]);
+    await h.tick();
+    expect(h.calls).toHaveLength(2);
+    h.client.dispose();
+  });
+
+  test("an oversized encoded key stays on fallback without rejecting the valid set", async () => {
+    const h = harness();
+    const oversized = `env/codex/tab/${encodeURIComponent("雪".repeat(120))}`;
+    h.listen(oversized);
+    h.listen(KEY);
+    h.client.streamConnected(OFFER);
+    await h.tick();
+    expect(h.calls[0]?.args.subscriptions).toEqual([{ topic: TOPIC, key: KEY }]);
+    await h.applyLast({});
+    expect(h.client.isHealthy(TOPIC, KEY)).toBe(true);
+    expect(h.client.isHealthy(TOPIC, oversized)).toBe(false);
+    h.client.dispose();
   });
 
   test("a stream without push leaves every key on its polling cadence", async () => {

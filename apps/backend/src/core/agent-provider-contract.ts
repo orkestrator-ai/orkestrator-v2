@@ -1,3 +1,7 @@
+import type {
+  NativeAgentToolOutputRead,
+  ToolOutputReadRequest,
+} from "@orkestrator/protocol/native-agent-tool-output";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import type {
@@ -1020,6 +1024,12 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     sessionId: string,
     locator: string,
   ): Promise<ProviderTranscriptDetail | undefined>;
+  /** A bounded read of the output behind a transcript detail locator. */
+  transcriptOutput?(
+    sessionId: string,
+    locator: string,
+    request: ToolOutputReadRequest,
+  ): Promise<NativeAgentToolOutputRead | undefined>;
   /**
    * History before a snapshot's `historyCursor`, served directly by the
    * provider. Undefined when this provider connection cannot page.

@@ -18,12 +18,19 @@ import { DEFAULT_NATIVE_AGENT_LIVE_WINDOW } from "@orkestrator/protocol/native-a
 import { PUSH_KEY_THROTTLE_MS } from "@orkestrator/protocol/push-events";
 import {
   AcceptanceStack,
+  FakeClaudeBridge,
   SESSION,
   runScenario,
   type BridgeSignalMode,
   type ScenarioResult,
   type Viewer,
 } from "./push-acceptance-fixture.js";
+
+import { HttpBridgeProvider } from "../src/core/http-bridge/provider.js";
+import { readReviewerTranscript } from "../src/core/multi-review-reviewer-transcript.js";
+import { SharedReviewTranscripts } from "../src/core/multi-review-transcript-push.js";
+import { ReviewTranscriptPushTopic } from "../src/core/push/review-transcript-push-topic.js";
+import { formatReviewTranscriptPushKey } from "@orkestrator/protocol/push-events";
 
 const stacks: AcceptanceStack[] = [];
 afterEach(async () => {
@@ -381,3 +388,87 @@ describe("push faults through the real gateway converge on the bridge's state", 
     },
   );
 });
+
+test("large tool locator ranges cross the provider hop without shipping the full detail", async () => {
+  const stack = await pushStack("revisions");
+  const initial = "first line\n" + "x".repeat(200_000);
+  stack.bridge.writeToolOutput(initial);
+  await authoritative(stack);
+  const first = await stack.readToolOutput("tail");
+  if (first.status !== "ok") throw new Error(`Tool output: ${first.status}`);
+  expect(first.totalBytes).toBe(initial.length);
+  expect(stack.bridge.routeCounts()["GET /session/:id/transcript/detail"]).toBeUndefined();
+  expect(stack.bridge.outputResponseBytes).toBeLessThan(4_600);
+
+  const before = stack.bridge.outputResponseBytes;
+  stack.bridge.writeToolOutput(initial + "final line");
+  await authoritative(stack);
+  const range = await stack.readToolOutput("range", first.end, first.endAnchor);
+  expect(range).toMatchObject({
+    status: "ok",
+    text: "final line",
+    totalBytes: initial.length + 10,
+  });
+  expect(stack.bridge.outputResponseBytes - before).toBeLessThan(512);
+});
+
+test.each(["revisions", "cadence"] as const)(
+  "two reviewer viewers share real bridge transcript work in %s mode",
+  async (mode) => {
+    const clock = new ManualClock();
+    const bridge = new FakeClaudeBridge(() => clock.now(), mode);
+    bridge.startTurn();
+    const shared = new SharedReviewTranscripts(() => clock.now());
+    const identity = {
+      environmentId: "review-env",
+      agent: "claude",
+      providerSessionId: "provider-session",
+      view: "reviewer",
+    };
+    const key = formatReviewTranscriptPushKey({ workflowId: "workflow", reviewerId: "reviewer" });
+    const provider = new HttpBridgeProvider(
+      { agent: "claude", baseUrl: "http://acceptance-bridge.invalid", authToken: "acceptance" },
+      bridge.fetch,
+    );
+    const load = (token?: string) =>
+      readReviewerTranscript(provider, identity.providerSessionId, token);
+    const read = (token?: string, probe = false) => shared.read(identity, token, probe, load);
+    const published: string[] = [];
+    const topic = new ReviewTranscriptPushTopic({
+      timers: clock,
+      now: () => clock.now(),
+      readTarget: async () => ({ ...identity, live: true, digest: "same" }),
+      bridgeAnnounces: () => mode === "revisions",
+      probeTranscript: async (_key, token) => (await read(token, true)).sourceToken,
+      publish: (_key, _stamp, parts) => published.push(...parts),
+    });
+    const calls = () => bridge.routeCounts()["GET /session/:id/transcript"] ?? 0;
+    try {
+      const mounted = await read();
+      expect(calls()).toBe(1);
+      topic.retain(key);
+      await topic.resolve(key);
+
+      bridge.stream();
+      if (mode === "revisions") {
+        shared.invalidate(identity.environmentId, identity.agent, identity.providerSessionId);
+        topic.hint(identity.environmentId, identity.agent, identity.providerSessionId, [
+          "transcript",
+        ]);
+      } else {
+        await clock.advanceAsync(0);
+      }
+      expect(published).toEqual(["transcript"]);
+      const [first, second] = await Promise.all([read(mounted.sourceToken), read()]);
+      expect(first.kind).toBe("snapshot");
+      expect(second).toEqual(first);
+      expect(first.sourceToken).not.toBe(mounted.sourceToken);
+      expect(calls()).toBe(2);
+      expect(await read(first.sourceToken)).toMatchObject({ kind: "unchanged" });
+      expect(calls()).toBe(2);
+    } finally {
+      topic.dispose();
+      await provider.dispose();
+    }
+  },
+);

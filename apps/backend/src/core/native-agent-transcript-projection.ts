@@ -282,8 +282,9 @@ export class NativeAgentTranscriptProjection {
   toolOutputSource(
     input: Parameters<NativeAgentToolOutputReads["toolOutputSource"]>[0],
     toolUseId: string,
+    messageId?: string,
   ): ToolOutputSource | null {
-    return this.toolOutputs.toolOutputSource(input, toolUseId);
+    return this.toolOutputs.toolOutputSource(input, toolUseId, messageId);
   }
 
   /** Write a session's newest pending display tail now. */

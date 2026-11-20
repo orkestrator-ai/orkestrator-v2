@@ -3320,10 +3320,11 @@ export function useNativeAgentSession<TMessage = unknown>({
   const toolOutputTail = useMemo<ToolOutputTailSource>(
     () => ({
       scope,
+      active: enabled && isActive,
       ...identity,
       read: (input) => backendForScope(scope).getNativeAgentToolOutput(input),
     }),
-    [scope, identity],
+    [enabled, identity, isActive, scope],
   );
   /**
    * Page older rows in behind the cursor this tab holds, then reconcile.

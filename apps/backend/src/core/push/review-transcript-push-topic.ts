@@ -409,7 +409,7 @@ export class ReviewTranscriptPushTopic implements PushTopicProvider {
       const sessionId = target.providerSessionId;
       const token = await this.options.probeTranscript(entry.parsed, entry.probeToken);
       if (entry.stopped || entry.target?.providerSessionId !== sessionId) return;
-      const moved = entry.probed && token !== entry.probeToken;
+      const moved = !entry.probed || token !== entry.probeToken;
       entry.probeToken = token;
       entry.probed = true;
       if (moved) this.publishTranscript(entry);

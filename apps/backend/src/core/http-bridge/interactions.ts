@@ -954,7 +954,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     return this.snapshotFromSideRoutes(sessionId, payloads);
   }
 
-  private async readSideRoutes(sessionId: string): Promise<unknown[] | "missing"> {
+  private async readSideRoutes(sessionId: string): Promise<unknown[][] | "missing"> {
     const paths =
       this.agent === "claude"
         ? (["questions", "plan-approvals", "interactions"] as const)
@@ -974,29 +974,32 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     // 404 fails the snapshot like any failed read.
     for (const response of fetched) assertOk(response, `${this.agent} interaction snapshot`);
     const snapshotBudget = { remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes };
+    const fields =
+      this.agent === "claude"
+        ? ["questions", "approvals", "interactions"]
+        : ["approvals", "interactions"];
     return Promise.all(
-      fetched.map((response) =>
-        boundedJson(response, `${this.agent} interaction snapshot`, snapshotBudget),
-      ),
+      fetched.map(async (response, index) => {
+        const payload = await boundedJson(
+          response,
+          `${this.agent} interaction snapshot`,
+          snapshotBudget,
+        );
+        const requests = asRecord(payload)?.[fields[index]!];
+        if (!Array.isArray(requests)) {
+          throw new ProviderUnavailableError(
+            `${this.agent} returned a malformed interaction snapshot`,
+          );
+        }
+        return requests as unknown[];
+      }),
     );
   }
 
   private snapshotFromSideRoutes(
     sessionId: string,
-    payloads: readonly unknown[],
+    [firstRequests = [], secondRequests = [], claudeInteractions = []]: readonly unknown[][],
   ): AgentInteractionSnapshot {
-    const first = asRecord(payloads[0]);
-    const second = asRecord(payloads[1]);
-    const firstRequests = first?.[this.agent === "claude" ? "questions" : "approvals"];
-    const secondRequests = second?.[this.agent === "claude" ? "approvals" : "interactions"];
-    const claudeInteractions = this.agent === "claude" ? asRecord(payloads[2])?.interactions : [];
-    if (
-      !Array.isArray(firstRequests) ||
-      !Array.isArray(secondRequests) ||
-      !Array.isArray(claudeInteractions)
-    ) {
-      throw new ProviderUnavailableError(`${this.agent} returned a malformed interaction snapshot`);
-    }
     const requests: AgentInteractionRequest[] = [];
     let droppedRequests = 0;
     const mapRequest = (

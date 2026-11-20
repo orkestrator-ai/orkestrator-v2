@@ -37,6 +37,9 @@
  */
 import {
   PUSH_CHANGED_EVENT,
+  PUSH_LIMITS,
+  PUSH_SUBSCRIPTION_BODY_BYTES,
+  pushUtf8Bytes,
   PUSH_RESYNC_EVENT,
   parsePushChangedPayload,
   parsePushResyncPayload,
@@ -147,7 +150,9 @@ export class PushSubscriptionClient {
   private readonly maxRetryMs: number;
   private stateValue: PushClientState = "connecting";
   private streamId: string | null = null;
-  private lastSeq = 0;
+  private lastSeq: number | null = null;
+  /** Undefined after the first set is acknowledged on this stream. */
+  private firstSeqBeforeSet: number | null | undefined = null;
   private setRevision = 0;
   private inFlight: AbortController | null = null;
   private missingRetryTimer: unknown = null;
@@ -244,7 +249,8 @@ export class PushSubscriptionClient {
     const offer = this.options.nodeId !== undefined && !streamOffer?.nodes ? null : streamOffer;
     if (!offer) {
       this.streamId = null;
-      this.lastSeq = 0;
+      this.lastSeq = null;
+      this.firstSeqBeforeSet = null;
       this.resetStatuses();
       this.setState("unavailable");
       return;
@@ -252,7 +258,8 @@ export class PushSubscriptionClient {
     const replaced = offer.streamId !== this.streamId;
     this.streamId = offer.streamId;
     if (replaced) {
-      this.lastSeq = 0;
+      this.lastSeq = null;
+      this.firstSeqBeforeSet = null;
       this.resetStatuses();
     }
     this.retryDelay = this.retryMs;
@@ -386,22 +393,25 @@ export class PushSubscriptionClient {
   /** Checks contiguity. Returns false for a duplicate that must be ignored. */
   private acceptSeq(seq: number): boolean {
     if (this.streamId === null) return false;
-    if (seq <= this.lastSeq) {
+    if (this.lastSeq !== null && seq <= this.lastSeq) {
       this.counters.duplicateFrames += 1;
       return false;
     }
-    const gap = seq > this.lastSeq + 1;
+    const gap = this.lastSeq !== null && seq > this.lastSeq + 1;
+    if (this.firstSeqBeforeSet === null) this.firstSeqBeforeSet = seq;
     this.lastSeq = seq;
-    if (gap) {
-      this.counters.seqGaps += 1;
-      this.recover();
-      // The next partial frame can advance the same key to the stamp the
-      // replacement set returns. Invalidate every part before applying it.
-      for (const entry of Array.from(this.entries.values())) {
-        this.emit(entry, { topic: entry.topic, key: entry.key, parts: null, reason: "resync" });
-      }
-    }
+    if (gap) this.noteSequenceGap();
     return true;
+  }
+
+  private noteSequenceGap(): void {
+    this.counters.seqGaps += 1;
+    this.recover();
+    // A partial frame can have advanced to the stamp the replacement set
+    // returns. Invalidate every subscribed part before relying on that stamp.
+    for (const entry of Array.from(this.entries.values())) {
+      this.emit(entry, { topic: entry.topic, key: entry.key, parts: null, reason: "resync" });
+    }
   }
 
   /** Whether a change is news for this entry; advances its stamp when it is. */
@@ -485,7 +495,26 @@ export class PushSubscriptionClient {
     const request = new AbortController();
     this.inFlight = request;
     const setRevision = this.nextSetRevision();
-    const sent = this.paused ? [] : Array.from(this.entries.values());
+    const subscriptions: PushSetSubscriptionsArgs["subscriptions"] = [];
+    // Leave room for stream, node and command-envelope metadata.
+    let remainingBytes = PUSH_SUBSCRIPTION_BODY_BYTES - 4096;
+    if (!this.paused) {
+      for (const entry of this.entries.values()) {
+        const { topic, key } = entry;
+        const bytes = pushUtf8Bytes(JSON.stringify({ topic, key })) + 1;
+        if (
+          subscriptions.length >= PUSH_LIMITS.maxSubscriptions ||
+          topic.length > 64 ||
+          pushUtf8Bytes(key) > PUSH_LIMITS.maxKeyBytes ||
+          bytes > remainingBytes
+        ) {
+          entry.status = "denied";
+          continue;
+        }
+        remainingBytes -= bytes;
+        subscriptions.push({ topic, key });
+      }
+    }
     this.counters.setCalls += 1;
     let result: PushSetSubscriptionsResult | null = null;
     let finishCancelled: () => void = () => undefined;
@@ -503,7 +532,7 @@ export class PushSubscriptionClient {
           {
             streamId,
             setRevision,
-            subscriptions: sent.map((entry) => ({ topic: entry.topic, key: entry.key })),
+            subscriptions,
             ...(this.options.nodeId === undefined ? {} : { nodeId: this.options.nodeId }),
           },
           request.signal,
@@ -554,6 +583,14 @@ export class PushSubscriptionClient {
       return;
     }
     if (result.setRevision !== setRevision) return;
+    // The sticky offer can predate this client. Check frames that overtook
+    // the first answer against its registration baseline.
+    const firstSeq = this.firstSeqBeforeSet;
+    if (firstSeq !== undefined) {
+      this.firstSeqBeforeSet = undefined;
+      this.lastSeq = Math.max(this.lastSeq ?? 0, result.seqBase);
+      if (firstSeq !== null && firstSeq > result.seqBase + 1) this.noteSequenceGap();
+    }
     const answered = new Map(
       result.subscriptions.map((answer) => [pushSubscriptionId(answer.topic, answer.key), answer]),
     );

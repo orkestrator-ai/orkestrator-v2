@@ -557,6 +557,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.transcripts.detail(sessionId, locator);
   }
 
+  transcriptOutput(...args: Parameters<HttpBridgeTranscriptReader["output"]>) {
+    return this.transcripts.output(...args);
+  }
+
   transcriptPage(...args: Parameters<HttpBridgeTranscriptReader["page"]>) {
     return this.transcripts.page(...args);
   }

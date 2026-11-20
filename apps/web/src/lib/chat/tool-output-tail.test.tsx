@@ -41,7 +41,12 @@ type ReadInput = Parameters<ToolOutputTailSource["read"]>[0];
 
 /** The call's output on the "backend", and every read made of it. */
 function fakeCall(initial: string, complete = false) {
-  const state = { output: initial, complete, failNext: false, status: "ok" as "ok" | "missing" };
+  const state = {
+    output: initial,
+    complete,
+    failNext: false,
+    status: "ok" as "ok" | "missing" | "pending",
+  };
   const reads: ReadInput[] = [];
   const read = async (input: ReadInput): Promise<NativeAgentToolOutputRead> => {
     reads.push(input);
@@ -84,23 +89,31 @@ function pushClient() {
 function TailProvider({
   read,
   timers,
+  active,
   children,
 }: {
   read: ToolOutputTailSource["read"];
   timers: ManualClock;
+  active?: boolean;
   children: ReactNode;
 }) {
   const scope = useNodeScope();
   const value = useMemo<ToolOutputTailSource>(
-    () => ({ scope, ...SESSION, read, timers }),
-    [scope, read, timers],
+    () => ({ scope, ...SESSION, read, timers, active }),
+    [scope, read, timers, active],
   );
   return <ToolOutputTailContext.Provider value={value}>{children}</ToolOutputTailContext.Provider>;
 }
 
-function Probe({ initiallyOpen = true }: { initiallyOpen?: boolean }) {
+function Probe({
+  initiallyOpen = true,
+  messageId,
+}: {
+  initiallyOpen?: boolean;
+  messageId?: string;
+}) {
   const [open, setOpen] = useState(initiallyOpen);
-  const tail = useToolOutputTail("call-1", "ref-1", open);
+  const tail = useToolOutputTail("call-1", "ref-1", open, messageId);
   return (
     <div>
       <button type="button" onClick={() => setOpen((value) => !value)}>
@@ -161,9 +174,9 @@ function setup(initial: string, ui: ReactNode = <Probe />, complete = false) {
   const tail = () => screen.getByTestId("tail");
   /** Run the row's due poll ticks and settle the reads they start. */
   const advance = (ms: number) => act(async () => void (await clock.advanceAsync(ms)));
-  const rerender = (next: ReactNode) =>
+  const rerender = (next: ReactNode, active = true) =>
     view.rerender(
-      <TailProvider read={call.read} timers={clock}>
+      <TailProvider read={call.read} timers={clock} active={active}>
         {next}
       </TailProvider>,
     );
@@ -246,6 +259,57 @@ describe("useToolOutputTail", () => {
     const earlier = h.call.reads.find((read) => read.mode === "before");
     expect(earlier).toMatchObject({ cursor: output.length - 32 * 1024 });
     expect(h.text()).toBe(output);
+  });
+
+  test("a hidden mounted tab releases output observation and resumes its open row", async () => {
+    const h = setup("before");
+    await waitFor(() => expect(h.text()).toBe("before"));
+    await h.connect();
+    await waitFor(() => expect(h.lastKeys()).toEqual([KEY]));
+    h.rerender(<Probe />, false);
+    await waitFor(() => expect(h.lastKeys()).toEqual([]));
+    const reads = h.call.reads.length;
+    await h.advance(60_000);
+    expect(h.call.reads).toHaveLength(reads);
+    h.call.state.output = "after";
+    h.rerender(<Probe />);
+    await waitFor(() => expect(h.text()).toBe("after"));
+    await waitFor(() => expect(h.lastKeys()).toEqual([KEY]));
+  });
+
+  test("a reused call ID starts a separate tail when the row changes", async () => {
+    const h = setup("first row", <Probe messageId="first" />);
+    await waitFor(() => expect(h.text()).toBe("first row"));
+    await h.connect();
+    const key = (messageId: string) =>
+      formatToolOutputPushKey({ ...SESSION, toolUseId: "call-1", messageId });
+    await waitFor(() => expect(h.lastKeys()).toEqual([key("first")]));
+    h.call.state.output = "second row";
+    h.rerender(<Probe messageId="second" />);
+    await waitFor(() => expect(h.text()).toBe("second row"));
+    await waitFor(() => expect(h.lastKeys()).toEqual([key("second")]));
+    expect(h.call.reads.find((read) => read.messageId === "second")).toMatchObject({
+      toolUseId: "call-1",
+      messageId: "second",
+      mode: "tail",
+    });
+  });
+
+  test("a temporarily absent occurrence keeps held output and follows its final update", async () => {
+    const h = setup("partial");
+    await waitFor(() => expect(h.text()).toBe("partial"));
+    await h.connect();
+    await waitFor(() => expect(h.lastKeys()).toEqual([KEY]));
+    h.call.state.status = "pending";
+    await h.frame();
+    expect(h.text()).toBe("partial");
+    expect(h.lastKeys()).toEqual([KEY]);
+    h.call.state.output = "partial and final";
+    h.call.state.status = "ok";
+    h.call.state.complete = true;
+    await h.frame();
+    await waitFor(() => expect(h.text()).toBe("partial and final"));
+    expect(h.tail().dataset.complete).toBe("yes");
   });
 
   test("a completed call stops subscribing", async () => {
@@ -436,7 +500,11 @@ describe("expanded running tool row", () => {
     );
     expect(screen.getByRole("button", { name: "Load earlier" })).toBeTruthy();
     await h.connect();
-    await waitFor(() => expect(h.lastKeys()).toEqual([KEY]));
+    await waitFor(() =>
+      expect(h.lastKeys()).toEqual([
+        formatToolOutputPushKey({ ...SESSION, toolUseId: "call-1", messageId: "m1" }),
+      ]),
+    );
     fireEvent.click(trigger);
     await waitFor(() => expect(h.lastKeys()).toEqual([]));
   });

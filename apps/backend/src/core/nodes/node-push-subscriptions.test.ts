@@ -59,6 +59,7 @@ function harness(options: { maxSubscriptions?: number } = {}) {
     holds: 0,
     failCalls: false,
     failNextEmpty: false,
+    nextAnswer: undefined as ((revision: number) => unknown) | undefined,
     delay: null as Promise<void> | null,
   };
   const port: NodePushLeafPort = {
@@ -79,6 +80,11 @@ function harness(options: { maxSubscriptions?: number } = {}) {
               if (leaf.failCalls) throw new Error("the node did not answer");
               const set = args as unknown as PushSetSubscriptionsArgs;
               leafCalls.push(set);
+              if (leaf.nextAnswer) {
+                const answer = leaf.nextAnswer(set.setRevision);
+                leaf.nextAnswer = undefined;
+                return answer as T;
+              }
               if (set.subscriptions.length === 0 && leaf.failNextEmpty) {
                 leaf.failNextEmpty = false;
                 throw new Error("temporary empty-set failure");
@@ -180,6 +186,42 @@ function harness(options: { maxSubscriptions?: number } = {}) {
 }
 
 describe("node push subscription controller", () => {
+  test.each([
+    ["malformed", (revision: number) => ({ status: "applied", setRevision: revision, seqBase: 0 })],
+    [
+      "mismatched",
+      (revision: number) => ({
+        status: "applied",
+        setRevision: revision + 1,
+        seqBase: 0,
+        subscriptions: [],
+      }),
+    ],
+  ] as const)(
+    "recovers from a %s leaf acknowledgement without a tight retry loop",
+    async (_kind, answer) => {
+      const h = harness();
+      h.openUpstream();
+      const window = h.open();
+      try {
+        h.leaf.nextAnswer = answer;
+        expect(await h.set(window.streamId, 1, ["env/codex/tab"])).toEqual({
+          status: "refused",
+          reason: "unavailable",
+        });
+        // Removing the failed downstream set may immediately clear the leaf.
+        expect(h.leafCalls.filter((call) => call.subscriptions.length > 0)).toHaveLength(1);
+        expect(await h.set(window.streamId, 2, ["env/codex/tab"])).toMatchObject({
+          status: "applied",
+          subscriptions: [{ status: "ok", revision: 3 }],
+        });
+      } finally {
+        h.controller.stop();
+        h.hub.closeConnection(window.streamId);
+      }
+    },
+  );
+
   test("sends the leaf the union of every connection's set with its own setRevision and copies the stamps", async () => {
     const h = harness();
     h.openUpstream();

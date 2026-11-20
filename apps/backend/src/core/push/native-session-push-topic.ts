@@ -129,6 +129,8 @@ interface Observer {
   wakeAgain: boolean;
   /** A bridge hint arrived during a read: read again, but not before the floor. */
   bridgeWakeAgain: boolean;
+  bridgeWakeCandidate?: string;
+  bridgeWakeCandidatesOverflow?: boolean;
   /** When the last read started, for the bridge wake floor. */
   lastReadAt: number;
   /** When the scheduled read is due. */
@@ -339,8 +341,8 @@ export class NativeSessionPushTopic implements PushTopicProvider {
 
   /**
    * A bridge frame is a wake hint (to-do 8102 task 2). It wakes only an
-   * observer reading on hints (`bridgeBackoff`); one on its cadence reads
-   * soon anyway. `providerSessionId` undefined means the stream lost or
+   * observer reading on hints (`bridgeBackoff`) or an in-flight read that
+   * may be about to switch onto hints. `providerSessionId` undefined means the stream lost or
    * regained continuity: every such observer of the provider reads, and falls
    * back to its cadence if the stream is no longer live. `parts` (what moved)
    * is informational: the read is conditional on both parts, so a part that
@@ -355,11 +357,26 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     _parts?: readonly ("state" | "transcript")[],
   ): void {
     for (const observer of this.observers.values()) {
-      if (!observer.bridgeBackoff) continue;
+      if (!observer.bridgeBackoff && !observer.reading) continue;
       if (observer.parsed.environmentId !== environmentId || observer.parsed.agent !== agent)
         continue;
-      if (providerSessionId !== undefined && observer.providerSessionId !== providerSessionId)
+      if (
+        providerSessionId !== undefined &&
+        observer.providerSessionId !== providerSessionId &&
+        !observer.reading
+      )
         continue;
+      if (
+        observer.reading &&
+        providerSessionId !== undefined &&
+        (!observer.bridgeBackoff || observer.providerSessionId !== providerSessionId)
+      ) {
+        if (observer.bridgeWakeCandidate && observer.bridgeWakeCandidate !== providerSessionId) {
+          observer.bridgeWakeCandidatesOverflow = true;
+        }
+        observer.bridgeWakeCandidate = providerSessionId;
+        continue;
+      }
       // A continuity hint (connect, gap, loss) is one event: read at once.
       this.wakeFromBridge(observer, providerSessionId === undefined);
     }
@@ -409,13 +426,7 @@ export class NativeSessionPushTopic implements PushTopicProvider {
 
   private wakeFromBridge(observer: Observer, immediate: boolean): void {
     if (observer.stopped) return;
-    this.counters.bridgeWakes += 1;
-    observer.quietIndex = 0;
-    try {
-      this.options.onBridgeWake?.(observer.parsed);
-    } catch (error) {
-      log.warn("native-session.wake-hook-failed", { error: formatLogError(error) });
-    }
+    this.noteBridgeWake(observer);
     if (observer.reading) {
       if (immediate) observer.wakeAgain = true;
       else observer.bridgeWakeAgain = true;
@@ -425,6 +436,16 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     // A read already due sooner covers this hint.
     if (observer.timer !== null && observer.dueAt <= this.now() + delay) return;
     this.schedule(observer, delay);
+  }
+
+  private noteBridgeWake(observer: Observer): void {
+    this.counters.bridgeWakes += 1;
+    observer.quietIndex = 0;
+    try {
+      this.options.onBridgeWake?.(observer.parsed);
+    } catch (error) {
+      log.warn("native-session.wake-hook-failed", { error: formatLogError(error) });
+    }
   }
 
   private bridgeWakeDelay(observer: Observer): number {
@@ -466,6 +487,8 @@ export class NativeSessionPushTopic implements PushTopicProvider {
     observer.reading = true;
     observer.wakeAgain = false;
     observer.bridgeWakeAgain = false;
+    observer.bridgeWakeCandidate = undefined;
+    observer.bridgeWakeCandidatesOverflow = false;
     observer.lastReadAt = this.now();
     this.counters.reads += 1;
     let update: NativeAgentLiveUpdate | null = null;
@@ -504,6 +527,14 @@ export class NativeSessionPushTopic implements PushTopicProvider {
           log.warn("native-session.listener-failed", { error: formatLogError(error) });
         }
       }
+    }
+    if (
+      observer.bridgeWakeCandidate !== undefined &&
+      (observer.bridgeWakeCandidatesOverflow ||
+        observer.bridgeWakeCandidate === observer.providerSessionId)
+    ) {
+      this.noteBridgeWake(observer);
+      observer.bridgeWakeAgain = true;
     }
     const delay = this.nextDelay(observer, update, parts.length > 0);
     observer.bridgeBackoff = delay === NATIVE_SESSION_BRIDGE_BACKSTOP_MS;

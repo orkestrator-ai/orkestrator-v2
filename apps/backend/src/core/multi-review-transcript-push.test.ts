@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
-import { multiReviewTranscriptPushTarget } from "./multi-review-transcript-push.js";
+import {
+  multiReviewTranscriptPushTarget,
+  SharedReviewTranscripts,
+} from "./multi-review-transcript-push.js";
 
 function session(providerSessionId: string, status = "running") {
   return {
@@ -96,4 +99,34 @@ describe("multiReviewTranscriptPushTarget", () => {
     expect(none?.providerSessionId).toBeUndefined();
     expect(none?.live).toBe(false);
   });
+});
+
+test("a hint fences the old reviewer read and shares one trailing refresh", async () => {
+  const shared = new SharedReviewTranscripts();
+  const identity = {
+    environmentId: "env",
+    providerSessionId: "s1",
+    agent: "claude",
+    view: "reviewer",
+  };
+  const snapshot = (sourceToken: string) => ({
+    kind: "snapshot" as const,
+    sourceToken,
+    bytes: 0,
+    messages: [],
+    truncated: false,
+  });
+  const held = Promise.withResolvers<ReturnType<typeof snapshot>>();
+  let loads = 0;
+  const load = async () => (++loads === 1 ? held.promise : snapshot("new"));
+  const old = shared.read(identity, undefined, false, load);
+  shared.invalidate(identity.environmentId, identity.agent, identity.providerSessionId);
+  const trailing = shared.read(identity, undefined, false, load);
+  const otherViewer = shared.read(identity, undefined, false, load);
+  expect(loads).toBe(1);
+  held.resolve(snapshot("old"));
+  expect(await old).toMatchObject({ sourceToken: "old" });
+  expect(await trailing).toMatchObject({ sourceToken: "new" });
+  expect(await otherViewer).toMatchObject({ sourceToken: "new" });
+  expect(loads).toBe(2);
 });

@@ -403,6 +403,7 @@ export const getNativeAgentToolOutputCommand = defineCommand({
   args: Schema.Struct({
     ...sessionKey,
     toolUseId: Schema.String,
+    messageId: optionalString,
     detailRef: optionalString,
     mode: optionalString,
     cursor: Schema.optionalKey(Schema.Number),
@@ -410,7 +411,7 @@ export const getNativeAgentToolOutputCommand = defineCommand({
     limit: Schema.optionalKey(Schema.Number),
   }),
   result: ToolOutputReadSchema,
-  critical: [],
+  critical: ["messageId"],
 });
 
 /** Re-reads the provider's model list. */

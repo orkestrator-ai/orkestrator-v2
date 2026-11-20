@@ -453,6 +453,7 @@ export function registerNativeAgentCommands(
       agent: asString(args.agent, "agent"),
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
       toolUseId: asString(args.toolUseId, "toolUseId"),
+      ...(args.messageId === undefined ? {} : { messageId: args.messageId }),
       ...(args.detailRef === undefined ? {} : { detailRef: args.detailRef }),
       ...(args.mode === undefined ? {} : { mode: args.mode }),
       ...(args.cursor === undefined ? {} : { cursor: args.cursor }),

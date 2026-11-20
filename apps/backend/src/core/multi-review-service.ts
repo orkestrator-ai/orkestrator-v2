@@ -152,7 +152,10 @@ import {
   stalledMinutes,
 } from "./multi-review-progress.js";
 import { readTranscriptProgressSample } from "./transcript-progress.js";
-import { multiReviewTranscriptPushTarget } from "./multi-review-transcript-push.js";
+import {
+  multiReviewTranscriptPushTarget,
+  SharedReviewTranscripts,
+} from "./multi-review-transcript-push.js";
 import type { ReviewTranscriptTarget } from "./push/review-transcript-push-topic.js";
 import type { ReviewTranscriptPushKey } from "@orkestrator/protocol/push-events";
 import {
@@ -763,6 +766,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   private readonly graphProjected = new Map<string, number>();
 
   private readonly transcriptArtifacts: WorkflowTranscriptArtifacts;
+  private readonly sharedTranscripts = new SharedReviewTranscripts();
 
   constructor(
     private readonly storage: StorageService,
@@ -842,6 +846,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     this.providerCreations.clear();
     this.providerUsers.clear();
     this.providerReaders.clear();
+    this.sharedTranscripts.clear();
     this.addressFindingsDispatchRetryAt.clear();
     this.autoPrRetryAt.clear();
     this.addressFindingsOutcomePolls.clear();
@@ -871,6 +876,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     workflowId: string,
     reviewerId: string,
     knownSourceToken?: string,
+    probe = false,
   ): Promise<MultiReviewReviewerTranscript> {
     const loadReviewer = async () => {
       const record = await this.storage.getMultiReviewWorkflow(workflowId);
@@ -893,43 +899,65 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       conversationKey,
     );
     if (readSessionId) {
-      const key = this.providerKey(workflow, reviewer);
-      this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
-      try {
-        const provider = await this.providerInstance(workflow, reviewer);
-        provider.registerSession?.(readSessionId, {
-          origin: "automated-review",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "review",
-          workflowId: workflow.id,
-          provider: reviewer.agent,
-          fence: reviewer.sessionKey,
-        });
-        const started = Date.now();
-        const release = retainProvider(provider);
+      const load = async (token: string | undefined) => {
+        const key = this.providerKey(workflow, reviewer);
+        this.providerReaders.set(key, (this.providerReaders.get(key) ?? 0) + 1);
         try {
-          transcript = await readReviewerTranscript(
-            provider,
-            readSessionId,
-            knownSourceToken,
-            { key: reviewerHistoryKey(workflow.id, reviewer.id) },
-            undefined,
-            ledgerRevision > 0 ? `artifacts-${ledgerRevision}` : undefined,
-          );
+          const provider = await this.providerInstance(workflow, reviewer);
+          provider.registerSession?.(readSessionId, {
+            origin: "automated-review",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            phase: "review",
+            workflowId: workflow.id,
+            provider: reviewer.agent,
+            fence: reviewer.sessionKey,
+          });
+          const started = Date.now();
+          const release = retainProvider(provider);
+          try {
+            const answer = await readReviewerTranscript(
+              provider,
+              readSessionId,
+              token,
+              { key: reviewerHistoryKey(workflow.id, reviewer.id) },
+              undefined,
+              ledgerRevision > 0 ? `artifacts-${ledgerRevision}` : undefined,
+            );
+            recordEfficiency(this.options.efficiency, {
+              owner: "multi-review",
+              operation:
+                answer.kind === "unchanged" ? "transcript.ui_unchanged" : "transcript.ui_read",
+              phase: "ui",
+              bytes: answer.kind === "snapshot" ? answer.bytes : 0,
+              elapsedMs: Date.now() - started,
+            });
+            return answer;
+          } finally {
+            release();
+          }
         } finally {
-          release();
+          await this.releaseProviderReaderByKey(key);
         }
-        recordEfficiency(this.options.efficiency, {
-          owner: "multi-review",
-          operation:
-            transcript.kind === "unchanged" ? "transcript.ui_unchanged" : "transcript.ui_read",
-          phase: "ui",
-          bytes: transcript.kind === "snapshot" ? transcript.bytes : 0,
-          elapsedMs: Date.now() - started,
-        });
-      } finally {
-        await this.releaseProviderReaderByKey(key);
-      }
+      };
+      transcript = this.options.onTranscriptHint
+        ? await this.sharedTranscripts.read(
+            {
+              environmentId: workflow.environmentId,
+              agent: reviewer.agent,
+              providerSessionId: readSessionId,
+              view: JSON.stringify([
+                "reviewer",
+                workflow.id,
+                reviewer.id,
+                reviewer.status,
+                ledgerRevision,
+              ]),
+            },
+            knownSourceToken,
+            probe,
+            load,
+          )
+        : await load(knownSourceToken);
       // The reviewer may have been restarted while the read was in flight. A
       // transcript from the replaced session must not reach the new session's
       // view, so answer from the current state with no messages and no token;
@@ -1013,8 +1041,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
   ): Promise<string | undefined> {
     const read =
       key.step === undefined
-        ? await this.reviewerTranscript(key.workflowId, key.reviewerId, knownSourceToken)
-        : await this.stepTranscript(key.workflowId, key.step, knownSourceToken);
+        ? await this.reviewerTranscript(key.workflowId, key.reviewerId, knownSourceToken, true)
+        : await this.stepTranscript(key.workflowId, key.step, knownSourceToken, true);
     return read.sourceToken;
   }
 
@@ -1027,9 +1055,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     workflowId: string,
     step: MultiReviewStepKind,
     knownSourceToken?: string,
+    probe = false,
   ): Promise<MultiReviewStepTranscript> {
     return readMultiReviewStepTranscript(
-      this.stepTranscriptHost(),
+      this.stepTranscriptHost(probe),
       workflowId,
       step,
       knownSourceToken,
@@ -1044,8 +1073,24 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     return readMultiReviewStepToolDetails(this.stepTranscriptHost(), workflowId, step, detailRef);
   }
 
-  private stepTranscriptHost(): StepTranscriptHost {
+  private stepTranscriptHost(probe = false): StepTranscriptHost {
     return {
+      ...(this.options.onTranscriptHint
+        ? {
+            shareRead: (workflow, step, session, token, read) =>
+              this.sharedTranscripts.read(
+                {
+                  environmentId: workflow.environmentId,
+                  agent: session.agent,
+                  providerSessionId: session.providerSessionId,
+                  view: JSON.stringify(["step", workflow.id, step, session.status]),
+                },
+                token,
+                probe,
+                read,
+              ),
+          }
+        : {}),
       loadWorkflow: async (id) => {
         const record = await this.storage.getMultiReviewWorkflow(id);
         if (!record || !isMultiReviewWorkflow(record.snapshot)) {
@@ -5832,8 +5877,16 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                     onObservationHint: (
                       providerSessionId: string | undefined,
                       parts?: readonly ("state" | "transcript")[],
-                    ) =>
-                      onTranscriptHint(environment.id, selection.agent, providerSessionId, parts),
+                    ) => {
+                      if (!parts || parts.includes("transcript")) {
+                        this.sharedTranscripts.invalidate(
+                          environment.id,
+                          selection.agent,
+                          providerSessionId,
+                        );
+                      }
+                      onTranscriptHint(environment.id, selection.agent, providerSessionId, parts);
+                    },
                   }
                 : {}),
               workflowResults: this.options.workflowResults,

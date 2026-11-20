@@ -54,6 +54,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 export function findToolPart(
   messages: readonly unknown[],
   toolUseId: string,
+  messageId?: string,
 ): FoundPart | undefined {
   let visited = 0;
   const visit = (raw: unknown, depth: number): FoundPart | undefined => {
@@ -87,7 +88,9 @@ export function findToolPart(
     return undefined;
   };
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const parts = asRecord(messages[index])?.parts;
+    const message = asRecord(messages[index]);
+    if (messageId !== undefined && message?.id !== messageId) continue;
+    const parts = message?.parts;
     if (!Array.isArray(parts)) continue;
     for (let partIndex = parts.length - 1; partIndex >= 0; partIndex -= 1) {
       const found = visit(parts[partIndex], 1);
@@ -118,6 +121,7 @@ export class NativeAgentToolOutputReads {
   toolOutputSource(
     input: Pick<NativeAgentProjectionInput, "environmentId" | "agent" | "logicalSessionKey">,
     toolUseId: string,
+    messageId?: string,
   ): ToolOutputSource | null {
     const sessionKey = nativeAgentSessionStorageKey(
       input.environmentId,
@@ -133,8 +137,8 @@ export class NativeAgentToolOutputReads {
       cachedAny = true;
       const value = entry.value;
       const match =
-        findToolPart(value.messages, toolUseId) ??
-        findToolPart(value.revisedMessages ?? [], toolUseId);
+        findToolPart(value.revisedMessages ?? [], toolUseId, messageId) ??
+        findToolPart(value.messages, toolUseId, messageId);
       if (match) found = match;
     }
     if (!cachedAny) return null;
@@ -152,6 +156,7 @@ export class NativeAgentToolOutputReads {
   async readToolOutput(
     input: NativeAgentProjectionInput & {
       toolUseId: string;
+      messageId?: string;
       detailRef?: string;
     } & ToolOutputReadRequest,
   ): Promise<NativeAgentToolOutputRead> {
@@ -161,7 +166,10 @@ export class NativeAgentToolOutputReads {
       agent: input.agent,
       logicalSessionKey: input.logicalSessionKey,
     };
-    let source = this.toolOutputSource(session, input.toolUseId);
+    // Older clients may still request by call ID only. Their existing detail
+    // fallback can display the row without risking a match in another row.
+    if (input.messageId === undefined) return { status: "expired" };
+    let source = this.toolOutputSource(session, input.toolUseId, input.messageId);
     if (source === null) {
       // Nothing has read this session's live view yet: read it once, the way
       // a mounting view would, so the call can be found.
@@ -172,7 +180,7 @@ export class NativeAgentToolOutputReads {
           liveWindow: { ...DEFAULT_NATIVE_AGENT_LIVE_WINDOW },
         })
         .catch(() => undefined);
-      source = this.toolOutputSource(session, input.toolUseId);
+      source = this.toolOutputSource(session, input.toolUseId, input.messageId);
     }
     const request: ToolOutputReadRequest = {
       mode: input.mode,
@@ -189,19 +197,26 @@ export class NativeAgentToolOutputReads {
       };
     }
     // A call outside the live view is read through the reference its row
-    // holds. That reference is content-addressed, so the body under it no
-    // longer grows: as far as this read can tell, the call is complete.
+    // holds. A readable historical body does not establish completion.
+    if (!source?.located && request.mode === "range") return { status: "pending" };
     const detailRef = source?.located ? source.detailRef : input.detailRef;
-    if (!detailRef) return { status: "missing" };
+    if (!detailRef) return { status: "pending" };
+    const complete = source?.located === true && source.complete;
     let details;
     try {
+      const range = await this.context.toolDetails.readRemoteOutput(
+        { ...session, detailRef },
+        request,
+      );
+      if (range?.status === "ok") return { ...range, complete };
+      if (range !== undefined) return { status: complete ? "expired" : "pending" };
       details = await this.context.toolDetails.getProjectionToolDetails({ ...session, detailRef });
     } catch {
-      return { status: "expired" };
+      return { status: complete ? "expired" : "pending" };
     }
     return {
       status: "ok",
-      complete: source?.located ? source.complete : true,
+      complete,
       ...sliceToolOutput(details.toolOutput ?? "", request),
       ...(details.toolError ? { toolError: boundToolOutputError(details.toolError) } : {}),
     };

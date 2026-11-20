@@ -83,9 +83,12 @@ export function DeferredToolMessagePart({
    * call uses the detail read.
    */
   const tailSource = useContext(ToolOutputTailContext) ?? null;
+  const row = useRichMessageIdentity();
+  const messageId = part.sourceMessageId ?? row?.messageId;
   const tailEligible =
     tailSource !== null &&
     part.toolUseId !== undefined &&
+    messageId !== undefined &&
     !eagerDetails &&
     !hasRenderableDiff(part.toolDiff);
   const [tailLatched, setTailLatched] = useState(false);
@@ -95,8 +98,12 @@ export function DeferredToolMessagePart({
     part.toolUseId,
     part.detailRef,
     isOpen && tailLatched && tailEligible,
+    messageId,
   );
-  const { details, error: loadError } = useToolDetails(part.detailRef, wanted && tail === null);
+  const { details, error: loadError } = useToolDetails(
+    part.detailRef,
+    wanted && tail === null && !(tailEligible && tailLatched && tailSource?.active === false),
+  );
   // The whole input, when the projection sent large values as previews.
   const { details: argsDetails, error: argsError } = useToolDetails(part.toolArgsDetailRef, wanted);
   const outputPending = tail ? tail.loading : part.detailRef !== undefined && !details;

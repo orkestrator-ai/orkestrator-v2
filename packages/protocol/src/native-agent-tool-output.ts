@@ -14,10 +14,9 @@
  *
  * Anchors make appends safe without assuming output only grows: the answer
  * carries an opaque anchor for each end of the range, and a later read from
- * that end sends it back. When the bytes beside the cursor are no longer the
- * ones the anchor was minted over (the output was rewritten, or the row now
- * names another body) the read answers the tail with `reset: true` and the
- * client replaces what it holds.
+ * that end sends it back. If the output prefix changed after the anchor
+ * was minted, the read answers with the tail and `reset: true`. The client
+ * then replaces its held text.
  *
  * Browser-safe: no Node or Bun imports.
  */
@@ -32,8 +31,6 @@ export const TOOL_OUTPUT_READ_DEFAULT_BYTES = 32 * 1024;
 export const TOOL_OUTPUT_TOOL_ID_MAX_BYTES = 256;
 /** A tool error longer than this is cut, keeping its start. */
 export const TOOL_OUTPUT_ERROR_MAX_BYTES = 8 * 1024;
-/** Bytes on each side of a cursor an anchor covers. */
-export const TOOL_OUTPUT_ANCHOR_BYTES = 64;
 const ANCHOR_MAX_LENGTH = 32;
 /** Cursors past this are refused (the projection holds at most a few MiB per body). */
 const CURSOR_MAX = 2 ** 31;
@@ -60,6 +57,7 @@ export interface NativeAgentToolOutputReadInput extends ToolOutputReadRequest {
   agent: string;
   logicalSessionKey: string;
   toolUseId: string;
+  messageId?: string;
   /**
    * The detail reference the row holds. Used only when the call is no longer
    * in the session's live view (an older row loaded through history).
@@ -91,6 +89,8 @@ export type NativeAgentToolOutputRead =
       /** The call's error text, at most {@link TOOL_OUTPUT_ERROR_MAX_BYTES}. */
       toolError?: string;
     } & ToolOutputSlice)
+  /** The occurrence is temporarily absent from the live projection. */
+  | { status: "pending" }
   /** No such session or tool call in it. */
   | { status: "missing" }
   /** The call's output was known but is no longer held; the row reads it through its details. */
@@ -125,28 +125,22 @@ function fnv1a(bytes: Uint8Array, from: number, to: number): string {
   return hash.toString(16).padStart(8, "0");
 }
 
-/** The anchor for the bytes just before `offset` (an end a client appends after). */
-function endAnchorAt(bytes: Uint8Array, offset: number): string {
-  const from = Math.max(0, offset - TOOL_OUTPUT_ANCHOR_BYTES);
-  return `e${offset - from}.${fnv1a(bytes, from, offset)}`;
+/** Bind the entire prefix through the range end, so appends preserve it. */
+function prefixAnchor(bytes: Uint8Array, end: number): string {
+  return `p${end}.${fnv1a(bytes, 0, end)}`;
 }
 
-/** The anchor for the bytes from `offset` up to `limit` (a start a client reads before). */
-function startAnchorAt(bytes: Uint8Array, offset: number, limit: number): string {
-  const to = Math.min(limit, offset + TOOL_OUTPUT_ANCHOR_BYTES);
-  return `s${to - offset}.${fnv1a(bytes, offset, to)}`;
-}
-
-function anchorMatches(bytes: Uint8Array, cursor: number, anchor: string): boolean {
-  const match = /^([es])(\d{1,3})\.[0-9a-f]{8}$/u.exec(anchor);
+function anchorMatches(
+  bytes: Uint8Array,
+  cursor: number,
+  anchor: string,
+  mode: ToolOutputReadMode,
+): boolean {
+  const match = /^p(\d{1,10})\.[0-9a-f]{8}$/u.exec(anchor);
   if (!match) return false;
-  const length = Number(match[2]);
-  if (match[1] === "e") {
-    if (length > cursor) return false;
-    return anchor === `e${length}.${fnv1a(bytes, cursor - length, cursor)}`;
-  }
-  if (cursor + length > bytes.length) return false;
-  return anchor === `s${length}.${fnv1a(bytes, cursor, cursor + length)}`;
+  const end = Number(match[1]);
+  if (end < cursor || end > bytes.length || (mode === "range" && end !== cursor)) return false;
+  return anchor === prefixAnchor(bytes, end);
 }
 
 /** Clamp a requested limit into the read's bound. */
@@ -164,16 +158,19 @@ export function sliceToolOutput(output: string, request: ToolOutputReadRequest):
   const bytes = encoder.encode(output);
   const total = bytes.length;
   const limit = clampToolOutputLimit(request.limit);
-  const make = (start: number, end: number, reset: boolean): ToolOutputSlice => ({
-    text: decoder.decode(bytes.subarray(start, end)),
-    start,
-    end,
-    totalBytes: total,
-    truncatedBefore: start > 0,
-    startAnchor: startAnchorAt(bytes, start, end),
-    endAnchor: endAnchorAt(bytes, end),
-    ...(reset ? { reset: true as const } : {}),
-  });
+  const make = (start: number, end: number, reset: boolean): ToolOutputSlice => {
+    const anchor = prefixAnchor(bytes, end);
+    return {
+      text: decoder.decode(bytes.subarray(start, end)),
+      start,
+      end,
+      totalBytes: total,
+      truncatedBefore: start > 0,
+      startAnchor: anchor,
+      endAnchor: anchor,
+      ...(reset ? { reset: true as const } : {}),
+    };
+  };
   const tail = (reset: boolean) => {
     const start = forwardToBoundary(bytes, Math.max(0, total - limit));
     return make(start, total, reset);
@@ -184,7 +181,7 @@ export function sliceToolOutput(output: string, request: ToolOutputReadRequest):
     cursor === undefined ||
     cursor > total ||
     isContinuationByte(bytes[cursor]) ||
-    (request.anchor !== undefined && !anchorMatches(bytes, cursor, request.anchor))
+    (request.anchor !== undefined && !anchorMatches(bytes, cursor, request.anchor, request.mode))
   ) {
     return tail(true);
   }
@@ -217,15 +214,19 @@ export function parseToolOutputReadInput(args: {
   agent: string;
   logicalSessionKey: string;
   toolUseId: string;
+  messageId?: string;
   detailRef?: string;
   mode?: string;
   cursor?: number;
   anchor?: string;
   limit?: number;
 }): NativeAgentToolOutputReadInput {
-  const { toolUseId, detailRef, anchor, cursor } = args;
+  const { toolUseId, messageId, detailRef, anchor, cursor } = args;
   if (toolUseId.trim().length === 0 || utf8Bytes(toolUseId) > TOOL_OUTPUT_TOOL_ID_MAX_BYTES) {
     throw new Error("toolUseId must be a bounded, non-blank string");
+  }
+  if (messageId !== undefined && (!messageId.trim() || utf8Bytes(messageId) > 512)) {
+    throw new Error("messageId must be a bounded, non-blank string");
   }
   if (detailRef !== undefined && (detailRef.length === 0 || detailRef.length > 128)) {
     throw new Error("detailRef must be a bounded string");
@@ -251,6 +252,7 @@ export function parseToolOutputReadInput(args: {
     agent: args.agent,
     logicalSessionKey: args.logicalSessionKey,
     toolUseId,
+    ...(messageId === undefined ? {} : { messageId }),
     ...(detailRef === undefined ? {} : { detailRef }),
     mode,
     ...(mode === "tail" || cursor === undefined ? {} : { cursor }),

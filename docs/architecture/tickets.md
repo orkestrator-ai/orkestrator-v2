@@ -342,27 +342,32 @@ events move the ticket (`build-pipeline-ticket-hold.ts`). Any other status
 change is left out of the write while the rest of it applies, so the ticket
 can still be edited, commented on and labelled: a drag on the board (which
 snaps back with a toast), an agent's `update_ticket`, the public API,
-self-improvement, a graph's hand-set status, and a closed pull request, which
-stays undecided until the build ends and reads it then. On another machine the
-same rule holds through sync: a leaf building the ticket keeps its column when
-a command node's snapshot moves it and queues it back, and a command node
-building it sends its own column back to a leaf that moved its copy. Before
-this, any of those could put a ticket that was still building back in the
-backlog. Cancel the build to move its ticket by hand. Merging the pull request
-still closes the ticket at once.
+self-improvement and a graph's hand-set status. A closed pull request stays
+undecided until the hold ends. The PR monitor retries the column move separately
+from the comment and metadata, even if the build's terminal write fails.
 
-A ticket in Done is never moved by any lifecycle event, a new build or a
-restart included: every lifecycle write passes `preserveDoneStatus` (storage
-option `lifecycle`), checked under the same mutation lease as the write, so a
-writer that read before the monitor closed the ticket cannot reopen it. Once the
-build has ended, a move by the user is kept until the next lifecycle event
-(a new build or a restart), which moves the ticket again. Each lifecycle move records its column on the ticket
-(`lifecycleStatus`, local to the machine that wrote it), and any other status
-change clears it: a move by hand on this machine, a command node's snapshot
-that changes the column, and one that keeps the column under a newer status
-revision (moved away and back between two pulls). A leaf's own lifecycle move
-coming back from the command node is told apart by `lifecycleEcho`. So a
-ticket moved away and back is still one the user placed, which is what a
+A leaf building the ticket restores its column when a command-board edit
+attempts to move it. The command board uses the revision of the rejected move
+to explain the restoration to the user who made it. If the command node also
+has an active build for that ticket, its column takes precedence. A newly
+confirmed merge takes effect with its merge marker in either direction, even
+during a hold.
+
+The reservation records the pending In progress write. The supervisor retries
+it while the build is active, including before review of an adopted Build, and
+checks the reservation under the board lease before writing. Lifecycle
+authority comes from the build's in-process command context. The legacy
+`preserveDoneStatus` argument on a workspace command can protect a Done ticket
+but cannot bypass a hold. Once the build has ended, a move by the user is kept
+until the next lifecycle event (a new build or a restart).
+
+Each lifecycle move records its column on the ticket (`lifecycleStatus`, local
+to the machine that wrote it). A hand move or an accepted remote move clears
+that ownership. While a leaf holds its column, a corrective echo or an
+away-and-back command revision preserves ownership. After the hold ends, a
+newer revision for the same column clears ownership unless it acknowledges
+the leaf's lifecycle write or its specific corrective revision. A ticket
+moved away and back after release is still one the user placed, which is what a
 closed pull request respects. A ticket's PR state, checks and conflicts are not
 columns: they are shown on the ticket's Notes tab.
 

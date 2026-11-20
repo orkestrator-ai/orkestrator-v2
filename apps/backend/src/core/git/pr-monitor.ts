@@ -219,7 +219,10 @@ export interface PrMonitorEffects {
    * merging, unless the user moved it by hand since its build did; the store
    * decides (`kanban-merge-closure.ts`). Optional for embedded adapters.
    */
-  returnTaskForClosedPr?: (taskId: string, prUrl: string) => Promise<void>;
+  returnTaskForClosedPr?: (
+    taskId: string,
+    prUrl: string,
+  ) => Promise<"moved" | "settled" | "deferred">;
   addTaskComment: (taskId: string, text: string) => Promise<void>;
   updateTaskPrMetadata: (
     taskId: string,
@@ -1780,9 +1783,12 @@ export class PrMonitorService {
         // and only for the build that raised it, so a replay after a restart
         // keeps a later move, and closed metadata a build recorded first (a
         // conflict resolution's re-detection) does not skip the return.
-        await this.options.effects.returnTaskForClosedPr?.(task.taskId, detection.url);
+        const result = await this.options.effects.returnTaskForClosedPr?.(
+          task.taskId,
+          detection.url,
+        );
         if (!this.isCurrent(entry, generation)) return false;
-        progress.add("status");
+        if (result !== "deferred") progress.add("status");
       }
 
       if (!progress.has("link")) {
@@ -1818,7 +1824,7 @@ export class PrMonitorService {
         if (!this.isCurrent(entry, generation)) return false;
         progress.add("metadata");
       }
-      return true;
+      return progress.has("status");
     } catch (error) {
       this.warn("monitor.task-reconcile-failed", environmentId, error, { state: terminalState });
       return false;

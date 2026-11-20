@@ -138,6 +138,8 @@ export interface TicketSyncMeta {
   /** The node whose change produced each field's current revision; absent for this node. */
   revBy?: Partial<Record<TicketSyncField, string>>;
   replica?: TicketReplicaMeta;
+  /** The command-board status revision restored by a leaf that held the column. */
+  rejectedStatusRevision?: number;
   /** Work for the ticket on another machine. */
   work?: TicketWorkLocation;
 }
@@ -162,6 +164,10 @@ export interface TicketSnapshot extends TicketContentValue {
   revs: TicketFieldRevisions;
   title: string;
   status: TicketSyncStatus;
+  /** An active build on the command node takes precedence over leaf holds. */
+  commandBuildHolds?: true;
+  /** The base revision of a leaf's accepted hold correction. */
+  rejectedStatusRevision?: number;
   /** The merge already applied, retained when a user reopens the ticket. */
   prMergeDoneUrl?: string;
   comments: TicketSyncComment[];
@@ -207,7 +213,13 @@ export type TicketSyncOp =
     }
   | { kind: "set-title"; value: string; baseRev: number }
   | { kind: "set-content"; value: TicketContentValue; baseRev: number }
-  | { kind: "set-status"; value: TicketSyncStatus; baseRev: number; prMergeDoneUrl?: string }
+  | {
+      kind: "set-status";
+      value: TicketSyncStatus;
+      baseRev: number;
+      prMergeDoneUrl?: string;
+      restoresHeldStatus?: true;
+    }
   | {
       kind: "checks";
       checks: Array<{ id: string; text: string; check: AcceptanceCriterionCheck }>;
@@ -509,6 +521,10 @@ export function parseTicketSyncItem(value: unknown): TicketSyncItem {
     revs: parseRevisions(value.revs ?? {}),
     title: value.title,
     status: value.status,
+    ...(value.commandBuildHolds === true ? { commandBuildHolds: true } : {}),
+    ...(isSeq(value.rejectedStatusRevision)
+      ? { rejectedStatusRevision: value.rejectedStatusRevision }
+      : {}),
     ...parseMergeDone(value),
     comments: value.comments.map(parseComment),
     ...parseImageRefs(value.images),
@@ -561,6 +577,7 @@ export function parseTicketSyncOp(value: unknown): TicketSyncOp {
         value: value.value,
         baseRev: value.baseRev,
         ...parseMergeDone(value),
+        ...(value.restoresHeldStatus === true ? { restoresHeldStatus: true } : {}),
       };
     case "checks": {
       if (!Array.isArray(value.checks) || value.checks.length > 500) break;

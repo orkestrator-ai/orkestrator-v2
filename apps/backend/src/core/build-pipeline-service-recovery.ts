@@ -730,20 +730,26 @@ export class BuildPipelineRecovery {
   }
 
   /**
-   * A ticket shows a build as In progress from the moment it is admitted, not
-   * only once its environment is ready and the build stage starts; from here
-   * until the build ends only the lifecycle moves it
-   * (`build-pipeline-ticket-hold.ts`). Best effort: the build stage's own
-   * `build-started` update makes the same move, so a failure here costs only
-   * the early column.
+   * Settle the admission move under the supervisor lock. The saved obligation
+   * survives a restart and is replayable if the board write already landed.
    */
-  async moveTicketOnAdmission(pipeline: BuildPipeline): Promise<void> {
+  async moveTicketOnAdmission(
+    pipeline: BuildPipeline,
+    revision: number,
+  ): Promise<number | undefined> {
     try {
-      await this.updateKanbanLifecycle(pipeline, {
-        status: buildPipelineKanbanUpdate("build-started").status,
-      });
+      await this.updateKanbanLifecycle(
+        pipeline,
+        { status: buildPipelineKanbanUpdate("build-started").status },
+        { admission: true },
+      );
+      delete pipeline.pendingKanbanAdmission;
+      return (await this.ctx.save(pipeline, revision)).revision;
     } catch (error) {
+      pipeline.pendingKanbanAdmission = true;
+      pipeline.backendRevision = revision;
       log.warn("kanban.status-failed", { pipelineId: pipeline.id, error: formatLogError(error) });
+      return undefined;
     }
   }
 
@@ -757,6 +763,7 @@ export class BuildPipelineRecovery {
     },
     options: {
       requireTicket?: boolean;
+      admission?: boolean;
       /** The build has ended (`complete`/`failed`), see {@link terminalTicketStatus}. */
       terminal?: boolean;
     } = {},
@@ -789,15 +796,19 @@ export class BuildPipelineRecovery {
       (updates.prUrl && task.prUrl !== updates.prUrl) ||
       (updates.prState && task.prState !== updates.prState)
     ) {
-      await this.ctx.invoke("update_kanban_task", {
-        taskId: task.id,
-        // Every lifecycle move: a done ticket is never reopened by a build,
-        // and storage records the column it set (`lifecycleStatus`).
-        ...(updates.status ? { preserveDoneStatus: true } : {}),
-        ...(updates.status ? { status: updates.status } : {}),
-        ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
-        ...(updates.prState ? { prState: updates.prState } : {}),
-      });
+      await this.ctx.invoke(
+        "update_kanban_task",
+        {
+          taskId: task.id,
+          // Every lifecycle move: a done ticket is never reopened by a build,
+          // and storage records the column it set (`lifecycleStatus`).
+          ...(updates.status ? { preserveDoneStatus: true } : {}),
+          ...(updates.status ? { status: updates.status } : {}),
+          ...(updates.prUrl ? { prUrl: updates.prUrl } : {}),
+          ...(updates.prState ? { prState: updates.prState } : {}),
+        },
+        options.admission ? { admissionPipelineId: pipeline.id } : {},
+      );
     }
     if (updates.comment && !task.comments.some((comment) => comment.text === updates.comment)) {
       await this.ctx.invoke("add_kanban_comment", {

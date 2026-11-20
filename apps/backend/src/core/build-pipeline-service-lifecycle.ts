@@ -542,6 +542,7 @@ export class BuildPipelineLifecycle {
       taskTitle: input.taskTitle,
       taskSnapshot,
       source: input.source,
+      ...(input.source?.type === "kanban" ? { pendingKanbanAdmission: true } : {}),
       ...(deliveryPolicy ? { deliveryPolicy } : {}),
       featurePlanId: input.featurePlanId?.trim() || undefined,
       admissionKey: buildAdmissionKey(input),
@@ -611,7 +612,6 @@ export class BuildPipelineLifecycle {
       this.ctx.provisioningPrompts.delete(pipeline.id);
       throw error;
     }
-    await this.recovery.moveTicketOnAdmission(pipeline);
     await this.rememberNetworkAccessMode(pipeline, existingEnvironment);
     // Provisioning is performed by the same per-pipeline supervisor lock used
     // by timer ticks. A tick that observes the just-persisted reservation joins

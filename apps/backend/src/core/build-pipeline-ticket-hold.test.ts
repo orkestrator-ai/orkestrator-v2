@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -129,6 +129,62 @@ describe("a build started from a ticket", () => {
         expect(ticket?.comments.map((comment) => comment.text)).not.toContain(
           BUILD_PIPELINE_BUILD_STARTED_COMMENT,
         );
+      },
+      { realKanban: true },
+    );
+  });
+
+  test("a provisioning failure returns an admitted ticket to Backlog", async () => {
+    await withService(
+      async (service, storage, _provider, invocations, controls) => {
+        const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
+        controls.failCommands.add("create_environment");
+        await expect(
+          service.start(startInput({ ...kanban(task.id), existingEnvironmentId: undefined })),
+        ).rejects.toThrow("create_environment failed");
+        expect(
+          invocations
+            .filter((call) => call.command === "update_kanban_task" && call.args.status)
+            .map((call) => call.args.status),
+        ).toEqual(["in-progress", "backlog"]);
+        expect((await storage.kanban.getKanbanTask(task.id))?.status).toBe("backlog");
+      },
+      { realKanban: true },
+    );
+  });
+
+  test("a cancellation orders its Backlog write after a delayed admission move", async () => {
+    await withService(
+      async (service, storage) => {
+        const task = await storage.kanban.addKanbanTask("project-1", "Ticket", "Body");
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const update = storage.kanban.updateKanbanTask.bind(storage.kanban);
+        const delayed = spyOn(storage.kanban, "updateKanbanTask").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return update(...args);
+          },
+        );
+        const starting = service.start(
+          startInput({ ...kanban(task.id), existingEnvironmentId: undefined }),
+        );
+        // The start response can reject if cancellation wins the next pass.
+        const settled = starting.catch(() => undefined);
+        try {
+          await entered.promise;
+          const [reservation] = await storage.listAllBuildPipelines();
+          const cancelled = service.cancel(reservation!.id);
+          release.resolve();
+          expect((await cancelled).phase).toBe("failed");
+          await settled;
+          expect((await storage.kanban.getKanbanTask(task.id))?.status).toBe("backlog");
+        } finally {
+          release.resolve();
+          await settled;
+          delayed.mockRestore();
+        }
       },
       { realKanban: true },
     );

@@ -86,6 +86,8 @@ export type CommandContext = {
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
   containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
+  /** Set only by the build supervisor's in-process Kanban invoker. */
+  buildKanbanWrite?: { admissionPipelineId?: string };
   nativeAgents?: NativeAgentService;
   /** The push event layer (`core/push/`): its metrics; the subscribe command is the gateway's. */
   push?: import("./push/index.js").BackendPush;

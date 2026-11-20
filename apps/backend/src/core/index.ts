@@ -1676,10 +1676,17 @@ export class OrkestratorBackend {
     const workspaceWriters = new WorkspaceWriters(storage);
     this.buildPipelines = new BuildPipelineService(
       storage,
-      async <T>(command: string, args: Record<string, unknown> = {}) => {
+      async <T>(
+        command: string,
+        args: Record<string, unknown> = {},
+        buildKanbanWrite?: CommandContext["buildKanbanWrite"],
+      ) => {
         const handler = this.commands.get(command);
         if (!handler) throw unknownCommand(command);
-        return (await handler(args, context)) as T;
+        return (await handler(
+          args,
+          buildKanbanWrite ? { ...context, buildKanbanWrite } : context,
+        )) as T;
       },
       {
         workflowResults: this.workflowResults,

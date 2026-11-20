@@ -457,7 +457,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `native-terminal-messages.ts` is `native-agent/terminal-messages.ts`, and
   `workflow-account-handoff.test.ts` keeps its name. `index.ts` re-exports 27
   symbols from 14 modules, and 26 of the 51 production importers outside the
-  folder import it. Nine modules are named exceptions in the
+  folder import it (27 of 52 after rebasing onto `a01039913`, whose
+  `rich-interactions/index.ts` imports the session key through it). Nine modules are named exceptions in the
   `apps/backend/src/**` pattern and are not re-exported: eight because each
   reaches, at runtime, a module that imports one of the modules re-exported
   there (`service.js`, `service-shared.js`, `provider.js`, `suborks.js`,
@@ -510,7 +511,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   679 and 723, down from 729 and 779 just before it, and after the
   `build-pipeline` slice on 2026-11-20 it holds 619 and 655, down from 679
   and 723 just before it, and after the `native-agent` slice on 2026-11-20
-  it holds 539 and 531, down from 619 and 655 just before it).
+  it holds 539 and 531, down from 619 and 655 just before it; 541 and 531
+  once rebased onto `a01039913`, which added two root files).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -766,7 +768,9 @@ they move many files that other work in flight touches.
   paths.
 - `index.ts` holds 27 symbols from 14 modules: every symbol production
   importers outside the folder use, other than the exceptions'. 26 of the 51
-  production importers import it; each importer's separate imports from
+  production importers import it (and, after rebasing onto `a01039913`,
+  `rich-interactions/index.ts`, which #2511 added with a deep import of
+  `native-agent-session-key.js`); each importer's separate imports from
   re-exported modules became one import (`storage.ts`'s all-type import
   stays `import type`). Tests and test support outside the folder, the
   `apps/backend/tests` and `apps/backend/scripts` files, the repository

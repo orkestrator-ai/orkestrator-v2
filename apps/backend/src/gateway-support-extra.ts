@@ -675,6 +675,11 @@ export type GatewayEventClient = {
   /** Highest authoritative revision whose `id` this client has been sent. */
   sentRevision?: number;
   /**
+   * This stream's push connection (`core/push/`), advertised in its
+   * `gateway.connected` frame. Only an authoritative main stream has one.
+   */
+  pushStreamId?: string | null;
+  /**
    * Newest revision this client's filter omitted since its last `id`. Flushed as
    * a `gateway.cursor` frame on the keepalive tick — without it a scoped stream's
    * cursor freezes under unrelated traffic and every reconnect reconciles.

@@ -311,6 +311,8 @@ export async function harness(
     /** Defaults to writing the rules into this test's own `codexHome`. */
     ensureReadOnlyExecRules?: () => Promise<void>;
     notificationQueueMaxDepth?: number;
+    /** Sees every emitted event first, as the bridge's own `emit` does. */
+    onEmit?: (event: RuntimeSseEvent) => void;
   } = {},
 ): Promise<Harness> {
   const merged = { ...BASE_HANDLERS, ...handlers };
@@ -355,6 +357,7 @@ export async function harness(
     codexHome,
     cwd: "/tmp/ws",
     emit: (event) => {
+      options.onEmit?.(event);
       events.push(event);
       for (const waiter of eventWaiters) {
         if (!waiter.predicate(event)) continue;

@@ -47,6 +47,7 @@ import type {
 import { bridgeGeneration } from "./config.js";
 import { chargeTranscript, rowChanged } from "./transcript.js";
 import type { BridgeMessage, BridgeMessagePart, PiCommandRun, SessionState } from "./state.js";
+import { revisionChanged } from "./observation.js";
 
 export type PiCommandKind = "template" | "skill" | "extension";
 
@@ -300,7 +301,7 @@ export function publishCommandCatalogue(
     ...(built.truncated ? { truncated: true } : {}),
     ...(attachPending ? { attachPending: true } : {}),
   };
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /** Keep the list, but stop calling it authoritative. */
@@ -311,7 +312,7 @@ export function markCommandCatalogueStale(state: SessionState): void {
     status: "stale",
     revision: state.commandCatalogue.revision + 1,
   };
-  state.revision += 1;
+  revisionChanged(state);
 }
 
 /**

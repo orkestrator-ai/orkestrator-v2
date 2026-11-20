@@ -91,6 +91,7 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
     // Reset status to idle temporarily so sendPrompt can be called
     session.status = "idle";
     session.abortController = undefined;
+    eventEmitter.announceState(sessionId);
 
     // Re-prompt with plan mode preserved, attachments stripped, and _isReprompt
     // set to prevent infinite recursion if this re-prompt also gets rejected.
@@ -133,6 +134,7 @@ export function settleTurnEnd(turn: TurnState): PromptFollowUp | undefined {
 
     session.status = "idle";
     session.abortController = undefined;
+    eventEmitter.announceState(sessionId);
 
     // Drop plan mode for the continuation re-prompt — the user has approved,
     // so Claude needs the full toolset (Write/Edit/Bash) to implement.
@@ -294,6 +296,7 @@ export function settleFailedTurn(turn: TurnState, error: unknown): void {
     session.status = "error";
     session.turnStartedAt = undefined;
     session.error = failure;
+    eventEmitter.announceState(session.id);
     session.failedTurn = {
       id: turn.promptUuid,
       occurredAt: new Date().toISOString(),

@@ -94,6 +94,16 @@ import {
 import { applyRuntimeEnvironmentOutput, refreshRuntimeEnvironment } from "./runtime-env.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { configureBridgeLogger } from "@orkestrator/protocol/node/logger-environment";
+import {
+  BRIDGE_KNOWN_STATE_REVISION_PARAM,
+  BRIDGE_STATE_REVISION_VERSION,
+  bridgeObservationFrameData,
+} from "@orkestrator/protocol/bridge-state-revision";
+import {
+  codexStateRevisionContent,
+  noteEmittedEvent,
+  sessionStateRevisions,
+} from "./state-revision.js";
 
 const log = createLogger("bridge.codex");
 
@@ -259,9 +269,23 @@ const subscribers = new Set<SseSubscriber>();
  */
 let latestRevision = 0;
 
-/** An observation frame's data: the session it names, never the payload. */
+/**
+ * An observation frame's data: the session it names and its state and
+ * transcript revisions (to-do 8102 task 2), never the payload. Computed when
+ * the event is emitted, so the revisions are the ones it moved; both reads are
+ * O(1) and touch nothing.
+ */
 function observationFrameData(sessionId: string | undefined): string {
-  return JSON.stringify(sessionId === undefined ? {} : { sessionId });
+  if (sessionId === undefined) return "{}";
+  try {
+    const transcriptRevision = appServerRuntime.transcriptRevision(sessionId);
+    return bridgeObservationFrameData(sessionId, {
+      stateRevision: sessionStateRevisions.peek(sessionId),
+      ...(transcriptRevision ? { transcriptRevision } : {}),
+    });
+  } catch {
+    return JSON.stringify({ sessionId });
+  }
 }
 
 /**
@@ -397,6 +421,8 @@ const FALLBACK_MODELS: BridgeModel[] = CODEX_FALLBACK_MODEL_CATALOG.map((model) 
 function emit(event: SseEvent): void {
   latestRevision += 1;
   const revision = latestRevision;
+  // Before the fan-out, so the observe frame carries the moved state revision.
+  noteEmittedEvent(event);
   for (const subscriber of subscribers) {
     try {
       void Promise.resolve(subscriber(event, revision)).catch((error) => {
@@ -1052,9 +1078,19 @@ registerCodexTranscriptRoutes(app, appServerRuntime);
 registerCodexChangeEvidenceRoutes(app, codexChangeEvidence.spool);
 
 app.get("/session/:id/status", (c) => {
-  const status = appServerRuntime.getStatus(c.req.param("id"));
+  const sessionId = c.req.param("id");
+  const status = appServerRuntime.getStatus(sessionId);
   if (!status) return c.json({ error: "Session not found" }, 404);
-  return c.json(status);
+  // One revision for this body, `/config`, `/approvals` and `/interactions`
+  // (to-do 8102 task 2): a still-current `knownStateRevision` gets one small
+  // `unchanged` answer and the backend reads none of the side routes.
+  const answer = sessionStateRevisions.answer(
+    sessionId,
+    codexStateRevisionContent(appServerRuntime, sessionId, status),
+    c.req.query(BRIDGE_KNOWN_STATE_REVISION_PARAM),
+  );
+  if (answer.unchanged) return c.json(answer.body);
+  return c.json({ ...status, stateRevision: answer.revision });
 });
 
 /** Exact account usage is fetched on demand; status polling stays cache-only. */
@@ -1694,10 +1730,12 @@ app.get("/event/subscribe", (c) => {
     );
 
     // The `id:` is the cursor the client echoes back on its next connection.
-    const frameFor = (event: Pick<SseEvent, "type" | "sessionId">, revision: number) => ({
+    // `data` is taken when the event is emitted, so a buffered frame carries
+    // the revisions that event moved, not later ones.
+    const frameFor = (event: Pick<SseEvent, "type">, revision: number, data: string) => ({
       event: event.type,
       id: String(revision),
-      data: observationFrameData(event.sessionId),
+      data,
     });
 
     /**
@@ -1713,6 +1751,7 @@ app.get("/event/subscribe", (c) => {
     let buffered: Array<{
       event: Pick<SseEvent, "type" | "sessionId">;
       revision: number;
+      data: string;
     }> | null = [];
     let highestSent = anchorRevision;
 
@@ -1725,12 +1764,16 @@ app.get("/event/subscribe", (c) => {
           failSlowSubscriber("handshake buffer overflowed");
           return;
         }
-        buffered.push({ event: { type: event.type, sessionId: event.sessionId }, revision });
+        buffered.push({
+          event: { type: event.type, sessionId: event.sessionId },
+          revision,
+          data: observationFrameData(event.sessionId),
+        });
         return;
       }
       if (revision <= highestSent) return;
       highestSent = revision;
-      await writeWhileOpen(frameFor(event, revision));
+      await writeWhileOpen(frameFor(event, revision, observationFrameData(event.sessionId)));
     };
     subscribers.add(listener);
 
@@ -1762,6 +1805,8 @@ app.get("/event/subscribe", (c) => {
           revision: subscribedAt,
           // Confirms observation mode; a backend refuses a bridge that does not.
           observe: true,
+          // Frames carry state and transcript revisions (to-do 8102 task 2).
+          revisions: BRIDGE_STATE_REVISION_VERSION,
         }),
       });
 
@@ -1795,7 +1840,7 @@ app.get("/event/subscribe", (c) => {
         if (sseRouteTestHooks?.beforeBufferedWrite) {
           await sseRouteTestHooks.beforeBufferedWrite(entry.revision);
         }
-        await writeWhileOpen(frameFor(entry.event, entry.revision));
+        await writeWhileOpen(frameFor(entry.event, entry.revision, entry.data));
       }
       buffered = null;
       // Start only after the handshake and its buffered tail are flushed. A

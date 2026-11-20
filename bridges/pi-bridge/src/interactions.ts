@@ -50,6 +50,7 @@ import {
   type JsonObject,
   type SessionState,
 } from "./state.js";
+import { revisionChanged } from "./observation.js";
 
 /** Built-ins that only observe. Gating these is noise, not safety. */
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
@@ -137,7 +138,7 @@ export async function requestToolApproval(
       settled = true;
       deadline.settle();
       state.approvals.delete(id);
-      state.revision += 1;
+      revisionChanged(state);
       resolve(
         decision === "allow"
           ? { block: false }
@@ -170,7 +171,7 @@ export async function requestToolApproval(
       deadline,
       settle,
     });
-    state.revision += 1;
+    revisionChanged(state);
     schedulePersist();
   });
 }
@@ -220,7 +221,7 @@ export function holdApproval(
   if (result === "applied") {
     // The published `expiresAt` and `hold` moved, which is what the
     // snapshot's revision tells a reader.
-    state.revision += 1;
+    revisionChanged(state);
     schedulePersist();
   }
   return {

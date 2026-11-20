@@ -1715,3 +1715,45 @@ test("MultiReviewService rewinds an attempted Address Findings step to the packa
     { packageFlow: true, serviceOptions: { environmentGit: git } },
   );
 });
+
+test("the review-transcript push reads come from the record, probe through the reviewer read and never create a provider", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  await withService("env-transcript-push", provider, async ({ service, start, snapshot }) => {
+    // Nothing has created a provider for this environment yet.
+    expect(
+      service.transcriptBridgeAnnounces({ environmentId: "env-transcript-push", agent: "claude" }),
+    ).toBe(false);
+    const started = await start();
+    await waitUntil(async () =>
+      Boolean((await snapshot(started.id))?.reviewers[0]?.providerSessionId),
+    );
+    const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+    const key = { workflowId: started.id, reviewerId: reviewer.id };
+    expect(await service.transcriptPushTarget(key)).toMatchObject({
+      environmentId: "env-transcript-push",
+      agent: "claude",
+      providerSessionId: reviewer.providerSessionId,
+      live: true,
+    });
+    const read = await service.reviewerTranscript(started.id, reviewer.id);
+    expect(await service.transcriptPushProbe(key, undefined)).toBe(read.sourceToken);
+
+    // The provider the reviewer runs on answers whether its bridge announces revisions.
+    const announcing = provider as unknown as { observationStreamRevisions?: () => boolean };
+    expect(
+      service.transcriptBridgeAnnounces({ environmentId: "env-transcript-push", agent: "claude" }),
+    ).toBe(false);
+    announcing.observationStreamRevisions = () => true;
+    expect(
+      service.transcriptBridgeAnnounces({ environmentId: "env-transcript-push", agent: "claude" }),
+    ).toBe(true);
+
+    expect(
+      await service.transcriptPushTarget({ workflowId: "gone", reviewerId: reviewer.id }),
+    ).toBeNull();
+    expect(
+      await service.transcriptPushTarget({ workflowId: started.id, reviewerId: "gone" }),
+    ).toBeNull();
+  });
+});

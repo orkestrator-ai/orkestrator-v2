@@ -1,3 +1,4 @@
+import { PUSH_SUBSCRIPTION_BODY_BYTES } from "@orkestrator/protocol/push-events";
 import { withRelayController } from "./core/public-api/index.js";
 import { isGlobalConfigEcho, isGlobalConfigWriteCommand } from "./core/nodes/index.js";
 import type { GatewayAuth } from "./gateway-auth.js";
@@ -18,6 +19,7 @@ import {
   INVOKE_COMMAND_BODY_LIMITS,
   DROPPABLE_EVENT_PREFIX,
   SSE_CLIENT_HARD_BUFFER_BYTES,
+  SSE_CLIENT_SOFT_BUFFER_BYTES,
   MAX_CLIENT_METRICS_BODY_BYTES,
   METRIC_UNKNOWN_COMMAND_KEY,
   METRIC_KEEPALIVE_KEY,
@@ -51,8 +53,25 @@ import { decodeInvokeEnvelope } from "@orkestrator/protocol/contract/envelope";
 import { codedErrorWire } from "@orkestrator/protocol/contract/errors";
 import { mcpFailure } from "@orkestrator/protocol/mcp-management";
 import * as Result from "effect/Result";
+import { createHash } from "node:crypto";
+import {
+  PUSH_SET_SUBSCRIPTIONS_COMMAND,
+  type PushSetSubscriptionsResult,
+} from "@orkestrator/protocol/push-events";
 
 const KEEPALIVE_EVENT_FRAME = `event: ${GATEWAY_KEEPALIVE_EVENT}\ndata: 1\n\n`;
+
+/**
+ * Who opened a stream, as far as the push layer needs to know: a digest of
+ * the request's credential, never the credential itself. A request with none
+ * (a listener that needs none) shares one owner, and its stream ids stay
+ * unguessable.
+ */
+function pushCredentialOwner(credential: string | null): string {
+  return credential
+    ? createHash("sha256").update(credential).digest("base64url").slice(0, 32)
+    : "anonymous";
+}
 
 /** The invoke, event-stream, metrics and loopback-proxy routes. */
 export class GatewayHandlers {
@@ -108,6 +127,10 @@ export class GatewayHandlers {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
       return;
     }
+    if (command === PUSH_SET_SUBSCRIPTIONS_COMMAND && requestBytes > PUSH_SUBSCRIPTION_BODY_BYTES) {
+      jsonResponse(response, 413, { error: "Push subscription set exceeds the request budget" });
+      return;
+    }
     // The envelope's contract fields travel next to `command` and `args`
     // (plan item 1003). A body without them is today's call, unchanged.
     const envelope = invocationFromBody(body);
@@ -156,6 +179,14 @@ export class GatewayHandlers {
         ? (args as Record<string, unknown>)
         : {};
     const startedAt = Date.now();
+    if (command === PUSH_SET_SUBSCRIPTIONS_COMMAND && this.ctx.backend.push) {
+      await this.handlePushSetSubscriptions(request, response, safeArgs, requestBytes, startedAt, {
+        // A workspace grant cannot use the relay, so it cannot subscribe to
+        // another node through this one either (design D10).
+        relayedNodes: !options.refuseCommand,
+      });
+      return;
+    }
     // Attribute work to its arrival window, even if it outlives the burst.
     // Without registry evidence, retain only the reserved unknown label.
     this.ctx.traffic.noteInvoke(
@@ -320,6 +351,25 @@ export class GatewayHandlers {
       state.prefixes === null &&
       state.includedPrefixes !== null &&
       state.includedPrefixes.every(isPerNodeRelayedEvent);
+    // An authoritative main stream gets a push connection, announced in its
+    // `gateway.connected` frame. Only a call made with the credential that
+    // opened the stream may set its subscriptions.
+    const push = this.ctx.backend.push;
+    const pushOwner = pushCredentialOwner(gatewayRequestCredential(request));
+    if (push && !isTerminalOnly && !state.relayedStream) {
+      state.pushStreamId = push.openConnection(pushOwner, {
+        write: (event, payload) => this.events.writePushFrame(client, state, event, payload),
+        // While replay drains, and over the soft limit, frames wait in the
+        // connection's coalescing map.
+        backpressured: () =>
+          Boolean(state.handshake) || client.writableLength > SSE_CLIENT_SOFT_BUFFER_BYTES,
+      });
+    }
+    const closePush = () => {
+      if (!state.pushStreamId) return;
+      push?.closeConnection(state.pushStreamId);
+      state.pushStreamId = null;
+    };
     // Subscribe before inspecting the ring. `emit()` buffers into this state
     // until replay drains, closing the replay/live race. Everything from here
     // until the handshake settles is guarded: a throw after the client is in the
@@ -340,6 +390,7 @@ export class GatewayHandlers {
       }
     } catch (error) {
       this.ctx.clients.delete(client);
+      closePush();
       this.ctx.metrics.recordStreamConnectFailed();
       client.destroy();
       throw error;
@@ -383,6 +434,7 @@ export class GatewayHandlers {
       if (credentialExpiryTimer) clearTimeout(credentialExpiryTimer);
       credentialExpiryTimer = null;
       this.ctx.clients.delete(client);
+      closePush();
       client.destroy();
       this.ctx.metrics.recordStreamClosed();
     };
@@ -403,6 +455,52 @@ export class GatewayHandlers {
     request.once("close", close);
     response.once("close", close);
     scheduleCredentialExpiry();
+  }
+
+  /**
+   * `push_set_subscriptions`, answered here rather than by the registry: only
+   * the gateway knows which credential opened the stream the call names.
+   */
+  private async handlePushSetSubscriptions(
+    request: IncomingMessage,
+    response: ServerResponse,
+    args: Record<string, unknown>,
+    requestBytes: number,
+    startedAt: number,
+    access: { relayedNodes: boolean },
+  ): Promise<void> {
+    this.ctx.traffic.noteInvoke(PUSH_SET_SUBSCRIPTIONS_COMMAND);
+    const push = this.ctx.backend.push!;
+    try {
+      const result: PushSetSubscriptionsResult =
+        args.nodeId !== undefined && !access.relayedNodes
+          ? { status: "refused", reason: "unavailable" }
+          : await push.setSubscriptions(
+              pushCredentialOwner(gatewayRequestCredential(request)),
+              args,
+            );
+      const body = Buffer.from(JSON.stringify({ result }));
+      this.ctx.metrics.recordInvoke(
+        PUSH_SET_SUBSCRIPTIONS_COMMAND,
+        requestBytes,
+        body.byteLength,
+        Math.max(0, Date.now() - startedAt),
+        true,
+      );
+      serializedJsonResponse(response, 200, body);
+    } catch (error) {
+      const body = JSON.stringify({
+        error: error instanceof Error ? error.message : "Push subscriptions failed",
+      });
+      this.ctx.metrics.recordInvoke(
+        PUSH_SET_SUBSCRIPTIONS_COMMAND,
+        requestBytes,
+        Buffer.byteLength(body),
+        Math.max(0, Date.now() - startedAt),
+        false,
+      );
+      serializedJsonResponse(response, 400, body);
+    }
   }
 
   handleMetrics(request: IncomingMessage, response: ServerResponse): void {
@@ -427,6 +525,9 @@ export class GatewayHandlers {
         relayedRing: this.ctx.relayedEventReplay.getStats(),
       },
       ...backendMetricsSnapshot(this.ctx.backend.databaseStats?.() ?? null),
+      // Content-free push counters: connections, subscriptions and observed
+      // keys by topic, frames, coalesced changes, resyncs and denials.
+      ...(this.ctx.backend.push ? { push: this.ctx.backend.push.metrics() } : {}),
     };
   }
 

@@ -244,7 +244,10 @@ export class CodexRuntimeApprovals {
       return { status: "wrong-session" };
     }
     const outcome = this.ctx.options.engine.holdApproval(approvalId, held);
-    return this.applyHold(this.ctx.pendingApprovals, approvalId, entry, outcome);
+    return this.announceHold(
+      sessionId,
+      this.applyHold(this.ctx.pendingApprovals, approvalId, entry, outcome),
+    );
   }
 
   /** Same contract as `holdApproval`. */
@@ -255,7 +258,21 @@ export class CodexRuntimeApprovals {
       return { status: "wrong-session" };
     }
     const outcome = this.ctx.options.engine.holdInteraction(interactionId, held);
-    return this.applyHold(this.ctx.pendingInteractions, interactionId, entry, outcome);
+    return this.announceHold(
+      sessionId,
+      this.applyHold(this.ctx.pendingInteractions, interactionId, entry, outcome),
+    );
+  }
+
+  /**
+   * A moved deadline changes what `/approvals` and `/interactions` list, which
+   * the state revision covers (to-do 8102 task 2): tell the observe stream.
+   */
+  private announceHold(sessionId: string, response: ParkedHoldResponse): ParkedHoldResponse {
+    if (response.status === "applied" || response.status === "unknown") {
+      this.ctx.options.emit({ type: "session.updated", sessionId });
+    }
+    return response;
   }
 
   private applyHold<T extends ApprovalRequest | InteractionRequest>(

@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:ff707d3ea1651e1727eb680fd39752245a60f0d413dd3b7de92ab00c36c87866",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "nodeId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "setRevision": {
+          "type": "number"
+        },
+        "streamId": {
+          "type": "string"
+        },
+        "subscriptions": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": ["key", "topic"],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["setRevision", "streamId", "subscriptions"],
+      "type": "object"
+    }
+  }
+}

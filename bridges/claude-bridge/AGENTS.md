@@ -281,6 +281,16 @@ When touching the session catalogue (`session-manager-catalog.ts`):
   revision, under a `generation:revision` cursor. A reconnect whose cursor is
   not the current one gets `replay.required`; nothing is serialized or
   retained for replay.
+- **Every state change moves the state revision**
+  ([State revisions](../AGENTS.md#state-revisions)). `eventEmitter.emit` bumps
+  it for every session event except `message.updated`/`message.patched`
+  (transcript only), before the fan-out, so the frame carries it. A change to
+  what `GET /session/:id` or its three side routes return that emits no event
+  (a status flip at admission, settle or close, a hold) calls
+  `eventEmitter.announceState(sessionId)`, which reaches only the observe
+  stream, never the bridge's own listeners or tests that capture events.
+  `routes/session-state-revision.test.ts` drives each path and fails on a
+  change without a move; add a new path there.
 - **No route deletes a rollout.** The bridge serves no `DELETE /session/:id`
   and no code in it calls the SDK's `deleteSession`; an older bridge's DELETE
   did, which removed the `{sessionId}.jsonl` rollout. Tab close uses

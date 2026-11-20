@@ -461,10 +461,13 @@ function resolvePath(message: SummarizableMessage, path: string[]): unknown {
  * the revision the reader asked for no longer exists anywhere. Neither is
  * reported as an empty result.
  */
-export function readBridgeTranscriptDetail(
+type LocatedDetail = { status: "ok"; detail: BridgeDetailPayload; bytes: number };
+type UnavailableDetail = { version: 1; status: "missing" | "expired" | "invalid" };
+
+export function locateBridgeTranscriptDetail(
   messages: readonly unknown[],
   locator: string,
-): BridgeTranscriptDetailResponse {
+): LocatedDetail | UnavailableDetail {
   const body = decodeLocator(locator);
   if (!body) return { version: 1, status: "invalid" };
   let message: SummarizableMessage | undefined;
@@ -480,11 +483,22 @@ export function readBridgeTranscriptDetail(
   if (!isRecord(part)) return { version: 1, status: "missing" };
   const payload = detailPayload(part);
   if (!payload) return { version: 1, status: "expired" };
-  const measured = digestPayload(payload);
+  const measured = measureDetail(part, payload);
   if (measured.digest !== body.d) return { version: 1, status: "expired" };
-  const limit = payload.fileDataUrl ? BRIDGE_FILE_DETAIL_MAX_BYTES : BRIDGE_TOOL_DETAIL_MAX_BYTES;
-  if (measured.bytes > limit) return { version: 1, status: "too-large" };
-  return { version: 1, status: "ok", detail: payload, bytes: measured.bytes };
+  return { status: "ok", detail: payload, bytes: measured.bytes };
+}
+
+export function readBridgeTranscriptDetail(
+  messages: readonly unknown[],
+  locator: string,
+): BridgeTranscriptDetailResponse {
+  const detail = locateBridgeTranscriptDetail(messages, locator);
+  if (detail.status !== "ok") return detail;
+  const limit = detail.detail.fileDataUrl
+    ? BRIDGE_FILE_DETAIL_MAX_BYTES
+    : BRIDGE_TOOL_DETAIL_MAX_BYTES;
+  if (detail.bytes > limit) return { version: 1, status: "too-large" };
+  return { version: 1, ...detail };
 }
 
 // ---------------------------------------------------------------------------

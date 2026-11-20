@@ -1,3 +1,4 @@
+import type { ToolOutputReadRequest } from "@orkestrator/protocol/native-agent-tool-output";
 /**
  * The transcript reads of one HTTP bridge connection, and what that
  * connection answered about the v2 contract (`http-bridge/transcript-v2.ts`).
@@ -18,6 +19,7 @@ import {
 import {
   HttpBridgeTranscriptCapabilities,
   readHttpBridgeTranscriptDetail,
+  readHttpBridgeTranscriptOutput,
   readHttpBridgeTranscriptPage,
 } from "./transcript-v2.js";
 
@@ -65,6 +67,20 @@ export class HttpBridgeTranscriptReader {
       options,
       capabilities: this.capabilities,
     });
+  }
+
+  async output(sessionId: string, locator: string, request: ToolOutputReadRequest) {
+    if (!this.capabilities.supports("output")) return undefined;
+    const result = await readHttpBridgeTranscriptOutput({
+      agent: this.agent,
+      connection: this.connection,
+      fetchImpl: this.fetchImpl,
+      sessionId,
+      locator,
+      request,
+    });
+    if (result === undefined) this.capabilities.markUnsupported("output");
+    return result;
   }
 
   async detail(sessionId: string, locator: string): Promise<ProviderTranscriptDetail | undefined> {

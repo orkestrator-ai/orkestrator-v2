@@ -27,6 +27,7 @@ import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { CLOSE_ACK_TIMEOUT_MS } from "./config.js";
 import { detachAgent } from "./agent-session.js";
 import { persistBarrier, schedulePersist } from "./persistence.js";
+import { sessionChanged, sessionRemoved, stateChanged } from "./state-revision.js";
 import type { CloseOutcome } from "./session-tombstones.js";
 import { clientSessionKeys, ownedWork, sessions, type SessionState } from "./state.js";
 
@@ -48,7 +49,7 @@ export async function closeSessionPermanently(
 ): Promise<CloseOutcome> {
   state.closed = true;
   if (!state.closing) {
-    state.revision += 1;
+    sessionChanged(state);
     const operation = runClose(state);
     state.closing = operation;
     // A failed publication must be retryable by the next request, and the
@@ -71,10 +72,13 @@ async function runClose(state: SessionState): Promise<void> {
     await stopOwnedWork(state);
     await detachAgent(state);
     state.closeFenced = true;
-    state.revision += 1;
+    sessionChanged(state);
   }
   await persistBarrier();
-  if (sessions.get(state.id) === state) sessions.delete(state.id);
+  if (sessions.get(state.id) === state) {
+    sessions.delete(state.id);
+    sessionRemoved(state);
+  }
   if (state.clientSessionKey && clientSessionKeys.get(state.clientSessionKey) === state.id) {
     clientSessionKeys.delete(state.clientSessionKey);
   }
@@ -104,6 +108,7 @@ async function stopOwnedWork(state: SessionState): Promise<void> {
   state.pendingCancelPromptSequence = undefined;
   if (state.status === "running") state.status = "idle";
   state.dispatching = false;
+  stateChanged(state);
 }
 
 /**

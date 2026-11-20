@@ -79,6 +79,7 @@ import {
   type GrokMcpConfigStatus,
   type VendorMcpServerStatus,
 } from "./acp-mcp-inventory.js";
+import { markSessionChanged } from "./acp-state-revision.js";
 
 const log = createLogger("bridge.acp");
 
@@ -1616,7 +1617,7 @@ function publishVendorMcp(): void {
   const mcp = withVendorMcpStatuses(vendorMcpListing, vendorMcpStatuses);
   if (JSON.stringify(agentRuntime.mcp) === JSON.stringify(mcp)) return;
   agentRuntime.mcp = mcp;
-  for (const state of sessions.values()) state.revision += 1;
+  for (const state of sessions.values()) markSessionChanged(state);
 }
 
 function rememberVendorRuntime(

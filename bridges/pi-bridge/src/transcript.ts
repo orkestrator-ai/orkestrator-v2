@@ -26,6 +26,7 @@ import {
   type BridgeMessagePart,
   type SessionState,
 } from "./state.js";
+import { revisionChanged, stateChanged } from "./observation.js";
 
 const TRUNCATION_NOTICE = "\n\n[output truncated]";
 /** Maximum unchecked growth while no renderer is polling the transcript. */
@@ -85,7 +86,12 @@ export const boundTranscript = bounds.boundTranscript;
  * pass. Called from read routes, where an unconditional bound would make every
  * poll of a large session serialize the transcript twice.
  */
-export const boundTranscriptForRead = bounds.boundTranscriptForRead;
+export function boundTranscriptForRead(state: SessionState): void {
+  const revision = state.revision;
+  bounds.boundTranscriptForRead(state);
+  // A trim moves `revision` (shared bounds code); announce it like any other.
+  if (state.revision !== revision) stateChanged(state);
+}
 
 /**
  * Periodically enforce bounds from the synchronous SDK event listener.
@@ -97,7 +103,7 @@ export const boundTranscriptForRead = bounds.boundTranscriptForRead;
  */
 export function boundTranscriptDuringStreaming(state: SessionState): void {
   if (!bounds.streamingBoundDue(state)) return;
-  if (boundTranscript(state)) state.revision += 1;
+  if (boundTranscript(state)) revisionChanged(state);
 }
 
 /** Charge appended bytes so the next read knows the budget may have moved. */
@@ -114,8 +120,14 @@ export const chargeTranscript = bounds.chargeTranscript;
  */
 export const noteRowRevised = bounds.noteRowRevised;
 
-/** Record a change to one row: note it and bump the revision readers compare. */
-export const rowChanged: (state: SessionState, row: BridgeMessage) => void = bounds.rowChanged;
+/**
+ * Record a change to one row: note it, bump the revision readers compare and
+ * announce the change (`observation.ts`).
+ */
+export function rowChanged(state: SessionState, row: BridgeMessage): void {
+  bounds.rowChanged(state, row);
+  stateChanged(state);
+}
 
 /** Measure a row again at the next bound without noting it for readers. */
 export const forgetRowSize: (state: SessionState, row: BridgeMessage) => void =

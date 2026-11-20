@@ -24,6 +24,7 @@ import {
 } from "./acp-context.js";
 import { flushStreamingPersist } from "./acp-persist-writer.js";
 import { restorePersistedState } from "./acp-persistence.js";
+import { observationHub } from "./acp-state-revision.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("bridge.acp");
@@ -75,6 +76,8 @@ export function shutdown(): Promise<void> {
     await Promise.allSettled([...sessions.values()].map((state) => state.child?.close()));
     await replayRecorder?.close();
     await flushStreamingPersist();
+    // An open observe stream would otherwise hold `server.close` forever.
+    observationHub.close();
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
   })();
   return shutdownPromise;

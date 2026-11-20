@@ -98,6 +98,7 @@ interface NativeChatShellProps<TMessage extends NativeMessageType> {
   sessionEstablished?: boolean;
   errorMessage?: string | null;
   desynced?: boolean;
+  pushRecovering?: boolean;
   serverLog?: string | null;
   onRetry: () => void;
 
@@ -233,6 +234,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   sessionEstablished = true,
   errorMessage,
   desynced = false,
+  pushRecovering = false,
   serverLog,
   onRetry,
   messages,
@@ -406,7 +408,9 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         ? "refresh"
         : desynced
           ? "desync"
-          : null;
+          : pushRecovering
+            ? "push-recovery"
+            : null;
   /*
    * The transcript normally scrolls behind the floating dock. A notice row
    * (reconnect error, refresh shimmer, desync warning) is text the user has to
@@ -648,10 +652,15 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
     ) : null;
 
   const desyncNotice =
-    dockNoticeKind === "desync" ? (
-      <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+    dockNoticeKind === "desync" || dockNoticeKind === "push-recovery" ? (
+      <div
+        role="status"
+        className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+      >
         <AlertCircle className="h-4 w-4 shrink-0" />
-        Live updates disconnected. A full session refresh will run when the connection returns.
+        {dockNoticeKind === "push-recovery"
+          ? "Recovering live updates. Checking the session in the meantime."
+          : "Live updates disconnected. A full session refresh will run when the connection returns."}
       </div>
     ) : null;
 

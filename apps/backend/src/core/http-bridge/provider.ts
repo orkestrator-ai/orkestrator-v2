@@ -108,6 +108,7 @@ import { HttpBridgeActivityBatchReader } from "./activity-batch.js";
 import { bridgeChangeEvidenceSource } from "./change-evidence.js";
 import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
+import { HttpBridgeStateReads } from "./state-revision.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
 import { readBridgeSessionBranches, switchBridgeSessionBranch } from "./session-branches.js";
 import { readBridgeHumanPrompts } from "./human-prompts.js";
@@ -141,8 +142,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly changeEvidenceSource: ReturnType<typeof bridgeChangeEvidenceSource>;
   /** Grok only: see {@link readAcpTurnTerminalError}. */
   readonly turnTerminalError?: (sessionId: string, requestId: string) => Promise<string | null>;
-  /** Claude and Codex: the bridge event stream as the idle wakeup. */
+  /** The bridge's observe stream: the idle wakeup and the push observer's change signal. */
   private readonly observationWakeup: HttpBridgeObservationWakeup;
+  private readonly stateReads: HttpBridgeStateReads;
   private readonly steerQualification: HttpBridgeSteerQualification;
 
   constructor(
@@ -162,6 +164,8 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.transcripts = new HttpBridgeTranscriptReader(this.agent, connection, fetchImpl);
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
+    this.stateReads = new HttpBridgeStateReads(this.agent, connection, fetchImpl);
+    this.interactionAdapter.sideRouteCache = this.stateReads;
     this.catalogAdapter = new HttpBridgeCatalogAdapter(this.agent, connection, fetchImpl);
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
     this.changeEvidenceSource = bridgeChangeEvidenceSource(connection, fetchImpl);
@@ -185,6 +189,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   observationStreamLive(): boolean {
     return this.observationWakeup.live();
   }
+
+  observationStreamRevisions = (): boolean => this.observationWakeup.revisionsLive();
+  /** Content-free counters of the conditional state reads (to-do 8102 task 2). */
+  stateReadMetrics = () => this.stateReads.metrics();
 
   dispose(): void {
     this.observationWakeup.close();
@@ -551,6 +559,10 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return this.transcripts.detail(sessionId, locator);
   }
 
+  transcriptOutput(...args: Parameters<HttpBridgeTranscriptReader["output"]>) {
+    return this.transcripts.output(...args);
+  }
+
   transcriptPage(...args: Parameters<HttpBridgeTranscriptReader["page"]>) {
     return this.transcripts.page(...args);
   }
@@ -571,6 +583,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       fetchImpl: this.fetchImpl,
       sessionId,
       planUsage: this.planUsage,
+      stateReads: this.stateReads,
       metadata: this.interactiveMetadata,
       refreshRuntimeMetadata: () => this.refreshRuntimeMetadata(sessionId),
       readRuntimeHealth: () => this.runtimeHealth(sessionId),
@@ -1479,5 +1492,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   releaseSession(sessionId: string): void {
     this.codexModes.delete(sessionId);
     this.steerQualification.forget(sessionId);
+    this.stateReads.forget(sessionId);
   }
 }

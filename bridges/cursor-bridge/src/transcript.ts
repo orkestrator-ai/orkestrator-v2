@@ -29,6 +29,7 @@ import {
   type BridgeTextPart,
   type SessionState,
 } from "./state.js";
+import { transcriptChanged } from "./state-revision.js";
 
 const TRUNCATION_NOTICE = "\n\n[output truncated]";
 /** Maximum charged growth between exact measurements while streaming. */
@@ -118,7 +119,7 @@ export function boundTranscript(state: SessionState): boolean {
  */
 export function boundTranscriptForRead(state: SessionState): void {
   if (state.uncheckedTranscriptBytes === 0) return;
-  if (boundTranscript(state)) state.revision += 1;
+  if (boundTranscript(state)) transcriptChanged(state);
 }
 
 /**
@@ -171,7 +172,7 @@ export function boundTranscriptDuringStreaming(
   stats.exactChecks += 1;
   if (boundTranscript(state)) {
     stats.trims += 1;
-    state.revision += 1;
+    transcriptChanged(state);
   }
   recordCheckDuration(stats, started);
 }
@@ -190,7 +191,7 @@ export function rewindTranscriptTo(state: SessionState, messageId: string): void
   state.messages.splice(transcriptIndex);
   beginAssistantTurn(state);
   startTranscriptEpoch(state);
-  state.revision += 1;
+  transcriptChanged(state);
 }
 
 /**
@@ -466,7 +467,10 @@ export const noteRowRevised = bounds.noteRowRevised;
  * Record a change to one row: note it and bump the revision readers compare.
  * Every in-place row change goes through here or `noteRowRevised`.
  */
-export const rowChanged: (state: SessionState, row: BridgeMessage) => void = bounds.rowChanged;
+export function rowChanged(state: SessionState, row: BridgeMessage): void {
+  bounds.noteRowRevised(state, row.id);
+  transcriptChanged(state);
+}
 
 /** Lost revision notes require retained-page reconciliation. */
 export const revisedRowsOverflowVersion = bounds.revisedRowsOverflowVersion;
@@ -630,7 +634,7 @@ export function boundNestedParts(
   stats.childPartsDropped += evicted.size;
   state.droppedParts += evicted.size;
   state.transcriptTruncated = true;
-  state.revision += 1;
+  transcriptChanged(state);
   return true;
 }
 

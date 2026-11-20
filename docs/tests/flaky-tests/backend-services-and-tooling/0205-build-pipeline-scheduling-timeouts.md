@@ -1,11 +1,13 @@
 # Build pipeline scheduling timeouts under aggregate load
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/scheduling.test.ts`.
+
 - **ID:** 0205
 - **Status:** open
 - **Date observed:** 2026-10-13
 - **Tests:** `BuildPipelineService keyed scheduling > old and new drivers make the same transitions from one persisted fixture`
   and `BuildPipelineService keyed scheduling > retained history is enumerated only by the safety scan`.
-- **Owning file:** `apps/backend/src/core/build-pipeline/scheduling.test.ts`.
+- **Owning file:** `apps/backend/src/core/build-pipeline-scheduling.test.ts`.
 - **Original command:** `mise run test:logged -- --name full-tests -- mise run test`,
   with the documented macOS GNU-tool PATH.
 - **Worker configuration:** workspace packages `--parallel=1`, two package
@@ -15,7 +17,7 @@
 - **Backend suite:** 5,875 passed, 15 skipped, 27 failed across 329 files in
   442.53 seconds; 22 failures reproduced as tmux cleanup errors on this host.
 - **Isolated rerun:** with the same PATH,
-  `mise run test:logged -- --name build-scheduling-rerun -- bun --cwd=apps/backend test ./src/core/build-pipeline/scheduling.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name build-scheduling-rerun -- bun --cwd=apps/backend test ./src/core/build-pipeline-scheduling.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`
   passed unchanged (exit 0) in 5.4 seconds.
 - **Evidence:** `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 
@@ -30,10 +32,10 @@ changed.
 - **Date observed:** 2026-10-13
 - **Original command:** `mise run test:logged -- --name fix-full-suite -- mise run test`
 - **Worker configuration:** normal aggregate allocation; backend used one Bun worker while root and bridge groups and component/isolated browser validation ran on the host.
-- **Failures:** `BuildPipelineService keyed scheduling > old and new drivers make the same transitions from one persisted fixture` timed out at 5147.39 ms; `BuildPipelineService keyed scheduling > retained history is enumerated only by the safety scan` timed out at 5000.59 ms in `apps/backend/src/core/build-pipeline/scheduling.test.ts`.
+- **Failures:** `BuildPipelineService keyed scheduling > old and new drivers make the same transitions from one persisted fixture` timed out at 5147.39 ms; `BuildPipelineService keyed scheduling > retained history is enumerated only by the safety scan` timed out at 5000.59 ms in `apps/backend/src/core/build-pipeline-scheduling.test.ts`.
 - **Associated errors:** late work read a null pipeline snapshot in `phaseOf`, and the safety scan observed 44 scanned records instead of 123 after the timed-out tests.
 - **Suite counts:** backend reported 5877 passed, 15 skipped and 25 failed; 22 failures were environment-move cleanup errors and one was an annotation quota hook timeout.
-- **Isolated rerun:** `mise run test:logged -- --name fix-scheduling-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/build-pipeline/scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 2.9 seconds).
+- **Isolated rerun:** `mise run test:logged -- --name fix-scheduling-rerun -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 2.9 seconds).
 - **Evidence:** `/tmp/orkestrator-test-run.Pv387k/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Hypothesis:** scheduler progress and fixture cleanup exceeded the generic test deadline under aggregate load or shared backend activity. The owning test and backend were unchanged; the cause is unconfirmed. No test was skipped or timeout raised.
 
@@ -55,7 +57,7 @@ changed.
 - **Evidence:** `/tmp/orkestrator-test-run.jDL6Dp/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name
   build-pipeline-scheduling-isolated -- bun test --cwd apps/backend
-  --preload ../../tests/setup-node.ts ./src/core/build-pipeline/scheduling.test.ts
+  --preload ../../tests/setup-node.ts ./src/core/build-pipeline-scheduling.test.ts
   --parallel=1 --only-failures` passed unchanged in 3.1 seconds.
 - **Hypothesis:** late work from a timed-out case can affect the following
   test and outlive its fixture storage. The unchanged isolated pass matches
@@ -107,7 +109,7 @@ GitHub Actions `lint.yml` "Unit and integration tests" job,
   `SQLITE_IOERR_VNODE` between tests followed, matching the 2026-10-15 local
   recurrence.
 - **Fix:** this branch, test fixture only
-  (`apps/backend/src/core/build-pipeline/scheduling.test.ts`):
+  (`apps/backend/src/core/build-pipeline-scheduling.test.ts`):
   - Only the active pipelines and the first completed pipeline go through
     the service path. Every later completed record is a copy of the first one's
     persisted snapshot, re-keyed to a new id, environment and task. One
@@ -140,7 +142,7 @@ GitHub Actions `lint.yml` "Unit and integration tests" job,
 - **Aggregate:** backend 11,960 passed, 141 skipped, 11 failed and seven errors across 719 files (1196.99 s); root/support 3,524 passed, four failed and one error (439.93 s). Aggregate exit 1 after 1354.0 s. Web passed all 9,937 active tests; bridges and protocol passed.
 - **Evidence:** `orkestrator-test-run.uWXxA5/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`, `orkestrator-test-run.uWXxA5/root-and-agent-support-tests.log.gz`, and enclosing `orkestrator-test-run.doKdov/merge-repository.log.gz` below the host temporary directory.
 - **Observation:** `retained history is enumerated only by the safety scan` exceeded its deadline (109988.53 ms).
-- **Complete unchanged owner:** `mise run test:logged -- --name merge-build-scheduling-owner -- bun test --cwd apps/backend ./src/core/build-pipeline/scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 0.9 s).
+- **Complete unchanged owner:** `mise run test:logged -- --name merge-build-scheduling-owner -- bun test --cwd apps/backend ./src/core/build-pipeline-scheduling.test.ts --parallel=1 --only-failures` passed (exit 0, 0.9 s).
 - **Assessment:** Reopened after this aggregate-only recurrence; the current cause is unconfirmed. Earlier fix history remains valid for its documented failure. No implementation, assertion, deadline or skip changed.
 
 ## Investigation (2026-11-15, status stays open)

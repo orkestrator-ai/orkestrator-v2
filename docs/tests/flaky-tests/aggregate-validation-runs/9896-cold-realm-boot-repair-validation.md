@@ -1,5 +1,7 @@
 # Cold realm boot repair aggregate timeout cluster
 
+Current path for the relocated file: `apps/backend/src/core/build-pipeline/review-fanout.test.ts`.
+
 - **ID:** 9896
 - **Status:** resolved
 - **Date observed:** 2026-11-06
@@ -17,7 +19,7 @@ were changed for these cases.
 | --- | --- | --- | --- |
 | tests/unit/hooks/useEnvironments.test.ts | unnamed beforeEach/afterEach hook timeout | 5622.98 ms | address-root-hook-owner: pass, 2.5 s |
 | apps/web/src/components/kanban/ProjectNotesView.test.tsx | unnamed beforeEach/afterEach hook timeout | 6578.91 ms | address-notes-hook-owner: pass, 1.2 s |
-| apps/backend/src/core/build-pipeline/review-fanout.test.ts | build pipeline multi-model review > a failed reviewer does not stop the panel | 7062.95 ms | address-review-fanout-owner: pass, 3.9 s |
+| apps/backend/src/core/build-pipeline-review-fanout.test.ts | build pipeline multi-model review > a failed reviewer does not stop the panel | 7062.95 ms | address-review-fanout-owner: pass, 3.9 s |
 | apps/backend/src/core/public-api/public-api-pull-requests.test.ts | pr.merge > a detected pull request that already merged is refused, and not stored as open | 6707.34 ms | address-public-pr-owner: pass, 3.4 s |
 | apps/backend/src/core/diff-baseline.test.ts | a rebase excludes imported history and retains the rebased worker commits | 7224.83 ms | address-diff-baseline-owner: pass, 2.3 s |
 

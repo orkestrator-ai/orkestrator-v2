@@ -14,6 +14,7 @@ import { act, cleanup, waitFor } from "@testing-library/react";
 import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type {
   NativeAgentDiscoveryUpdate,
+  NativeAgentLiveUpdate,
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
   NativeAgentViewIdentity,
@@ -46,24 +47,31 @@ let transcriptUpdates: Array<
 let stateUpdates: Array<
   () => NativeAgentSessionStateUpdate | Promise<NativeAgentSessionStateUpdate>
 > = [];
+const readLiveUpdate = mock(async (): Promise<NativeAgentLiveUpdate<TestMessage>> => {
+  throw new Error("Unexpected combined live update");
+});
+const readCapabilities = mock(async () => ({
+  historyPagingVersions: [1],
+  progressiveViewVersions: [1],
+  transcriptPatchVersions: [],
+  liveUpdateVersions: [] as number[],
+}));
+const readTranscript = mock(async (input: { knownToken?: string; forceSnapshot?: boolean }) => {
+  const next = transcriptUpdates.shift();
+  if (next) return next();
+  return {
+    viewVersion: 1,
+    status: "unchanged",
+    token: input.knownToken ?? "transcript-unscripted",
+    identity,
+  } satisfies NativeAgentTranscriptUpdate<TestMessage>;
+});
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
-  getNativeAgentSyncCapabilities: async () => ({
-    historyPagingVersions: [1],
-    progressiveViewVersions: [1],
-    transcriptPatchVersions: [],
-  }),
-  getNativeAgentTranscriptUpdate: async (input: { knownToken?: string }) => {
-    const next = transcriptUpdates.shift();
-    if (next) return next();
-    return {
-      viewVersion: 1,
-      status: "unchanged",
-      token: input.knownToken ?? "transcript-unscripted",
-      identity,
-    } satisfies NativeAgentTranscriptUpdate<TestMessage>;
-  },
+  getNativeAgentSyncCapabilities: readCapabilities,
+  getNativeAgentLiveUpdate: readLiveUpdate,
+  getNativeAgentTranscriptUpdate: readTranscript,
   getNativeAgentSessionStateUpdate: async (input: { knownToken?: string }) => {
     const next = stateUpdates.shift();
     if (next) return next();
@@ -98,13 +106,13 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
 });
 
-function transcriptSnapshot(token: string, messages: TestMessage[]) {
+function transcriptSnapshot(token: string, messages: TestMessage[], viewIdentity = identity) {
   return {
     viewVersion: 1,
     status: "snapshot",
     token,
     value: {
-      identity,
+      identity: viewIdentity,
       freshness: messages.length === 0 ? "empty" : "current",
       messages,
       historyEpoch: "epoch-1",
@@ -113,13 +121,13 @@ function transcriptSnapshot(token: string, messages: TestMessage[]) {
   } satisfies NativeAgentTranscriptUpdate<TestMessage>;
 }
 
-function stateSnapshot(token: string) {
+function stateSnapshot(token: string, viewIdentity = identity) {
   return {
     viewVersion: 1,
     status: "snapshot",
     token,
     value: {
-      identity,
+      identity: viewIdentity,
       connection: "connected",
       turn: { phase: "running" },
       interactions: [],
@@ -136,8 +144,8 @@ function renderCountedSession() {
     renders: 0,
     refreshing: [] as boolean[],
     stateRefreshing: [] as boolean[],
-    /** The failure the connection surface would show, per render. */
     failures: [] as Array<string | null>,
+    genericFailures: [] as boolean[],
   };
   const rendered = renderHookInAppCommandScope(() => {
     const session = useNativeAgentSession<TestMessage>({
@@ -152,7 +160,17 @@ function renderCountedSession() {
     seen.renders += 1;
     seen.refreshing.push(session.isRefreshing);
     seen.stateRefreshing.push(session.sessionStateRefreshing);
-    seen.failures.push(session.transcriptError ?? session.sessionStateError ?? null);
+    const failure = session.transcriptError ?? session.sessionStateError ?? session.runtimeError;
+    seen.failures.push(failure);
+    seen.genericFailures.push(
+      failure === null &&
+        session.sessionStateAvailability !== "current" &&
+        session.hasCompletedRead &&
+        !session.isRefreshing &&
+        !session.transcriptRefreshing &&
+        !session.sessionStateRefreshing &&
+        session.sessionStateAvailability !== "refreshing",
+    );
     return session;
   });
   const reset = () => {
@@ -160,6 +178,7 @@ function renderCountedSession() {
     seen.refreshing = [];
     seen.stateRefreshing = [];
     seen.failures = [];
+    seen.genericFailures = [];
   };
   return { ...rendered, seen, reset };
 }
@@ -168,6 +187,8 @@ beforeEach(() => {
   resetNativeAgentSyncCapabilityForTests();
   transcriptUpdates = [];
   stateUpdates = [];
+  readTranscript.mockClear();
+  readLiveUpdate.mockClear();
   appCommandStore(paneLayoutStore).setState({
     environments: new Map(),
     hydration: new Map(),
@@ -413,6 +434,132 @@ describe("useNativeAgentSession background read flags", () => {
     expect(result.current.sessionStateAvailability).toBe("current");
   });
 
+  test("a runtime-only failure stays visible through a background retry", async () => {
+    const unreachable = "Could not read session sync capabilities";
+    readCapabilities.mockImplementationOnce(async () => {
+      throw new Error(unreachable);
+    });
+    const { result, seen, reset } = renderCountedSession();
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.runtimeError).toBe(unreachable);
+    expect(result.current.transcriptError).toBeNull();
+    expect(result.current.sessionStateError).toBeNull();
+    expect(result.current.sessionStateAvailability).toBe("unavailable");
+    reset();
+
+    const gate = Promise.withResolvers<void>();
+    transcriptUpdates = [() => gate.promise.then(() => transcriptSnapshot("transcript-1", []))];
+    stateUpdates = [() => gate.promise.then(() => stateSnapshot("state-1"))];
+    let inFlight!: Promise<unknown>;
+    try {
+      await act(async () => {
+        inFlight = result.current.refresh({ manual: false });
+      });
+      expect(transcriptUpdates).toHaveLength(0);
+      expect(stateUpdates).toHaveLength(0);
+      expect(result.current.runtimeError).toBe(unreachable);
+      expect(result.current.isRefreshing).toBe(false);
+      expect(result.current.sessionStateRefreshing).toBe(false);
+      expect(seen.failures.every((failure) => failure === unreachable)).toBe(true);
+    } finally {
+      await act(async () => {
+        gate.resolve();
+        await inFlight;
+      });
+    }
+    expect(result.current.runtimeError).toBeNull();
+    expect(result.current.sessionStateAvailability).toBe("current");
+    expect(result.current.projection?.connection).toBe("connected");
+  });
+
+  test.each(["split", "combined"] as const)(
+    "a transcript-only failure stays visible through a %s retry with current state",
+    async (readPath) => {
+      const combined = readPath === "combined";
+      const transcriptFailure = "Transcript read failed";
+      if (combined) {
+        readCapabilities.mockImplementationOnce(async () => ({
+          historyPagingVersions: [1],
+          progressiveViewVersions: [1],
+          transcriptPatchVersions: [],
+          liveUpdateVersions: [1],
+        }));
+      }
+      transcriptUpdates = [() => transcriptSnapshot("transcript-1", [])];
+      stateUpdates = [() => stateSnapshot("state-1")];
+      const { result, seen, reset } = renderCountedSession();
+      await act(async () => {
+        await result.current.refresh();
+      });
+
+      const failedTranscript = {
+        viewVersion: 1,
+        status: "unavailable",
+        retryable: true,
+        error: transcriptFailure,
+      } as const;
+      const unchangedState = {
+        viewVersion: 1,
+        status: "unchanged",
+        token: "state-1",
+        identity,
+      } as const;
+      if (combined) {
+        readLiveUpdate.mockResolvedValueOnce({
+          viewVersion: 1,
+          transcript: failedTranscript,
+          state: unchangedState,
+        });
+      } else {
+        transcriptUpdates = [() => failedTranscript];
+      }
+      await act(async () => {
+        await result.current.refresh({ manual: false });
+      });
+      expect(result.current.transcriptError).toBe(transcriptFailure);
+      expect(result.current.sessionStateError).toBeNull();
+      expect(result.current.runtimeError).toBeNull();
+      expect(result.current.sessionStateAvailability).toBe("current");
+      reset();
+
+      const gate = Promise.withResolvers<void>();
+      const recoveredTranscript = transcriptSnapshot("transcript-2", [{ id: "m2", text: "two" }]);
+      if (combined) {
+        readLiveUpdate.mockImplementationOnce(async () => {
+          await gate.promise;
+          return { viewVersion: 1, transcript: recoveredTranscript, state: unchangedState };
+        });
+      } else {
+        transcriptUpdates = [() => gate.promise.then(() => recoveredTranscript)];
+      }
+      readTranscript.mockClear();
+      readLiveUpdate.mockClear();
+      let inFlight!: Promise<unknown>;
+      try {
+        await act(async () => {
+          inFlight = result.current.refresh({ manual: false });
+        });
+        expect(readLiveUpdate).toHaveBeenCalledTimes(combined ? 1 : 0);
+        expect(readTranscript).toHaveBeenCalledTimes(combined ? 0 : 1);
+        expect(result.current.transcriptError).toBe(transcriptFailure);
+        expect(result.current.sessionStateAvailability).toBe("current");
+        expect(seen.failures.every((failure) => failure === transcriptFailure)).toBe(true);
+      } finally {
+        await act(async () => {
+          gate.resolve();
+          await inFlight;
+        });
+      }
+      expect(seen.refreshing).not.toContain(true);
+      expect(seen.stateRefreshing).not.toContain(true);
+      expect(result.current.transcriptError).toBeNull();
+      expect(result.current.sessionStateAvailability).toBe("current");
+      expect(result.current.projection?.messages).toEqual(recoveredTranscript.value.messages);
+    },
+  );
+
   describe("over a failed view", () => {
     const unreachable = "The connection is awaiting a verified route.";
 
@@ -492,6 +639,87 @@ describe("useNativeAgentSession background read flags", () => {
       });
       expect(result.current.transcriptError).toBeNull();
       expect(result.current.sessionStateError).toBeNull();
+      expect(result.current.sessionStateAvailability).toBe("current");
+    });
+
+    test("a new transcript generation keeps recovery pending until session state arrives", async () => {
+      const { result, seen } = await renderFailedSession();
+      const nextIdentity = { ...identity, sourceGeneration: "generation-2" };
+      const transcript = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+      const state = Promise.withResolvers<NativeAgentSessionStateUpdate>();
+      transcriptUpdates = [() => transcript.promise];
+      stateUpdates = [() => state.promise];
+      let inFlight!: Promise<unknown>;
+      try {
+        await act(async () => {
+          inFlight = result.current.refresh({ manual: false });
+        });
+        expect(result.current.transcriptError).toBe(unreachable);
+        expect(result.current.sessionStateError).toBe(unreachable);
+        expect(result.current.isRefreshing).toBe(false);
+        await act(async () => {
+          transcript.resolve(
+            transcriptSnapshot("transcript-2", [{ id: "m2", text: "two" }], nextIdentity),
+          );
+        });
+        expect(result.current.projection?.generation).toBe(nextIdentity.sourceGeneration);
+        expect(result.current.hasCompletedRead).toBe(true);
+        expect(result.current.sessionStateAvailability).toBe("unavailable");
+        expect(result.current.transcriptError).toBeNull();
+        expect(result.current.sessionStateError).toBeNull();
+        expect(result.current.isRefreshing).toBe(true);
+      } finally {
+        await act(async () => {
+          state.resolve(stateSnapshot("state-2", nextIdentity));
+          await inFlight;
+        });
+      }
+      expect(seen.genericFailures).not.toContain(true);
+      expect(result.current.isRefreshing).toBe(false);
+      expect(result.current.sessionStateAvailability).toBe("current");
+      expect(result.current.projection?.connection).toBe("connected");
+    });
+
+    test("a second unusable delta clears the retained transcript failure and stops retrying", async () => {
+      const { result } = await renderFailedSession();
+      const staleDelta = {
+        viewVersion: 1,
+        status: "delta",
+        baseToken: "wrong-base",
+        token: "transcript-2",
+        identity,
+        delta: {
+          messageUpserts: [{ id: "m2", text: "two" }],
+          deletedMessageIds: [],
+          freshness: "current",
+          historyEpoch: "epoch-1",
+          historyComplete: true,
+        },
+      } satisfies NativeAgentTranscriptUpdate<TestMessage>;
+      const fallback = Promise.withResolvers<NativeAgentTranscriptUpdate<TestMessage>>();
+      transcriptUpdates = [() => staleDelta, () => fallback.promise];
+      stateUpdates = [() => stateSnapshot("state-2")];
+      readTranscript.mockClear();
+      let inFlight!: Promise<unknown>;
+      try {
+        await act(async () => {
+          inFlight = result.current.refresh({ manual: false });
+        });
+        expect(readTranscript).toHaveBeenCalledTimes(2);
+        expect(readTranscript.mock.calls[0]?.[0]).toMatchObject({ knownToken: "transcript-1" });
+        expect(readTranscript.mock.calls[1]?.[0]).toMatchObject({ forceSnapshot: true });
+        expect(result.current.transcriptError).toBe(unreachable);
+      } finally {
+        await act(async () => {
+          fallback.resolve(staleDelta);
+          await inFlight;
+        });
+      }
+      expect(readTranscript).toHaveBeenCalledTimes(2);
+      expect(result.current.transcriptError).toBeNull();
+      expect(result.current.transcriptAvailability).toBe("cached");
+      expect(result.current.transcriptRefreshing).toBe(false);
+      expect(result.current.projection?.messages).toEqual([{ id: "m1", text: "one" }]);
       expect(result.current.sessionStateAvailability).toBe("current");
     });
 

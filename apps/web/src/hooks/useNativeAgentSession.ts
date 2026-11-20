@@ -1258,6 +1258,9 @@ export function useNativeAgentSession<TMessage = unknown>({
         progressiveIdentityRef.current !== undefined &&
         progressiveIdentityRef.current.providerSessionId !== value.identity.providerSessionId;
       if (identityChanged) {
+        // This snapshot retires the old generation's state and errors. Keep
+        // the connection pending until the paired read settles.
+        setIsRefreshing(true);
         progressiveStateTokenRef.current = undefined;
         progressiveDiscoveryTokenRef.current = undefined;
         progressiveDiscoveryRef.current = undefined;
@@ -1674,6 +1677,7 @@ export function useNativeAgentSession<TMessage = unknown>({
       markSessionStateAvailability,
       markTranscriptAvailability,
       sessionKey,
+      setIsRefreshing,
       setSessionStateError,
       setTranscriptError,
       updateProgressiveCache,

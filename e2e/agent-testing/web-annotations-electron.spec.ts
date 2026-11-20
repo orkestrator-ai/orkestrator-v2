@@ -2319,13 +2319,11 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
     expect(ring).not.toBeNull();
     expect(overlaps(view.bounds, ring!)).toBe(false);
 
-    // The native view is a separate surface and would paint over the
-    // renderer, so it must never cover a menu or a dialog. Since #2110 a menu
-    // hides it only where the two overlap, while a modal dialog hides it
-    // wherever it sits. The server menu opens in the sidebar, beside the
-    // view, so the case checks that branch first, then moves the same open
-    // menu over the preview host and requires the view hidden under it.
-    const servers = s().window.getByRole("button", { name: /^Connected server: / });
+    // The server switcher sits in the title bar. Its Radix menu can land
+    // beside or over the preview, depending on the available space.
+    const servers = s()
+      .window.getByTestId("desktop-agent-info-slot")
+      .getByRole("button", { name: /^Connected server: / });
     await pressControl(servers);
     await expect(s().window.getByRole("menu")).toBeVisible();
     let menuLayout = "";
@@ -2341,25 +2339,31 @@ test("the real Notes column shrinks the native view, overlays hide it, and the n
       if (covered) return view.visible ? "view over the menu" : "covered: hidden";
       return view.visible ? "beside: visible" : "hidden beside the menu";
     };
+    await expect.poll(menuAgainstView).toMatch(/^(beside: visible|covered: hidden)$/);
+    record(testInfo, "title-bar-menu", menuLayout);
+    // A translated menu keeps its position while Radix updates its own
+    // wrapper. Exercise both placements regardless of where it opens.
+    const placeServerMenu = (placement: "beside" | "over") =>
+      s().window.evaluate(
+        ({ hostSelector, placement }) => {
+          const menu = document.querySelector<HTMLElement>('[role="menu"]');
+          const host = document.querySelector(hostSelector);
+          if (!menu || !host) throw new Error("menu or preview host missing");
+          menu.style.removeProperty("translate");
+          const from = menu.getBoundingClientRect();
+          const to = host.getBoundingClientRect();
+          const x = placement === "beside" ? to.left - from.width - 4 : to.left + 24;
+          menu.style.translate = `${x - from.left}px ${to.top + 24 - from.top}px`;
+        },
+        { hostSelector: PREVIEW_HOST, placement },
+      );
+    await placeServerMenu("beside");
     await expect.poll(menuAgainstView).toBe("beside: visible");
     record(testInfo, "menu-beside-view", menuLayout);
-    // Radix positions the menu through its popper wrapper's `transform`, so a
-    // `translate` on the menu itself survives repositioning. The renderer's
-    // overlay watcher sees the style change and rechecks the geometry, as it
-    // does when Floating UI moves a menu.
-    await s().window.evaluate((hostSelector) => {
-      const menu = document.querySelector<HTMLElement>('[role="menu"]');
-      const host = document.querySelector(hostSelector);
-      if (!menu || !host) throw new Error("menu or preview host missing");
-      const from = menu.getBoundingClientRect();
-      const to = host.getBoundingClientRect();
-      menu.style.translate = `${to.left + 24 - from.left}px ${to.top + 24 - from.top}px`;
-    }, PREVIEW_HOST);
+    await placeServerMenu("over");
     await expect.poll(menuAgainstView).toBe("covered: hidden");
     record(testInfo, "menu-over-view", menuLayout);
-    await s().window.evaluate(() => {
-      document.querySelector<HTMLElement>('[role="menu"]')?.style.removeProperty("translate");
-    });
+    await placeServerMenu("beside");
     await expect.poll(menuAgainstView).toBe("beside: visible");
     await s().window.keyboard.press("Escape");
     await expect(s().window.getByRole("menu")).toHaveCount(0);

@@ -331,7 +331,9 @@ export function ProjectSearchBar({
   onSelectEnvironment,
   onSelectMachineProject,
   commandHandlers = NO_HANDLERS,
+  iconOnly = false,
 }: {
+  iconOnly?: boolean;
   projects: Project[];
   environments: Environment[];
   /**
@@ -891,28 +893,39 @@ export function ProjectSearchBar({
   );
 
   return (
-    // Sits in the sidebar header's row, beside its sort, refresh and add
-    // buttons, taking the width they leave.
-    <div data-testid="project-search-bar" className="@container flex min-w-0 flex-1 items-center">
+    <div
+      data-testid="project-search-bar"
+      className={cn(
+        "flex min-w-0 items-center",
+        iconOnly ? "w-8 shrink-0 md:w-7" : "@container flex-1",
+      )}
+    >
       <button
         type="button"
         data-testid="project-search-trigger"
         aria-label="Search projects and environments"
         aria-keyshortcuts="Meta+K Control+K"
         onClick={openSearch}
-        className="flex h-8 w-full min-w-0 items-center gap-2 rounded-lg bg-input-surface px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7"
+        className={cn(
+          "flex h-8 w-full min-w-0 items-center rounded-lg text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground md:h-7",
+          iconOnly ? "justify-center" : "gap-2 bg-input-surface px-2 text-left text-sm",
+        )}
       >
         <Search className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="min-w-0 truncate">Search projects, environments...</span>
-        <kbd
-          data-testid="project-search-shortcut"
-          aria-hidden="true"
-          // Shown only once the field has room for the placeholder as well, so
-          // a 280px sidebar reads "Search projects, …" rather than "Search proj…".
-          className="ml-auto hidden shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[11px] font-medium text-zinc-300 @[15rem]:inline-block"
-        >
-          {shortcutLabel}
-        </kbd>
+        {iconOnly ? null : (
+          <>
+            <span className="min-w-0 truncate">Search projects, environments...</span>
+            <kbd
+              data-testid="project-search-shortcut"
+              aria-hidden="true"
+              // Shown only once the field has room for the placeholder as well, so
+              // a 280px sidebar reads "Search projects, …" rather than "Search proj…".
+              className="ml-auto hidden shrink-0 rounded-[5px] border border-border/70 bg-zinc-900 px-1.5 py-px font-sans text-[11px] font-medium text-zinc-300 @[15rem]:inline-block"
+            >
+              {shortcutLabel}
+            </kbd>
+          </>
+        )}
       </button>
 
       <Dialog open={open} onOpenChange={handleOpenChange}>

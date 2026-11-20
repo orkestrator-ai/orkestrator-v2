@@ -23,7 +23,10 @@ import {
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
-import { COMMAND_HANDOVER_PREVIEW_CHANGED } from "@orkestrator/protocol/command-nodes";
+import {
+  COMMAND_HANDOVER_PREVIEW_CHANGED,
+  type NodeListResult,
+} from "@orkestrator/protocol/command-nodes";
 import { requestCommandHandover } from "@/lib/command-handover";
 import { resetNodeChangeProjectionsForTests } from "@/lib/federation/node-change-projections";
 import { resetNodeEventsForTests } from "@/lib/federation/node-events";
@@ -1055,6 +1058,58 @@ describe("The title bar's command-node switcher", () => {
     expect(items.at(-1)!.textContent).toContain("Manage machines…");
   });
 
+  test("retries a rejected native list on reopen without a connection event", async () => {
+    const fake = installTwoMachines();
+    fake.connections.list.mockRejectedValueOnce(new Error("List unavailable"));
+    renderWithFederation(<SwitcherOnly />);
+
+    const menu = await openSwitcher();
+    expect(
+      await within(menu).findByText("Could not load machines. Reopen to try again."),
+    ).toBeTruthy();
+    expect(within(menu).queryAllByRole("menuitemradio")).toHaveLength(0);
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryAllByRole("menu")).toHaveLength(0));
+
+    const reopened = await openSwitcher();
+    expect(await switchTarget(reopened, /^Local, command node/)).toBeTruthy();
+    expect(await switchTarget(reopened, /^Machine A, leaf/)).toBeTruthy();
+    expect(fake.connections.list).toHaveBeenCalledTimes(2);
+  });
+
+  test("matches iOS connection colours by active identity and registered HTTPS origin", async () => {
+    const fake = installTwoMachines();
+    fake.connections.list.mockResolvedValue({
+      activeConnectionId: "ios-current",
+      credentialStorage: "secure",
+      connections: [
+        { id: "ios-current", name: "Current", address: "https://current.example", active: true },
+        {
+          id: "ios-a",
+          name: "Saved A",
+          address: `${MACHINE_A.address}:443/`,
+          active: false,
+        },
+        { id: "ios-other", name: "Other", address: "https://other.example", active: false },
+      ].map((connection) => ({
+        ...connection,
+        kind: "remote",
+        requiresToken: false,
+        lastConnectedAt: "2026-11-20T00:00:00Z",
+      })),
+    });
+    renderWithFederation(<SwitcherOnly />);
+    const menu = await openSwitcher();
+    const colour = (element: HTMLElement) =>
+      within(element).getByTestId("machine-color-dot").getAttribute("data-machine-color");
+
+    expect(colour(await switchTarget(menu, /^Current, command node/))).toBe(
+      colour(screen.getByTestId("command-node-switcher")),
+    );
+    expect(colour(await switchTarget(menu, /^Saved A, leaf/))).toBe("teal");
+    expect(colour(await switchTarget(menu, /^Other, leaf/))).toBe("neutral");
+  });
+
   test("Manage machines… opens Machines settings", async () => {
     installTwoMachines();
     const requests: unknown[] = [];
@@ -1136,6 +1191,63 @@ describe("The title bar's command-node switcher", () => {
 });
 
 describe("The command node in a browser tab", () => {
+  test("a reopened menu offers only the fresh browser routes", async () => {
+    const refresh = Promise.withResolvers<NodeListResult>();
+    let holdRefresh = false;
+    const fake = installDesktopFake({
+      list: connectionList([MACHINE_A, MACHINE_B]),
+      datasets: { a: sharedIdDataset("working"), b: sharedIdDataset("waiting") },
+      respondPortal: (command) =>
+        command === "list_nodes" && holdRefresh ? refresh.promise : undefined,
+    });
+    delete (window.orkestrator as { connections?: unknown }).connections;
+    const original = (await fake.invoke("list_nodes", {})) as NodeListResult;
+    const newOrigin = "https://new-machine-b.example";
+
+    renderWithFederation(<SwitcherOnly />);
+    const firstMenu = await openSwitcher();
+    expect((await switchTarget(firstMenu, /^Machine B, leaf/)).textContent).toContain(
+      MACHINE_B.address!,
+    );
+    fireEvent.keyDown(firstMenu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryAllByRole("menu")).toHaveLength(0));
+
+    holdRefresh = true;
+    const reopened = await openSwitcher();
+    expect(within(reopened).getByRole("status").textContent).toContain("Loading");
+    expect(within(reopened).queryAllByRole("menuitemradio")).toHaveLength(0);
+    expect(screen.queryAllByTestId("command-handover-dialog")).toHaveLength(0);
+
+    await act(async () => {
+      refresh.resolve({
+        ...original,
+        nodes: original.nodes.map((node) =>
+          node.nodeId === MACHINE_B.backendId
+            ? {
+                ...node,
+                routes: node.routes.map((route) =>
+                  route.kind === "https" ? { ...route, origin: newOrigin } : route,
+                ),
+              }
+            : node,
+        ),
+      });
+    });
+    const target = await switchTarget(reopened, /^Machine B, leaf/);
+    expect(target.textContent).toContain(newOrigin);
+    fireEvent.click(target);
+    const dialog = await screen.findByTestId("command-handover-dialog");
+    const assign = mock((_url: string) => undefined);
+    const originalAssign = window.location.assign;
+    window.location.assign = assign;
+    try {
+      fireEvent.click(within(dialog).getByRole("button", { name: /Make command node/ }));
+      await waitFor(() => expect(assign).toHaveBeenCalledWith(newOrigin));
+    } finally {
+      window.location.assign = originalAssign;
+    }
+  });
+
   test("switching hands command to another machine and opens its own address", async () => {
     installTwoMachines();
     delete (window.orkestrator as { connections?: unknown }).connections;

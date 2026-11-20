@@ -2,7 +2,7 @@ import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mail";
 import { useEffect, useState } from "react";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import * as realResizable from "@/components/ui/resizable";
 import * as realFilesPanelComponents from "@/components/files-panel";
 import * as realStores from "@/stores";
@@ -32,6 +32,7 @@ import {
 import { ProjectSearchBar } from "@/components/sidebar/ProjectSearchBar";
 import { requestAppShortcut, onAppShortcut } from "@/lib/app-shortcuts";
 import { uiStore as uiStoreDef, useUIStore as realUIStore, type UIState } from "@/stores/uiStore";
+import { useGlobalSettingsStore } from "@/stores/globalSettingsStore";
 import { useUIChromeStore } from "@/stores/uiChromeStore";
 import type { TabInfo } from "@/types/paneLayout";
 
@@ -743,6 +744,53 @@ describe("AppShell", () => {
     expect(delivered).not.toHaveBeenCalled();
     dispose();
   });
+
+  test.each([false, true])(
+    "opens the compact title-bar connection menu after closing the mobile drawer (federation: %s)",
+    async (federated) => {
+      installDesktopFake({
+        list: connectionList(federated ? [remoteConnection("leaf", "Leaf", "teal")] : []),
+        datasets: federated ? { leaf: sharedIdDataset("idle") } : {},
+      });
+      try {
+        renderInAppCommandScope(
+          <FederationProvider>
+            <AppShell>Workspace</AppShell>
+          </FederationProvider>,
+        );
+        const drawer = screen.getByRole("dialog", { name: "Projects and environments" });
+        fireEvent.click(
+          within(drawer).getAllByRole("button", { name: "Close projects and environments" })[1]!,
+        );
+        expect(screen.queryAllByRole("dialog", { name: "Projects and environments" })).toHaveLength(
+          0,
+        );
+        const trigger = await screen.findByRole("button", {
+          name: federated ? /^Command node: .+\. Switch command node$/ : "Connected server: Local",
+        });
+        expect(screen.getByTestId("mobile-agent-info-slot").contains(trigger)).toBe(true);
+        expect(trigger.classList.contains("w-9")).toBe(true);
+        expect(trigger.textContent).toBe("");
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+
+        const menu = await screen.findByRole("menu");
+        if (federated) {
+          fireEvent.click(within(menu).getByRole("menuitem", { name: "Manage machines…" }));
+          expect(useGlobalSettingsStore.getState()).toMatchObject({
+            open: true,
+            section: "machines",
+          });
+        } else {
+          expect(within(menu).getByRole("menuitem", { name: "New connection" })).toBeTruthy();
+        }
+      } finally {
+        cleanup();
+        useGlobalSettingsStore.getState().close();
+        uninstallDesktopFake();
+        portalStore.store.setState(INITIAL_PORTAL, true);
+      }
+    },
+  );
 
   test("mounts the agent-info button in the desktop title bar outside the drag region", () => {
     isMobile = false;

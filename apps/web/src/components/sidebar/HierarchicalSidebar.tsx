@@ -1288,30 +1288,23 @@ export function HierarchicalSidebar() {
         {compactActive ? (
           sortMenu
         ) : (
-          // The search stays mounted while several environments are selected,
-          // hidden behind the selection's count, so ⌘K and an open search
-          // survive it.
-          <div
-            className={cn("flex min-w-0 flex-1", isMultiSelectMode && "hidden")}
-            data-testid="sidebar-header-search"
-          >
-            <ProjectSearchBar
-              projects={projects}
-              environments={sidebarEnvironments}
-              allEnvironments={allEnvironments}
-              onSelectProject={handleSearchSelectProject}
-              onSelectEnvironment={handleSearchSelectEnvironment}
-              onSelectMachineProject={revealMachineProject}
-              commandHandlers={paletteHandlers}
-            />
-          </div>
+          <ProjectSearchBar
+            projects={projects}
+            environments={sidebarEnvironments}
+            allEnvironments={allEnvironments}
+            onSelectProject={handleSearchSelectProject}
+            onSelectEnvironment={handleSearchSelectEnvironment}
+            onSelectMachineProject={revealMachineProject}
+            commandHandlers={paletteHandlers}
+            iconOnly={isMultiSelectMode}
+          />
         )}
         {compactActive ? null : isMultiSelectMode ? (
           <>
-            <span className="text-sm font-medium text-foreground">
+            <span className="mr-auto min-w-0 truncate text-sm font-medium text-foreground">
               {selection.selected.length} selected
             </span>
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon"

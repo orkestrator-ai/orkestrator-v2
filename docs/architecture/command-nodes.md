@@ -668,8 +668,10 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   Settings > Machines, and the machine
   lists outside the sidebar follow it with the command node always first
   (`inMachineOrder`): that list, the Settings machine strip, the agent accounts
-  table and the command-node switcher's list. The machine tiles show each
-  machine's CPU (`useMachineCpu`, one coordinated read per machine, routed
+  table. The command-node switcher follows the device's saved connection
+  order (Local first on desktop). In a browser tab it shows the current
+  command node first, followed by machines with an enabled HTTPS route in
+  registry order. The machine tiles show each machine's CPU (`useMachineCpu`, one coordinated read per machine, routed
   through the command node). Ordered by machine, a node's environment order belongs to
   that node: a drag within its run is written to the owner
   (`reorder_environments`).

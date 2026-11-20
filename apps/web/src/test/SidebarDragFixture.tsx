@@ -12,6 +12,7 @@ import { useStore } from "zustand";
 import { COORDINATOR_ACTIVITY_COMMAND } from "@orkestrator/protocol/coordinator-activity";
 import { emptyPortalLayout, type PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider } from "@/components/federation/FederationProvider";
+import { MobileAppShellLayout } from "@/components/layout/MobileAppShellLayout";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { TerminalProvider } from "@/contexts/TerminalContext";
@@ -487,6 +488,30 @@ function AttentionTargetTranscript() {
   );
 }
 
+function SidebarHeaderFixture({ drawer }: { drawer: boolean }) {
+  if (!drawer) {
+    return (
+      <aside className="h-screen w-[280px] border-r border-border">
+        <HierarchicalSidebar />
+      </aside>
+    );
+  }
+  return (
+    <MobileAppShellLayout
+      title="Workspace"
+      sidebar={<HierarchicalSidebar />}
+      selectedProjectId={null}
+      selectedEnvironmentId={null}
+      filesPanelOpen={false}
+      centralPanelStyle={{}}
+      actionBar={null}
+      agentInfoButton={null}
+      filesPanel={null}
+      onTitleBarMouseDown={() => undefined}
+    />
+  );
+}
+
 let instance: ReturnType<typeof install> | undefined;
 export function SidebarDragFixture() {
   const [calls] = useState(() => (instance ??= install()));
@@ -497,13 +522,17 @@ export function SidebarDragFixture() {
     <DockerAvailabilityProvider available={false}>
       <TerminalProvider>
         <FederationProvider>
-          <main className="h-screen max-w-sm bg-background text-foreground">
-            {!attentionTarget && (
-              <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
-            )}
-            {attentionTarget && <AttentionTargetTranscript />}
-            <HierarchicalSidebar />
-          </main>
+          {params.has("header") ? (
+            <SidebarHeaderFixture drawer={params.has("drawer")} />
+          ) : (
+            <main className="h-screen max-w-sm bg-background text-foreground">
+              {!attentionTarget && (
+                <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
+              )}
+              {attentionTarget && <AttentionTargetTranscript />}
+              <HierarchicalSidebar />
+            </main>
+          )}
         </FederationProvider>
       </TerminalProvider>
     </DockerAvailabilityProvider>

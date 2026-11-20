@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, ChevronDown, Loader2, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import type { NodeListResult } from "@orkestrator/protocol/command-nodes";
@@ -20,7 +20,7 @@ import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { cn } from "@/lib/utils";
 import { MachineColorDot, MachineRoleIcon } from "./MachineDot";
 import { useCommandNode, type CommandNodeIdentity } from "./useCommandNode";
-import { useMachineViews } from "./useMachineViews";
+import { useFederation } from "./FederationProvider";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
 
@@ -107,54 +107,51 @@ export function targetsFromNodes(
   ];
 }
 
-/**
- * The machines this client can connect to as its command node, loaded while
- * `open`: the saved connections on the desktop and iOS (kept current by their
- * snapshots), else the command node's machines with a web address.
- */
-function useSwitchTargets(
-  commandNode: CommandNodeIdentity | null,
-  open: boolean,
-): SwitchTarget[] | null {
-  const api = connectionsApi();
-  const [connections, setConnections] = useState<ConnectionList | null>(null);
-  const [nodes, setNodes] = useState<NodeListResult["nodes"] | null>(null);
+/** Each opening owns its snapshot. Connection events supersede an in-flight list. */
+function useSwitchTargets(commandNode: CommandNodeIdentity, api: ConnectionsApi | null) {
+  const [snapshot, setSnapshot] = useState<ConnectionList | NodeListResult | "unavailable" | null>(
+    null,
+  );
 
   useEffect(() => {
-    if (!api) return;
     let active = true;
-    void api
-      .list()
-      .then((list) => {
-        if (active) setConnections(list);
-      })
-      .catch(() => undefined);
-    const stop = subscribeToConnections(setConnections);
+    let receivedConnectionEvent = false;
+    const stop = api
+      ? subscribeToConnections((list) => {
+          receivedConnectionEvent = true;
+          setSnapshot(list);
+        })
+      : undefined;
+    const request = api ? api.list() : portalNodesApi().list_nodes(NO_ARGS);
+    void request.then(
+      (list) => {
+        if (active && !receivedConnectionEvent) setSnapshot(list);
+      },
+      () => {
+        if (active && !receivedConnectionEvent) setSnapshot("unavailable");
+      },
+    );
     return () => {
       active = false;
-      stop();
+      stop?.();
     };
   }, [api]);
 
-  useEffect(() => {
-    if (api || !open) return;
-    let active = true;
-    void portalNodesApi()
-      .list_nodes(NO_ARGS)
-      .then((list) => {
-        if (active) setNodes(list.nodes);
-      })
-      .catch(() => {
-        if (active) setNodes([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, [api, open]);
+  if (!snapshot || snapshot === "unavailable") return snapshot;
+  return "connections" in snapshot
+    ? targetsFromConnections(snapshot)
+    : targetsFromNodes(commandNode, snapshot.nodes);
+}
 
-  if (!commandNode) return null;
-  if (api) return connections && targetsFromConnections(connections);
-  return nodes && targetsFromNodes(commandNode, nodes);
+/** Saved iOS addresses may include a trailing slash or an explicit default port. */
+function httpsOrigin(address: string | null): string | undefined {
+  if (!address) return undefined;
+  try {
+    const url = new URL(address);
+    if (url.protocol === "https:" && !url.username && !url.password) return url.origin;
+  } catch {
+    // A saved address with no matching HTTPS origin has no registry colour.
+  }
 }
 
 /**
@@ -194,15 +191,7 @@ function switchCommandNode(target: SwitchTarget, viaConnections: boolean) {
 export function CommandNodeSwitcher({ compact = false }: { compact?: boolean }) {
   const commandNode = useCommandNode();
   const [open, setOpen] = useState(false);
-  const targets = useSwitchTargets(commandNode, open);
-  const machines = useMachineViews();
-  const colorOf = useMemo(() => {
-    const byNode = new Map(machines.map((machine) => [machine.backendId, machine.colorToken]));
-    return (target: SwitchTarget) =>
-      target.colorToken ?? (target.nodeId ? byNode.get(target.nodeId) : undefined);
-  }, [machines]);
   if (!commandNode) return null;
-  const viaConnections = connectionsApi() !== null;
   const label = `Command node: ${commandNode.name}. Switch command node`;
 
   return (
@@ -234,57 +223,89 @@ export function CommandNodeSwitcher({ compact = false }: { compact?: boolean }) 
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72" data-testid="command-node-menu">
-        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          Connect to
-        </DropdownMenuLabel>
-        {targets === null ? (
-          <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-            Loading…
-          </div>
-        ) : (
-          targets.map((target) => (
-            <DropdownMenuItem
-              key={target.id}
-              role="menuitemradio"
-              aria-checked={target.current}
-              data-testid="command-node-target"
-              className="items-start"
-              onSelect={() => switchCommandNode(target, viaConnections)}
-              aria-label={`${target.name}, ${
-                target.current ? "command node, connected" : "leaf"
-              }${target.requiresToken ? ", token required" : ""}`}
-            >
-              <span className="flex h-5 shrink-0 items-center gap-1.5">
-                <MachineColorDot colorToken={colorOf(target)} />
-                <MachineRoleIcon role={target.current ? "command" : "leaf"} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate">{target.name}</span>
-                {target.address ? (
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {target.requiresToken ? "Token required · " : ""}
-                    {target.address}
-                  </span>
-                ) : null}
-              </span>
-              <span className="flex h-5 w-4 shrink-0 items-center justify-center">
-                {target.current ? <Check className="size-3.5" aria-hidden="true" /> : null}
-              </span>
-            </DropdownMenuItem>
-          ))
-        )}
-        {!viaConnections && targets !== null && targets.length === 1 ? (
-          <p className="px-2 py-1.5 text-xs text-muted-foreground">
-            No other machine has a web address this tab can open.
-          </p>
-        ) : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => requestGlobalSettings("machines")}>
-          <Settings2 className="size-3.5" aria-hidden="true" />
-          Manage machines…
-        </DropdownMenuItem>
+        {open ? <CommandNodeTargets key={commandNode.nodeId} commandNode={commandNode} /> : null}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function CommandNodeTargets({ commandNode }: { commandNode: CommandNodeIdentity }) {
+  const api = connectionsApi();
+  const targets = useSwitchTargets(commandNode, api);
+  const { portalState } = useFederation();
+  const colorOf = (target: SwitchTarget) => {
+    if (target.current) return commandNode.colorToken;
+    if (target.colorToken) return target.colorToken;
+    const origin = target.nodeId ? undefined : httpsOrigin(target.address);
+    return portalState.nodes.find(({ nodeId, view }) =>
+      target.nodeId
+        ? nodeId === target.nodeId
+        : origin !== undefined &&
+          view.routes.some(
+            (route) => route.kind === "https" && route.enabled && route.origin === origin,
+          ),
+    )?.view.colorToken;
+  };
+
+  return (
+    <>
+      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+        Connect to
+      </DropdownMenuLabel>
+      {targets === null ? (
+        <div
+          role="status"
+          className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground"
+        >
+          <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+          Loading…
+        </div>
+      ) : targets === "unavailable" ? (
+        <p role="status" className="px-2 py-1.5 text-sm text-muted-foreground">
+          Could not load machines. Reopen to try again.
+        </p>
+      ) : (
+        targets.map((target) => (
+          <DropdownMenuItem
+            key={target.id}
+            role="menuitemradio"
+            aria-checked={target.current}
+            data-testid="command-node-target"
+            className="items-start"
+            onSelect={() => switchCommandNode(target, api !== null)}
+            aria-label={`${target.name}, ${
+              target.current ? "command node, connected" : "leaf"
+            }${target.requiresToken ? ", token required" : ""}`}
+          >
+            <span className="flex h-5 shrink-0 items-center gap-1.5">
+              <MachineColorDot colorToken={colorOf(target)} />
+              <MachineRoleIcon role={target.current ? "command" : "leaf"} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate">{target.name}</span>
+              {target.address ? (
+                <span className="block truncate text-xs text-muted-foreground">
+                  {target.requiresToken ? "Token required · " : ""}
+                  {target.address}
+                </span>
+              ) : null}
+            </span>
+            <span className="flex h-5 w-4 shrink-0 items-center justify-center">
+              {target.current ? <Check className="size-3.5" aria-hidden="true" /> : null}
+            </span>
+          </DropdownMenuItem>
+        ))
+      )}
+      {!api && Array.isArray(targets) && targets.length === 1 ? (
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+          No other machine has a web address this tab can open.
+        </p>
+      ) : null}
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onSelect={() => requestGlobalSettings("machines")}>
+        <Settings2 className="size-3.5" aria-hidden="true" />
+        Manage machines…
+      </DropdownMenuItem>
+    </>
   );
 }

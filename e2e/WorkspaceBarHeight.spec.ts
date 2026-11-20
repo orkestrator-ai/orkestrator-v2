@@ -49,6 +49,81 @@ test("project search sits in the sidebar header row, level with the action bar",
   }
 });
 
+test("the narrow project drawer fits search, all header actions and its close button", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.goto("/sidebar-drag?header&drawer");
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  const header = drawer.locator("[data-sidebar-header]");
+  const close = drawer
+    .getByRole("complementary")
+    .getByRole("button", { name: "Close projects and environments" });
+  const controls = [
+    header.getByRole("button", { name: "Search projects and environments" }),
+    header.getByRole("button", { name: /^Sort environments/ }),
+    header.getByRole("button", { name: /^Refresh projects/ }),
+    header.getByRole("button", { name: "Add project" }),
+    close,
+  ];
+  for (const control of controls) await expect(control).toBeVisible();
+  const row = (await header.boundingBox())!;
+  let left = row.x;
+  for (const control of controls) {
+    const box = (await control.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(27);
+    expect(box.x).toBeGreaterThanOrEqual(left);
+    expect(box.x + box.width).toBeLessThanOrEqual(row.x + row.width);
+    expect(box.y).toBeGreaterThanOrEqual(row.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(row.y + row.height);
+    left = box.x + box.width;
+  }
+
+  const search = page.getByRole("dialog", { name: "Search projects and environments" });
+  await controls[0]!.click();
+  await expect(search.getByRole("combobox")).toBeFocused();
+  // Wait for the nested modal to take over outside input before dismissing it.
+  await expect(page.locator("#mobile-projects-drawer")).toHaveCSS("pointer-events", "none");
+  await page.keyboard.press("Escape");
+  await expect(search).toBeHidden();
+  await expect(controls[0]!).toBeFocused();
+  await close.click();
+  await expect(drawer).toBeHidden();
+});
+
+test("bulk selection keeps project search within the same header", async ({ page }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile-chromium";
+  await page.goto(mobile ? "/sidebar-drag?header&drawer" : "/sidebar-drag?header");
+  const header = page.locator("[data-sidebar-header]");
+  const search = header.getByRole("button", { name: "Search projects and environments" });
+  await expect(search).toBeVisible();
+  const row = (await header.boundingBox())!;
+  await page.locator('[data-environment-selection-id="p-env-1"]').click({ modifiers: ["Shift"] });
+  const count = header.getByText(/\d+ selected/);
+  await expect(count).toBeVisible();
+  const searchBox = (await search.boundingBox())!;
+  const countBox = (await count.boundingBox())!;
+  expect((await header.boundingBox())!.height).toBe(row.height);
+  expect(searchBox.width).toBeGreaterThanOrEqual(28);
+  const gap = countBox.x - (searchBox.x + searchBox.width);
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThanOrEqual(8);
+
+  const palette = page.getByRole("dialog", { name: "Search projects and environments" });
+  await search.click();
+  await expect(palette.getByRole("combobox")).toBeFocused();
+  if (mobile)
+    await expect(page.locator("#mobile-projects-drawer")).toHaveCSS("pointer-events", "none");
+  await page.keyboard.press("Escape");
+  await expect(palette).toBeHidden();
+  await expect(count).toBeVisible();
+  await page.keyboard.press("Meta+k");
+  await expect(palette.getByRole("combobox")).toBeFocused();
+  await page.keyboard.press("Meta+k");
+  await expect(palette).toBeHidden();
+  await expect(count).toBeVisible();
+});
+
 test("project navigation sits below the sidebar header and contains the Notes tab", async ({
   page,
 }, testInfo) => {

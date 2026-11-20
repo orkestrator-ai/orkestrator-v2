@@ -111,7 +111,16 @@ function nodeView(connection: ConnectionSummary): NodeView {
     displayName: connection.profile?.displayName ?? connection.name,
     ...(connection.profile?.colorToken ? { colorToken: connection.profile.colorToken } : {}),
     fallbackName: connection.name,
-    routes: [],
+    routes: connection.address
+      ? [
+          {
+            id: "https" as NodeView["routeOrder"][number],
+            kind: "https",
+            enabled: true,
+            origin: connection.address,
+          },
+        ]
+      : [],
     routeOrder: [],
     hasCredential: true,
     attachment: { status: "attached" },
@@ -215,12 +224,7 @@ export function installDesktopFake(options: {
         revision: 1,
         mode: "command",
         suspended: false,
-        nodes: remotes.map((connection) => ({
-          ...nodeView(connection),
-          routes: connection.address
-            ? [{ id: "https", kind: "https", enabled: true, origin: connection.address }]
-            : [],
-        })),
+        nodes: remotes.map(nodeView),
         pendingDetaches: [],
       };
     }

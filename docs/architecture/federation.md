@@ -793,8 +793,9 @@ process's, see [logging.md](logging.md)), each with `nodeId`, `nodeName` and
 
 The sidebar header is one row: the project search (`ProjectSearchBar`,
 which takes the width the buttons leave), then the sort menu, refresh and
-add-project buttons. The search stays mounted, hidden, while several
-environments are selected, so ⌘K and an open search survive the selection.
+add-project buttons. During bulk selection, the search stays mounted as an
+icon beside the selection count and actions. The icon, ⌘K and any open search
+remain available.
 Compact mode keeps only the sort menu.
 
 When multi-machine views are enabled (`federation.enabled`: the command node
@@ -811,8 +812,10 @@ button):
   a leaf (lucide `Leaf`), then **Manage machines…** (Settings > Machines).
   The targets are the device's saved connections, one per machine
   (`targetsFromConnections`), or in a browser tab the command node's machines
-  with a web address (`targetsFromNodes`). Choosing another machine hands
-  command over (`requestCommandHandover`); one whose token is not saved here
+  with a web address (`targetsFromNodes`). Each opening loads a new target
+  list. Active rows use the command node's colour, and saved addresses
+  without a node ID or profile can use the colour of a matching HTTPS registry
+  route. Choosing another machine hands command over (`requestCommandHandover`); one whose token is not saved here
   goes to Settings > Machines first.
 - With federation off the same slot is the switch-and-reload
   `ServerConnectionSwitcher`, and a browser tab on a lone server shows

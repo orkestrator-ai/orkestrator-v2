@@ -418,6 +418,15 @@ export async function deleteEnvironment(
           });
         });
       await storage.removeEnvironment(environmentId);
+      await context.capabilities
+        ?.forgetEnvironmentLaunches(environmentId)
+        .catch((error: unknown) => {
+          environmentLog.warn("delete.step-failed", {
+            environmentId,
+            step: "capability-launches",
+            error: formatLogError(error),
+          });
+        });
       // Bridges were stopped above, so nothing is writing bridge state now.
       if (cleanup) await runEnvironmentCleanupStep(cleanup, "state-dirs", context);
       await storage.deletePaneLayout(environmentId).catch(() => undefined);

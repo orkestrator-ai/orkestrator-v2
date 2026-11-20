@@ -104,6 +104,64 @@ async function recordMainWidths(main: Locator) {
 const mainWidths = (page: Page) =>
   page.evaluate(() => (window as unknown as { mainWidths: number[] }).mainWidths);
 
+test("a viewport resize keeps the content pinned through the replacement transition", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1024, height: 844 });
+  const main = await openFixture(page, testInfo);
+  const sidebar = page.locator("[data-panel]").first();
+  await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(344);
+  // Lengthen the transition so the hook enters its wait even on a fast renderer.
+  // Finish the replacement explicitly to keep the test short.
+  await page.addStyleTag({
+    content:
+      "[data-sidebar-width-animating] > [data-panel] { transition-duration: 60s !important }",
+  });
+  await sidebar.evaluate((panel) => {
+    const getAnimations = panel.getAnimations.bind(panel);
+    panel.getAnimations = (options) => {
+      const animations = getAnimations(options);
+      const width = animations.find(
+        (animation) =>
+          animation instanceof CSSTransition && animation.transitionProperty === "flex-grow",
+      );
+      if (width && !panel.dataset.widthWait) {
+        panel.dataset.widthWait = "waiting";
+        void width.finished.catch(() => {
+          panel.dataset.widthWait = "cancelled";
+        });
+      }
+      return animations;
+    };
+  });
+  await page.getByRole("button", { name: "compact", exact: true }).click();
+  await expect(sidebar).toHaveAttribute("data-width-wait", "waiting");
+  const pin = await main.evaluate((element) => element.style.width);
+  expect(pin).not.toBe("");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(sidebar).toHaveAttribute("data-width-wait", "cancelled");
+  expect(await main.evaluate((element) => element.style.width)).toBe(pin);
+  await page.screenshot({ path: testInfo.outputPath("sidebar-replacement.png") });
+
+  const finished = await sidebar.evaluate((panel) => {
+    const replacement = panel
+      .getAnimations()
+      .find(
+        (animation) =>
+          animation instanceof CSSTransition && animation.transitionProperty === "flex-grow",
+      );
+    replacement?.finish();
+    return replacement !== undefined;
+  });
+  expect(finished).toBe(true);
+  await expect(page.locator("[data-sidebar-width-animating]")).toHaveCount(0);
+  expect(await main.evaluate((element) => element.style.width)).toBe("");
+  // The group converts the compact width to a percentage when the viewport changes.
+  await expect
+    .poll(async () => Math.abs(Math.round((await sidebar.boundingBox())!.width) - 56))
+    .toBeLessThanOrEqual(1);
+});
+
 // The group lays itself out afresh when the handle remounts, from a percentage
 // default as in the shell, and a dragged width differs from that default.
 async function openWithDraggedWidth(page: Page, testInfo: TestInfo) {

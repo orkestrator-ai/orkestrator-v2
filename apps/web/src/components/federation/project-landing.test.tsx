@@ -25,17 +25,16 @@ import {
   sharedIdDataset,
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
-import { MergedProjectList, RemoteMachineSection } from "./FederatedSidebarSections";
-import { RemoteProjectGroup } from "./RemoteMachineTree";
 import { FederationProvider } from "./FederationProvider";
+import { NO_BOUND_ROWS } from "./federation-ui-test-fixture";
+import { RepositoryEnvironmentList } from "./RepositoryEnvironmentList";
 import { useMachineViews } from "./useMachineViews";
 import { selectOnNode } from "@/test/node-selection";
 import { appCommandStore } from "@/test/app-command-store";
 
-/** A project's header button, found through its "+" button, which names project and machine. */
+/** A repository's heading, named by what it opens and the machine it opens on. */
 function projectHeading(project: string, machine: string): HTMLElement {
-  const add = screen.getByRole("button", { name: `New environment in ${project} on ${machine}` });
-  return add.parentElement!.querySelector("button")!;
+  return screen.getByRole("button", { name: `Open ${project} on ${machine}` });
 }
 
 const initialUI = appCommandStore(uiStore).getState();
@@ -67,19 +66,6 @@ function installTwoMachines() {
 
 function renderWithFederation(node: ReactNode) {
   return renderInAppCommandScope(<FederationProvider>{node}</FederationProvider>);
-}
-
-function RemoteSections() {
-  const machines = useMachineViews();
-  return (
-    <>
-      {machines
-        .filter((machine) => !machine.bound)
-        .map((machine) => (
-          <RemoteMachineSection key={machine.connectionId} machine={machine} />
-        ))}
-    </>
-  );
 }
 
 function machineView(overrides: Partial<MachineView> = {}): MachineView {
@@ -115,10 +101,6 @@ function machineView(overrides: Partial<MachineView> = {}): MachineView {
     loadedAt: 1,
     ...overrides,
   };
-}
-
-function firstEnvironment(machine: MachineView): FederatedEnvironment {
-  return machine.environmentsByProject.get("project-1")![0]!;
 }
 
 async function waitForRows(count: number) {
@@ -177,12 +159,11 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
         appCommandStore(uiStore).setState({ selectedProjectId: null, projectBoardTab: "kanban" });
         renderWithFederation(
           <>
-            <MergedProjectList
+            <RepositoryEnvironmentList
               machines={[bound]}
               shownIds={new Set([SELF_NODE_ID])}
-              mode="repository"
-              renderBoundProject={() => null}
-              onBoundEnvironmentDragEnd={() => undefined}
+              ordering="machine"
+              bound={NO_BOUND_ROWS}
             />
             <Workspace />
           </>,
@@ -238,14 +219,11 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
       installTwoMachines();
       const machine = machineView({ connectionId: "bk_a", truncated });
       renderWithFederation(
-        <RemoteProjectGroup
-          machine={machine}
-          project={machine.projects[0]!}
-          environments={[firstEnvironment(machine)]}
-          isCollapsed={false}
-          onToggleCollapse={() => {}}
-          sortable={false}
-          grouping="machine"
+        <RepositoryEnvironmentList
+          machines={[machine]}
+          shownIds={new Set([machine.connectionId])}
+          ordering="machine"
+          bound={NO_BOUND_ROWS}
         />,
       );
       await waitFor(() => expect(portalStore.getState().loaded).toBe(true));
@@ -281,100 +259,74 @@ describe("a project's entry opens on the tab its grouping calls for", () => {
     return installDesktopFake({ list: connectionList([MACHINE_A, MACHINE_B]), datasets });
   }
 
-  function Merged({ mode }: { mode: "project" | "repository" }) {
+  function RepositoryList() {
     const machines = useMachineViews();
     return (
-      <MergedProjectList
+      <RepositoryEnvironmentList
         machines={machines}
         shownIds={new Set(machines.filter(isMachineShown).map((machine) => machine.connectionId))}
-        mode={mode}
-        renderBoundProject={() => null}
-        onBoundEnvironmentDragEnd={() => undefined}
+        ordering="machine"
+        bound={NO_BOUND_ROWS}
       />
     );
   }
 
   const request = () => useRemoteWorkspaceStore.getState().requests.bk_a?.request;
 
-  for (const [grouping, coordinator] of [
-    ["machine", true],
-    ["project", true],
-    ["repository", false],
-  ] as const) {
-    test(`grouped by ${grouping}, a leaf's project opens on ${coordinator ? "Coordinator" : "Home"}; its environments open as before`, async () => {
-      installRepository();
-      renderWithFederation(
-        grouping === "machine" ? <RemoteSections /> : <Merged mode={grouping} />,
-      );
-      await waitForRows(2);
+  test("a leaf's repository opens on its coordinator and is highlighted; its environments open as before", async () => {
+    installRepository();
+    renderWithFederation(<RepositoryList />);
+    await waitForRows(2);
 
-      fireEvent.click(projectHeading("app", "Machine A"));
-      await waitFor(() =>
-        expect(request()).toEqual({
-          projectId: "project-1",
-          ...(coordinator ? { landingTab: "coordinator" } : {}),
-        }),
-      );
-
-      fireEvent.click(
-        within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
-      );
-      await waitFor(() =>
-        expect(request()).toEqual({
-          projectId: "project-1",
-          environmentId: "env-1",
-        }),
-      );
-
-      if (grouping === "repository") {
-        // With no copy on the command node, the repository's own entry opens
-        // a leaf's copy on its coordinator, and is highlighted in place of
-        // the member it opened.
-        const repository = screen.getByRole("button", { name: "Open acme/app on Machine A" });
-        const member = projectHeading("app", "Machine A");
-        act(() =>
-          useMachineViewStore
-            .getState()
-            .revealProject(projectKey(projectRef("bk_a" as BackendId, "project-1"))),
-        );
-        expect(member.getAttribute("aria-current")).toBe("true");
-        fireEvent.click(repository);
-        await waitFor(() =>
-          expect(request()).toEqual({
-            projectId: "project-1",
-            landingTab: "coordinator",
-          }),
-        );
-        expect(repository.getAttribute("aria-current")).toBe("page");
-        expect(member.getAttribute("aria-current")).toBeNull();
-
-        expect(useMachineViewStore.getState().revealedProject).toBeNull();
-        // The node can ensure Home before the shell's next summary arrives.
-        act(() =>
-          selectOnNode("bk_a", {
-            projectId: "project-1",
-            environmentId: "ensured-home",
-            projectHome: true,
-          }),
-        );
-        expect(repository.getAttribute("aria-current")).toBe("page");
-        expect(member.getAttribute("aria-current")).toBeNull();
-        expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request.landingTab).toBe(
-          "coordinator",
-        );
-
-        // The member's own entry takes the highlight back.
-        fireEvent.click(member);
-        await waitFor(() => expect(member.getAttribute("aria-current")).toBe("page"));
-        expect(repository.getAttribute("aria-current")).toBeNull();
-
-        // So does anything else the node selects.
-        fireEvent.click(repository);
-        await waitFor(() => expect(repository.getAttribute("aria-current")).toBe("page"));
-        act(() => selectOnNode("bk_a", { projectId: "project-1", environmentId: "env-1" }));
-        expect(repository.getAttribute("aria-current")).toBeNull();
-        expect(member.getAttribute("aria-current")).toBeNull();
-      }
+    // With no copy on the command node, the repository's heading opens the
+    // first machine's copy on its coordinator.
+    const repository = projectHeading("acme/app", "Machine A");
+    act(() =>
+      useMachineViewStore
+        .getState()
+        .revealProject(projectKey(projectRef("bk_a" as BackendId, "project-1"))),
+    );
+    expect(repository.closest("[data-revealed]")).not.toBeNull();
+    fireEvent.click(repository);
+    await waitFor(() =>
+      expect(request()).toEqual({
+        projectId: "project-1",
+        landingTab: "coordinator",
+      }),
+    );
+    expect(repository.getAttribute("aria-current")).toBe("page");
+    expect(useMachineViewStore.getState().revealedProject).toBeNull();
+    expect(useMachineViewStore.getState().openedRepository).toEqual({
+      name: "github.com/acme/app",
+      projectKey: projectKey(projectRef("bk_a" as BackendId, "project-1")),
     });
-  }
+
+    // The node can ensure Home before the shell's next summary arrives.
+    act(() =>
+      selectOnNode("bk_a", {
+        projectId: "project-1",
+        environmentId: "ensured-home",
+        projectHome: true,
+      }),
+    );
+    expect(repository.getAttribute("aria-current")).toBe("page");
+    expect(useRemoteWorkspaceStore.getState().requests.bk_a?.request.landingTab).toBe(
+      "coordinator",
+    );
+
+    // Anything else the node selects takes the highlight.
+    act(() => selectOnNode("bk_a", { projectId: "project-1", environmentId: "env-1" }));
+    expect(repository.getAttribute("aria-current")).toBeNull();
+
+    // Its rows (on both machines) open their environment on their own machine.
+    fireEvent.click(
+      within(rowOf("bk_a")).getByRole("button", { name: /^feature, on Machine A, Working/ }),
+    );
+    await waitFor(() =>
+      expect(request()).toEqual({
+        projectId: "project-1",
+        environmentId: "env-1",
+      }),
+    );
+  });
 });

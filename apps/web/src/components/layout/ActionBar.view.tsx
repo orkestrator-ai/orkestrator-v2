@@ -86,6 +86,7 @@ import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
 import { isEditableShortcutTarget, useActionBarController } from "./useActionBarController";
 import { pullRequestLabel } from "@/lib/pr-target-mismatch";
+import { ProjectMachineSwitcher } from "./ProjectMachineSwitcher";
 import { useAutoMergeConfirmation } from "./useAutoMergeConfirmation";
 import { useAutoMergeToggle } from "./useAutoMergeToggle";
 import { MergePrDialog, prMergeability } from "./MergePrDialog";
@@ -644,106 +645,108 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
    * beneath the environment controls, which act on the project home; the grid
    * (mobile) toolbar keeps them in sequence with its other controls.
    */
-  const projectNavigation = (
-    <>
-      <SegmentedSelector
-        value={projectBoardTab}
-        onValueChange={openProjectBoardTab}
-        disabled={!selectedProject}
-        semantics={isProjectView ? "tabs" : "buttons"}
-        ariaLabel="Project navigation"
-        // Bare icon-and-label tabs, sized to sit within the workspace bar row
-        // alongside the sidebar's project search bar. The grid toolbar
-        // stretches every button to its cell, so there the tabs take two
-        // columns like its other tiles; a scrolling row would show only one.
-        // In the bar the tabs keep their full width and the project navigation
-        // row scrolls them with its scrollbar hidden. The tab list must not
-        // scroll or cap its own width: it would then show a scrollbar of its
-        // own beneath the tabs as soon as they outgrew the cap.
-        className={cn(
-          "rounded-none border-0 bg-transparent p-0",
-          isGrid ? "col-span-2 grid w-full grid-cols-2 gap-2" : "shrink-0 gap-0.5",
-        )}
-        buttonClassName="h-6 shrink-0 rounded-lg px-2 text-xs"
-        options={
-          [
-            ...(hasProjectCheckout
-              ? [
-                  {
-                    value: "home" as const,
-                    label: "Home",
-                    icon: <House className="size-3.5" />,
-                    panelId: "project-panel-home",
-                  },
-                ]
-              : []),
-            {
-              value: "coordinator",
-              label: "Coordinator",
-              // Working circles the whole tab; waiting stays a halo on the icon.
-              icon: (
-                <CoordinatorActivityIcon
-                  state={coordinatorActivity === "waiting" ? "waiting" : null}
-                >
-                  <MessagesSquare className="size-3.5" />
-                </CoordinatorActivityIcon>
-              ),
-              overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
-              panelId: "project-panel-coordinator",
-            },
-            {
-              value: "schedules",
-              label: "Scheduling",
-              icon: <CalendarClock className="size-3.5" />,
-              panelId: "project-panel-schedules",
-            },
-            {
-              value: "kanban",
-              label: "Kanban",
-              icon: <Columns3 className="size-3.5" />,
-              panelId: "project-panel-kanban",
-            },
-            {
-              value: "github",
-              label: "GitHub",
-              icon: <GithubIcon className="size-3.5" />,
-              panelId: "project-panel-github",
-            },
-            {
-              value: "linear",
-              label: "Linear",
-              icon: <Workflow className="size-3.5" />,
-              panelId: "project-panel-linear",
-            },
-            {
-              value: "features",
-              label: "Features",
-              icon: <ListChecks className="size-3.5" />,
-              panelId: "project-panel-features",
-            },
-            {
-              value: "notes",
-              label: "Notes",
-              icon: <StickyNote className="size-3.5" />,
-              panelId: "project-panel-notes",
-            },
-            {
-              value: "pull-requests",
-              label: "Pull requests",
-              icon: <GitPullRequest className="size-3.5" />,
-              panelId: "project-panel-pull-requests",
-            },
-          ] satisfies Array<{
-            value: ProjectBoardTab;
-            label: string;
-            icon: ReactNode;
-            overlay?: ReactNode;
-            className?: string;
-            panelId: string;
-          }>
-        }
-      />
-    </>
+  const projectTabs = (
+    <SegmentedSelector
+      value={projectBoardTab}
+      onValueChange={openProjectBoardTab}
+      disabled={!selectedProject}
+      semantics={isProjectView ? "tabs" : "buttons"}
+      ariaLabel="Project navigation"
+      // Bare icon-and-label tabs, sized to sit within the workspace bar row
+      // alongside the sidebar's project search bar. The grid toolbar
+      // stretches every button to its cell, so there the tabs take two
+      // columns like its other tiles; a scrolling row would show only one.
+      // In the bar the tabs keep their full width inside a scroll area
+      // beside the machine switcher.
+      className={cn(
+        "rounded-none border-0 bg-transparent p-0",
+        isGrid ? "col-span-2 grid w-full grid-cols-2 gap-2" : "shrink-0 gap-0.5",
+      )}
+      buttonClassName="h-6 shrink-0 rounded-lg px-2 text-xs"
+      options={
+        [
+          ...(hasProjectCheckout
+            ? [
+                {
+                  value: "home" as const,
+                  label: "Home",
+                  icon: <House className="size-3.5" />,
+                  panelId: "project-panel-home",
+                },
+              ]
+            : []),
+          {
+            value: "coordinator",
+            label: "Coordinator",
+            // Working circles the whole tab; waiting stays a halo on the icon.
+            icon: (
+              <CoordinatorActivityIcon state={coordinatorActivity === "waiting" ? "waiting" : null}>
+                <MessagesSquare className="size-3.5" />
+              </CoordinatorActivityIcon>
+            ),
+            overlay: coordinatorActivity === "working" ? <CoordinatorWorkingOutline /> : null,
+            panelId: "project-panel-coordinator",
+          },
+          {
+            value: "schedules",
+            label: "Scheduling",
+            icon: <CalendarClock className="size-3.5" />,
+            panelId: "project-panel-schedules",
+          },
+          {
+            value: "kanban",
+            label: "Kanban",
+            icon: <Columns3 className="size-3.5" />,
+            panelId: "project-panel-kanban",
+          },
+          {
+            value: "github",
+            label: "GitHub",
+            icon: <GithubIcon className="size-3.5" />,
+            panelId: "project-panel-github",
+          },
+          {
+            value: "linear",
+            label: "Linear",
+            icon: <Workflow className="size-3.5" />,
+            panelId: "project-panel-linear",
+          },
+          {
+            value: "features",
+            label: "Features",
+            icon: <ListChecks className="size-3.5" />,
+            panelId: "project-panel-features",
+          },
+          {
+            value: "notes",
+            label: "Notes",
+            icon: <StickyNote className="size-3.5" />,
+            panelId: "project-panel-notes",
+          },
+          {
+            value: "pull-requests",
+            label: "Pull requests",
+            icon: <GitPullRequest className="size-3.5" />,
+            panelId: "project-panel-pull-requests",
+          },
+        ] satisfies Array<{
+          value: ProjectBoardTab;
+          label: string;
+          icon: ReactNode;
+          overlay?: ReactNode;
+          className?: string;
+          panelId: string;
+        }>
+      }
+    />
+  );
+  const projectMachineSwitcher = isProjectView && selectedProject && (
+    <ProjectMachineSwitcher
+      projectId={selectedProject.id}
+      projectName={selectedProject.name}
+      tab={projectBoardTab}
+      isGrid={isGrid}
+    />
   );
 
   return (
@@ -1551,7 +1554,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               )}
             >
               {isGrid ? (
-                projectNavigation
+                <>
+                  {projectTabs}
+                  {projectMachineSwitcher}
+                </>
               ) : !selectedEnvironment && !isProjectView ? (
                 <span className="whitespace-nowrap text-sm text-muted-foreground">
                   Select an environment to get started
@@ -1609,12 +1615,17 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           <div
             data-testid="project-navigation-bar"
             className={cn(
-              "flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border/80 bg-chrome px-2 md:px-4 [&::-webkit-scrollbar]:hidden",
+              "flex min-w-0 shrink-0 items-center border-b border-border/80 bg-chrome px-2 md:px-4",
               WORKSPACE_BAR_HEIGHT_CLASS,
             )}
-            style={{ scrollbarWidth: "none" }}
           >
-            {projectNavigation}
+            <div
+              className="flex min-w-0 flex-1 overflow-x-auto [&::-webkit-scrollbar]:hidden"
+              style={{ scrollbarWidth: "none" }}
+            >
+              {projectTabs}
+            </div>
+            {projectMachineSwitcher}
           </div>
         )}
       </ToolbarTooltipsEnabledContext.Provider>

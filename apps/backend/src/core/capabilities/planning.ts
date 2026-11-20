@@ -1,0 +1,724 @@
+/**
+ * From desired setups to per-machine installation plans
+ * (docs/architecture/agent-capabilities-management.md, "Plan" and
+ * "Shared physical files").
+ *
+ * For each enrolled machine and each provider the resolver gives the
+ * components that target should have. File components are then grouped by
+ * the set of providers that want them and placed with
+ * `planCapabilityLocations`, so providers that read the same directory share
+ * one physical copy, and every provider that also sees that copy is named.
+ * Each physical copy is one installation key (`<node>|<location>|<component>`)
+ * with every setup that references it: removing one setup does not remove a
+ * copy another still needs.
+ *
+ * The diff is against what the machine *reports* (its inventory), not
+ * against what was last sent: after an unknown outcome the next plan is
+ * computed from a fresh observation, so a write is never blindly repeated.
+ */
+import { createHash } from "node:crypto";
+
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  MY_SETUP_ID,
+  type CapabilityComponent,
+  type CapabilityLiveSemantics,
+  type CapabilityPackage,
+  type CapabilityPlannedTarget,
+  type CapabilitySetup,
+  type CapabilityTargetStatus,
+  type EffectiveAgentResources,
+} from "@orkestrator/protocol/capability-resources";
+import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
+import {
+  canonicalCapabilityJson,
+  resolveEffectiveAgentResources,
+  capabilityRevisionComponents,
+  UNRESTRICTED_CAPABILITY_CEILING,
+  type CapabilityLayer,
+} from "@orkestrator/protocol/capability-resources-resolve";
+import {
+  capabilityLocation,
+  describeCapabilitySupport,
+  planCapabilityLocations,
+  type CapabilitySupportMatrix,
+} from "@orkestrator/protocol/capability-resources-support";
+
+import type { NodePlanTarget } from "./executor.js";
+import { installName } from "./native-ownership.js";
+import { heldByRunningWork, RUNNING_WORK_HOLD_REASON } from "./running-work.js";
+import {
+  claudeCarriedComponents,
+  isDeliverableClaudePlugin,
+} from "./provider-adapters/claude-plugins.js";
+import { isMachineWideReceipt, type CapabilityState } from "./types.js";
+
+export function sha256(text: string): string {
+  return `sha256:${createHash("sha256").update(text).digest("hex")}`;
+}
+
+/** One physical installation the desired state calls for. */
+export interface DesiredInstallation {
+  key: string;
+  nodeId: string;
+  /** A file location id, or `mcp:<provider>` / `plugin:<provider>`. */
+  locationId: string;
+  componentId: string;
+  packageId: string;
+  digest: string;
+  providers: AgentPlatform[];
+  alsoVisibleTo: AgentPlatform[];
+  references: string[];
+}
+
+/** A component a target wanted but cannot have, with the reason. */
+export interface UndeliverableComponent {
+  nodeId: string;
+  provider: AgentPlatform;
+  componentId: string;
+  packageId: string;
+  status: CapabilityTargetStatus;
+  reason: string;
+}
+
+export interface NodeDesiredState {
+  nodeId: string;
+  installations: DesiredInstallation[];
+  undeliverable: UndeliverableComponent[];
+  manifestDigest: string;
+  effective: EffectiveAgentResources[];
+}
+
+export function installationKey(nodeId: string, locationId: string, componentId: string): string {
+  return `${nodeId}|${locationId}|${componentId}`;
+}
+
+/** A named setup writes into shared homes only with explicit machine-wide targeting. */
+export function machineWideSetupIds(state: CapabilityState): string[] {
+  return [
+    MY_SETUP_ID,
+    ...Object.values(state.setups)
+      .filter(
+        (setup) =>
+          setup.id !== MY_SETUP_ID &&
+          !setup.targetSelectors?.length &&
+          setup.machineSelectors.length > 0,
+      )
+      .map((setup) => setup.id)
+      .sort(),
+  ];
+}
+
+/** Which setups reference a package, for the installation's reference list. */
+function referencingSetups(
+  state: CapabilityState,
+  packageId: string,
+  setupIds: readonly string[],
+): string[] {
+  return setupIds
+    .filter((id) =>
+      state.setups[id]?.packageSelections.some((selection) => selection.packageId === packageId),
+    )
+    .map((id) => `setup:${id}`);
+}
+
+export function supportFor(
+  inventory: CapabilityInventory | undefined,
+  provider: AgentPlatform,
+  location: "host" | "container" = "host",
+): CapabilitySupportMatrix {
+  const entry = inventory?.providers.find((candidate) => candidate.provider === provider);
+  return describeCapabilitySupport(provider, {
+    location,
+    ...(entry ? { available: entry.available } : {}),
+    ...(entry?.version ? { providerVersion: entry.version } : {}),
+  });
+}
+
+/** Requirements are compared to the target's operating system, including architecture if named. */
+export function capabilityOsDenial(
+  component: CapabilityComponent,
+  os: string | undefined,
+): string | undefined {
+  const supported = component.requirements.os;
+  if (!supported?.length) return undefined;
+  if (!os || os === "unknown") return "The target operating system could not be verified.";
+  const normalized = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/^macos(?=-|$)/, "darwin")
+      .replace(/^windows(?=-|$)/, "win32");
+  const actual = normalized(os);
+  if (
+    !supported.some(
+      (name) => actual === normalized(name) || actual.startsWith(`${normalized(name)}-`),
+    )
+  )
+    return `This component requires ${supported.join(", ")}; the target runs ${os}.`;
+  return undefined;
+}
+
+function maps(state: CapabilityState) {
+  return {
+    setups: new Map<string, CapabilitySetup>(Object.entries(state.setups)),
+    packages: new Map<string, CapabilityPackage>(Object.entries(state.packages)),
+    components: new Map<string, CapabilityComponent>(Object.entries(state.components)),
+  };
+}
+
+/** The desired installations on one machine. */
+export function desiredStateForNode(
+  state: CapabilityState,
+  nodeId: string,
+  inventory: CapabilityInventory | undefined,
+): NodeDesiredState {
+  const machine = state.machines[nodeId];
+  const setupIds = machineWideSetupIds(state);
+  const { setups, packages, components } = maps(state);
+  const layers: CapabilityLayer[] = [
+    { scope: "my-setup", setupIds: [MY_SETUP_ID] },
+    { scope: "toolkit", setupIds: setupIds.filter((id) => id !== MY_SETUP_ID) },
+  ];
+  const effective: EffectiveAgentResources[] = [];
+  const undeliverable: UndeliverableComponent[] = [];
+  /** componentId -> providers wanting it, with the digest. */
+  const wanted = new Map<
+    string,
+    {
+      providers: Set<AgentPlatform>;
+      digest: string;
+      packageId: string;
+      component: CapabilityComponent;
+    }
+  >();
+  const plain: DesiredInstallation[] = [];
+
+  for (const provider of AGENT_PLATFORMS) {
+    const support = supportFor(inventory, provider);
+    const resolved = resolveEffectiveAgentResources({
+      facts: {
+        target: { nodeId, provider },
+        groups: machine?.groups ?? [],
+        // A machine seen for the first time follows the enrolment default.
+        enrolled: machine?.enrolled ?? state.settings.enrollNewMachines,
+      },
+      layers,
+      setups,
+      packages,
+      components,
+      support,
+      ceiling: UNRESTRICTED_CAPABILITY_CEILING,
+      admin: {
+        forbiddenSources: state.settings.forbiddenSources,
+        forbiddenComponents: state.settings.forbiddenComponents,
+      },
+      prerequisiteDenial: (component) => capabilityOsDenial(component, inventory?.os),
+      hash: sha256,
+      now: () => "",
+    });
+    effective.push(resolved);
+    // Parts of a delivered Claude plugin load from the plugin (claude-plugins.ts).
+    const carried = claudeCarriedComponents(
+      provider,
+      resolved.resolvedPackages,
+      (packageId, digest) =>
+        capabilityRevisionComponents(packages.get(packageId)!, digest, components),
+      (packageId) => packages.get(packageId)?.source.kind,
+    );
+    for (const entry of resolved.unsupported) {
+      const component = components.get(entry.componentId);
+      if (!component || carried.has(entry.componentId)) continue;
+      // A component with a provider hint for another provider was never meant for this one.
+      if (component.providerHints.length > 0 && !component.providerHints.includes(provider))
+        continue;
+      undeliverable.push({
+        nodeId,
+        provider,
+        componentId: entry.componentId,
+        packageId: component.packageId,
+        status: "unsupported",
+        reason: entry.reason,
+      });
+    }
+    for (const entry of resolved.blocked) {
+      const component = components.get(entry.componentId);
+      undeliverable.push({
+        nodeId,
+        provider,
+        componentId: entry.componentId,
+        packageId: component?.packageId ?? entry.componentId,
+        status: "blocked-policy",
+        reason: entry.reason,
+      });
+    }
+    for (const pkg of resolved.resolvedPackages) {
+      const selected = capabilityRevisionComponents(
+        packages.get(pkg.id)!,
+        pkg.artifactDigest,
+        components,
+      );
+      const revisionComponents = new Map(selected?.map((component) => [component.id, component]));
+      for (const componentId of pkg.components) {
+        const component = revisionComponents.get(componentId);
+        if (!component || carried.has(componentId)) continue;
+        if (component.providerHints.length > 0 && !component.providerHints.includes(provider))
+          continue;
+        if (component.kind === "native-plugin" && provider === "claude") {
+          if (!isDeliverableClaudePlugin(component, packages.get(pkg.id)?.source.kind)) {
+            undeliverable.push({
+              nodeId,
+              provider,
+              componentId,
+              packageId: pkg.id,
+              status: "unsupported",
+              reason:
+                "Claude resolves marketplace plugins from a mutable source; add the plugin from its repository so Orkestrator can review and pin its bytes.",
+            });
+            continue;
+          }
+          const locationId = "plugin:claude";
+          plain.push({
+            key: installationKey(nodeId, locationId, componentId),
+            nodeId,
+            locationId,
+            componentId,
+            packageId: pkg.id,
+            digest: pkg.artifactDigest,
+            providers: [provider],
+            alsoVisibleTo: [],
+            references: referencingSetups(state, pkg.id, setupIds),
+          });
+          continue;
+        }
+        if (component.kind === "mcp-server") {
+          const locationId = `mcp:${provider}`;
+          plain.push({
+            key: installationKey(nodeId, locationId, componentId),
+            nodeId,
+            locationId,
+            componentId,
+            packageId: pkg.id,
+            digest: pkg.artifactDigest,
+            providers: [provider],
+            alsoVisibleTo: [],
+            references: referencingSetups(state, pkg.id, setupIds),
+          });
+          continue;
+        }
+        if (component.kind === "hook") {
+          undeliverable.push({
+            nodeId,
+            provider,
+            componentId,
+            packageId: pkg.id,
+            status: "unsupported",
+            reason:
+              support.kinds.hook.install.reason ??
+              "Hooks are delivered only inside a native plugin installed through the provider.",
+          });
+          continue;
+        }
+        const revisionKey = `${componentId}|${pkg.artifactDigest}`;
+        const entry = wanted.get(revisionKey) ?? {
+          providers: new Set<AgentPlatform>(),
+          component,
+          digest: pkg.artifactDigest,
+          packageId: pkg.id,
+        };
+        entry.providers.add(provider);
+        wanted.set(revisionKey, entry);
+      }
+    }
+  }
+
+  const installations: DesiredInstallation[] = [...plain];
+  const locations = new Map<string, DesiredInstallation>();
+  const conflicts = new Set<string>();
+  for (const [, entry] of [...wanted.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const component = entry.component;
+    const componentId = component.id;
+    const providers = AGENT_PLATFORMS.filter((provider) => entry.providers.has(provider));
+    const placement = planCapabilityLocations(component.kind, providers);
+    for (const location of placement.locations) {
+      const readBy = capabilityLocation(location.id)?.readBy ?? [];
+      const key = installationKey(nodeId, location.id, componentId);
+      const previous = locations.get(key);
+      if (previous && previous.digest !== entry.digest) {
+        conflicts.add(key);
+        for (const provider of [...previous.providers, ...location.providers]) {
+          undeliverable.push({
+            nodeId,
+            provider,
+            componentId,
+            packageId: entry.packageId,
+            status: "unsupported",
+            reason: "Different revisions share the same physical provider location.",
+          });
+        }
+      }
+      locations.set(key, {
+        key,
+        nodeId,
+        locationId: location.id,
+        componentId,
+        packageId: entry.packageId,
+        digest: entry.digest,
+        providers: location.providers,
+        alsoVisibleTo: readBy.filter((provider) => !providers.includes(provider)),
+        references: referencingSetups(state, entry.packageId, setupIds),
+      });
+    }
+    for (const provider of placement.uncovered) {
+      undeliverable.push({
+        nodeId,
+        provider,
+        componentId,
+        packageId: entry.packageId,
+        status: "unsupported",
+        reason: `${provider} reads no location Orkestrator can write a ${component.kind} to.`,
+      });
+    }
+  }
+  installations.push(...[...locations.values()].filter(({ key }) => !conflicts.has(key)));
+  installations.sort((a, b) => a.key.localeCompare(b.key));
+  const manifestDigest = sha256(
+    canonicalCapabilityJson(installations.map((entry) => [entry.key, entry.digest])),
+  );
+  return { nodeId, installations, undeliverable, manifestDigest, effective };
+}
+
+/** What the machine reports at a key: the managed item's package, component and digest. */
+export interface ObservedInstallation {
+  key: string;
+  packageId?: string;
+  componentId?: string;
+  digest?: string;
+  drifted: boolean;
+  external: boolean;
+}
+
+/** Observed managed items by installation key, and external ones by `<location>/<name>`. */
+export function observedInstallations(
+  nodeId: string,
+  inventory: CapabilityInventory | undefined,
+): { byKey: Map<string, ObservedInstallation>; external: Map<string, ObservedInstallation> } {
+  const byKey = new Map<string, ObservedInstallation>();
+  const external = new Map<string, ObservedInstallation>();
+  for (const item of inventory?.items ?? []) {
+    if (item.ownership === "managed" && item.componentId) {
+      const key = installationKey(nodeId, item.locationId, item.componentId);
+      byKey.set(key, {
+        key,
+        ...(item.packageId ? { packageId: item.packageId } : {}),
+        componentId: item.componentId,
+        ...(item.digest ? { digest: item.digest } : {}),
+        drifted: item.drifted === true,
+        external: false,
+      });
+    } else if (
+      item.ownership === "external" &&
+      item.locationId !== "mcp" &&
+      item.locationId !== "plugin"
+    ) {
+      external.set(`${item.locationId}/${item.name}`, {
+        key: item.id,
+        ...(item.digest ? { digest: item.digest } : {}),
+        drifted: false,
+        external: true,
+      });
+    }
+  }
+  return { byKey, external };
+}
+
+export interface NodePlan {
+  nodeId: string;
+  /** Sent to the machine. */
+  targets: NodePlanTarget[];
+  /** Shown in the preview and the operation: every desired or removed installation. */
+  planned: CapabilityPlannedTarget[];
+  manifestDigest: string;
+}
+
+/**
+ * The plan for one machine: install what is missing, update what has an old
+ * package digest, remove managed copies nothing references any more, and
+ * keep the rest. Removal happens only for items Orkestrator owns.
+ */
+export function planNode(
+  state: CapabilityState,
+  desired: NodeDesiredState,
+  options: {
+    connected: boolean;
+    sessionRunning?: boolean;
+    forceKeys?: ReadonlySet<string>;
+    /** Installations with open local changes: skipped until the user decides. */
+    driftKeys?: ReadonlySet<string>;
+    /**
+     * Providers with work in flight on the machine (`running-work.ts`): a
+     * write at a location one of them reads waits until the work ends.
+     */
+    busyProviders?: ReadonlySet<AgentPlatform>;
+  },
+): NodePlan {
+  const readersOf = (locationId: string): AgentPlatform[] =>
+    locationId.startsWith("mcp:") || locationId.startsWith("plugin:")
+      ? [locationId.split(":")[1] as AgentPlatform]
+      : [...(capabilityLocation(locationId)?.readBy ?? [])];
+  const held = (locationId: string) =>
+    heldByRunningWork(readersOf(locationId), options.busyProviders);
+  const targets: NodePlanTarget[] = [];
+  const planned: CapabilityPlannedTarget[] = [];
+  const desiredKeys = new Set(desired.installations.map((entry) => entry.key));
+  const revisions = new Map(Object.entries(state.components));
+  const componentFor = (packageId: string, digest: string, componentId: string) => {
+    const pkg = state.packages[packageId];
+    return (
+      pkg &&
+      capabilityRevisionComponents(pkg, digest, revisions)?.find(
+        (entry) => entry.id === componentId,
+      )
+    );
+  };
+  const physicalKeys = new Map<string, string>();
+  const occupants = new Map<string, number>();
+  for (const installation of desired.installations) {
+    const component = componentFor(
+      installation.packageId,
+      installation.digest,
+      installation.componentId,
+    );
+    const location = capabilityLocation(installation.locationId);
+    if (!component || !location) continue;
+    const name = installName(component.name, component.pathOrKey, location.layout);
+    const key = `${location.id}|${name}`;
+    physicalKeys.set(installation.key, key);
+    occupants.set(key, (occupants.get(key) ?? 0) + 1);
+  }
+  const receipts = Object.values(state.receipts).filter(
+    (receipt) => receipt.nodeId === desired.nodeId && isMachineWideReceipt(receipt),
+  );
+
+  for (const installation of desired.installations) {
+    const pkg = state.packages[installation.packageId];
+    const component = componentFor(
+      installation.packageId,
+      installation.digest,
+      installation.componentId,
+    );
+    if (!component) continue;
+    if ((occupants.get(physicalKeys.get(installation.key) ?? "") ?? 0) > 1) {
+      planned.push({
+        key: installation.key,
+        target: { nodeId: desired.nodeId, provider: installation.providers[0] ?? "claude" },
+        componentId: installation.componentId,
+        packageId: installation.packageId,
+        action: "skip",
+        locationId: installation.locationId,
+        status: "failed",
+        reason: "Multiple selected components would write to the same path.",
+      });
+      continue;
+    }
+    const receipt = state.receipts[installation.key];
+    const fileLocation = capabilityLocation(installation.locationId);
+    const upToDate =
+      receipt !== undefined &&
+      receipt.packageDigest === installation.digest &&
+      receipt.packageId === installation.packageId &&
+      !receipt.outcomeUnknown &&
+      !options.forceKeys?.has(installation.key) &&
+      receipt.status !== "failed" &&
+      receipt.status !== "needs-auth" &&
+      !(installation.locationId.startsWith("mcp:") && receipt.verification === "present") &&
+      receipt.status !== "blocked-policy" &&
+      receipt.status !== "needs-approval" &&
+      receipt.status !== "unsupported" &&
+      receipt.status !== "outcome-unknown" &&
+      receipt.status !== "drifted";
+    if (options.driftKeys?.has(installation.key) && !options.forceKeys?.has(installation.key)) {
+      planned.push({
+        key: installation.key,
+        target: { nodeId: desired.nodeId, provider: installation.providers[0]! },
+        componentId: installation.componentId,
+        packageId: installation.packageId,
+        action: "skip",
+        locationId: installation.locationId,
+        status: "drifted",
+        reason:
+          "Local changes on this machine are kept until you choose to keep them, adopt them or replace them.",
+      });
+      continue;
+    }
+    const action: CapabilityPlannedTarget["action"] = upToDate
+      ? "keep"
+      : receipt && receipt.status !== "failed"
+        ? "update"
+        : "install";
+    const provider = installation.providers[0]!;
+    const locationProvider =
+      installation.locationId.startsWith("mcp:") || installation.locationId.startsWith("plugin:")
+        ? (installation.locationId.split(":")[1] as AgentPlatform)
+        : undefined;
+    const liveSemantics: CapabilityLiveSemantics =
+      component.kind === "mcp-server"
+        ? options.sessionRunning
+          ? "queued-until-idle"
+          : "available-next-turn"
+        : component.kind === "native-plugin" || component.kind === "subagent"
+          ? "new-session-required"
+          : "new-session-required";
+    const status: CapabilityTargetStatus = !options.connected
+      ? "offline"
+      : action === "keep"
+        ? (receipt?.status ?? "installed-next-session")
+        : "pending";
+    planned.push({
+      key: installation.key,
+      target: { nodeId: desired.nodeId, provider },
+      componentId: installation.componentId,
+      packageId: installation.packageId,
+      action,
+      ...(receipt?.digest ? { fromDigest: receipt.digest } : {}),
+      toDigest: installation.digest,
+      locationId: installation.locationId,
+      ...(installation.alsoVisibleTo.length > 0
+        ? { alsoVisibleTo: installation.alsoVisibleTo }
+        : {}),
+      status,
+      liveSemantics,
+      ...(installation.references.length > 1
+        ? { sharedWith: installation.references.length - 1 }
+        : {}),
+    });
+    if (action === "keep") continue;
+    if (held(installation.locationId)) {
+      // Running work keeps what it started with; the latest revision applies after it.
+      const entry = planned[planned.length - 1]!;
+      entry.action = "skip";
+      entry.status = "queued-until-idle";
+      entry.liveSemantics = "queued-until-idle";
+      entry.reason = RUNNING_WORK_HOLD_REASON;
+      continue;
+    }
+    targets.push({
+      key: installation.key,
+      action: action === "update" ? "update" : "install",
+      kind: component.kind,
+      packageId: installation.packageId,
+      componentId: installation.componentId,
+      componentName: component.name,
+      pathOrKey: component.pathOrKey,
+      ...(fileLocation ? { locationId: installation.locationId } : {}),
+      ...(locationProvider ? { provider: locationProvider } : {}),
+      artifactDigest: installation.digest,
+      ...(options.forceKeys?.has(installation.key) ? { force: true } : {}),
+      ...(pkg?.source.kind === "provider-marketplace"
+        ? { qualifiedId: pkg.source.qualifiedId }
+        : {}),
+      ...(pkg?.derivedFrom ? { takeoverFrom: pkg.derivedFrom.packageId } : {}),
+    });
+  }
+
+  for (const receipt of receipts) {
+    if (desiredKeys.has(receipt.id)) continue;
+    if (receipt.status === "unsupported") continue;
+    // Still referenced by an account or a project outside the fleet setups.
+    if (receipt.references.some((reference) => !reference.startsWith("setup:"))) continue;
+    if (options.driftKeys?.has(receipt.id) && !options.forceKeys?.has(receipt.id)) continue;
+    const component = componentFor(receipt.packageId, receipt.packageDigest, receipt.componentId);
+    const fileLocation = capabilityLocation(receipt.locationId);
+    if (fileLocation && !component) {
+      planned.push({
+        key: receipt.id,
+        target: { nodeId: desired.nodeId, provider: receipt.providers[0] ?? "claude" },
+        packageId: receipt.packageId,
+        componentId: receipt.componentId,
+        locationId: receipt.locationId,
+        action: "skip",
+        status: "failed",
+        reason: "The installed revision's file location cannot be verified.",
+      });
+      continue;
+    }
+    const locationProvider =
+      receipt.locationId.startsWith("mcp:") || receipt.locationId.startsWith("plugin:")
+        ? (receipt.locationId.split(":")[1] as AgentPlatform)
+        : undefined;
+    if (held(receipt.locationId)) {
+      planned.push({
+        key: receipt.id,
+        target: { nodeId: desired.nodeId, provider: receipt.providers[0] ?? "claude" },
+        componentId: receipt.componentId,
+        packageId: receipt.packageId,
+        action: "skip",
+        fromDigest: receipt.digest,
+        locationId: receipt.locationId,
+        status: "queued-until-idle",
+        liveSemantics: "queued-until-idle",
+        reason: RUNNING_WORK_HOLD_REASON,
+      });
+      continue;
+    }
+    planned.push({
+      key: receipt.id,
+      target: { nodeId: desired.nodeId, provider: receipt.providers[0] ?? "claude" },
+      componentId: receipt.componentId,
+      packageId: receipt.packageId,
+      action: "remove",
+      fromDigest: receipt.digest,
+      locationId: receipt.locationId,
+      status: options.connected ? "pending" : "offline",
+      liveSemantics: "new-session-required",
+    });
+    targets.push({
+      key: receipt.id,
+      action: "remove",
+      kind:
+        component?.kind ??
+        (locationProvider
+          ? receipt.locationId.startsWith("mcp:")
+            ? "mcp-server"
+            : "native-plugin"
+          : "skill"),
+      packageId: receipt.packageId,
+      componentId: receipt.componentId,
+      componentName: component?.name ?? receipt.componentId.split(":").pop() ?? "component",
+      pathOrKey: component?.pathOrKey ?? "",
+      ...(fileLocation ? { locationId: receipt.locationId } : {}),
+      ...(locationProvider ? { provider: locationProvider } : {}),
+      ...(options.forceKeys?.has(receipt.id) ? { force: true } : {}),
+      ...(state.packages[receipt.packageId]?.source.kind === "provider-marketplace"
+        ? {
+            qualifiedId: (state.packages[receipt.packageId]!.source as { qualifiedId: string })
+              .qualifiedId,
+          }
+        : {}),
+    });
+  }
+
+  for (const entry of desired.undeliverable) {
+    planned.push({
+      key: `${desired.nodeId}|${entry.provider}|${entry.componentId}`,
+      target: { nodeId: desired.nodeId, provider: entry.provider },
+      componentId: entry.componentId,
+      packageId: entry.packageId,
+      action: "skip",
+      status: entry.status,
+      reason: entry.reason,
+    });
+  }
+  return { nodeId: desired.nodeId, targets, planned, manifestDigest: desired.manifestDigest };
+}
+
+/** The installed-name collision a component would have with an external item at a location. */
+export function externalCollision(
+  component: CapabilityComponent,
+  locationId: string,
+  external: ReadonlyMap<string, ObservedInstallation>,
+): boolean {
+  const location = capabilityLocation(locationId);
+  if (!location) return false;
+  const name = installName(component.name, component.pathOrKey, location.layout);
+  return external.has(`${locationId}/${location.layout === "file" ? name : name}`);
+}

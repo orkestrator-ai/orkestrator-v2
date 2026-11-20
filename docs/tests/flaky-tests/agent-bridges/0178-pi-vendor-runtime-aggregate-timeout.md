@@ -1,7 +1,7 @@
 # Pi staged runtime load timeout
 
 - **ID:** 0178
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-02
 - **Original command:** `mise run test:logged -- --name steer-suite -- mise run test`
 - **Worker configuration:** normal aggregate host allocation; root and agent-support group used three workers. Browser validation also ran on the host.
@@ -956,3 +956,27 @@ no Pi code, deadline or assertion changed.
 - **Cause of the recorded failures:** the case copies the whole Pi runtime closure and then waits for a real child process to import it; it asserts on versions and exports, never on elapsed time. Its own budgets were a 30 s test timeout and a 15 s `execFile` timeout, which are the failures recorded here (the 15 s one sat inside the 30 s one).
 - **Change:** `tests/unit/pi-bridge-vendor.test.ts` now uses hang watchdogs of 180 s for the test and 150 s for the child (`STAGED_RUNTIME_TEST_WATCHDOG_MS`, `STAGED_RUNTIME_WATCHDOG_MS`), so a starved host does not fail a run that is still making progress.
 - **Not verified, so left open:** `mise run test:logged -- --name pi-vendor-cont -- bun scripts/test-under-contention.ts --burners 6 -- bun test ./tests/unit/pi-bridge-vendor.test.ts --parallel=1 --rerun-each=2` still failed: the case timed out at 180 s in both runs (the file took 507.9 s). The host was shared with many other contention runners on the same pinned core, so this does not show what a normal aggregate needs, but it does show that no fixed watchdog is a proof here. The staging work itself (a full closure copy) is not a signal this test can wait on instead; making it cheaper would mean staging less than production does. Reopen for a measured idle duration, and for a decision on a smaller staged closure.
+
+## Resolution (2026-11-19) — heavy work, now off the default suite and on a hang watchdog
+
+- **Cause:** genuine work, not a race. The case copies the whole Pi runtime
+  closure and imports it in a real child. A run on this macOS host at load
+  average 35 took 12.8 s, of which 9.8 s was kernel time (file copying from the
+  checkout's volume into the temporary directory). Every recorded failure was the
+  old 30 s budget on a host saturated by aggregates or other worktrees (once
+  112 s at load 156). Nothing in the test's outcome depends on elapsed time.
+- **Fix (already in place, now verified):** the file moved to the slow tier on
+  2026-10-28 (`beb1ec4c8`, `scripts/test-tiers.ts`), so the default
+  `mise run test` aggregate where every recurrence happened no longer runs it;
+  and on 2026-11-15 the 30 s and 15 s budgets became 180 s and 150 s hang
+  watchdogs with comments saying so. No recurrence has been recorded since
+  2026-10-25.
+- **Verification under contention:** `mise run test:logged -- --name
+  forkb-pi-vendor-cont -- bun scripts/test-under-contention.ts --burners 4 --
+  bun test ./tests/unit/pi-bridge-vendor.test.ts -t "staged runtime closure"
+  --rerun-each=3` passed all three runs in 38.8 s (about 13 s each, a
+  fourteen-fold margin to the watchdog), at host load 35 on macOS (unpinned
+  burners). The 2026-11-15 180 s timeout was a single core pinned under many
+  other contention runners at once, far beyond what an aggregate grants one file.
+- **Not done:** staging a smaller closure. That would test less than production
+  stages, and the watchdog no longer needs it.

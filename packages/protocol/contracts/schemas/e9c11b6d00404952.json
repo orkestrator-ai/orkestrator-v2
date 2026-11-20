@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:e9c11b6d0040495264d9861a1c39d10cf95858ec61aa41cfe4fd3538b67d6a0f",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "controllerId": {},
+        "environmentId": {},
+        "epoch": {},
+        "keep": {},
+        "operationId": {},
+        "targets": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -12,6 +12,7 @@ import {
   Pencil,
   ExternalLink as ExternalLinkIcon,
   FileClock,
+  Timer,
 } from "lucide-react";
 import type { ToolOutputTailView } from "@/lib/chat/tool-output-tail";
 import { formatBytes } from "@/lib/chat/rich-markdown/media-types";
@@ -415,9 +416,10 @@ export function ToolDurationLabel({ label }: { label?: string }) {
   if (!label) return null;
   return (
     <span
-      className="shrink-0 tabular-nums text-[11px] text-muted-foreground"
+      className="inline-flex shrink-0 items-center gap-1 tabular-nums text-[11px] text-muted-foreground"
       title={`Ran for ${label}`}
     >
+      <Timer className="h-3 w-3 shrink-0" aria-hidden="true" />
       {label}
     </span>
   );

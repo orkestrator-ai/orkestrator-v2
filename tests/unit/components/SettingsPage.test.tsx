@@ -11,8 +11,8 @@ import { defaultConfig } from "../../../apps/backend/src/core/storage";
 
 import * as realGlobalSettings from "../../../apps/web/src/components/settings/GlobalSettings";
 const realGlobalSettingsSnapshot = { ...realGlobalSettings };
-import * as realSkillsSettings from "../../../apps/web/src/components/settings/SkillsSettings";
-const realSkillsSettingsSnapshot = { ...realSkillsSettings };
+import * as realCapabilitiesSettings from "../../../apps/web/src/components/settings/capabilities/CapabilitiesSettings";
+const realCapabilitiesSettingsSnapshot = { ...realCapabilitiesSettings };
 import * as previousFullscreenSettingsLayout from "../../../apps/web/src/components/settings/FullscreenSettingsLayout";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 const previousFullscreenSettingsLayoutSnapshot = { ...previousFullscreenSettingsLayout };
@@ -24,23 +24,27 @@ mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => ({
     </div>
   ),
 }));
-mock.module("../../../apps/web/src/components/settings/SkillsSettings", () => ({
-  SkillsSettings: () => <div data-testid="skills-settings">Skills browser</div>,
+mock.module("../../../apps/web/src/components/settings/capabilities/CapabilitiesSettings", () => ({
+  CapabilitiesSettings: ({ initialTab }: { initialTab: string }) => (
+    <div data-testid="capabilities-settings">{initialTab}</div>
+  ),
 }));
 mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => ({
   SettingsHeaderActions: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   FullscreenSettingsLayout: ({
     open,
     menuItems,
+    defaultSection,
     children,
   }: {
     open: boolean;
     // The real layout renders `icon` beside `label`, so the stub has to as
     // well or nothing here can see what glyph a menu entry chose.
     menuItems: Array<{ id: string; label: string; icon: React.ReactNode }>;
+    defaultSection?: string;
     children: (activeSection: string) => React.ReactNode;
   }) => {
-    const [activeSection, setActiveSection] = useState(menuItems[0]?.id ?? "");
+    const [activeSection, setActiveSection] = useState(defaultSection ?? menuItems[0]?.id ?? "");
     if (!open) return null;
     return (
       <div>
@@ -72,8 +76,8 @@ afterAll(() => {
     () => realGlobalSettingsSnapshot,
   );
   mock.module(
-    "../../../apps/web/src/components/settings/SkillsSettings",
-    () => realSkillsSettingsSnapshot,
+    "../../../apps/web/src/components/settings/capabilities/CapabilitiesSettings",
+    () => realCapabilitiesSettingsSnapshot,
   );
   mock.module(
     "../../../apps/web/src/components/settings/FullscreenSettingsLayout",
@@ -155,11 +159,12 @@ describe("SettingsPage", () => {
 
   test("shows the loading state until the first config request completes", async () => {
     let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
-    invokeMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveConfig = resolve as typeof resolveConfig;
-        }),
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config"
+        ? new Promise((resolve) => {
+            resolveConfig = resolve;
+          })
+        : Promise.resolve(undefined),
     );
 
     const { container } = renderInAppCommandScope(
@@ -176,7 +181,9 @@ describe("SettingsPage", () => {
   });
 
   test("keeps sound controls unavailable while the initial config is loading", async () => {
-    invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config" ? new Promise(() => undefined) : Promise.resolve(undefined),
+    );
 
     const { container } = renderInAppCommandScope(
       <SettingsPage open onOpenChange={() => undefined} />,
@@ -188,8 +195,10 @@ describe("SettingsPage", () => {
     expect(screen.queryByRole("switch", { name: "Agent stopped sound" }) === null).toBe(true);
   });
 
-  test("opens the read-only Skills browser without waiting for config or rendering GlobalSettings", async () => {
-    invokeMock.mockImplementationOnce(() => new Promise(() => undefined));
+  test("opens Capabilities without waiting for config or rendering GlobalSettings", async () => {
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config" ? new Promise(() => undefined) : Promise.resolve(undefined),
+    );
 
     const { container } = renderInAppCommandScope(
       <SettingsPage open onOpenChange={() => undefined} />,
@@ -198,31 +207,39 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
     expect(container.querySelector(".animate-spin")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Skills and plugins" }));
+    fireEvent.click(screen.getByRole("button", { name: "Capabilities" }));
 
-    expect(screen.getByTestId("skills-settings")).toBeTruthy();
+    expect(screen.getByTestId("capabilities-settings")).toBeTruthy();
     expect(screen.queryByTestId("active-settings-section") === null).toBe(true);
     expect(container.querySelector(".animate-spin") === null).toBe(true);
   });
 
-  test("returns to GlobalSettings after leaving Skills once config resolves", async () => {
+  test("opens the Installed tab from a legacy Skills deep link", () => {
+    renderInAppCommandScope(
+      <SettingsPage open defaultSection="skills" onOpenChange={() => undefined} />,
+    );
+    expect(screen.getByTestId("capabilities-settings").textContent).toBe("installed");
+  });
+
+  test("returns to GlobalSettings after leaving Capabilities once config resolves", async () => {
     let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
-    invokeMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveConfig = resolve as typeof resolveConfig;
-        }),
+    invokeMock.mockImplementation((command: string) =>
+      command === "get_config"
+        ? new Promise((resolve) => {
+            resolveConfig = resolve;
+          })
+        : Promise.resolve(undefined),
     );
 
     renderInAppCommandScope(<SettingsPage open onOpenChange={() => undefined} />);
-    fireEvent.click(screen.getByRole("button", { name: "Skills and plugins" }));
-    expect(screen.getByTestId("skills-settings")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Capabilities" }));
+    expect(screen.getByTestId("capabilities-settings")).toBeTruthy();
 
     resolveConfig(defaultConfig());
     fireEvent.click(screen.getByRole("button", { name: "General" }));
 
     expect(await screen.findByTestId("active-settings-section")).toBeTruthy();
-    expect(screen.queryByTestId("skills-settings") === null).toBe(true);
+    expect(screen.queryByTestId("capabilities-settings") === null).toBe(true);
   });
 
   test("reuses a successful initial load when the page is reopened", async () => {

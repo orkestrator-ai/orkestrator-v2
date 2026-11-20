@@ -26,139 +26,128 @@ async function expectVerticalShift(row: Locator, top: number, shift: number) {
     .toBeLessThan(1);
 }
 
-for (const merged of [false, true]) {
-  test(`${merged ? "merged" : "local"} project drag keeps expanded folder rows separate before release`, async ({
+// This window's own sidebar, with no other machine. With one, the sidebar is
+// the repository list (design EL01), covered further down and in
+// RepositoryEnvironmentList.spec.ts.
+test("local project drag keeps expanded folder rows separate before release", async ({ page }) => {
+  await page.goto("/sidebar-drag?groups=1");
+  // Keep one project expanded so measured blocks include environment rows,
+  // while the whole scenario fits both viewport profiles.
+  for (const name of ["p2", "q", "q2"]) {
+    await page.getByRole("button", { name: `Collapse project ${name}`, exact: true }).click();
+  }
+  const source = page.locator('[data-project-folder="Source"]');
+  const target = page.locator('[data-project-folder="Target"]');
+  const sourceHeading = source.getByTitle("Collapse folder Source", { exact: true }).first();
+  const targetHeading = target.getByTitle("Collapse folder Target", { exact: true }).first();
+  const rows = [
+    sourceHeading,
+    project(page, "p"),
+    project(page, "p2"),
+    targetHeading,
+    project(page, "q"),
+    project(page, "q2"),
+  ];
+  const before = await Promise.all(rows.map(async (row) => (await row.boundingBox())!.y));
+  const active = project(page, "p2");
+  const activeBlock = active.locator("xpath=ancestor::div[contains(@class, 'px-2')][1]");
+  const activeHeight = (await activeBlock.boundingBox())!.height;
+  // Verify the real folder measurement encloses its member nodes.
+  const targetBox = (await target.boundingBox())!;
+  const lastBox = (await project(page, "q2").boundingBox())!;
+  expect(targetBox.y).toBeLessThan(lastBox.y);
+  expect(targetBox.y + targetBox.height).toBeGreaterThanOrEqual(lastBox.y + lastBox.height);
+
+  await holdDrag(page, active, targetHeading);
+  await expect(page.getByTestId("sidebar-drag-overlay")).toContainText("p2");
+  await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
+  for (const index of [0, 1, 3, 4, 5]) {
+    await expectVerticalShift(rows[index]!, before[index]!, 0);
+  }
+  // Continue across the entire target folder. Its members must inherit one
+  // parent shift, rather than adding a second transform on top of it.
+  await project(page, "q2").hover();
+  await expect(
+    page.locator('[id^="DndLiveRegion"]').filter({ hasText: "over droppable area" }),
+  ).toContainText("area q2");
+  for (const index of [0, 1]) await expectVerticalShift(rows[index]!, before[index]!, 0);
+  for (const index of [3, 4, 5])
+    await expectVerticalShift(rows[index]!, before[index]!, -activeHeight);
+  await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+  await page.keyboard.press("Escape");
+  for (const [index, row] of rows.entries()) await expectVerticalShift(row, before[index]!, 0);
+  await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
+});
+
+for (const collapsed of [false, true]) {
+  test(`local folder drag shifts ${collapsed ? "collapsed" : "expanded"} target as one block before release`, async ({
     page,
   }) => {
-    await page.goto(`/sidebar-drag?groups=1${merged ? "&merged=1" : ""}`);
-    // Keep one project expanded so measured blocks include environment rows,
-    // while the whole scenario fits both viewport profiles.
+    await page.goto("/sidebar-drag?groups=1");
     for (const name of ["p2", "q", "q2"]) {
       await page.getByRole("button", { name: `Collapse project ${name}`, exact: true }).click();
     }
     const source = page.locator('[data-project-folder="Source"]');
     const target = page.locator('[data-project-folder="Target"]');
+    if (collapsed)
+      await target.getByRole("button", { name: "Collapse folder Target", exact: true }).click();
     const sourceHeading = source.getByTitle("Collapse folder Source", { exact: true }).first();
-    const targetHeading = target.getByTitle("Collapse folder Target", { exact: true }).first();
-    const rows = [
-      sourceHeading,
-      project(page, "p"),
-      project(page, "p2"),
-      targetHeading,
-      project(page, "q"),
-      project(page, "q2"),
-    ];
-    const before = await Promise.all(rows.map(async (row) => (await row.boundingBox())!.y));
-    const active = project(page, "p2");
-    const activeBlock = active.locator("xpath=ancestor::div[contains(@class, 'px-2')][1]");
-    const activeHeight = (await activeBlock.boundingBox())!.height;
-    // Verify the real folder measurement encloses its member nodes.
+    const targetHeading = target
+      .getByTitle(`${collapsed ? "Expand" : "Collapse"} folder Target`, { exact: true })
+      .first();
+    const sourceBox = (await source.boundingBox())!;
     const targetBox = (await target.boundingBox())!;
-    const lastBox = (await project(page, "q2").boundingBox())!;
-    expect(targetBox.y).toBeLessThan(lastBox.y);
-    expect(targetBox.y + targetBox.height).toBeGreaterThanOrEqual(lastBox.y + lastBox.height);
-
-    await holdDrag(page, active, targetHeading);
-    await expect(page.getByTestId("sidebar-drag-overlay")).toContainText("p2");
+    // Both sidebars use an overlay; the source occupies its sortable destination.
+    const sourceShift = targetBox.height;
+    const sourceMember = project(page, "p2");
+    const sourceMemberTop = (await sourceMember.boundingBox())!.y;
+    const members = collapsed ? [] : [project(page, "q"), project(page, "q2")];
+    const memberTops = await Promise.all(members.map(async (row) => (await row.boundingBox())!.y));
+    await holdDrag(page, sourceHeading, targetHeading);
+    await expect(page.getByTestId("sidebar-drag-overlay")).toContainText("Source");
     await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
-    for (const index of [0, 1, 3, 4, 5]) {
-      await expectVerticalShift(rows[index]!, before[index]!, 0);
+    await expectVerticalShift(source, sourceBox.y, sourceShift);
+    await expectVerticalShift(sourceMember, sourceMemberTop, sourceShift);
+    await expectVerticalShift(target, targetBox.y, -sourceBox.height);
+    for (const [index, member] of members.entries()) {
+      await expectVerticalShift(member, memberTops[index]!, -sourceBox.height);
     }
-    // Continue across the entire target folder. Its members must inherit one
-    // parent shift, rather than adding a second transform on top of it.
-    await project(page, "q2").hover();
-    await expect(
-      page.locator('[id^="DndLiveRegion"]').filter({ hasText: "over droppable area" }),
-    ).toContainText(merged ? "q2" : "area q2");
-    for (const index of [0, 1]) await expectVerticalShift(rows[index]!, before[index]!, 0);
-    for (const index of [3, 4, 5])
-      await expectVerticalShift(rows[index]!, before[index]!, -activeHeight);
     await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
-    await page.keyboard.press("Escape");
-    for (const [index, row] of rows.entries()) await expectVerticalShift(row, before[index]!, 0);
-    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
-  });
-
-  for (const collapsed of [false, true]) {
-    test(`${merged ? "merged" : "local"} folder drag shifts ${collapsed ? "collapsed" : "expanded"} target as one block before release`, async ({
-      page,
-    }) => {
-      await page.goto(`/sidebar-drag?groups=1${merged ? "&merged=1" : ""}`);
-      for (const name of ["p2", "q", "q2"]) {
-        await page.getByRole("button", { name: `Collapse project ${name}`, exact: true }).click();
-      }
-      const source = page.locator('[data-project-folder="Source"]');
-      const target = page.locator('[data-project-folder="Target"]');
-      if (collapsed)
-        await target.getByRole("button", { name: "Collapse folder Target", exact: true }).click();
-      const sourceHeading = source.getByTitle("Collapse folder Source", { exact: true }).first();
-      const targetHeading = target
-        .getByTitle(`${collapsed ? "Expand" : "Collapse"} folder Target`, { exact: true })
-        .first();
-      const sourceBox = (await source.boundingBox())!;
-      const targetBox = (await target.boundingBox())!;
-      // Both sidebars use an overlay; the source occupies its sortable destination.
-      const sourceShift = targetBox.height;
-      const sourceMember = project(page, "p2");
-      const sourceMemberTop = (await sourceMember.boundingBox())!.y;
-      const members = collapsed ? [] : [project(page, "q"), project(page, "q2")];
-      const memberTops = await Promise.all(
-        members.map(async (row) => (await row.boundingBox())!.y),
-      );
-      await holdDrag(page, sourceHeading, targetHeading);
-      await expect(page.getByTestId("sidebar-drag-overlay")).toContainText("Source");
-      await expect(target.locator(":scope > .relative")).toHaveClass(/border-primary/);
-      await expectVerticalShift(source, sourceBox.y, sourceShift);
-      await expectVerticalShift(sourceMember, sourceMemberTop, sourceShift);
-      await expectVerticalShift(target, targetBox.y, -sourceBox.height);
-      for (const [index, member] of members.entries()) {
-        await expectVerticalShift(member, memberTops[index]!, -sourceBox.height);
-      }
-      await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
-      await page.mouse.up();
-      await expect(page.getByTestId("sidebar-writes")).toContainText(
-        merged ? "update_portal_layout" : "arrange_projects",
-      );
-      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
-        "data-project-folder",
-        "Target",
-      );
-      await page.reload();
-      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
-        "data-project-folder",
-        "Target",
-      );
-    });
-  }
-}
-
-for (const merged of [false, true]) {
-  test(`${merged ? "merged" : "local"} project header drop reorders expanded projects and survives reload`, async ({
-    page,
-  }) => {
-    await page.goto(`/sidebar-drag${merged ? "?merged=1" : ""}`);
-    await expect(page.getByText("p-env-3", { exact: true })).toBeVisible();
-    await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
-    await drag(page, project(page, "q"), project(page, "p"));
-    await expect(page.getByTestId("sidebar-writes")).toContainText(
-      merged ? "update_portal_layout" : "arrange_projects",
-    );
-    const write = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!)[0];
-    expect(
-      write.args[merged ? "projectOrder" : "projectIds"].map((id: string) =>
-        merged ? JSON.parse(id)[2] : id,
-      ),
-    ).toEqual(["q", "p"]);
-    expect((await project(page, "q").boundingBox())!.y).toBeLessThan(
-      (await project(page, "p").boundingBox())!.y,
+    await page.mouse.up();
+    await expect(page.getByTestId("sidebar-writes")).toContainText("arrange_projects");
+    await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+      "data-project-folder",
+      "Target",
     );
     await page.reload();
-    await expect(page.getByText("p-env-3", { exact: true })).toBeVisible();
-    expect((await project(page, "q").boundingBox())!.y).toBeLessThan(
-      (await project(page, "p").boundingBox())!.y,
+    await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+      "data-project-folder",
+      "Target",
     );
   });
+}
 
+test("local project header drop reorders expanded projects and survives reload", async ({
+  page,
+}) => {
+  await page.goto("/sidebar-drag");
+  await expect(page.getByText("p-env-3", { exact: true })).toBeVisible();
+  await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
+  await drag(page, project(page, "q"), project(page, "p"));
+  await expect(page.getByTestId("sidebar-writes")).toContainText("arrange_projects");
+  const write = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!)[0];
+  expect(write.args.projectIds).toEqual(["q", "p"]);
+  expect((await project(page, "q").boundingBox())!.y).toBeLessThan(
+    (await project(page, "p").boundingBox())!.y,
+  );
+  await page.reload();
+  await expect(page.getByText("p-env-3", { exact: true })).toBeVisible();
+  expect((await project(page, "q").boundingBox())!.y).toBeLessThan(
+    (await project(page, "p").boundingBox())!.y,
+  );
+});
+
+for (const merged of [false, true]) {
   test(`${merged ? "merged" : "local"} environment drop on another project submits no write`, async ({
     page,
   }) => {
@@ -177,268 +166,131 @@ for (const merged of [false, true]) {
   });
 }
 
-for (const repository of [false, true]) {
-  test(`${repository ? "repository group" : "folder"} drop on an expanded member moves the whole group`, async ({
-    page,
-  }) => {
-    await page.goto(`/sidebar-drag?groups=1${repository ? "&merged=1&repository=1" : ""}`);
-    const source = repository
-      ? page.getByRole("button", { name: /^Open acme\/source( on |$)/ })
-      : page.getByTitle("Collapse folder Source", { exact: true }).first();
-    await expect(source).toBeVisible();
-    await drag(page, source, project(page, "q"));
-    await expect(page.getByTestId("sidebar-writes")).toContainText(
-      repository ? "repositoryOrder" : "projectIds",
-    );
-    const write = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!)[0];
-    const ids: string[] = write.args[repository ? "repositoryOrder" : "projectIds"];
-    expect(ids.map((id) => (repository ? JSON.parse(id)[2] : id))).toEqual(["q", "q2", "p", "p2"]);
-    if (!repository) expect(write.args.folders).toEqual({});
-    await expect(
-      page
-        .locator(`[data-project-folder='${repository ? "github.com/acme/source" : "Source"}']`)
-        .getByRole("button", { name: /^(Self · )?p 3$/ }),
-    ).toBeVisible();
-    await expect(
-      page
-        .locator(`[data-project-folder='${repository ? "github.com/acme/target" : "Target"}']`)
-        .getByRole("button", { name: /^(Self · )?q 3$/ }),
-    ).toBeVisible();
-  });
-}
+// With another machine known, the sidebar is the repository list (design
+// EL01): this window's projects are repository headings over their rows.
+const repositoryHeading = (page: Page, label: string) =>
+  page.getByRole("button", { name: new RegExp(`^Open acme/${label} on `) });
+const repositoryFolder = (page: Page, label: string) =>
+  page.locator(`[data-project-folder="github.com/acme/${label}"]`);
 
-for (const collapsed of [false, true]) {
-  for (const [region, fraction] of [
-    ["rule", 0.5],
-    ["above rule", 0.1],
-    ["below rule", 0.9],
-  ] as const) {
-    test(`repository drop ${region} reorders ${collapsed ? "collapsed" : "expanded"} groups and survives reload`, async ({
-      page,
-    }) => {
-      await page.goto("/sidebar-drag?groups=1&merged=1&repository=1");
-      const source = page.getByRole("button", { name: /^Open acme\/source( on |$)/ });
-      const target = page.locator('[data-project-folder="github.com/acme/target"]');
-      await expect(source).toBeVisible();
-      if (collapsed) {
-        await page
-          .getByRole("button", { name: "Collapse folder acme/source", exact: true })
-          .click();
-        await page
-          .getByRole("button", { name: "Collapse folder acme/target", exact: true })
-          .click();
-      }
-      // Exercise the line and both padding bands inside the following group's drop target.
-      const separatorBand = target.getByTestId("repository-separator").locator("..");
-      await drag(page, source, separatorBand, fraction);
-      await expect(page.getByTestId("sidebar-writes")).toContainText('"repositoryOrder"');
-      const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
-      expect(writes.at(-1).args.repositoryOrder.map((id: string) => JSON.parse(id)[2])).toEqual([
-        "q",
-        "q2",
-        "p",
-        "p2",
-      ]);
-      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
-        "data-project-folder",
-        "github.com/acme/target",
-      );
-      await page.reload();
-      await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
-        "data-project-folder",
-        "github.com/acme/target",
-      );
-    });
-  }
-}
-
-for (const input of ["pointer", "keyboard"] as const) {
-  test(`machine name ${input} reorder persists and restores focus`, async ({ page }) => {
-    await page.goto("/sidebar-drag?machines=1");
-    const source = page.getByRole("button", { name: "Move Self", exact: true });
-    const target = page.getByRole("button", { name: "Move Remote", exact: true });
-    await expect(source).toBeVisible();
-    // The trailing chevron collapses independently and cannot start dragging.
-    await page.getByRole("button", { name: "Collapse Self", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Expand Self", exact: true })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    await expect(page.getByText("p-env-1", { exact: true })).toHaveCount(0);
-    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
-    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
-    await page.getByRole("button", { name: "Collapse Remote", exact: true }).press("Space");
-    await expect(page.getByRole("button", { name: "Expand Remote", exact: true })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
-    await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
-    if (input === "pointer") {
-      await drag(page, source, target);
-    } else {
-      await source.focus();
-      await source.press("Space");
-      await expect(source).toHaveAttribute("aria-pressed", "true");
-      await page.evaluate(
-        () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-      );
-      await page.keyboard.press("ArrowDown");
-      await expect(page.getByTestId("bound-machine-section")).toHaveAttribute(
-        "style",
-        /translate3d\(0px, [1-9]/,
-      );
-      await expect(
-        page.locator('[id^="DndLiveRegion"]').filter({ hasText: "machine:bk_self" }),
-      ).toContainText("over droppable area machine:bk_remote");
-      await page.keyboard.press("Space");
-    }
-    await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
-    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
-    expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self"]);
-    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
-      "data-machine",
-      "bk_remote",
-    );
-    await expect(source).toBeFocused();
-    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
-    await page.reload();
-    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
-      "data-machine",
-      "bk_remote",
-    );
-    await expect(page.getByText("p-env-1", { exact: true })).toBeVisible();
-  });
-}
-
-for (const direction of ["down", "up"] as const) {
-  test(`machine name pointer drop ${direction} targets an adjacent heading with unequal section heights`, async ({
-    page,
-  }) => {
-    await page.goto("/sidebar-drag?machines=1&spare=1");
-    await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Move Spare", exact: true })).toBeVisible();
-    const source = page.getByRole("button", {
-      name: direction === "down" ? "Move Self" : "Move Remote",
-      exact: true,
-    });
-    // Self stays expanded, so its section is far taller than Remote's or Spare's.
-    await drag(
-      page,
-      source,
-      page.getByRole("button", {
-        name: direction === "down" ? "Move Remote" : "Move Self",
-        exact: true,
-      }),
-    );
-    await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
-    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
-    expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self", "bk_spare"]);
-    await expect(source).toBeFocused();
-    await page.reload();
-    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
-      "data-machine",
-      "bk_remote",
-    );
-  });
-}
-
-test("machine released in empty space below collapsed sections moves to the end", async ({
+test("repository heading drop on an expanded repository's row moves the whole group", async ({
   page,
 }) => {
-  await page.goto("/sidebar-drag?machines=1&spare=1");
-  for (const name of ["Self", "Remote", "Spare"]) {
-    await page.getByRole("button", { name: `Collapse ${name}`, exact: true }).click();
-  }
-  const source = page.getByRole("button", { name: "Move Self", exact: true });
-  const start = (await source.boundingBox())!;
-  const last = (await page.getByTestId("machine-section-header").last().boundingBox())!;
-  const x = start.x + start.width / 2;
-  const y = last.y + last.height + 80;
-  // Verify the release point really is outside every machine section.
-  for (const header of await page.getByTestId("machine-section-header").all()) {
-    const box = (await header.boundingBox())!;
-    expect(box.y + box.height).toBeLessThan(y);
-  }
-  await page.mouse.move(x, start.y + start.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(x + 12, start.y + start.height / 2, { steps: 3 });
-  await expect(source).toHaveAttribute("aria-pressed", "true");
-  await page.mouse.move(x, y, { steps: 12 });
-  await page.mouse.up();
+  await page.goto("/sidebar-drag?groups=1&merged=1");
+  const source = repositoryHeading(page, "source");
+  await expect(source).toBeVisible();
+  await drag(page, source, page.getByText("q-env-1", { exact: true }));
+  await expect(page.getByTestId("sidebar-writes")).toContainText("repositoryOrder");
+  const write = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!)[0];
+  expect(write.command).toBe("update_portal_layout");
+  expect(write.args.repositoryOrder.map((id: string) => JSON.parse(id)[2])).toEqual([
+    "q",
+    "q2",
+    "p",
+    "p2",
+  ]);
+  await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+    "data-project-folder",
+    "github.com/acme/target",
+  );
+  // Rows stay with their repository.
+  await expect(
+    repositoryFolder(page, "source").getByText("p-env-1", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    repositoryFolder(page, "target").getByText("q-env-1", { exact: true }),
+  ).toBeVisible();
+});
+
+for (const collapsed of [false, true]) {
+  test(`repository heading drop reorders ${collapsed ? "collapsed" : "expanded"} repositories and survives reload`, async ({
+    page,
+  }) => {
+    await page.goto("/sidebar-drag?groups=1&merged=1");
+    const source = repositoryHeading(page, "source");
+    const target = repositoryHeading(page, "target");
+    await expect(source).toBeVisible();
+    if (collapsed) {
+      // No chevron: Left collapses a heading from the keyboard.
+      for (const heading of [source, target]) {
+        await heading.focus();
+        await heading.press("ArrowLeft");
+        await expect(heading).toHaveAttribute("aria-expanded", "false");
+      }
+      await expect(page.getByText("p-env-1", { exact: true })).toHaveCount(0);
+    }
+    await drag(page, source, target);
+    await expect(page.getByTestId("sidebar-writes")).toContainText('"repositoryOrder"');
+    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+    expect(writes.at(-1).args.repositoryOrder.map((id: string) => JSON.parse(id)[2])).toEqual([
+      "q",
+      "q2",
+      "p",
+      "p2",
+    ]);
+    await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+      "data-project-folder",
+      "github.com/acme/target",
+    );
+    await page.reload();
+    await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
+      "data-project-folder",
+      "github.com/acme/target",
+    );
+  });
+}
+
+test("a row of this window's machine reorders within its project", async ({ page }) => {
+  await page.goto("/sidebar-drag?merged=1");
+  await expect(page.getByText("p-env-2", { exact: true })).toBeVisible();
+  await drag(
+    page,
+    page.getByRole("button", { name: "Reorder p-env-1", exact: true }),
+    page.getByText("p-env-2", { exact: true }),
+  );
+  await expect(page.getByTestId("sidebar-writes")).toContainText("reorder_environments");
+  const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+  expect(writes).toHaveLength(1);
+});
+
+const tile = (page: Page, machine: string) =>
+  page.getByTestId("machine-tile").and(page.locator(`[data-machine="bk_${machine}"]`));
+
+test("a machine tile pointer reorder persists without filtering", async ({ page }) => {
+  await page.goto("/sidebar-drag?merged=1");
+  await expect(page.getByTestId("machine-tile").first()).toHaveAttribute("data-machine", "bk_self");
+  await drag(page, tile(page, "remote"), tile(page, "self"));
+  await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
+  const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
+  expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self"]);
+  await expect(page.getByTestId("machine-tile").first()).toHaveAttribute(
+    "data-machine",
+    "bk_remote",
+  );
+  // The click that ends the drag does not filter.
+  await expect(page.getByTestId("machine-tiles")).not.toHaveAttribute("data-filtered");
+  await expect(page.getByText("p-env-1", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("machine-tile").first()).toHaveAttribute(
+    "data-machine",
+    "bk_remote",
+  );
+});
+
+test("a machine tile dropped on the last tile moves to the end", async ({ page }) => {
+  await page.goto("/sidebar-drag?merged=1&spare=1");
+  await expect(page.getByTestId("machine-tile")).toHaveCount(3);
+  await drag(page, tile(page, "self"), tile(page, "spare"));
   await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
   const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
   expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_spare", "bk_self"]);
-  await expect(source).toBeFocused();
   await page.reload();
-  await expect(page.getByTestId("machine-section-header").last()).toHaveAttribute(
-    "data-machine",
-    "bk_self",
-  );
+  await expect(page.getByTestId("machine-tile").last()).toHaveAttribute("data-machine", "bk_self");
 });
 
-for (const sourceName of ["Self", "Remote"] as const) {
-  test(`keyboard machine reorder from ${sourceName} visits adjacent unequal-height sections`, async ({
-    page,
-  }) => {
-    await page.goto("/sidebar-drag?machines=1&spare=1");
-    await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
-    const source = page.getByRole("button", { name: `Move ${sourceName}`, exact: true });
-    await source.focus();
-    await source.press("Space");
-    await expect(source).toHaveAttribute("aria-pressed", "true");
-    // The keyboard sensor attaches its arrow listener after activation.
-    await page.evaluate(
-      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-    );
-    const targets =
-      sourceName === "Self"
-        ? [
-            ["ArrowDown", "bk_remote"],
-            ["ArrowDown", "bk_spare"],
-            ["ArrowUp", "bk_remote"],
-          ]
-        : [["ArrowUp", "bk_self"]];
-    for (const [key, id] of targets) {
-      await page.keyboard.press(key);
-      await expect(
-        page
-          .locator('[id^="DndLiveRegion"]')
-          .filter({ hasText: `machine:bk_${sourceName.toLowerCase()}` }),
-      ).toContainText(`over droppable area machine:${id}`);
-    }
-    await page.keyboard.press("Space");
-    await expect(page.getByTestId("sidebar-writes")).toContainText('"machineOrder"');
-    const writes = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!);
-    expect(writes.at(-1).args.machineOrder).toEqual(["bk_remote", "bk_self", "bk_spare"]);
-    await expect(source).toBeFocused();
-    await expect(page.locator('[aria-pressed="true"]')).toHaveCount(0);
-    await page.reload();
-    await expect(page.getByTestId("machine-section-header").first()).toHaveAttribute(
-      "data-machine",
-      "bk_remote",
-    );
-  });
-}
-
-test("project grouping leads bound project headings with the machine home icon", async ({
-  page,
-}) => {
-  await page.goto("/sidebar-drag?merged=1");
-  const heading = project(page, "p");
-  await expect(heading.getByTestId("machine-home-icon")).toHaveAttribute(
-    "data-machine-color",
-    "teal",
-  );
-  // The home leads the heading inside the coordinator's activity ring.
-  await expect(
-    heading.locator(':scope > :first-child [data-testid="machine-home-icon"]'),
-  ).toHaveCount(1);
-});
-
-test("a connected machine exposes catching-up status in its header", async ({ page }) => {
-  await page.goto("/sidebar-drag?machines=1&catching-up=1");
-  const header = page.getByTestId("machine-section-header").filter({ hasText: "Remote" });
-  await expect(header.getByText("Catching up", { exact: true })).toBeVisible();
-  await expect(header.locator(".lucide-wifi-off")).toHaveCount(0);
+test("a connected machine's tile says it is catching up", async ({ page }) => {
+  await page.goto("/sidebar-drag?merged=1&catching-up=1");
+  const remote = tile(page, "remote");
+  await expect(remote).toHaveAttribute("title", /^Remote · Catching up\n/);
+  await expect(remote).not.toHaveAttribute("data-dimmed");
 });

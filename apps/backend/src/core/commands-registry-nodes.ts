@@ -48,12 +48,16 @@ import {
   unwatchNodeEventsCommand,
   updateNodeCommand,
   updatePortalLayoutCommand,
+  updateRepositoryEnvironmentOrderCommand,
   watchNodeEventsCommand,
 } from "@orkestrator/protocol/contract/domains/nodes";
 import { workerSessionActivity } from "./worker-session-activity.js";
 import { parseNodeImportEntries } from "@orkestrator/protocol/command-nodes";
 import { isBackendId } from "@orkestrator/protocol/federation";
-import { parsePortalLayoutUpdate } from "@orkestrator/protocol/portal-layout";
+import {
+  parsePortalLayoutUpdate,
+  parseRepositoryEnvironmentOrderUpdate,
+} from "@orkestrator/protocol/portal-layout";
 import {
   abortNodeFileWriteCommand,
   appendNodeFileWriteCommand,
@@ -146,6 +150,14 @@ export function registerNodeCommands(register: CommandRegistrar): void {
 
   register(updatePortalLayoutCommand, async (args, context) => {
     const layout = await context.storage.nodes.updatePortalLayout(parsePortalLayoutUpdate(args));
+    context.emit(portalLayoutChangedEvent, layout);
+    return layout;
+  });
+
+  register(updateRepositoryEnvironmentOrderCommand, async (args, context) => {
+    const layout = await context.storage.nodes.updateRepositoryEnvironmentOrder(
+      parseRepositoryEnvironmentOrderUpdate(args),
+    );
     context.emit(portalLayoutChangedEvent, layout);
     return layout;
   });

@@ -27,6 +27,7 @@ import { PUBLIC_API_LOG_AREAS } from "./public-api.js";
 import { AGENT_ACCOUNTS_LOG_AREAS } from "./agent-accounts.js";
 import { DOCKER_LOG_AREAS } from "./docker.js";
 import { MCP_LOG_AREAS } from "./mcp.js";
+import { CAPABILITIES_LOG_AREAS } from "./capabilities.js";
 import { DESIGN_LOG_AREAS } from "./design.js";
 import { GRAPH_LOG_AREAS } from "./graph.js";
 import { NODES_LOG_AREAS } from "./nodes.js";
@@ -97,6 +98,7 @@ export const LOG_VOCABULARY = {
   ...AGENT_ACCOUNTS_LOG_AREAS,
   ...DOCKER_LOG_AREAS,
   ...MCP_LOG_AREAS,
+  ...CAPABILITIES_LOG_AREAS,
   ...DESIGN_LOG_AREAS,
   ...GRAPH_LOG_AREAS,
   ...NODES_LOG_AREAS,

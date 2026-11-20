@@ -50,7 +50,9 @@ import {
 import { snapshotNotices } from "./runtime-health.js";
 import { ensureCodexMode, updateCodexSessionConfig } from "./codex-config.js";
 import { readBridgeMcpConfigEvidence } from "./mcp-evidence.js";
+import { readBridgeCapabilityEvidence } from "./capability-evidence.js";
 import {
+  readBridgeRuntimeHealth,
   refreshHttpBridgeRuntimeMetadata,
   type HttpBridgeRuntimeMetadata,
 } from "./runtime-metadata.js";
@@ -100,13 +102,13 @@ import {
 } from "./transport.js";
 import { closeBridgeSessionRetaining } from "../bridge-session-close.js";
 import { compactBridgeSession } from "./compact.js";
+import { synchronizeBridgeBugReportPolicy } from "./bug-report-policy.js";
 import { HttpBridgeTranscriptReader } from "./transcript-reader.js";
 import { HttpBridgeActivityBatchReader } from "./activity-batch.js";
 import { bridgeChangeEvidenceSource } from "./change-evidence.js";
 import { readAcpTurnTerminalError } from "./turn-outcome.js";
 import { HttpBridgeObservationWakeup } from "./observation-stream.js";
 import { HttpBridgeStateReads } from "./state-revision.js";
-import { readBridgeRuntimeHealth } from "./runtime-health-read.js";
 import { readBridgeResumableSessions } from "./resumable-sessions.js";
 import { readBridgeSessionBranches, switchBridgeSessionBranch } from "./session-branches.js";
 import { readBridgeHumanPrompts } from "./human-prompts.js";
@@ -588,15 +590,21 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     });
   }
 
-  /** See `readBridgeRuntimeHealth`. */
   runtimeHealth(sessionId: string): Promise<ProviderRuntimeHealth> {
-    return readBridgeRuntimeHealth(this.connection, this.fetchImpl, this.agent, sessionId);
+    const { agent, connection, fetchImpl } = this;
+    return readBridgeRuntimeHealth({ agent, connection, fetchImpl, sessionId });
   }
 
   /** Backend-only MCP apply evidence; see `http-bridge/mcp-evidence.ts`. */
   mcpConfigEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
     const { connection, fetchImpl, agent } = this;
     return readBridgeMcpConfigEvidence({ connection, fetchImpl, agent, sessionId, signal });
+  }
+
+  /** Agent Capabilities runtime proof; see `http-bridge/capability-evidence.ts`. */
+  capabilityEvidence(sessionId: string, { signal }: ProviderReadOptions = {}) {
+    const { connection, fetchImpl, agent } = this;
+    return readBridgeCapabilityEvidence({ connection, fetchImpl, agent, sessionId, signal });
   }
 
   private refreshRuntimeMetadata(sessionId: string): Promise<void> {
@@ -996,23 +1004,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     };
   }
 
-  async synchronizeBugReportSessionPolicy(
-    sessionId: string,
-    policy: NativeAgentExecutionPolicy,
-  ): Promise<void> {
-    const response = await bridgeFetch(
-      this.connection,
-      `/session/${encodeURIComponent(sessionId)}/config`,
-      { method: "POST", body: JSON.stringify({ policy: this.wirePolicy(policy) }) },
-      this.fetchImpl,
-    );
-    await assertOkWithErrorDetail(response, "Bug report session policy update");
-    if (this.agent === "codex") {
-      const result = asRecord(await boundedJson(response, "Bug report session policy update"));
-      if (result?.durable !== true) {
-        throw new ProviderUnavailableError("Codex could not save the bug report session policy");
-      }
-    }
+  synchronizeBugReportSessionPolicy(sessionId: string, policy: NativeAgentExecutionPolicy) {
+    const { agent, connection, fetchImpl } = this;
+    return synchronizeBridgeBugReportPolicy({ agent, connection, fetchImpl, sessionId, policy });
   }
 
   async updateInteractiveControls(

@@ -975,7 +975,7 @@ export async function runDeferredCommandReload(state: SessionState): Promise<voi
 
 /** Project-local resource switches passed to Pi's default loader. */
 export function projectResourceDiscoveryOptions(
-  enabled = false,
+  _enabled = false,
   readOnly = false,
   _approvals?: NativeAgentExecutionPolicy["approvals"],
 ): {
@@ -987,14 +987,16 @@ export function projectResourceDiscoveryOptions(
   // A project extension can replace a built-in tool under the same name. The
   // tool_call hook sees only that name, not the registration that owns it, so
   // a name allowlist is safe only when untrusted registrations were excluded
-  // while the SDK built the session. Skills and prompt templates are disabled
-  // with extensions because they are repository-controlled instructions too.
-  const discoverProjectResources = enabled && !readOnly;
+  // while the SDK built the session. The repository's own skills and prompt
+  // templates are kept out by project trust (`projectTrusted`, from the same
+  // switch): the pinned SDK then reads only the user's (`~/.pi/agent`,
+  // `~/.agents/skills`), which Agent Capabilities delivers into, as every
+  // other provider does. A read-only turn loads neither.
   return {
     // Every policy shares this process, including future ask sessions.
     noExtensions: true,
-    noSkills: !discoverProjectResources,
-    noPromptTemplates: !discoverProjectResources,
+    noSkills: readOnly,
+    noPromptTemplates: readOnly,
     // Branch-controlled instructions must not steer a read-only review.
     noContextFiles: readOnly,
   };

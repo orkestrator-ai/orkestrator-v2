@@ -310,7 +310,12 @@ export async function assertClaudeRuntimeAccepts(
   if (!resources) {
     const policy = claudeTurnPolicy(session.executionPolicy, options?.readOnly);
     const [{ plugins }, environment] = await Promise.all([
-      resolveClaudeTurnPlugins(request.cwd, policy, claudeTurnSettingSources(session, options)),
+      resolveClaudeTurnPlugins(
+        request.cwd,
+        policy,
+        claudeTurnSettingSources(session, options),
+        options?.capabilityPlugins,
+      ),
       runtimeEnvironmentForSessionQuery(policy).then((environment) =>
         withReadOnlyConnectionEnv(policy, environment),
       ),

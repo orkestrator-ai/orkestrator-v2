@@ -105,7 +105,7 @@ export function CoordinatorWebResearchSettings({
         ))}
       </div>
       {mode === "search-and-mcp" ? (
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 space-y-2" data-setting-anchor="coordinator.research-servers">
           <p className="text-xs leading-relaxed text-muted-foreground">
             Remote (https) MCP servers only: a local server would run on this machine outside the
             Coordinator&apos;s sandbox. The Coordinator may call every tool these servers offer.

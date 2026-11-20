@@ -159,6 +159,8 @@ export interface AgentExtensionItem {
   name: string;
   status: "connected" | "configured" | "disabled" | "failed" | "pending";
   source?: string;
+  /** The id the provider keys the item on (`name@marketplace`), when it differs from `name`. */
+  qualifiedId?: string;
 }
 
 export interface AgentExtensionCatalog {

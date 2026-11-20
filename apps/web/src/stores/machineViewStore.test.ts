@@ -7,7 +7,12 @@ import {
   type BackendId,
 } from "@orkestrator/protocol/federation";
 import { searchProjectsAndEnvironments, type ProjectSearchSource } from "@/lib/project-search";
-import { MAX_RECENT_KEYS, useMachineViewStore, withRecentKeys } from "./machineViewStore";
+import {
+  MAX_RECENT_KEYS,
+  sanitizePersisted,
+  useMachineViewStore,
+  withRecentKeys,
+} from "./machineViewStore";
 
 const original = useMachineViewStore.getState();
 const storageKey = useMachineViewStore.persist.getOptions().name!;
@@ -105,8 +110,9 @@ test("rehydrates storage from before recentKeys existed with compatible defaults
   );
   await useMachineViewStore.persist.rehydrate();
   expect(useMachineViewStore.getState().recentKeys).toEqual([]);
-  expect(useMachineViewStore.getState().machineFilter).toBe("bk_remote");
+  expect(useMachineViewStore.getState().machineFilter).toEqual(["bk_remote"]);
   expect(useMachineViewStore.getState().grouping).toBe("repository");
+  expect(useMachineViewStore.getState().environmentOrdering).toBe("machine");
   expect(useMachineViewStore.getState().collapsedMachines).toEqual(["bk_local"]);
   useMachineViewStore.getState().recordRecent(["new"]);
   expect(useMachineViewStore.getState().recentKeys).toEqual(["new"]);
@@ -147,28 +153,113 @@ test("recency is bounded to 64 newest keys across repeated updates and oversized
   ]);
 });
 
-test("compact persists across a reload, with what it replaced", async () => {
+test("compact persists across a reload", async () => {
   localStorage.removeItem(storageKey);
-  useMachineViewStore.getState().setGrouping("repository");
   useMachineViewStore.getState().setGrouping("compact");
   const stored = JSON.parse(localStorage.getItem(storageKey)!) as {
-    state: { grouping: string; groupingBeforeCompact: string };
+    state: Record<string, unknown>;
+    version: number;
   };
+  expect(stored.version).toBe(1);
   expect(stored.state.grouping).toBe("compact");
-  expect(stored.state.groupingBeforeCompact).toBe("repository");
+  expect(stored.state).not.toHaveProperty("groupingBeforeCompact");
 
-  useMachineViewStore.setState({ grouping: "machine", groupingBeforeCompact: "machine" });
-  localStorage.setItem(storageKey, JSON.stringify({ state: stored.state, version: 0 }));
+  useMachineViewStore.setState({ grouping: "repository" });
+  localStorage.setItem(storageKey, JSON.stringify(stored));
   await useMachineViewStore.persist.rehydrate();
   expect(useMachineViewStore.getState().grouping).toBe("compact");
-  expect(useMachineViewStore.getState().groupingBeforeCompact).toBe("repository");
 });
 
-test("choosing compact twice keeps what it replaced", () => {
-  useMachineViewStore.getState().setGrouping("project");
-  useMachineViewStore.getState().setGrouping("compact");
-  useMachineViewStore.getState().setGrouping("compact");
-  expect(useMachineViewStore.getState().groupingBeforeCompact).toBe("project");
-  useMachineViewStore.getState().setGrouping("machine");
-  expect(useMachineViewStore.getState().groupingBeforeCompact).toBe("machine");
+test("rehydrating an earlier build's view migrates its filter and grouping", async () => {
+  for (const [grouping, expected] of [
+    ["machine", "repository"],
+    ["project", "repository"],
+    ["compact", "compact"],
+  ] as const) {
+    useMachineViewStore.setState(original, true);
+    localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        state: { machineFilter: "all", grouping, groupingBeforeCompact: "project" },
+        version: 0,
+      }),
+    );
+    await useMachineViewStore.persist.rehydrate();
+    const state = useMachineViewStore.getState();
+    expect(state.machineFilter).toEqual([]);
+    expect(state.grouping).toBe(expected);
+    expect(state.environmentOrdering).toBe("machine");
+    expect(state).not.toHaveProperty("groupingBeforeCompact");
+  }
+});
+
+test("the filter and environment ordering persist across a reload", async () => {
+  useMachineViewStore.getState().setMachineFilter(["bk_a", "bk_b"]);
+  useMachineViewStore.getState().setEnvironmentOrdering("manual");
+  const persisted = localStorage.getItem(storageKey)!;
+  useMachineViewStore.setState(original, true);
+  localStorage.setItem(storageKey, persisted);
+  await useMachineViewStore.persist.rehydrate();
+  expect(useMachineViewStore.getState().machineFilter).toEqual(["bk_a", "bk_b"]);
+  expect(useMachineViewStore.getState().environmentOrdering).toBe("manual");
+});
+
+test("sanitizePersisted reads every stored machine filter as a list", () => {
+  expect(sanitizePersisted({ machineFilter: "all" }).machineFilter).toEqual([]);
+  expect(sanitizePersisted({ machineFilter: "" }).machineFilter).toEqual([]);
+  expect(sanitizePersisted({ machineFilter: "bk_a" }).machineFilter).toEqual(["bk_a"]);
+  expect(sanitizePersisted({ machineFilter: ["bk_a", "bk_b"] }).machineFilter).toEqual([
+    "bk_a",
+    "bk_b",
+  ]);
+  expect(
+    sanitizePersisted({ machineFilter: ["bk_a", "", 3, null, "bk_a", "bk_b"] }).machineFilter,
+  ).toEqual(["bk_a", "bk_b"]);
+  expect(sanitizePersisted({ machineFilter: 7 }).machineFilter).toEqual([]);
+  expect(sanitizePersisted({ machineFilter: { bk_a: true } }).machineFilter).toEqual([]);
+  expect(sanitizePersisted({})).not.toHaveProperty("machineFilter");
+});
+
+test("sanitizePersisted maps earlier groupings to the repository list and keeps compact", () => {
+  expect(sanitizePersisted({ grouping: "machine" }).grouping).toBe("repository");
+  expect(sanitizePersisted({ grouping: "project" }).grouping).toBe("repository");
+  expect(sanitizePersisted({ grouping: "repository" }).grouping).toBe("repository");
+  expect(sanitizePersisted({ grouping: "compact" }).grouping).toBe("compact");
+  expect(sanitizePersisted({ grouping: "activity" }).grouping).toBe("repository");
+  expect(sanitizePersisted({ grouping: 1 }).grouping).toBe("repository");
+  expect(
+    sanitizePersisted({ grouping: "compact", groupingBeforeCompact: "project" }),
+  ).not.toHaveProperty("groupingBeforeCompact");
+});
+
+test("sanitizePersisted keeps a valid environment ordering and defaults any other", () => {
+  expect(sanitizePersisted({ environmentOrdering: "manual" }).environmentOrdering).toBe("manual");
+  expect(sanitizePersisted({ environmentOrdering: "machine" }).environmentOrdering).toBe("machine");
+  expect(sanitizePersisted({ environmentOrdering: "activity" }).environmentOrdering).toBe(
+    "machine",
+  );
+  expect(sanitizePersisted({ environmentOrdering: null }).environmentOrdering).toBe("machine");
+  expect(sanitizePersisted({})).not.toHaveProperty("environmentOrdering");
+  expect(useMachineViewStore.getState().environmentOrdering).toBe("machine");
+});
+
+test("sanitizePersisted ignores a stored value that is not an object", () => {
+  expect(sanitizePersisted(null)).toEqual({});
+  expect(sanitizePersisted("compact")).toEqual({});
+  expect(sanitizePersisted(undefined)).toEqual({});
+});
+
+test("setMachineFilter accepts all, one machine, or a list", () => {
+  const filter = () => useMachineViewStore.getState().machineFilter;
+  expect(filter()).toEqual([]);
+  useMachineViewStore.getState().setMachineFilter("bk_a");
+  expect(filter()).toEqual(["bk_a"]);
+  useMachineViewStore.getState().setMachineFilter("all");
+  expect(filter()).toEqual([]);
+  useMachineViewStore.getState().setMachineFilter(["bk_b", "bk_a", "bk_b", ""]);
+  expect(filter()).toEqual(["bk_b", "bk_a"]);
+  useMachineViewStore.getState().setMachineFilter([]);
+  expect(filter()).toEqual([]);
+  useMachineViewStore.getState().setMachineFilter("");
+  expect(filter()).toEqual([]);
 });

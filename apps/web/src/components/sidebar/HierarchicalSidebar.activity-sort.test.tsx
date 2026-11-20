@@ -113,7 +113,7 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
   appCommandStore(projectStore).setState({ projects: [], hasLoaded: true });
   appCommandStore(environmentStore).setState({ environments: [], deletingEnvironments: new Set() });
   useUIChromeStore.setState({ environmentSortMode: "activity", activitySortOrder: "priority" });
-  useMachineViewStore.setState({ machineFilter: "all" });
+  useMachineViewStore.setState({ machineFilter: [] });
   renderInAppCommandScope(
     <FederationProvider>
       <HierarchicalSidebar />
@@ -135,11 +135,15 @@ test("sidebar menu orders cross-machine activity and preserves the order under a
   }
 
   fireEvent.pointerDown(screen.getByTestId("machines-filter"));
-  fireEvent.click(await screen.findByRole("menuitemradio", { name: /^Machine A,/ }));
+  const machineA = await screen.findByRole("menuitemcheckbox", { name: /^Machine A,/ });
+  fireEvent.click(machineA);
+  // The menu stays open so several machines can be picked; close it.
+  fireEvent.keyDown(machineA, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu") === null).toBe(true));
   await waitFor(() => expect(displayedNames()).toEqual(["c", "a"]));
   await chooseOrder("Newest first");
   await waitFor(() => expect(displayedNames()).toEqual(["a", "c"]));
-  expect(useMachineViewStore.getState().machineFilter).toBe("bk_a");
+  expect(useMachineViewStore.getState().machineFilter).toEqual(["bk_a"]);
 });
 
 for (const order of ["newest", "oldest"] as const) {

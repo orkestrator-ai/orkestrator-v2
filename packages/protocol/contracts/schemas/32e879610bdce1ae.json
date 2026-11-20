@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:32e879610bdce1ae034813894667fcb37b2d566f6d137a43936f43364ae6c71c",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "content": {},
+        "description": {},
+        "files": {},
+        "hook": {},
+        "kind": {},
+        "managedId": {},
+        "mcp": {},
+        "name": {}
+      },
+      "type": "object"
+    }
+  }
+}

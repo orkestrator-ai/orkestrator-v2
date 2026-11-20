@@ -1,0 +1,289 @@
+import { useState } from "react";
+import { createStore } from "zustand/vanilla";
+import { useStore } from "zustand";
+import type { BackendId } from "@orkestrator/protocol/federation";
+import {
+  toNodeEnvironmentSummary,
+  toNodeProjectSummary,
+  type NodeSummary,
+} from "@orkestrator/protocol/node-summaries";
+import { FederationProvider } from "@/components/federation/FederationProvider";
+import { RepositoryEnvironmentList } from "@/components/federation/RepositoryEnvironmentList";
+import { useRemoteMachineViews } from "@/components/federation/useMachineViews";
+import { portalStore, type NodeOutcomeRecord } from "@/lib/portal/portal-store";
+import { remoteOrdersFor } from "@/lib/federation/remote-order-writes";
+
+/**
+ * Another machine's environment rows in the repository list (design EL01):
+ * Remote has projects p (rows a, b, c around a project home) and q (row d),
+ * neither with a repository, so each is a heading of its own. Writes routed
+ * to Remote are deferred until a control answers them, so the optimistic
+ * order, its rollback and the unknown-outcome notice can be observed.
+ */
+
+const nodeId = "bk_remote" as BackendId;
+
+function install() {
+  const node: NodeSummary = {
+    nodeId,
+    view: {
+      nodeId,
+      enabled: true,
+      displayName: "Remote",
+      fallbackName: "Remote",
+      routes: [],
+      routeOrder: [],
+      hasCredential: true,
+      attachment: { status: "attached" },
+      connection: { state: "connected", epoch: 1 },
+      addedAt: "t",
+      source: "portal",
+    },
+    available: true,
+    freshness: "current",
+    loadedAt: 1,
+    truncated: new URLSearchParams(location.search).has("truncated"),
+    lastError: null,
+    projects: ["p", "q"].map((id, index) =>
+      toNodeProjectSummary(nodeId, { id, name: id, order: index }, index)!,
+    ),
+    environments: ["a", "home", "b", "c", "d"].map((id, index) =>
+      toNodeEnvironmentSummary(
+        nodeId,
+        {
+          id,
+          name: id,
+          projectId: id === "d" ? "q" : "p",
+          order: index,
+          status: "running",
+          projectHome: id === "home",
+          ...(id === "b" && new URLSearchParams(location.search).has("delete-failed")
+            ? {
+                deletionRequestedAt: "2026-11-06T00:00:00Z",
+                deletionError: "fixture cleanup refused",
+              }
+            : {}),
+          // `?delete-slow`: "b" has been deleting for five minutes;
+          // `?delete-slow=<step>` adds the step its machine reports.
+          ...(id === "b" && new URLSearchParams(location.search).has("delete-slow")
+            ? {
+                lifecycleOperation: "deleting",
+                deletionRequestedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+                lifecycleOperationStartedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+                deletionStep: new URLSearchParams(location.search).get("delete-slow") || undefined,
+              }
+            : {}),
+          ...(id === "b" && new URLSearchParams(location.search).has("accessible-state")
+            ? { hasUnreadWork: true, agentMailUnread: 2, prState: "open" }
+            : {}),
+          // `?merge-ready`: "b" relays a clean persisted PR reading without
+          // monitor health; `?merge-ready=confirmed` adds the leaf's
+          // confirmation, and "c" then relays confirmed merge conflicts.
+          ...(id === "b" && new URLSearchParams(location.search).has("merge-ready")
+            ? { prState: "open", hasMergeConflicts: false, prMergeability: "clean" }
+            : {}),
+          ...(new URLSearchParams(location.search).get("merge-ready") === "confirmed"
+            ? id === "b"
+              ? { prMonitorConfirmed: true }
+              : id === "c"
+                ? {
+                    prState: "open",
+                    hasMergeConflicts: true,
+                    prMergeability: "dirty",
+                    prMonitorConfirmed: true,
+                  }
+                : {}
+            : {}),
+        },
+        index,
+      )!,
+    ),
+  };
+  const state = createStore<{
+    calls: string[][];
+    pending: Array<(outcome: "ok" | "reject" | "unknown") => void>;
+    owner: string[];
+  }>(() => ({ calls: [], pending: [], owner: ["a", "home", "b", "c"] }));
+  const outcomes: NodeOutcomeRecord[] = [];
+  window.orkestrator = {
+    ...window.orkestrator!,
+    listen: () => () => {},
+    invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
+      if (command === "get_node_status") return { nodeId: "bk_self", mode: "command" } as T;
+      if (command === "get_node_summaries")
+        return { selfId: "bk_self", nodes: [structuredClone(node)] } as T;
+      if (command === "get_backend_profile")
+        return { revision: 1, displayName: "Self", colorToken: "teal", updatedAt: "t" } as T;
+      if (command === "invoke_on_node" && args?.command === "get_environment") {
+        return {
+          outcome: "ok",
+          result: { id: "b", name: "b", prUrl: "https://github.com/o/r/pull/1" },
+        } as T;
+      }
+      if (command === "list_node_outcomes") return [...outcomes] as T;
+      if (command === "invoke_on_node" && args?.command === "reorder_environments") {
+        const ids = (args.args as { environmentIds: string[] }).environmentIds;
+        state.setState((current) => ({ calls: [...current.calls, ids] }));
+        return new Promise<T>((resolve, reject) => {
+          state.setState((current) => ({
+            pending: [
+              ...current.pending,
+              (outcome) => {
+                if (outcome === "reject") {
+                  reject(new Error("Owner refused reorder"));
+                  return;
+                }
+                if (outcome === "unknown") {
+                  outcomes.push({
+                    outcomeId: "unknown",
+                    nodeId,
+                    command: "reorder_environments",
+                    recordedAt: "t",
+                  });
+                  resolve({
+                    outcome: "unknown",
+                    requestKey: args.requestKey,
+                    outcomeId: "unknown",
+                  } as T);
+                  return;
+                }
+                state.setState({ owner: ids });
+                resolve({ outcome: "ok", result: {} } as T);
+              },
+            ],
+          }));
+        });
+      }
+      return {} as T;
+    },
+  };
+  return {
+    state,
+    signalState(
+      change:
+        | "waiting"
+        | "working"
+        | "stopped"
+        | "running"
+        | "deleting"
+        | "restore"
+        | "disconnect"
+        | "connect",
+    ) {
+      if (change === "disconnect" || change === "connect") {
+        node.available = change === "connect";
+        node.view.connection = {
+          state: change === "connect" ? "connected" : "unavailable",
+          epoch: 1,
+        };
+      } else {
+        node.environments = node.environments.map((environment) =>
+          environment.ref.environmentId !== "b"
+            ? environment
+            : {
+                ...environment,
+                ...(change === "waiting" || change === "working" ? { activity: change } : {}),
+                ...(change === "stopped" || change === "running"
+                  ? { status: change, environmentType: "containerized" }
+                  : {}),
+                ...(change === "deleting" || change === "restore"
+                  ? { deleting: change === "deleting" }
+                  : {}),
+              },
+        );
+      }
+      void portalStore.refresh();
+    },
+    publish() {
+      const ids = state.getState().owner;
+      node.environments = node.environments.map((environment) => ({
+        ...environment,
+        order:
+          environment.projectId === "p"
+            ? ids.indexOf(environment.ref.environmentId)
+            : environment.order,
+      }));
+      void portalStore.refresh();
+    },
+    finish(outcome: "ok" | "reject" | "unknown") {
+      const [first, ...rest] = state.getState().pending;
+      state.setState({ pending: rest });
+      first?.(outcome);
+    },
+  };
+}
+
+const NO_BOUND_ROWS = {
+  renderEnvironment: () => null,
+  selectedEnvironmentId: null,
+  onDragEnd: () => {},
+  onCreate: () => {},
+};
+
+/** The list over Remote alone; it also shows Remote's unknown-outcome notice. */
+function Tree({ visible }: { visible: boolean }) {
+  const machines = useRemoteMachineViews();
+  const shownIds = new Set(
+    machines
+      .filter((machine) => machine.transport === "connected")
+      .map((machine) => machine.connectionId),
+  );
+  const listedIds = new Set(machines.map((machine) => machine.connectionId));
+  return visible ? (
+    <RepositoryEnvironmentList
+      machines={machines}
+      shownIds={shownIds}
+      listedIds={listedIds}
+      ordering="machine"
+      bound={NO_BOUND_ROWS}
+      showEmptyState={false}
+    />
+  ) : null;
+}
+
+// StrictMode may call a state initializer twice; both invocations must use
+// the same fake owner and deferred requests as the visible controls.
+let fixtureInstance: ReturnType<typeof install> | undefined;
+function fixtureForWindow() {
+  fixtureInstance ??= install();
+  return fixtureInstance;
+}
+
+export function RemoteEnvironmentRowsFixture() {
+  const [fixture] = useState(fixtureForWindow);
+  const [visible, setVisible] = useState(true);
+  const state = useStore(fixture.state);
+  const overlay = useStore(remoteOrdersFor(portalStore).store);
+  return (
+    <main className="max-w-lg p-4">
+      <button onClick={() => setVisible((value) => !value)}>Toggle tree</button>
+      <button onClick={() => fixture.finish("ok")}>Acknowledge</button>
+      <button onClick={() => fixture.finish("reject")}>Reject</button>
+      <button onClick={() => fixture.finish("unknown")}>Unknown</button>
+      <button onClick={fixture.publish}>Publish owner</button>
+      {(
+        [
+          "waiting",
+          "working",
+          "stopped",
+          "running",
+          "deleting",
+          "restore",
+          "disconnect",
+          "connect",
+        ] as const
+      ).map((change) => (
+        <button key={change} onClick={() => fixture.signalState(change)}>
+          Signal {change}
+        </button>
+      ))}
+      <output data-testid="calls">{JSON.stringify(state.calls)}</output>
+      <output data-testid="pending">{state.pending.length}</output>
+      <output data-testid="owner">{JSON.stringify(state.owner)}</output>
+      <output data-testid="overlay">{overlay.size}</output>
+      <FederationProvider>
+        <Tree visible={visible} />
+      </FederationProvider>
+    </main>
+  );
+}

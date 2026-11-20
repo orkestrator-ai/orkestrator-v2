@@ -163,6 +163,12 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
   executionPolicy(branch: B): Promise<NativeAgentExecutionPolicy>;
   agentMcp?(branch: B, requestId: string): Promise<AgentToolConnection | undefined>;
   /**
+   * Plugin directories the branch's Claude turns pass: what its launch
+   * delivered to its session alone (Agent Capabilities). Throws when they
+   * can no longer be produced; the turn then does not dispatch.
+   */
+  capabilityPlugins?(branch: B): Promise<string[]>;
+  /**
    * Preflight for a turn that resolves no workflow-result connection
    * (structured output): throws when the branch's container cannot reach the
    * agent tools server. A tool-transport turn's `agentMcp` makes the same

@@ -201,8 +201,8 @@ export const KEYBOARD_SHORTCUT_GROUPS: readonly KeyboardShortcutGroup[] = [
         keywords: ["help", "keybindings", "hotkeys", "view menu"],
       }),
       appShortcutEntry("search-projects", {
-        description: "Search projects and environments",
-        keywords: ["command palette", "switch", "jump"],
+        description: "Search projects and environments, run actions, open settings",
+        keywords: ["command palette", "switch", "jump", "actions", "settings", "commands"],
       }),
       appShortcutEntry("open-settings", {
         description: "Open settings",

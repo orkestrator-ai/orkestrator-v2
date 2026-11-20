@@ -4,6 +4,7 @@ import {
   keepPreviousLogCommand,
   bridgeLogEnvironmentExports,
 } from "./container-log-bounds.js";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { bridgeRestarts } from "./bridge-restarts.js";
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
   DOCKER_LABEL_OWNER,
   DOCKER_LABEL_PROJECT_ID,
   DOCKER_LABEL_OPERATION_ID,
+  DOCKER_LABEL_CAPABILITIES_DIGEST,
   DOCKER_LABEL_INPUTS_REVISION,
   DOCKER_LABEL_DEBIAN_ARCHIVE,
   DOCKER_LABEL_NETWORK_POLICY,
@@ -137,6 +139,7 @@ import {
   sharedMemoryMiB,
 } from "./container-resources.js";
 import {
+  SHARED_SKILLS_INPUT,
   STAGED_INPUT_RELAY_DIR,
   defaultInputSourceRoots,
   stagePortableInputs,
@@ -155,7 +158,7 @@ import {
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
-import { createLogger } from "@orkestrator/protocol/logger";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   backendHostPortLabelArguments,
   chooseBackendHostPorts,
@@ -552,6 +555,27 @@ export async function createDockerContainer(
       : new Set([...inputProviders].filter((provider) => provider !== "cursor")),
     imageCopiesSharedSkills(imageCapabilitySet),
   );
+  // Agent Capabilities: the container's effective manifest is staged with its
+  // inputs and its digest labelled on the container; nothing is ever written
+  // into a running container (`capabilities/container-staging.ts`).
+  // On a leaf the manifest is the command node's, staged here from verified artifacts.
+  const capabilityStaging = await (context.capabilityEnvironments ?? context.capabilities)
+    ?.prepareContainerStaging({
+      environmentId: environment.id,
+      projectId: environment.projectId,
+      providers: [...stagedProviders].filter(isAgentPlatform),
+      stages: [...stagedProviders].map((provider) =>
+        provider === SHARED_SKILLS_INPUT ? "agents-skills" : provider,
+      ),
+    })
+    .catch((error: unknown) => {
+      dockerLog.warn("capabilities.staging-failed", {
+        environmentId: environment.id,
+        phase: "prepare",
+        error: formatLogError(error, { message: false }),
+      });
+      return null;
+    });
   const stagedInputs = await stagePortableInputs(
     context.storage.getDataDir(),
     environment.id,
@@ -561,6 +585,24 @@ export async function createDockerContainer(
       ...(await activeAgentAccountInputRoots(context)),
       includeClaudeCredentials: allowClaudeCredentials,
     },
+    undefined,
+    undefined,
+    capabilityStaging
+      ? {
+          beforeCommit: async (partial) => {
+            try {
+              return { capabilities: await capabilityStaging.stage(partial) };
+            } catch (error) {
+              dockerLog.warn("capabilities.staging-failed", {
+                environmentId: environment.id,
+                phase: "write",
+                error: formatLogError(error, { message: false }),
+              });
+              return undefined;
+            }
+          },
+        }
+      : {},
   );
   if (topology.rootless && !imageRelaysStagedInputs(imageCapabilitySet)) {
     dockerLog.warn("portable-inputs.relay-missing", { imageId: imageId.slice(0, 19) });
@@ -579,6 +621,9 @@ export async function createDockerContainer(
     ...stagedInputMountArguments(stagedInputs),
     "--label",
     `${DOCKER_LABEL_INPUTS_REVISION}=${stagedInputs.revision}`,
+    ...(capabilityStaging && stagedInputs.extensions?.capabilities
+      ? ["--label", `${DOCKER_LABEL_CAPABILITIES_DIGEST}=${capabilityStaging.plan.digest}`]
+      : []),
   );
 
   // The files the "Environment Files" setting matches (by default `.env` and

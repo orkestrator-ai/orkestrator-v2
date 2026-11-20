@@ -26,7 +26,10 @@ export function networkChurnReport(
       ["-p", path.join(artifactsDirectory, name, "trace.zip"), "*.trace"],
       { encoding: "utf8", maxBuffer },
     );
-    if (traces.status !== 0) return [];
+    // An overflowing read stops unzip, but the exit status alone does not say
+    // so: a child that finishes or handles the stop may still exit 0 with the
+    // output cut short (flake 10001). `error` (ENOBUFS) is what marks it.
+    if (traces.error !== undefined || traces.status !== 0) return [];
     const count = traces.stdout.split(NETWORK_CHANGED).length - 1;
     return count > 0 ? [`  ${name}: ${count}`] : [];
   });

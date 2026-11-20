@@ -90,6 +90,18 @@ function stubScript(): string {
   return script;
 }
 
+/**
+ * Waits until `marker` is carried by exactly `count` live processes. The stub's
+ * child is forked by the stub itself after `startInstance` returns, and a
+ * SIGKILLed process leaves `/proc` only once the kernel has run its exit, so a
+ * single read right after either step can see the tree half-formed under load.
+ */
+async function waitForMarkedProcesses(marker: string, count: number): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (markedProcesses(marker).length !== count && Date.now() < deadline) await Bun.sleep(10);
+  expect(markedProcesses(marker).length).toBe(count);
+}
+
 function options(overrides: Partial<LauncherOptions> = {}): LauncherOptions {
   return {
     root,
@@ -371,13 +383,19 @@ describe("process identity", () => {
 });
 
 describe("lifecycle", () => {
+  // These cases start, restart and stop real process trees, and the launcher's
+  // own stop and ready deadlines in `options()` are already 5 s each, the same
+  // as Bun's default test budget. A loaded host that spends one of those
+  // deadlines would fail the test on Bun's clock instead of the launcher's.
+  const LIFECYCLE_TIMEOUT_MS = 30_000;
+
   linuxTest(
     "start, restart and stop own exactly the instance's processes and directories",
     async () => {
       const started = await startInstance("unit", {}, options());
       expect(isRunning(started)).toBe(true);
       // The parent and the child it started both carry the marker.
-      expect(markedProcesses(started.marker).length).toBe(2);
+      await waitForMarkedProcesses(started.marker, 2);
       expect(existsSync(started.paths.config)).toBe(true);
       expect(readRecord(root, "unit")?.process).toEqual(started.process);
       await expect(startInstance("unit", {}, options())).rejects.toThrow("already running");
@@ -402,6 +420,7 @@ describe("lifecycle", () => {
       expect(existsSync(started.paths.runtimeDir)).toBe(false);
       expect(await stopInstance("unit", options())).toBe(false);
     },
+    LIFECYCLE_TIMEOUT_MS,
   );
 
   linuxTest("a daemon that never answers is stopped and removed", async () => {
@@ -417,7 +436,12 @@ describe("lifecycle", () => {
     async () => {
       const running = await startInstance("alive", {}, options());
       const stale = await startInstance("stale", {}, options());
+      // Kill the whole tree once it exists, then let the kernel finish the exits:
+      // a reap that runs while the killed parent is still exiting rightly
+      // finds it running.
+      await waitForMarkedProcesses(stale.marker, 2);
       for (const identity of markedProcesses(stale.marker)) process.kill(identity.pid, "SIGKILL");
+      await waitForMarkedProcesses(stale.marker, 0);
       expect(await reapStale(options())).toEqual(["stale"]);
       expect(existsSync(stale.paths.instanceDir)).toBe(false);
       expect(isRunning(running)).toBe(true);
@@ -426,6 +450,7 @@ describe("lifecycle", () => {
       expect(await reapStale(options())).toEqual([]);
       expect(existsSync(path.join(root, "notes"))).toBe(true);
     },
+    LIFECYCLE_TIMEOUT_MS,
   );
 });
 

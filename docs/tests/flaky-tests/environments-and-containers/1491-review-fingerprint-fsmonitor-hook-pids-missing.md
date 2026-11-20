@@ -1,7 +1,7 @@
 # Fingerprint budget fires before the blocking fake process writes its pid file (apps/backend/src/core/review-worktree-fingerprint.test.ts)
 
 - **ID:** 1491
-- **Status:** open
+- **Status:** resolved
 - **Test:** `stops a blocked git and its descendant at its budget (bun)` (since 2026-11-15; first observed as `timeout reaps a blocking fsmonitor hook and descendants before fallback (node)`)
 - **Date observed:** 2026-10-31; reopened 2026-11-15
 - **Original command:** `mise run test`
@@ -74,3 +74,36 @@
   9991, which was outside the branch's reserved flake range (9850–9859, all
   already taken). It is recorded here instead because the recurrence check
   matches this case; 9991 never reached `main`.
+
+### Resolution — 2026-11-19
+
+- **Status:** resolved. Base `fe9d1f5d6`.
+- **Root cause (reproduced):** the probe arms its budget when it spawns the
+  fake Git, not when the fake Git's shell has started. On a loaded host the
+  budget can expire, and the probe kill the group, before the shell has forked
+  `sleep` and written `status-pid`. The probe still correctly reports
+  `timeout`, but the test then reads a pid file that never existed. This is a
+  harness race, not a product defect: the probe's budget and group kill
+  behaved as specified.
+- **Reproduction:** prefixing the fake Git with `sleep 1;` (the losing side
+  delayed past the 500 ms budget) failed both interpreters with the recorded
+  `ENOENT` opening `.git/status-pid`:
+  `mise run test:logged -- --name fp-repro -- bun --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts -t "stops a blocked git"`
+  → 0 pass, 2 fail.
+- **Fix:** the test retries with longer budgets (500 ms, then 2 s, then 5 s)
+  only when the pid file is absent. Every attempt must still end as a
+  `timeout` within its budget plus 7.5 s, and the attempt that finds the pid
+  file still has to show both the fake Git and its descendant stopped. The
+  usual path stays at 500 ms; the test budget is 45 s for three bounded
+  attempts.
+- **Verification:** the same `sleep 1;` injection with the fix: PASS (6.6 s,
+  both interpreters, through the 2 s attempt). Stress without the injection:
+  `mise run test:logged -- --name fp-stress -- bun scripts/test-under-contention.ts --burners 4 -- bun --cwd=apps/backend test ./src/core/review-worktree-fingerprint.test.ts --rerun-each=5`
+  → PASS (97.3 s; macOS, burners unpinned).
+
+Each attempt now gives the fake Git its own PID record. The
+fixture writes the pair to a temporary file and renames it into place, so
+expiry between those steps leaves the final record absent and allows a
+retry. The owning test file passed. A separate probe held the first attempt
+after writing its temporary file and verified that both Bun and Node retried,
+then confirmed that the two processes from the successful attempt stopped.

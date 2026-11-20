@@ -4,6 +4,7 @@ import { useCoordinatorActionMarking } from "@/components/projects/useCoordinato
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import { usePaletteResume } from "./usePaletteResume";
 import { backendForScope } from "@/lib/backend/scope-backend";
 import { isGoalCarrierContent } from "@orkestrator/protocol/native-agent-goal";
 import { GoalDetailLoaderContext } from "@/components/chat/goal-detail-context";
@@ -342,6 +343,7 @@ export function SharedNativeAgentController({
   initialFastMode,
   initialExecutionProfileId,
   initialResumeOpen,
+  initialResume,
   ownsGlobalShortcuts,
   isReviewTab,
   hideStructuredOutput,
@@ -487,7 +489,10 @@ export function SharedNativeAgentController({
   const [queueEditPending, setQueueEditPending] = useState(false);
   // Reserve synchronously: events can arrive before React commits the disabled UI.
   const queueEditPendingRef = useRef(false);
-  const [resumeDialogOpen, setResumeDialogOpen] = useState(initialResumeOpen === true);
+  // A tab opened to resume a chosen conversation skips the picker.
+  const [resumeDialogOpen, setResumeDialogOpen] = useState(
+    initialResumeOpen === true && !initialResume,
+  );
   /**
    * A tab opened only to resume creates no provider session of its own. The
    * backend resumes into a tab with no mapping, so the session is created only
@@ -3709,6 +3714,52 @@ export function SharedNativeAgentController({
       ? unreadRead
       : undefined,
   );
+  /** The picker's resume handler; a tab opened to resume a chosen conversation runs it too. */
+  const resumeChosenSession = (providerSessionId: string) => {
+    setResumeDialogOpen(false);
+    const sourceSessionId = projection?.sessionId;
+    if (heldSubmit && providerSessionId !== heldSessionId) {
+      settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
+    }
+    // A tab still waiting on its resume choice has no composer of its
+    // own; the resumed conversation keeps its settings.
+    return resume(
+      providerSessionId,
+      composer
+        ? {
+            modelId: composer.selectedModelId,
+            reasoningId: composer.selectedReasoningId,
+            fastMode: composer.fastModeEnabled ?? undefined,
+            mode: composer.selectedModeId,
+            executionProfileId: effectiveComposeProfileId,
+            includeLocalSettings: composer.includeLocalSettings,
+            promptSuggestions: composer.promptSuggestionsEnabled,
+          }
+        : undefined,
+    )
+      .then(() => {
+        setAwaitingResumeChoice(false);
+        if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
+          clearTabAgentHandoff(tabId, data.environmentId);
+        }
+        clearPersistedVirtuosoState(sessionKey);
+        scrollToBottom();
+      })
+      .catch((error) => {
+        setAwaitingResumeChoice(false);
+        toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
+      });
+  };
+  const { resumeSaveFailed, retryResumeSave } = usePaletteResume({
+    scope: composeScope,
+    environmentId: data.environmentId,
+    tabId,
+    platform,
+    initialResume,
+    resumeChosenSession,
+    setAwaitingResumeChoice,
+  });
+
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -4003,41 +4054,7 @@ export function SharedNativeAgentController({
         currentSessionId={projection?.sessionId}
         fetchSessions={fetchResumableSessions}
         {...(canArchiveResumable ? { onArchive: setResumableArchived } : {})}
-        onResume={(providerSessionId) => {
-          setResumeDialogOpen(false);
-          const sourceSessionId = projection?.sessionId;
-          if (heldSubmit && providerSessionId !== heldSessionId) {
-            settleHeldSubmit(HELD_SUBMIT_CONVERSATION_CHANGED);
-          }
-          // A tab still waiting on its resume choice has no composer of its
-          // own; the resumed conversation keeps its settings.
-          void resume(
-            providerSessionId,
-            composer
-              ? {
-                  modelId: composer.selectedModelId,
-                  reasoningId: composer.selectedReasoningId,
-                  fastMode: composer.fastModeEnabled ?? undefined,
-                  mode: composer.selectedModeId,
-                  executionProfileId: effectiveComposeProfileId,
-                  includeLocalSettings: composer.includeLocalSettings,
-                  promptSuggestions: composer.promptSuggestionsEnabled,
-                }
-              : undefined,
-          )
-            .then(() => {
-              setAwaitingResumeChoice(false);
-              if (agentHandoffId && sourceSessionId && providerSessionId !== sourceSessionId) {
-                clearTabAgentHandoff(tabId, data.environmentId);
-              }
-              clearPersistedVirtuosoState(sessionKey);
-              scrollToBottom();
-            })
-            .catch((error) => {
-              setAwaitingResumeChoice(false);
-              toast.error(error instanceof Error ? error.message : `Failed to resume ${label}`);
-            });
-        }}
+        onResume={resumeChosenSession}
       />
     ) : null;
   // The same gate the composer applies to a typed `/steer`.
@@ -4902,11 +4919,27 @@ export function SharedNativeAgentController({
           <AgentPlatformIcon platform={platform} className="h-16 w-16" />
         </span>
         <p className="text-sm">
-          {resumeDialogOpen
-            ? `Choose a ${label} session to resume.`
-            : `Resuming the ${label} session...`}
+          {resumeSaveFailed
+            ? `Ready to resume the ${label} session when the tab is saved.`
+            : resumeDialogOpen
+              ? `Choose a ${label} session to resume.`
+              : `Resuming the ${label} session...`}
         </p>
-        {resumeDialog}
+        {resumeSaveFailed ? (
+          <>
+            <p className="text-sm">The new tab could not be saved.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void retryResumeSave()}
+            >
+              Retry saving tab and resume
+            </Button>
+          </>
+        ) : (
+          resumeDialog
+        )}
       </div>
     );
   }

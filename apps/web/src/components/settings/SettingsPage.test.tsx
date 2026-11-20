@@ -358,8 +358,10 @@ test("a remote workspace opens Docker in parent Settings and every action target
     ]),
   );
   expect(routed.every((call) => call.nodeId === "bk_remote")).toBe(true);
+  // Layered reads ask both nodes: the command node for its inherited preferences.
+  const layeredReads = new Set(["get_config", "get_global_setting_sources"]);
   expect(
-    direct.filter((command) => remoteCommands.includes(command) && command !== "get_config"),
+    direct.filter((command) => remoteCommands.includes(command) && !layeredReads.has(command)),
   ).toEqual([]);
   expect(routed.find((call) => call.command === "reattach_container")?.args).toEqual({
     projectId: "remote-project",

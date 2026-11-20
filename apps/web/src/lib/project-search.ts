@@ -305,7 +305,16 @@ function environmentHaystacks(
   ];
 }
 
-function scoreHaystacks(haystacks: string[], tokens: string[]): number | null {
+/**
+ * Match quality of `tokens` against `haystacks`: every token must match some
+ * haystack (exact 100, prefix 80, substring 40, best per token, summed), else
+ * null. The palette's command, settings and history results use the same
+ * scoring, so one query ranks the same way in every group.
+ */
+export function scoreHaystacks(
+  haystacks: readonly string[],
+  tokens: readonly string[],
+): number | null {
   if (tokens.length === 0) return 0;
 
   let total = 0;

@@ -96,23 +96,103 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # WebKit's --with-deps pulls ~200 apt packages. The install usually takes
-      # 30-60s, but a stalled Azure mirror has held it for the job's whole
-      # budget (each stalled fetch waits ~30s before apt moves on). Short apt
-      # timeouts with retries move past a stalled mirror sooner, and the step
-      # has its own bound so a stall fails visibly instead of starving the
-      # tests of the job's time.
+      # WebKit's --with-deps pulls ~185 apt packages (140 MB). The install
+      # usually takes 30-60s, but a stalled Azure mirror has held it for the
+      # job's whole budget (each stalled fetch waits ~30s before apt moves on),
+      # and a merely slow EC2 mirror (~300 kB/s with 15-50s pauses) ran the
+      # step past its bound on four PRs in one day. The downloaded .deb files
+      # and the browser build have separate caches. Browser builds can differ
+      # across Ubuntu releases. Package candidates change between image builds,
+      # so rotate the archive cache daily and verify restored files against APT.
+      # Short apt timeouts with retries still move past a stalled mirror on a
+      # miss, and the step has its own bound so a stall fails visibly instead
+      # of starving the tests of the job's time.
+      - name: Resolve browser and APT cache keys
+        id: install-cache-keys
+        shell: bash
+        env:
+          BROWSER: ${{ matrix.browser }}
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          version="$(bunx playwright --version | awk '{print $2}')"
+          platform="${ID:?}-${VERSION_ID:?}-${RUNNER_ARCH:?}-${BROWSER}-playwright-${version:?}"
+          browser_prefix="browser-v2-${platform}-"
+          apt_prefix="browser-apt-v2-${platform}-"
+          {
+            echo "browser-prefix=${browser_prefix}"
+            echo "browser-key=${browser_prefix}${ImageVersion:?}"
+            echo "apt-prefix=${apt_prefix}"
+            echo "apt-key=${apt_prefix}${ImageVersion}-$(date -u +%F)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore Playwright browser cache
+        id: browser-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.install-cache-keys.outputs.browser-key }}
+          restore-keys: ${{ steps.install-cache-keys.outputs.browser-prefix }}
+
+      - name: Restore APT archive cache
+        id: apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/orkestrator-apt-archives
+          key: ${{ steps.install-cache-keys.outputs.apt-key }}
+          restore-keys: ${{ steps.install-cache-keys.outputs.apt-prefix }}
+
       - name: Install browser
         timeout-minutes: 12
+        shell: bash
         run: |
-          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+          set -euo pipefail
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\nAPT::Keep-Downloaded-Packages "true";\n' \
             | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          apt_cache="$HOME/.cache/orkestrator-apt-archives"
+          mkdir -p "$apt_cache"
+          # APT can accept a completed archive based on size alone. Stage only
+          # archives that match the freshly authenticated package candidates.
+          shopt -s nullglob
+          if compgen -G "$apt_cache/*.deb" >/dev/null; then
+            sudo apt-get -o APT::Update::Error-Mode=any update
+            verified="$(mktemp -d)"
+            trap 'rm -rf -- "$verified"' EXIT
+            apt-cache dumpavail | bun scripts/stage-playwright-apt-archives.ts "$apt_cache" "$verified"
+            archives=("$verified"/*.deb)
+            if (( ${#archives[@]} > 0 )); then
+              sudo install -m 0644 -t /var/cache/apt/archives/ -- "${archives[@]}"
+            fi
+          fi
           bunx playwright install --with-deps ${{ matrix.browser }}
+          # Keep only archives the package lists still offer, so a cache
+          # restored from an older image does not grow without bound.
+          sudo apt-get autoclean -y >/dev/null
+          rm -f -- "$apt_cache"/*.deb
+          archives=(/var/cache/apt/archives/*.deb)
+          if (( ${#archives[@]} > 0 )); then
+            cp -- "${archives[@]}" "$apt_cache"/
+          fi
+
+      - name: Save APT archive cache
+        if: ${{ steps.apt-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/orkestrator-apt-archives
+          key: ${{ steps.install-cache-keys.outputs.apt-key }}
 
       - name: Test mobile shell input
         env:
           ORKESTRATOR_E2E_BROWSER: ${{ matrix.browser }}
         run: mise run test:logged -- --name mobile-shell-${{ matrix.browser }} -- bunx playwright test --config e2e/playwright.config.ts e2e/MobileAppShellLayout.spec.ts --workers=1
+
+      # A successful mobile test proves that the installed engine launches.
+      - name: Save Playwright browser cache
+        if: ${{ steps.browser-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.install-cache-keys.outputs.browser-key }}
 
       - name: Test overview scroll preservation
         env:

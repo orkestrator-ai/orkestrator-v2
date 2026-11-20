@@ -86,8 +86,12 @@ describe("folded tool group", () => {
     const count = trigger.querySelector('[title="3 tool calls"]');
     expect(count?.textContent).toBe("3");
     expect(count?.querySelector("svg.lucide-wrench")).toBeTruthy();
-    // 10:00:00 → 10:00:02 + 1s.
-    expect(trigger.textContent).toContain("3s");
+    // 10:00:00 → 10:00:02 + 1s, behind a stopwatch.
+    const span = trigger.querySelector('[title="First call started to last call finished: 3s"]');
+    expect(span?.textContent).toBe("3s");
+    expect(span?.querySelector("svg.lucide-timer")).toBeTruthy();
+    // The count and the span read as one pair: same size, same colour.
+    expect(span?.className).toBe(count?.className);
     expect(container.querySelector("svg.lucide-layers")).toBeTruthy();
     // The older calls are folded away rather than drawn as rows.
     expect(screen.queryByText("git status") === null).toBe(true);

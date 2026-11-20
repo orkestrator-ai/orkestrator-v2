@@ -14,7 +14,12 @@ import type { PublicCapability } from "@orkestrator/protocol/public-api-inputs";
 import {
   invokeGlobalConfigCommand,
   invokeRepositoryConfigCommand,
+  invokeResetGlobalSettings,
+  invokeSettingSources,
+  type ResetSettingsOutcome,
+  type SettingSourcesLayers,
 } from "@/lib/portal/command-node-config";
+import type { ResetSettingExpectation } from "@orkestrator/protocol/setting-sources";
 import { getGatewayBaseUrl, resolveGatewayLoopbackBaseUrl } from "@/lib/gateway-url";
 import { shellOpenExternal } from "@/lib/native/shell";
 import type {
@@ -120,6 +125,27 @@ export async function patchGlobalConfig(
     { patch, ...(unset.length > 0 ? { unset: [...unset] } : {}) },
     options.machine,
   );
+}
+
+/**
+ * Which settings `machine` and its command node store (key names only), so
+ * Settings can say where each value comes from. Never throws: a node that
+ * predates the read answers `unsupported`.
+ */
+export function getSettingSources(machine?: AccountMachine): Promise<SettingSourcesLayers> {
+  return invokeSettingSources(machine);
+}
+
+/**
+ * Remove stored settings so `machine` follows their defaults, each on the
+ * node that owns it, only while each still holds the previewed value.
+ */
+export function resetGlobalSettings(
+  keys: readonly (keyof GlobalConfig)[],
+  expectations: readonly ResetSettingExpectation[],
+  machine?: AccountMachine,
+): Promise<ResetSettingsOutcome> {
+  return invokeResetGlobalSettings(keys, expectations, machine);
 }
 
 /** Turn the startup reminder to set up the GitHub CLI off, or back on. */
@@ -464,6 +490,18 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     return (await settings().get_repository_config({ projectId })) as RepositoryConfig;
   }
 
+  async function patchRepositorySettings(
+    projectId: string,
+    updates: Partial<RepositoryConfig>,
+    unset: readonly (keyof RepositoryConfig)[],
+  ): Promise<AppConfig> {
+    return (await settings().patch_repository_settings({
+      projectId,
+      updates,
+      ...(unset.length > 0 ? { unset: [...unset] } : {}),
+    })) as AppConfig;
+  }
+
   async function getLogDirectory(machine?: AccountMachine): Promise<string> {
     return environmentsOn(machine).getLogDirectory({});
   }
@@ -802,6 +840,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     rotateControlMcpCredential,
     revokeControlMcpCredential,
     getRepositoryConfig,
+    patchRepositorySettings,
     getLogDirectory,
     getLogStorageStats,
     cleanupLogs,

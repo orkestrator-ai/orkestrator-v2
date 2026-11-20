@@ -66,6 +66,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
     description:
       "The Claude bridge: its routes, sessions, parked interactions and the Agent SDK turn loop.",
     events: {
+      "capability-plugins.refused":
+        "A prompt's Agent Capabilities session plugin was outside the backend's root or not a plugin; it was not loaded (`reason`, `count`).",
       "commands.read-failed": "The command catalogue read failed; the cached answer stands.",
       "context-usage.read-failed": "The detailed context usage read failed; the route falls back.",
       "dispatch.rollback-failed": "Rolling back a prompt dispatch claim failed.",

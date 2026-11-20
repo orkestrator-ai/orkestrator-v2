@@ -970,8 +970,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       ),
     );
     if (fetched.every((response) => response.status === 404)) return "missing";
-    // Every Claude bridge from v2.21.0 serves `/interactions`, so any other
-    // 404 fails the snapshot like any failed read.
+    // Every supported Claude bridge serves `/interactions`, so a partial 404 fails the snapshot.
     for (const response of fetched) assertOk(response, `${this.agent} interaction snapshot`);
     const snapshotBudget = { remaining: AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes };
     const fields =

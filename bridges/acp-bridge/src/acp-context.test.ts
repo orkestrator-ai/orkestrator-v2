@@ -960,13 +960,19 @@ describe("ACP bridge", () => {
       headers,
       body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
     });
-    await waitFor(read, (session) => subagent(session)?.agentState === "active");
+    // The card turns active before the launching turn's end_turn lands, so wait
+    // for idle too: a follow-up prompt sent mid-turn is refused with 409.
+    await waitFor(
+      read,
+      (session) => session.status === "idle" && subagent(session)?.agentState === "active",
+    );
 
-    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+    const followUp = await nativeFetch(`${base}/session/${created.id}/prompt`, {
       method: "POST",
       headers,
       body: JSON.stringify({ prompt: "FAILCREDITSSUBAGENT" }),
     });
+    expect(followUp.status).toBe(202);
     const failed = await waitFor(
       read,
       (session) => session.status === "idle" && subagent(session)?.agentState === "failed",

@@ -5,6 +5,7 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
     description:
       "Docker containers: lifecycle, starts, staged inputs and the login files they hold.",
     events: {
+      "capabilities.staging-failed": "Preparing or writing container capabilities failed.",
       "portable-inputs.relay-missing":
         "Docker is rootless and the image predates the staged-input relay, so the container cannot read them until rebuilt.",
       "git-mirror.mount-unavailable":

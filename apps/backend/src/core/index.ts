@@ -60,9 +60,14 @@ import {
   NodePortal,
   NodeService,
   NodeUsageSync,
+  NODE_HEARTBEAT_MS,
   type NodeServiceOptions,
 } from "./nodes/index.js";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
+import {
+  CAPABILITY_LAUNCH_REQUESTED_EVENT,
+  CAPABILITY_LEAF_REQUESTED_EVENT,
+} from "@orkestrator/protocol/contract/domains/capabilities";
 import type { GatewayNodeHooks } from "../gateway-support-core.js";
 import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
@@ -137,6 +142,7 @@ import {
 } from "./shutdown-steps.js";
 
 const log = createLogger("backend");
+const capabilityLog = createLogger("capabilities");
 
 /** How long shutdown waits for web annotations to close before going on without them. */
 const WEB_ANNOTATIONS_CLOSE_TIMEOUT_MS = 5_000;
@@ -170,6 +176,13 @@ import {
   mcpContainerOptions,
 } from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/index.js";
+import {
+  createCapabilityEnvironmentAuthority,
+  createCapabilityService,
+  type CapabilityNodeAccess,
+} from "./capabilities/index.js";
+import { remoteScopedEnvironments } from "./capabilities/scoped-sources.js";
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
@@ -1071,6 +1084,49 @@ export class OrkestratorBackend {
         recordCentralUsageReadings(context, readings, ownIdentities),
     });
     context.usageSync = this.usageSync;
+    // Agent Capabilities: the command node's authority over setups and
+    // packages, and this machine's executor (docs/architecture/agent-capabilities-management.md).
+    const capabilityNodes = {
+      selfId: () => this.nodes.selfIdentity(),
+      selfName: async () => (await this.nodes.selfProfile()).displayName,
+      machines: async () =>
+        (await this.nodes.listNodes()).nodes.map((node) => ({
+          nodeId: node.nodeId,
+          name: node.displayName || node.fallbackName,
+          connected: node.connection.state === "connected",
+        })),
+      link: (nodeId) => (isBackendId(nodeId) ? this.nodes.link(nodeId) : null),
+      isLeaf: () => this.nodes.isLeaf(),
+      // Heartbeats reach a leaf every NODE_HEARTBEAT_MS while its command node is linked.
+      controllerReachable: async () =>
+        (await this.nodes.status()).controllers.some(
+          (controller) => Date.now() - Date.parse(controller.lastContactAt) < 3 * NODE_HEARTBEAT_MS,
+        ),
+      // Which environments live on another machine, for project setups in its worktrees.
+      remoteEnvironments: async (nodeId: string) =>
+        remoteScopedEnvironments(await this.nodePortal.summaries([nodeId]), nodeId),
+    } satisfies CapabilityNodeAccess;
+    context.capabilities = createCapabilityService(context, capabilityNodes);
+    // A leaf's containers are staged from the command node's manifest, and an
+    // environment card on any machine is answered from the command node's receipts.
+    context.capabilityEnvironments = createCapabilityEnvironmentAuthority(
+      context,
+      context.capabilities,
+      capabilityNodes,
+    );
+    this.nodeCoordination.onNodeConnected((nodeId) =>
+      context.capabilities?.noteNodeConnected(nodeId),
+    );
+    // The capability state and its single-writer epoch move with a command handover.
+    this.nodes.setCapabilityHandover(context.capabilities.handoverHooks());
+    // A leaf's native launch is resolved here, against the authoritative state.
+    this.nodePortal.readModel.onNodeEvent((event, payload, nodeId) => {
+      if (event === CAPABILITY_LAUNCH_REQUESTED_EVENT)
+        void context.capabilities?.answerLeafLaunch(nodeId, payload);
+      // A leaf creating a container, or showing an environment card, asks here.
+      if (event === CAPABILITY_LEAF_REQUESTED_EVENT)
+        void context.capabilityEnvironments?.answerLeafRequest(nodeId, payload);
+    });
     this.nodePortal.readModel.onNodeEvent((event, payload) =>
       this.usageSync.handleNodeEvent(event, payload),
     );
@@ -1454,6 +1510,24 @@ export class OrkestratorBackend {
           const projectGit = context.projectGit;
           if (!projectGit) throw new Error("Project Git service is unavailable");
           return projectGit.beginTurnAfterMergeSync(projectId);
+        },
+        capabilitySessionPlugins: async (logicalSessionKey, environmentId, provider) =>
+          context.capabilities
+            ? context.capabilities.sessionPlugins(logicalSessionKey, environmentId, provider)
+            : [],
+        capabilityPreflight: async (input) => {
+          if (!context.capabilities || !isAgentPlatform(input.agent)) return;
+          await context.capabilities.preflightSession({
+            environmentId: input.environmentId,
+            ...(input.accountHomeId ? { accountHomeId: input.accountHomeId } : {}),
+            ...(input.environmentIncarnation
+              ? { environmentIncarnation: input.environmentIncarnation }
+              : {}),
+            ...(input.projectId ? { projectId: input.projectId } : {}),
+            provider: input.agent,
+            sessionKey: input.logicalSessionKey,
+            ...(input.policy ? { policy: input.policy } : {}),
+          });
         },
         resolveAgentToolConnection: async (environmentId, projectId, tabId, target) => {
           if (target === "container" && this.containerHostReachability) {
@@ -1848,6 +1922,11 @@ export class OrkestratorBackend {
     // Agent nodes run on the shared agent branch runner (item 204).
     this.graphAgents = installGraphAgentExecutor({
       graphRuns: this.graphRuns,
+      capabilityPreflight: async (input) => context.capabilities?.preflightSession(input) ?? null,
+      capabilitySessionPlugins: async (sessionKey, environmentId, provider) =>
+        context.capabilities
+          ? context.capabilities.sessionPlugins(sessionKey, environmentId, provider)
+          : [],
       artifacts: graphArtifacts,
       storage,
       invoke: invokeCommand,
@@ -3069,6 +3148,15 @@ export class OrkestratorBackend {
       });
     });
     this.nodeCoordination.start();
+    // Capability reconciliation resumes whatever a previous run left in flight.
+    await this.context.capabilities
+      ?.init()
+      .then(() => this.context.capabilities?.start())
+      .catch((error: unknown) => {
+        capabilityLog.warn("service.init-failed", {
+          error: formatLogError(error, { message: false }),
+        });
+      });
     // Shared usage readings: once now, then a minute apart as a last resort for
     // anything an event did not trigger (a node with nothing new costs a collect).
     // `init()` can be re-entered by a supervisor retrying a partial startup;
@@ -3376,6 +3464,7 @@ export class OrkestratorBackend {
     stopStepNow("pr-auto-merge", () => this.prAutoMerge.dispose());
     // Closes node links and owned SSH tunnels only; nothing on any node stops.
     stopStepNow("node-coordination", () => this.nodeCoordination.dispose());
+    stopStepNow("capabilities", () => this.context.capabilities?.dispose());
     stopStepNow("usage-sync", () => {
       if (this.usageSyncTimer) clearInterval(this.usageSyncTimer);
       this.usageSyncTimer = null;

@@ -583,6 +583,11 @@ export interface SessionState {
   /** Last init's plugin errors, so unchanged load failures do not reissue advisories each turn. */
   pluginErrorSignatures?: string[];
   /**
+   * Agent Capabilities runtime evidence: the latest load's plugins and skills
+   * and the skills the agent invoked (`capability-evidence.ts`).
+   */
+  capabilityEvidence?: import("../services/capability-evidence.js").CapabilityEvidenceState;
+  /**
    * Ultracode requested for the live turn. The CLI can decline the request.
    */
   ultracode?: boolean;
@@ -1438,6 +1443,11 @@ export interface PromptOptions {
   /** Stable caller id used to reconcile an async structured turn. */
   requestId?: string;
   agentMcp?: { url: string; token: string; design?: boolean; artifacts?: { token: string } };
+  /**
+   * Agent Capabilities: plugin directories the backend staged for this
+   * session alone (`capability-session-plugins.ts`), frozen at launch.
+   */
+  capabilityPlugins?: string[];
   /**
    * The workflow-result attempt this turn runs for (`workflowResultTool`,
    * `workflowResultKey` and a graph activation's slots and extra tools). Its

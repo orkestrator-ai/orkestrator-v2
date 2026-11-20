@@ -69,6 +69,7 @@ import type { GraphGuardPeerSource } from "./graph-agent-remote-attribution.js";
 import { graphAnswerTurnPrompt, type GraphAgentQuestions } from "./graph-agent-questions.js";
 import { GraphAgentResults, type GraphAgentResultService } from "./graph-agent-results.js";
 import { graphAgentBranch } from "./graph-agent-state.js";
+import { graphAgentSessionKey } from "./graph-agent-state.js";
 import { appendGraphAgentProgress, type GraphAgentProgressInbox } from "./graph-agent-tools.js";
 import {
   GRAPH_SURPLUS_BRANCH_ERROR,
@@ -92,6 +93,16 @@ import {
 const MAX_PENDING_CONSUMPTIONS = 256;
 
 export interface GraphAgentExecutorDependencies {
+  capabilityPreflight?: Pick<
+    import("./capabilities/service.js").CapabilityService,
+    "preflightSession"
+  >["preflightSession"];
+  /** A graph session's private capability plugins (`CapabilityService.sessionPlugins`). */
+  capabilitySessionPlugins?: (
+    sessionKey: string,
+    environmentId: string,
+    provider: "claude",
+  ) => Promise<string[]>;
   storage: { getEnvironment(environmentId: string): Promise<Environment | null> };
   providers: GraphAgentProviders;
   questions: GraphAgentQuestions;
@@ -377,6 +388,29 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
           const message = error instanceof Error ? error.message : "The branch worktree failed";
           return failed(message, "system-error", facts);
         }
+      }
+      const { run } = context;
+      try {
+        await this.dependencies.capabilityPreflight?.({
+          environmentId: environment.id,
+          projectId: run.projectId,
+          ...(environment.environmentType !== "local"
+            ? { environmentIncarnation: environment.containerId ?? environment.id }
+            : {}),
+          provider: platform,
+          sessionKey: graphAgentSessionKey(run.id, activation.key),
+          templateId: run.template.id,
+          graphNode: `${run.template.id}/${node.id}`,
+          ...(facts.worktree ? { relativeWorktree: facts.worktree.path } : {}),
+          policy: decision.compiled.policy,
+          readOnly: decision.compiled.readOnly,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Required graph capabilities could not be verified";
+        return failed(message, "guard-violation", facts);
       }
       // Every guard fails closed: no baseline, no dispatch.
       try {

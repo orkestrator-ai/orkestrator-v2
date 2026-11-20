@@ -1,3 +1,5 @@
+import { versionClientKind } from "@/lib/version-reminder";
+
 export function getCurrentWindow() {
   return {
     startDragging(): Promise<void> {
@@ -17,4 +19,13 @@ export function getCurrentWindow() {
 export function windowCapture(): (() => Promise<string>) | null {
   const capturer = window.orkestrator?.bugReport;
   return capturer ? () => capturer.captureWindow() : null;
+}
+
+/** Whether this window is the dedicated desktop view for its local backend. */
+export function isLocalDesktopWindow(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    versionClientKind() === "desktop" &&
+    !window.orkestratorGateway?.enabled
+  );
 }

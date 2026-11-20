@@ -12,7 +12,7 @@ async function expectWithinViewport(row: Locator, container: Locator) {
     .toBe(true);
 }
 
-test("reveals the selected file in the split or stacked tree after both navigation jumps", async ({
+test("reveals the selected file and outlines the focused conversation after keyboard navigation", async ({
   page,
 }) => {
   await page.goto("/pull-request-code");
@@ -46,12 +46,16 @@ test("reveals the selected file in the split or stacked tree after both navigati
 
   const guide = tree.getByRole("button", { name: /guide\.md/ });
   await expect(guide).not.toBeInViewport();
-  await page.getByRole("button", { name: "Next unresolved conversation" }).click();
+  await page.getByRole("button", { name: "Next unresolved conversation" }).press("Enter");
   await expect(guide).toHaveAttribute("aria-current", "true");
   await expectWithinViewport(guide, tree);
   const conversation = page.getByTestId("review-thread");
   await expect(conversation).toBeFocused();
   await expect(conversation).toBeInViewport();
+  await expect(conversation).toHaveCSS("outline-style", "solid");
+  await expect(conversation).toHaveCSS("outline-width", "1px");
+  await expect(conversation).toHaveCSS("outline-offset", "-2px");
+  await expect(conversation).toHaveCSS("outline-color", "rgb(59, 130, 246)");
   await expect(page.getByText("No textual changes.")).toBeVisible();
 });
 

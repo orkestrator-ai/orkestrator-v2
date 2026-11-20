@@ -5,6 +5,7 @@ import { AgentMailInjects } from "./storage-agent-mail-injects.js";
 import { AgentMailStore } from "./storage-agent-mail-store.js";
 import { AgentMailRepository } from "./storage-agent-mail.js";
 import { BugReportsRepository } from "./storage-bug-reports.js";
+import { CapabilitiesRepository } from "./storage-capabilities.js";
 import { BuildPipelinesRepository } from "./storage-build-pipelines.js";
 import { ConfigRepository } from "./storage-config.js";
 import type { StorageContext } from "./storage-context.js";
@@ -94,6 +95,7 @@ export class StorageRepositories {
   readonly environmentIsolation: EnvironmentIsolationRepository;
   readonly watchedPullRequests: WatchedPullRequestsRepository;
   readonly machineLoadHistory: MachineLoadHistoryRepository;
+  readonly capabilities: CapabilitiesRepository;
 
   constructor(context: StorageContext) {
     const files = new StorageFiles(context.dataDir);
@@ -124,6 +126,7 @@ export class StorageRepositories {
     this.linear = new LinearRepository(context);
     this.previewServices = new PreviewServicesRepository(context);
     this.nodes = new NodesRepository(context);
+    this.capabilities = new CapabilitiesRepository(context);
     this.coordinatorNotices = new CoordinatorNoticesRepository(context);
     this.publicOperations = new PublicOperationsRepository(context, files, this);
     this.coordinators = new CoordinatorsRepository(context, files, this);

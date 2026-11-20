@@ -60,6 +60,8 @@ import {
   type SettingsMenuItem,
 } from "@/components/settings/FullscreenSettingsLayout";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
+import { CapabilityScopeCard } from "@/components/settings/capabilities/CapabilityScopeCard";
+import { EnvironmentDeliveryPanel } from "@/components/settings/capabilities/EnvironmentDeliveryPanel";
 import { EnvironmentDiskUsageBreakdown } from "@/components/disk-usage/EnvironmentDiskUsageBreakdown";
 import type * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
@@ -250,10 +252,13 @@ function AgentExtensionSection({
   catalog,
   environmentId,
   canRevealSkills,
+  onRebuild,
 }: {
   catalog: backend.AgentExtensionCatalog;
   environmentId: string;
   canRevealSkills: boolean;
+  /** Opens the Container section, where the existing rebuild re-stages capabilities. */
+  onRebuild?: () => void;
 }) {
   const nodeBackend = useScopeBackend();
   const copy = AGENT_EXTENSION_COPY[catalog.agent];
@@ -273,6 +278,13 @@ function AgentExtensionSection({
 
   return (
     <section className="space-y-5" aria-label={`${copy.label} extensions`}>
+      <CapabilityScopeCard
+        scope="environment"
+        scopeId={environmentId}
+        environmentId={environmentId}
+        provider={catalog.agent}
+        {...(onRebuild ? { onRebuild } : {})}
+      />
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
           {unavailableCollections === 2
@@ -373,6 +385,14 @@ export function EnvironmentSettingsDialog({
 
   // Name state
   const [name, setName] = useState(environment.name);
+  // A capability card's "Rebuild container…" opens the Container section in
+  // place; closing the dialog forgets it (state adjusted while rendering).
+  const [sectionJump, setSectionJump] = useState(0);
+  const [jumpOpen, setJumpOpen] = useState(open);
+  if (jumpOpen !== open) {
+    setJumpOpen(open);
+    if (!open) setSectionJump(0);
+  }
   const [nameError, setNameError] = useState<string | null>(null);
 
   // Network state
@@ -1184,6 +1204,9 @@ export function EnvironmentSettingsDialog({
                 This environment has no container yet. Start it to create one.
               </p>
             ) : null}
+            {environment.containerId ? (
+              <EnvironmentDeliveryPanel environmentId={environment.id} />
+            ) : null}
             {environment.containerId && onRestart && (
               <EnvironmentRebuildSection
                 environment={environment}
@@ -1525,6 +1548,9 @@ export function EnvironmentSettingsDialog({
                     catalog={activeCatalog}
                     environmentId={environment.id}
                     canRevealSkills={isLocalEnvironment}
+                    {...(!isLocalEnvironment && environment.containerId
+                      ? { onRebuild: () => setSectionJump((count) => count + 1) }
+                      : {})}
                   />
                 )}
               </div>
@@ -1544,8 +1570,8 @@ export function EnvironmentSettingsDialog({
         onOpenChange={onOpenChange}
         title="Environment settings"
         menuItems={menuItems}
-        defaultSection={initialSection}
-        sectionRequest={sectionRequest}
+        defaultSection={sectionJump > 0 ? "container" : initialSection}
+        sectionRequest={(sectionRequest ?? 0) + sectionJump}
         headerActions={
           <>
             <Button variant="outline" onClick={() => onOpenChange(false)}>

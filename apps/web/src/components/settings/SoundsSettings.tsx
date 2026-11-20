@@ -23,11 +23,14 @@ import {
   SettingsRow,
   SettingsSectionHeader,
 } from "./SettingsPageLayout";
+import { useSettingsExplain } from "./search/settings-explain";
+import { SettingField } from "./search/SettingField";
 import { cn } from "@/lib/utils";
 
 export function SoundsSettings() {
   const { machine } = useAccountMachine();
   const { config: settingsConfig, setConfig } = useSettingsConfig();
+  const explain = useSettingsExplain();
   const storedSettings = settingsConfig.global.notificationSounds;
   const updateGlobalConfig = useConfigStore((state) => state.updateGlobalConfig);
   const savedSettings = useMemo(
@@ -69,7 +72,10 @@ export function SoundsSettings() {
       }
       try {
         const savedConfig = await backend.updateNotificationSoundSettings(next, machine);
-        if (generation === saveGenerationRef.current) setConfig(savedConfig);
+        if (generation === saveGenerationRef.current) {
+          setConfig(savedConfig);
+          explain?.refreshSources();
+        }
       } catch (error) {
         if (generation !== saveGenerationRef.current) return;
         toast.error("Sound settings were not saved", {
@@ -123,6 +129,7 @@ export function SoundsSettings() {
     >
       <div className={cn(SETTINGS_CARD_CLASS, "divide-y divide-zinc-800")}>
         <SoundRow
+          setting="sounds.agent-stopped"
           label="Agent stopped"
           description="Play a cue when an environment raises the same completed-activity indicator as the bell icon."
           enabled={settings.agentStopped}
@@ -130,6 +137,7 @@ export function SoundsSettings() {
           onPreview={() => void preview("agent-stopped")}
         />
         <SoundRow
+          setting="sounds.agent-question"
           label="Agent question"
           description="Play a different, more urgent cue when an agent asks a question or stops for your approval, unless you are looking at that environment."
           enabled={settings.agentQuestion}
@@ -137,6 +145,7 @@ export function SoundsSettings() {
           onPreview={() => void preview("agent-question")}
         />
         <SoundRow
+          setting="sounds.pr-merged"
           label="Pull request merged"
           description="Play a different cue when GitHub confirms that a monitored pull request was merged."
           enabled={settings.prMerged}
@@ -144,6 +153,7 @@ export function SoundsSettings() {
           onPreview={() => void preview("pr-merged")}
         />
         <SoundRow
+          setting="sounds.coordinator-report"
           label="Coordinator report"
           description="Play a cue when a Coordinator is woken by a worker it was waiting on, unless that Coordinator is on screen."
           enabled={settings.coordinatorReport}
@@ -161,7 +171,11 @@ export function SoundsSettings() {
           Questions block an agent until you answer, so they can also raise a notification outside
           Orkestrator. Clicking it opens the environment.
         </SettingsSectionHeader>
-        <div className={SETTINGS_CARD_CLASS}>
+        <SettingField
+          setting="sounds.desktop-notifications"
+          className={SETTINGS_CARD_CLASS}
+          explanationClassName="px-4 pb-3"
+        >
           <SettingsRow
             label="Agent questions"
             description={
@@ -183,7 +197,7 @@ export function SoundsSettings() {
               aria-label="Agent questions desktop notification"
             />
           </SettingsRow>
-        </div>
+        </SettingField>
       </section>
 
       <div className="flex h-5 items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
@@ -210,12 +224,15 @@ function NotificationPermissionNote({ permission }: { permission: DesktopNotific
 }
 
 function SoundRow({
+  setting,
   label,
   description,
   enabled,
   onEnabledChange,
   onPreview,
 }: {
+  /** The settings catalog entry, so search can open this row. */
+  setting: string;
   label: string;
   description: string;
   enabled: boolean;
@@ -223,12 +240,14 @@ function SoundRow({
   onPreview: () => void;
 }) {
   return (
-    <SettingsRow label={label} description={description}>
-      <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
-        <Play className="h-3.5 w-3.5" aria-hidden="true" />
-        Preview
-      </Button>
-      <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
-    </SettingsRow>
+    <SettingField setting={setting} explanationClassName="px-4 pb-3">
+      <SettingsRow label={label} description={description}>
+        <Button variant="outline" size="sm" onClick={onPreview} aria-label={`Preview ${label}`}>
+          <Play className="h-3.5 w-3.5" aria-hidden="true" />
+          Preview
+        </Button>
+        <Switch checked={enabled} onCheckedChange={onEnabledChange} aria-label={`${label} sound`} />
+      </SettingsRow>
+    </SettingField>
   );
 }

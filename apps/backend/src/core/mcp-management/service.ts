@@ -320,6 +320,10 @@ export class McpManagementService {
   // Catalog
   // -------------------------------------------------------------------------
 
+  withSourceLock<T>(file: string, work: () => Promise<T>): Promise<T> {
+    return this.store.withLock(file, work);
+  }
+
   private async specsFor(target: ResolvedTarget): Promise<SourceSpec[]> {
     if (target.info.location === "container") {
       if (!target.info.containerId) {
@@ -519,6 +523,56 @@ export class McpManagementService {
     const { catalog } = await this.loadTargetCatalog(target, await this.specsFor(target));
     const entry = findEntry(catalog, args.entryId);
     return editableDefinition(entry, this.capabilitiesFor(target), this.rowReadOnly(target));
+  }
+
+  /** Internal ownership proof for a capability-managed native entry. */
+  async capabilityEntryIdentity(targetId: string, entryId: string) {
+    await this.init();
+    const target = await resolveTarget(targetId, this.options.storage);
+    const { catalog } = await this.loadTargetCatalog(target, await this.specsFor(target));
+    const entry = catalog.entries.find((candidate) => candidate.entryId === entryId);
+    if (!entry?.raw || !entry.source.file?.revision || entry.conflict || entry.issue) return null;
+    return {
+      sourceId: entry.source.spec.sourceId,
+      revision: entry.source.file.revision,
+      fingerprint: await this.operations.entryDigest(entry.raw),
+    };
+  }
+
+  /** Checks a user-configured entry without granting capability ownership. */
+  async matchesCapabilityConfiguration(
+    targetId: string,
+    entryId: string,
+    expected: {
+      transport: string;
+      command?: string;
+      args?: string[];
+      url?: string;
+      envKeys: string[];
+      headerKeys: string[];
+    },
+  ): Promise<boolean> {
+    await this.init();
+    const target = await resolveTarget(targetId, this.options.storage);
+    const { catalog } = await this.loadTargetCatalog(target, await this.specsFor(target));
+    const entry = catalog.entries.find((candidate) => candidate.entryId === entryId);
+    const definition = entry?.definition;
+    return (
+      !!definition &&
+      !entry?.conflict &&
+      !entry?.issue &&
+      !entry?.skipReason &&
+      !entry?.disabledReason &&
+      !definition.invalidReason &&
+      !definition.unsupportedReason &&
+      definition.enabled !== false &&
+      definition.transport === expected.transport &&
+      definition.command === expected.command &&
+      definition.url === expected.url &&
+      JSON.stringify(definition.args) === JSON.stringify(expected.args ?? []) &&
+      expected.envKeys.every((key) => !!definition.env[key]) &&
+      expected.headerKeys.every((key) => !!definition.headers[key])
+    );
   }
 
   async getOperation(args: { operationId?: unknown }): Promise<McpOperationSnapshot> {

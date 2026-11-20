@@ -53,10 +53,11 @@ function shellPart(overrides: Partial<NativeMessagePart> = {}): NativeMessagePar
 }
 
 describe("tool card duration", () => {
-  test("shows a settled shell call's runtime beside its state", () => {
+  test("shows a stopwatch before a settled shell call's runtime beside its state", () => {
     renderParts([shellPart({ toolDurationMs: 2_400 })]);
     const label = screen.getByText("2.4s");
     expect(label.getAttribute("title")).toBe("Ran for 2.4s");
+    expect(label.firstChild).toBe(label.querySelector("svg.lucide-timer[aria-hidden='true']"));
     expect(screen.getByText("success")).toBeTruthy();
   });
 
@@ -105,7 +106,7 @@ describe("tool card duration", () => {
     expect(container.textContent).not.toContain("40ms");
   });
 
-  test("the edit card shows the same label", () => {
+  test("shows a stopwatch before a settled edit's runtime", () => {
     renderParts([
       {
         type: "tool-invocation",
@@ -118,7 +119,9 @@ describe("tool card duration", () => {
       },
     ]);
     expect(screen.getByText("a.ts")).toBeTruthy();
-    expect(screen.getByText("1.2s").getAttribute("title")).toBe("Ran for 1.2s");
+    const label = screen.getByText("1.2s");
+    expect(label.getAttribute("title")).toBe("Ran for 1.2s");
+    expect(label.firstChild).toBe(label.querySelector("svg.lucide-timer[aria-hidden='true']"));
   });
 });
 

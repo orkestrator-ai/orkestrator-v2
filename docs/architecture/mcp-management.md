@@ -245,7 +245,7 @@ is not permission to execute. The editor never changes an execution policy.
   - The skill catalogues and their skill-file read allowlists follow the same
     install rule (`claudeInstalledPluginIdEnablement`), so a turned-off or
     never-enabled install's skills are neither listed nor readable (todo
-    0205). Settings → Skills and plugins on the host (`agent-skills.ts`) reads user
+    0205). Settings → Capabilities → Installed on this machine (formerly Skills and plugins) on the host (`agent-skills.ts`) reads user
     settings only, from `$CLAUDE_CONFIG_DIR/settings.json` or else
     `~/.claude/settings.json`: it has no project, so a project's settings can
     still change which plugin skills a single session loads. That page's plugin

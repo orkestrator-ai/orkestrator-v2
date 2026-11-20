@@ -539,6 +539,7 @@ export class GraphRunsRepository {
     });
     // Then its activation transcripts (item 211), best-effort as for environment deletion.
     if (removed) {
+      this.forgetCapabilityLaunches([runId]);
       await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
     }
     return removed;
@@ -615,10 +616,20 @@ export class GraphRunsRepository {
       return expired.map((run) => run.id);
     });
     // Then their activation transcripts (item 211), best-effort as for environment deletion.
+    this.forgetCapabilityLaunches(removed);
     for (const runId of removed) {
       await this.repos.buildPipelines.deleteGraphRunTranscripts(runId).catch(() => undefined);
     }
     return removed;
+  }
+
+  private forgetCapabilityLaunches(runIds: readonly string[]): void {
+    if (runIds.length === 0) return;
+    const removed = new Set(runIds);
+    this.repos.capabilities.forgetCapabilityLaunches(({ sessionKey }) => {
+      const [kind, runId] = sessionKey.split(":", 2);
+      return kind === "graph" && runId !== undefined && removed.has(runId);
+    });
   }
 
   /**

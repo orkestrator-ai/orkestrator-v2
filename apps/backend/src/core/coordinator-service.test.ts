@@ -1816,9 +1816,11 @@ describe("project coordinator", () => {
       launchEligible: false,
       fetchError: expect.any(String),
     });
-    await runCommand("git", ["remote", "set-url", "origin", remote], { cwd: checkout });
-    // Set the remote branch directly so push cannot update our tracking ref.
+    // Publish the branch before pointing origin at it: Git updates
+    // refs/remotes/origin/* when a pushed URL matches origin's URL, which would
+    // hand the cached failure a usable tracking ref without any fetch.
     await runCommand("git", ["push", remote, "main:main"], { cwd: checkout });
+    await runCommand("git", ["remote", "set-url", "origin", remote], { cwd: checkout });
     expect((await git.baseBranchTip(project.id, "main")).launchEligible).toBe(false);
     const retried = await git.baseBranchTip(project.id, "main", true);
     expect(retried).toMatchObject({ ref: "origin/main", fetched: true, launchEligible: true });

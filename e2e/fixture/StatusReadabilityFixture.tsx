@@ -1,3 +1,5 @@
+import { MessagePart } from "@/components/chat/NativeMessage.renderer";
+import { NativeMessagePartRendererContext } from "@/components/chat/NativeMessage.shared";
 import { ToolGroupPart } from "@/components/chat/NativeMessage.tool-group";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
 import { CriterionStatusIcon } from "@/components/tickets/criterion-status";
@@ -74,23 +76,25 @@ export function StatusReadabilityFixture() {
           toolState="success"
           taskSnapshot={{ items: [], complete: true }}
         />
-        <ToolGroupPart
-          partKey="timed-tools"
-          part={{
-            type: "tool-group",
-            content: "",
-            parts: ["git status", "git diff", "git diff --stat HEAD~1"].map((command, index) => ({
-              type: "tool-invocation",
-              content: command,
-              toolName: "Bash",
-              toolArgs: { command },
-              toolState: index === 0 ? "failure" : "success",
-              toolUseId: `status-call-${index}`,
-              createdAt: `2026-10-20T10:00:0${index}.000Z`,
-              toolDurationMs: 250,
-            })),
-          }}
-        />
+        <NativeMessagePartRendererContext.Provider value={MessagePart}>
+          <ToolGroupPart
+            partKey="timed-tools"
+            part={{
+              type: "tool-group",
+              content: "",
+              parts: ["git status", "git diff", "git diff --stat HEAD~1"].map((command, index) => ({
+                type: "tool-invocation",
+                content: command,
+                toolName: "Bash",
+                toolArgs: { command },
+                toolState: index === 0 ? "failure" : "success",
+                toolUseId: `status-call-${index}`,
+                createdAt: `2026-10-20T10:00:0${index}.000Z`,
+                toolDurationMs: 250,
+              })),
+            }}
+          />
+        </NativeMessagePartRendererContext.Provider>
         <div className="flex gap-2 px-2 py-1 text-xs">
           <CriterionStatusIcon state="unchecked" />
           <span>Verify the task summary</span>

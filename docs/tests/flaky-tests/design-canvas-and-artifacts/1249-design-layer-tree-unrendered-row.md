@@ -1,7 +1,7 @@
 # Unrendered-frame keyboard journey misses the layer-tree row
 
 - **ID:** 1249
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-28
 - **Test:** `Enter on a layer of an unrendered frame announces the wait and selects once it renders`
 - **File:** `e2e/DesignCanvasAccessibility.spec.ts:594`
@@ -266,3 +266,23 @@ Class A candidate. A navigation (`page.goto`/`page.reload`) or step used up Play
 The provider-upgrade section mentions a different mobile keyboard-journey failure in an earlier combined rerun whose text was not kept; it is not covered by this evidence. The 2026-11-01 failure of the owner run alone was the same 5 s `toBeAttached` deadline on a shared host.
 
 A recurrence that hangs until near the new budget (a navigation or assertion timing out at 120 s or 30 s) is a real hang, not this deadline: reopen this case and record it.
+
+
+## Settings review recurrence (2026-11-19)
+
+The Settings review branch was based on `5e9835d0a6981a8d2c217d8941e2e065abbe3008`.
+`mise run test:logged -- --name browser -- mise run test:browser` started 2,130
+component cases with three workers. In mobile Chromium the same journey reached
+the 30 s assertion deadline at line 699 because the Layers tree never attached
+`plans (h2)` after End. The run had no sealed totals at the time of observation.
+
+The complete mobile owner passed alone in 110.1 s (exit 0):
+
+```sh
+mise run test:logged -- --name canvas-layer-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/DesignCanvasAccessibility.spec.ts --project mobile-chromium --workers=1 --output output/agent-testing/qa-settings-review-640e/design-canvas-confirmation
+```
+
+`mise run flaky:recurrence -- 1249 --base 5e9835d0a6981a8d2c217d8941e2e065abbe3008`
+found the earlier fix (`6302f96c69`) in the observing base. The design spec and
+implementation are unchanged by the Settings branch. The cause of the renewed
+hang is unconfirmed.

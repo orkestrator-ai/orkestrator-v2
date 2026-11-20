@@ -8,7 +8,11 @@
  * creates the ticket, the environment and the pipeline from this one object.
  */
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
+import {
+  isBuildIntent,
+  type BuildIntent,
+  type EnvironmentInteractionMode,
+} from "@orkestrator/protocol/environment-interaction";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   BuildStepConfig,
@@ -39,7 +43,20 @@ import type { EnvironmentType, NetworkAccessMode, PortMapping } from "@/types";
  * without asking questions and then waits, `interactive` may ask questions
  * from the start.
  */
-export type BuildIntent = "feature" | EnvironmentInteractionMode;
+export type { BuildIntent };
+
+/**
+ * The Build choice the create dialog opens on: the one this project last
+ * created an environment with (`RepositoryConfig.lastBuildIntent`), or a task.
+ * Pipeline is remembered only where this dialog can launch one.
+ */
+export function rememberedBuildIntent(
+  lastBuildIntent: unknown,
+  canLaunchPipeline: boolean,
+): BuildIntent {
+  if (!isBuildIntent(lastBuildIntent)) return "task";
+  return lastBuildIntent === "feature" && !canLaunchPipeline ? "task" : lastBuildIntent;
+}
 
 /** The interaction mode a prompt intent gives its environment; none for a pipeline. */
 export function buildIntentInteractionMode(

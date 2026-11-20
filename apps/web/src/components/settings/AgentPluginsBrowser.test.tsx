@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { AgentExtensionItem, AgentSkill } from "@/lib/backend";
 
@@ -32,7 +32,8 @@ afterAll(() => {
   mock.module("@/lib/native/backend", () => ({ invoke: mock(() => Promise.resolve()) }));
 });
 
-const { useAgentPlugins } = await import("./AgentPluginsBrowser");
+const { AgentPluginsBrowser, useAgentPlugins } = await import("./AgentPluginsBrowser");
+const { capabilitiesApi } = await import("@/lib/backend/capabilities");
 const { SkillsSettings } = await import("./SkillsSettings");
 
 const VERCEL: AgentExtensionItem = { name: "vercel", status: "configured", source: "user" };
@@ -346,4 +347,106 @@ test("unsupported Cursor catalog remains a stable unavailable result", async () 
   clickTab(/^Plugins/);
   expect(pluginReads()).toHaveLength(1);
   expect(screen.queryByRole("alert") === null).toBe(true);
+});
+
+describe("the Codex plugin switch", () => {
+  const LINEAR: AgentExtensionItem = {
+    name: "linear",
+    status: "configured",
+    source: "openai-curated",
+    qualifiedId: "linear@openai-curated",
+  };
+
+  test("Codex plugins get a named switch that flips the flag and reads the list back", async () => {
+    pluginResponse = async (agent) => ({
+      agent,
+      plugins: agent === "codex" ? [LINEAR] : [VERCEL],
+    });
+    const toggle = spyOn(capabilitiesApi, "setCapabilityPluginEnabled").mockResolvedValue({
+      provider: "codex",
+      qualifiedId: "linear@openai-curated",
+      enabled: false,
+      changed: true,
+    });
+    try {
+      render(<SkillsSettings />);
+      clickTab(/^Plugins/);
+      await waitFor(() => expect(pluginListText()).toContain("vercel"));
+      // Claude keeps no flag Orkestrator edits: no switch.
+      expect(screen.queryByRole("switch") === null).toBe(true);
+
+      clickTab("Codex");
+      const control = await screen.findByRole("switch", { name: "Enable linear" });
+      expect(control.getAttribute("aria-checked")).toBe("true");
+      expect(control.hasAttribute("disabled")).toBe(false);
+      const reads = pluginReads().length;
+      fireEvent.click(control);
+      await waitFor(() =>
+        expect(toggle).toHaveBeenCalledWith("codex", "linear@openai-curated", false),
+      );
+      // Codex's own list is read again, so the switch shows what Codex reports.
+      await waitFor(() => expect(pluginReads().length).toBe(reads + 1));
+    } finally {
+      toggle.mockRestore();
+    }
+  });
+
+  test("a failed switch says why in an alert and keeps the reported state", async () => {
+    const setEnabled = mock(() =>
+      Promise.reject(new Error("Codex's config.toml keeps this plugin inline; it is read-only.")),
+    );
+    render(
+      <AgentPluginsBrowser
+        state={{ loading: false, catalog: { agent: "codex", plugins: [LINEAR] } }}
+        onReload={() => undefined}
+        skills={[]}
+        onOpenSkill={() => undefined}
+        pluginSwitch={{ kind: "available", setEnabled }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Enable linear" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Could not switch linear: Codex's config.toml keeps this plugin inline; it is read-only.",
+    );
+    expect(screen.getByRole("switch", { name: "Enable linear" }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+  });
+
+  test("the switch is disabled with its reason where it cannot be used", () => {
+    const { rerender } = render(
+      <AgentPluginsBrowser
+        state={{ loading: false, catalog: { agent: "codex", plugins: [LINEAR] } }}
+        onReload={() => undefined}
+        skills={[]}
+        onOpenSkill={() => undefined}
+        pluginSwitch={{ kind: "unavailable", reason: "Open Orkestrator on that machine." }}
+      />,
+    );
+    const control = screen.getByRole("switch", { name: "Enable linear" });
+    expect(control.hasAttribute("disabled")).toBe(true);
+    const reason = document.getElementById(control.getAttribute("aria-describedby")!);
+    expect(reason?.textContent).toBe("Open Orkestrator on that machine.");
+
+    // No marketplace reported: there is no id to switch.
+    rerender(
+      <AgentPluginsBrowser
+        state={{
+          loading: false,
+          catalog: { agent: "codex", plugins: [{ name: "local", status: "disabled" }] },
+        }}
+        onReload={() => undefined}
+        skills={[]}
+        onOpenSkill={() => undefined}
+        pluginSwitch={{ kind: "available", setEnabled: async () => undefined }}
+      />,
+    );
+    const local = screen.getByRole("switch", { name: "Enable local" });
+    expect(local.hasAttribute("disabled")).toBe(true);
+    expect(local.getAttribute("aria-checked")).toBe("false");
+    expect(document.getElementById(local.getAttribute("aria-describedby")!)?.textContent).toContain(
+      "did not report which marketplace",
+    );
+  });
 });

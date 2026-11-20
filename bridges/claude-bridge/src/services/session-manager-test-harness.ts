@@ -15,6 +15,16 @@
  * This assumes `bun test --parallel` (which implies `--isolate`), the mode
  * AGENTS.md mandates: each test file gets a fresh module registry, so this
  * module is evaluated once per file exactly as the duplicated preambles were.
+ *
+ * A non-isolated run (`bun test a.test.ts b.test.ts` without `--isolate` or
+ * `--parallel`) is not supported, and neither is `--rerun-each` (Bun 1.4.4
+ * re-runs a file without re-isolating it, even with `--isolate`). Bun then
+ * evaluates this module once for the whole process: its hooks attach to the
+ * first file (or pass) only, and that `afterAll` restores the real `node:fs`,
+ * `node:fs/promises` and `node:child_process`, so a later file's
+ * `mockReadFile`/`mockExecFile` stubs reach nothing and its tests see the real
+ * SDK manifest or CLI in under a millisecond (flake 0014). Add `--isolate` to
+ * an ad hoc multi-file run, and repeat a file with a shell loop instead.
  */
 import {
   PERSISTED_SDK_ID,

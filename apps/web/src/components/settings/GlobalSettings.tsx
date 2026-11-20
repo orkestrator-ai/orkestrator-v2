@@ -66,11 +66,15 @@ import {
   SSH_AGENT_SOCKET_PATH_ERROR_MESSAGES,
 } from "@orkestrator/protocol/ssh-agent-socket";
 import { MAX_DEFAULT_PROJECTS_DIRECTORY_CHARS } from "@orkestrator/protocol/project-copy";
+import { settingValuesEqual } from "@orkestrator/protocol/setting-sources";
 import { parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 import { globalConfigPatchFromCoreFields, type CoreFieldsSnapshot } from "./global-settings-patch";
 import { SETTINGS_PAGE_DEFAULT_WIDTH_CLASS } from "./SettingsPageLayout";
 import { cn } from "@/lib/utils";
+import { SETTINGS_CATALOG } from "@/lib/settings-catalog/catalog";
+import { SETTING_TIMING_SHORT } from "@/lib/settings-catalog/scope";
+import { useSettingsDraftRegistry } from "./search/settings-explain";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("web.settings");
@@ -259,12 +263,34 @@ export function globalFormSignature(global: GlobalConfig): string {
   ]);
 }
 
+/**
+ * Says when the settings a save changed take effect, unless they all apply at
+ * once: " Session titles applies to new agent sessions."
+ */
+export function savedTimingNote(keys: readonly string[]): string {
+  const later = SETTINGS_CATALOG.filter(
+    (descriptor) =>
+      descriptor.value &&
+      keys.includes(descriptor.value.key) &&
+      descriptor.appliesWhen !== "immediately",
+  );
+  if (later.length === 0) return "";
+  const timings = [...new Set(later.map((descriptor) => descriptor.appliesWhen))];
+  if (
+    later.length === 1 ||
+    (timings.length === 1 && new Set(later.map((d) => d.value!.key)).size === 1)
+  ) {
+    return ` ${later[0]!.label} ${SETTING_TIMING_SHORT[later[0]!.appliesWhen]}.`;
+  }
+  return ` Some changes apply later: ${timings.map((timing) => SETTING_TIMING_SHORT[timing].replace(/^applies /, "")).join("; ")}.`;
+}
+
 interface GlobalSettingsProps {
   activeSection: string;
 }
 
 export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
-  const { config, setConfig } = useSettingsConfig();
+  const { config, setConfig, ready: machineReady } = useSettingsConfig();
   const { machine } = useAccountMachine();
   const global = config.global;
 
@@ -410,6 +436,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const [isResettingTailscaleServe, setIsResettingTailscaleServe] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
+  // The stored keys the last successful save changed, for its timing note.
+  const [lastSavedKeys, setLastSavedKeys] = useState<readonly string[]>([]);
   const [githubCredentialPropagationPending, setGithubCredentialPropagationPending] =
     useState(false);
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
@@ -424,6 +453,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // The `global` those values came from: the baseline a save diffs against, so
   // only the fields edited here are sent and nothing else is overwritten.
   const syncedGlobalRef = useRef<GlobalConfig>(global);
+  const unconfirmedSave = useRef<{ desired: CoreFieldsSnapshot; keys: string[] } | null>(null);
+  const replaceDraft = useRef(false);
 
   // Sync local state when config changes in the store
   useEffect(() => {
@@ -433,69 +464,113 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     // routine case — it persists `favoriteModels` from inside this very form.
     const signature = globalFormSignature(global);
     if (syncedGlobalSignatureRef.current === signature) return;
+    const baseline = syncedGlobalRef.current;
+    const replace = replaceDraft.current;
+    if (unconfirmedSave.current && !replace) return;
+    replaceDraft.current = false;
+    const sync = <T,>(
+      set: (update: (value: T) => T) => void,
+      read: (global: GlobalConfig) => T,
+    ) => {
+      const previous = read(baseline);
+      const next = read(global);
+      set((current) => (replace || !settingValuesEqual(previous, next) ? next : current));
+    };
     syncedGlobalSignatureRef.current = signature;
     syncedGlobalRef.current = global;
-    setEnvPatterns(global.envFilePatterns.join(", "));
+    sync(setEnvPatterns, (global) => global.envFilePatterns.join(", "));
     // Credential inputs are deliberately not reset here. They are write-only and
     // cleared explicitly once their save succeeds, so preserving whatever is
     // typed keeps a rejected secret retryable across an unrelated store write.
-    setUseHostGitHubCredentials(global.useHostGitHubCredentials ?? true);
-    setContainerGitHubCredential(global.containerGitHubCredential ?? "none");
-    setSshAgentSocketPath(global.sshAgentSocketPath ?? "");
-    setAutoMergeRequireChecks(global.autoMergeRequireChecks ?? true);
-    setAutoSteer(global.autoSteer ?? false);
-    setDefaultProjectsDirectory(global.defaultProjectsDirectory ?? "");
-    setUseHostClaudeCredentials(global.useHostClaudeCredentials ?? true);
-    setAllowedDomains((global.allowedDomains || []).join("\n"));
-    setPreferredEditor(global.preferredEditor || "vscode");
-    setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
-    setCoordinatorProviderTiers(
-      global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    sync(setUseHostGitHubCredentials, (global) => global.useHostGitHubCredentials ?? true);
+    sync(setContainerGitHubCredential, (global) => global.containerGitHubCredential ?? "none");
+    sync(setSshAgentSocketPath, (global) => global.sshAgentSocketPath ?? "");
+    sync(setAutoMergeRequireChecks, (global) => global.autoMergeRequireChecks ?? true);
+    sync(setAutoSteer, (global) => global.autoSteer ?? false);
+    sync(setDefaultProjectsDirectory, (global) => global.defaultProjectsDirectory ?? "");
+    sync(setUseHostClaudeCredentials, (global) => global.useHostClaudeCredentials ?? true);
+    sync(setAllowedDomains, (global) => (global.allowedDomains || []).join("\n"));
+    sync(setPreferredEditor, (global) => global.preferredEditor || "vscode");
+    sync<AgentPlatform[]>(
+      setEnabledAgentPlatforms,
+      (global) => global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
     );
-    setCoordinatorWebResearch(coordinatorWebResearchSetting(global.coordinatorWebResearch));
-    setCoordinatorResearchMcpServers(
+    sync(
+      setCoordinatorProviderTiers,
+      (global) => global.coordinatorProviderTiers ?? DEFAULT_COORDINATOR_PROVIDER_TIER,
+    );
+    sync(setCoordinatorWebResearch, (global) =>
+      coordinatorWebResearchSetting(global.coordinatorWebResearch),
+    );
+    sync(setCoordinatorResearchMcpServers, (global) =>
       normalizeCoordinatorResearchMcpServers(global.coordinatorResearchMcpServers),
     );
-    setAgentSettings(normalizeAgentSettings(global.agentSettings));
-    setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
-    setCodexMaxConcurrentThreads(
-      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+    sync(setAgentSettings, (global) => normalizeAgentSettings(global.agentSettings));
+    sync(setOpenCodeModelProviders, (global) =>
+      normalizeOpenCodeModelProviders(global.openCodeModelProviders),
     );
-    setClaudeBackgroundCommandLimitHours(
+    sync(
+      setCodexMaxConcurrentThreads,
+      (global) => global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
+    );
+    sync(setClaudeBackgroundCommandLimitHours, (global) =>
       resolveClaudeBackgroundCommandLimitHours(global.claudeBackgroundCommandLimitHours),
     );
-    setSessionTitleGeneration(resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration));
-    const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
-    setTerminalFontFamily(appearance.fontFamily);
-    setTerminalFontSize(appearance.fontSize);
-    setTerminalBackgroundColor(appearance.backgroundColor);
-    setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
-    setTerminalLinkDefaultTarget(
+    sync(setSessionTitleGeneration, (global) =>
+      resolveSessionTitleGenerationPolicy(global.sessionTitleGeneration),
+    );
+
+    sync(
+      setTerminalFontFamily,
+      (global) => (global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE).fontFamily,
+    );
+    sync(
+      setTerminalFontSize,
+      (global) => (global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE).fontSize,
+    );
+    sync(
+      setTerminalBackgroundColor,
+      (global) => (global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE).backgroundColor,
+    );
+    sync(
+      setTerminalScrollback,
+      (global) => global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
+    );
+    sync(setTerminalLinkDefaultTarget, (global) =>
       resolveTerminalLinkDefaultTarget(global.terminalLinkDefaultTarget),
     );
-    setTerminalHistoryEnabled(global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED);
-    setTerminalHistoryRetentionMb(
-      global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
+    sync(
+      setTerminalHistoryEnabled,
+      (global) => global.terminalHistoryEnabled ?? DEFAULT_TERMINAL_HISTORY_ENABLED,
     );
-    setTerminalHistoryGlobalRetentionMb(
-      global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
+    sync(
+      setTerminalHistoryRetentionMb,
+      (global) => global.terminalHistoryRetentionMb ?? DEFAULT_TERMINAL_HISTORY_RETENTION_MB,
     );
-    setTerminalHistoryRetentionDays(
-      global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+    sync(
+      setTerminalHistoryGlobalRetentionMb,
+      (global) =>
+        global.terminalHistoryGlobalRetentionMb ?? DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
     );
-    setExperimentalScheduling(global.experimentalScheduling ?? false);
-    setLocalWindowGatewayTransport(global.localWindowGatewayTransport ?? true);
-    setExperimentalGraphs(global.experimentalGraphs ?? false);
-    setExperimentalSelfImprovement(global.experimentalSelfImprovement ?? false);
-    setExperimentalTmux(global.experimentalTmux ?? false);
-    setDebugLogging(global.debugLogging ?? false);
-    setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
-    setLogDetail(resolveLogDetail(global));
-    setLogDetailKeepRaised(global.logDetailKeepRaised === true);
-    setWebClientEnabled(global.webClientEnabled ?? true);
-    setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
-    setReviewLensPresets(resolveReviewLensPresets(global.reviewLensPresets));
-    setMultiReviewEngine(global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE);
+    sync(
+      setTerminalHistoryRetentionDays,
+      (global) => global.terminalHistoryRetentionDays ?? DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
+    );
+    sync(setExperimentalScheduling, (global) => global.experimentalScheduling ?? false);
+    sync(setLocalWindowGatewayTransport, (global) => global.localWindowGatewayTransport ?? true);
+    sync(setExperimentalGraphs, (global) => global.experimentalGraphs ?? false);
+    sync(setExperimentalSelfImprovement, (global) => global.experimentalSelfImprovement ?? false);
+    sync(setExperimentalTmux, (global) => global.experimentalTmux ?? false);
+    sync(setDebugLogging, (global) => global.debugLogging ?? false);
+    sync(setDebugLogRetentionDays, (global) =>
+      normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+    );
+    sync(setLogDetail, (global) => resolveLogDetail(global));
+    sync(setLogDetailKeepRaised, (global) => global.logDetailKeepRaised === true);
+    sync(setWebClientEnabled, (global) => global.webClientEnabled ?? true);
+    sync(setReviewInstruction, (global) => getSavedReviewInstruction(global.reviewInstruction));
+    sync(setReviewLensPresets, (global) => resolveReviewLensPresets(global.reviewLensPresets));
+    sync(setMultiReviewEngine, (global) => global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE);
   }, [global]);
 
   // Entering the web-client section starts a fresh status load, and entering
@@ -733,6 +808,13 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const storedCoreSignature = useMemo(() => JSON.stringify(storedCoreFields(global)), [global]);
   const coreHasChanges =
     localCoreSignature !== storedCoreSignature || githubCredentialPropagationPending;
+  // Which stored settings the form holds unsaved edits for, for the field
+  // explanations, search navigation and the reset preview.
+  const dirtyKeys = useMemo(() => {
+    if (localCoreSignature === storedCoreSignature) return [];
+    const changes = globalConfigPatchFromCoreFields(localCoreFields, storedCoreFields(global));
+    return [...Object.keys(changes.patch), ...changes.unset].sort();
+  }, [localCoreSignature, storedCoreSignature, localCoreFields, global]);
 
   // Latest-value mirrors for the unmount flush. Its effect must run once, so it
   // cannot depend on state that changes on every render; the refs carry the
@@ -859,16 +941,17 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
    * mid-typing cannot store a partial secret and then clear the field.
    */
   const persistCore = async () => {
+    if (!machineReady || unconfirmedSave.current || isSavingRef.current) return;
     const signature = coreSignatureRef.current;
     setIsSaving(true);
     setSaveState("saving");
+    let pendingPatch: { desired: CoreFieldsSnapshot; keys: string[] } | null = null;
     try {
       // Only what changed since the form loaded travels; the backend merges it
       // onto its current settings, so another window's edits are kept.
       const changes = globalConfigPatchFromCoreFields(
         localCoreFields,
         storedCoreFields(syncedGlobalRef.current),
-        syncedGlobalRef.current,
       );
 
       const containerGitHubCredentialChanged =
@@ -881,10 +964,15 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
 
       // A retry of a failed credential propagation has no changes to send; the
       // empty patch writes nothing and answers with the authoritative config.
+      pendingPatch = {
+        desired: localCoreFields,
+        keys: [...Object.keys(changes.patch), ...changes.unset],
+      };
       const newConfig = await backend.patchGlobalConfig(changes.patch, {
         unset: changes.unset,
         machine,
       });
+      pendingPatch = null;
       // Always advance the raw baseline, even when the resolved form values did
       // not change. Also preserve edits made while this save was in flight.
       // A directly opened leaf can have this preference masked by its command
@@ -896,8 +984,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       setLogDetailKeepRaised((current) =>
         current === logDetailKeepRaised ? newConfig.global.logDetailKeepRaised === true : current,
       );
-      syncedGlobalSignatureRef.current = globalFormSignature(newConfig.global);
-      syncedGlobalRef.current = newConfig.global;
+      // Reconcile against the values this mutation submitted so changes to
+      // other fields made during the request remain in the form.
+      syncedGlobalRef.current = { ...syncedGlobalRef.current, ...changes.patch };
+      for (const key of changes.unset) delete syncedGlobalRef.current[key];
       setConfig(newConfig);
       if (useHostClaudeCredentials !== (global.useHostClaudeCredentials ?? true)) {
         // The Claude plan read goes unavailable when host credentials are off,
@@ -936,14 +1026,18 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         await propagateGithubCredentials();
       }
       failedCoreSignatureRef.current = null;
+      setSaveErrorMessage(null);
+      setLastSavedKeys([...Object.keys(changes.patch), ...changes.unset]);
       setSaveState("saved");
     } catch (err) {
       // Remember the exact edit the backend rejected so the debounce effect does
       // not spin retrying it; any further edit retries naturally.
       failedCoreSignatureRef.current = signature;
+      unconfirmedSave.current = pendingPatch;
       setSaveState("error");
       log.error("config.save-failed", { error: formatLogError(err) });
       const message = err instanceof Error ? err.message : "Failed to save settings";
+      setSaveErrorMessage(message);
       toast.error("Failed to save settings", { description: message });
     } finally {
       setIsSaving(false);
@@ -1283,7 +1377,50 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sshAgentSocketPathValidationError,
     defaultProjectsDirectoryValidationError,
   ]);
+  const reconcileCore = async (useSavedValues: boolean) => {
+    if (!machineReady || isSavingRef.current) return;
+    const attempt = unconfirmedSave.current;
+    if (!attempt) {
+      failedCoreSignatureRef.current = null;
+      if (!saveBlockerRef.current) void persistCoreRef.current();
+      return;
+    }
+    isSavingRef.current = true;
+    setIsSaving(true);
+    try {
+      // The effective read includes a current result from each owning node.
+      // An unconfirmed write is never replayed, including after a split save.
+      const current = await backend.getConfig(machine);
+      const saved = storedCoreFields(current.global);
+      const matches = attempt.keys.every((key) => {
+        const field = key as keyof CoreFieldsSnapshot;
+        return settingValuesEqual(saved[field], attempt.desired[field]);
+      });
+      if (matches || useSavedValues) {
+        replaceDraft.current = useSavedValues;
+        if (useSavedValues) syncedGlobalSignatureRef.current = null;
+        unconfirmedSave.current = null;
+        failedCoreSignatureRef.current = null;
+        setConfig(current);
+        setSaveErrorMessage(null);
+        setSaveState(matches ? "saved" : "idle");
+      } else {
+        setSaveErrorMessage(
+          "The saved values differ from this edit. Use the saved values to review them before editing again.",
+        );
+      }
+    } catch {
+      setSaveErrorMessage(
+        "The saved values could not be checked. Try checking again when the machine is reachable.",
+      );
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
+    }
+  };
+  const reconcileCoreRef = useRef(reconcileCore);
   useLayoutEffect(() => {
+    reconcileCoreRef.current = reconcileCore;
     coreSignatureRef.current = localCoreSignature;
     coreHasChangesRef.current = coreHasChanges;
     isSavingRef.current = isSaving;
@@ -1296,24 +1433,56 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   // clears and re-arms the timer and only the final value is written. A rejected
   // signature is not retried until the value changes again.
   useEffect(() => {
-    if (!coreHasChanges || isSaving || saveBlocker) return;
+    if (!machineReady || !coreHasChanges || isSaving || saveBlocker || unconfirmedSave.current)
+      return;
     if (failedCoreSignatureRef.current === localCoreSignature) return;
     const timer = setTimeout(() => {
       void persistCoreRef.current();
     }, AUTO_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [coreHasChanges, localCoreSignature, isSaving, saveBlocker]);
+  }, [coreHasChanges, localCoreSignature, isSaving, saveBlocker, machineReady]);
 
   // Closing Settings, or switching to Messaging/Skills/MCP/Connections, unmounts
   // this form. Flush a still-debounced edit so it is not silently dropped when
   // the Save button that once covered it is gone.
   useEffect(() => {
     return () => {
-      if (!coreHasChangesRef.current || isSavingRef.current || saveBlockerRef.current) return;
+      if (
+        !coreHasChangesRef.current ||
+        isSavingRef.current ||
+        saveBlockerRef.current ||
+        unconfirmedSave.current
+      )
+        return;
       if (failedCoreSignatureRef.current === coreSignatureRef.current) return;
       void persistCoreRef.current();
     };
   }, []);
+
+  const draftRegistry = useSettingsDraftRegistry();
+  useEffect(() => {
+    if (!draftRegistry) return;
+    draftRegistry.report({
+      dirtyKeys,
+      saving: isSaving,
+      unconfirmedKeys: unconfirmedSave.current?.keys ?? [],
+      blocker: saveBlocker,
+      errorMessage:
+        saveState === "error" ? (saveErrorMessage ?? "Changes could not be saved") : null,
+    });
+  }, [draftRegistry, dirtyKeys, isSaving, saveBlocker, saveState, saveErrorMessage]);
+  useEffect(() => {
+    if (!draftRegistry) return;
+    draftRegistry.setRetry((useSavedValues) => void reconcileCoreRef.current(useSavedValues));
+    draftRegistry.setDiscard(() => {
+      coreHasChangesRef.current = false;
+    });
+    return () => {
+      draftRegistry.setRetry(null);
+      draftRegistry.setDiscard(null);
+      draftRegistry.report({ dirtyKeys: [], saving: false, blocker: null, errorMessage: null });
+    };
+  }, [draftRegistry]);
 
   const SAVE_BLOCKER_SECTION_LABELS: Record<string, string> = {
     network: "Network",
@@ -1335,7 +1504,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
         : coreHasChanges
           ? { tone: "pending" as const, text: "Unsaved changes" }
           : saveState === "saved"
-            ? { tone: "saved" as const, text: "All changes saved" }
+            ? {
+                tone: "saved" as const,
+                text: `All changes saved.${savedTimingNote(lastSavedKeys)}`,
+              }
             : null;
 
   return (

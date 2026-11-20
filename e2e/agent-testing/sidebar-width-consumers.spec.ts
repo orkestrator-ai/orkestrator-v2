@@ -20,6 +20,8 @@ type Motion = {
   frames: Array<{ sidebar: number; terminalGap: number; editorGap: number; files: number | null }>;
   terminalWidths: number[];
   editorWidths: number[];
+  /** The sidebar panel's own transition events, in order. */
+  transitions: Array<{ type: string; property: string; elapsed: number }>;
 };
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -27,6 +29,8 @@ const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 const previews = path.join(repositoryRoot, "output", "visual-previews");
 /** The first layout when the pin takes effect and the last when it is released. */
 const MAX_LAYOUTS_PER_CHANGE = 2;
+/** `SIDEBAR_WIDTH_TRANSITION_MS` in `apps/web/src/lib/sidebar-width.ts`, in seconds. */
+const SIDEBAR_WIDTH_TRANSITION_S = 0.18;
 /** The menu's non-compact view, named for whether the profile has other machines. */
 const FULL_VIEW = /^(Full list|By project)$/;
 
@@ -81,7 +85,23 @@ async function startRecording(page: Page): Promise<void> {
     // The panes of a split are panels too; only the shell's own are its siblings.
     const files =
       sidebar.parentElement!.querySelectorAll<HTMLElement>(":scope > [data-panel]")[2] ?? null;
-    const motion: Motion = { frames: [], terminalWidths: [], editorWidths: [] };
+    const motion: Motion = { frames: [], terminalWidths: [], editorWidths: [], transitions: [] };
+    const types = ["transitionrun", "transitionend", "transitioncancel"];
+    const onTransition = (event: Event) => {
+      const transition = event as TransitionEvent;
+      if (transition.target !== sidebar) return;
+      motion.transitions.push({
+        type: transition.type,
+        property: transition.propertyName,
+        elapsed: transition.elapsedTime,
+      });
+    };
+    for (const type of types) sidebar.addEventListener(type, onTransition);
+    // The browser dispatches these after the frame that finishes the motion,
+    // which a loaded renderer can deliver well after the width has settled.
+    (window as unknown as { transitionEnded: () => boolean }).transitionEnded = () =>
+      motion.transitions.filter((transition) => transition.property === "flex-grow").at(-1)
+        ?.type === "transitionend";
     const observe = (element: HTMLElement, into: number[]) => {
       let first = true;
       const observer = new ResizeObserver(() => {
@@ -108,6 +128,7 @@ async function startRecording(page: Page): Promise<void> {
     (window as unknown as { stopRecording: () => Motion }).stopRecording = () => {
       cancelAnimationFrame(frame);
       for (const observer of observers) observer.disconnect();
+      for (const type of types) sidebar.removeEventListener(type, onTransition);
       return motion;
     };
   });
@@ -234,15 +255,32 @@ test("the sidebar's animated width lays out a real terminal and editor at most t
       await expect.poll(sidebarWidth).toBe(expectedWidth);
       await settled(page);
       await page.waitForTimeout(300);
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            (window as unknown as { transitionEnded: () => boolean }).transitionEnded(),
+          ),
+        )
+        .toBe(true);
       const motion = await page.evaluate(() =>
         (window as unknown as { stopRecording: () => Motion }).stopRecording(),
       );
       return { motion, ptyResizes: resizes.slice(before) };
     };
     const assertCheap = ({ motion, ptyResizes }: Awaited<ReturnType<typeof measure>>) => {
-      const steps = new Set(motion.frames.map((frame) => Math.round(frame.sidebar)));
-      // The panel really moved through intermediate widths.
-      expect(steps.size).toBeGreaterThan(3);
+      // The panel really moved through intermediate widths: the browser ran
+      // its width transition to the end, with no cancellation left standing.
+      // Counting sampled widths cannot show this: a loaded renderer paints
+      // only one or two frames in 180 ms, so the samples hold just the start
+      // and end widths (flake 4290).
+      const flexGrow = motion.transitions.filter(
+        (transition) => transition.property === "flex-grow",
+      );
+      expect(flexGrow.at(-1), JSON.stringify(motion.transitions)).toEqual({
+        type: "transitionend",
+        property: "flex-grow",
+        elapsed: SIDEBAR_WIDTH_TRANSITION_S,
+      });
       expect(
         motion.terminalWidths.length,
         `terminal widths ${JSON.stringify(motion.terminalWidths)}`,
@@ -335,6 +373,7 @@ test("the sidebar's animated width lays out a real terminal and editor at most t
             {
               frames: result.motion.frames.length,
               widths: new Set(result.motion.frames.map((frame) => Math.round(frame.sidebar))).size,
+              transitions: result.motion.transitions.length,
               terminal: result.motion.terminalWidths,
               editor: result.motion.editorWidths,
               pty: result.ptyResizes,

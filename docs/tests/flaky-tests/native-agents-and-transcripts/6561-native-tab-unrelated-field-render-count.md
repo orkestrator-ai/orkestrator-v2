@@ -146,3 +146,26 @@ mise run test:logged -- --name watcher-triage-native-tab-render -- bun test --cw
 The recurrence check against `origin/main` at `04639b12b71d4326a3b8941485367aca197f4966` reported this case already open; this branch still had its earlier resolved status. Reopen the local row and preserve the prior resolution as history. The current observation does not prove the old token-fixture cause has returned; the same owner also had a distinct anchor-resize count failure, recorded in case 9926.
 
 Evidence: `/private/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.dH765N/` (compressed group logs); JUnit under `/private/tmp/ork-watcher-failure-triage.0oarZv/`. [The complete report](../../../development/worktree-watcher-validation.md) contains the exact group outcomes, commands and non-green isolated owners. Passing alone establishes intermittence, not a cause or a fix. No related assertion, timeout, skip or implementation changed.
+
+## Investigation — 2026-11-19 (not reproduced; stays open)
+
+Base `fe9d1f5d6`. No code changed.
+
+- With temporary instrumentation in the owning test: after `renderTab()` the
+  tab made no commits during an 8 s idle wait (80 × 100 ms `act` windows),
+  and none in the 4 s after `writeUnrelatedFields()`. So no background poll,
+  retry or debounce commits once mount has settled.
+- The mount itself: the last commits come from the compose-draft hydration
+  (`getComposeDraft` → `reconcile` → `deleteComposeDraft`). They are flushed
+  at the end of the `act` window that `settle()` is waiting in, about 40 ms
+  after the read, and `settle()` loops again, so they stay out of the
+  measurement.
+- Simulated load did not reproduce it: a synchronous 100, 450 or 1,600 ms
+  stall between `renderTab()` and the write, and a 60 or 300 ms stall inside
+  each of the first four `settle()` windows, all passed with 0 commits.
+  20 fresh-process runs of the complete owner under
+  `bun scripts/test-under-contention.ts --burners 6` also passed.
+- Every recorded failure is the first test of the file in a fresh worker
+  (cold modules), at 560–842 ms. The source of the single commit is still
+  unidentified; a recurrence should log which component rendered
+  (for example a temporary `Profiler` per subtree) before anything is changed.

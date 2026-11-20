@@ -11,6 +11,7 @@
 import type { AnyEventDef, AnyEventFamilyDef } from "../event.js";
 import { ACCOUNTS_EVENTS } from "./accounts/events.js";
 import { AGENT_SERVERS_EVENTS } from "./agent-servers/events.js";
+import { CAPABILITIES_EVENTS } from "./capabilities/events.js";
 import { CLAUDE_TMUX_EVENTS } from "./claude-tmux/events.js";
 import { COORDINATOR_EVENTS } from "./coordinator/events.js";
 import { DESIGN_EVENTS } from "./design/events.js";
@@ -30,6 +31,7 @@ import { WEB_ANNOTATIONS_EVENTS } from "./web-annotations/events.js";
 
 export * from "./accounts/events.js";
 export * from "./agent-servers/events.js";
+export * from "./capabilities/events.js";
 export * from "./claude-tmux/events.js";
 export * from "./coordinator/events.js";
 export * from "./design/events.js";
@@ -54,6 +56,7 @@ export type BackendEventDefinition = AnyEventDef | AnyEventFamilyDef;
 export const BACKEND_EVENTS: readonly BackendEventDefinition[] = Object.freeze([
   ...ACCOUNTS_EVENTS,
   ...AGENT_SERVERS_EVENTS,
+  ...CAPABILITIES_EVENTS,
   ...CLAUDE_TMUX_EVENTS,
   ...COORDINATOR_EVENTS,
   ...DESIGN_EVENTS,

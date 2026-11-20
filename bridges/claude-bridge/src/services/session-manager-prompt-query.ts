@@ -196,7 +196,7 @@ export async function resolveQueryPlan(
     // Installs pass only when the settings this CLI reads enable them. A
     // coordinator also gets the user's and the project's skills, mirrored
     // without their hooks or tool grants (`coordinator-skills.ts`).
-    resolveClaudeTurnPlugins(cwd, policy, settingSources),
+    resolveClaudeTurnPlugins(cwd, policy, settingSources, options?.capabilityPlugins),
   ]);
   turn.mcpServerNames = mcpServerNames;
   // On an added account the CLI loads its own copy of the servers; what that

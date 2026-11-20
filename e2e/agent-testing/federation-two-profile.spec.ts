@@ -791,3 +791,249 @@ test("relayed events arrive per node with a busy leaf and an inactive tab (#2212
     rings: { mainDelta: after.main - before.main, relayedDelta: after.relayed - before.relayed },
   };
 });
+
+test("the phone palette opens the shown leaf's Files panel", async () => {
+  const { commandPage, leafEnvironment, leafNodeId } = s();
+  const desktop = commandPage.viewportSize()!;
+  await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
+  const remote = commandPage.getByTestId("remote-workspace-region");
+  await expect(remote).toHaveAttribute("data-node", leafNodeId);
+  await commandPage.setViewportSize({ width: 390, height: 844 });
+  try {
+    appendLines(1);
+    for (const [query, tabName] of [
+      ["open changes", /^Changes/],
+      ["browse files", "All files"],
+    ] as const) {
+      const drawer = commandPage
+        .getByRole("button", {
+          name: /^(Open|Close) projects and environments$/,
+        })
+        .filter({ visible: true })
+        .first();
+      await expect(drawer).toBeVisible();
+      if ((await drawer.getAttribute("aria-expanded")) === "false") await drawer.click();
+      await commandPage.getByTestId("project-search-trigger").click();
+      const input = commandPage.getByRole("combobox", { name: "Search projects and environments" });
+      await input.fill(query);
+      const action = commandPage.getByRole("option", { name: new RegExp(query, "i") });
+      await expect(action).toHaveAccessibleName(new RegExp(LEAF_NAME));
+      await action.click();
+
+      const files = commandPage.getByRole("complementary", { name: "Workspace files" });
+      await expect(files.getByRole("tab", { name: tabName })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await expect(files.getByText("README.md", { exact: true })).toBeVisible();
+      await files.screenshot({
+        path: path.join(
+          repositoryRoot,
+          "output/visual-previews",
+          `palette-remote-${query.replace(" ", "-")}-390.png`,
+        ),
+      });
+      await files.getByRole("button", { name: "Close panel" }).click();
+      await expect(files).toBeHidden();
+    }
+  } finally {
+    await commandPage.setViewportSize(desktop);
+  }
+});
+
+test("past sessions refuse a disconnected owner and resume durably after reconnect", async () => {
+  test.setTimeout(240_000);
+  const { command, commandPage, leaf, leafEnvironment, leafNodeId, identity } = s();
+  const past = { ...identity, logicalSessionKey: `env-${leafEnvironment.id}:past-palette-fixture` };
+  const prompt = "Create a conversation to resume from the command palette.";
+  await leaf.invoke("ensure_native_agent_session", { ...past, model: MODEL_REF });
+  await leaf.invoke("dispatch_native_agent_prompt", {
+    ...past,
+    prompt,
+    requestId: `federation-palette-past-${Date.now()}`,
+    model: MODEL_REF,
+  });
+  const projection = (logicalSessionKey: string) =>
+    leaf.invoke<{ turn?: { phase?: string }; messages?: Array<{ content?: unknown }> } | null>(
+      "get_native_agent_projection",
+      { ...identity, logicalSessionKey },
+    );
+  await expect
+    .poll(async () => (await projection(past.logicalSessionKey))?.turn?.phase, {
+      timeout: VIEW_TIMEOUT_MS,
+    })
+    .toBe("idle");
+  // Pi's resume handle is the provider's list entry, not the bridge's live ID.
+  const list = () =>
+    leaf.invoke<Array<{ sessionId: string; detail?: string }>>(
+      "list_native_agent_resumable_sessions",
+      identity,
+    );
+  await expect.poll(async () => (await list()).some((entry) => entry.detail === prompt)).toBe(true);
+  const sessionId = (await list()).find((entry) => entry.detail === prompt)!.sessionId;
+
+  await revealRow(commandPage, leafEnvironment.name);
+  await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
+  await expect(commandPage.getByTestId("remote-workspace-region")).toHaveAttribute(
+    "data-node",
+    leafNodeId,
+  );
+  const openHistory = async () => {
+    await commandPage.getByTestId("project-search-trigger").click();
+    const input = commandPage.getByRole("combobox", { name: "Search projects and environments" });
+    await input.press("Alt+ArrowUp");
+    return input;
+  };
+  const layout = () =>
+    leaf.invoke<{
+      root: { tabs: Array<{ id: string; nativeAgentData?: { sessionId?: string } }> };
+    }>("get_pane_layout", { environmentId: leafEnvironment.id });
+  const before = (await layout()).root.tabs.map(({ id }) => id);
+  const input = await openHistory();
+  const result = commandPage.getByTestId(`command-palette-session-${sessionId}`);
+  await expect(result).toBeVisible({ timeout: VIEW_TIMEOUT_MS });
+  const rowId = await result.getAttribute("id");
+  for (let index = 0; index < (await commandPage.getByRole("option").count()); index++) {
+    if ((await input.getAttribute("aria-activedescendant")) === rowId) break;
+    await input.press("ArrowDown");
+  }
+  await expect(input).toHaveAttribute("aria-activedescendant", rowId!);
+
+  await command.invoke("update_node", { nodeId: leafNodeId, enabled: false });
+  try {
+    await expect(result).toHaveCount(0, { timeout: VIEW_TIMEOUT_MS });
+    await input.press("Enter");
+    expect((await layout()).root.tabs.map(({ id }) => id)).toEqual(before);
+  } finally {
+    await command.invoke("update_node", { nodeId: leafNodeId, enabled: true });
+  }
+  await expect(result).toBeVisible({ timeout: VIEW_TIMEOUT_MS });
+  await result.click();
+  const resumedTab = async () =>
+    (await layout()).root.tabs.find(
+      (tab) => !before.includes(tab.id) && tab.nativeAgentData?.sessionId,
+    );
+  await expect
+    .poll(async () => Boolean(await resumedTab()), { timeout: VIEW_TIMEOUT_MS })
+    .toBe(true);
+  const { id: tabId } = (await resumedTab())!;
+  const resumed = await projection(`env-${leafEnvironment.id}:${tabId}`);
+  expect(resumed?.messages?.some((message) => message.content === prompt)).toBe(true);
+
+  await commandPage.reload();
+  await revealRow(commandPage, leafEnvironment.name);
+  await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
+  const reloadedHistory = await openHistory();
+  await expect(commandPage.getByTestId(`command-palette-history-${tabId}`)).toBeVisible({
+    timeout: VIEW_TIMEOUT_MS,
+  });
+  await reloadedHistory.press("Escape");
+  await expect(reloadedHistory).toBeHidden();
+});
+
+test("the project toolbar switches Home to the leaf and Pull requests back to the command node", async () => {
+  const { command, leaf, commandPage: page, leafNodeId } = s();
+  const findCopy = async (node: Gateway) => {
+    const { testProject } = profileStatus(node.profile);
+    const projects =
+      await node.invoke<Array<{ id: string; name: string; gitUrl: string; localPath: string }>>(
+        "get_projects",
+      );
+    const project = projects.find((entry) => entry.localPath === testProject);
+    if (!project) throw new Error(`${node.profile} has no fixture project`);
+    return { node, project };
+  };
+  const [local, peer] = await Promise.all([findCopy(command), findCopy(leaf)]);
+  expect(local.project.id).not.toBe(peer.project.id);
+
+  const remote = page.getByTestId("remote-workspace-region");
+  const remoteBar = remote.getByTestId("project-navigation-bar");
+  const localBar = page.getByTestId("project-navigation-bar").filter({
+    has: page.getByRole("combobox", { name: "Machine" }).filter({ hasText: COMMAND_NAME }),
+  });
+  const openCopy = async (projectName: string, machineName: string) => {
+    await page.getByTestId("project-search-trigger").click();
+    await page
+      .getByRole("combobox", { name: "Search projects and environments" })
+      .fill(projectName);
+    await page
+      .getByRole("option", { name: `${projectName}, project on ${machineName}`, exact: true })
+      .click();
+  };
+
+  // Both profiles are reset by the suite. The shared URL is used only for repository identity.
+  for (const { node, project } of [local, peer]) {
+    await node.invoke("update_project", {
+      projectId: project.id,
+      updates: { gitUrl: "https://example.test/fixtures/machine-switch.git" },
+    });
+  }
+
+  // Remember Notes on the same leaf scope that will handle the switch.
+  await openCopy(peer.project.name, LEAF_NAME);
+  await expect(remote).toHaveAttribute("data-node", leafNodeId);
+  const notes = remoteBar.getByRole("tab", { name: "Notes", exact: true });
+  await notes.click();
+  await expect(notes).toHaveAttribute("aria-selected", "true");
+  await openCopy(local.project.name, COMMAND_NAME);
+  await expect(remote).toBeHidden();
+  await localBar.getByRole("tab", { name: "Home", exact: true }).click();
+  await expect(page.locator("#project-panel-home").filter({ visible: true })).toBeVisible();
+  await localBar.getByRole("combobox", { name: "Machine" }).click();
+  await page.getByRole("option", { name: LEAF_NAME, exact: true }).click();
+
+  await expect(remote).toHaveAttribute("data-node", leafNodeId);
+  await expect(remoteBar.getByRole("tab", { name: "Home", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(remote.locator("#project-panel-home")).toBeVisible();
+  await expect(remoteBar.getByRole("combobox", { name: "Machine" })).toHaveText(LEAF_NAME);
+
+  await remoteBar.getByRole("tab", { name: "Pull requests", exact: true }).click();
+  await expect(remote.locator("#project-panel-pull-requests")).toBeVisible();
+  await remoteBar.getByRole("combobox", { name: "Machine" }).click();
+  await page.getByRole("option", { name: COMMAND_NAME, exact: true }).click();
+  await expect(remote).toBeHidden();
+  await expect(localBar.getByRole("tab", { name: "Pull requests", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(
+    page.locator("#project-panel-pull-requests").filter({ visible: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(localBar.getByRole("tab", { name: "Pull requests", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("Settings offers explicit recovery after its last leaf is removed", async () => {
+  const { command, commandPage, leafEnvironment, leafNodeId } = s();
+  await revealRow(commandPage, leafEnvironment.name);
+  await sidebarEnvironmentRow(commandPage, leafEnvironment.name).click();
+  await expect(commandPage.getByTestId("remote-workspace-region")).toHaveAttribute(
+    "data-node",
+    leafNodeId,
+  );
+  await commandPage.getByTestId("project-search-trigger").click();
+  await commandPage
+    .getByRole("combobox", { name: "Search projects and environments" })
+    .fill("allowlist");
+  await commandPage.getByTestId("command-palette-item-settings.network").click();
+  await expect(commandPage.getByTestId("settings-scope")).toContainText(
+    `Machine settings for ${LEAF_NAME}`,
+  );
+  await command.invoke("forget_node", { nodeId: leafNodeId });
+
+  const warning = commandPage.getByText("The selected machine is no longer available.");
+  const recover = commandPage.getByRole("button", { name: "Use the command machine" });
+  await expect(warning).toBeVisible();
+  await expect(recover).toBeVisible();
+  await recover.locator("..").screenshot({
+    path: path.join(repositoryRoot, "output/visual-previews/palette-settings-owner-recovery.png"),
+  });
+  await recover.click();
+  await expect(warning).toBeHidden();
+});

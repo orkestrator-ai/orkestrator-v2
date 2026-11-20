@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:5c26b5207be803d4ce768a67f46e10ea3a0e93516e4e3bbf7b1b75d52905e134",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "basis": {},
+        "driftId": {},
+        "resolutions": {}
+      },
+      "type": "object"
+    }
+  }
+}

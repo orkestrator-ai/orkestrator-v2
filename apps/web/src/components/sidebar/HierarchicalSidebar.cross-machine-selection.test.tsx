@@ -6,8 +6,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
-import { environmentKey, environmentRef, type BackendId } from "@orkestrator/protocol/federation";
+import {
+  environmentKey,
+  environmentRef,
+  projectKey,
+  projectRef,
+  type BackendId,
+} from "@orkestrator/protocol/federation";
+import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
 import { FederationProvider } from "@/components/federation/FederationProvider";
+import { repositoryCollapseKey } from "@/components/federation/useRevealMachineProject";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
@@ -79,11 +87,9 @@ const keyOn = (machine: string, id: string) =>
   environmentKey(environmentRef(`bk_${machine}` as BackendId, id));
 
 function setup({
-  grouping = "project",
   sortMode = "activity",
   respond,
 }: {
-  grouping?: "project" | "machine";
   sortMode?: "activity" | "project";
   respond?: Parameters<typeof installDesktopFake>[0]["respond"];
 } = {}) {
@@ -112,8 +118,8 @@ function setup({
   appCommandStore(projectStore).getState().setProjects([localProject]);
   appCommandStore(environmentStore).getState().setEnvironments(environments);
   useMachineViewStore.setState({
-    grouping,
-    machineFilter: "all",
+    grouping: "repository",
+    machineFilter: [],
     collapsedMachines: [],
     collapsedProjectKeys: [],
     collapsedFolderKeys: [],
@@ -142,9 +148,9 @@ function rowIdsOnScreen(): string[] {
 const rowWithId = (id: string) =>
   document.querySelector(`[data-environment-selection-id='${id}']`) as HTMLElement;
 
-/** What was sent to a machine, without the change counts its rows keep reading. */
+/** Mutations sent to a machine. Mounted rows and tiles also issue background reads. */
 const writesTo = (fake: ReturnType<typeof setup>["fake"], machine: string) =>
-  fake.callsTo(machine).filter((call) => call.command !== "changes_get_view");
+  fake.callsTo(machine).filter((call) => !isNodeReadCommand(call.command));
 
 async function everyRowDrawn() {
   await row("Own b1");
@@ -280,19 +286,24 @@ describe("ranges", () => {
     expect(selected().length).toBeGreaterThan(1);
   });
 
-  test("in the merged project list a range crosses machines and skips a collapsed project", async () => {
+  test("in the repository list a range crosses machines and skips a collapsed repository", async () => {
     setup({ sortMode: "project" });
-    // A merged list hides a machine that is not connected.
+    // The repository list hides a machine that is not connected.
     await row("Own b1");
     await row("On A");
     await row("On B");
+    expect(screen.getByTestId("federated-repository-list")).toBeTruthy();
     expect(rowIdsOnScreen()).not.toContain(keyOn("down", "d1"));
 
     fireEvent.click(await row("Own b1"));
+    // Machine B's project reports no repository, so it is a heading of its own.
     act(() =>
       useMachineViewStore
         .getState()
-        .setProjectKeyCollapsed(JSON.stringify(["bk_b", "project", "rp"])),
+        .setFolderKeyCollapsed(
+          repositoryCollapseKey(projectKey(projectRef("bk_b" as BackendId, "rp"))),
+          true,
+        ),
     );
     await waitFor(() => expect(rowIdsOnScreen()).not.toContain(keyOn("b", "shared")));
 
@@ -303,8 +314,8 @@ describe("ranges", () => {
     expect(selected().some((id) => id !== "b1")).toBe(true);
   });
 
-  test("grouped by machine a range crosses the machine sections", async () => {
-    setup({ grouping: "machine", sortMode: "project" });
+  test("a range crosses repository headings and machines as drawn", async () => {
+    setup({ sortMode: "project" });
     await row("Own b1");
     await row("On A");
     await row("On B");
@@ -418,6 +429,11 @@ describe("bulk actions", () => {
     expect(items).toContain("On A on Machine A");
     expect(items).toContain("On B on Machine B");
     expect(items).toContain("On Down on Machine Down (unavailable, skipped)");
+    // Model a CPU read arriving while confirmation is open, regardless of timer scheduling.
+    await act(async () => {
+      await portalStore.invokeOnNode("bk_a" as BackendId, "get_system_usage");
+    });
+    expect(fake.callsTo("a", "get_system_usage").length).toBeGreaterThan(0);
     expect(writesTo(fake, "a")).toEqual([]);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete all" }));
@@ -579,7 +595,7 @@ describe("bulk action admission", () => {
     const { fake } = setup();
     await everyRowDrawn();
     fireEvent.click(await row("On B"), { metaKey: true });
-    act(() => useMachineViewStore.getState().setMachineFilter("bk_a"));
+    act(() => useMachineViewStore.getState().setMachineFilter(["bk_a"]));
     await waitFor(() => expect(rowIdsOnScreen()).toHaveLength(2));
     expect(rowIdsOnScreen()).toEqual(
       expect.arrayContaining([keyOn("a", "shared"), keyOn("a", "a2")]),
@@ -589,7 +605,7 @@ describe("bulk action admission", () => {
     expect(selected()).toEqual([keyOn("a", "shared")]);
     fireEvent.click(await row("Second on A"), { shiftKey: true });
     expect(selected()).toEqual(rowIdsOnScreen());
-    act(() => useMachineViewStore.getState().setMachineFilter("bk_b"));
+    act(() => useMachineViewStore.getState().setMachineFilter(["bk_b"]));
     await waitFor(() => expect(rowIdsOnScreen()).toEqual([keyOn("b", "shared")]));
     expect(selected()).toHaveLength(2);
     fireEvent.click(screen.getByTitle("Stop selected"));

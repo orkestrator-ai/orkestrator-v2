@@ -481,3 +481,40 @@ env -u NODE_ENV mise run test:logged -- --name merge-browser-ToolGroupFold -- \
 ```
 
 The owning file passed across both Chromium viewports with one worker in 104.2 seconds. The recurrence check confirmed case 1012 is open on the target base.
+
+
+## Settings review recurrence (2026-11-19)
+
+On the Settings review branch based on `5e9835d0a6981a8d2c217d8941e2e065abbe3008`,
+`mise run test:logged -- --name browser -- mise run test:browser` measured
+a 57 px mobile gap against the 2 px limit at line 195. Three workers started
+1,031 of 2,130 component cases before the 1,800 s deadline. The browser run
+emitted no sealed totals. See `orkestrator-test-run.Md64ZR/browser.log.gz`.
+
+The first owner rerun shared a fixture port with the broader check and was
+interrupted when that server stopped. The complete mobile owner passed in
+76.5 s on a private port (exit 0, one worker):
+
+```sh
+ORKESTRATOR_REVIEW_VALIDATION=1 mise run test:logged -- --name tool-group-fold-owner -- bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts --project mobile-chromium --workers=1 --retries=0 --output output/agent-testing/qa-settings-review-640e/tool-group-fold-isolated
+```
+
+`mise run flaky:recurrence -- 1012 --base 5e9835d0a6981a8d2c217d8941e2e065abbe3008`
+reported the case open. The Settings branch leaves the fold implementation and
+test unchanged.
+
+## Capabilities merge validation on 2026-11-19
+
+The merge combined feature head `daa4699dcab5c2765e8291be914892b92dfd7a1b`
+with target parent `75f4aed74cf4cc9a50859d9deef0bc25b7081593`. The branch
+base was `fb2c01e830f497e51745bebd8d73a093fb4af90a`. The five-worker
+component run, `mise run test:logged -- --name merge-browser -- mise run test:browser`,
+finished with 1,964 passed, 155 skipped and three failed. The mobile
+no-preference-motion case measured 57 px against a 2 px limit at line 195.
+
+A private-port rerun of `e2e/HoverWashes.spec.ts` and
+`e2e/ToolGroupFold.spec.ts` with `--workers 1` through `test:logged` reported
+47 passed, one skipped and four failed. This case measured 13 px on mobile
+and 11 px on desktop. With one worker on the detached target parent, the
+exact case also failed on both viewports, at 12 px on mobile and 95 px on
+desktop. The recurrence check confirmed the case was open at the branch base.

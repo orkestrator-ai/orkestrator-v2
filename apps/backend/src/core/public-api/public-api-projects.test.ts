@@ -421,6 +421,29 @@ describe("projects", () => {
 });
 
 describe("settings", () => {
+  test("a remembered Build choice leaves an existing settings revision usable", async () => {
+    const h = await harness();
+    const { project } = await addProject(h);
+    const target = { projectId: project.id };
+    const before = await h.call<PublicSettingsSnapshot>("project.config.get", target);
+    if (!before.ok) throw new Error(before.error.message);
+
+    await h.storage.patchRepositorySettings(project.id, { lastBuildIntent: "interactive" });
+    const after = await h.call<PublicSettingsSnapshot>("project.config.get", target);
+    if (!after.ok) throw new Error(after.error.message);
+    expect(after.result.revision).toBe(before.result.revision);
+    const applied = await h.call(
+      "project.config.set",
+      { ...target, set: { entryPort: 3000 }, expectedRevision: before.result.revision },
+      { requestId: "cfg-after-build-intent" },
+    );
+    expect(applied.ok).toBe(true);
+    expect(await h.storage.getRepositoryConfig(project.id)).toMatchObject({
+      entryPort: 3000,
+      lastBuildIntent: "interactive",
+    });
+  });
+
   test("partial edits preserve unrelated fields and conflict on stale revisions", async () => {
     const h = await harness();
     const { project } = await addProject(h);

@@ -3,32 +3,19 @@ import {
   type ProjectArrangementIntent,
 } from "@orkestrator/protocol/project-arrangement";
 import { useState } from "react";
-import { DndContext } from "@dnd-kit/core";
-import { SortableContext } from "@dnd-kit/sortable";
 import type { AgentRegistrySnapshot } from "@orkestrator/protocol/agent-registry";
 import { NativeInteractionAnchor } from "@/components/native-agent/NativeInteractionAnchor";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useUIStore } from "@/stores/uiStore";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
-import {
-  COORDINATOR_ACTIVITY_COMMAND,
-  type CoordinatorActivityState,
-} from "@orkestrator/protocol/coordinator-activity";
+import { COORDINATOR_ACTIVITY_COMMAND } from "@orkestrator/protocol/coordinator-activity";
 import { emptyPortalLayout, type PortalLayout } from "@orkestrator/protocol/portal-layout";
 import { FederationProvider } from "@/components/federation/FederationProvider";
-import { CommandNodeHomeIcon, MachineHomeIcon } from "@/components/federation/MachineDot";
 import { HierarchicalSidebar } from "@/components/sidebar/HierarchicalSidebar";
-import { ProjectGroupHeader } from "@/components/sidebar/ProjectGroupHeader";
-import { SortableProjectFolder } from "@/components/sidebar/SortableProjectFolder";
-import { Collapsible } from "@/components/ui/collapsible";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { TerminalProvider } from "@/contexts/TerminalContext";
 import { environmentStore, projectStore, uiStore } from "@/stores";
-import {
-  coordinatorActivityStore,
-  useCoordinatorActivity,
-} from "@/stores/coordinatorActivityStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { prMonitorStore } from "@/stores/prMonitorStore";
 import { type ActivitySortOrder, useUIChromeStore } from "@/stores/uiChromeStore";
@@ -100,24 +87,31 @@ const ACTIVITY_SORT_ROWS: ReadonlyArray<
   },
 ];
 
-/** What the fake backend reports for the members' coordinators. */
-let alignmentActivity: CoordinatorActivityState | null = null;
+function usageSample(cpuPercent: number) {
+  return {
+    cpuPercent,
+    ramPercent: 40,
+    gpuPercent: 0,
+    diskPercent: 50,
+    sampledAt: new Date().toISOString(),
+  };
+}
 
 function install() {
   const params = new URLSearchParams(location.search);
-  const byMachine = params.has("machines");
   // `?cross-machine`: "By activity" over this window's rows and two connected
   // machines', all running, plus a machine that is down. The two connected
   // machines share an environment ID, which stays two environments.
   const crossMachine = params.has("cross-machine");
-  const merged = params.has("merged") || byMachine || crossMachine;
+  // `?merged`: another machine (Remote) is known, so the sidebar shows the
+  // multi-machine repository list (design EL01) with its machine tiles.
+  const merged = params.has("merged") || crossMachine;
   const groups = params.has("groups");
-  const repository = params.has("repository");
-  // A third, empty machine, so an expanded machine has a neighbour on each side.
+  // A third, empty machine, so a machine tile has a neighbour on each side.
   const spare = params.has("spare");
-  // `?alignment`: repository members with and without a project icon, long
-  // names, mail badges, another machine's copy of the repository, and a
-  // project with no repository, which stays outside every group.
+  // `?alignment`: projects with and without a project icon, a long project
+  // and machine name, mail badges, another machine's copy of a repository,
+  // and a project with no repository, which is a heading of its own.
   const alignment = params.has("alignment");
   const attentionTarget = params.has("attention-target");
   const activitySort = params.has("activity-sort");
@@ -352,8 +346,13 @@ function install() {
           layout = { ...layout, ...args, revision: layout.revision + 1 };
           persist();
           return layout as T;
+        case "get_system_usage":
+          return usageSample(31) as T;
         case "invoke_on_node":
           if (args?.command === "changes_get_view") return { outcome: "ok", result: null } as T;
+          // The machine tiles' CPU reads are not writes.
+          if (args?.command === "get_system_usage")
+            return { outcome: "ok", result: usageSample(18) } as T;
           calls.setState((state) => ({ writes: [...state.writes, { command, args }] }));
           return { outcome: "ok", result: {} } as T;
         case "reorder_environments":
@@ -370,11 +369,7 @@ function install() {
         case "list_node_outcomes":
           return [] as T;
         case COORDINATOR_ACTIVITY_COMMAND:
-          return {
-            projects: alignmentActivity
-              ? Object.fromEntries(["p", "p2", "q", "house"].map((id) => [id, alignmentActivity]))
-              : {},
-          } as T;
+          return { projects: {} } as T;
         default:
           return [] as T;
       }
@@ -416,74 +411,14 @@ function install() {
     activitySortOrder: (params.get("order") as ActivitySortOrder | null) ?? "priority",
   });
   useMachineViewStore.setState({
-    grouping: repository ? "repository" : merged && !byMachine ? "project" : "machine",
+    grouping: "repository",
+    machineFilter: [],
+    environmentOrdering: "machine",
     collapsedMachines: [],
     collapsedProjectKeys: [],
     collapsedFolderKeys: [],
   });
   return calls;
-}
-
-const noop = () => {};
-
-/**
- * A repository member led by the machine's home. The sidebar shows members
- * their project's icon or none, so this draws the shared header directly to
- * measure the home in the same column.
- */
-function HouseRepositoryGroup() {
-  const activity = useCoordinatorActivity("house");
-  return (
-    <DndContext>
-      <SortableContext items={["house-group"]}>
-        <SortableProjectFolder
-          name="github.com/acme/house"
-          sortableId="house-group"
-          label="acme/house"
-          repository
-          icon={<CommandNodeHomeIcon colorToken="teal" />}
-          subtitle="1 machine · 0 environments"
-          projectCount={1}
-          isCollapsed={false}
-          onToggleCollapse={noop}
-        >
-          <div className="px-2">
-            <Collapsible open>
-              <ProjectGroupHeader
-                projectName="house"
-                label="Self"
-                icon={<MachineHomeIcon colorToken="teal" machineName="Self" />}
-                card={{ environmentCount: 0, runningCount: 0, openHint: "" }}
-                highlighted={false}
-                ariaCurrent={undefined}
-                sortable={false}
-                isCollapsed={false}
-                onOpen={noop}
-                menu={{
-                  openBoard: noop,
-                  openSettings: noop,
-                  newEnvironment: noop,
-                  deleteProject: noop,
-                }}
-                writable
-                coordinatorActivity={activity}
-                newEnvironment={{ label: "New environment", title: "New environment" }}
-              />
-            </Collapsible>
-          </div>
-        </SortableProjectFolder>
-      </SortableContext>
-    </DndContext>
-  );
-}
-
-/**
- * Starts and stops the members' coordinators through the fake backend. Writing
- * the store directly would lose to its first read if that landed afterwards.
- */
-function setAlignmentActivity(state: CoordinatorActivityState | null) {
-  alignmentActivity = state;
-  void appCommandStore(coordinatorActivityStore).getState().refresh();
 }
 
 function AttentionTargetTranscript() {
@@ -554,7 +489,6 @@ export function SidebarDragFixture() {
   const [calls] = useState(() => (instance ??= install()));
   const { writes } = useStore(calls);
   const params = new URLSearchParams(location.search);
-  const alignment = params.has("alignment");
   const attentionTarget = params.has("attention-target");
   return (
     <DockerAvailabilityProvider available={false}>
@@ -564,23 +498,8 @@ export function SidebarDragFixture() {
             {!attentionTarget && (
               <output data-testid="sidebar-writes">{JSON.stringify(writes)}</output>
             )}
-            {alignment ? (
-              <div>
-                {(["working", "waiting", null] as const).map((state) => (
-                  <button
-                    key={state ?? "idle"}
-                    type="button"
-                    className="mr-2 text-xs"
-                    onClick={() => setAlignmentActivity(state)}
-                  >
-                    Coordinators {state ?? "idle"}
-                  </button>
-                ))}
-              </div>
-            ) : null}
             {attentionTarget && <AttentionTargetTranscript />}
             <HierarchicalSidebar />
-            {alignment ? <HouseRepositoryGroup /> : null}
           </main>
         </FederationProvider>
       </TerminalProvider>

@@ -309,34 +309,84 @@ describe("PT-02/PT-05 node-qualified routing", () => {
     expect(await command.portal.outcomes.list()).toEqual([]);
   });
 
-  test("a write whose answer is lost is recorded as outcome-unknown and never resent", async () => {
+  test("two power requests reach one owner and a lost acknowledgement does not resend", async () => {
     const { command, leaf } = await commandWithLeaf();
-    void leaf;
-    let calls = 0;
-    // Simulate an answer lost after the request was sent.
+    const environment = { id: "e1", name: "feature-a", status: "running" };
+    seed(leaf, [environment]);
+    const firstEntered = Promise.withResolvers<void>();
+    const bothEntered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let handled = 0;
+    const getEnvironment = () => ({ ...environment });
+    leaf.commands.set("get_environment", getEnvironment);
+    leaf.commands.set("stop_environment", async (args) => {
+      expect(args.environmentId).toBe(environment.id);
+      if (++handled === 1) firstEntered.resolve();
+      else bothEntered.resolve();
+      await release.promise;
+      environment.status = "stopped";
+      return getEnvironment();
+    });
+
     const link = command.service.link("bk_leaf" as never)!;
     const invoke = link.invoke.bind(link);
-    (link as unknown as { invoke: typeof link.invoke }).invoke = async (name, args) => {
-      if (name === "start_environment_background") {
-        calls += 1;
-        const { NodeOutcomeUnknownError } = await import("./node-link.js");
-        throw new NodeOutcomeUnknownError("lost");
-      }
-      return invoke(name, args);
+    let dispatched = 0;
+    link.invoke = async <T>(
+      name: string,
+      args?: Record<string, unknown>,
+      options?: Parameters<typeof invoke>[2],
+    ) => {
+      const loseAcknowledgement = name === "stop_environment" && ++dispatched === 1;
+      const result = await invoke<T>(name, args, options);
+      if (loseAcknowledgement) throw new NodeOutcomeUnknownError("lost");
+      return result;
     };
-    const result = await command.portal.invokeOnNode({
-      nodeId: "bk_leaf",
-      command: "start_environment_background",
-      args: { environmentId: "e1" },
-      requestKey: "req-1",
-    });
-    expect(result).toMatchObject({ outcome: "unknown", requestKey: "req-1" });
-    expect(calls).toBe(1);
+
+    const stop = (requestKey: string) =>
+      command.portal.invokeOnNode({
+        nodeId: "bk_leaf",
+        command: "stop_environment",
+        args: { environmentId: environment.id },
+        requestKey,
+      });
+    const clientA = stop("client-a");
+    let clientB: ReturnType<typeof stop>;
+    try {
+      await Promise.race([
+        firstEntered.promise,
+        clientA.then(() => {
+          throw new Error("The first request returned before reaching the owner");
+        }),
+      ]);
+      clientB = stop("client-b");
+      await Promise.race([
+        bothEntered.promise,
+        clientB.then(() => {
+          throw new Error("The second request returned before reaching the owner");
+        }),
+      ]);
+      expect(environment.status).toBe("running");
+    } finally {
+      release.resolve();
+    }
+    const [first, second] = await Promise.all([clientA, clientB]);
+    expect(first).toMatchObject({ outcome: "unknown", requestKey: "client-a" });
+    expect(second).toMatchObject({ outcome: "ok", result: { status: "stopped" } });
+    expect(dispatched).toBe(2);
+    expect(handled).toBe(2);
+    expect(
+      await command.portal.invokeOnNode({
+        nodeId: "bk_leaf",
+        command: "get_environment",
+        args: { environmentId: environment.id },
+      }),
+    ).toMatchObject({ outcome: "ok", result: { status: "stopped" } });
+
     const recorded = command.portal.outcomes.list("bk_leaf");
     expect(command.events.filter(({ event }) => event === NODE_OUTCOMES_CHANGED_EVENT)).toEqual([
       { event: NODE_OUTCOMES_CHANGED_EVENT, payload: { nodeId: "bk_leaf" } },
     ]);
-    expect(recorded.map((entry) => entry.command)).toEqual(["start_environment_background"]);
+    expect(recorded.map((entry) => entry.command)).toEqual(["stop_environment"]);
     expect(await command.portal.outcomes.dismiss(recorded[0]!.outcomeId)).toBe(true);
     expect(
       command.events.filter(({ event }) => event === NODE_OUTCOMES_CHANGED_EVENT),

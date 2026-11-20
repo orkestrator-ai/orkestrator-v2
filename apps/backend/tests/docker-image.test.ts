@@ -1,3 +1,4 @@
+import { configureLogger, resetLogger, type LogRecord } from "@orkestrator/protocol/logger";
 import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -642,6 +643,13 @@ esac
     };
     process.env.ORKESTRATOR_NETWORK_POLICY = "1";
     process.env.ORKESTRATOR_PORTABLE_INPUTS = "host-mounts";
+    const diagnostics: LogRecord[] = [];
+    configureLogger({
+      level: "warn",
+      sink: ({ record }) => {
+        if (record?.event === "capabilities.staging-failed") diagnostics.push(record);
+      },
+    });
     try {
       await withDockerScript(
         `#!/bin/sh
@@ -655,9 +663,24 @@ case "$1" in
 esac
 `,
         async (log) => {
-          expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
-            "created-retired",
-          );
+          for (const phase of ["prepare", "write"] as const) {
+            const fail = () => {
+              throw new Error("fixture details stay out of the log");
+            };
+            Object.assign(context, {
+              capabilities: {
+                prepareContainerStaging: async () => {
+                  if (phase === "prepare") fail();
+                  return { stage: async () => fail() };
+                },
+              },
+            });
+            expect(await createDockerContainer(environment, context, { imageId: IMAGE_ID })).toBe(
+              "created-retired",
+            );
+          }
+          expect(diagnostics.map((entry) => entry.fields?.phase)).toEqual(["prepare", "write"]);
+          expect(JSON.stringify(diagnostics)).not.toContain("fixture details stay out of the log");
           const create = (await log.read())
             .split("\n")
             .find((line) => line.startsWith("create --name"));
@@ -667,6 +690,7 @@ esac
         },
       );
     } finally {
+      resetLogger();
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;

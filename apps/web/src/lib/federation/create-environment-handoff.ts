@@ -1,8 +1,9 @@
+import { getWindowScope } from "@/lib/node-scope/app-window-scope";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 /**
- * What became of a New Environment request the window sent to another
- * node's workspace when the user moved the dialog to that machine
+ * What became of a New Environment request when the user moved the dialog to another machine
  * (`openCreateEnvironmentOnMachine`):
  *
  * - `opened`: the node's own dialog is showing the carried form;
@@ -31,7 +32,7 @@ interface Watch {
 const watches = new Set<Watch>();
 
 /**
- * Watches the window's request `seq` to `nodeId` until it settles, then calls
+ * Watches request `seq` to `nodeId` (empty for the command node), then calls
  * `onSettled` once. Returns the stop, which ends the watch without calling it.
  */
 export function watchCreateEnvironmentRequest(
@@ -46,6 +47,7 @@ export function watchCreateEnvironmentRequest(
     done = true;
     clearTimeout(timer);
     unsubscribe();
+    stopSelection?.();
     watches.delete(watch);
   };
   const watch: Watch = {
@@ -66,13 +68,22 @@ export function watchCreateEnvironmentRequest(
       }),
     timeoutMs,
   );
-  const unsubscribe = useRemoteWorkspaceStore.subscribe((state) => {
-    if (state.requests[nodeId]?.seq !== seq) watch.settle({ kind: "superseded" });
-  });
+  const supersede = () => watch.settle({ kind: "superseded" });
+  const commandSequence = () => {
+    const { request, requestSequence } = useAppDialogStore.getState();
+    return request?.kind === "create-environment" ? requestSequence : undefined;
+  };
+  const remoteSequence = () => useRemoteWorkspaceStore.getState().requests[nodeId]?.seq;
+  const currentSequence = nodeId ? remoteSequence : commandSequence;
+  const onRequestChange = () => {
+    if (currentSequence() !== seq) supersede();
+  };
+  const unsubscribe = nodeId
+    ? useRemoteWorkspaceStore.subscribe(onRequestChange)
+    : useAppDialogStore.subscribe(onRequestChange);
+  const stopSelection = nodeId ? undefined : getWindowScope().selection.subscribe(supersede);
   watches.add(watch);
-  if (useRemoteWorkspaceStore.getState().requests[nodeId]?.seq !== seq) {
-    watch.settle({ kind: "superseded" });
-  }
+  onRequestChange();
   return stop;
 }
 

@@ -17,7 +17,7 @@ import {
   renderInAppCommandScope,
   renderInNodeScope,
 } from "@/test/render-in-node-scope";
-import { CreateEnvironmentDialog } from "./CreateEnvironmentDialog";
+import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import type { CreateEnvironmentMachine } from "./create-environment-machines";
 
 const LEAF = "bk_studio" as BackendId;
@@ -283,7 +283,7 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
         environmentType: "containerized",
         agent: { type: "claude", model: "sonnet", reasoningEffort: "default" },
       } satisfies CreateEnvironmentHandoff;
-      expect(onSelectMachine.mock.calls).toEqual([[STUDIO, handoff]]);
+      expect(onSelectMachine.mock.calls[0]?.slice(0, 2)).toEqual([STUDIO, handoff]);
       cleanup();
 
       renderInAppCommandScope(
@@ -335,13 +335,14 @@ describe("CreateEnvironmentDialog machine switch carries the form", () => {
     expect(form?.agent?.type).toBe("claude");
   });
 
-  test("a carried environment type and agent replace the destination's defaults", async () => {
+  test("a carried environment type and agent survive Strict Mode effect replay", async () => {
     federated();
     const onSelectMachine = mock(
       (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
     );
     renderInAppCommandScope(
       dialogWithMachines([OWN, STUDIO], onSelectMachine, { handoff: carried }),
+      { reactStrictMode: true },
     );
     // Containerized is this dialog's default; the carried Local wins.
     expect(screen.queryByText("Git worktree on Build Mac") !== null).toBe(true);
@@ -463,3 +464,61 @@ test("hydrates on open, ignores other nodes, and removes the refresh listener on
   });
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+for (const editsModel of [false, true]) {
+  test(`a late OpenCode catalogue ${editsModel ? "respects the user's model selection" : "restores the carried model and effort"}`, async () => {
+    const cachedModel = {
+      id: "fixture/late",
+      name: "Late OpenCode model",
+      provider: "Fixture",
+      variants: ["high"],
+    };
+    const catalogue = Promise.withResolvers<{
+      projectId: string;
+      models: (typeof cachedModel)[];
+    }>();
+    const onCreate = mock(async (_options: ClaudeOptions) => true);
+    const leaf = new FakeNodeClient({ nodeId: LEAF }).respond(
+      "get_opencode_model_catalog_cache",
+      () => catalogue.promise,
+    );
+    const view = renderInNodeScope(<></>, { role: "leaf", client: leaf });
+    view.scope
+      .store(configStore)
+      .setState({ config: appCommandStore(configStore).getState().config });
+    view.rerender(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={() => undefined}
+          onCreate={onCreate}
+          projectId="project-1"
+          handoff={{
+            name: "carried-model",
+            prompt: "",
+            agent: { type: "opencode", model: cachedModel.id, reasoningEffort: "high" },
+          }}
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    if (editsModel) {
+      const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+      fireEvent.keyDown(picker, { key: "Enter" });
+      fireEvent.click(await screen.findByRole("button", { name: "claude models" }));
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    }
+    await act(async () => catalogue.resolve({ projectId: "project-1", models: [cachedModel] }));
+    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    if (editsModel) {
+      expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ agentType: "claude" });
+    } else {
+      expect(onCreate.mock.calls[0]?.[0]).toMatchObject({
+        agentType: "opencode",
+        model: cachedModel.id,
+        reasoningEffort: "high",
+      });
+    }
+  });
+}

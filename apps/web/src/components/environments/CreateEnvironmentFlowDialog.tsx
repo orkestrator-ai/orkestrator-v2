@@ -1,4 +1,7 @@
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import type {
+  CreateEnvironmentHandoff,
+  CreateEnvironmentRecovery,
+} from "@/lib/federation/workspace-request";
 import {
   effectiveClaudeNativeBackend,
   isTmuxModeEnabled,
@@ -71,6 +74,7 @@ export interface CreateEnvironmentFlowOperations {
 
 interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperations {
   handoff?: CreateEnvironmentHandoff;
+  recovery?: CreateEnvironmentRecovery;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
@@ -193,6 +197,7 @@ export function CreateEnvironmentFlowDialog({
   projectId,
   projectName: providedProjectName,
   handoff,
+  recovery,
   createEnvironment,
   updateEnvironment,
   startEnvironment,
@@ -478,17 +483,24 @@ export function CreateEnvironmentFlowDialog({
   const handleSelectMachine = (
     machine: CreateEnvironmentMachine,
     form: CreateEnvironmentHandoff,
+    sourceForm: CreateEnvironmentRecovery,
   ) => {
     if (isCreating || !projectId) return false;
     cancelPendingCredentialFlow();
     onOpenChange(false);
     const currentName = machines.find((candidate) => candidate.current)?.name;
-    openCreateEnvironmentOnMachine(machine, projectName ?? "New environment", form, {
-      connectionId: scope.role === "command" ? "" : scope.nodeId,
-      projectId,
-      machineName: !currentName || currentName === "This machine" ? "this machine" : currentName,
-      title: projectName ?? "New environment",
-    });
+    openCreateEnvironmentOnMachine(
+      machine,
+      projectName ?? "New environment",
+      form,
+      {
+        connectionId: scope.role === "command" ? "" : scope.nodeId,
+        projectId,
+        machineName: !currentName || currentName === "This machine" ? "this machine" : currentName,
+        title: projectName ?? "New environment",
+      },
+      sourceForm,
+    );
     return true;
   };
 
@@ -589,6 +601,7 @@ export function CreateEnvironmentFlowDialog({
         localEnvironmentAvailable={localEnvironmentAvailable}
         machines={machines}
         handoff={handoff}
+        recovery={recovery}
         onSelectMachine={handleSelectMachine}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined

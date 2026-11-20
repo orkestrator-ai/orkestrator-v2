@@ -4,6 +4,7 @@ import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import type {
   CreateEnvironmentHandoff,
+  CreateEnvironmentRecovery,
   WorkspaceBoardTab,
   WorkspaceDialog,
   WorkspaceWorkTarget,
@@ -31,6 +32,7 @@ export interface MachineWorkspaceSpec {
   /** Open the New Environment dialog for `projectId` instead of selecting it. */
   createEnvironment?: boolean;
   createEnvironmentHandoff?: CreateEnvironmentHandoff;
+  createEnvironmentRecovery?: CreateEnvironmentRecovery;
   /**
    * Open one of the node's own dialogs over the selection: the project's, or
    * with `environmentId`, the environment's settings (or its rebuild).
@@ -63,6 +65,7 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
         nodeId: scope.nodeId,
         projectId: spec.projectId,
         ...(spec.createEnvironmentHandoff ? { handoff: spec.createEnvironmentHandoff } : {}),
+        ...(spec.createEnvironmentRecovery ? { recovery: spec.createEnvironmentRecovery } : {}),
       });
     } else if (spec.environmentId) {
       ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId, {
@@ -91,6 +94,9 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
             createEnvironmentProjectId: spec.projectId,
             ...(spec.createEnvironmentHandoff
               ? { createEnvironmentHandoff: spec.createEnvironmentHandoff }
+              : {}),
+            ...(spec.createEnvironmentRecovery
+              ? { createEnvironmentRecovery: spec.createEnvironmentRecovery }
               : {}),
           }
         : {

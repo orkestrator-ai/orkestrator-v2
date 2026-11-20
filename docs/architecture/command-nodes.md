@@ -603,10 +603,11 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   carries the name, prompt, Build choice and Feature build details, and the
   environment type and agent with its model and effort. The destination keeps
   the type only where it can create it, the agent only when it is enabled
-  there, and the model only when its catalogue lists it. The source retains a
-  recoverable draft, and opening a handoff preserves any saved destination draft.
-  The transfer omits attachments and uses the destination’s machine-specific defaults
-  for everything else.
+  there, and the model only when its catalogue lists it. A carried OpenCode
+  model and effort can resolve when the project catalogue arrives, until the
+  user edits the agent selection. Opening a handoff preserves any saved
+  destination draft. The destination uses its own machine-specific defaults.
+  Attachments and machine-specific settings stay with the source form.
 
   The request survives the destination opening the project's Home behind the
   dialog (`useProjectHomeActivation`): the window's selection sync
@@ -614,11 +615,13 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   selection is its project or that project's Home, and drops it on any other
   navigation. The switch watches its request (`watchCreateEnvironmentRequest`,
   `lib/federation/create-environment-handoff.ts`). When the destination cannot
-  show the form (its workspace fails to open, the project is not there, or
-  nothing opens within 30 seconds) a toast says so and the form opens again on
-  the source machine with what was entered. A switch the user navigated away
-  from stays cancelled. The handoff is renderer state only, so it does not
-  depend on the destination backend's version.
+  show the form (its workspace fails to open, the project is missing or has
+  neither a checkout nor Docker, or 30 seconds pass), the command and leaf
+  hosts use the same recovery path. A toast gives the reason, and the source
+  form reopens with its input, attachments and machine-specific settings.
+  Navigation cancels a pending switch. The handoff lives in the renderer.
+  The [mixed-version browser check](../development/agent-testing.md#mixed-version-create-environment-handoff)
+  exercises the destination's project reads and create command separately.
 - **Project and environment menus** of another node offer what the node's
   own sidebar does. Dialogs (Repository settings, Delete project, an
   environment's Settings) open on the node's scope, so they read and write the

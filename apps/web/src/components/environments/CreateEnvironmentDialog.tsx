@@ -1,4 +1,7 @@
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import type {
+  CreateEnvironmentHandoff,
+  CreateEnvironmentRecovery,
+} from "@/lib/federation/workspace-request";
 import { defineScopedSlot } from "@/lib/node-scope-slots";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
@@ -301,8 +304,13 @@ interface CreateEnvironmentDialogProps {
   machines?: readonly CreateEnvironmentMachine[];
   /** Form data carried by the request that opened this dialog. */
   handoff?: CreateEnvironmentHandoff;
+  recovery?: CreateEnvironmentRecovery;
   /** Moves the form to another machine, returning whether the switch was accepted. */
-  onSelectMachine?: (machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean;
+  onSelectMachine?: (
+    machine: CreateEnvironmentMachine,
+    form: CreateEnvironmentHandoff,
+    recovery: CreateEnvironmentRecovery,
+  ) => boolean;
 }
 
 // Drafts are per project within a node scope, independent of transient open requests.
@@ -330,6 +338,7 @@ export function CreateEnvironmentDialog({
   machines,
   onSelectMachine,
   handoff,
+  recovery,
 }: CreateEnvironmentDialogProps) {
   const nodeBackend = useScopeBackend();
   // Browses the host of the node this component renders in.
@@ -836,8 +845,10 @@ export function CreateEnvironmentDialog({
     const saved = drafts.get(projectId);
     const form = handoff ?? saved;
     if (!form) return;
-    setInitialPrompt(form.feature || form.prompt ? form.prompt : (saved?.prompt ?? ""));
-    setEnvironmentName(form.name);
+    setInitialPrompt(
+      recovery?.prompt ?? (form.feature || form.prompt ? form.prompt : (saved?.prompt ?? "")),
+    );
+    setEnvironmentName(recovery?.name ?? form.name);
     // A draft that carried no choice keeps the one this opening started on.
     const intent = form.feature ? "feature" : (form.interactionMode ?? buildIntentRef.current);
     buildIntentRef.current = intent;
@@ -845,7 +856,7 @@ export function CreateEnvironmentDialog({
     setFeatureName(form.feature?.name ?? "");
     setFeatureAcceptanceCriteria(form.feature?.acceptanceCriteria ?? "");
     setFeatureDeliveryPolicy(form.feature?.deliveryPolicy ?? DEFAULT_DELIVERY_POLICY);
-  }, [drafts, handoff, open, projectId]);
+  }, [drafts, handoff, open, projectId, recovery]);
 
   // Focus the prompt when its section becomes active.
   useEffect(() => {
@@ -1288,18 +1299,22 @@ export function CreateEnvironmentDialog({
     setInitialPromptAttachments(next);
   }, []);
 
-  // Sync defaults when dialog opens
-  // This ensures the dialog always starts with the latest defaults, since the component
-  // may have been mounted before the defaults were available (e.g., config loaded async)
+  // Read the latest defaults once per opening. A replayed mount effect must
+  // preserve the handoff and the agent selection it already applied.
+  const initializedOpeningRef = useRef(false);
   useEffect(() => {
-    if (open) {
-      setMobileSection("prompt");
-      setMobileTabTransitionDirection(null);
-      setPortMappings(defaultPortMappings);
-      setShowPortConfig(defaultPortMappings.length > 0);
-      setEnvironmentType(effectiveDefaultEnvironmentType);
-      agentSelectionTouchedRef.current = false;
+    if (!open) {
+      initializedOpeningRef.current = false;
+      return;
     }
+    if (initializedOpeningRef.current) return;
+    initializedOpeningRef.current = true;
+    setMobileSection("prompt");
+    setMobileTabTransitionDirection(null);
+    setPortMappings(defaultPortMappings);
+    setShowPortConfig(defaultPortMappings.length > 0);
+    setEnvironmentType(effectiveDefaultEnvironmentType);
+    agentSelectionTouchedRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read current defaults only when the dialog opens
   }, [open]);
 
@@ -1365,24 +1380,47 @@ export function CreateEnvironmentDialog({
     }
   }, [agentType, availableModels, getInitialAgentSelection, model, open, reasoningEffort]);
 
+  useEffect(() => {
+    if (!open || !recovery) return;
+    initialPromptAttachmentsRef.current = recovery.attachments;
+    setInitialPromptAttachments(recovery.attachments);
+    setLaunchAgent(recovery.launchAgent);
+    setNetworkAccessMode(recovery.networkAccessMode);
+    setPortMappings(recovery.portMappings);
+    setShowPortConfig(recovery.showPortConfig);
+    setWorktreeBaseDir(recovery.worktreeBaseDir);
+    setClaudeMode(recovery.claudeMode);
+    setCodexMode(recovery.codexMode);
+    setOpencodeMode(recovery.opencodeMode);
+    setGrokMode(recovery.grokMode);
+    setPiMode(recovery.piMode);
+    setAdvancedOpen(recovery.advancedOpen);
+    setCustomizeModels(recovery.customizeModels);
+    setFeatureModels(recovery.featureModels);
+  }, [open, recovery]);
+
   // A handoff's environment type and agent override this opening's defaults,
   // so this follows the effects that apply them. The machine's own limits
   // still hold: the availability effect above moves a type it cannot create
   // to one it can, and a model missing from its catalogue falls back to the
   // agent's default.
   const appliedHandoffRef = useRef<CreateEnvironmentHandoff | null>(null);
+  const pendingOpenCodeSelection = useRef<CreateEnvironmentHandoff["agent"]>(undefined);
   useEffect(() => {
     if (!open) {
       appliedHandoffRef.current = null;
+      pendingOpenCodeSelection.current = undefined;
       return;
     }
     if (!handoff || appliedHandoffRef.current === handoff) return;
+    pendingOpenCodeSelection.current = undefined;
     appliedHandoffRef.current = handoff;
     if (handoff.environmentType) setEnvironmentType(handoff.environmentType);
     const carried = handoff.agent;
     if (!carried || !enabledAgentPlatforms.includes(carried.type)) return;
     agentSelectionTouchedRef.current = true;
     setAgentType(carried.type);
+    if (carried.type === "opencode") pendingOpenCodeSelection.current = carried;
     const carriedModel = modelsForAgent(modelCatalog, carried.type).find(
       (candidate) => candidate.id === carried.model,
     );
@@ -1394,18 +1432,38 @@ export function CreateEnvironmentDialog({
           ? carried.reasoningEffort
           : "default",
       );
-      setFastMode(defaultFastModeFor(carried.type, carriedModel.id, modelCatalog));
+      setFastMode(
+        recovery
+          ? recovery.fastMode
+          : defaultFastModeFor(carried.type, carriedModel.id, modelCatalog),
+      );
     } else {
       const fallback = getInitialAgentSelection(carried.type);
       setModel(fallback.model);
       setReasoningEffort(fallback.reasoningEffort);
       setFastMode(fallback.fastMode);
     }
-  }, [enabledAgentPlatforms, getInitialAgentSelection, handoff, modelCatalog, open]);
+  }, [enabledAgentPlatforms, getInitialAgentSelection, handoff, modelCatalog, open, recovery]);
+
+  useEffect(() => {
+    if (!open || !cachedOpenCodeModels.length) return;
+    const carried = pendingOpenCodeSelection.current;
+    if (!carried) return;
+    pendingOpenCodeSelection.current = undefined;
+    const option = modelCatalog.opencode.find((candidate) => candidate.id === carried.model);
+    if (!option) return;
+    setModel(option.id);
+    setReasoningEffort(
+      option.reasoningEfforts?.includes(carried.reasoningEffort)
+        ? carried.reasoningEffort
+        : "default",
+    );
+  }, [cachedOpenCodeModels, modelCatalog, open]);
 
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {
       if (nextAgent === agentType) return;
+      pendingOpenCodeSelection.current = undefined;
       agentSelectionTouchedRef.current = true;
       featureAttemptModelsRef.current = null;
       setAgentType(nextAgent);
@@ -1419,6 +1477,7 @@ export function CreateEnvironmentDialog({
 
   const selectAgentModel = useCallback(
     (nextModel: AgentModel) => {
+      pendingOpenCodeSelection.current = undefined;
       agentSelectionTouchedRef.current = true;
       featureAttemptModelsRef.current = null;
       const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
@@ -1463,6 +1522,7 @@ export function CreateEnvironmentDialog({
   );
 
   const selectReasoningEffort = useCallback((nextEffort: string) => {
+    pendingOpenCodeSelection.current = undefined;
     agentSelectionTouchedRef.current = true;
     featureAttemptModelsRef.current = null;
     setReasoningEffort(nextEffort);
@@ -1550,27 +1610,44 @@ export function CreateEnvironmentDialog({
     [drafts, onOpenChange, portableForm.prompt, preserveSavedDraft, projectId, resetForm],
   );
 
-  const handleSelectMachine = useCallback(
-    (machine: CreateEnvironmentMachine) => {
-      if (!onSelectMachine || isLoading || !onSelectMachine(machine, portableForm)) return;
-      // Keep recovery on the source scope. Navigation can supersede the
-      // destination request before its stores are ready to show the dialog.
-      if (projectId && !preserveSavedDraft) {
-        if (
-          portableForm.prompt ||
-          portableForm.name ||
-          portableForm.feature ||
-          portableForm.interactionMode === "interactive"
-        ) {
-          drafts.set(projectId, portableForm);
-        } else {
-          drafts.delete(projectId);
-        }
+  const handleSelectMachine = (machine: CreateEnvironmentMachine) => {
+    if (!onSelectMachine || isLoading) return;
+    const sourceForm: CreateEnvironmentRecovery = {
+      name: environmentName,
+      prompt: initialPrompt,
+      attachments: initialPromptAttachments,
+      launchAgent,
+      networkAccessMode,
+      portMappings,
+      showPortConfig,
+      worktreeBaseDir,
+      claudeMode,
+      codexMode,
+      opencodeMode,
+      grokMode,
+      piMode,
+      fastMode,
+      advancedOpen,
+      customizeModels,
+      featureModels,
+    };
+    if (!onSelectMachine(machine, portableForm, sourceForm)) return;
+    // Keep recovery on the source scope. Navigation can supersede the
+    // destination request before its stores are ready to show the dialog.
+    if (projectId && !preserveSavedDraft) {
+      if (
+        portableForm.prompt ||
+        portableForm.name ||
+        portableForm.feature ||
+        portableForm.interactionMode === "interactive"
+      ) {
+        drafts.set(projectId, portableForm);
+      } else {
+        drafts.delete(projectId);
       }
-      resetForm();
-    },
-    [drafts, isLoading, onSelectMachine, portableForm, preserveSavedDraft, projectId, resetForm],
-  );
+    }
+    resetForm();
+  };
 
   // Validate port mappings - returns true if all valid
   const validatePortMappings = useCallback((): boolean => {

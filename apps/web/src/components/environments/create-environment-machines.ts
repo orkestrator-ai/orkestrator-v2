@@ -12,10 +12,14 @@ import { toast } from "sonner";
 import { watchCreateEnvironmentRequest } from "@/lib/federation/create-environment-handoff";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { scopeRowsSource } from "@/lib/federation/scope-overlay";
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import type {
+  CreateEnvironmentHandoff,
+  CreateEnvironmentRecovery,
+} from "@/lib/federation/workspace-request";
 import { domainApi } from "@/lib/node-scope/domains/domain-api";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { portalStore } from "@/lib/portal/portal-store";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 export type CreateEnvironmentMachine = BuildLaunchMachine;
@@ -139,21 +143,30 @@ export function openCreateEnvironmentOnMachine(
   title: string,
   handoff: CreateEnvironmentHandoff,
   source?: CreateEnvironmentSwitchSource,
+  recovery?: CreateEnvironmentRecovery,
 ): void {
-  const connectionId = machine.nodeId ?? "";
+  const destinationId = machine.nodeId ?? "";
   openMachineWorkspace({
-    connectionId,
+    connectionId: destinationId,
     projectId: machine.projectId,
     createEnvironment: true,
     createEnvironmentHandoff: handoff,
     title,
   });
-  // The window's own node opens its dialog from its own loaded stores.
+  if (!source) return;
   const selfId = portalStore.getState().selfId;
-  if (!source || !connectionId || connectionId === selfId) return;
-  const seq = useRemoteWorkspaceStore.getState().requests[connectionId]?.seq;
+  const connectionId = selfId && destinationId !== selfId ? destinationId : "";
+  const seq = connectionId
+    ? useRemoteWorkspaceStore.getState().requests[connectionId]?.seq
+    : useAppDialogStore.getState().requestSequence;
   if (seq === undefined) return;
   watchCreateEnvironmentRequest(connectionId, seq, (outcome) => {
+    if (outcome.kind !== "opened" && !connectionId) {
+      const dialogs = useAppDialogStore.getState();
+      if (dialogs.requestSequence === seq && dialogs.request?.kind === "create-environment") {
+        dialogs.close();
+      }
+    }
     if (outcome.kind !== "failed") return;
     toast.error(`Could not open the new environment form on ${machine.name}`, {
       description: `${outcome.reason} It is open again on ${source.machineName} with what you entered.`,
@@ -163,6 +176,7 @@ export function openCreateEnvironmentOnMachine(
       projectId: source.projectId,
       createEnvironment: true,
       createEnvironmentHandoff: handoff,
+      createEnvironmentRecovery: recovery,
       title: source.title,
     });
   });

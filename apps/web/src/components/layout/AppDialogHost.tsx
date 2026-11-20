@@ -1,8 +1,18 @@
-import { lazy, useEffect, useRef } from "react";
+import { lazy, useEffect, useRef, useState } from "react";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
-import { useDockerAvailabilityReady } from "@/contexts/DockerAvailabilityContext";
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
+import {
+  useDockerAvailability,
+  useDockerAvailabilityReady,
+} from "@/contexts/DockerAvailabilityContext";
+import {
+  reportCreateEnvironmentFailed,
+  reportCreateEnvironmentOpened,
+} from "@/lib/federation/create-environment-handoff";
+import type {
+  CreateEnvironmentHandoff,
+  CreateEnvironmentRecovery,
+} from "@/lib/federation/workspace-request";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import {
   createProjectUpdateHandler,
@@ -84,6 +94,7 @@ function AppDialogContent() {
           requestSequence={requestSequence}
           projectId={request.projectId}
           handoff={request.handoff}
+          recovery={request.recovery}
         />
       );
     case "repository-settings":
@@ -229,10 +240,12 @@ function CreateEnvironmentHost({
   requestSequence,
   projectId,
   handoff,
+  recovery,
 }: {
   requestSequence: number;
   projectId: string;
   handoff?: CreateEnvironmentHandoff;
+  recovery?: CreateEnvironmentRecovery;
 }) {
   const project = useProjectStore((state) =>
     state.projects.find((candidate) => candidate.id === projectId),
@@ -242,20 +255,36 @@ function CreateEnvironmentHost({
   const { windowScope } = useScopesWithCommandFallback();
   const configReady = useConfigStore((state) => state.hasLoaded);
   const dockerReady = useDockerAvailabilityReady();
+  const dockerAvailable = useDockerAvailability();
   const { createEnvironment, updateEnvironment, startEnvironment } = useEnvironments(null);
-  const ready = Boolean(project && projectsLoaded && configReady && dockerReady);
+  const [accepted, setAccepted] = useState(false);
+  const projectsLive = projectsLoaded && !projectsLoading;
+  const ready = Boolean(
+    project &&
+    projectsLoaded &&
+    (!handoff || accepted || projectsLive) &&
+    configReady &&
+    dockerReady,
+  );
+  const failure =
+    projectsLive && !project
+      ? "The project is not on that machine any more."
+      : ready && handoff && !accepted && !recovery && !project?.localPath && !dockerAvailable
+        ? "The project has no local checkout and Docker is unavailable."
+        : null;
+  if (ready && !failure && !accepted) setAccepted(true);
   useEffect(() => {
-    if (ready) return;
-    const close = () => closeCreateRequest(requestSequence);
-    if (projectsLoaded && !projectsLoading && !project) {
-      close();
-      return;
+    if (failure) {
+      reportCreateEnvironmentFailed("", requestSequence, failure);
+      closeCreateRequest(requestSequence);
+    } else if (ready && handoff) {
+      reportCreateEnvironmentOpened("", requestSequence);
+    } else if (!ready) {
+      return windowScope.selection.subscribe(() => closeCreateRequest(requestSequence));
     }
-    // A pending command-node handoff is superseded by subsequent navigation.
-    return windowScope.selection.subscribe(close);
-  }, [project, projectsLoaded, projectsLoading, ready, requestSequence, windowScope]);
+  }, [failure, handoff, ready, requestSequence, windowScope]);
 
-  if (!project || !ready) return null;
+  if (!project || !ready || failure) return null;
   return (
     <CreateEnvironmentFlowDialog
       open
@@ -265,6 +294,7 @@ function CreateEnvironmentHost({
       projectId={projectId}
       projectName={project.name}
       handoff={handoff}
+      recovery={recovery}
       createEnvironment={createEnvironment}
       updateEnvironment={updateEnvironment}
       startEnvironment={startEnvironment}

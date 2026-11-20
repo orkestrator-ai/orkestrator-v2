@@ -2,7 +2,17 @@ import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import type { ProjectBoardTab } from "@/stores/uiStore";
 import type { AgentType } from "@/stores/claudeOptionsStore";
-import type { EnvironmentType } from "@/types";
+import type {
+  AgentStyle,
+  ClaudeMode,
+  CodexMode,
+  EnvironmentType,
+  NetworkAccessMode,
+  OpenCodeMode,
+  PortMapping,
+} from "@/types";
+import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
+import type { FeatureBuildModelState } from "@/lib/feature-build-launch";
 
 /**
  * What the window asks another node's workspace to show when it opens it
@@ -71,6 +81,27 @@ export interface CreateEnvironmentHandoff {
   agent?: { type: AgentType; model: string; reasoningEffort: string };
 }
 
+/** Form state used only when reopening on the original machine after a failed switch. */
+export interface CreateEnvironmentRecovery {
+  prompt: string;
+  name: string;
+  attachments: InitialPromptImageAttachment[];
+  launchAgent: boolean;
+  networkAccessMode: NetworkAccessMode;
+  portMappings: PortMapping[];
+  showPortConfig: boolean;
+  worktreeBaseDir: string | null;
+  claudeMode: ClaudeMode;
+  codexMode: CodexMode;
+  opencodeMode: OpenCodeMode;
+  grokMode: AgentStyle;
+  piMode: AgentStyle;
+  fastMode: boolean | undefined;
+  advancedOpen: boolean;
+  customizeModels: boolean;
+  featureModels: FeatureBuildModelState | null;
+}
+
 /** What the window asks another node's workspace to show. */
 export interface WorkspaceRequest {
   projectId?: string;
@@ -91,6 +122,7 @@ export interface WorkspaceRequest {
   /** Open the node's New Environment dialog for this project. */
   createEnvironmentProjectId?: string;
   createEnvironmentHandoff?: CreateEnvironmentHandoff;
+  createEnvironmentRecovery?: CreateEnvironmentRecovery;
   /** Open one of the node's dialogs for the selected project or environment. */
   dialog?: WorkspaceDialog;
 }

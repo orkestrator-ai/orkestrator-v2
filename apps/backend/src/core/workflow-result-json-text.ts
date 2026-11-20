@@ -101,14 +101,35 @@ function wrongType(value: unknown): JsonTextResultDecode {
   return { ok: false, message: summary, summary };
 }
 
-function refusal(text: string, decoding: string): JsonTextResultDecode {
-  const fault = findJsonTextFault(text) ?? {
+/**
+ * Where JSON text `JSON.parse` refused breaks, as "at character N (line L,
+ * column C) <problem>.", followed by any advice for that fault, and a short
+ * excerpt around it.
+ */
+export function describeJsonTextFault(
+  text: string,
+  expected: "array" | "object" = "object",
+): {
+  location: string;
+  advice?: string;
+  excerpt: string;
+} {
+  const fault = findJsonTextFault(text, expected) ?? {
     offset: text.length,
     problem: "the text is not valid JSON",
   };
   const { line, column } = lineAndColumn(text, fault.offset);
+  return {
+    location: `at character ${fault.offset} (line ${line}, column ${column}) ${fault.problem}.`,
+    ...(fault.advice ? { advice: fault.advice } : {}),
+    excerpt: excerpt(text, fault.offset),
+  };
+}
+
+function refusal(text: string, decoding: string): JsonTextResultDecode {
+  const fault = describeJsonTextFault(text);
   const summary = [
-    `\`result\` is a string, and it is not valid JSON${decoding}: at character ${fault.offset} (line ${line}, column ${column}) ${fault.problem}.`,
+    `\`result\` is a string, and it is not valid JSON${decoding}: ${fault.location}`,
     fault.advice,
     "Fix only that point, keep the rest of the content, and pass the result as a JSON object in `result` rather than as a string.",
   ]
@@ -117,7 +138,7 @@ function refusal(text: string, decoding: string): JsonTextResultDecode {
   return {
     ok: false,
     summary,
-    message: `${summary} Near the fault: ${excerpt(text, fault.offset)}`,
+    message: `${summary} Near the fault: ${fault.excerpt}`,
   };
 }
 
@@ -162,7 +183,10 @@ function pathOf(stack: readonly Frame[], omitLastKey = false): string {
  * The first point at which `text` stops being one JSON value, or null when it
  * is valid. Iterative, so a deeply nested text cannot exhaust the stack.
  */
-export function findJsonTextFault(text: string): JsonTextFault | null {
+export function findJsonTextFault(
+  text: string,
+  expected: "array" | "object" = "object",
+): JsonTextFault | null {
   const stack: Frame[] = [];
   let pos = 0;
   let started = false;
@@ -308,7 +332,7 @@ export function findJsonTextFault(text: string): JsonTextFault | null {
     return {
       offset: pos,
       problem: "more text follows a complete JSON value",
-      advice: "Pass exactly one JSON object.",
+      advice: `Pass exactly one JSON ${expected}.`,
     };
   };
 

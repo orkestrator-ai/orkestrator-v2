@@ -368,15 +368,17 @@ test.each([
     });
   `,
     );
-    // Keep the worker command identity while exercising the actual Playwright CLI
-    // against a temporary, browser-free suite with no shared ports or services.
-    const wrapper = path.join(root, "mise-wrapper");
+    // Exercise mise and the actual Playwright CLI against a temporary suite,
+    // without a browser download, web server or any shared ports.
     await writeFile(
-      wrapper,
-      'mise() { unset JEST_WORKER_ID; node "$ORK_TEST_PLAYWRIGHT_CLI" test; }\n',
+      path.join(root, "mise.toml"),
+      `
+[tasks."test:browser"]
+run = 'unset JEST_WORKER_ID; node "$ORK_TEST_PLAYWRIGHT_CLI" test'
+`,
     );
     const done = await waitFor(root, run, 12_000, {
-      BASH_ENV: wrapper,
+      MISE_TRUSTED_CONFIG_PATHS: root,
       ORK_TEST_PLAYWRIGHT_CLI: cli,
     });
     const result = done.results[0]!;

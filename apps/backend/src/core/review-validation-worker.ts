@@ -386,10 +386,10 @@ async function execute(cmd, index, readyAt) {
       killTree(child, "SIGKILL");
       if (forceKill) clearTimeout(forceKill);
       result.exitCode = typeof code === "number" ? code : null;
-      // The review browser configs preserve Playwright's timeout report and
-      // translate its final timedout status to the CLI's interrupted exit.
-      const browserInterrupted = code === 130 && cmd.cwd === "." && cmd.command === "mise run test:browser";
-      const unavailable = failure ?? (browserInterrupted ? "Playwright validation was interrupted before completing; inspect captured output" : null) ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
+      // Review Playwright reporters preserve timeout output and use the CLI's
+      // interrupted exit status, which wrappers pass through unchanged.
+      const interrupted = code === 130 ? "Validation command was interrupted (exit 130); inspect captured output" : null;
+      const unavailable = failure ?? interrupted ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
       result.status = unavailable ? "incomplete" : code === 0 ? "passed" : "failed";
       delete result.queueReason;
       // A replaced on-demand suite keeps saying what ran in its place.

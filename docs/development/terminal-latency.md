@@ -216,6 +216,14 @@ cells without checking the requested load, and an empty metrics response
 could look like zero stalls. The full comparison needs to be repeated with
 the corrected harness before these figures inform a backend-worker decision.
 
+A review follow-up ran one round at the original busy load with the corrected
+probe and load checks. All five cells recorded 200 measured keys with no
+timeouts. The backend monitor advanced in every cell and recorded zero ticks
+at least 100 ms late. Idle p95/p99 were 27.0/28.3 ms and backend-only p95/p99
+were 32.9/37.4 ms. This run verifies that the harness can measure the busy
+shape. The multi-round comparison and the heavy backend-only run still need
+repeating.
+
 **Load shape.** The loopback benchmark's `busy` level, minus observers:
 three fixture terminals running `producer.ts build` at 256 KiB/s, two running
 `producer.ts tool` (2 MiB every 1.5 s), and four native Claude agents (the

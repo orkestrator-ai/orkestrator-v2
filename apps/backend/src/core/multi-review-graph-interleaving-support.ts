@@ -152,6 +152,7 @@ function routedAgentExecutor(
 export async function multiReviewInterleavingWorld(
   options: {
     script?: FakeAgentScript;
+    invoke?: (command: string, args: Record<string, unknown>) => Promise<unknown>;
     /**
      * One executor call at a time within a pass (default): reviewers still run
      * side by side at the provider, but the order in which they reach each
@@ -279,7 +280,8 @@ export async function multiReviewInterleavingWorld(
         graphRuns: wiringRuns,
         artifacts,
         storage,
-        invoke: async () => {
+        invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+          if (options.invoke) return (await options.invoke(command, args)) as T;
           throw new Error("no commands in tests");
         },
         workflowResults,

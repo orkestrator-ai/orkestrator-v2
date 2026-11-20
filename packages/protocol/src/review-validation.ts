@@ -91,6 +91,8 @@ export interface ReviewValidationResult {
   id: string;
   command: string;
   status: "pending" | "queued" | "running" | "passed" | "failed" | "skipped" | "incomplete";
+  /** Actual command when the scheduler replaced the sealed command. */
+  executedCommand?: string;
   queuedMs?: number;
   /** Bounded scheduler explanation, persisted for inactive views. */
   queueReason?: string;
@@ -280,6 +282,7 @@ export function isReviewValidationRun(value: unknown): value is ReviewValidation
       object(r) &&
       r.id === plan.commands[i]!.id &&
       r.command === plan.commands[i]!.command &&
+      (r.executedCommand === undefined || text(r.executedCommand, 8192)) &&
       ["pending", "queued", "running", "passed", "failed", "skipped", "incomplete"].includes(
         String(r.status),
       ) &&

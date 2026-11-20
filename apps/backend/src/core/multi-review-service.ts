@@ -241,6 +241,7 @@ import {
 } from "./review-fanout.js";
 import {
   disputedReviewChecks,
+  disputedCheckRerunRequest,
   settleDisputedCheckReruns,
   type DisputedCheckReruns,
 } from "./review-disputed-checks.js";
@@ -1540,6 +1541,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
       const { workflow, token } = controlled;
       if (workflow.phase !== "failed") return workflow;
+      await this.cancelDisputedCheckRerun(workflow);
       this.pollGate.clearPrefix(`${workflow.id}\0`);
       // A stale immutable package is unusable and requires a full preparation
       // reset. Live-worktree drift on a legacy/no-package review is advisory:
@@ -1638,14 +1640,17 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // them at once. Restoring only the first would consolidate from fewer
         // reviewers than the user asked for, without saying so.
         const failedReviewers = workflow.reviewers.filter(
-          (reviewer) => reviewer.status === "failed",
+          (reviewer, index) =>
+            reviewer.status === "failed" ||
+            (reviewer.status === "cancelled" &&
+              index < (workflow.reviewPackage?.diffChunkCount ?? 0)),
         );
         const hasReport = workflow.reviewers.some(
           (reviewer) => reviewer.status === "completed" && reviewer.report !== undefined,
         );
         // With no surviving report there is nothing to consolidate, so retry
-        // every failed or stopped reviewer. If a report did survive, preserve
-        // the user's stop choices and retry only failures from the requested panel.
+        // every failed or stopped reviewer. With surviving reports, also
+        // restore stopped slots that own parts of the sealed diff.
         const restartable = hasReport
           ? failedReviewers
           : workflow.reviewers.filter(
@@ -2122,6 +2127,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         supersedePendingAutoPr(workflow);
         this.autoPrRetryAt.delete(workflow.id);
 
+        await this.cancelDisputedCheckRerun(workflow);
         await this.supersedeRestartedResults(workflow, [reviewer]);
 
         await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
@@ -2279,6 +2285,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       // authorized an undelivered PR launch.
       supersedePendingAutoPr(workflow);
       this.autoPrRetryAt.delete(workflow.id);
+      await this.cancelDisputedCheckRerun(workflow);
       await this.supersedeRestartedResults(workflow, kind === "prepare" ? workflow.reviewers : []);
       const activeReviewSession = reviewSession(workflow);
       const abandonActiveReviewSession =
@@ -2670,6 +2677,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             run: workflow.validationRun,
           });
         }
+        await this.cancelDisputedCheckRerun(workflow);
         const shutdowns = await Promise.allSettled(
           uniqueTargets.map(async ({ selection, sessionId }) => {
             const provider = await this.provider(workflow, selection);
@@ -3751,6 +3759,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     supersedePendingAutoPr(workflow);
     this.autoPrRetryAt.delete(workflow.id);
     const waiting: string[] = [];
+    try {
+      await this.cancelDisputedCheckRerun(workflow);
+    } catch {
+      workflow.error = "Cancellation is waiting for disputed validation to stop.";
+      await this.save(workflow, token);
+      return;
+    }
     if (workflow.validationRun && ["planned", "running"].includes(workflow.validationRun.status)) {
       try {
         workflow.validationRun = await this.invoke<ReviewValidationRun>(
@@ -3893,6 +3908,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     kind: MultiReviewStepKind,
   ): Promise<string[]> {
     const errors: string[] = [];
+    if (kind === "consolidate") {
+      try {
+        await this.cancelDisputedCheckRerun(workflow);
+      } catch (error) {
+        errors.push(`disputed validation: ${errorMessage(error)}`);
+      }
+    }
     if (
       kind === "prepare" &&
       workflow.validationRun &&
@@ -4385,17 +4407,36 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     workflow: MultiReviewWorkflow,
   ): Promise<DisputedCheckReruns | "pending"> {
     return settleDisputedCheckReruns({
-      disputes: disputedReviewChecks(completedReviewerReports(workflow.reviewers)),
-      plan: workflow.validationRun?.plan,
-      headRef: workflow.reviewPackage?.headRef,
-      scopeKey: `multi-review\0${workflow.id}\0${workflow.reviewPackage?.id ?? ""}`,
+      ...this.disputedCheckInput(workflow),
       control: (run) =>
         this.invoke<ReviewValidationRun>("start_review_validation", {
           environmentId: workflow.environmentId,
           run,
-          targetBranch: workflow.targetBranch,
+          targetBranch: workflow.reviewPackage?.targetBranch ?? workflow.targetBranch,
+          targetCommit: workflow.reviewPackage?.baseRef,
         }),
     });
+  }
+
+  private disputedCheckInput(workflow: MultiReviewWorkflow) {
+    const plan = workflow.validationRun?.plan;
+    return {
+      disputes: disputedReviewChecks(completedReviewerReports(workflow.reviewers), plan),
+      plan,
+      headRef: workflow.reviewPackage?.headRef ?? "",
+      scopeKey: `multi-review\0${workflow.id}\0${workflow.reviewPackage?.id ?? ""}\0${workflow.activeRequest?.requestId ?? ""}`,
+    };
+  }
+
+  private async cancelDisputedCheckRerun(workflow: MultiReviewWorkflow): Promise<void> {
+    if (workflow.activeRequest?.kind !== "consolidate") return;
+    const request = disputedCheckRerunRequest(this.disputedCheckInput(workflow));
+    if (request?.run) {
+      await this.invoke("cancel_review_validation", {
+        environmentId: workflow.environmentId,
+        run: request.run,
+      });
+    }
   }
 
   private async advanceValidation(workflow: MultiReviewWorkflow, token: string): Promise<void> {
@@ -4665,11 +4706,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               !workflow.reviewPackage && workflow.reviewSnapshotStale === true,
             reviewPackage: workflow.reviewPackage,
             reports: consolidationReports(workflow.reviewers),
+            validationPlan: workflow.validationRun?.plan,
             // Only the result tool's slot fills the scope lists in; a
             // provider-enforced schema still takes the full report.
             scopeFilledByBackend:
               request.resultTransport === "tool-v1" &&
-              consolidationScopeFilledByBackend(workflow.reviewers),
+              consolidationScopeFilledByBackend(workflow.reviewers, workflow.validationRun?.plan),
             onEvidenceStats: (stats) =>
               recordEfficiency(this.options.efficiency, {
                 owner: "multi-review",
@@ -4708,7 +4750,12 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           provider: selection.agent,
           schema,
           ...(request.kind === "consolidate"
-            ? { context: consolidationResultContext(workflow.reviewers) }
+            ? {
+                context: consolidationResultContext(
+                  workflow.reviewers,
+                  workflow.validationRun?.plan,
+                ),
+              }
             : {}),
         });
       }
@@ -5150,7 +5197,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       return;
     }
     if (request.kind === "consolidate") {
-      const parsed = parseStructuredReportResult(result, workflow.reviewers);
+      const parsed = parseStructuredReportResult(
+        result,
+        workflow.reviewers,
+        workflow.validationRun?.plan,
+      );
       if (!parsed.success) {
         await this.prepareAddressFindingsSessionSchemaRepair(
           workflow,
@@ -5187,7 +5238,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       const reruns = await this.disputedCheckReruns(workflow);
       await this.assertFence(workflow.id, token);
       if (reruns === "pending") return;
-      const provenance = deriveConsolidatedProvenance(parsed.data, workflow.reviewers, reruns);
+      const provenance = deriveConsolidatedProvenance(
+        parsed.data,
+        workflow.reviewers,
+        reruns,
+        workflow.validationRun?.plan,
+        workflow.reviewPackage?.diffChunkCount,
+      );
       if (provenance.issues.length > 0) {
         await this.prepareAddressFindingsSessionSchemaRepair(
           workflow,
@@ -5321,7 +5378,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                 "Do not repeat the fix, re-run validation, or edit any file. Keep the files changed, commands run, notes, and limitations you already established, and change only what the errors above require.",
             }
           : request.resultTransport === "tool-v1" &&
-              consolidationScopeFilledByBackend(workflow.reviewers)
+              consolidationScopeFilledByBackend(workflow.reviewers, workflow.validationRun?.plan)
             ? { schema: CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA }
             : undefined,
     );

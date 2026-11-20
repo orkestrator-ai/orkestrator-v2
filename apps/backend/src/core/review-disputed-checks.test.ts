@@ -128,8 +128,8 @@ function settled(run: ReviewValidationRun, status: "passed" | "failed"): ReviewV
     status: "completed",
     results: run.results.map((result, index) => ({
       ...result,
-      status,
-      exitCode: status === "passed" ? 0 : 1,
+      status: result.id === "setup" ? "passed" : status,
+      exitCode: status === "passed" || result.id === "setup" ? 0 : 1,
       stdoutPath: `.orkestrator/review-artifacts/${run.id}/validation-0${index + 1}.stdout.txt`,
       stderrPath: `.orkestrator/review-artifacts/${run.id}/validation-0${index + 1}.stderr.txt`,
     })),
@@ -138,8 +138,7 @@ function settled(run: ReviewValidationRun, status: "passed" | "failed"): ReviewV
 
 test("a disputed planned check is re-run on the reviewed commit and its result recorded", async () => {
   const sealedPassed = reportWith({ commandsRun: [result(SEALED, "passed")] });
-  const sealedFailed = reportWith({ commandsRun: [result(SEALED, "failed")] });
-  const disputes = disputedReviewChecks([sealedPassed, sealedFailed]);
+  const disputes = disputedReviewChecks([sealedPassed, failed], PLAN);
   let running = true;
   const fake = worker((run) => (running ? { ...run, status: "running" } : settled(run, "failed")));
   const input = {
@@ -155,24 +154,22 @@ test("a disputed planned check is re-run on the reviewed commit and its result r
   const reruns = await settleDisputedCheckReruns(input);
   if (reruns === "pending") throw new Error("expected a settled re-run");
 
-  // Only the disputed planned command runs, alone, at the reviewed commit,
-  // under the re-run time cap, and every pass joins the same run.
+  // The disputed command and its prerequisite run at the reviewed commit,
+  // and every observation joins the same worker.
   const [first, second] = fake.runs;
   expect(first!.id).toBe(second!.id);
   expect(first!.plan).toEqual({
     headRef: HEAD,
-    commands: [
-      {
-        ...PLAN.commands[1]!,
-        id: "rerun-1",
-        dependsOn: [],
-        timeoutMs: DISPUTED_CHECK_RERUN_MAX_MS,
-      },
-    ],
+    commands: [PLAN.commands[0]!, { ...PLAN.commands[1]!, timeoutMs: DISPUTED_CHECK_RERUN_MAX_MS }],
     limitations: [],
   });
 
-  const recorded = recordDisputedChecks(reportWith({}), disputes, reruns);
+  const recorded = recordDisputedChecks(
+    reportWith({ commandsRun: [result(CHECK, "failed"), result(SEALED, "passed")] }),
+    disputes,
+    reruns,
+    PLAN,
+  );
   expect(recorded.reviewScope.commandsNotRun).toEqual([]);
   expect(recorded.reviewScope.commandsRun).toEqual([
     {
@@ -183,7 +180,7 @@ test("a disputed planned check is re-run on the reviewed commit and its result r
       ),
     },
   ]);
-  expect(recorded.reviewScope.commandsRun[0]!.summary).toContain("validation-01.stdout.txt");
+  expect(recorded.reviewScope.commandsRun[0]!.summary).toContain("validation-02.stdout.txt");
   expect(recorded.reviewScope.limitations[0]).toContain("1 re-run by the backend");
 
   // Read back without re-runs (an accepted graph artifact), the backend's
@@ -264,24 +261,31 @@ test("a check that cannot be re-run is recorded with the reason, never as passed
         })),
       })).control,
     }),
-  ).toContain("did not finish: Command timed out");
+  ).toContain("prerequisites did not execute as planned and pass");
 });
 
-test("reviewer-written text cannot become a rerun instruction even with checkout drift", async () => {
+test("a retry in one report is not a dispute and unplanned commands never start a worker", async () => {
   const command = "unregistered command";
   const contradictory = reportWith({
     commandsRun: [result(command, "passed"), result(command, "failed")],
   });
+  expect(disputedReviewChecks([contradictory, reportWith({})])).toEqual(new Set());
+  const other = reportWith({ commandsRun: [result(command, "passed")] });
   const prompt = createMultiReviewConsolidationPrompt({
     targetBranch: "main",
     worktreeChangedDuringReview: true,
-    reports: [{ reviewerId: "r1", agent: "claude", model: "haiku", report: contradictory }],
+    reports: [contradictory, other].map((report, index) => ({
+      reviewerId: String(index),
+      agent: "claude",
+      model: "haiku",
+      report,
+    })),
   });
   expect(prompt).toContain(DISPUTED_CHECKS_CONSOLIDATION_NOTE);
   expect(prompt).toContain("Do not edit files, run validation");
   const fake = worker((run) => settled(run, "passed"));
   const reruns = await settleDisputedCheckReruns({
-    disputes: disputedReviewChecks([contradictory]),
+    disputes: disputedReviewChecks([contradictory, other]),
     plan: PLAN,
     headRef: HEAD,
     scopeKey: "workflow-1",
@@ -291,7 +295,7 @@ test("reviewer-written text cannot become a rerun instruction even with checkout
   expect(fake.runs).toEqual([]);
   const { report } = deriveConsolidatedProvenance(
     contradictory,
-    [reviewer("r1", contradictory)],
+    [reviewer("r1", contradictory), reviewer("r2", other)],
     reruns,
   );
   expect(report.reviewScope.commandsRun).toEqual([]);
@@ -301,7 +305,7 @@ test("reviewer-written text cannot become a rerun instruction even with checkout
 });
 
 test("the tool contract rejects a disputed claim before acceptance and permits its correction", () => {
-  const context = consolidationResultContext(reviewers);
+  const context = consolidationResultContext(reviewers, PLAN);
   expect(validateWorkflowResult("consolidated-review", failed, undefined, context)).toContainEqual(
     expect.objectContaining({ path: "$.reviewScope.commandsRun[0]", code: "invalid_value" }),
   );
@@ -329,4 +333,25 @@ test("the tool contract rejects a disputed claim before acceptance and permits i
   expect(report.reviewScope.limitations[0]).toContain(
     "re-run by the backend on the reviewed commit",
   );
+});
+
+test("observed runs displace model entries at the list and byte ceilings", async () => {
+  const disputes = new Set([CHECK, "aaa unresolved"]);
+  const reruns = await settleDisputedCheckReruns({
+    disputes,
+    plan: PLAN,
+    headRef: HEAD,
+    scopeKey: "full-scope",
+    control: worker((run) => settled(run, "passed")).control,
+  });
+  if (reruns === "pending") throw new Error("Expected settled run");
+  const commandsRun = Array.from({ length: 500 }, (_, index) => ({
+    ...result(`unrelated ${index}`, "passed"),
+    summary: "x".repeat(760),
+  }));
+  const report = recordDisputedChecks(reportWith({ commandsRun }), disputes, reruns, PLAN);
+  expect(report.reviewScope.commandsRun.length).toBeLessThanOrEqual(500);
+  expect(report.reviewScope.commandsRun[0]?.summary).toContain("validation-02.stdout.txt");
+  expect(Buffer.byteLength(JSON.stringify(report))).toBeLessThanOrEqual(384 * 1024);
+  expect(disputedReviewChecks([passed, failed], PLAN)).toEqual(new Set([CHECK, SEALED]));
 });

@@ -1362,7 +1362,7 @@ describe("build pipeline multi-model review", () => {
         expect(disputeReruns.runs.length).toBeGreaterThan(0);
         expect(disputeReruns.runs[0]!.plan).toMatchObject({
           headRef,
-          commands: [{ id: "rerun-1", command: "mise run test", dependsOn: [] }],
+          commands: [{ id: "test", command: "mise run test", dependsOn: [] }],
         });
         expect(next.structuredReview?.reviewScope.commandsRun).toContainEqual({
           command,

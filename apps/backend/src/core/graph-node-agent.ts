@@ -86,6 +86,7 @@ import type { WorkflowResultService } from "./workflow-result-service.js";
 import type { WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
 import {
   GraphAgentBranchHost,
+  cancelGraphDisputeReruns,
   type GraphAgentCallFacts,
   type GraphAgentCallState,
 } from "./graph-agent-host.js";
@@ -178,6 +179,12 @@ export interface GraphAgentExecutorDependencies {
   rerunDisputedChecks?(
     environmentId: string,
     run: ReviewValidationRun,
+    targetBranch?: string,
+    targetCommit?: string,
+  ): Promise<ReviewValidationRun>;
+  cancelDisputedChecks?(
+    environmentId: string,
+    run: ReviewValidationRun,
   ): Promise<ReviewValidationRun>;
   pollGate?: AgentBranchPollGate;
   progressTracker?: MultiReviewProgressTracker;
@@ -251,6 +258,9 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
     context: GraphExecutorContext,
     reason: GraphCancelReason,
   ): Promise<GraphActivationReport> {
+    if (this.dependencies.cancelDisputedChecks) {
+      await cancelGraphDisputeReruns(context, this.dependencies.cancelDisputedChecks);
+    }
     const session = context.activation.session;
     if (session?.question) this.dependencies.questions.release(session.question.id);
     const binding = context.binding;

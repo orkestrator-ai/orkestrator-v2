@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   STRUCTURED_REVIEW_MAX_LIST_ITEMS,
+  STRUCTURED_REVIEW_MAX_COMMAND_BYTES,
   utf8Bytes,
   type ReviewCommandResult,
   type StructuredReviewReport,
@@ -47,23 +48,46 @@ export const DISPUTED_CHECK_RERUN_SUMMARY_PREFIX =
   "Re-run by the backend after review reports disagreed";
 
 const DISPUTE_LIMITATION_BYTES = 512;
+// Reserve bounded space for backend evidence, including the reported command
+// and both artifact paths for each of the four observed results.
+const DISPUTE_PROJECTION_BYTES =
+  MAX_DISPUTED_CHECK_RERUNS * (6 * STRUCTURED_REVIEW_MAX_COMMAND_BYTES + 1024) +
+  DISPUTE_LIMITATION_BYTES;
 
 const CHECK_LIMITATION = "Disputed validation outcomes:";
 
-/** Compare exact command text, including whitespace within shell arguments. */
+/** Compare each reviewer's last outcome for a check, preserving shell argument text. */
 export function disputedReviewChecks(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
+  plan?: ReviewValidationPlan,
 ): Set<string> {
   const results = new Map<string, "passed" | "failed">();
   const disputed = new Set<string>();
+  const aliases = new Map<string, Set<string>>();
   for (const report of reports) {
+    const latest = new Map<string, "passed" | "failed">();
     for (const { command, result } of report.reviewScope?.commandsRun ?? []) {
-      const previous = results.get(command);
-      if (previous !== undefined && previous !== result) disputed.add(command);
-      results.set(command, result);
+      const planned = plan && plannedCommandFor(command, plan);
+      const key = planned ? sealedCommand(planned) : command;
+      latest.set(key, result);
+      const spellings = aliases.get(key) ?? new Set<string>();
+      spellings.add(command);
+      if (planned) {
+        if (utf8Bytes(key) <= STRUCTURED_REVIEW_MAX_COMMAND_BYTES) spellings.add(key);
+        if (plannedCommandFor(planned.command, plan)?.id === planned.id) {
+          if (utf8Bytes(planned.command) <= STRUCTURED_REVIEW_MAX_COMMAND_BYTES)
+            spellings.add(planned.command);
+        }
+      }
+      aliases.set(key, spellings);
+    }
+    for (const [key, result] of latest) {
+      const previous = results.get(key);
+      if (previous !== undefined && previous !== result) disputed.add(key);
+      results.set(key, result);
     }
   }
-  return disputed;
+  return new Set(Array.from(disputed).flatMap((key) => Array.from(aliases.get(key)!)));
 }
 
 /** What the backend observed when it re-ran one disputed check. */
@@ -104,15 +128,17 @@ export type DisputedCheckRerunControl = (run: ReviewValidationRun) => Promise<Re
  * reviewer may also have copied the bare command, which matches only when
  * exactly one planned command has that text.
  */
+function sealedCommand(command: ReviewValidationPlan["commands"][number]): string {
+  return `cd ${quoteShell(command.cwd)} && ${command.command}`;
+}
+
 function plannedCommandFor(
   disputed: string,
   plan: ReviewValidationPlan,
 ): ReviewValidationPlan["commands"][number] | undefined {
   const text = disputed.trim();
-  const sealed = plan.commands.find(
-    (command) => text === `cd ${quoteShell(command.cwd)} && ${command.command}`,
-  );
-  if (sealed) return sealed;
+  const sealed = plan.commands.filter((command) => text === sealedCommand(command));
+  if (sealed.length > 0) return sealed.length === 1 ? sealed[0] : undefined;
   const bare = plan.commands.filter((command) => command.command.trim() === text);
   return bare.length === 1 ? bare[0] : undefined;
 }
@@ -181,28 +207,24 @@ export function disputedCheckRerunRequest(input: {
     }
   }
   if (selected.length === 0) return { commands: new Map(), notRun, headRef: input.headRef };
-  const ids = new Map<string, string>();
-  const commands: ReviewValidationPlan["commands"] = [];
-  const disputed = new Map<string, string>();
-  for (const entry of selected) {
-    let id = ids.get(entry.planned.id);
-    if (!id) {
-      id = `rerun-${commands.length + 1}`;
-      ids.set(entry.planned.id, id);
-      commands.push({
-        ...entry.planned,
-        id,
-        // Each disputed check stands on its own; its prerequisites already
-        // ran when the package was sealed.
-        dependsOn: [],
-        timeoutMs: Math.min(entry.planned.timeoutMs, DISPUTED_CHECK_RERUN_MAX_MS),
-      });
+  const needed = new Set(selected.map(({ planned }) => planned.id));
+  // Plans are in dependency order. Walk backwards to collect transitive setup,
+  // then preserve the original ordering and IDs in the worker's plan.
+  for (const command of input.plan!.commands.toReversed()) {
+    if (needed.has(command.id)) {
+      for (const dependency of command.dependsOn) needed.add(dependency);
     }
-    disputed.set(entry.disputed, id);
   }
+  const commands = input
+    .plan!.commands.filter(({ id }) => needed.has(id))
+    .map((command) => ({
+      ...command,
+      timeoutMs: Math.min(command.timeoutMs, DISPUTED_CHECK_RERUN_MAX_MS),
+    }));
+  const disputed = new Map(selected.map(({ disputed, planned }) => [disputed, planned.id]));
   const plan: ReviewValidationPlan = { headRef: input.headRef, commands, limitations: [] };
   const run = newReviewValidationRun(
-    disputedCheckRerunId(input.scopeKey, input.headRef, Array.from(disputed.keys())),
+    disputedCheckRerunId(input.scopeKey, input.headRef, ["v2", JSON.stringify(plan)]),
     plan,
   );
   return { run, commands: disputed, notRun, headRef: input.headRef };
@@ -246,6 +268,26 @@ export async function advanceDisputedCheckRerun(
     return notRun("The environment returned no usable re-run record.");
   }
   if (UNSETTLED_RUN.has(run.status)) return "pending";
+  if (JSON.stringify(run.plan) !== JSON.stringify(request.run.plan)) {
+    return notRun("Its re-run did not use the sealed command plan.");
+  }
+  if (run.environmentChanges?.length || run.environmentChangesOmitted) {
+    return notRun("The workspace differed from the reviewed commit during its re-run.");
+  }
+  const commandsById = new Map(request.run.plan.commands.map((command) => [command.id, command]));
+  const resultsById = new Map(run.results.map((result) => [result.id, result]));
+  const passedSetup = new Set<string>();
+  for (const planned of request.run.plan.commands) {
+    const observed = resultsById.get(planned.id);
+    if (
+      observed?.status === "passed" &&
+      (observed.executedCommand ?? observed.command) === planned.command &&
+      planned.dependsOn.every((id) => passedSetup.has(id))
+    ) {
+      passedSetup.add(planned.id);
+    }
+  }
+  const setupPassed = (id: string) => passedSetup.has(id);
   if (run.status !== "completed") {
     return notRun(
       run.status === "cancelled"
@@ -253,9 +295,29 @@ export async function advanceDisputedCheckRerun(
         : "Its re-run did not complete on the reviewed commit.",
     );
   }
+  const aliases = new Map<string, string>();
   for (const [command, id] of request.commands) {
-    const result = run.results.find((entry) => entry.id === id);
-    if (result?.status === "passed" || result?.status === "failed") {
+    const planned = commandsById.get(id)!;
+    const existing = aliases.get(id);
+    if (!existing || command === sealedCommand(planned)) aliases.set(id, command);
+  }
+  for (const [id, command] of aliases) {
+    const planned = commandsById.get(id)!;
+    const result = resultsById.get(id);
+    const executed = result?.executedCommand ?? result?.command;
+    const reason =
+      executed !== undefined && executed !== planned.command
+        ? `The scheduler ran ${executed} in its place.`
+        : !planned.dependsOn.every(setupPassed)
+          ? "Its re-run prerequisites did not execute as planned and pass."
+          : undefined;
+    if (reason) {
+      reruns.set(command, {
+        command,
+        result: "not-run",
+        reason: `${DISPUTED_CHECK_REASON} ${reason}`,
+      });
+    } else if (result?.status === "passed" || result?.status === "failed") {
       reruns.set(command, {
         command,
         result: result.status,
@@ -268,10 +330,11 @@ export async function advanceDisputedCheckRerun(
       reruns.set(command, {
         command,
         result: "not-run",
-        reason: `${DISPUTED_CHECK_REASON} Its re-run ${result?.status === "skipped" ? "was skipped" : "did not finish"}${result?.limitation ? `: ${result.limitation.slice(0, 512)}` : "."}`,
+        reason: `${DISPUTED_CHECK_REASON} Its re-run ${result?.status === "skipped" ? "was skipped" : "did not finish"}${result?.limitation && utf8Bytes(result.limitation) <= 512 ? `: ${result.limitation}` : "."}`,
       });
     }
   }
+  for (const [alias, id] of request.commands) reruns.set(alias, reruns.get(aliases.get(id)!)!);
   return reruns;
 }
 
@@ -300,6 +363,7 @@ export function recordDisputedChecks(
   report: StructuredReviewReport,
   disputes: ReadonlySet<string>,
   reruns?: DisputedCheckReruns,
+  plan?: ReviewValidationPlan,
 ) {
   if (disputes.size === 0) return report;
   const { reviewScope } = report;
@@ -332,29 +396,49 @@ export function recordDisputedChecks(
     utf8Bytes(JSON.stringify({ ...report, reviewScope: scope })) -
     DISPUTE_LIMITATION_BYTES;
   let omitted = 0;
+  const entries = new Map<string, ReviewCommandResult | { command: string; reason: string }>();
+  const group = (command: string) => {
+    const planned = plan && plannedCommandFor(command, plan);
+    return planned ? `plan:${planned.id}` : `command:${command}`;
+  };
   for (const command of Array.from(disputes).sort()) {
     const observed = reruns?.get(command);
-    const entry: ReviewCommandResult | { command: string; reason: string } | undefined =
-      kept.get(command) ??
+    const known = kept.get(command);
+    const entry =
+      known ??
       (observed && observed.result !== "not-run"
-        ? { command, result: observed.result, summary: rerunSummary(observed) }
+        ? { command: observed.command, result: observed.result, summary: rerunSummary(observed) }
         : {
-            command,
-            reason:
-              observed?.result === "not-run"
-                ? observed.reason
-                : `${DISPUTED_CHECK_REASON} It was not re-run.`,
+            command: observed?.command ?? command,
+            reason: observed?.reason ?? `${DISPUTED_CHECK_REASON} It was not re-run.`,
           });
-    const isRun = "result" in entry;
-    const list = isRun ? rerun : pending;
-    const existing = isRun ? commandsRun.length : commandsNotRun.length;
+    const key = group(entry.command);
+    if (observed || known || !entries.has(key)) entries.set(key, entry);
+  }
+  // Observed results have priority over unresolved disputes and model scope.
+  for (const entry of entries.values()) {
+    if (!("result" in entry)) continue;
     const bytes = utf8Bytes(JSON.stringify(entry)) + 1;
-    if (list.length + existing >= STRUCTURED_REVIEW_MAX_LIST_ITEMS || bytes > remaining) {
+    while (
+      commandsRun.length &&
+      (rerun.length + commandsRun.length >= STRUCTURED_REVIEW_MAX_LIST_ITEMS || bytes > remaining)
+    ) {
+      remaining += utf8Bytes(JSON.stringify(commandsRun.pop())) + 1;
+    }
+    rerun.push(entry);
+    remaining -= bytes;
+  }
+  for (const entry of entries.values()) {
+    if ("result" in entry) continue;
+    const bytes = utf8Bytes(JSON.stringify(entry)) + 1;
+    if (
+      pending.length + commandsNotRun.length >= STRUCTURED_REVIEW_MAX_LIST_ITEMS ||
+      bytes > remaining
+    ) {
       omitted += 1;
       continue;
     }
-    if (isRun) rerun.push(entry);
-    else pending.push(entry);
+    pending.push(entry);
     remaining -= bytes;
   }
   const parts = [
@@ -384,21 +468,29 @@ export function disputedCheckDigests(disputes: ReadonlySet<string>): string[] {
   return Array.from(disputes, commandDigest);
 }
 
+/** Leave room for observed worker results before accepting a consolidator's report. */
+export function disputedCheckProjectionBudgetIssues(
+  value: unknown,
+): ReviewContractValidationIssue[] {
+  return utf8Bytes(JSON.stringify(value)) > WORKFLOW_RESULT_MAX_BYTES - DISPUTE_PROJECTION_BYTES
+    ? [
+        {
+          path: "$",
+          code: "invalid_value",
+          message: "Shorten the report to leave room for the backend's disputed-check evidence.",
+        },
+      ]
+    : [];
+}
+
 /** Refuse claims before the result becomes final. Re-run entries are backend-owned. */
 export function disputedCheckSubmissionIssues(
   value: unknown,
   digests: readonly string[] | undefined,
 ): ReviewContractValidationIssue[] {
   if (!digests?.length) return [];
-  if (utf8Bytes(JSON.stringify(value)) > WORKFLOW_RESULT_MAX_BYTES - DISPUTE_LIMITATION_BYTES) {
-    return [
-      {
-        path: "$",
-        code: "invalid_value",
-        message: "Shorten the report to leave room for the backend's disputed-check limitation.",
-      },
-    ];
-  }
+  const budget = disputedCheckProjectionBudgetIssues(value);
+  if (budget.length > 0) return budget;
   const scope = (value as Partial<StructuredReviewReport>).reviewScope;
   if (!Array.isArray(scope?.commandsRun)) return [];
   const disputed = new Set(digests);

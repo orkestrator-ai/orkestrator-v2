@@ -81,6 +81,7 @@ export const startReviewValidationCommand = defineCommand({
     environmentId: Schema.String,
     run: checked,
     targetBranch: Schema.optionalKey(Schema.String),
+    targetCommit: Schema.optionalKey(Schema.String),
   }),
   result: ReviewValidationRunSchema,
   critical: [],

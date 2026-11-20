@@ -360,7 +360,16 @@ function gainsDisputedCheckFence(
   )
     return false;
   const { disputedCheckDigests, ...rest } = next;
-  return Boolean(disputedCheckDigests?.length) && serialize(previous) === serialize(rest);
+  if (!disputedCheckDigests?.length) return false;
+  if (
+    previous.type === "consolidated-review" &&
+    rest.type === "consolidated-review" &&
+    rest.scope === undefined
+  ) {
+    const { scope: _scope, ...prior } = previous;
+    return serialize(prior) === serialize(rest);
+  }
+  return serialize(previous) === serialize(rest);
 }
 
 /** Bind a held validation to all review context that can change its outcome. */

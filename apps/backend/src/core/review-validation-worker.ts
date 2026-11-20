@@ -130,10 +130,10 @@ function recordEnvironmentChanges(files) {
   for (const file of recorded) seenDriftPaths.add(file);
   let omitted = Number.isSafeInteger(run.environmentChangesOmitted) ? run.environmentChangesOmitted : 0;
   for (const file of files) {
-    if (typeof file !== "string" || file.length === 0 || file.length > ${REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX}) continue;
+    if (typeof file !== "string" || file.length === 0) continue;
     if (seenDriftPaths.has(file)) continue;
     seenDriftPaths.add(file);
-    if (recorded.length < ${REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX}) recorded.push(file);
+    if (file.length <= ${REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX} && recorded.length < ${REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX}) recorded.push(file);
     else omitted++;
   }
   recorded.sort();
@@ -263,6 +263,7 @@ async function execute(cmd, index, readyAt) {
     throw error;
   }
   for (const stream of streams) result[stream.name + "Path"] = path.relative(root, stream.file).split(path.sep).join("/");
+  if (cmd.command !== result.command) result.executedCommand = cmd.command;
   result.status = "running";
   delete result.queueReason;
   result.startedAt = new Date().toISOString();
@@ -494,15 +495,18 @@ async function main() {
     // A repository-declared on-demand suite (commandProfiles[...].onDemand)
     // runs only when the change touches one of its trigger paths. Otherwise
     // its declared replacement runs in its place, or it is skipped. The plan
-    // and each result keep the planned command line; the limitation says what
-    // ran instead and why. When the changed paths cannot be read, every
-    // command runs as planned.
+    // and each result keep the planned command line. Execution records a
+    // replacement separately. A moving branch can use the full plan when its
+    // paths are unavailable; a sealed comparison must be readable.
     const onDemandSkipped = new Map();
     const onDemandReplacements = new Map();
     const onDemandRules = run.plan.commands.map(cmd => cmd.cwd === "." ? policy.profiles[cmd.command]?.onDemand : undefined);
     if (onDemandRules.some(Boolean) && typeof input.targetRef === "string") {
       const diff = spawnSync("git", ["diff", "--name-only", "-z", input.targetRef + "...HEAD"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20000 });
       const changed = diff.status === 0 ? diff.stdout.split("\0").filter(Boolean) : null;
+      if (!changed && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.targetRef)) {
+        throw new Error("The sealed validation comparison could not be read");
+      }
       const globToRegExp = pattern => new RegExp("^" + pattern.split("**").map(part => part.split("*").map(piece => piece.replace(/[.+?^$(){}|[\]\\]/g, "\\$&")).join("[^/]*")).join(".*") + "$");
       if (changed) {
         for (const [index, rule] of onDemandRules.entries()) {

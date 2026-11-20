@@ -9,8 +9,8 @@
  *   the confined writer, in a container through the pinned in-container
  *   writer the review package uses), and hash-verified at the source before
  *   each consumer reads them: on the host by streaming the file, in a
- *   container with `realpath`, `stat` and `sha256sum` inside it, so no file
- *   content crosses the container boundary to be checked.
+ *   container with `realpath`, `stat` and `sha256sum` inside it. Review-package
+ *   verification also reads the bounded JSON to verify its linked diff files.
  *
  * Every artifact is checked against its type from the run's frozen plan
  * (budgets, schema, domain validator) before it is stored, so a consumer
@@ -47,6 +47,7 @@ import {
 import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands-files.js";
 import {
   createGitEnvironmentCommandRunner,
+  readEnvironmentWorkspaceFile,
   ensureWorkspaceArtifactIsGitExcluded,
   writeContainerReviewPackage,
   type EnvironmentCommandRunner,
@@ -61,6 +62,11 @@ import {
   type WorkspaceFileHashFailure,
 } from "./review-validation-artifacts.js";
 import { runCommand } from "./shell.js";
+import {
+  isReviewPackageReference,
+  type ReviewPackage,
+} from "@orkestrator/protocol/review-workflow";
+import { MAX_REVIEW_DIFF_ARTIFACT_BYTES } from "./review-diff-artifact.js";
 import {
   graphStorageHash,
   type GraphArtifactUsage,
@@ -473,14 +479,15 @@ export class GraphArtifactStore {
     if (granted !== undefined && this.now().getTime() - granted < GRAPH_FILE_PERMIT_MAX_AGE_MS) {
       return { ok: true, artifact };
     }
+    const verifyEvidence = () => this.verifyArtifactEvidence(run ?? null, artifact, file);
     if (permitKey === undefined) {
-      const verified = await this.verifySealedFile(run ?? null, file);
+      const verified = await verifyEvidence();
       if (!verified.ok) this.revokeFilePermits(runId, artifactId);
       return verified.ok ? { ok: true, artifact } : verified;
     }
     let flight = this.filePermitFlights.get(permitKey);
     if (!flight) {
-      flight = this.verifySealedFile(run ?? null, file).then((verified) => {
+      flight = verifyEvidence().then((verified) => {
         if (verified.ok) this.grantFilePermit(permitKey);
         else this.revokeFilePermits(runId, artifactId);
         return verified;
@@ -513,6 +520,71 @@ export class GraphArtifactStore {
       if (oldest === undefined) break;
       this.filePermits.delete(oldest);
     }
+  }
+
+  /** A review package's permit covers the JSON and the sibling diff files it names. */
+  private async verifyArtifactEvidence(
+    run: GraphRun | null,
+    artifact: GraphArtifact,
+    file: { path: string; sha256: string; bytes: number },
+  ): Promise<{ ok: true } | Extract<GraphArtifactVerification, { ok: false }>> {
+    const verified = await this.verifySealedFile(run, file);
+    if (!verified.ok) return verified;
+    const reference = "value" in artifact.body ? artifact.body.value : undefined;
+    if (!isReviewPackageReference(reference)) return verified;
+    const environment =
+      run?.environmentId && (await this.dependencies.storage.getEnvironment(run.environmentId));
+    if (!environment)
+      return { ok: false, code: "no-environment", message: "The run has no environment" };
+    if (file.sha256 !== reference.sha256 || file.bytes !== reference.bytes) {
+      return {
+        ok: false,
+        code: "hash-mismatch",
+        message: "Review package does not match its descriptor",
+      };
+    }
+    const runner = this.createRunner(environment, this.dependencies.fence);
+    try {
+      const contents = await readEnvironmentWorkspaceFile(
+        environment,
+        runner,
+        file.path,
+        file.bytes,
+      );
+      if (
+        contents.byteLength !== file.bytes ||
+        createHash("sha256").update(contents).digest("hex") !== file.sha256
+      ) {
+        return { ok: false, code: "hash-mismatch", message: "Review package SHA-256 changed" };
+      }
+      const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
+      if ((reference.diffChunkCount ?? 0) !== (pkg.diffChunks?.length ?? 0)) {
+        return {
+          ok: false,
+          code: "size-mismatch",
+          message: "Review package diff part count changed",
+        };
+      }
+      for (const evidence of [
+        ...(pkg.diffArtifact ? [pkg.diffArtifact] : []),
+        ...(pkg.diffChunks ?? []),
+      ]) {
+        const actual = await hashEnvironmentWorkspaceFile(environment, runner, evidence.path, {
+          maxBytes: MAX_REVIEW_DIFF_ARTIFACT_BYTES,
+          label: "Review diff",
+        });
+        if (actual.sha256 !== evidence.sha256 || actual.bytes !== evidence.bytes) {
+          return { ok: false, code: "hash-mismatch", message: "Review diff evidence changed" };
+        }
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof WorkspaceFileHashError ? error.failure : "unavailable",
+        message: "Review diff evidence could not be verified",
+      };
+    }
+    return { ok: true };
   }
 
   /** Hashes a reference artifact's sealed file in the run's environment and compares it. */

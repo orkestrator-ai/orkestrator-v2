@@ -1,3 +1,8 @@
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
+import {
+  disputedReviewChecks,
+  disputedCheckProjectionBudgetIssues,
+} from "./review-disputed-checks.js";
 import { reviewChunkCoverageFailure } from "./review-diff-artifact.js";
 /**
  * The reviewer fan-out, shared by Multi Review and the build pipeline.
@@ -289,6 +294,7 @@ export function reviewerFailureSummary(reviewers: readonly ReviewerRecord[]): st
 export function parseStructuredReportResult(
   result: StructuredOutputResult<unknown>,
   consolidationReviewers?: readonly ReviewerRecord[],
+  validationPlan?: ReviewValidationPlan,
 ) {
   if (!result.ok) {
     if (
@@ -340,6 +346,15 @@ export function parseStructuredReportResult(
         }
       : undefined,
   );
+  if (
+    sourceReports &&
+    disputedReviewChecks(
+      sourceReports.map((reviewer) => reviewer.report!),
+      validationPlan,
+    ).size > 0
+  ) {
+    budget.push(...disputedCheckProjectionBudgetIssues(parsed.data));
+  }
   if (budget.length > 0) {
     return {
       success: false as const,
@@ -715,14 +730,13 @@ export class ReviewFanoutRunner {
       this.host.diffChunkCount,
       reviewers.map((reviewer) => reviewer.status === "completed" && reviewer.report !== undefined),
     );
-    if (coverageFailure) return { kind: "no-reports", error: coverageFailure };
     const reports = usableReviewerReports(reviewers);
     if (reports.length >= REVIEW_FANOUT_FAN_IN.minSuccessful) return { kind: "ready", reports };
     // Reviewers fail locally, so an environment-wide cause (an unreachable
     // bridge, a deleted worktree) reaches here as the same message on every
     // reviewer. Carry the distinct causes up rather than reporting a bare
     // "no valid report", which reads as a model-quality problem instead.
-    return { kind: "no-reports", error: reviewerFailureSummary(reviewers) };
+    return { kind: "no-reports", error: coverageFailure ?? reviewerFailureSummary(reviewers) };
   }
 
   /**

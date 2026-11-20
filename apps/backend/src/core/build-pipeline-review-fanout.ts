@@ -1278,10 +1278,14 @@ export class BuildPipelineReviewFanout {
           createReviewConsolidationPrompt({
             targetBranch,
             reports: consolidationReports(state.reviewers),
+            validationPlan: buildPipelineSealedValidationPlan(pipeline),
             // Only the result tool's slot fills the scope lists in.
             scopeFilledByBackend:
               consolidation.resultTransport === "tool-v1" &&
-              consolidationScopeFilledByBackend(state.reviewers),
+              consolidationScopeFilledByBackend(
+                state.reviewers,
+                buildPipelineSealedValidationPlan(pipeline),
+              ),
             onEvidenceStats: (stats) =>
               recordEfficiency(this.deps.efficiency, {
                 owner: "build-pipeline",
@@ -1312,7 +1316,10 @@ export class BuildPipelineReviewFanout {
           projectId: pipeline.projectId,
           provider: consolidation.agent,
           schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-          context: consolidationResultContext(state.reviewers),
+          context: consolidationResultContext(
+            state.reviewers,
+            buildPipelineSealedValidationPlan(pipeline),
+          ),
         });
       }
       const artifactTurn = beginWorkflowArtifactTurn(this.deps.artifactDispatch, {
@@ -1600,7 +1607,11 @@ export class BuildPipelineReviewFanout {
     }
     let parsed: ReturnType<typeof parseStructuredReportResult>;
     try {
-      parsed = parseStructuredReportResult(result, state.reviewers);
+      parsed = parseStructuredReportResult(
+        result,
+        state.reviewers,
+        buildPipelineSealedValidationPlan(pipeline),
+      );
     } catch (error) {
       return { kind: "failed", error: reviewFanoutErrorMessage(error) };
     }
@@ -1615,20 +1626,23 @@ export class BuildPipelineReviewFanout {
     // Disputed checks are re-run on the reviewed commit before the report is
     // kept. The run id is derived from the pipeline and package, so the next
     // pass (or a restart) joins the same environment-owned run.
-    const reviewed = pipeline.reviewPackage;
+    const rerunInput = buildPipelineDisputedCheckInput(pipeline, state);
     const reruns = await settleDisputedCheckReruns({
-      disputes: disputedReviewChecks(completedReviewerReports(state.reviewers)),
-      plan:
-        pipeline.validationRun?.plan ??
-        (reviewed && "validationPlan" in reviewed ? reviewed.validationPlan : undefined),
-      headRef: reviewed && "headRef" in reviewed ? reviewed.headRef : undefined,
-      scopeKey: `build-pipeline\0${pipeline.id}\0${pipeline.iteration}\0${reviewed && "id" in reviewed ? reviewed.id : ""}`,
+      ...rerunInput,
       control: this.deps.rerunDisputedChecks
         ? (run) => this.deps.rerunDisputedChecks!(pipeline, run)
         : undefined,
     });
     if (reruns === "pending") return { kind: "working" };
-    const provenance = deriveConsolidatedProvenance(parsed.data, state.reviewers, reruns);
+    const provenance = deriveConsolidatedProvenance(
+      parsed.data,
+      state.reviewers,
+      reruns,
+      rerunInput.plan,
+      pipeline.reviewPackage && "diffChunkCount" in pipeline.reviewPackage
+        ? pipeline.reviewPackage.diffChunkCount
+        : undefined,
+    );
     if (provenance.issues.length > 0) {
       return this.prepareConsolidationRepair(
         pipeline,
@@ -1887,7 +1901,11 @@ export class BuildPipelineReviewFanout {
       error.issues,
       attempt,
       MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
-      previousTransport === "tool-v1" && consolidationScopeFilledByBackend(state.reviewers)
+      previousTransport === "tool-v1" &&
+        consolidationScopeFilledByBackend(
+          state.reviewers,
+          buildPipelineSealedValidationPlan(pipeline),
+        )
         ? { schema: CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA }
         : undefined,
     );
@@ -1980,4 +1998,23 @@ function reviewerFromConfig(config: BuildStepSelection): ReviewerRecord {
 
 function completedReviewerCount(reviewers: readonly ReviewerRecord[]): number {
   return reviewers.filter((reviewer) => reviewer.status === "completed").length;
+}
+
+function buildPipelineSealedValidationPlan(pipeline: BuildPipeline) {
+  const reviewed = pipeline.reviewPackage;
+  return (
+    pipeline.validationRun?.plan ??
+    (reviewed && "validationPlan" in reviewed ? reviewed.validationPlan : undefined)
+  );
+}
+
+export function buildPipelineDisputedCheckInput(pipeline: BuildPipeline, state: ReviewFanoutState) {
+  const reviewed = pipeline.reviewPackage;
+  const plan = buildPipelineSealedValidationPlan(pipeline);
+  return {
+    disputes: disputedReviewChecks(completedReviewerReports(state.reviewers), plan),
+    plan,
+    headRef: reviewed && "headRef" in reviewed ? reviewed.headRef : "",
+    scopeKey: `build-pipeline\0${pipeline.id}\0${pipeline.iteration}\0${reviewed && "id" in reviewed ? reviewed.id : ""}\0${state.consolidation?.requestId ?? ""}`,
+  };
 }

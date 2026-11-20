@@ -1,3 +1,5 @@
+import { buildPipelineDisputedCheckInput } from "./build-pipeline-review-fanout.js";
+import { disputedCheckRerunRequest } from "./review-disputed-checks.js";
 /**
  * Agent harness resolution for build pipelines: the cached provider per
  * environment and harness, the bridge connection behind it, the model, effort
@@ -358,6 +360,15 @@ export class BuildPipelineAgents {
   ): Promise<unknown[]> {
     const fanout = pipeline.reviewFanout;
     if (!fanout) return [];
+    if (fanout.consolidation && !fanout.report) {
+      const request = disputedCheckRerunRequest(buildPipelineDisputedCheckInput(pipeline, fanout));
+      if (request?.run) {
+        await this.ctx.invoke("cancel_review_validation", {
+          environmentId: pipeline.environmentId,
+          run: request.run,
+        });
+      }
+    }
     const now = new Date().toISOString();
     const targets: Array<{ agent: BuildPipelineAgent; sessionId: string }> = [];
     for (const reviewer of fanout.reviewers) {

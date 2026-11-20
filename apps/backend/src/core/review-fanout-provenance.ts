@@ -1,3 +1,6 @@
+import { reviewChunkCoverageFailure } from "./review-diff-artifact.js";
+import { STRUCTURED_REVIEW_MAX_LIST_ITEMS } from "@orkestrator/protocol/structured-review";
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
 /**
  * Report provenance for the reviewer fan-out (`review-fanout.ts`).
  *
@@ -132,15 +135,18 @@ export function completedReviewerReports(
  * (`review-consolidation-scope.ts`). A prompt for this slot must say whether
  * the lists are filled in: pass {@link consolidationScopeFilledByBackend}.
  */
-export function consolidationResultContext(reviewers: readonly ReviewerRecord[]): {
+export function consolidationResultContext(
+  reviewers: readonly ReviewerRecord[],
+  plan?: ReviewValidationPlan,
+): {
   type: "consolidated-review";
   sources: Record<string, SourceFindingKind>;
   scope?: ConsolidationScopeLists;
   disputedCheckDigests?: string[];
 } {
   const reports = completedReviewerReports(reviewers);
-  const scope = consolidationScopeLists(reports);
-  const digests = disputedCheckDigests(disputedReviewChecks(reports));
+  const scope = consolidationScopeLists(reports, plan);
+  const digests = disputedCheckDigests(disputedReviewChecks(reports, plan));
   return {
     type: "consolidated-review",
     sources: Object.fromEntries(
@@ -155,8 +161,11 @@ export function consolidationResultContext(reviewers: readonly ReviewerRecord[])
  * Whether a consolidation over the result tool leaves the scope lists to the
  * backend: the same decision {@link consolidationResultContext} makes.
  */
-export function consolidationScopeFilledByBackend(reviewers: readonly ReviewerRecord[]): boolean {
-  return consolidationScopeLists(completedReviewerReports(reviewers)) !== undefined;
+export function consolidationScopeFilledByBackend(
+  reviewers: readonly ReviewerRecord[],
+  plan?: ReviewValidationPlan,
+): boolean {
+  return consolidationScopeLists(completedReviewerReports(reviewers), plan) !== undefined;
 }
 
 /**
@@ -170,13 +179,32 @@ export function deriveConsolidatedProvenance(
   report: StructuredReviewReport,
   reviewers: readonly ReviewerRecord[],
   reruns?: DisputedCheckReruns,
+  plan?: ReviewValidationPlan,
+  diffChunkCount?: number,
 ): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
   const issues: ReviewContractValidationIssue[] = [];
   report = recordDisputedChecks(
     report,
-    disputedReviewChecks(completedReviewerReports(reviewers)),
+    disputedReviewChecks(completedReviewerReports(reviewers), plan),
     reruns,
+    plan,
   );
+  const coverageGap = reviewChunkCoverageFailure(
+    diffChunkCount,
+    reviewers.map((reviewer) => reviewer.status === "completed" && reviewer.report !== undefined),
+  );
+  if (coverageGap) {
+    report = {
+      ...report,
+      reviewScope: {
+        ...report.reviewScope,
+        limitations: [
+          coverageGap,
+          ...report.reviewScope.limitations.filter((entry) => entry !== coverageGap),
+        ].slice(0, STRUCTURED_REVIEW_MAX_LIST_ITEMS),
+      },
+    };
+  }
   const sources = provenanceSources(reviewers);
   const inspect = (
     reviewModels: string[] | undefined,

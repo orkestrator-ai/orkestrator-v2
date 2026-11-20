@@ -31,6 +31,7 @@ import type {
   ConsolidationScopeLists,
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
 import { disputedReviewChecks } from "./review-disputed-checks.js";
 import { inspectFinalText } from "./workflow-result-final-text.js";
 
@@ -132,8 +133,9 @@ export function mergeConsolidationScopeLists(
  */
 export function consolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
+  plan?: ReviewValidationPlan,
 ): ConsolidationScopeLists | undefined {
-  if (disputedReviewChecks(reports).size > 0) return undefined;
+  if (disputedReviewChecks(reports, plan).size > 0) return undefined;
   const scope = mergeConsolidationScopeLists(reports);
   if (!scope || utf8Bytes(JSON.stringify(scope)) > CONSOLIDATION_SCOPE_MAX_BYTES) return undefined;
   const issues: WorkflowResultValidationIssue[] = [];

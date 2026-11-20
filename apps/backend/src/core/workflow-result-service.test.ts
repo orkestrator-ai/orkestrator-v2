@@ -1146,6 +1146,44 @@ describe("WorkflowResultService", () => {
     },
   );
 
+  test("reopens a prepared legacy consolidation with scoped contradictory outcomes", async () => {
+    const resultKey = crypto.randomUUID();
+    const command = "mise run test";
+    const slot = {
+      ...scope,
+      kind: "consolidated-review" as const,
+      provider: "codex" as const,
+      resultKey,
+    };
+    const legacy = { ...emptyReport.reviewScope };
+    legacy.commandsRun = [
+      { command, result: "failed", summary: "First reviewer" },
+      { command, result: "passed", summary: "Second reviewer" },
+    ];
+    const context = { type: "consolidated-review" as const, sources: {} };
+    await service.prepare({
+      ...slot,
+      context: {
+        ...context,
+        scope: {
+          filesReviewed: legacy.filesReviewed,
+          filesSkipped: legacy.filesSkipped,
+          filesLeftUncommitted: legacy.filesLeftUncommitted,
+          commandsRun: legacy.commandsRun,
+          commandsNotRun: legacy.commandsNotRun,
+        },
+      },
+    });
+    await service.prepare({
+      ...slot,
+      context: { ...context, disputedCheckDigests: disputedCheckDigests(new Set([command])) },
+    });
+    expect(
+      await service.submit(scope, resultKey, { ...emptyReport, reviewScope: legacy }),
+    ).toMatchObject({ ok: false });
+    expect(await service.submit(scope, resultKey, emptyReport)).toMatchObject({ ok: true });
+  });
+
   test("terminal slots discard bulky validation context and stay below the byte ceiling", async () => {
     const sources = Object.fromEntries(
       Array.from({ length: 4_096 }, (_, index) => [`reviewer-${index}:0`, "issue" as const]),

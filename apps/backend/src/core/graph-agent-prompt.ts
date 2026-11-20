@@ -1,3 +1,4 @@
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
 /**
  * The prompt of a graph agent activation (item 204, D13, report §5.6).
  *
@@ -584,6 +585,7 @@ export interface GraphAgentPromptInput {
   capability?: string;
   resultTools: GraphResultTools;
   targetBranch: string;
+  validationPlan?: ReviewValidationPlan;
   notes?: string;
   /** An isolated branch's worktree (item 403): the locked frame naming where it works. */
   worktree?: GraphBranchWorktreeFrame;
@@ -615,6 +617,7 @@ export function renderGraphAgentPrompt(input: GraphAgentPromptInput): string {
       inputs: input.inputs.builtInInputs ?? {},
       outputs,
       targetBranch: input.targetBranch,
+      validationPlan: input.validationPlan,
       ...(input.notes ? { notes: input.notes } : {}),
       ...(lens ? { lens } : {}),
       ...(branch ? { branch: { index: branch.index, count: branch.count } } : {}),

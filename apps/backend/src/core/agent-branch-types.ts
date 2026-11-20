@@ -225,7 +225,7 @@ export interface AgentBranchHost<B extends AgentBranchRecord = AgentBranchRecord
     maxAttempts: number,
   ): string;
   /** Keeps an accepted result on the branch before it is committed `completed`. */
-  acceptResult(branch: B, data: unknown): void | Promise<void>;
+  acceptResult(branch: B, data: unknown): void | "pending" | Promise<void | "pending">;
   /**
    * Why a valid result still fails its branch, or `null` to accept it. A
    * reviewer that reports it could not review returns a well-formed result

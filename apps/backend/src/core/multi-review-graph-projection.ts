@@ -1,3 +1,7 @@
+import {
+  isReviewValidationPlan,
+  type ReviewValidationPlan,
+} from "@orkestrator/protocol/review-workflow";
 /**
  * Projects a graph run of the Multi Review template onto its Multi Review
  * record (item 301, plan Phase 3, D5).
@@ -442,7 +446,26 @@ async function readConsolidation(
   if (!value) return undefined;
   const translation = await sourceIdTranslation(run, consolidate, branches, read);
   const translated = translateSourceIds(value, translation);
-  const derived = deriveConsolidatedProvenance(translated, reviewers);
+  const packageId = consolidate.inputs.package;
+  let plan: ReviewValidationPlan | undefined;
+  if (typeof packageId === "string") {
+    const reviewPackage = await read(packageId);
+    const reference = artifactValue(reviewPackage);
+    for (const inputId of reviewPackage?.inputs ?? []) {
+      const input = await read(inputId);
+      const value = artifactValue(input);
+      if (
+        input?.type.startsWith("validation-plan@") &&
+        isReviewValidationPlan(value) &&
+        isReviewPackageReference(reference) &&
+        value.headRef === reference.headRef
+      ) {
+        plan = value;
+        break;
+      }
+    }
+  }
+  const derived = deriveConsolidatedProvenance(translated, reviewers, undefined, plan);
   return { report: derived.report, overlap: consolidationOverlap(translated, reviewers) };
 }
 

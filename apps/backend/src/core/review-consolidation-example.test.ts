@@ -11,8 +11,8 @@ import {
 } from "./review-consolidation-example.js";
 import { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
 import { decodeResult, jsonSchemaField, strictObject } from "./tool-schema.js";
-import { validateWorkflowResult } from "./workflow-result-contracts.js";
-import { workflowResultProviderSchema } from "./workflow-result-registry.js";
+import { validateWorkflowResult } from "./workflows/result-contracts.js";
+import { workflowResultProviderSchema } from "./workflows/result-registry.js";
 
 const context = {
   type: "consolidated-review" as const,

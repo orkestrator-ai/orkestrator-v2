@@ -1939,11 +1939,11 @@ throws lets the result through, and the owner still compares the worktree when
 it reads the result.
 
 **Result kind registry.** Every kind maps to one definition in
-`workflow-result-registry.ts`: its schema, the schema a provider sees, its
+`workflows/result-registry.ts`: its schema, the schema a provider sees, its
 submission and validation tools, and the validators that run at submit time
 (structure, domain checks, final-content placeholder checks, the trusted-context
 check, and an optional environment check). Built-in kinds register themselves
-in `workflow-result-contracts.ts`; `workflowResultJsonSchema` and
+in `workflows/result-contracts.ts`; `workflowResultJsonSchema` and
 `validateWorkflowResult` delegate to the registry. Acceptance checks and the
 environment hook live on a `WorkflowResultRegistry` instance that each service
 owns. Multi Review consolidation's citation check runs through the generic
@@ -1960,7 +1960,7 @@ schema, domain validator), the placeholder check of the result kind a built-in
 type maps to, and, for consolidating ports, provenance against the node's input
 items (`cite`, `accountForAll`). Values whose type needs the environment are
 also checked there through the environment hook the backend installs
-(`workflow-result-environment-validator.ts`): a `workspace@1` commit must exist
+(`workflows/result-environment-validator.ts`): a `workspace@1` commit must exist
 and be reachable from its branch, `file-list@1` paths must resolve inside the
 worktree, a `validation-plan@2` must name the workspace HEAD it validates, and a
 `review-package@2` reference must still match its sealed package
@@ -2008,7 +2008,7 @@ report, with one stray `}` closing the root early). The published schema still
 asks for an object, but every result tool (`submit_*`, `validate_*`, the
 broker's `validate_workflow_result`) lets a string through its input check
 (`jsonSchemaField(..., { jsonText: true })`) and decodes it in the handler
-(`workflow-result-json-text.ts`):
+(`workflows/result-json-text.ts`):
 
 - Text that parses to an object is used as if the object had been sent, after
   the same acceptance check the input schema gives an object. Text encoded twice
@@ -2040,7 +2040,7 @@ port and report it for the required port named in the diagnostic.
 **Follow-up turns.** A Multi Review reviewer, and the preparation,
 consolidation and Fix steps, each get two bounded follow-up turns in the same
 session, under a fresh request id and result slot
-(`workflow-result-missing.ts`):
+(`workflows/result-missing.ts`):
 
 - **Result reminder.** A tool-mode turn that went idle with no accepted result
   gets one `workflowResultReminderPrompt` after the idle-poll bound, then fails

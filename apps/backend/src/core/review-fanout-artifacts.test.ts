@@ -13,7 +13,10 @@ import {
 } from "./build-pipeline-provider.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
-import { beginWorkflowArtifactTurn, type ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import {
+  beginWorkflowArtifactTurn,
+  type ArtifactTurnDispatch,
+} from "./workflows/artifact-turns.js";
 
 const policy = resolveNativeAgentExecutionPolicy(
   { environmentType: "local", networkAccessMode: "full" },

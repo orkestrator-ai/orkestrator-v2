@@ -540,7 +540,7 @@ task 5).
 
 **Context.** Decision 1 is to wait for the busy live profile. `stableJitterMs` has already moved, so deleting `multi-review-scheduler.ts` is self-contained.
 
-**Investigation.** Unchanged. `KEYED_SCHEDULING_ROLLBACK_ENV` and `keyedSchedulingEnabled` are at `apps/backend/src/core/workflow-supervisor.ts:77` and `:79`, with six call sites (task 1). `WorkflowDueScheduler` is at `apps/backend/src/core/multi-review-scheduler.ts:52`, and `stableJitterMs` at `multi-review-scheduling.ts:157`. The desktop allowlist entries are at `apps/desktop/electron/backend-process.ts:71` to `:73`, and observation sharing is read at `apps/backend/src/core/index.ts:699`. The catalogue still describes the adaptive scheduler as Multi Review's rollback (`packages/protocol/src/recurring-work.ts:363`).
+**Investigation.** Unchanged. `KEYED_SCHEDULING_ROLLBACK_ENV` and `keyedSchedulingEnabled` are at `apps/backend/src/core/workflows/supervisor.ts:77` and `:79`, with six call sites (task 1). `WorkflowDueScheduler` is at `apps/backend/src/core/multi-review-scheduler.ts:52`, and `stableJitterMs` at `multi-review-scheduling.ts:157`. The desktop allowlist entries are at `apps/desktop/electron/backend-process.ts:71` to `:73`, and observation sharing is read at `apps/backend/src/core/index.ts:699`. The catalogue still describes the adaptive scheduler as Multi Review's rollback (`packages/protocol/src/recurring-work.ts:363`).
 
 **Decisions.**
 
@@ -560,7 +560,7 @@ task 5).
     - Cons: decision 1 already rejected it; busy obligations stay unproved.
 
 **Outcome (2026-11-06).** Rechecked on `ee2cc8423`: `KEYED_SCHEDULING_ROLLBACK_ENV`
-and `keyedSchedulingEnabled` are at `workflow-supervisor.ts:79` and `:81`,
+and `keyedSchedulingEnabled` are at `workflows/supervisor.ts:79` and `:81`,
 with seven call sites (task 1, `graph-run` added; its "rollback" only turns
 graph runs off). `WorkflowDueScheduler` is at `multi-review-scheduler.ts:55`,
 the desktop allowlist entries at `backend-process.ts:144` to `:146`, and
@@ -586,14 +586,14 @@ qualify differently (decision W1). Both are removed (decision W2):
   `NativeAgentService.initialize` always starts the keyed launch/queue
   scheduler. The `keyedQueueScheduling` option is gone.
 - The switch can no longer name either domain
-  (`REVERTIBLE_KEYED_SCHEDULING_DOMAINS`, `workflow-supervisor.ts`); a value
+  (`REVERTIBLE_KEYED_SCHEDULING_DOMAINS`, `workflows/supervisor.ts`); a value
   that still names one, or `all`, leaves them keyed. Both stay in
   `KEYED_SCHEDULING_DOMAINS`, which also labels the supervisors.
 - Tests that drove the rollback drivers now drive the keyed ones on a manual
   clock (`index.test.ts`: tab-resource coalescing, periodic activity and
   shutdown, a rejected sweep, repeated init, fault wiring;
   `native-agent-service-dispatch.test.ts`: launch scans and the cadence
-  floor), and `workflow-supervisor.test.ts` pins the revertible list.
+  floor), and `workflows/supervisor.test.ts` pins the revertible list.
 - `recurring-work.md`, `native-agent-service.md`, `testing-guide.md` and the
   `recurring-live-ab.ts` header describe the change. The catalogue
   (`RECURRING_JOB_CATALOGUE`) named no rollback for either domain, so it is
@@ -632,7 +632,7 @@ rollback driver is removed (decision W6):
   review to `ready` on the keyed supervisor; the due scheduler's lease-renewal
   test is replaced by one that drives the keyed critical job on a manual clock
   (one renewal per interval, none overlapping a slow one, one job after a
-  repeated `init`, none after shutdown); `workflow-supervisor.test.ts` pins the
+  repeated `init`, none after shutdown); `workflows/supervisor.test.ts` pins the
   smaller revertible list.
 - The recurring baseline harness keeps a rollback mode for feature planning
   and build pipelines only, and `recurring-baseline.test.ts` checks Multi
@@ -987,7 +987,7 @@ and the decisions below were recorded.
 - Rollback switches, each read once at startup and let through the desktop
   environment allowlist in `apps/desktop/electron/backend-process.ts`:
   - `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK` (`KEYED_SCHEDULING_ROLLBACK_ENV`,
-    `workflow-supervisor.ts`): a comma list of `feature-planning`,
+    `workflows/supervisor.ts`): a comma list of `feature-planning`,
     `build-pipeline`, `graph-run`, or `all`. A named domain runs its old
     whole-store driver instead of the keyed one (`graph-run` is turned off).
     `multi-review`, `native-queues` and `backend-activity` are no longer

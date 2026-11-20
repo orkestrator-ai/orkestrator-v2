@@ -48,7 +48,7 @@ projectId, conversationKey }`:
   `createAgentToolServer` before artifact tools are registered, so they can
   neither see nor authorize artifact operations.
 - A workflow turn's grant (minted through the same `artifactDispatch`,
-  `workflow-artifact-turns.ts`) also authenticates the artifact-only
+  `workflows/artifact-turns.ts`) also authenticates the artifact-only
   `/artifact-mcp` server that the HTTP bridges attach as
   `orkestrator-artifacts` beside the workflow-result server: the grant is the
   bearer token, the server lists only the artifact tools, and every call is

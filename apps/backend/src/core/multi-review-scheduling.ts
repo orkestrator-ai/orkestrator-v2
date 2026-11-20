@@ -3,7 +3,7 @@ import type {
   MultiReviewPhase,
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
-import type { WorkflowDiscoveryResult } from "./workflow-supervisor.js";
+import type { WorkflowDiscoveryResult } from "./workflows/index.js";
 
 /**
  * Supervision rules for Multi Review: how its keyed driver classifies a

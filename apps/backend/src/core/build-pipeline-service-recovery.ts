@@ -74,7 +74,7 @@ import {
   lastAssistantText,
   missingWorkflowResultMessage,
   workflowResultRefusals,
-} from "./workflow-result-missing.js";
+} from "./workflows/index.js";
 
 const log = createLogger("build-pipeline");
 

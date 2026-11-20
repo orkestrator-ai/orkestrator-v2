@@ -25,7 +25,7 @@ import {
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 /** A run input summarized by one observer: compiles with no errors. */
 function draft(overrides: Partial<GraphTemplateV1> = {}): GraphTemplateV1 {

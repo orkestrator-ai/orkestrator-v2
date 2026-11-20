@@ -2,10 +2,10 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
-import { runCommand } from "./shell.js";
-import { gitEnvironmentValidator } from "./workflow-result-environment-validator.js";
-import type { WorkflowResultEnvironmentRequest } from "./workflow-result-registry.js";
+import type { EnvironmentGit } from "../build-pipeline-code-rewind.js";
+import { runCommand } from "../shell.js";
+import { gitEnvironmentValidator } from "./result-environment-validator.js";
+import type { WorkflowResultEnvironmentRequest } from "./result-registry.js";
 
 /** A real repository behind the environment Git port, as a local worktree runs it. */
 describe("git-backed environment validator", () => {

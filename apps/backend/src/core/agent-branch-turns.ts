@@ -17,10 +17,10 @@ import {
   type AgentBranchRecord,
 } from "./agent-branch-types.js";
 import {
-  workflowResultReminderPrompt,
   workflowRestartContinuationPrompt,
+  workflowResultReminderPrompt,
   workflowUsageLimitContinuationPrompt,
-} from "./workflow-result-missing.js";
+} from "./workflows/index.js";
 
 /** Bounds the durable correction budget for a rejected result. */
 export const AGENT_BRANCH_MAX_SCHEMA_REPAIR_ATTEMPTS = REVIEW_FANOUT_MAX_SCHEMA_REPAIR_ATTEMPTS;

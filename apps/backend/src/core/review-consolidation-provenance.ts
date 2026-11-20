@@ -2,8 +2,8 @@
  * Multi Review's consolidation contract as a provenance plan (report §5.9):
  * every merged issue and coverage gap cites at least one source finding of
  * its own class, and leaves `reviewModels` to the backend. The bespoke
- * consolidation step (`workflow-result-contracts.ts`) and a graph node whose
- * prompt is the consolidation built-in (`workflow-result-graph-output.ts`,
+ * consolidation step (`workflows/result-contracts.ts`) and a graph node whose
+ * prompt is the consolidation built-in (`workflows/result-graph-output.ts`,
  * item 301) both check it, with the wording the consolidator has always seen.
  */
 import type {

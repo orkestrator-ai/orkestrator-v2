@@ -50,7 +50,7 @@ import { MultiReviewGraphEngine } from "./multi-review-graph-engine.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { runCommand } from "./shell.js";
 import type { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/index.js";
 
 const FINGERPRINT = "a".repeat(64);
 /** The template node whose activations run on the real agent executor. */

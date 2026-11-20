@@ -92,7 +92,7 @@ import type { CheckoutChanges } from "./project-git-service.js";
 import type { DirectHistoryPageCacheLimits } from "./native-agent-direct-history.js";
 import type { ProjectedMessageCacheLimits } from "./native-agent-projection-entries.js";
 import type { ArtifactLedgerReader } from "./native-agent-service-projection-artifacts.js";
-import type { ArtifactTurnDispatch } from "./workflow-artifact-turns.js";
+import type { ArtifactTurnDispatch } from "./workflows/index.js";
 import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,

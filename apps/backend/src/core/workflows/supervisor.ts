@@ -1,18 +1,18 @@
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
-import type { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import type { RecurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import {
   RecurringScheduler,
   type RecurringRunContext,
   type RecurringRunResult,
   type RecurringSchedulerLimits,
   type RecurringTimerFactory,
-} from "./recurring-scheduler.js";
-import type { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+} from "../recurring-scheduler.js";
+import type { RecurringWorkMetrics } from "../recurring-work-metrics.js";
 import {
   AdmissionRejectedError,
   type AdmissionLease,
   type WorkAdmissionPool,
-} from "./work-admission.js";
+} from "../work-admission.js";
 
 /**
  * Keyed supervision for backend-owned workflows (recurring-processes step 08).

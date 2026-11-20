@@ -33,7 +33,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | --- | --- | --- | --- |
 | Template schema (101) | `template.ts`, `template-model.ts`, `template-nodes.ts`, `grammar.ts` | | |
 | Types (102) | `types.ts`, `artifact-type-def.ts`, `schema-subset.ts`, `type-assignability.ts`, `type-validators.ts`, `schema-from-example.ts` | | |
-| Result kinds (103) | `output-slots.ts`, `provenance.ts` | `workflow-result-registry.ts`, `workflow-result-graph-output.ts` | |
+| Result kinds (103) | `output-slots.ts`, `provenance.ts` | `workflows/result-registry.ts`, `workflows/result-graph-output.ts` | |
 | Predicates (104) | `predicates.ts`, `predicate-shape.ts`, `predicate-typecheck.ts`, `predicate-eval.ts` | | |
 | Prompts (105) | `prompts.ts`, `prompt-*.ts`, `system-contract.ts` | `graph-agent-prompt.ts`, `graph-agent-builtins.ts` | |
 | Capabilities (106, 209, 404) | `capability-profiles.ts`, `capability-enforcement.ts`, `agent-enforcement.ts` | `graph-agent-policy.ts`, `graph-agent-guards.ts` | |
@@ -48,7 +48,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Designer (110, 212) | | | `components/graph-designer/`, `stores/graphDesignerStore.ts` |
 | Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands-registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
 | Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator/graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
-| Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflow-result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
+| Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflows/result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
 | Isolated branch worktrees (403) | `isolation.ts`, `testing/graph-isolation-template.ts` (fixture) | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
@@ -929,7 +929,7 @@ graph executor adds:
 
 #### Result slots
 
-The `graph-output` result kind (`workflow-result-graph-output.ts`, item 103)
+The `graph-output` result kind (`workflows/result-graph-output.ts`, item 103)
 opens one result slot per output port, keyed uniquely across runs. The slot
 carries the contract: the port type's schema, `toolName: submit_<port>` (with
 `validate_<port>` for dry runs) and the port declaration as context (type,
@@ -1760,7 +1760,7 @@ Every bound below is enforced by a guard or the runtime, not only documented
 
 | Bound | Value | Where |
 | --- | --- | --- |
-| `MAX_CONCURRENT_GRAPH_RUN_PASSES`; supervisor discovery | 8; 30 s | `graph-run-supervisor.ts`, `workflow-supervisor.ts` |
+| `MAX_CONCURRENT_GRAPH_RUN_PASSES`; supervisor discovery | 8; 30 s | `graph-run-supervisor.ts`, `workflows/supervisor.ts` |
 | `GRAPH_RUN_OBSERVATION_MS`, `GRAPH_RUN_PROGRESS_MS`, `GRAPH_RUN_HUMAN_WAIT_MS` | 3 s, 1 s, 30 s | `graph-run-pass.ts` |
 | `GRAPH_RUN_MAX_CANCEL_ATTEMPTS`, `MAX_PASS_ROUNDS`, `MAX_VALUE_LOADS` | 3, 16, 32 | `graph-run-pass.ts` |
 | Executor calls per pass: starting, observing, per provider, ceiling | 4, 8, 4, 16 | `graph-run-pass.ts` |

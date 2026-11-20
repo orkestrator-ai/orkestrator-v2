@@ -44,7 +44,7 @@ import {
 } from "./review-prompts.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 export const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 export const REVIEW_FINGERPRINT = "a".repeat(64);

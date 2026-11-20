@@ -25,11 +25,11 @@
  */
 import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import type { WorkflowResultValidationIssue } from "@orkestrator/protocol/workflow-results";
-import type { EnvironmentGit } from "./build-pipeline-code-rewind.js";
+import type { EnvironmentGit } from "../build-pipeline-code-rewind.js";
 import type {
   WorkflowResultEnvironmentRequest,
   WorkflowResultEnvironmentValidator,
-} from "./workflow-result-registry.js";
+} from "./result-registry.js";
 
 const SHA_PATTERN = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const MAX_ISSUES = 32;

@@ -43,8 +43,11 @@ import type { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { RecordUsageTurnsInput } from "./usage-history-store.js";
 import type { PersistedSuborkBatch, PersistedSuborkBranch } from "./storage-suborks.js";
-import type { WorkflowResultService } from "./workflow-result-service.js";
-import { LAST_ASSISTANT_TEXT_READ_LIMIT, lastAssistantText } from "./workflow-result-missing.js";
+import {
+  LAST_ASSISTANT_TEXT_READ_LIMIT,
+  lastAssistantText,
+  type WorkflowResultService,
+} from "./workflows/index.js";
 
 const SUBMIT_TOOL = workflowResultToolName(SUBORK_RESULT_KIND);
 /** A running subork's latest action is read at most this often. */

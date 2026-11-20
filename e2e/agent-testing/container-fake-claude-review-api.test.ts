@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { validateWorkflowResult } from "../../apps/backend/src/core/workflow-result-contracts";
+import { validateWorkflowResult } from "../../apps/backend/src/core/workflows/result-contracts";
 import {
   HEAD_COMMAND,
   LIST_COMMAND,

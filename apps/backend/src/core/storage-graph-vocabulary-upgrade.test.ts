@@ -63,7 +63,7 @@ import {
 } from "./storage-graph-vocabulary-upgrade.js";
 import { openBackendDatabase, STORAGE_MIGRATIONS, storeLayout } from "./storage-stores.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 const directories: string[] = [];
 const closers: Array<() => void> = [];

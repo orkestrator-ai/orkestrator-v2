@@ -9,7 +9,7 @@ import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { ManualTime } from "./recurring-test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./review-fanout.js";
 import { reportFor } from "./build-pipeline-review-fanout-test-support.js";
-import { ElapsedPollGate } from "./workflow-poll-gate.js";
+import { ElapsedPollGate } from "./workflows/poll-gate.js";
 
 /** A running reviewer whose bridge can be taken down and brought back. */
 function harness(options: { interactionsUnreachable?: boolean; interactionFailure?: Error } = {}) {

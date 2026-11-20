@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { nativeWebPlatform } from "../../tests/register-dom";
-import { validateWorkflowResult } from "../../apps/backend/src/core/workflow-result-contracts";
+import { validateWorkflowResult } from "../../apps/backend/src/core/workflows/result-contracts";
 import { workflowResultInstruction } from "@orkestrator/protocol/workflow-results";
 import { reviewReport as claudeReviewReport } from "./container-fake-claude-review-api";
 import {

@@ -7,14 +7,14 @@ import {
   WORKFLOW_RESULT_MAX_ENTRIES,
   WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY,
 } from "@orkestrator/protocol/workflow-results";
-import { StorageDatabase } from "./storage-database.js";
+import { StorageDatabase } from "../storage-database.js";
 import {
   readStoredValue,
   seedStore,
   seedUnreadableStore,
   storageFilesContain,
-} from "./storage-test-support.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+} from "../storage-test-support.js";
+import { WorkflowResultService } from "./result-service.js";
 
 const STORE = "workflow-results.json";
 

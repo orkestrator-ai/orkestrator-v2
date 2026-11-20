@@ -26,7 +26,7 @@
  * A turn with neither path (an HTTP bridge turn without a tool-mode
  * connection) gets no grant at all rather than one nobody can use.
  */
-import type { AgentToolConnection } from "./agent-tools.js";
+import type { AgentToolConnection } from "../agent-tools.js";
 
 /** The backend's per-turn artifact bookkeeping (`NativeAgentServiceOptions.artifactDispatch`). */
 export interface ArtifactTurnDispatch {

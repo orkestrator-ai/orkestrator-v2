@@ -37,7 +37,7 @@ import {
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
 import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import type { KeyedWorkflowOwner } from "./workflow-supervisor.js";
+import type { KeyedWorkflowOwner } from "./workflows/index.js";
 
 /**
  * Builds (or joins) a plan holding `containerLogs`' server logs, and lists the

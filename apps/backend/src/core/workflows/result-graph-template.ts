@@ -30,7 +30,7 @@ import {
   WORKFLOW_RESULT_MAX_ISSUES,
   type WorkflowResultKindDefinition,
   type WorkflowResultSlotView,
-} from "./workflow-result-registry.js";
+} from "./result-registry.js";
 
 function context(slot: WorkflowResultSlotView): GraphTemplateResultContext | undefined {
   return slot.context?.type === "graph-template" ? slot.context : undefined;

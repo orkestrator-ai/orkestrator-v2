@@ -57,13 +57,13 @@ import {
   type BuildPipelineKeyInformationHost,
 } from "./build-pipeline-key-information.js";
 import type { StorageService } from "./storage.js";
-import { WorkflowTranscriptArtifacts } from "./workflow-transcript-artifacts.js";
-import type {
-  KeyedWorkflowOwner,
-  WorkflowReconcileReport,
-  WorkflowSupervisorStatus,
-  WorkflowWakeReason,
-} from "./workflow-supervisor.js";
+import {
+  type KeyedWorkflowOwner,
+  type WorkflowReconcileReport,
+  type WorkflowSupervisorStatus,
+  WorkflowTranscriptArtifacts,
+  type WorkflowWakeReason,
+} from "./workflows/index.js";
 
 export type { BuildPipelineServiceOptions } from "./build-pipeline-context.js";
 
@@ -320,7 +320,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
   /**
    * A stage transcript's rows with each publication of that stage session's
    * conversation placed beside the call that published it
-   * (`workflow-transcript-artifacts.ts`). The session key is the conversation.
+   * (`workflows/transcript-artifacts.ts`). The session key is the conversation.
    */
   placeStageArtifacts(environmentId: string, sessionKey: string, rows: unknown[]): unknown[] {
     return this.transcriptArtifacts.place(environmentId, sessionKey, rows);

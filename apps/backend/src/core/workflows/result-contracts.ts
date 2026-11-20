@@ -38,21 +38,21 @@ import {
   parseAddressFindingsResult,
   parsePrResult,
   parseReviewPreparationResult,
-} from "./review-prompts.js";
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
+} from "../review-prompts.js";
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-validation-prompts.js";
 import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   REVIEW_CONSOLIDATION_WORDING,
-} from "./review-consolidation-provenance.js";
+} from "../review-consolidation-provenance.js";
 import {
   CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
   CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
   completeConsolidatedReview,
   inspectScopeListText,
-} from "./review-consolidation-scope.js";
-import { inspectFinalText } from "./workflow-result-final-text.js";
-import { graphOutputKindDefinition } from "./workflow-result-graph-output.js";
-import { graphTemplateKindDefinition } from "./workflow-result-graph-template.js";
+} from "../review-consolidation-scope.js";
+import { inspectFinalText } from "./result-final-text.js";
+import { graphOutputKindDefinition } from "./result-graph-output.js";
+import { graphTemplateKindDefinition } from "./result-graph-template.js";
 import {
   WORKFLOW_RESULT_MAX_ISSUES,
   registerWorkflowResultKind,
@@ -61,7 +61,7 @@ import {
   workflowResultKindDefinition,
   type WorkflowResultKindDefinition,
   type WorkflowResultSlotView,
-} from "./workflow-result-registry.js";
+} from "./result-registry.js";
 
 const MAX_ISSUES = WORKFLOW_RESULT_MAX_ISSUES;
 function issue(path: string, code: string, message: string): WorkflowResultValidationIssue {

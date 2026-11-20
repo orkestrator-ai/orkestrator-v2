@@ -15,7 +15,7 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
-import { workflowResultProviderSchema } from "./workflow-result-registry.js";
+import { workflowResultProviderSchema } from "./workflows/result-registry.js";
 import {
   REVIEW_RESULT_COMMIT_NUDGE_MS,
   deriveConsolidatedProvenance,

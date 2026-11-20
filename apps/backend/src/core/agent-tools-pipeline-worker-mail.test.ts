@@ -22,7 +22,7 @@ import {
   stageSession,
 } from "./pipeline-worker-mail-test-support.js";
 import type { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 type RpcBody = {
   result?: {

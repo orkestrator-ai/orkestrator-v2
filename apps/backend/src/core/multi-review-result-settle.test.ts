@@ -32,7 +32,7 @@ import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-revi
 import { parseReviewPackageReference } from "./review-package.js";
 import { ManualTime, settleKeyedWork } from "./recurring-test-support.js";
 import { StorageService } from "./storage.js";
-import { WorkflowResultService } from "./workflow-result-service.js";
+import { WorkflowResultService } from "./workflows/result-service.js";
 
 jest.setTimeout(30_000);
 

@@ -10,8 +10,8 @@ import {
   ORKESTRATOR_ARTIFACT_MCP_PATH,
 } from "@orkestrator/protocol/transcript-artifacts";
 import { AgentToolsServer } from "../agent-tools.js";
-import { WorkflowResultService } from "../workflow-result-service.js";
-import { WorkflowTranscriptArtifacts } from "../workflow-transcript-artifacts.js";
+import { WorkflowResultService } from "../workflows/result-service.js";
+import { WorkflowTranscriptArtifacts } from "../workflows/transcript-artifacts.js";
 import {
   ENV,
   PROJECT,

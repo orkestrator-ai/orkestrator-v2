@@ -10,15 +10,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ArtifactPublication } from "@orkestrator/protocol/transcript-artifacts";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import { BuildPipelineService } from "./build-pipeline-service.js";
-import { transcriptFingerprint } from "./build-pipeline-service-helpers.js";
-import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
-import type { CommandContext } from "./commands-context.js";
-import { createCommandRegistry } from "./commands-registry.js";
-import { readReviewerTranscript } from "./multi-review-reviewer-transcript.js";
-import type { ArtifactLedgerReader } from "./native-agent-service-projection-artifacts.js";
-import { StorageService } from "./storage.js";
-import { WorkflowTranscriptArtifacts } from "./workflow-transcript-artifacts.js";
+import { BuildPipelineService } from "../build-pipeline-service.js";
+import { transcriptFingerprint } from "../build-pipeline-service-helpers.js";
+import type { BuildPipelineProvider } from "../build-pipeline-provider.js";
+import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands-registry.js";
+import { readReviewerTranscript } from "../multi-review-reviewer-transcript.js";
+import type { ArtifactLedgerReader } from "../native-agent-service-projection-artifacts.js";
+import { StorageService } from "../storage.js";
+import { WorkflowTranscriptArtifacts } from "./transcript-artifacts.js";
 
 const ENV = "env-pipeline";
 

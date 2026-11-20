@@ -1201,12 +1201,37 @@ test("echo probe resolves an echo observed before the wait", async ({ page }) =>
 test("harness rejects invalid setup and incomplete measurements", async () => {
   expect(() => parseVariants("idle,unknown")).toThrow("supported variants");
   expect(() => parseIntegerOption("ROUNDS", "invalid", 1, 10)).toThrow("ROUNDS");
+  const defaultClaude = {
+    id: DEFAULT_AGENT_ACCOUNT_ID,
+    platform: "claude",
+    label: "Default",
+    isDefault: true,
+    isActive: true,
+    signedIn: false,
+    identity: {},
+  };
+  const active = { claude: DEFAULT_AGENT_ACCOUNT_ID, codex: DEFAULT_AGENT_ACCOUNT_ID };
+  expect(() => assertIsolatedClaudeAccount({ accounts: [defaultClaude], active })).not.toThrow();
   expect(() =>
     assertIsolatedClaudeAccount({
-      accounts: [],
-      active: { claude: "alternate", codex: DEFAULT_AGENT_ACCOUNT_ID },
+      accounts: [
+        { ...defaultClaude, isActive: false },
+        { ...defaultClaude, id: "alternate", isDefault: false },
+      ],
+      active: { ...active, claude: "alternate" },
     }),
   ).toThrow("isolated default Claude account");
+  expect(() =>
+    assertIsolatedClaudeAccount({
+      accounts: [{ ...defaultClaude, signedIn: true }],
+      active,
+    }),
+  ).toThrow("isolated default Claude account");
+
+  const undelivered: Invoke = async <T>() => ({ delivered: false }) as T;
+  await expect(terminalWrite(undelivered, "fixture", "fixture input")).rejects.toThrow(
+    "PTY write delivered",
+  );
 
   const cursor = { generation: 1, revision: 3 };
   const advancing = [{ ...cursor, revision: 4 }];
@@ -1241,20 +1266,28 @@ test("harness rejects invalid setup and incomplete measurements", async () => {
     ),
   ).toEqual({ ticks: 1, stalls: 0, lateTicks: eventLoop.lateTicks });
 
-  const created: Environment[] = [];
-  const failingStart: Invoke = async <T>(command: string) => {
-    if (command === "create_environment") return { id: "fixture", name: "fixture" } as T;
-    throw new Error("fixture start failed");
-  };
-  await expect(
-    createEnvironment(
-      failingStart,
-      { id: "project", name: "fixture", localPath: null },
-      "setup-failure",
-      created,
-    ),
-  ).rejects.toThrow("fixture start failed");
-  expect(created.map(({ id }) => id)).toEqual(["fixture"]);
+  for (const failOn of [1, 2]) {
+    const created: Environment[] = [];
+    const fixture = { id: "project", name: "fixture", localPath: null };
+    const failingStart: Invoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      if (command === "create_environment") {
+        return { id: String(created.length + 1), name: "fixture" } as T;
+      }
+      if (command === "start_environment" && created.length === failOn) {
+        throw new Error("fixture start failed");
+      }
+      return { id: args?.environmentId, status: "running" } as T;
+    };
+    for (let index = 1; index < failOn; index += 1) {
+      await createEnvironment(failingStart, fixture, "setup-success", created);
+    }
+    await expect(
+      createEnvironment(failingStart, fixture, "setup-failure", created),
+    ).rejects.toThrow("fixture start failed");
+    expect(created.map(({ id }) => id)).toEqual(
+      Array.from({ length: failOn }, (_, i) => String(i + 1)),
+    );
+  }
 });
 
 async function sendPrompt(page: Page, prompt: string) {

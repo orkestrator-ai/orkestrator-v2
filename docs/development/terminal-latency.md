@@ -143,10 +143,12 @@ Renderer-side measurement is follow-up work (8312 task 2).
    32 KiB slice at a time from `requestIdleCallback` (200 ms timeout), with one
    slice in flight across the page. Input and rendering run before idle
    callbacks, so the shown tab's echo waits behind at most one slice's parse
-   instead of every hidden tab's 12 ms parse tasks. Showing the tab, a replay,
-   a buffer capture before a pane move and unmount flush the queue first; a
-   queue past 4 MiB or 4,096 writes flushes straight into xterm.js rather than
-   growing. The local-storage key `orkestrator-terminal-background-writes` set
+   instead of every hidden tab's 12 ms parse tasks. Reveal flushes the queue.
+   Replacement replay and history capture wait for earlier bytes to finish
+   parsing. A pane move keeps the live xterm buffer. A gate above 4 MiB or
+   4,096 writes flushes into xterm.js. Separately, a WebSocket channel above
+   4 MiB or 1,024 pending frames resubscribes for snapshot recovery and only
+   acknowledges revisions that completed parsing. The local-storage key `orkestrator-terminal-background-writes` set
    to `off` before a terminal mounts writes straight through, as before; it
    exists for the measurement below.
 
@@ -184,8 +186,8 @@ the frame that paints it). The typing terminal runs `cat` in raw mode, as the
 loopback benchmark's does. After 10 warm-up keys it types 200 (150 in the A/B
 run), each 30 ms after the previous echo. The page also records long tasks and
 animation-frame gaps. The backend's own event-loop monitor is read from
-`/__orkestrator/metrics` around each run; it counts ticks at least 100 ms late,
-and none was in any run below.
+`/__orkestrator/metrics` around each run. It counts ticks at least 100 ms late.
+The benchmark reports unavailable counters separately from a measured zero.
 
 ```bash
 env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
@@ -202,9 +204,17 @@ mise run dev:reset --profile echo8312
 `ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS`, `_ROUNDS`, `_KEYS`, `_BUILD`, `_TOOL`,
 `_AGENTS` and `_STREAM` select the variants, rounds, keys, load terminals,
 agents and streamed answer length. Evidence (numbers only) is written as
-`evidence-terminal-echo-<time>.json` beside the run's Playwright artifacts. The
-spec's second case checks that a hidden tab shows all of a 150,000-line run,
-in order, once revealed.
+`evidence-terminal-echo.json` in the test's Playwright artifact directory.
+A cell requires all measured keystrokes, output from each requested producer,
+and fake-model streams covering the typing window. The reveal case checks all
+600 numbered lines in xterm's retained buffer and checks the visible screen
+on reveal, WebSocket reconnect, and reload.
+
+The tables below record the original harness runs. The original probe could
+wait five seconds after it had already recorded an echo. It also accepted
+cells without checking the requested load, and an empty metrics response
+could look like zero stalls. The full comparison needs to be repeated with
+the corrected harness before these figures inform a backend-worker decision.
 
 **Load shape.** The loopback benchmark's `busy` level, minus observers:
 three fixture terminals running `producer.ts build` at 256 KiB/s, two running
@@ -261,13 +271,12 @@ every agent streamed throughout, load average about 1):
 | hidden-tabs (idle-time writes) | 35.4 | 64.2 | 91.3 | 101.7 |
 | hidden-tabs-direct | 35.5 | 80.4 | 100.7 | 101.5 |
 
-What this says:
+What the original runs suggested:
 
-- **The backend's stall is not felt in the browser at these loads.** With the
-  load running only on the backend, typing is as fast as idle at the busy
-  level and about 6 ms slower at p99 at the heavy terminal level, and the backend
-  never had a tick 100 ms late. Moving headless parsing into a worker (8312
-  task 1) is therefore not built; the task stays open with this evidence.
+- **The backend-only and idle timings were close.** At the busy level they
+  were similar, and at the heavy terminal level the backend-only p99 was
+  about 6 ms slower. The backend-worker task (8312 task 1) stays open pending
+  a verified comparison.
 - **The renderer's largest cost is a visible streaming agent**, not terminals:
   showing one beside the typing terminal adds about 40 ms at p95 and 50 ms at
   p99, with about a second of long tasks per run.

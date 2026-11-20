@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { Terminal } from "@xterm/xterm";
 import {
+  BACKGROUND_SLICE_BYTES,
   createBackgroundWriteScheduler,
   createTerminalWriteGate,
   type IdleDeadlineLike,
@@ -192,4 +194,113 @@ describe("terminal write gate", () => {
     expect(text(target.written)).toBe("b");
     scheduler.dispose();
   });
+  test("a late callback cannot release a newer slice for the same gate", () => {
+    const idle = manualIdle();
+    const watchdogs = new Map<() => void, () => void>();
+    const scheduler = createBackgroundWriteScheduler({
+      idle: idle.idle,
+      sliceBytes: 1,
+      timers: {
+        set(callback) {
+          watchdogs.set(callback, callback);
+          return callback;
+        },
+        clear(callback) {
+          watchdogs.delete(callback as () => void);
+        },
+      },
+    });
+    const callbacks: Array<() => void> = [];
+    const gate = createTerminalWriteGate((_data, done) => callbacks.push(done), scheduler, {
+      hidden: true,
+    });
+    try {
+      gate.write(bytes("abc"));
+      idle.runIdle();
+      watchdogs.values().next().value!();
+      idle.runIdle();
+      expect(callbacks).toHaveLength(2);
+      callbacks[0]!();
+      expect(idle.pending()).toBe(0);
+      expect(watchdogs.size).toBe(1);
+      callbacks[1]!();
+      expect(idle.pending()).toBe(1);
+    } finally {
+      scheduler.dispose();
+    }
+  });
+
+  for (const flush of [false, true]) {
+    test(`a failed ${flush ? "flush" : "idle slice"} rejects the queued tail and frees the scheduler`, () => {
+      const idle = manualIdle();
+      const scheduler = createBackgroundWriteScheduler({ idle: idle.idle, sliceBytes: 1 });
+      const failure = new Error("sink rejected");
+      const failed: unknown[] = [];
+      const gate = createTerminalWriteGate(
+        () => {
+          throw failure;
+        },
+        scheduler,
+        { hidden: true },
+      );
+      const healthy = deferredSink();
+      const other = createTerminalWriteGate(healthy.sink, scheduler, { hidden: true });
+      try {
+        gate.write(
+          bytes("aa"),
+          () => {
+            throw new Error("incorrect acknowledgment");
+          },
+          (error) => failed.push(error),
+        );
+        gate.write(bytes("bb"), undefined, (error) => failed.push(error));
+        other.write(bytes("c"));
+        if (flush) gate.flush();
+        else idle.runIdle();
+        expect(failed).toEqual([failure, failure]);
+        expect(gate.queuedBytes()).toBe(0);
+        idle.runIdle();
+        expect(healthy.pieces).toEqual(["c"]);
+        healthy.parseAll();
+      } finally {
+        scheduler.dispose();
+      }
+    });
+  }
+
+  for (const sequence of ["é", "\u001b[31mZ\u001b[0m"]) {
+    test(`real xterm preserves ${JSON.stringify(sequence)} across the idle slice boundary`, async () => {
+      const idle = manualIdle();
+      const scheduler = createBackgroundWriteScheduler({ idle: idle.idle });
+      const terminal = new Terminal({ allowProposedApi: true });
+      const gate = createTerminalWriteGate(
+        (data, parsed) => terminal.write(data, parsed),
+        scheduler,
+        { hidden: true },
+      );
+      try {
+        // NUL is ignored by xterm, so the sequence starts on the last byte
+        // of one 32 KiB slice without filling the on-screen buffer.
+        const data = bytes(`${"\0".repeat(BACKGROUND_SLICE_BYTES - 1)}${sequence}!`);
+        const completed = new Promise<void>((parsed, failed) => gate.write(data, parsed, failed));
+        const firstParsed = new Promise<void>((resolve) => {
+          const listener = terminal.onWriteParsed(() => {
+            listener.dispose();
+            resolve();
+          });
+        });
+        idle.runIdle();
+        await firstParsed;
+        idle.runIdle();
+        await completed;
+        const line = terminal.buffer.active.getLine(0)!;
+        expect(line.translateToString(true)).toBe(sequence === "é" ? "é!" : "Z!");
+        if (sequence !== "é") expect(line.getCell(0)!.getFgColor()).toBe(1);
+        expect(scheduler.metrics.slices).toBe(2);
+      } finally {
+        terminal.dispose();
+        scheduler.dispose();
+      }
+    });
+  }
 });

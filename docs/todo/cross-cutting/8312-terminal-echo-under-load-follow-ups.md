@@ -46,17 +46,17 @@ the page sees it: with the load running only on the backend (terminals and
 agents in other environments, so the page parses none of it), key-to-echo was
 p50/p95/p99 27.6/40.1/44.1 ms against 37.0/38.3/40.9 ms idle at the `busy`
 shape, and 27.0/31.4/42.3 ms against 32.0/35.3/36.2 ms with six build and three
-tool terminals. The backend's event-loop monitor recorded no tick 100 ms late
-in any run. The remaining backend stall is not felt in the browser at these
-loads, so the worker was not built and the checkpoint trigger was left as it
-is.
+tool terminals. Those were historical runs. The original harness could
+confuse unavailable event-loop counters with zero stalls and did not verify
+that the requested load covered each measurement. The worker remains open
+pending a comparison with the corrected harness.
 
 **Decisions.**
 
 - **Where the headless terminals run.**
   - **A worker per backend holding every session's terminal, behind an async interface (the design to build once a measurement shows the remaining stall is felt).**
     - Pros: parsing and serialization leave the loop entirely; uses a second core.
-    - Cons: `serializedState` and its callers become async; the worker needs `@xterm/headless` at run time, which means either a separately bundled worker entry in the backend, Electron and CLI builds or an inlined bundle; restart and crash handling for the worker. The 2026-11-20 browser figures show nothing for it to recover at the measured loads.
+    - Cons: `serializedState` and its callers become async; the worker needs `@xterm/headless` at run time, which means either a separately bundled worker entry in the backend, Electron and CLI builds or an inlined bundle; restart and crash handling for the worker. The historical browser figures need a verified comparison before they can inform this choice.
   - **Keep the metered scheduler and lower its budgets.**
     - Pros: no packaging change.
     - Cons: the work stays on the loop; smaller turns only spread it out, and throughput falls when the loop is busy.
@@ -92,8 +92,10 @@ transcript (about 50 ms at p99), but a real one, and the recommended option
 keeps the 2026-10-27 decision intact, so it was built: hidden tabs' writes
 wait for idle callbacks and reach xterm.js one slice at a time
 (`apps/web/src/lib/terminal-background-writes.ts`). In the A/B run it took p95
-from 80.4 to 64.2 ms and p99 from 100.7 to 91.3 ms. A hidden tab revealed after
-a 150,000-line run shows its end in order.
+from 80.4 to 64.2 ms and p99 from 100.7 to 91.3 ms in the original harness.
+Those figures are historical. Repeat the full comparison with the corrected
+harness before relying on them. The reveal check inspects all 600 numbered
+lines within configured scrollback, plus the current screen.
 
 **Decisions.**
 
@@ -185,10 +187,10 @@ exact history, and its A/B showed the gain.
 
 ### Task 1: not built
 
-The ticket asked to build the worker only if the measurement showed the
-backend stall is felt. It did not (see task 1's investigation), so the worker,
-the async `serializedState` and their packaging were not built, and the
-serialization checkpoint trigger was left unchanged.
+The ticket conditions the worker on a measured backend stall. The original
+runs compared idle and backend-only typing. Review found gaps in verification
+of producer activity, stream duration and stall counters. Use the corrected
+harness for the comparison before deciding whether a worker is warranted.
 
 ## Constraints and rationale
 

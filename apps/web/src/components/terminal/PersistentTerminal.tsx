@@ -1,4 +1,8 @@
-import { bindOsc52ClipboardGestures, suppressOsc52Clipboard } from "@/lib/terminal-osc52";
+import {
+  bindOsc52ClipboardGestures,
+  suppressBackgroundOsc52Clipboard,
+  suppressOsc52Clipboard,
+} from "@/lib/terminal-osc52";
 import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
@@ -279,10 +283,6 @@ export function PersistentTerminal({
   const previousPaneIdRef = useRef<string>(paneId);
   // Track if this is the first mount for this effect
   const isFirstMountRef = useRef<boolean>(true);
-  // Store buffer content captured during cleanup for restoration on remount
-  const pendingBufferRestoreRef = useRef<string | null>(null);
-  // Track if restoration is in progress to prevent duplicate restores
-  const restorationInProgressRef = useRef<boolean>(false);
   // Track if initial buffer restoration has completed - prevents cleanup from overwriting buffer during mount cycle
   const initialRestorationCompleteRef = useRef<boolean>(false);
 
@@ -594,8 +594,12 @@ export function PersistentTerminal({
         }
       }
 
-      const releaseClipboard = replay ? suppressOsc52Clipboard(terminal) : () => {};
-      const applied = new Promise<void>((resolve) =>
+      const releaseClipboard = replay
+        ? suppressOsc52Clipboard(terminal)
+        : !isActive || !isEnvironmentVisible
+          ? suppressBackgroundOsc52Clipboard(terminal)
+          : () => {};
+      const applied = new Promise<void>((resolve, reject) =>
         hiddenWrites.write(
           data,
           () => {
@@ -603,9 +607,13 @@ export function PersistentTerminal({
             onApplied?.();
             resolve();
           },
-          // A replay may reset the terminal next; everything received before
-          // it reaches xterm first.
-          { immediate: replay },
+          {
+            immediate: replay,
+            failed: (error) => {
+              releaseClipboard();
+              reject(error);
+            },
+          },
         ),
       );
       if (data.length > 0) {
@@ -687,7 +695,31 @@ export function PersistentTerminal({
       }
       return applied;
     },
-    [terminal, hiddenWrites, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady],
+    [
+      terminal,
+      hiddenWrites,
+      isActive,
+      isEnvironmentVisible,
+      isFirstTab,
+      isLocalEnvironment,
+      isEnvironmentReady,
+      tabId,
+      onReady,
+    ],
+  );
+
+  const resetAndReplay = useCallback(
+    async (data: Uint8Array) => {
+      // Queue the reset and its replacement in the same call. Live frames
+      // arriving later enter xterm after both, even with a deferred parser.
+      hiddenWrites.afterParsed(() => {
+        terminal.clear();
+        terminal.reset();
+      });
+      await handleData(data, undefined, true);
+      terminal.scrollToBottom();
+    },
+    [handleData, hiddenWrites, terminal],
   );
 
   const handleReplay = useCallback(
@@ -727,9 +759,7 @@ export function PersistentTerminal({
       if (degraded) {
         pendingDurableReplayRef.current = null;
         if (serializedBuffer && !hasRenderedOutputRef.current) {
-          terminal.clear();
-          terminal.reset();
-          await handleData(new TextEncoder().encode(serializedBuffer), undefined, true);
+          await resetAndReplay(new TextEncoder().encode(serializedBuffer));
         } else if (persistentBufferLoadPendingRef.current) {
           // Do not retain a truncated snapshot for the later reset. Only bytes
           // received after the snapshot cursor are safe to append to the durable
@@ -761,9 +791,7 @@ export function PersistentTerminal({
         pendingDurableReplayRef.current = null;
       }
 
-      terminal.clear();
-      terminal.reset();
-      await handleData(replayData, undefined, true);
+      const replay = resetAndReplay(replayData);
       if (trackUntilDurableHistoryLoads) {
         // Persistent storage can finish loading after the replacement session
         // attaches. Keep the snapshot and any subsequent live bytes so the
@@ -774,9 +802,9 @@ export function PersistentTerminal({
           overflowed: false,
         };
       }
-      terminal.scrollToBottom();
+      await replay;
     },
-    [handleData, serializedBuffer, terminal],
+    [handleData, resetAndReplay, serializedBuffer, terminal],
   );
 
   useEffect(() => {
@@ -789,10 +817,9 @@ export function PersistentTerminal({
       // it directly instead of waiting for an onReplay callback that cannot
       // arrive from attachExistingOnly without an existing session id.
       if (!isBackendManagedSetupTab || existingSessionId || hasRenderedOutputRef.current) return;
-      terminal.clear();
-      terminal.reset();
-      handleData(new TextEncoder().encode(serializedBuffer), undefined, true);
-      terminal.scrollToBottom();
+      void resetAndReplay(new TextEncoder().encode(serializedBuffer)).catch(
+        reportDurableReplayFailure,
+      );
       return;
     }
 
@@ -809,11 +836,13 @@ export function PersistentTerminal({
       replayData.set(chunk, offset);
       offset += chunk.length;
     }
-    terminal.clear();
-    terminal.reset();
-    handleData(replayData, undefined, true);
-    terminal.scrollToBottom();
-  }, [existingSessionId, handleData, isBackendManagedSetupTab, serializedBuffer, terminal]);
+    void resetAndReplay(replayData).catch(reportDurableReplayFailure);
+
+    function reportDurableReplayFailure(error: unknown) {
+      log.error("buffer.restore-failed", { error: formatLogError(error) });
+      setReplayWarning("Saved terminal history could not be restored.");
+    }
+  }, [existingSessionId, resetAndReplay, isBackendManagedSetupTab, serializedBuffer]);
 
   // Register an invisible OSC escape handler for setup completion detection.
   // When the setup command finishes, it emits an OSC sequence that xterm.js
@@ -1479,61 +1508,18 @@ export function PersistentTerminal({
         setDomReattachCount((count) => count + 1);
       }
 
-      // CRITICAL: Only do buffer clear/restore if the terminal LOGICALLY moved to a different pane
-      // When portal targets are recreated (pane structure changes), ALL terminals get
-      // unmount/remount cycles, but terminals staying in the same pane don't need
-      // buffer manipulation - their content is preserved in the existing xterm instance
+      // Moving the DOM node retains the same xterm and its parser state.
+      if (paneChanged || needsDOMMove) {
+        requestAnimationFrame(() => {
+          fitToLaidOutPane(fitAddon, terminalRef.current);
+          terminal.refresh(0, terminal.rows - 1);
+        });
+      }
       if (paneChanged) {
-        // Terminal moved to a different pane - need to restore buffer
-        const pendingBuffer = pendingBufferRestoreRef.current;
-
-        if (pendingBuffer && !restorationInProgressRef.current) {
-          // Mark restoration in progress to prevent duplicate restores
-          restorationInProgressRef.current = true;
-          // Clear the pending buffer so we don't restore again
-          pendingBufferRestoreRef.current = null;
-
-          // Restore the buffer that was captured during cleanup
-          requestAnimationFrame(() => {
-            try {
-              fitToLaidOutPane(fitAddon, terminalRef.current);
-              terminal.clear();
-              terminal.write(pendingBuffer);
-              terminal.scrollToBottom();
-            } catch (err) {
-              log.error("buffer.restore-failed", { tabId, error: formatLogError(err) });
-              fitToLaidOutPane(fitAddon, terminalRef.current);
-              terminal.refresh(0, terminal.rows - 1);
-            } finally {
-              // Clear the restoration flag after RAF completes
-              restorationInProgressRef.current = false;
-            }
-          });
-        } else if (!pendingBuffer) {
-          // Terminal moved but no pending buffer - just refresh
-          requestAnimationFrame(() => {
-            fitToLaidOutPane(fitAddon, terminalRef.current);
-            terminal.refresh(0, terminal.rows - 1);
-          });
-        }
-
-        // Fallback refresh after layout settles (only for moved terminals)
         setTimeout(() => {
           fitToLaidOutPane(fitAddon, terminalRef.current);
           terminal.refresh(0, terminal.rows - 1);
         }, 100);
-      } else {
-        // Terminal stayed in same pane - just refresh, no buffer manipulation needed
-        // Clear any stale pending buffer
-        pendingBufferRestoreRef.current = null;
-
-        // Simple refresh since DOM was reconnected
-        if (needsDOMMove) {
-          requestAnimationFrame(() => {
-            fitToLaidOutPane(fitAddon, terminalRef.current);
-            terminal.refresh(0, terminal.rows - 1);
-          });
-        }
       }
     }
 
@@ -1632,53 +1618,44 @@ export function PersistentTerminal({
     return () => {
       const restorationComplete = initialRestorationCompleteRef.current;
 
-      // Serialize buffer BEFORE cleanup while DOM is still connected
-      // This captures the full buffer content for restoration if needed after remount
-      // The effect will decide whether to use this based on whether pane actually changed
-      hiddenWrites.flush();
-      try {
-        const bufferContent = serializeLegacyTerminalBuffer(
-          (options) => serializeAddon.serialize(options),
-          terminal.options.scrollback,
-        );
-        const currentStoreBuffer = terminalSessions
-          .getState()
-          .sessions.get(sessionKey)?.serializedBuffer;
-        const currentStoreLength = currentStoreBuffer?.length ?? 0;
-
-        if (bufferContent && bufferContent.length > 0) {
-          // Store in ref for within-mount-cycle pane moves
-          pendingBufferRestoreRef.current = bufferContent;
-
-          // CRITICAL: Only update the store if initial restoration has completed.
-          // This prevents saving stale/cleared buffer content during:
-          // 1. React Strict Mode's mount-unmount-remount cycle
-          // 2. Effect re-runs before restoration completes
-          //
-          // When restoration is complete, we know the terminal has the correct content,
-          // so it's safe to save. The existing buffer in the store is preserved until then.
-          //
-          // Also check that new buffer is meaningful (not significantly smaller than stored)
-          // which would indicate we captured an intermediate/cleared state.
-          const newBufferIsMeaningful =
-            bufferContent.length >= currentStoreLength * BUFFER_SIZE_THRESHOLD ||
-            currentStoreLength === 0;
-
-          if (restorationComplete && newBufferIsMeaningful) {
-            terminalSessions.getState().setSerializedBuffer(sessionKey, bufferContent);
-            const persistentId = persistentSessionIdRef.current;
-            if (persistentId) {
-              savePersistentSessionBuffer(persistentId, bufferContent).catch((err) => {
-                log.error("persistent-buffer.save-failed", {
-                  persistentSessionId: persistentId,
-                  error: formatLogError(err),
-                });
-              });
+      const persistentId = persistentSessionIdRef.current;
+      const owner = terminalSessions.getState().sessions.get(sessionKey);
+      const reportCaptureFailure = (error: unknown) =>
+        log.error("buffer.serialize-failed", { error: formatLogError(error) });
+      if (restorationComplete && owner) {
+        try {
+          hiddenWrites.afterParsed(() => {
+            // The same xterm stays live across pane moves. A terminal that has
+            // been replaced or whose session was removed no longer owns this buffer.
+            const current = useTerminalPortalStore
+              .getState()
+              .getTerminal(terminalNodeId, environmentId, tabId);
+            const session = terminalSessions.getState().sessions.get(sessionKey);
+            if (
+              current?.terminal !== terminal ||
+              !session ||
+              session.sessionId !== owner.sessionId ||
+              session.persistentSessionId !== owner.persistentSessionId
+            )
+              return;
+            try {
+              const buffer = serializeLegacyTerminalBuffer(
+                (options) => serializeAddon.serialize(options),
+                terminal.options.scrollback,
+              );
+              const previousLength = session.serializedBuffer?.length ?? 0;
+              if (!buffer || buffer.length < previousLength * BUFFER_SIZE_THRESHOLD) return;
+              terminalSessions.getState().setSerializedBuffer(sessionKey, buffer);
+              if (persistentId) {
+                void savePersistentSessionBuffer(persistentId, buffer).catch(reportCaptureFailure);
+              }
+            } catch (error) {
+              reportCaptureFailure(error);
             }
-          }
+          });
+        } catch (error) {
+          reportCaptureFailure(error);
         }
-      } catch (err) {
-        log.error("buffer.serialize-failed", { error: formatLogError(err) });
       }
 
       if (terminalInputDisposables.get(terminal) === dataDisposable) {

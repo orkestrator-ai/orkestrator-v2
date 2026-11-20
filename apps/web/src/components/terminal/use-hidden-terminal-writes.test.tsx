@@ -66,7 +66,7 @@ describe("useHiddenTerminalWrites", () => {
     const { terminal, written } = fakeTerminal();
     const hook = renderHook(() => useHiddenTerminalWrites(terminal, false));
     hook.result.current.write(bytes("a"), () => undefined);
-    hook.result.current.flush();
+    hook.result.current.afterParsed(() => {});
     expect(written).toEqual(["a"]);
     hook.result.current.write(bytes("b"), () => undefined);
     hook.unmount();

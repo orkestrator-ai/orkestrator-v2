@@ -10,6 +10,8 @@ import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import * as realTerminalPortalStore from "@/stores/terminalPortalStore";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import { invoke } from "@/lib/native/backend";
+import { disposeBackgroundWriteScheduler } from "@/lib/terminal-background-writes";
+import { bindOsc52ClipboardGestures, installOsc52ClipboardHandler } from "@/lib/terminal-osc52";
 import { mockReadText, mockWriteText } from "../../../../../tests/mocks/clipboard";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import {
@@ -42,6 +44,7 @@ const bootstrapWrites = (): string[] =>
   invokeMock.mock.calls
     .filter(([command]) => command === "bootstrap_terminal_session")
     .map(([, args]) => (args as { data: string }).data);
+let portalTerminal: MockTerminal | undefined;
 let terminalOnData: ((data: Uint8Array) => void) | undefined;
 let terminalInputHandler: ((data: string) => void) | undefined;
 let terminalOscHandler: ((data: string) => boolean) | undefined;
@@ -374,6 +377,7 @@ function interceptDisconnectedNoticeTimer() {
 
 useTerminalPortalStoreMock.getState = () => ({
   ...portalStoreActions,
+  getTerminal: () => ({ terminal: portalTerminal }),
   terminals: new Map(),
 });
 
@@ -524,12 +528,13 @@ function createTerminalData(options?: {
   xtermNode.className = "xterm";
   storedContainerElement.appendChild(xtermNode);
 
+  portalTerminal = createMockTerminal();
   return {
     nodeId: "bk_persistent-terminal-node",
     tabId: "tab-1",
     containerId: options?.containerId ?? "container-1",
     environmentId: options?.environmentId ?? "env-1",
-    terminal: createMockTerminal(),
+    terminal: portalTerminal,
     fitAddon: { fit: mock(() => {}) },
     serializeAddon: { serialize: mock(() => options?.serializedBuffer ?? "") },
     webLinksAddon: {},
@@ -698,6 +703,7 @@ describe("PersistentTerminal", () => {
   });
 
   afterEach(() => {
+    disposeBackgroundWriteScheduler();
     cleanup();
     appCommandStore(terminalSessionStore).setState({ setSession: originalSetTerminalSession });
     terminalClocks?.restore();
@@ -2196,8 +2202,8 @@ describe("PersistentTerminal", () => {
         containerId="container-1"
         environmentId="env-1"
         isEnvironmentVisible
-        isActive
-        isFocused
+        isActive={false}
+        isFocused={false}
         isFirstTab={false}
         paneId="pane-1"
       />,
@@ -2216,17 +2222,28 @@ describe("PersistentTerminal", () => {
       "replacement output\r\n",
     );
 
+    const writes: Array<() => void> = [];
+    let screen = "replacement output\r\n";
+    terminal.reset.mockImplementation(() => {
+      screen = "";
+    });
+    terminal.write.mockImplementation((data: string | Uint8Array, parsed?: () => void) => {
+      writes.push(() => {
+        screen += typeof data === "string" ? data : new TextDecoder().decode(data);
+        parsed?.();
+      });
+    });
     act(() => {
       terminalOnData?.(new TextEncoder().encode("interim live output\r\n"));
     });
-    expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)?.[0] as Uint8Array)).toBe(
-      "interim live output\r\n",
-    );
-
+    expect(writes).toHaveLength(0);
     await act(async () => {
       resolvePersistentBuffer!("late durable history\r\n");
-      await Promise.resolve();
     });
+    act(() => {
+      for (const parse of writes.splice(0)) parse();
+    });
+    expect(screen).toBe("late durable history\r\nreplacement output\r\ninterim live output\r\n");
 
     await waitFor(() => {
       const replayData = terminal.write.mock.calls.at(-1)?.[0];
@@ -4033,7 +4050,7 @@ describe("PersistentTerminal", () => {
     expect(writeMock).toHaveBeenCalledWith("/tmp/local\\ env/image\\ one.png ");
   });
 
-  it("restores the serialized buffer when a terminal moves panes", async () => {
+  it("keeps the live xterm buffer when a terminal moves panes", async () => {
     const terminalData = createTerminalData({ serializedBuffer: "pane-buffer" });
     const terminal = terminalData.terminal as unknown as MockTerminal;
     const view = renderInAppCommandScope(
@@ -4067,67 +4084,117 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => {
-      expect(terminal.clear).toHaveBeenCalled();
-      expect(terminal.write).toHaveBeenCalledWith("pane-buffer");
-      expect(terminal.scrollToBottom).toHaveBeenCalled();
+      expect(terminal.refresh).toHaveBeenCalled();
+      expect(terminal.clear).not.toHaveBeenCalled();
+      expect(terminal.write).not.toHaveBeenCalled();
     });
   });
 
-  it("recovers when pane buffer restoration throws", async () => {
-    const terminalData = createTerminalData({ serializedBuffer: "pane-buffer" });
+  it("orders hidden queued bytes before an authoritative reset and later live output", async () => {
+    const terminalData = createTerminalData();
     const terminal = terminalData.terminal as unknown as MockTerminal;
-    terminal.write.mockImplementationOnce(() => {
-      throw new Error("parser unavailable");
+    const writes: Array<() => void> = [];
+    let screen = "";
+    terminal.reset.mockImplementation(() => {
+      screen = "";
     });
-    const logs = captureLogs();
-
-    try {
-      const view = renderInAppCommandScope(
-        <PersistentTerminal
-          terminalData={terminalData}
-          tabId="tab-1"
-          tabType="plain"
-          containerId="container-1"
-          environmentId="env-1"
-          isEnvironmentVisible
-          isActive
-          isFocused
-          isFirstTab={false}
-          paneId="pane-1"
-        />,
-      );
-
-      view.rerender(
-        <PersistentTerminal
-          terminalData={terminalData}
-          tabId="tab-1"
-          tabType="plain"
-          containerId="container-1"
-          environmentId="env-1"
-          isEnvironmentVisible
-          isActive
-          isFocused
-          isFirstTab={false}
-          paneId="pane-2"
-        />,
-      );
-
-      await waitFor(() => {
-        expect(logs.records()).toContainEqual(
-          expect.objectContaining({
-            level: "error",
-            area: "terminal",
-            event: "buffer.restore-failed",
-            fields: expect.objectContaining({
-              tabId: "tab-1",
-              error: expect.objectContaining({ message: "parser unavailable" }),
-            }),
-          }),
-        );
-        expect(terminal.refresh).toHaveBeenCalled();
+    terminal.write.mockImplementation((data: string | Uint8Array, parsed?: () => void) => {
+      writes.push(() => {
+        screen += typeof data === "string" ? data : new TextDecoder().decode(data);
+        parsed?.();
       });
+    });
+
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = renderInAppCommandScope(
+      <PersistentTerminal {...props} isActive isFocused={false} isEnvironmentVisible={false} />,
+    );
+    await act(async () => {
+      terminalOnData?.(new TextEncoder().encode("old"));
+      expect(writes).toHaveLength(0); // Active tab in a hidden environment.
+      const replay = lastUseTerminalOptions!.onReplay!(new TextEncoder().encode("snapshot"), {
+        preserveExisting: false,
+      });
+      expect(terminal.reset).not.toHaveBeenCalled();
+      view.rerender(<PersistentTerminal {...props} isActive isFocused isEnvironmentVisible />);
+      terminalOnData?.(new TextEncoder().encode("later"));
+      // Reveal may be committed after act, so explicitly apply the writes in
+      // separate turns while keeping the fake parser asynchronous.
+      for (const parse of writes.splice(0)) parse();
+      await replay;
+    });
+    act(() => {
+      for (const parse of writes.splice(0)) parse();
+    });
+    expect(screen).toBe("snapshotlater");
+  });
+
+  it("does not let a gesture after reveal authorize queued clipboard output", async () => {
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    const clipboard = mock(async (_text: string) => {});
+    // Register against the same terminal instance PersistentTerminal receives.
+    Object.assign(terminal, { loadAddon: () => {} });
+    const addon = installOsc52ClipboardHandler(terminalData.terminal, { writeText: clipboard });
+    let keydown: ((event: Event) => void) | undefined;
+    const host = {
+      addEventListener: (name: string, callback: (event: Event) => void) => {
+        if (name === "keydown") keydown = callback;
+      },
+      removeEventListener() {},
+    } as unknown as HTMLElement;
+    const writes: Array<() => void> = [];
+    terminal.write.mockImplementation((data: Uint8Array | string, parsed?: () => void) => {
+      writes.push(() => {
+        if (data instanceof Uint8Array) terminalOscHandler?.(new TextDecoder().decode(data));
+        parsed?.();
+      });
+    });
+
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = renderInAppCommandScope(
+      <PersistentTerminal {...props} isActive={false} isFocused={false} isEnvironmentVisible />,
+    );
+    try {
+      act(() => {
+        terminalOnData?.(new TextEncoder().encode("c;aGlkZGVu"));
+      });
+      expect(writes).toHaveLength(0);
+      view.rerender(<PersistentTerminal {...props} isActive isFocused isEnvironmentVisible />);
+      bindOsc52ClipboardGestures(terminalData.terminal, host);
+      keydown?.({ isTrusted: true } as Event);
+      act(() => {
+        for (const parse of writes.splice(0)) parse();
+      });
+      expect(clipboard).not.toHaveBeenCalled();
+
+      // The same trusted gesture can still authorize a new visible response.
+      act(() => {
+        terminalOnData?.(new TextEncoder().encode("c;dmlzaWJsZQ=="));
+      });
+      act(() => {
+        for (const parse of writes.splice(0)) parse();
+      });
+      expect(clipboard).toHaveBeenCalledWith("visible");
     } finally {
-      logs.restore();
+      view.unmount();
+      addon.dispose();
     }
   });
 
@@ -4762,32 +4829,48 @@ describe("PersistentTerminal", () => {
     });
   });
 
-  it("persists serialized buffers for persistent sessions on cleanup", async () => {
+  it("waits for hidden output to parse before persisting the buffer on cleanup", async () => {
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    const writes: Array<() => void> = [];
+    let screen = "persisted-buffer";
+    (terminalData.serializeAddon.serialize as ReturnType<typeof mock>).mockImplementation(
+      () => screen,
+    );
+    terminal.write.mockImplementation((data: string | Uint8Array, parsed?: () => void) => {
+      writes.push(() => {
+        screen += typeof data === "string" ? data : new TextDecoder().decode(data);
+        parsed?.();
+      });
+    });
     const view = renderInAppCommandScope(
       <PersistentTerminal
-        terminalData={createTerminalData({ serializedBuffer: "persisted-buffer" })}
+        terminalData={terminalData}
         tabId="tab-1"
         tabType="claude"
         containerId="container-1"
         environmentId="env-1"
-        isEnvironmentVisible={true}
-        isActive={true}
-        isFocused={true}
+        isEnvironmentVisible
+        isActive={false}
+        isFocused={false}
         isFirstTab={false}
         paneId="pane-1"
       />,
     );
-
-    await waitFor(() => {
-      expect(persistentSessionStore.createSession).toHaveBeenCalled();
+    await waitFor(() => expect(persistentSessionStore.createSession).toHaveBeenCalled());
+    act(() => {
+      terminalOnData?.(new TextEncoder().encode("-hidden-tail"));
     });
-
+    expect(writes).toHaveLength(0);
     view.unmount();
-
+    expect(persistentSessionStore.saveSessionBuffer).not.toHaveBeenCalled();
+    act(() => {
+      for (const parse of writes.splice(0)) parse();
+    });
     await waitFor(() => {
       expect(persistentSessionStore.saveSessionBuffer).toHaveBeenCalledWith(
         "persistent-1",
-        "persisted-buffer",
+        "persisted-buffer-hidden-tail",
       );
     });
   });

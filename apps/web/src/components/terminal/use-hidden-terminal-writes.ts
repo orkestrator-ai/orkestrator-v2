@@ -13,11 +13,11 @@ import {
  * subscribed and receives every byte; only the parse waits.
  *
  * `write` keeps per-terminal order with everything else that touches xterm:
- * a replay, and anything that calls `flush` first (a buffer capture before a
- * pane move), sees every byte received before it.
+ * use `afterParsed` to order resets and history capture after earlier writes.
  */
 export function useHiddenTerminalWrites(terminal: Terminal, visible: boolean) {
   const gateRef = useRef<TerminalWriteGate | null>(null);
+  const pending = useRef(0);
   const visibleRef = useRef(visible);
 
   useEffect(() => {
@@ -41,20 +41,44 @@ export function useHiddenTerminalWrites(terminal: Terminal, visible: boolean) {
   }, [visible]);
 
   const write = useCallback(
-    (data: Uint8Array, parsed: () => void, options: { immediate?: boolean } = {}) => {
+    (
+      data: Uint8Array,
+      parsed: () => void,
+      options: { immediate?: boolean; failed?: (error: unknown) => void } = {},
+    ) => {
       const gate = gateRef.current;
+      pending.current += 1;
+      const complete = () => {
+        pending.current -= 1;
+        parsed();
+      };
+      const fail = (error: unknown) => {
+        pending.current -= 1;
+        options.failed?.(error);
+      };
       if (!gate || options.immediate) {
         gate?.flush();
-        terminal.write(data, parsed);
+        try {
+          terminal.write(data, complete);
+        } catch (error) {
+          fail(error);
+        }
         return;
       }
-      gate.write(data, parsed);
+      gate.write(data, complete, fail);
     },
     [terminal],
   );
 
-  const flush = useCallback(() => gateRef.current?.flush(), []);
+  const afterParsed = useCallback(
+    (callback: () => void) => {
+      gateRef.current?.flush();
+      if (pending.current === 0) callback();
+      else terminal.write("", callback);
+    },
+    [terminal],
+  );
 
   // Stable, so effects may list it without re-running on every render.
-  return useMemo(() => ({ write, flush }), [write, flush]);
+  return useMemo(() => ({ write, afterParsed }), [write, afterParsed]);
 }

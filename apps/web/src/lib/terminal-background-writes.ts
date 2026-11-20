@@ -122,7 +122,7 @@ export function createBackgroundWriteScheduler(
   const metrics: BackgroundWriteMetrics = { slices: 0, sliceBytes: 0, flushes: 0, boundFlushes: 0 };
   let handle: unknown = null;
   /** The gate whose slice xterm is parsing; at most one across the page. */
-  let inFlight: Gate | null = null;
+  let inFlight: { gate: Gate } | null = null;
   let watchdog: unknown = null;
   let disposed = false;
 
@@ -131,8 +131,8 @@ export function createBackgroundWriteScheduler(
     handle = idle.request(run, idleTimeoutMs);
   };
 
-  const release = (gate: Gate) => {
-    if (inFlight !== gate) return;
+  const release = (slice: { gate: Gate }) => {
+    if (inFlight !== slice) return;
     inFlight = null;
     if (watchdog !== null) timers.clear(watchdog);
     watchdog = null;
@@ -143,11 +143,12 @@ export function createBackgroundWriteScheduler(
     handle = null;
     for (const gate of Array.from(waiting)) {
       waiting.delete(gate);
-      inFlight = gate;
+      const slice = { gate };
+      inFlight = slice;
       let settled = false;
       const issued = gate.issueSlice(sliceBytes, () => {
         settled = true;
-        release(gate);
+        release(slice);
       });
       // Round robin: a gate with more queued goes behind the others.
       if (gate.hasQueued()) waiting.add(gate);
@@ -158,9 +159,10 @@ export function createBackgroundWriteScheduler(
         // callback is requested once xterm has parsed this one. A terminal
         // disposed mid-parse never calls back, so the slot is not held forever.
         if (settled) schedule();
-        else watchdog = timers.set(() => release(gate), watchdogMs);
+        else watchdog = timers.set(() => release(slice), watchdogMs);
         return;
       }
+      if (inFlight !== slice) return;
       inFlight = null;
     }
   };
@@ -173,7 +175,7 @@ export function createBackgroundWriteScheduler(
     },
     remove(gate) {
       waiting.delete(gate);
-      release(gate);
+      if (inFlight?.gate === gate) release(inFlight);
     },
     metrics,
     dispose() {
@@ -188,11 +190,16 @@ export function createBackgroundWriteScheduler(
   };
 }
 
-type Queued = { data: Uint8Array; offset: number; parsed?: () => void };
+type Queued = {
+  data: Uint8Array;
+  offset: number;
+  parsed?: () => void;
+  failed?: (error: unknown) => void;
+};
 
 export interface TerminalWriteGate {
   /** Writes now when the tab is shown and nothing is queued; otherwise queues. */
-  write(data: Uint8Array, parsed?: () => void): void;
+  write(data: Uint8Array, parsed?: () => void, failed?: (error: unknown) => void): void;
   /** A shown tab flushes its queue at once; a hidden one queues from now on. */
   setHidden(hidden: boolean): void;
   /** Hands every queued byte to xterm now, in order. */
@@ -223,10 +230,24 @@ export function createTerminalWriteGate(
     bytes -= end - entry.offset;
     entry.offset = end;
     const parsed = last ? entry.parsed : undefined;
-    sink(piece, () => {
-      parsed?.();
-      done?.();
-    });
+    try {
+      sink(piece, () => {
+        parsed?.();
+        done?.();
+      });
+      return true;
+    } catch (error) {
+      // Earlier pieces may already be in xterm. Fail the entire pending tail so
+      // the transport reconciles from its last successfully applied revision.
+      const pending = queue.splice(0);
+      bytes = 0;
+      scheduler.remove(gate);
+      entry.failed?.(error);
+      for (const other of pending) {
+        if (other !== entry) other.failed?.(error);
+      }
+      return false;
+    }
   };
 
   const gate: Gate = {
@@ -243,7 +264,7 @@ export function createTerminalWriteGate(
         issued += size;
         // The slice's completion rides on its last piece; xterm parses in order.
         const lastPiece = budget <= 0 || queue.length === 0;
-        handOver(entry, end, finished, lastPiece ? done : undefined);
+        if (!handOver(entry, end, finished, lastPiece ? done : undefined)) return 0;
       }
       return issued;
     },
@@ -255,17 +276,21 @@ export function createTerminalWriteGate(
     scheduler.metrics.flushes += 1;
     if (bound) scheduler.metrics.boundFlushes += 1;
     scheduler.remove(gate);
-    for (const entry of queue.splice(0)) handOver(entry, entry.data.byteLength, true);
-    bytes = 0;
+    while (queue.length > 0) {
+      const entry = queue.shift()!;
+      if (!handOver(entry, entry.data.byteLength, true)) return;
+    }
   };
 
   return {
-    write(data, parsed) {
+    write(data, parsed, failed) {
+      const entry = { data, offset: 0, parsed, failed };
       if (disposed || (!hidden && queue.length === 0)) {
-        sink(data, () => parsed?.());
+        bytes += data.byteLength;
+        handOver(entry, data.byteLength, true);
         return;
       }
-      queue.push({ data, offset: 0, parsed });
+      queue.push(entry);
       bytes += data.byteLength;
       if (!hidden) {
         flush();

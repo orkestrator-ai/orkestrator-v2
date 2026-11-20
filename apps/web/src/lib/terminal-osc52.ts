@@ -65,6 +65,7 @@ type Osc52Terminal = Pick<Terminal, "parser" | "loadAddon">;
 type ClipboardGate = {
   lastInputAt: number;
   replayDepth: number;
+  backgroundDepth: number;
   mark: (event: Event) => void;
   cleanups: Set<() => void>;
   host?: HTMLElement;
@@ -108,6 +109,16 @@ export function suppressOsc52Clipboard(terminal: object): () => void {
   };
 }
 
+/** Background output cannot use a gesture, but a following visible write can. */
+export function suppressBackgroundOsc52Clipboard(terminal: object): () => void {
+  const gate = gates.get(terminal);
+  if (!gate) return () => {};
+  gate.backgroundDepth += 1;
+  return () => {
+    gate.backgroundDepth -= 1;
+  };
+}
+
 /** Route OSC 52 clipboard writes from programs in `terminal` to the system clipboard. */
 export function installOsc52ClipboardHandler(
   terminal: Osc52Terminal,
@@ -116,6 +127,7 @@ export function installOsc52ClipboardHandler(
   const gate: ClipboardGate = {
     lastInputAt: Number.NEGATIVE_INFINITY,
     replayDepth: 0,
+    backgroundDepth: 0,
     cleanups: new Set(),
     mark: (event) => {
       if (event.isTrusted && gate.replayDepth === 0) gate.lastInputAt = now();
@@ -123,7 +135,12 @@ export function installOsc52ClipboardHandler(
   };
   gates.set(terminal, gate);
   const parser = terminal.parser.registerOscHandler(OSC_52, (data) => {
-    if (gate.replayDepth > 0 || now() - gate.lastInputAt > OSC_52_INPUT_WINDOW_MS) return true;
+    if (
+      gate.replayDepth > 0 ||
+      gate.backgroundDepth > 0 ||
+      now() - gate.lastInputAt > OSC_52_INPUT_WINDOW_MS
+    )
+      return true;
     // Persistent terminals remain mounted when inactive. A gesture must still
     // belong to the focused terminal when its asynchronous response arrives.
     if (

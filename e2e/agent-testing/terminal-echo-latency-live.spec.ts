@@ -39,19 +39,38 @@
  * tokens: the typed keys are a fixed cycle of letters and digits.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, promises as fs, readFileSync } from "node:fs";
+import { promises as fs } from "node:fs";
 import path from "node:path";
+import {
+  DEFAULT_AGENT_ACCOUNT_ID,
+  parseAgentAccountsSnapshot,
+} from "@orkestrator/protocol/agent-accounts";
+import { TERMINAL_WEBSOCKET_PATH } from "@orkestrator/protocol/terminal-websocket";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { BrowserContext } from "@playwright/test";
 import { expect, fetchModulesOutsideChromium, test, type Page } from "./browser-test";
 import {
   fakeModelClaudeSettings,
+  MAX_STREAM_DELTAS,
   startFakeAnthropicModel,
   type FakeAnthropicModel,
 } from "./fake-anthropic-model";
-import { resolveRuntimeProfile } from "../../apps/desktop/electron/runtime-profile";
+import {
+  loadRuntimeProfileSync,
+  resolveRuntimeProfile,
+  statusManifestPath,
+} from "../../apps/desktop/electron/runtime-profile";
 
-type Status = { status: string; profile?: string; browserUrl?: string; testProject?: string };
+type Status = {
+  status: string;
+  profile: string;
+  flavor: string;
+  dataDir: string;
+  statusPath: string;
+  browserUrl: string;
+  testProject: string;
+  live: Record<string, boolean>;
+};
 type Project = { id: string; name: string; localPath: string | null };
 type Environment = { id: string; name: string; status?: string };
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -60,7 +79,7 @@ type Variant = "idle" | "backend-only" | "agent-visible" | "hidden-tabs" | "hidd
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "echo8312";
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_LIVE_TERMINAL_ECHO === "1";
-const FAKE_MODEL_PORT = Number(process.env.ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT ?? "0");
+const FAKE_MODEL_PORT = integerOption("ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT", 0, 0, 65535);
 const ALL_VARIANTS: Variant[] = [
   "idle",
   "backend-only",
@@ -70,27 +89,54 @@ const ALL_VARIANTS: Variant[] = [
 ];
 /** The renderer's measurement switch (`terminal-background-writes.ts`). */
 const BACKGROUND_WRITES_KEY = "orkestrator-terminal-background-writes";
-const VARIANTS = (process.env.ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS ?? ALL_VARIANTS.join(","))
-  .split(",")
-  .map((variant) => variant.trim())
-  .filter((variant): variant is Variant => (ALL_VARIANTS as string[]).includes(variant));
-const ROUNDS = Math.max(1, Number(process.env.ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS ?? "3"));
-const KEYS = Math.max(20, Number(process.env.ORKESTRATOR_AGENT_TEST_ECHO_KEYS ?? "200"));
+function parseIntegerOption(name: string, raw: string | number, min: number, max: number) {
+  const value = typeof raw === "string" && !raw.trim() ? NaN : Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+function integerOption(name: string, fallback: number, min: number, max = Number.MAX_SAFE_INTEGER) {
+  return LIVE ? parseIntegerOption(name, process.env[name] ?? fallback, min, max) : fallback;
+}
+
+function parseVariants(option: string): Variant[] {
+  const variants = option.split(",").map((variant) => variant.trim());
+  if (
+    variants.some((variant) => !ALL_VARIANTS.includes(variant as Variant)) ||
+    new Set(variants).size !== variants.length
+  ) {
+    throw new Error("ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS must list distinct supported variants");
+  }
+  return variants as Variant[];
+}
+
+const VARIANTS = LIVE
+  ? parseVariants(process.env.ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS ?? ALL_VARIANTS.join(","))
+  : ALL_VARIANTS;
+const ROUNDS = integerOption("ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS", 3, 1);
+const KEYS = integerOption("ORKESTRATOR_AGENT_TEST_ECHO_KEYS", 200, 20);
 const WARMUP_KEYS = 10;
 /** Pause between an echo and the next key, as the loopback benchmark uses. */
 const KEY_GAP_MS = 30;
 const ECHO_TIMEOUT_MS = 5_000;
 /** The load shape: the loopback benchmark's `busy` level. */
 const LOAD = {
-  build: Number(process.env.ORKESTRATOR_AGENT_TEST_ECHO_BUILD ?? "3"),
-  tool: Number(process.env.ORKESTRATOR_AGENT_TEST_ECHO_TOOL ?? "2"),
-  agents: Number(process.env.ORKESTRATOR_AGENT_TEST_ECHO_AGENTS ?? "4"),
+  build: integerOption("ORKESTRATOR_AGENT_TEST_ECHO_BUILD", 3, 0),
+  tool: integerOption("ORKESTRATOR_AGENT_TEST_ECHO_TOOL", 2, 0),
+  agents: integerOption("ORKESTRATOR_AGENT_TEST_ECHO_AGENTS", 4, 0),
   buildBytesPerSecond: 256 * 1024,
   toolBurstBytes: 2 * 1024 * 1024,
   toolEveryMs: 1_500,
 };
 /** Lines per streamed answer, 25 ms apart: long enough to cover a measured run. */
-const STREAM_DELTAS = Number(process.env.ORKESTRATOR_AGENT_TEST_ECHO_STREAM ?? "1600");
+const STREAM_DELTAS = integerOption(
+  "ORKESTRATOR_AGENT_TEST_ECHO_STREAM",
+  1600,
+  1,
+  MAX_STREAM_DELTAS,
+);
 const KEY_CYCLE = "abcdefghijklmnopqrstuvwxyz0123456789";
 const PRODUCER = path.join(repositoryRoot, "apps/backend/scripts/terminal-latency/producer.ts");
 const TYPING_TAB = "echo-typing";
@@ -109,9 +155,26 @@ function readyStatus(): Status {
     cwd: repositoryRoot,
     encoding: "utf8",
   });
+  if (command.status !== 0) throw new Error("The benchmark needs a running fixture profile");
   const status = JSON.parse(command.stdout) as Status;
   expect(status.profile, "dev:status answered for a different profile").toBe(profile);
   expect(status.status, `profile "${profile}" is not running`).toBe("ready");
+  const expected = runtime();
+  expect(status.flavor).toBe("agent-test");
+  expect(status.statusPath).toBe(statusManifestPath(expected));
+  expect(status.dataDir).toBe(expected.dataDir);
+  expect(status.testProject).toBe(path.join(expected.fixtureDir, "test-project"));
+  const gateway = new URL(status.browserUrl);
+  expect(gateway.protocol).toBe("http:");
+  expect(gateway.hostname).toBe("127.0.0.1");
+  for (const service of ["launcher", "vite", "electron", "backend"]) {
+    expect(status.live[service], `${service} is running`).toBe(true);
+  }
+  const config = loadRuntimeProfileSync(path.join(expected.profileRoot, "profile.json"));
+  expect(config.id).toBe(status.profile);
+  expect(config.dataDir).toBe(status.dataDir);
+  expect(config.hostSeedDisabled, "start with --no-host-seed").toBe(true);
+  expect(config.credentialSources, "start with --no-agent-credentials").toEqual([]);
   return status;
 }
 
@@ -219,13 +282,19 @@ function split(children: Leaf[]) {
   };
 }
 
-async function createEnvironment(invoke: Invoke, fixture: Project, label: string) {
+async function createEnvironment(
+  invoke: Invoke,
+  fixture: Project,
+  label: string,
+  createdEnvironments: Environment[],
+) {
   const created = await invoke<Environment>("create_environment", {
     projectId: fixture.id,
     name: `echo-${label}-${Date.now().toString(36)}`,
     environmentType: "local",
     networkAccessMode: "restricted",
   });
+  createdEnvironments.push(created);
   await invoke("start_environment", { environmentId: created.id });
   await expect
     .poll(
@@ -374,6 +443,9 @@ async function installProbe(page: Page) {
         armed = { suffix, keyAt: null, echoAt: null };
       },
       wait(timeoutMs: number) {
+        if (armed && armed.echoAt !== null) {
+          return Promise.resolve({ keyAt: armed.keyAt, echoAt: armed.echoAt });
+        }
         return new Promise<{ keyAt: number | null; echoAt: number | null }>((done) => {
           const finish = () => {
             clearTimeout(timer);
@@ -491,50 +563,140 @@ async function typeAndTime(page: Page, sessionId: string) {
 // The run
 
 type EventLoop = {
-  ticks?: number;
-  maxLagMs?: number;
-  lateTicks?: Record<string, number>;
-  stalls?: number;
+  ticks: number;
+  lateTicks: Record<string, number>;
+  stalls: number;
 };
+type LoopReading = { counters: EventLoop } | { unavailable: string };
+const stallBuckets = ["100", "1000", "5000", "30000"];
+const isCounter = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
-async function backendLoop(page: Page, gatewayUrl: string): Promise<EventLoop> {
-  const response = await page.request.get(new URL("/__orkestrator/metrics", gatewayUrl).href);
-  if (!response.ok()) return {};
-  const body = (await response.json()) as { eventLoop?: EventLoop | null };
-  return body.eventLoop ?? {};
+async function backendLoop(page: Page, gatewayUrl: string): Promise<LoopReading> {
+  const response = await page.request
+    .get(new URL("/__orkestrator/metrics", gatewayUrl).href)
+    .catch(() => null);
+  return readLoopMetrics(response);
 }
 
-function loopDelta(before: EventLoop, after: EventLoop) {
-  const late: Record<string, number> = {};
-  for (const [bucket, count] of Object.entries(after.lateTicks ?? {})) {
-    const delta = count - (before.lateTicks?.[bucket] ?? 0);
-    if (delta > 0) late[bucket] = delta;
+async function readLoopMetrics(
+  response: {
+    ok(): boolean;
+    status(): number;
+    json(): Promise<unknown>;
+  } | null,
+): Promise<LoopReading> {
+  if (!response) return { unavailable: "metrics request failed" };
+  if (!response.ok()) return { unavailable: `HTTP ${response.status()}` };
+  const body = (await response.json().catch(() => null)) as {
+    eventLoop?: Partial<EventLoop>;
+  } | null;
+  const counters = body?.eventLoop;
+  if (!counters) return { unavailable: "event-loop monitor absent" };
+  if (
+    !isCounter(counters.ticks) ||
+    !isCounter(counters.stalls) ||
+    !stallBuckets.every((bucket) => isCounter(counters.lateTicks?.[bucket]))
+  ) {
+    return { unavailable: "event-loop counters incomplete" };
   }
-  return {
-    ticks: (after.ticks ?? 0) - (before.ticks ?? 0),
-    lateTicks: late,
-    stalls: (after.stalls ?? 0) - (before.stalls ?? 0),
-  };
+  return { counters: counters as EventLoop };
+}
+
+function loopDelta(before: LoopReading, after: LoopReading) {
+  if ("unavailable" in before) return before;
+  if ("unavailable" in after) return after;
+  const ticks = after.counters.ticks - before.counters.ticks;
+  const stalls = after.counters.stalls - before.counters.stalls;
+  const lateTicks = Object.fromEntries(
+    stallBuckets.map((bucket) => [
+      bucket,
+      after.counters.lateTicks[bucket]! - before.counters.lateTicks[bucket]!,
+    ]),
+  );
+  if (ticks <= 0 || stalls < 0 || Object.values(lateTicks).some((delta) => delta < 0)) {
+    return { unavailable: "event-loop counters did not advance monotonically" };
+  }
+  return { ticks, lateTicks, stalls };
+}
+
+async function terminalWrite(invoke: Invoke, sessionId: string, data: string) {
+  const result = await invoke<{ delivered: boolean }>("local_terminal_write", { sessionId, data });
+  expect(result.delivered, `PTY write delivered to ${sessionId}`).toBe(true);
+}
+
+type OutputCursor = { generation: number; revision: number };
+
+async function outputCursors(invoke: Invoke, sessions: string[]) {
+  // Read only revision metadata from the response. Never include PTY output
+  // in the evidence.
+  return Promise.all(
+    sessions.map((sessionId) =>
+      invoke<OutputCursor>("get_terminal_output_snapshot", { sessionId }),
+    ),
+  );
+}
+
+function assertCellLoad(
+  loadBefore: OutputCursor[],
+  loadAfter: OutputCursor[],
+  streamsCovered: boolean,
+  measured: { samples: number; timeouts: number },
+) {
+  for (const [index, before] of loadBefore.entries()) {
+    const after = loadAfter[index]!;
+    expect(after.generation, `producer ${index + 1} generation`).toBe(before.generation);
+    expect(after.revision, `producer ${index + 1} output during typing`).toBeGreaterThan(
+      before.revision,
+    );
+  }
+  expect(streamsCovered, "all requested streams cover the typing window").toBe(true);
+  expect(measured.samples, "measured keys echoed").toBe(KEYS);
+  expect(measured.timeouts, "key timeouts").toBe(0);
 }
 
 const evidence: { run: Record<string, unknown>; cells: Record<string, unknown>[] } = {
   run: {},
   cells: [],
 };
-let model: FakeAnthropicModel;
-let settingsPath: string;
-let priorSettings: string | null = null;
+function assertIsolatedClaudeAccount(value: unknown) {
+  const accounts = parseAgentAccountsSnapshot(value);
+  const claudeAccounts = accounts?.accounts.filter(({ platform }) => platform === "claude");
+  const account = claudeAccounts?.[0];
+  if (
+    accounts?.active.claude !== DEFAULT_AGENT_ACCOUNT_ID ||
+    claudeAccounts?.length !== 1 ||
+    account?.id !== DEFAULT_AGENT_ACCOUNT_ID ||
+    !account.isDefault ||
+    !account.isActive ||
+    account.signedIn
+  ) {
+    throw new Error("The benchmark requires the isolated default Claude account");
+  }
+}
 
-test.beforeAll(async () => {
-  model = await startFakeAnthropicModel(FAKE_MODEL_PORT);
-  const claudeDir = path.join(runtime().dataDir, "agent-credentials", "claude");
-  // The profile's own isolated Claude home, never a real one.
-  expect(claudeDir.startsWith(runtime().profileRoot)).toBe(true);
+async function configureFakeModel(status: Status, invoke: Invoke, model: FakeAnthropicModel) {
+  assertIsolatedClaudeAccount(await invoke("list_agent_accounts"));
+  const claudeDir = path.join(status.dataDir, "agent-credentials", "claude");
   await fs.mkdir(claudeDir, { recursive: true });
-  settingsPath = path.join(claudeDir, "settings.json");
-  priorSettings = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null;
-  // Written before any agent tab opens, so every Claude process reads it.
-  await fs.writeFile(settingsPath, JSON.stringify(fakeModelClaudeSettings(model.origin)));
+  if ((await fs.realpath(claudeDir)) !== claudeDir) {
+    throw new Error("The profile Claude home must not redirect outside its directory");
+  }
+  const entries = await fs.readdir(claudeDir);
+  if (entries.some((name) => name === "settings.json" || name === ".credentials.json")) {
+    throw new Error("The isolated Claude home already contains settings or credentials");
+  }
+  const settings = path.join(claudeDir, "settings.json");
+  await fs.writeFile(settings, JSON.stringify(fakeModelClaudeSettings(model.origin)), {
+    flag: "wx",
+  });
+  return settings;
+}
+
+test("key-to-echo latency per load variant", async ({ browser }) => {
+  test.setTimeout(90 * 60_000);
+  const status = readyStatus();
+  const gatewayUrl = status.browserUrl;
   evidence.run = {
     profile,
     variants: VARIANTS,
@@ -554,23 +716,8 @@ test.beforeAll(async () => {
     },
     startedAt: new Date().toISOString(),
   };
-});
-
-test.afterAll(async () => {
-  const file = path.join(test.info().outputDir, "..", `evidence-terminal-echo-${Date.now()}.json`);
-  await fs.writeFile(file, `${JSON.stringify(evidence, null, 2)}\n`);
-  progress(`evidence written to ${file}`);
-  if (settingsPath) {
-    if (priorSettings === null) await fs.rm(settingsPath, { force: true });
-    else await fs.writeFile(settingsPath, priorSettings);
-  }
-  await model?.stop();
-});
-
-test("key-to-echo latency per load variant", async ({ browser }) => {
-  test.setTimeout(90 * 60_000);
-  const status = readyStatus();
-  const gatewayUrl = status.browserUrl!;
+  let model: FakeAnthropicModel | undefined;
+  let settingsPath: string | undefined;
   const contexts: BrowserContext[] = [];
   const created: Environment[] = [];
   let invoke: Invoke | undefined;
@@ -592,6 +739,9 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
     const measured = await signedInPage(1440);
     invoke = invokeThrough(measured, gatewayUrl);
     const command = invoke;
+    const fakeModel = await startFakeAnthropicModel(FAKE_MODEL_PORT);
+    model = fakeModel;
+    settingsPath = await configureFakeModel(status, invoke, fakeModel);
     const testProject = status.testProject ?? path.join(runtime().fixtureDir, "test-project");
     const fixture = (await invoke<Project[]>("get_projects")).find(
       (project) => project.localPath === testProject,
@@ -605,10 +755,9 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
       ...Array.from({ length: LOAD.build }, (_, index) => `echo-build-${index}`),
       ...Array.from({ length: LOAD.tool }, (_, index) => `echo-tool-${index}`),
     ];
-    const terminalOnly = await createEnvironment(invoke, fixture!, "w");
-    const withAgent = await createEnvironment(invoke, fixture!, "u");
-    const withHidden = await createEnvironment(invoke, fixture!, "t");
-    created.push(terminalOnly, withAgent, withHidden);
+    const terminalOnly = await createEnvironment(invoke, fixture!, "w", created);
+    const withAgent = await createEnvironment(invoke, fixture!, "u", created);
+    const withHidden = await createEnvironment(invoke, fixture!, "t", created);
     await seedLayout(invoke, terminalOnly.id, terminalLeaf([]));
     await seedLayout(invoke, withAgent.id, split([terminalLeaf([]), agentLeaf(withAgent.id)]));
     await seedLayout(
@@ -618,12 +767,11 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
     );
     const backgroundAgents: Environment[] = [];
     for (let index = 0; index < Math.max(0, LOAD.agents - 2); index += 1) {
-      const environment = await createEnvironment(invoke, fixture!, `a${index}`);
-      created.push(environment);
+      const environment = await createEnvironment(invoke, fixture!, `a${index}`, created);
       await seedLayout(invoke, environment.id, agentLeaf(environment.id));
       backgroundAgents.push(environment);
     }
-    const agentEnvironments = [withAgent, withHidden, ...backgroundAgents].slice(0, LOAD.agents);
+    const agentEnvironments = LOAD.agents > 0 ? [withAgent, withHidden, ...backgroundAgents] : [];
 
     // Load sessions: the hidden tabs' own, and the same shape under keys no
     // tab has, in the terminal-only environment (never subscribed by a page).
@@ -645,10 +793,7 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
         : `clear; ${bun} ${PRODUCER} tool ${LOAD.toolBurstBytes} ${LOAD.toolEveryMs}\n`,
     );
     for (const sessionId of typing.values()) {
-      await invoke("local_terminal_write", {
-        sessionId,
-        data: "clear; stty raw -echo && exec cat\n",
-      });
+      await terminalWrite(invoke, sessionId, "clear; stty raw -echo && exec cat\n");
     }
 
     await measured.goto(gatewayUrl, { waitUntil: "domcontentloaded" });
@@ -678,7 +823,7 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
       await expect
         .poll(
           () =>
-            model
+            fakeModel
               .callsWith(`ECHOWARM${environment.id.slice(0, 6)}`)
               .some((call) => call.answeredAt),
           {
@@ -689,17 +834,22 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
     }
 
     let turn = 0;
-    const startAgents = async () => {
+    const startAgents = async (visibleEnvironment: Environment) => {
       const words: string[] = [];
-      for (const environment of agentEnvironments) {
+      // A one-agent hidden-tabs cell still needs its visible agent.
+      const agents = agentEnvironments.filter(({ id }) => id !== visibleEnvironment.id);
+      if (agents.length !== agentEnvironments.length) agents.unshift(visibleEnvironment);
+      for (const environment of agents.slice(0, LOAD.agents)) {
         turn += 1;
         const word = `ECHOLOAD${turn}X`;
-        await prompt(environment, `${word} [stream:${STREAM_DELTAS}]`);
+        await prompt(environment, `${word} [hold:${word}] [stream:${STREAM_DELTAS}]`);
         words.push(word);
       }
       for (const word of words) {
         await expect
-          .poll(() => model.callsWith(word).some((call) => call.answeredAt), { timeout: 120_000 })
+          .poll(() => fakeModel.callsWith(word).some((call) => call.hold && !call.aborted), {
+            timeout: 120_000,
+          })
           .toBe(true);
       }
       for (const driver of drivers.values()) await driver.goto("about:blank");
@@ -707,12 +857,12 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
     };
     const startTerminals = async (sessions: string[]) => {
       for (const [index, sessionId] of sessions.entries()) {
-        await command("local_terminal_write", { sessionId, data: loadCommands[index] });
+        await terminalWrite(command, sessionId, loadCommands[index]!);
       }
     };
     const stopTerminals = async (sessions: string[]) => {
       for (const sessionId of sessions) {
-        await command("local_terminal_write", { sessionId, data: "\u0003" });
+        await terminalWrite(command, sessionId, "\u0003");
       }
     };
 
@@ -730,35 +880,70 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
         const loadSessions = hiddenTabs ? hiddenSessions : unseenSessions;
         progress(`round ${round + 1}: ${variant}`);
         let words: string[] = [];
-        if (loaded) words = await startAgents();
-        // Pass through the terminal-only environment, so the target's
-        // terminals mount afresh and read the measurement switch.
-        if (environment !== terminalOnly) await openEnvironment(measured, terminalOnly, false);
+        if (loaded) words = await startAgents(environment);
+        const directWrites = variant === "hidden-tabs-direct";
         await measured.evaluate(
           ([key, direct]) => {
             if (direct) localStorage.setItem(key, "off");
             else localStorage.removeItem(key);
           },
-          [BACKGROUND_WRITES_KEY, variant === "hidden-tabs-direct"] as const,
+          [BACKGROUND_WRITES_KEY, directWrites] as const,
         );
+        // The setting is read at mount. Reload both A/B variants to start
+        // with the intended mode even when an inactive environment stays mounted.
+        if (hiddenTabs) {
+          await measured.reload({ waitUntil: "domcontentloaded" });
+          await dismissStartupDialogs(measured, fixture!.name);
+        }
         await openEnvironment(measured, environment, environment !== terminalOnly);
         if (loaded) await startTerminals(loadSessions);
         // Let the load reach a steady state and the page settle after the switch.
         await measured.waitForTimeout(loaded ? 4_000 : 2_000);
+        const loadBefore = loaded ? await outputCursors(command, loadSessions) : [];
         const loopBefore = await backendLoop(measured, gatewayUrl);
+        for (const word of words) fakeModel.release(word);
+        await expect
+          .poll(() =>
+            words.every((word) =>
+              fakeModel.callsWith(word).some((call) => call.answeredAt && !call.aborted),
+            ),
+          )
+          .toBe(true);
+        const slicesBefore = hiddenTabs ? await idleSlices(measured) : null;
         const startedAt = Date.now();
         const result = await typeAndTime(measured, typing.get(environment.id)!);
         const endedAt = Date.now();
+        const hiddenIdleSlices =
+          slicesBefore === null ? null : (await idleSlices(measured)) - slicesBefore;
+        if (hiddenIdleSlices !== null && loadSessions.length > 0) {
+          if (directWrites) expect(hiddenIdleSlices, "direct cell bypasses idle slices").toBe(0);
+          else
+            expect(
+              hiddenIdleSlices,
+              "idle cell parses hidden output during typing",
+            ).toBeGreaterThan(0);
+        }
         const loopAfter = await backendLoop(measured, gatewayUrl);
+        const loadAfter = loaded ? await outputCursors(command, loadSessions) : [];
         if (loaded) await stopTerminals(loadSessions);
         const agentsStreamedThroughout = words.every((word) =>
-          model.callsWith(word).some((call) => !call.streamedAt || call.streamedAt >= endedAt),
+          fakeModel
+            .callsWith(word)
+            .some(
+              (call) =>
+                call.answeredAt !== undefined &&
+                call.answeredAt <= startedAt &&
+                !call.aborted &&
+                (!call.streamedAt || call.streamedAt >= endedAt),
+            ),
         );
+        assertCellLoad(loadBefore, loadAfter, agentsStreamedThroughout, result.keyToEchoMs);
         const cell = {
           variant,
           round: round + 1,
           durationMs: endedAt - startedAt,
           agentsStreamedThroughout,
+          hiddenIdleSlices,
           ...result,
           backendEventLoop: loopDelta(loopBefore, loopAfter),
         };
@@ -771,7 +956,8 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
           // Let the turns end, so the next variant starts from the same place.
           await expect
             .poll(
-              () => words.every((word) => model.callsWith(word).some((call) => call.streamedAt)),
+              () =>
+                words.every((word) => fakeModel.callsWith(word).some((call) => call.streamedAt)),
               {
                 timeout: STREAM_DELTAS * 25 + 120_000,
               },
@@ -781,9 +967,7 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
         }
       }
     }
-    for (const cell of evidence.cells) {
-      expect((cell.keyToEchoMs as { samples: number }).samples, "keys echoed").toBeGreaterThan(0);
-    }
+    expect(evidence.cells).toHaveLength(ROUNDS * VARIANTS.length);
   } finally {
     for (const environment of created) {
       if (!invoke) break;
@@ -791,23 +975,114 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }
     for (const context of contexts) await context.close().catch(() => undefined);
+    try {
+      if (settingsPath) await fs.rm(settingsPath, { force: true });
+    } finally {
+      await model?.stop();
+    }
+    const file = test.info().outputPath("evidence-terminal-echo.json");
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, `${JSON.stringify(evidence, null, 2)}\n`);
+    progress(`evidence written to ${file}`);
   }
 });
 
-/**
- * The no-drop check for idle-time writes: a hidden tab prints a long numbered
- * run while the typing tab is shown, and once revealed its screen must end
- * with the run's last numbers, in order. Only numbers are compared.
- */
+async function idleSlices(page: Page) {
+  return page.evaluate(async () => {
+    const moduleUrl = "/src/lib/terminal-background-writes.ts";
+    const { backgroundWriteScheduler } = (await import(moduleUrl)) as {
+      backgroundWriteScheduler(): { metrics: { slices: number } };
+    };
+    return backgroundWriteScheduler().metrics.slices;
+  });
+}
+
+async function inspectTerminal(page: Page, environmentId: string, tabId: string) {
+  // Use the actual xterm buffer, including rows outside the DOM viewport.
+  return page.evaluate(
+    async ({ environmentId, tabId }) => {
+      const storeUrl = "/src/stores/terminalPortalStore.ts";
+      const schedulerUrl = "/src/lib/terminal-background-writes.ts";
+      type TerminalView = {
+        environmentId: string;
+        tabId: string;
+        terminal: {
+          rows: number;
+          buffer: {
+            active: {
+              length: number;
+              viewportY: number;
+              getLine(index: number): { translateToString(trimRight: boolean): string } | undefined;
+            };
+          };
+        };
+      };
+      const { useTerminalPortalStore } = (await import(storeUrl)) as {
+        useTerminalPortalStore: { getState(): { terminals: Map<string, TerminalView> } };
+      };
+      const { backgroundWriteScheduler } = (await import(schedulerUrl)) as {
+        backgroundWriteScheduler(): { metrics: { slices: number } };
+      };
+      const data = Array.from(useTerminalPortalStore.getState().terminals.values()).find(
+        (entry) => entry.environmentId === environmentId && entry.tabId === tabId,
+      );
+      const buffer = data?.terminal.buffer.active;
+      const lines: number[] = [];
+      const screen: number[] = [];
+      const screenRows: string[] = [];
+      let ready = false;
+      for (let index = 0; buffer && index < buffer.length; index += 1) {
+        const row = buffer.getLine(index)?.translateToString(true) ?? "";
+        const line = row.trim();
+        const visible = index >= buffer.viewportY && index < buffer.viewportY + data!.terminal.rows;
+        if (visible) screenRows.push(row);
+        if (line === "ECHO-REVEAL-ATTACHED") ready = true;
+        if (!/^\d+$/u.test(line)) continue;
+        lines.push(Number(line));
+        if (visible) screen.push(Number(line));
+      }
+      // Compare every visible row without returning shell prompts or terminal text.
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(JSON.stringify(screenRows)),
+      );
+      return {
+        ready,
+        lines,
+        screen,
+        screenDigest: Array.from(new Uint8Array(digest)),
+        slices: backgroundWriteScheduler().metrics.slices,
+      };
+    },
+    { environmentId, tabId },
+  );
+}
+
 test("a hidden tab shows every line once revealed", async ({ browser }) => {
   test.setTimeout(10 * 60_000);
   const status = readyStatus();
   const gatewayUrl = status.browserUrl!;
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   let invoke: Invoke | undefined;
-  let environment: Environment | undefined;
+  const created: Environment[] = [];
   try {
     await fetchModulesOutsideChromium(context);
+    await context.addInitScript((socketPath) => {
+      if (location.protocol === "http:")
+        localStorage.setItem("orkestrator-terminal-transport", "websocket");
+      const terminalSockets = new Set<WebSocket>();
+      window.WebSocket = new Proxy(window.WebSocket, {
+        construct(target, args: ConstructorParameters<typeof WebSocket>) {
+          const socket = new target(...args);
+          if (new URL(socket.url).pathname === socketPath) {
+            terminalSockets.add(socket);
+            socket.addEventListener("close", () => terminalSockets.delete(socket), { once: true });
+          }
+          return socket;
+        },
+      });
+      Object.assign(window, { __echoTerminalSockets: terminalSockets });
+    }, TERMINAL_WEBSOCKET_PATH);
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
     const login = new URL(mintLoginUrl());
@@ -820,7 +1095,7 @@ test("a hidden tab shows every line once revealed", async ({ browser }) => {
       (project) => project.localPath === testProject,
     );
     expect(fixture, "the profile has no seeded fixture project").toBeTruthy();
-    environment = await createEnvironment(invoke, fixture!, "reveal");
+    const environment = await createEnvironment(invoke, fixture!, "reveal", created);
     const hiddenTab = "echo-reveal";
     await seedLayout(invoke, environment.id, terminalLeaf([hiddenTab]));
     await terminalSession(invoke, environment.id, TYPING_TAB);
@@ -828,37 +1103,158 @@ test("a hidden tab shows every line once revealed", async ({ browser }) => {
     await page.goto(gatewayUrl, { waitUntil: "domcontentloaded" });
     await dismissStartupDialogs(page, fixture!.name);
     await openEnvironment(page, environment, false);
-    await page.evaluate((key) => localStorage.removeItem(key), BACKGROUND_WRITES_KEY);
-    const last = 150_000;
-    await invoke("local_terminal_write", { sessionId: hidden, data: `clear; seq 1 ${last}\n` });
-    // Give the run time to finish while the tab is still hidden.
-    await page.waitForTimeout(8_000);
-    await page.locator(`[id="pane-tab:${environment.id}:echo-terminal-pane:${hiddenTab}"]`).click();
+    const selectTab = (tabId: string) =>
+      page.locator(`[id="pane-tab:${environment.id}:echo-terminal-pane:${tabId}"]`).click();
+    const inspect = () => inspectTerminal(page, environment.id, hiddenTab);
+    await selectTab(hiddenTab);
+    await terminalWrite(invoke, hidden, "printf 'ECHO-REVEAL-ATTACHED\\n'\n");
+    await expect.poll(async () => (await inspect()).ready).toBe(true);
+    await selectTab(TYPING_TAB);
+    const slicesBefore = (await inspect()).slices;
+    const lineCount = 600; // Fits the fixture's default 1,000-line scrollback.
+    const expected = Array.from({ length: lineCount }, (_, index) => index + 1);
+    await terminalWrite(invoke, hidden, `clear; seq 1 ${lineCount}\n`);
     await expect
-      .poll(
-        () =>
-          page.evaluate((tabId) => {
-            const rows = document.querySelector(`[data-terminal-tab-id="${tabId}"] .xterm-rows`);
-            const lines = Array.from(rows?.children ?? [])
-              .map((row) => (row.textContent ?? "").trim())
-              .filter((line) => /^\d+$/u.test(line))
-              .map(Number);
-            if (lines.length < 10) return `only ${lines.length} numbered rows`;
-            for (let index = 1; index < lines.length; index += 1) {
-              if (lines[index] !== lines[index - 1]! + 1) return "rows out of order";
-            }
-            return lines.at(-1);
-          }, hiddenTab),
-        { timeout: 60_000 },
-      )
-      .toBe(last);
+      .poll(async () => (await inspect()).slices, { timeout: 60_000 })
+      .toBeGreaterThan(slicesBefore);
+    await selectTab(hiddenTab);
+    await expect.poll(async () => (await inspect()).lines, { timeout: 60_000 }).toEqual(expected);
+    const { screen: visibleNumbers, screenDigest } = await inspect();
+    expect(visibleNumbers.length).toBeGreaterThan(0);
+    expect(visibleNumbers).toEqual(expected.slice(-visibleNumbers.length));
+
+    // Drop the live browser channel and wait for a new subscription
+    // before comparing the same terminal buffer.
+    const reconnect = page
+      .waitForEvent("websocket", {
+        predicate: (socket) => new URL(socket.url()).pathname === TERMINAL_WEBSOCKET_PATH,
+      })
+      .then((socket) =>
+        socket.waitForEvent("framereceived", {
+          predicate: ({ payload }) =>
+            typeof payload === "string" &&
+            (JSON.parse(payload) as { type?: string }).type === "subscribed",
+        }),
+      );
+    void reconnect.catch(() => undefined);
+    await page.evaluate(() => {
+      const sockets = (window as unknown as { __echoTerminalSockets: Set<WebSocket> })
+        .__echoTerminalSockets;
+      if (!sockets.size) throw new Error("The terminal is not on WebSocket transport");
+      for (const socket of sockets) socket.close(4000, "Benchmark reconnect");
+    });
+    await reconnect;
+    await expect.poll(async () => (await inspect()).lines).toEqual(expected);
+    await expect.poll(async () => (await inspect()).screenDigest).toEqual(screenDigest);
+
+    // A fresh renderer must recover the retained scrollback and the same
+    // visible screen from the backend attachment.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await dismissStartupDialogs(page, fixture!.name);
+    await selectEnvironment(page, environment);
+    await selectTab(hiddenTab);
+    await expect.poll(async () => (await inspect()).lines, { timeout: 60_000 }).toEqual(expected);
+    await expect.poll(async () => (await inspect()).screenDigest).toEqual(screenDigest);
   } finally {
-    if (invoke && environment) {
+    for (const environment of created) {
+      if (!invoke) break;
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }
     await context.close().catch(() => undefined);
   }
+});
+
+test("echo probe resolves an echo observed before the wait", async ({ page }) => {
+  await page.setContent(
+    `<div data-terminal-tab-id="${TYPING_TAB}"><div class="xterm-rows"><div></div></div></div>`,
+  );
+  await installProbe(page);
+  const result = await page.evaluate(async (tabId) => {
+    const host = document.querySelector(`[data-terminal-tab-id="${tabId}"]`)!;
+    const probe = (
+      window as unknown as {
+        __echoProbe: {
+          arm(suffix: string): void;
+          wait(ms: number): Promise<{ keyAt: number | null; echoAt: number | null }>;
+          stop(): void;
+        };
+      }
+    ).__echoProbe;
+    try {
+      probe.arm("echo");
+      host.dispatchEvent(new KeyboardEvent("keydown"));
+      host.querySelector(".xterm-rows div")!.textContent = "echo";
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      return await Promise.race([
+        probe.wait(5_000),
+        // The already observed echo must settle in the current turn.
+        Promise.resolve().then(() => "did not resolve the recorded echo"),
+      ]);
+    } finally {
+      probe.stop();
+    }
+  }, TYPING_TAB);
+  expect(result).toEqual({ keyAt: expect.any(Number), echoAt: expect.any(Number) });
+});
+
+test("harness rejects invalid setup and incomplete measurements", async () => {
+  expect(() => parseVariants("idle,unknown")).toThrow("supported variants");
+  expect(() => parseIntegerOption("ROUNDS", "invalid", 1, 10)).toThrow("ROUNDS");
+  expect(() =>
+    assertIsolatedClaudeAccount({
+      accounts: [],
+      active: { claude: "alternate", codex: DEFAULT_AGENT_ACCOUNT_ID },
+    }),
+  ).toThrow("isolated default Claude account");
+
+  const cursor = { generation: 1, revision: 3 };
+  const advancing = [{ ...cursor, revision: 4 }];
+  const counts = { samples: KEYS, timeouts: 0 };
+  expect(() => assertCellLoad([cursor], [cursor], true, counts)).toThrow("output during typing");
+  expect(() => assertCellLoad([cursor], advancing, false, counts)).toThrow("streams cover");
+  expect(() =>
+    assertCellLoad([cursor], advancing, true, { samples: KEYS - 1, timeouts: 1 }),
+  ).toThrow("measured keys echoed");
+
+  const response = (status: number, body: unknown) => ({
+    ok: () => status === 200,
+    status: () => status,
+    json: async () => body,
+  });
+  const eventLoop = {
+    ticks: 1,
+    stalls: 0,
+    lateTicks: { "100": 0, "1000": 0, "5000": 0, "30000": 0 },
+  };
+  const before = await readLoopMetrics(response(200, { eventLoop }));
+  expect(loopDelta(before, await readLoopMetrics(response(503, {})))).toEqual({
+    unavailable: "HTTP 503",
+  });
+  expect(loopDelta(before, await readLoopMetrics(response(200, {})))).toEqual({
+    unavailable: "event-loop monitor absent",
+  });
+  expect(
+    loopDelta(
+      before,
+      await readLoopMetrics(response(200, { eventLoop: { ...eventLoop, ticks: 2 } })),
+    ),
+  ).toEqual({ ticks: 1, stalls: 0, lateTicks: eventLoop.lateTicks });
+
+  const created: Environment[] = [];
+  const failingStart: Invoke = async <T>(command: string) => {
+    if (command === "create_environment") return { id: "fixture", name: "fixture" } as T;
+    throw new Error("fixture start failed");
+  };
+  await expect(
+    createEnvironment(
+      failingStart,
+      { id: "project", name: "fixture", localPath: null },
+      "setup-failure",
+      created,
+    ),
+  ).rejects.toThrow("fixture start failed");
+  expect(created.map(({ id }) => id)).toEqual(["fixture"]);
 });
 
 async function sendPrompt(page: Page, prompt: string) {

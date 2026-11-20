@@ -130,6 +130,16 @@ const mockCreateLocalFolder = mock<
 >((_environmentId, parentDirectory, folderName) =>
   Promise.resolve(parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`),
 );
+const mockCreateContainerFile = mock<
+  (environmentId: string, parentDirectory: string, fileName: string) => Promise<string>
+>((_environmentId, parentDirectory, fileName) =>
+  Promise.resolve(parentDirectory === "." ? fileName : `${parentDirectory}/${fileName}`),
+);
+const mockCreateLocalFile = mock<
+  (environmentId: string, parentDirectory: string, fileName: string) => Promise<string>
+>((_environmentId, parentDirectory, fileName) =>
+  Promise.resolve(parentDirectory === "." ? fileName : `${parentDirectory}/${fileName}`),
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -152,6 +162,8 @@ mock.module("@/lib/backend", () => ({
   renameLocalFile: mockRenameLocalFile,
   createContainerFolder: mockCreateContainerFolder,
   createLocalFolder: mockCreateLocalFolder,
+  createContainerFile: mockCreateContainerFile,
+  createLocalFile: mockCreateLocalFile,
 }));
 
 const { useFilesPanel, FileBatchActionError } =
@@ -267,6 +279,8 @@ describe("useFilesPanel", () => {
     mockRenameLocalFile.mockClear();
     mockCreateContainerFolder.mockClear();
     mockCreateLocalFolder.mockClear();
+    mockCreateContainerFile.mockClear();
+    mockCreateLocalFile.mockClear();
     mockToastError.mockClear();
     mockToastSuccess.mockClear();
     mockGetGitStatus.mockImplementation(() => Promise.resolve([]));
@@ -1268,6 +1282,60 @@ describe("useFilesPanel", () => {
     expect(mockCreateLocalFolder).toHaveBeenCalledWith("env-local", ".", "docs");
     expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
     expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+  });
+
+  test("routes local and container file creation and refreshes authoritative snapshots", async () => {
+    const containerEnvironment = createMockEnvironment({
+      id: "env-container",
+      projectId: "project-1",
+      environmentType: "containerized",
+      containerId: "container-1",
+      status: "running",
+    });
+    resetStores(containerEnvironment);
+    const containerHook = renderHookInAppCommandScope(() => useFilesPanel());
+    mockCreateContainerFile.mockResolvedValueOnce("src/notes.md");
+    await act(async () => {
+      await expect(containerHook.result.current.createFile("src", "notes.md")).resolves.toBe(
+        "src/notes.md",
+      );
+    });
+    expect(mockCreateContainerFile).toHaveBeenCalledWith("env-container", "src", "notes.md");
+    expect(mockCreateLocalFile).not.toHaveBeenCalled();
+    expect(mockGetGitStatus).toHaveBeenCalledWith("container-1", "develop", true);
+    expect(mockGetFileTree).toHaveBeenCalledWith("container-1");
+    expect(mockToastSuccess).toHaveBeenCalledWith("File created", { description: "src/notes.md" });
+    expect(containerHook.result.current.fileActionPending).toBeNull();
+    containerHook.unmount();
+
+    const localEnvironment = createMockEnvironment({
+      id: "env-local",
+      projectId: "project-1",
+      environmentType: "local",
+      worktreePath: "/tmp/worktree",
+      status: "stopped",
+    });
+    resetStores(localEnvironment);
+    const localHook = renderHookInAppCommandScope(() => useFilesPanel());
+    await act(async () => {
+      await localHook.result.current.createFile(".", "TODO.md");
+    });
+    expect(mockCreateLocalFile).toHaveBeenCalledWith("env-local", ".", "TODO.md");
+    expect(mockGetLocalGitStatus).toHaveBeenCalledWith("/tmp/worktree", "develop", true);
+    expect(mockGetLocalFileTree).toHaveBeenCalledWith("/tmp/worktree");
+
+    mockCreateLocalFile.mockRejectedValueOnce(
+      new Error("A file or folder already exists at TODO.md"),
+    );
+    await act(async () => {
+      await expect(localHook.result.current.createFile(".", "TODO.md")).rejects.toThrow(
+        "already exists",
+      );
+    });
+    expect(mockToastError).toHaveBeenCalledWith("Failed to create file", {
+      description: "A file or folder already exists at TODO.md",
+    });
+    expect(localHook.result.current.fileActionPending).toBeNull();
   });
 
   test("routes local and container renames and refreshes authoritative snapshots", async () => {

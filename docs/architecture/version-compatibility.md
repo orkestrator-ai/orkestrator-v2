@@ -883,7 +883,7 @@ export const nodeMailClient = domainClient(nodeMail, {
 - **Terminals, files and Claude tmux**
   ([7002](../../plans/unified/7002-domain-terminals-files-tmux.md)):
   `terminals` (26 commands, the composer's `!` user commands included),
-  `files` (28) and `claude-tmux` (28), all at version 1 (min 1), called by
+  `files` (30) and `claude-tmux` (28), all at version 1 (min 1), called by
   the renderer through `apps/web/src/lib/node-scope/domains/` over the
   `lib/backend` factory's client. Their clients' API is the command list
   keyed by name (`commandApi`, `contract/domains/command-api.ts`):

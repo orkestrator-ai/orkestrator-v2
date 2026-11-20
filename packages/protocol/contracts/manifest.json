@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1082,
-    "defined": 1082,
+    "commands": 1084,
+    "defined": 1084,
     "untyped": 0,
     "events": 48
   },
@@ -1643,6 +1643,15 @@
       "argsDigest": "sha256:d3c1815072033195fd513170bde410a81a9e0bf1d5723c01866a4a9564bf8f12",
       "resultDigest": "sha256:4067feb1da6d29ab0341c20a43e0a8bafee738ca8da1920bce5dc643d5bcad16"
     },
+    "create_container_file": {
+      "domain": "files",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7d9e2c56b8e265ef097ebff3dabe14832fffdb43fd3e8d482bd19fa242c21694",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
+    },
     "create_container_folder": {
       "domain": "files",
       "since": 1,
@@ -1774,6 +1783,15 @@
       "critical": ["requestKey"],
       "argsDigest": "sha256:7287f6941afb269d2cd04cabb9cccc90c19b47af9b3293bba3fde88390985d24",
       "resultDigest": "sha256:8ac4a81609251f37bce09e305ce8738332c9dadc4df8f43f80242fa3aa49ca9b"
+    },
+    "create_local_file": {
+      "domain": "files",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:7d9e2c56b8e265ef097ebff3dabe14832fffdb43fd3e8d482bd19fa242c21694",
+      "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
     "create_local_folder": {
       "domain": "files",

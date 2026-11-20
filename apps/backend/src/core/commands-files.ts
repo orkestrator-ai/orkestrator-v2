@@ -164,6 +164,7 @@ const path = require("node:path");
 const root = path.resolve(process.argv[1]);
 const limit = Number(process.argv[2]);
 const start = process.argv[3] || "";
+const recentRootFiles = new Set(JSON.parse(process.argv[4] || "[]"));
 const deferredNames = new Set(${JSON.stringify(DEFERRED_FILE_TREE_DIRECTORIES)});
 let startDirectory = root;
 for (const segment of start ? start.split("/") : []) {
@@ -194,13 +195,16 @@ while (level.length && count < limit) {
       } catch {
         continue;
       }
+      const priority = entry =>
+        !relativeDirectory && entry.isFile() && recentRootFiles.has(entry.name) ? 1 : 0;
       entries.sort((a, b) =>
+        priority(b) - priority(a) ||
         Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
       let added = 0;
       let complete = true;
       for (let entryIndex = cursor; entryIndex < entries.length; entryIndex += 1) {
         const entry = entries[entryIndex];
-        if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) continue;
+        if (entry.name === ".git" || (entry.name === "node_modules" && entry.isDirectory()) || entry.isSymbolicLink()) continue;
         if (!entry.isDirectory() && !entry.isFile()) continue;
         if (added >= quota) {
           complete = false;
@@ -326,8 +330,9 @@ export function parseContainerFileSubtree(output: string, directory: string): Fi
 export async function buildFileTree(
   rootPath: string,
   budget: { remaining: number } = { remaining: MAX_FILE_TREE_NODES },
+  recentRootFiles: ReadonlySet<string> = new Set(),
 ): Promise<FileTreeNode[]> {
-  return (await walkFileTree(rootPath, "", budget)).children;
+  return (await walkFileTree(rootPath, "", budget, recentRootFiles)).children;
 }
 
 /**
@@ -359,6 +364,7 @@ async function walkFileTree(
   rootPath: string,
   startDirectory: string,
   budget: { remaining: number },
+  recentRootFiles?: ReadonlySet<string>,
 ): Promise<FileSubtree> {
   const roots: FileTreeNode[] = [];
   type Directory = {
@@ -395,16 +401,24 @@ async function walkFileTree(
           if (node === start) throw error;
           continue;
         }
+        const priority = (entry: (typeof entries)[number]) =>
+          !relativePath && entry.isFile() && recentRootFiles?.has(entry.name) ? 1 : 0;
         entries.sort(
           (a, b) =>
-            Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name),
+            priority(b) - priority(a) ||
+            Number(b.isDirectory()) - Number(a.isDirectory()) ||
+            a.name.localeCompare(b.name),
         );
         let added = 0;
         let complete = true;
         for (let entryIndex = cursor; entryIndex < entries.length; entryIndex += 1) {
           const entry = entries[entryIndex]!;
           // Symlinks are not valid picker targets and must never escape the root.
-          if (entry.name === ".git" || entry.name === "node_modules" || entry.isSymbolicLink()) {
+          if (
+            entry.name === ".git" ||
+            (entry.name === "node_modules" && entry.isDirectory()) ||
+            entry.isSymbolicLink()
+          ) {
             continue;
           }
           if (!entry.isDirectory() && !entry.isFile()) continue;
@@ -1755,45 +1769,71 @@ export async function copyExternalFileToLocalWorkspace(
   return copy.destination;
 }
 
-/**
- * Resolve a single-segment folder name against an existing parent directory.
- *
- * The name is a leaf only: separators are rejected so a right-click location
- * cannot be used to create a nested path elsewhere in the workspace.
- */
-export function resolveWorkspaceFolderCreate(
+/** Resolve one leaf name against the exact workspace directory selected in the tree. */
+export function resolveWorkspaceLeafCreate(
   parentDirectory: string,
-  folderName: string,
-): { directory: string; folderPath: string } {
-  const name = folderName.trim();
+  entryName: string,
+  kind: "file" | "folder",
+): { directory: string; name: string; entryPath: string } {
+  const label = `${kind}Name`;
+  const maxBytes =
+    kind === "file" ? MAX_WORKSPACE_FILE_NAME_BYTES : MAX_WORKSPACE_FOLDER_NAME_BYTES;
+  const name = entryName.trim();
   if (name.length === 0) {
-    throw new Error("Invalid folderName: name is required");
+    throw new Error(`Invalid ${label}: name is required`);
   }
-  if (Buffer.byteLength(name, "utf8") > MAX_WORKSPACE_FOLDER_NAME_BYTES) {
-    throw new Error(`Invalid folderName: name exceeds ${MAX_WORKSPACE_FOLDER_NAME_BYTES} bytes`);
+  if (Buffer.byteLength(name, "utf8") > maxBytes) {
+    throw new Error(`Invalid ${label}: name exceeds ${maxBytes} bytes`);
   }
   if (name === "." || name === "..") {
-    throw new Error("Invalid folderName: path must stay inside the workspace");
+    throw new Error(`Invalid ${label}: path must stay inside the workspace`);
   }
   if (name.toLowerCase() === ".git") {
-    throw new Error("Invalid folderName: Git metadata cannot be modified");
+    throw new Error(`Invalid ${label}: Git metadata cannot be modified`);
   }
   if (name.includes("/") || name.includes("\\")) {
-    throw new Error("Invalid folderName: path separators are not allowed");
+    throw new Error(`Invalid ${label}: path separators are not allowed`);
+  }
+  if (parentDirectory.includes("\\")) {
+    throw new Error("Invalid parentDirectory: folder paths cannot contain a backslash");
   }
 
   const directory =
     parentDirectory === "."
       ? "."
       : validateWorkspaceMutationPath(parentDirectory, "parentDirectory");
-  const folderPath = validateWorkspaceMutationPath(
+  const entryPath = validateWorkspaceMutationPath(
     directory === "." ? name : path.posix.join(directory, name),
-    "folderPath",
+    `${kind}Path`,
   );
-  if (path.posix.basename(folderPath) !== name) {
-    throw new Error("Invalid folderName: path must stay inside the workspace");
+  if (path.posix.basename(entryPath) !== name) {
+    throw new Error(`Invalid ${label}: path must stay inside the workspace`);
   }
-  return { directory, folderPath };
+  return { directory: path.posix.dirname(entryPath), name, entryPath };
+}
+
+export function resolveWorkspaceFolderCreate(
+  parentDirectory: string,
+  folderName: string,
+): { directory: string; folderPath: string } {
+  const { directory, entryPath } = resolveWorkspaceLeafCreate(
+    parentDirectory,
+    folderName,
+    "folder",
+  );
+  return { directory, folderPath: entryPath };
+}
+
+/** Interpret the codes and markers emitted by the pinned container writer. */
+export function containerAttachmentWriteFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const exitCode = error instanceof CommandFailedError ? error.exitCode : undefined;
+  if ((exitCode === 76 || exitCode === undefined) && message.includes("EEXIST")) return "exists";
+  if ((exitCode === 77 || exitCode === undefined) && message.includes("ENOENT_ANCESTOR")) {
+    return "missing-parent";
+  }
+  if (exitCode === 73) return "invalid-parent";
+  return "unknown";
 }
 
 /** Create one empty directory without replacing an existing path. */

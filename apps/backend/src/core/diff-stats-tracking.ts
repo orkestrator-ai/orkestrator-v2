@@ -101,7 +101,14 @@ export function createGitFetchScheduler(): GitFetchScheduler {
   return new GitFetchScheduler({
     run: (args, timeoutMs) =>
       args[2] === "fetch"
-        ? runRemoteGit("fetch", args.slice(3), { cwd: args[1], timeoutMs })
+        ? runRemoteGit("fetch", args.slice(3), {
+            cwd: args[1],
+            // The retry classifier reads Git's local diagnostics in English.
+            env: { ...process.env, LC_ALL: "C" },
+            timeoutMs,
+            // Include SSH configuration discovery in the scheduler's budget.
+            signal: timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined,
+          })
         : runCommand("git", args, { timeoutMs }),
   });
 }

@@ -22,10 +22,17 @@
  * The fetch is a background one ({@link backgroundFetchArgs}): it updates only
  * `origin/<ref>` and never rewrites the worktree's `FETCH_HEAD`, which belongs
  * to whoever is working in that checkout.
+ *
+ * A fetch that loses a race for the ref it updates (another Git process in the
+ * same repository moved or locked `origin/<ref>` at that moment, see
+ * {@link isRefLockContentionFailure}) can retry once after a short pause if the
+ * original fetch budget allows it. The project's own refresh fetches
+ * `--prune origin` into the same shared refs and can cause these collisions.
  */
 
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
 import { backgroundFetchArgs } from "./background-fetch.js";
+import { isRefLockContentionFailure } from "./noninteractive-env.js";
 
 export interface GitFetchSchedulerOptions {
   /** Runs a git command; injected so tests need neither git nor a network. */
@@ -35,12 +42,20 @@ export interface GitFetchSchedulerOptions {
   now?: () => number;
   fetchTimeoutMs?: number;
   resolveTimeoutMs?: number;
+  /** Pause before the one retry of a fetch that lost a ref-lock race. */
+  lockRetryDelayMs?: number;
   /** Content-free cost accounting; defaults to the process-wide recorder. */
   metrics?: RecurringWorkMetrics;
 }
 
 /** A base branch that moves on the order of minutes does not need fetching faster. */
 export const DEFAULT_GIT_FETCH_TTL_MS = 5 * 60_000;
+
+/**
+ * Long enough for the competing fetch to finish writing its ref, short enough
+ * that a diff read waiting on this fetch does not notice.
+ */
+export const DEFAULT_GIT_FETCH_LOCK_RETRY_DELAY_MS = 250;
 
 interface FetchRecord {
   completedAt: number;
@@ -54,6 +69,7 @@ export class GitFetchScheduler {
   private readonly now: () => number;
   private readonly fetchTimeoutMs: number;
   private readonly resolveTimeoutMs: number;
+  private readonly lockRetryDelayMs: number;
   private readonly metrics: RecurringWorkMetrics;
   /** worktree path -> shared git dir, so the resolve runs once per worktree. */
   private readonly commonDirs = new Map<string, Promise<string>>();
@@ -63,9 +79,10 @@ export class GitFetchScheduler {
   constructor(options: GitFetchSchedulerOptions) {
     this.run = options.run;
     this.ttlMs = options.ttlMs ?? DEFAULT_GIT_FETCH_TTL_MS;
-    this.now = options.now ?? (() => Date.now());
+    this.now = options.now ?? (() => performance.now());
     this.fetchTimeoutMs = options.fetchTimeoutMs ?? 60_000;
     this.resolveTimeoutMs = options.resolveTimeoutMs ?? 10_000;
+    this.lockRetryDelayMs = options.lockRetryDelayMs ?? DEFAULT_GIT_FETCH_LOCK_RETRY_DELAY_MS;
     this.metrics = options.metrics ?? recurringWorkMetrics;
   }
 
@@ -94,9 +111,7 @@ export class GitFetchScheduler {
 
     const record: FetchRecord = { completedAt: existing?.completedAt ?? 0 };
     const attempt = this.metrics
-      .observe("git-fetch-local", () =>
-        this.run(["-C", worktreePath, "fetch", ...backgroundFetchArgs(ref)], this.fetchTimeoutMs),
-      )
+      .observe("git-fetch-local", () => this.fetch(worktreePath, ref))
       .then(
         () => undefined,
         () => undefined,
@@ -116,6 +131,27 @@ export class GitFetchScheduler {
     record.inFlight = attempt;
     this.fetches.set(key, record);
     return attempt;
+  }
+
+  /**
+   * One fetch of `ref`, retried once when another Git process held the ref.
+   * Any other failure (network, authentication, a missing remote branch) is
+   * not retried here: it waits out the TTL like before.
+   */
+  private async fetch(worktreePath: string, ref: string): Promise<void> {
+    const args = ["-C", worktreePath, "fetch", ...backgroundFetchArgs(ref)];
+    const deadline = this.fetchTimeoutMs === 0 ? Infinity : this.now() + this.fetchTimeoutMs;
+    try {
+      await this.run(args, this.fetchTimeoutMs);
+    } catch (error) {
+      if (!isRefLockContentionFailure(error)) throw error;
+      // Reserve at least one millisecond for Git, where zero disables its timeout.
+      if (deadline - this.now() < this.lockRetryDelayMs + 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, this.lockRetryDelayMs));
+      const remainingMs = Math.floor(deadline - this.now());
+      if (remainingMs < 1) throw error;
+      await this.run(args, deadline === Infinity ? 0 : remainingMs);
+    }
   }
 
   /**

@@ -123,6 +123,7 @@ function MachineTile({
   });
   const commandRelease = useStore(portalStore.store, (portal) => portal.commandRelease);
   const currency = machineViewCurrency(machine, { commandRelease });
+  const offersUpdate = currency !== null && currencyOffersUpdate(currency);
   // Only the pointer listeners: the sortable's keyboard attributes would
   // rename the toggle a "sortable" and take Space and Enter from it.
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -199,6 +200,8 @@ function MachineTile({
         aria-hidden="true"
         className={cn(
           "flex h-1/2 items-center justify-center font-mono text-[11px] leading-none font-bold tracking-tight text-zinc-950",
+          // Move the initials 4px left so wide ones (WWW, MMM) clear the update arrow.
+          offersUpdate && "pr-2",
           colors.top,
         )}
       >
@@ -214,13 +217,37 @@ function MachineTile({
       >
         {reading}
       </span>
-      {currency && currencyOffersUpdate(currency) ? (
-        <span
-          aria-hidden="true"
-          data-testid="machine-tile-update"
-          className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-amber-300 ring-1 ring-zinc-950"
-        />
-      ) : null}
+      {offersUpdate ? <UpdateArrow /> : null}
     </button>
+  );
+}
+
+/**
+ * The tile's "update on offer" mark: a small green up arrow outlined in black,
+ * so it reads against every machine colour. It sits 2.5px in from the tile's
+ * top-right corner, away from the rounded edge; the initials move 4px left
+ * while it is shown, which leaves at least 1px between them and the arrow, and
+ * it stays above the CPU reading. The tile's tooltip also serves as
+ * its accessible description and gives the version difference in words.
+ */
+function UpdateArrow() {
+  return (
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      data-testid="machine-tile-update"
+      viewBox="0 0 10 10"
+      className={cn(
+        "pointer-events-none absolute top-[2.5px] right-[2.5px] size-2.5 fill-success stroke-zinc-950",
+        "forced-colors:fill-[Canvas] forced-colors:stroke-[CanvasText]",
+      )}
+    >
+      <path
+        d="M5 1.3 L8.7 5.1 H6.5 V8.7 H3.5 V5.1 H1.3 Z"
+        strokeWidth={2.4}
+        strokeLinejoin="round"
+        paintOrder="stroke"
+      />
+    </svg>
   );
 }

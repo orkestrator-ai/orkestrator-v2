@@ -31,7 +31,7 @@ export function currencyLacksText(currency: MachineCurrency): string | null {
   return `lacks ${listed.join(", ")}${more > 0 ? ` +${more}` : ""}`;
 }
 
-/** The header's full description, for its tooltip and accessible name. */
+/** The version details for the machine tile's tooltip and accessible description. */
 export function currencyDescription(machineName: string, currency: MachineCurrency): string {
   const relation =
     currency.relation === "older"

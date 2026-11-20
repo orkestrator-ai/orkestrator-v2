@@ -834,9 +834,9 @@ button):
   A machine that is not connected or has no current sample is dimmed and
   shows "—", never an old figure. A tile is a toggle button whose name gives
   the machine, its CPU and "shown" or "hidden"; its tooltip adds the status and
-  any version skew (an amber dot marks an update on offer). The tiles drive
-  the filter (`toggleMachineFilter`): with every machine
-  shown a click shows only that machine, which stays highlighted while the
+  any version skew. A green up arrow outlined in black marks an available
+  update. When every machine is shown, clicking a tile filters the list
+  (`toggleMachineFilter`) to that machine, which stays highlighted while the
   others fade; after that each click adds or removes one machine, and turning
   off the last one shows every machine again, so the list is never empty.
   Dragging a tile (8 px before a press becomes a drag) reorders the machines
@@ -1166,11 +1166,11 @@ row, header, badge, icon, menu, hover card, filter or sort shows:
   action-bar merge dialog for the environment (`mergePrRequestStore`), so it
   exists only where that dialog can act.
 - A machine tile's tooltip gives the machine's version when it differs from
-  the command node's, with the domains it lacks, and an amber dot marks an
-  update on offer, which Settings > Machines starts
-  (`MachineView.release`, which every adapter supplies from the command
-  node's summaries; see
-  [Keeping the fleet current](host-updates.md#keeping-the-fleet-current)).
+  the command node's, along with the domains it lacks. A green up arrow
+  outlined in black marks an available update. Start updates from
+  **Settings > Machines**. Every adapter supplies `MachineView.release` from
+  the command node's summaries. See
+  [Keeping the fleet current](host-updates.md#keeping-the-fleet-current).
 - Container actions are gated by the machine's own Docker availability, which
   its summary read stamps on every row (`dockerAvailable`, from a 30-second
   cache of `check_docker` answers and a bounded probe). A machine that predates

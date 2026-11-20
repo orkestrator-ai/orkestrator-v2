@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
+import { FederationProvider } from "@/components/federation/FederationProvider";
 import {
   pickHostPath,
   useHostPathPickerStore,
@@ -9,12 +10,19 @@ import {
 } from "@/lib/host-path-picker";
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import {
+  connectionList,
+  installDesktopFake,
+  remoteConnection,
+  SELF_NODE_ID,
+  uninstallDesktopFake,
+} from "@/test/federation-desktop-fake";
+import {
   cleanupNodeScopes,
   FAKE_NODE_ID,
   FakeNodeClient,
   renderInNodeScope,
 } from "@/test/render-in-node-scope";
-import { HostPathPickerDialog } from "./HostPathPickerDialog";
+import { HostPathPickerDialog, pickerMachineName } from "./HostPathPickerDialog";
 
 type Listing = {
   path: string;
@@ -116,6 +124,7 @@ afterEach(() => {
   act(() => useHostPathPickerStore.getState().settle(null));
   cleanup();
   cleanupNodeScopes();
+  uninstallDesktopFake();
 });
 
 function submitPath(path: string) {
@@ -593,17 +602,25 @@ describe("HostPathPickerDialog", () => {
     expect(screen.getByRole("button", { name: "New folder" }).hasAttribute("disabled")).toBe(false);
   });
 
-  test("browses the host of the node that asked, not the command node's", async () => {
+  test("browses and names the host of the node that asked", async () => {
     const windowScope = new WindowScope();
-    const commandClient = hostClient();
-    const leafClient = hostClient("bk_leaf-b" as BackendId);
-    renderInNodeScope(<HostPathPickerDialog />, { client: commandClient, windowScope });
+    const commandClient = hostClient(SELF_NODE_ID);
+    const leaf = remoteConnection("leaf-b", "MacBook", "teal");
+    installDesktopFake({ list: connectionList([leaf]), datasets: {} });
+    const leafClient = hostClient(leaf.backendId!);
+    renderInNodeScope(
+      <FederationProvider>
+        <HostPathPickerDialog />
+      </FederationProvider>,
+      { client: commandClient, windowScope },
+    );
     windowScope.open({ role: "leaf", client: leafClient });
     let result!: Promise<string | null>;
     act(() => {
       result = pickHostPath({ mode: "directory", nodeId: leafClient.nodeId });
     });
 
+    await screen.findByText("Browsing files on MacBook.");
     fireEvent.click(await screen.findByRole("button", { name: "repo" }));
     await waitFor(() =>
       expect((screen.getByLabelText("Path") as HTMLInputElement).value).toBe("/home/me/repo"),
@@ -625,5 +642,35 @@ describe("HostPathPickerDialog", () => {
     await expect(result).resolves.toBeNull();
     expect(invoke).not.toHaveBeenCalled();
     expectDomAbsent(screen.queryByLabelText("Path"), "picker for an unopened node");
+  });
+});
+
+describe("pickerMachineName", () => {
+  const leaf = "bk_leaf-b" as BackendId;
+  const federation = {
+    enabled: true,
+    bound: { connectionId: FAKE_NODE_ID, backendId: FAKE_NODE_ID, name: "Studio", colorToken: "" },
+    portalState: { nodes: [{ nodeId: leaf, view: { displayName: "MacBook" } }] },
+  } as unknown as Parameters<typeof pickerMachineName>[0];
+
+  test("names the machine whose host the picker browses", () => {
+    expect(pickerMachineName(federation, FAKE_NODE_ID)).toBe("Studio");
+    expect(pickerMachineName(federation, leaf)).toBe("MacBook");
+  });
+
+  test("names nothing with one machine or an unknown node", () => {
+    expect(pickerMachineName({ ...federation, enabled: false }, leaf)).toBeNull();
+    expect(pickerMachineName(federation, "bk_unknown" as BackendId)).toBeNull();
+    expect(pickerMachineName(federation, undefined)).toBeNull();
+  });
+
+  test("the dialog keeps the generic description outside a multi-machine client", async () => {
+    renderPicker();
+    act(() => {
+      void pick({ mode: "directory" });
+    });
+    expect(
+      await screen.findByText("Browsing the machine running the Orkestrator backend."),
+    ).toBeTruthy();
   });
 });

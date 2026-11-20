@@ -358,10 +358,11 @@ invariants keep it honest:
   whenever it differs from the text the model wrote), so a reading the shell
   would not share cannot reach it. `read-only-shell-syntax.integration.test.ts` checks the parser against
   real bash. `cd` (alone in a list) and `git -C` may name only an existing
-  directory inside the checkout (`directoriesWithin`, through symlinks; the
-  session's `cwd` is the root, wherever an earlier call left the shell), and
-  `shellCommandRefused` checks each command from every directory it may run
-  in, since a failed `cd` leaves the shell where it was. `sed` is admitted
+  directory physically inside the checkout (`directoriesWithin`). The session's
+  `cwd` is the root, wherever an earlier call left the shell. `cd` bypasses
+  `CDPATH`, and multiple `git -C` options are checked in order. The list
+  operators determine where each command may run, and `shellCommandRefused`
+  checks arguments from all of those directories. `sed` is admitted
   only for line-number ranges to print (`sed -n 120,180p`). A pipe
   also makes a stage's stdin the model's to write, so a path need never
   appear as a token: a program that takes file names from its input
@@ -371,12 +372,13 @@ invariants keep it honest:
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout
   put there, so programs run by bare name only. Where a reading tool has a
-  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`,
-  `yq -i`) rather than dropping the tool; a one-letter flag there also matches
+  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`).
+  A one-letter flag there also matches
   inside a cluster or with its value attached (`-no out`, `-oout`). A tool that
-  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`, and one
-  with too many writing options to list (gawk) in `OPTION_ALLOWLISTS`. Git
-  subcommands whose effect depends on their arguments belong in
+  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`. AWK is
+  limited to field printing and numeric line selection with an optional
+  literal field separator. yq is limited to field selectors and file operands.
+  Git subcommands whose effect depends on their arguments belong in
   `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
   `remote` and `config` all read in one form and write in another.
 - **Assume no sandbox behind it.** The SDK sandbox lets a command write its
@@ -421,10 +423,10 @@ invariants keep it honest:
   with a scripted model and a fixture directory.
 - **Git runs against the checkout and nothing else.** Options before the
   subcommand are an allowlist (`GIT_GLOBAL_OPTIONS`, exact match), because
-  `--git-dir`, `--work-tree`, `-c` and `-C` choose which repository's config
-  Git obeys, and a checkout can commit a bare-repo layout naming
-  `core.fsmonitor`. A read-only turn's CLI also runs with
-  `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor, hooks
+  `--git-dir`, `--work-tree` and `-c` can change which configuration Git obeys.
+  The `-C` check also refuses a nested repository, submodule or bare layout
+  between the effective Git directory and the checkout root. A read-only turn's
+  CLI also runs with `withReadOnlyGitConfig` (`runtime-env.ts`), which turns fsmonitor, hooks
   and the signature programs off through `GIT_CONFIG_COUNT`, outranking the
   checkout's own config, and sets `GIT_OPTIONAL_LOCKS=0` and
   `GIT_NO_LAZY_FETCH=1`.

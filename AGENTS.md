@@ -1088,18 +1088,19 @@ names at all. Three invariants keep it honest:
   redirection, substitution, globs, grouping, background `&` and any other
   `$`. `isReadOnlyShellCommand` judges each command of the list on its own,
   and what runs is the serialization of the words judged (the hook's
-  `updatedInput` whenever it differs from the text the model wrote). `cd` and `git -C` may name only an existing
-  directory inside the checkout, and paths are checked from every directory a
-  command may run in.
+  `updatedInput` whenever it differs from the text the model wrote). `cd` and
+  `git -C` resolve existing directories physically inside the checkout. The
+  rewrite bypasses `CDPATH`, and the hook refuses Git in a nested repository.
+  Paths are checked from every directory the list operators can reach.
 - **The program name is not the whole command.** A program that launches another
   program does not belong in `READ_ONLY_COMMANDS` whatever it is called — `env`
   is absent for that reason, and a path (`bin/cat`) names whatever the checkout
   put there, so programs run by bare name only. Where a reading tool has a
-  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`,
-  `yq -i`) rather than dropping the tool; a one-letter flag there also matches
+  writing flag, name it in `MUTATING_ARGUMENTS` (`find -delete`, `sort -o`).
+  A one-letter flag there also matches
   inside a cluster or with its value attached (`-no out`, `-oout`). A tool that
-  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`, and one
-  with too many writing options to list (gawk) in `OPTION_ALLOWLISTS`. Git
+  writes a positional (`uniq in out`) belongs in `POSITIONAL_LIMITS`. AWK and
+  yq have dedicated checks for the permitted expressions and options. Git
   subcommands whose effect depends on their arguments belong in
   `CONDITIONAL_GIT_SUBCOMMANDS`, not the flat read-only set: `branch`, `tag`,
   `remote` and `config` all read in one form and write in another.

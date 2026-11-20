@@ -1020,8 +1020,8 @@ What each enforced platform actually does:
   list of reading commands (also as the commands of a `;`, `&&`, `||` list or
   plain pipe, quoted or not, each checked on its own and run as the words
   checked) and refuses redirection, substitution, globs, `cd` or `git -C`
-  outside the checkout, writing arguments (`uniq in out`, `sort -o`, `git diff --output`,
-  gawk's in-place and program options), path-qualified programs and the
+  outside the checkout, Git reads from nested repositories, writing arguments
+  (`uniq in out`, `sort -o`, `git diff --output`), path-qualified programs and the
   network-only `gh`, `curl` and `git ls-remote`. The SDK sandbox's default lets
   a command write its working directory, so the coordinator sandbox denies
   writes to the checkout (`filesystem.denyWrite`); before that, `uniq in.txt

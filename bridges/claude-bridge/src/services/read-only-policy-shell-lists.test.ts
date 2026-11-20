@@ -35,11 +35,14 @@ beforeAll(() => {
   checkout = join(root, "checkout");
   mkdirSync(join(checkout, ".orkestrator", "review-artifacts", "r1"), { recursive: true });
   mkdirSync(join(checkout, "apps", "web"), { recursive: true });
+  mkdirSync(join(checkout, "linked"));
   mkdirSync(join(root, "other"), { recursive: true });
   mkdirSync(join(root, "data"), { recursive: true });
   writeFileSync(join(root, "data", "secret"), "fixture");
   // A directory in the checkout that leads out of it.
   symlinkSync(join(root, "other"), join(checkout, "escape"));
+  symlinkSync(join(root, "other"), join(checkout, "apps", "linked"));
+  symlinkSync(join(checkout, "apps", "web"), join(checkout, "internal-link"));
   boundary = protectedDataDirBoundary(join(root, "data"), [])!;
 });
 
@@ -140,7 +143,7 @@ describe("a reviewer's shell lists", () => {
         cwd: checkout,
       }).command,
     ).toBe(
-      "cd apps; git diff --no-ext-diff --no-textconv --submodule=short a..b -- 'web/x y.ts' && git show --no-ext-diff --no-textconv --submodule=short b:x",
+      `cd -P -- ${join(checkout, "apps")}; git diff --no-ext-diff --no-textconv --submodule=short a..b -- 'web/x y.ts' && git show --no-ext-diff --no-textconv --submodule=short b:x`,
     );
     // A command that needs nothing changed runs as written.
     expect(isReadOnlyShellCommand("git diff a..b; ls", sandboxed).command).toBeUndefined();
@@ -182,6 +185,7 @@ describe("a reviewer's shell lists", () => {
       "cd / ; cat etc/passwd",
       `cd ${join(root, "other")} && git diff`,
       "cd escape && ls",
+      "cd escape/.. && ls",
       "cd missing && ls",
       "cd",
       "cd -",
@@ -191,6 +195,8 @@ describe("a reviewer's shell lists", () => {
       "git -C .. status",
       `git -C ${join(root, "other")} log`,
       "git -C escape log",
+      "git -C escape/.. log",
+      "git -C apps -C linked status",
       "git -C",
     ]) {
       const answer = await hookAnswer(command, { commandSandbox: "required" });
@@ -208,6 +214,36 @@ describe("a reviewer's shell lists", () => {
     expect((await hookAnswer("cd ../.. && ls", fromSub))?.permissionDecision).toBe("deny");
   });
 
+  test("directory changes use their physical targets and Git applies -C cumulatively", () => {
+    const options = { ...hardened, cwd: checkout };
+    const apps = join(checkout, "apps");
+    const web = join(apps, "web");
+    expect(isReadOnlyShellCommand("cd internal-link/.. && pwd", options).command).toBe(
+      `cd -P -- ${apps} && pwd`,
+    );
+    const git = isReadOnlyShellCommand("git -C apps -C web status", options);
+    expect(git.allowed).toBe(true);
+    expect(git.command).toBe(`git -C ${apps} -C ${web} status`);
+    expect(git.stages?.[0]?.directories).toEqual([web]);
+    expect(isReadOnlyShellCommand("git -C internal-link/.. status", options).command).toBe(
+      `git -C ${apps} status`,
+    );
+  });
+
+  test("a successful cd narrows the directories for its && successor", async () => {
+    const command = "cd apps && cd web && pwd";
+    const verdict = isReadOnlyShellCommand(command, { ...hardened, cwd: checkout });
+    expect(verdict.stages).toEqual([
+      { words: ["pwd"], directories: [join(checkout, "apps", "web")] },
+    ]);
+    expect((await hookAnswer(command, hardened))?.permissionDecision).toBeUndefined();
+    for (const operator of [";", "||"]) {
+      expect((await hookAnswer(`cd apps ${operator} cd web`, hardened))?.permissionDecision).toBe(
+        "deny",
+      );
+    }
+  });
+
   test("paths are checked against every directory a command may run in", async () => {
     const options = { commandSandbox: "required" as const, readBoundary: boundary };
     // From the checkout this names the data directory's secret; from
@@ -220,6 +256,8 @@ describe("a reviewer's shell lists", () => {
       "cd apps/web && cat ../../../data/secret",
       // A `cd` that fails leaves the shell where it was, so both are checked.
       "cd apps/web; cat ../data/secret",
+      "cd apps/web || cat ../data/secret",
+      "cd apps/web && false || cat ../../../data/secret",
       "git -C apps/web diff --no-index ../../../data/secret x",
     ]) {
       expect({
@@ -229,6 +267,32 @@ describe("a reviewer's shell lists", () => {
         command,
         decision: "deny",
       });
+    }
+  });
+
+  test("AWK and yq accept simple reads and refuse interpreter side effects", async () => {
+    for (const options of [sandboxed, hardened]) {
+      for (const command of ["awk '{ print $1, $2 }' fixture.txt", "yq .name.value fixture.yaml"]) {
+        expect((await hookAnswer(command, options))?.permissionDecision).toBeUndefined();
+      }
+      // Inert operands exercise syntax admission. None of these commands run.
+      for (const command of [
+        `awk 'BEGIN { system("") }'`,
+        `awk 'BEGIN { print 1 | "" }'`,
+        `awk 'BEGIN { print 1 > "" }'`,
+        `awk 'BEGIN { getline < "" }'`,
+        "awk '{ print $1 }' mode=1 fixture.txt",
+        `yq 'load("")' fixture.yaml`,
+        "yq .name fixture.yaml --inplace",
+      ]) {
+        expect({
+          command,
+          decision: (await hookAnswer(command, options))?.permissionDecision,
+        }).toEqual({
+          command,
+          decision: "deny",
+        });
+      }
     }
   });
 

@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isReadOnlyShellCommand } from "./read-only-policy.js";
 import { parseReadOnlyShell, serializeShellList } from "./read-only-shell-syntax.js";
 
 /**
@@ -73,6 +77,33 @@ describe("parseReadOnlyShell agrees with bash", () => {
         command,
         serialized: flat,
       });
+    }
+  });
+
+  test("directory rewrites bypass CDPATH even when more than one destination is possible", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "read-only-cdpath-")));
+    try {
+      const cwd = join(root, "checkout");
+      const search = join(root, "search");
+      for (const target of [join(cwd, "a", "b"), join(cwd, "b"), join(search, "b")]) {
+        mkdirSync(target, { recursive: true });
+      }
+      for (const [command, destination] of [
+        ["cd b && pwd", join(cwd, "b")],
+        ["cd a; cd b && pwd", join(cwd, "a", "b")],
+      ] as const) {
+        const verdict = isReadOnlyShellCommand(command, { cwd });
+        expect(verdict.allowed).toBe(true);
+        expect(verdict.command).toBeDefined();
+        const run = Bun.spawnSync(["bash", "--norc", "--noprofile", "-c", verdict.command!], {
+          cwd,
+          env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CDPATH: search },
+        });
+        expect(run.exitCode).toBe(0);
+        expect(run.stdout.toString().trim()).toBe(destination);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

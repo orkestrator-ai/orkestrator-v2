@@ -222,12 +222,13 @@ describe("Claude coordinator read-only policy", () => {
       "yq -s .name file.yaml",
       "file -C -m magic",
       "hostname evil",
-      // gawk writes and loads programs through options; only -F and -v pass.
+      // gawk writes and loads programs through options; only a literal -F passes.
       "awk -i inplace NR==1 file",
       "awk -iinplace NR==1 file",
       "awk -f prog.awk file",
       "awk -o file",
       "awk --profile=prof.out NR==1 file",
+      "awk -F : -v n=1 NR==n file",
       // Git output files and programs chosen by argument.
       "git diff --output=patch.diff",
       "git log -p --output patch.diff",
@@ -377,7 +378,7 @@ describe("Claude coordinator read-only policy", () => {
       "yq .name file.yaml",
       "awk NR==1 file",
       "awk -F, NR==1 file",
-      "awk -F : -v n=1 NR==n file",
+      "awk -F : NR==1 file",
       "hostname",
       "git diff --stat",
       "git log --output-indicator-new=+ -p",

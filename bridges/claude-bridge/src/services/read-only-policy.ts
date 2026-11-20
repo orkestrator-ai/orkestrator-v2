@@ -22,6 +22,7 @@ import {
   claudeReadOnlyWorkspacePaths,
   coordinatorReadBoundary,
   directoriesWithin,
+  gitDirectoriesWithinCheckout,
   readToolRefused,
   shellCommandRefused,
   type ReadBoundary,
@@ -113,7 +114,6 @@ export const WAITING_TOOLS: ReadonlySet<string> = new Set([
  */
 const READ_ONLY_COMMANDS = Object.freeze(
   new Set([
-    "awk",
     "basename",
     "cat",
     "cksum",
@@ -153,7 +153,6 @@ const READ_ONLY_COMMANDS = Object.freeze(
     "which",
     "whoami",
     "xxd",
-    "yq",
   ]),
 );
 
@@ -161,7 +160,7 @@ const READ_ONLY_COMMANDS = Object.freeze(
  * Arguments that turn an otherwise-reading program into a writing one.
  *
  * The program name alone is not the whole command: `find . -delete` removes
- * files, `sort -o` and `yq -i` write in place, and `fd -x` / `rg --pre` run a
+ * files, `sort -o` writes output, and `fd -x` / `rg --pre` run a
  * program of the model's choosing. Each of those is refused by argument, so the
  * reading forms of the same tools stay available. A one-letter flag also
  * matches inside a cluster or with its value attached (`-ofile`, `-iP`), which
@@ -190,7 +189,6 @@ const MUTATING_ARGUMENTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["rg", new Set(["--hostname-bin", "--pre"])],
   // `-T` puts temporary files where the model says; `--compress-program` runs one.
   ["sort", new Set(["-o", "--output", "-T", "--temporary-directory", "--compress-program"])],
-  ["yq", new Set(["-i", "--in-place", "--inplace", "-s", "--split-exp"])],
 ]);
 
 /**
@@ -233,27 +231,14 @@ const POSITIONAL_LIMITS: ReadonlyMap<
 ]);
 
 /**
- * Programs whose options are admitted by allowlist. Every listed option takes a
- * value, attached (`-F,`) or as the next token; anything else is refused.
- *
- * gawk alone has `-i inplace`, `-o`, `-p`, `-d` and `-D` that write files and
- * `-f`, `-E` and `-l` that load a program, and any of them can hide in a short
- * option cluster. Field separators and variable assignments are what reading
- * needs.
- */
-const OPTION_ALLOWLISTS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["awk", new Set(["-F", "-v", "--field-separator", "--assign"])],
-]);
-
-/**
  * Git's own options that may come before the subcommand, matched exactly.
  *
  * An allowlist, because the options in that position choose what Git runs
  * against rather than what it prints: `--git-dir=<dir>` and `--work-tree=<dir>`
  * point an admitted `git status` at a repository whose `config` the checkout
- * supplies (a committed bare-repo layout naming `core.fsmonitor`), and
- * `--namespace`, `--attr-source`, `-c` and `-C` are the same shape. Git does
- * not abbreviate these, so an exact match is the whole test.
+ * supplies. `--namespace`, `--attr-source` and `-c` likewise change what Git
+ * sees. `-C` is handled separately and checks the directories Git can use.
+ * Git does not abbreviate these options.
  */
 const GIT_GLOBAL_OPTIONS: ReadonlySet<string> = new Set([
   "-P",
@@ -759,6 +744,7 @@ const REFUSALS = {
       `Coordinator shells run reading programs by name only, so \`${program}\` is not available here. Use the program name, or delegate it to a worker environment.`,
     gitSandbox:
       "Coordinator Git commands require the command sandbox because Git configuration can run helpers. Use reading tools or delegate to a worker environment.",
+    gitRepository: "Coordinator Git commands must use the session's checkout repository.",
     unavailable: (described: string) =>
       `Coordinator is read-only, so \`${described}\` is not available here. Delegate it to a worker environment.`,
     gitArgument: (described: string) =>
@@ -790,6 +776,7 @@ const REFUSALS = {
       `This session runs reading programs by name only, so \`${program}\` is not available here. Use the program name.`,
     gitSandbox:
       "Git commands in this session require the command sandbox because Git configuration can run helpers. Use reading tools instead.",
+    gitRepository: "Git commands in this session must use the session's checkout repository.",
     unavailable: (described: string) =>
       `This session is read-only, so \`${described}\` is not available here.`,
     gitArgument: (described: string) =>
@@ -878,42 +865,63 @@ export function isReadOnlyShellCommand(
   if (!trimmed) return { allowed: true, stages: [] };
   const items = parseReadOnlyShell(trimmed);
   if (!items) return { allowed: false, reason: refusals.composition };
-  const context: StageContext = {
-    directories: options.cwd ? [options.cwd] : [],
-    root: options.workspaceRoot ?? options.cwd,
-  };
+  const root = options.workspaceRoot ?? options.cwd;
+  let success = options.cwd ? [options.cwd] : [];
+  let failure: string[] = [];
   const stages: ReadOnlyStage[] = [];
   const runs: typeof items = [];
   for (const item of items) {
+    // && and || are left-associative. A skipped item retains the previous
+    // status and directory, which can matter for the next operator.
+    const { operator } = item;
+    const directories =
+      operator === "&&"
+        ? success
+        : operator === "||"
+          ? failure
+          : [...new Set([...success, ...failure])];
+    const context: StageContext = { directories, root };
     const [first, ...rest] = item.pipeline;
+    let successfulDirectories = directories;
     if (first?.[0] === "cd") {
       // In a pipeline `cd` runs in a subshell and moves nothing; alone, it
       // takes one directory operand (no `-`, `-P`, or bare `cd` to `$HOME`).
-      const target = first.length === 2 ? first[1]! : undefined;
-      const moved =
-        rest.length === 0 && target !== undefined && !target.startsWith("-")
-          ? stageDirectories(target, context)
-          : null;
+      const target = first[1];
+      if (rest.length > 0 || first.length !== 2 || !target || target.startsWith("-")) {
+        return { allowed: false, reason: refusals.directory(first.join(" ")) };
+      }
+      const moved = stageDirectories(target, context);
       if (!moved) return { allowed: false, reason: refusals.directory(first.join(" ")) };
-      // A `cd` that fails leaves the shell where it was, and `;` or `||` still
-      // runs what follows, so every directory so far stays possible.
-      context.directories = [...new Set([...context.directories, ...moved])];
-      runs.push(item);
-      continue;
-    }
-    const pipeline: string[][] = [];
-    for (const words of item.pipeline) {
-      const verdict = isReadOnlyCommandStage(words, options, context);
-      if (!verdict.allowed) return { allowed: false, reason: verdict.reason };
-      const run = verdict.words ?? words;
-      const directories = verdict.directories ?? context.directories;
-      pipeline.push(run);
-      stages.push({
-        words: run,
-        ...(directories.length > 0 ? { directories: [...directories] } : {}),
+      successfulDirectories = moved;
+      // Use the checked absolute destination when possible. For multiple
+      // destinations ./ bypasses CDPATH and -P uses the same physical lookup.
+      runs.push({
+        ...item,
+        pipeline: [["cd", "-P", "--", moved.length === 1 ? moved[0]! : `./${target}`]],
       });
+    } else {
+      const pipeline: string[][] = [];
+      for (const words of item.pipeline) {
+        const verdict = isReadOnlyCommandStage(words, options, context);
+        if (!verdict.allowed) return { allowed: false, reason: verdict.reason };
+        const run = verdict.words ?? words;
+        const stageCwds = verdict.directories ?? directories;
+        pipeline.push(run);
+        stages.push({
+          words: run,
+          ...(stageCwds.length > 0 ? { directories: [...stageCwds] } : {}),
+        });
+      }
+      runs.push({ ...item, pipeline });
     }
-    runs.push({ ...item, pipeline });
+    success =
+      operator === "||"
+        ? [...new Set([...success, ...successfulDirectories])]
+        : successfulDirectories;
+    // A cd failure can also come from updating PWD after the directory moved.
+    failure = [
+      ...new Set([...(operator === "&&" ? failure : []), ...directories, ...successfulDirectories]),
+    ];
   }
   const serialized = serializeShellList(runs);
   return {
@@ -948,27 +956,39 @@ function isReadOnlyCommandStage(
     }
     let subcommandIndex = 1;
     let gitDirectories: string[] | undefined;
+    const globalOptions: string[] = [];
     while (subcommandIndex < tokens.length && tokens[subcommandIndex]!.startsWith("-")) {
       const option = tokens[subcommandIndex]!;
       if (option === "-C" && subcommandIndex + 1 < tokens.length) {
-        // `-C` may name a directory inside the checkout, where Git finds the
-        // same repository; anywhere else it would obey another one's config.
+        // Each -C is relative to Git's directory after the preceding -C.
         const target = tokens[subcommandIndex + 1]!;
-        const moved = stageDirectories(target, context);
+        const moved = stageDirectories(target, {
+          ...context,
+          directories: gitDirectories ?? context.directories,
+        });
         if (!moved) return { allowed: false, reason: refusals.directory(`git -C ${target}`) };
         gitDirectories = moved;
+        globalOptions.push(option, moved.length === 1 ? moved[0]! : target);
         subcommandIndex += 2;
         continue;
       }
       if (!GIT_GLOBAL_OPTIONS.has(option)) {
         return { allowed: false, reason: refusals.gitGlobalOption(option) };
       }
+      globalOptions.push(option);
       subcommandIndex += 1;
     }
     const subcommand = tokens[subcommandIndex];
     const args = tokens.slice(subcommandIndex + 1);
     // Git resolves its own path arguments from `-C`'s directory.
-    const located = gitDirectories ? { directories: gitDirectories } : {};
+    const effectiveDirectories = gitDirectories ?? context.directories;
+    if (
+      context.root &&
+      effectiveDirectories.some((directory) => directory !== context.root) &&
+      !gitDirectoriesWithinCheckout(effectiveDirectories, context.root)
+    ) {
+      return { allowed: false, reason: refusals.gitRepository };
+    }
     if (
       subcommand &&
       (NETWORK_GIT_SUBCOMMANDS.has(subcommand) ||
@@ -990,22 +1010,28 @@ function isReadOnlyCommandStage(
     ) {
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
-    if (sandboxed) return { allowed: true, ...located };
     if (
-      hasFlag(args, HARDENED_GIT_REFUSED_ARGUMENTS.get(subcommand) ?? new Set()) ||
-      (HARDENED_LOG_SUBCOMMANDS.has(subcommand) && remergeDiffSelected(args))
+      !sandboxed &&
+      (hasFlag(args, HARDENED_GIT_REFUSED_ARGUMENTS.get(subcommand) ?? new Set()) ||
+        (HARDENED_LOG_SUBCOMMANDS.has(subcommand) && remergeDiffSelected(args)))
     ) {
       return { allowed: false, reason: refusals.gitArgument(described) };
     }
-    const hardening = HARDENED_GIT_ARGUMENTS.get(subcommand);
-    if (!hardening) return { allowed: true, ...located };
+    const hardening = sandboxed ? undefined : HARDENED_GIT_ARGUMENTS.get(subcommand);
     // Straight after the subcommand, so a `--` among the arguments cannot turn
     // the flags into pathspecs.
     return {
       allowed: true,
-      words: [...tokens.slice(0, subcommandIndex + 1), ...hardening, ...args],
-      ...located,
+      ...(gitDirectories || hardening
+        ? { words: [program, ...globalOptions, subcommand, ...(hardening ?? []), ...args] }
+        : {}),
+      ...(gitDirectories ? { directories: gitDirectories } : {}),
     };
+  }
+  if (program === "awk" || program === "yq") {
+    const args = tokens.slice(1);
+    const reads = program === "awk" ? awkPrintsFields(args) : yqSelectsField(args);
+    return reads ? { allowed: true } : { allowed: false, reason: refusals.argument(program) };
   }
   if (program === "sed") {
     return sedPrintsLines(tokens.slice(1))
@@ -1015,11 +1041,9 @@ function isReadOnlyCommandStage(
   if (READ_ONLY_COMMANDS.has(program)) {
     const args = tokens.slice(1);
     const mutating = MUTATING_ARGUMENTS.get(program);
-    const allowedOptions = OPTION_ALLOWLISTS.get(program);
     const limit = POSITIONAL_LIMITS.get(program);
     if (
       (mutating && hasFlag(args, mutating)) ||
-      (allowedOptions && !optionsAllowed(args, allowedOptions)) ||
       (limit && positionalCount(args, limit.valueOptions, limit.stopAtFirstOperand) > limit.max)
     ) {
       return { allowed: false, reason: refusals.argument(program) };
@@ -1073,21 +1097,33 @@ function sedPrintsLines(args: readonly string[]): boolean {
   return script !== undefined;
 }
 
-/** Whether every option in `args` is one of `allowed`, each taking a value. */
-function optionsAllowed(args: readonly string[], allowed: ReadonlySet<string>): boolean {
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index]!;
-    if (arg === "--") return true;
-    if (!arg.startsWith("-") || arg === "-") continue;
-    if (allowed.has(arg)) {
-      index += 1;
-      continue;
-    }
-    const long = arg.startsWith("--") ? arg.split("=", 1)[0]! : undefined;
-    const attached = long ?? arg.slice(0, 2);
-    if (!allowed.has(attached)) return false;
-  }
-  return true;
+function ordinaryFileOperand(arg: string): boolean {
+  return arg === "-" || (arg !== "" && !arg.startsWith("-"));
+}
+
+/** Only field printing and selecting a line by number, with an optional literal separator. */
+function awkPrintsFields(args: readonly string[]): boolean {
+  const first = args[0] ?? "";
+  const scriptIndex =
+    first === "-F" && /^[!-~]$/.test(args[1] ?? "") ? 2 : /^-F[!-~]$/.test(first) ? 1 : 0;
+  const script = args[scriptIndex] ?? "";
+  return (
+    /^(?:NR[ \t]*==[ \t]*\d+|\{[ \t]*print[ \t]+\$\d+(?:[ \t]*,[ \t]*\$\d+)*[ \t]*\})$/.test(
+      script,
+    ) &&
+    // AWK also interprets a `name=value` operand as an assignment.
+    args
+      .slice(scriptIndex + 1)
+      .every((arg) => ordinaryFileOperand(arg) && !/^[a-zA-Z_][a-zA-Z0-9_]*=/.test(arg))
+  );
+}
+
+/** Field selection only, across yq implementations with different option sets. */
+function yqSelectsField(args: readonly string[]): boolean {
+  const [selector = "", ...files] = args;
+  return (
+    /^(?:\.|(?:\.[a-zA-Z_][a-zA-Z0-9_]*)+)$/.test(selector) && files.every(ordinaryFileOperand)
+  );
 }
 
 /** Positional arguments, not counting the values of `valueOptions`. */

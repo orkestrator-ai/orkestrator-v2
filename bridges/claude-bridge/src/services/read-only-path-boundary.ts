@@ -1,5 +1,5 @@
-import { statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV,
   COORDINATOR_PROTECTED_DATA_DIR_ENV,
@@ -47,20 +47,61 @@ export function directoriesWithin(
   from: readonly string[],
   root: string,
 ): string[] | null {
-  const top = canonicalPath(root);
-  const found = new Set<string>();
-  for (const base of from) {
-    const directory = canonicalPath(resolve(base, target));
-    const fromTop = relative(top, directory);
-    if (fromTop === ".." || fromTop.startsWith(`..${sep}`) || isAbsolute(fromTop)) return null;
-    try {
+  if (!target || from.length === 0) return null;
+  try {
+    const top = realpathSync.native(root);
+    const found = new Set<string>();
+    for (const base of from) {
+      // join/resolve would remove `..` before the filesystem follows symlinks.
+      const directory = realpathSync.native(isAbsolute(target) ? target : `${base}${sep}${target}`);
+      if (!isWithin(top, directory)) return null;
       if (!statSync(directory).isDirectory()) return null;
-    } catch {
-      return null;
+      found.add(directory);
     }
-    found.add(directory);
+    return [...found];
+  } catch {
+    return null;
   }
-  return found.size > 0 ? [...found] : null;
+}
+
+function isWithin(root: string, directory: string): boolean {
+  const fromTop = relative(root, directory);
+  return fromTop !== ".." && !fromTop.startsWith(`..${sep}`) && !isAbsolute(fromTop);
+}
+
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Refuse Git discovery below the trusted checkout's own repository. */
+export function gitDirectoriesWithinCheckout(
+  directories: readonly string[],
+  root: string,
+): boolean {
+  try {
+    const top = realpathSync.native(root);
+    for (const directory of directories) {
+      if (directory === root) continue;
+      let current = realpathSync.native(directory);
+      if (!isWithin(top, current)) return false;
+      while (relative(top, current) !== "") {
+        // A .git entry can be a directory, submodule gitfile, or symlink.
+        // A discoverable bare repository requires HEAD. Treat any such entry
+        // as a boundary, without asking Git to inspect untrusted config.
+        if (entryExists(join(current, ".git")) || entryExists(join(current, "HEAD"))) return false;
+        current = dirname(current);
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The boundary this process was launched under; null outside a coordinator. */

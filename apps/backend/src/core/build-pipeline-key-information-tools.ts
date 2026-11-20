@@ -11,12 +11,16 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { describe, list, str, toolInput } from "./tool-schema.js";
+import { describeJsonTextFault } from "./workflow-result-json-text.js";
 import {
+  KEY_INFORMATION_CHECK_STATUSES,
   KEY_INFORMATION_FRAMINGS,
   KEY_INFORMATION_ISSUE_STATUSES,
   KEY_INFORMATION_LIMITS,
   KEY_INFORMATION_TEST_RESULTS,
   KEY_INFORMATION_TOOL_NAMES,
+  type KeyInformationCheck,
+  type KeyInformationCheckStatus,
   type KeyInformationPatch,
 } from "@orkestrator/protocol/build-pipeline-key-information";
 import {
@@ -149,13 +153,33 @@ function updateInputSchema() {
           checks: list(
             Schema.Struct({
               check: text(limits.checkLength),
-              passed: Schema.Boolean,
-              details: Schema.optionalKey(text(limits.itemLength)),
-            }),
+              status: Schema.optionalKey(
+                describe(
+                  Schema.Literals(KEY_INFORMATION_CHECK_STATUSES),
+                  "`passed`, `failed`, or `not-checked` for a check you did not or could not run (it needs a live provider, another platform, credentials or a person). Never record a check you did not run as `failed`.",
+                ),
+              ),
+              passed: Schema.optionalKey(
+                describe(
+                  Schema.Boolean,
+                  "Older form of `status`: true is passed, false is failed. Prefer `status`.",
+                ),
+              ),
+              details: Schema.optionalKey(
+                describe(
+                  text(limits.itemLength),
+                  "What failed; for `not-checked`, required: why it was not checked.",
+                ),
+              ),
+            }).check(
+              Schema.makeFilter((check) => checkInputProblem(check) ?? true, {
+                toJsonSchema: () => ({}),
+              }),
+            ),
             { max: limits.checks * INPUT_SLACK },
           ),
         }),
-        "The current round's verification: each check and whether it passed, and what failed. Replaces this round's entry only.",
+        "The current round's verification: each check with its status (`passed`, `failed` or `not-checked`), what failed, and why a not-checked check was not run. Replaces this round's entry only.",
       ),
     ),
     capability: Schema.optionalKey(
@@ -185,7 +209,137 @@ function updateInputSchema() {
   });
 }
 
-type UpdateInput = KeyInformationPatch & {
+/** A check as the tool takes it: `status`, or the older `passed`, or both when they agree. */
+interface CheckInput {
+  check: string;
+  status?: KeyInformationCheckStatus;
+  passed?: boolean;
+  details?: string;
+}
+
+/** Why a check is refused, or undefined when it is well formed. */
+function checkInputProblem(check: CheckInput): string | undefined {
+  if (check.status === undefined && check.passed === undefined) {
+    return "Give the check a `status`: `passed`, `failed` or `not-checked`.";
+  }
+  if (
+    check.status !== undefined &&
+    check.passed !== undefined &&
+    check.passed !== (check.status === "passed")
+  ) {
+    return `\`passed: ${check.passed}\` contradicts \`status: "${check.status}"\`. Give only \`status\`.`;
+  }
+  if (check.status === "not-checked" && !check.details?.trim()) {
+    return "A `not-checked` check needs `details` saying why it was not checked (for example what it needs that is missing here).";
+  }
+  return undefined;
+}
+
+function toCheck(input: CheckInput): KeyInformationCheck {
+  const status: KeyInformationCheckStatus = input.status ?? (input.passed ? "passed" : "failed");
+  return {
+    check: input.check,
+    passed: status === "passed",
+    status,
+    ...(input.details !== undefined ? { details: input.details } : {}),
+  };
+}
+
+const CHECK_SHAPE = `{"check": "...", "status": ${KEY_INFORMATION_CHECK_STATUSES.map((value) => `"${value}"`).join(" | ")}, "details": "what failed, or why it was not checked"}`;
+
+/**
+ * Appended to every refusal of `update_key_information`: the arguments it
+ * takes, so a model that sent a malformed call can repair it in one step.
+ */
+export const KEY_INFORMATION_UPDATE_SHAPE = [
+  "Expected arguments: one JSON object; every field is optional and is itself a JSON value (an array or object, never a string holding JSON).",
+  `{"framing": ${KEY_INFORMATION_FRAMINGS.map((value) => `"${value}"`).join(" | ")},`,
+  '"summary" | "statement" | "context" | "solution": "text",',
+  '"workDone": ["..."], "notDone": ["..."],',
+  '"decisions": [{"decision": "...", "options": [{"option": "...", "pros": ["..."], "cons": ["..."]}], "chosen": "...", "rationale": "..."}],',
+  `"tests": [{"name": "...", "result": ${KEY_INFORMATION_TEST_RESULTS.map((value) => `"${value}"`).join(" | ")}, "details": "..."}],`,
+  `"issues": [{"issue": "...", "severity": "...", "resolution": "...", "status": ${KEY_INFORMATION_ISSUE_STATUSES.map((value) => `"${value}"`).join(" | ")}}],`,
+  `"verification": {"passed": true, "summary": "...", "checks": [${CHECK_SHAPE}]}}`,
+].join(" ");
+
+/** The fields a model may send as a string of JSON instead of the value. */
+const JSON_TEXT_FIELDS = [
+  "workDone",
+  "notDone",
+  "decisions",
+  "tests",
+  "issues",
+  "verification",
+] as const;
+
+type PreparedInput =
+  | { readonly value: unknown }
+  | { readonly issues: ReadonlyArray<{ message: string; path?: PropertyKey[] }> };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parses a field sent as JSON text. Text that does not look like JSON (a
+ * plain sentence) is left for the schema to refuse as the wrong type.
+ */
+function parseJsonTextField(
+  raw: string,
+  path: PropertyKey[],
+): { ok: true; value: unknown } | { ok: false; issue: { message: string; path: PropertyKey[] } } {
+  const trimmed = raw.trim();
+  if (!/^[[{"]/.test(trimmed)) return { ok: true, value: raw };
+  let value: unknown;
+  try {
+    value = JSON.parse(trimmed) as unknown;
+  } catch {
+    const fault = describeJsonTextFault(trimmed);
+    const message = [
+      `was sent as a string of JSON text, and it is not valid JSON: ${fault.location}`,
+      fault.advice,
+      `Near the fault: ${fault.excerpt}. Fix that point and send the value itself, not a string.`,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return { ok: false, issue: { message, path } };
+  }
+  // A value encoded twice is unwrapped once.
+  if (typeof value === "string" && /^[[{]/.test(value.trim())) {
+    return parseJsonTextField(value, path);
+  }
+  return { ok: true, value };
+}
+
+/**
+ * Accepts the structured fields sent as JSON text, as some models do: valid
+ * text is used as the value it encodes, and invalid text is refused with
+ * where it breaks rather than with "expected an array, received a string".
+ */
+export function prepareKeyInformationInput(input: unknown): PreparedInput {
+  if (!isRecord(input)) return { value: input };
+  const next: Record<string, unknown> = { ...input };
+  const issues: Array<{ message: string; path: PropertyKey[] }> = [];
+  for (const field of JSON_TEXT_FIELDS) {
+    const raw = next[field];
+    if (typeof raw !== "string") continue;
+    const parsed = parseJsonTextField(raw, [field]);
+    if (parsed.ok) next[field] = parsed.value;
+    else issues.push(parsed.issue);
+  }
+  const verification = next.verification;
+  if (isRecord(verification) && typeof verification.checks === "string") {
+    const parsed = parseJsonTextField(verification.checks, ["verification", "checks"]);
+    if (parsed.ok) next.verification = { ...verification, checks: parsed.value };
+    else issues.push(parsed.issue);
+  }
+  return issues.length > 0 ? { issues } : { value: next };
+}
+
+type UpdateInput = Omit<KeyInformationPatch, "verification"> & {
+  verification?: Omit<NonNullable<KeyInformationPatch["verification"]>, "checks"> & {
+    checks: CheckInput[];
+  };
   capability?: string;
   continueReview?: boolean;
   stopKind?: PipelineBuildOutcomeInput["stopKind"];
@@ -197,7 +351,17 @@ export function splitKeyInformationUpdate(input: UpdateInput): {
   patch: KeyInformationPatch;
   outcome?: PipelineBuildOutcomeInput;
 } {
-  const { continueReview, stopKind, stopReason, capability: _capability, ...patch } = input;
+  const {
+    continueReview,
+    stopKind,
+    stopReason,
+    capability: _capability,
+    verification,
+    ...rest
+  } = input;
+  const patch: KeyInformationPatch = verification
+    ? { ...rest, verification: { ...verification, checks: verification.checks.map(toCheck) } }
+    : rest;
   if (continueReview === true && (stopKind !== undefined || stopReason !== undefined)) {
     throw new Error("`stopKind` and `stopReason` need `continueReview: false`.");
   }
@@ -263,7 +427,10 @@ export async function registerKeyInformationTools(
       title: "Update the pipeline's key information",
       description:
         "Update the key information the user reads in the build pipeline header. Each field you pass replaces that whole section, so include the entries you want to keep; omitted fields are left unchanged. `issues` and `verification` apply to the current round only. The Build stage also says here whether the rest of the pipeline should run (`continueReview`, with `stopKind` and `stopReason` when it should not). Write for a reader who has not seen the transcript: short, specific and accurate. Record observable work and concise engineering decision summaries only. Do not perform reasoning extraction: do not disclose, reconstruct or request private internal reasoning, hidden deliberations or chain of thought.",
-      inputSchema: toolInput(updateInputSchema()),
+      inputSchema: toolInput(updateInputSchema(), {
+        prepare: prepareKeyInformationInput,
+        refusalNote: KEY_INFORMATION_UPDATE_SHAPE,
+      }),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -274,7 +441,9 @@ export async function registerKeyInformationTools(
     async (input) => {
       const { patch, outcome } = splitKeyInformationUpdate(input as UpdateInput);
       if (!outcome && Object.values(patch).every((value) => value === undefined)) {
-        throw new Error("Provide at least one key information section to update.");
+        throw new Error(
+          `Provide at least one key information section to update. ${KEY_INFORMATION_UPDATE_SHAPE}`,
+        );
       }
       const caller =
         outcome && resolveOutcomeScope

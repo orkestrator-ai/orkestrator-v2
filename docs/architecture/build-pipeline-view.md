@@ -517,7 +517,17 @@ written:
   option chosen and why.
 - **Not done or needs further work**, **Tests** (each with its result).
 - **Review issues**: each round's issues, how each was handled, and its status.
-- **Verification**: each round's verdict and checks, with what failed.
+- **Verification**: each round's verdict and checks. A check is `passed`,
+  `failed` (with what failed) or `not-checked` (with why it was not run, for
+  example it needs a live provider or a person); a not-checked check shows a
+  dashed icon and a "Not checked" label, never the failure cross. The record
+  keeps `passed: false` beside `status: "not-checked"` for readers that
+  predate `status`, which show such a check as failed.
+
+`update_key_information` refuses an ill-formed call with what was wrong and
+the arguments it expects, so a stage can repair the call in one step. A
+section sent as a string of JSON text is accepted when the text parses; when
+it does not, the refusal names the character, line and column where it breaks.
 
 The panel lists the written sections' headings in a column on its left, or in
 a row above the brief when the panel is narrower than 32rem. The list sits

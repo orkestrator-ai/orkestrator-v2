@@ -5,6 +5,7 @@ import {
   emptyKeyInformation,
   hasKeyInformation,
   isBuildPipelineKeyInformation,
+  keyInformationCheckStatus,
   recordKeyInformationReviewIssues,
   recordKeyInformationVerdict,
   type BuildPipelineKeyInformation,
@@ -256,7 +257,7 @@ describe("recordKeyInformationReviewIssues", () => {
 });
 
 describe("recordKeyInformationVerdict", () => {
-  test("derives checks from the checked criteria when Verify wrote none", () => {
+  test("derives checks from every criterion when Verify wrote none, keeping not-checked apart from failed", () => {
     const info = recordKeyInformationVerdict(
       undefined,
       {
@@ -276,8 +277,19 @@ describe("recordKeyInformationVerdict", () => {
         passed: false,
         summary: "Criterion two failed.",
         checks: [
-          { check: "Timer in the header", passed: true, details: "Seen in the diff" },
-          { check: "Panel lists decisions", passed: false },
+          {
+            check: "Timer in the header",
+            passed: true,
+            status: "passed",
+            details: "Seen in the diff",
+          },
+          { check: "Panel lists decisions", passed: false, status: "failed" },
+          {
+            check: "Works on Linux",
+            passed: false,
+            status: "not-checked",
+            details: "No Linux host",
+          },
         ],
       },
     ]);
@@ -308,6 +320,54 @@ describe("recordKeyInformationVerdict", () => {
         checks: [{ check: "Own", passed: true }],
       },
     ]);
+  });
+});
+
+describe("verification check status", () => {
+  test("a not-checked check is stored apart from a failure, with passed false for older readers", () => {
+    const info = applyKeyInformationPatch(
+      undefined,
+      {
+        verification: {
+          summary: "One check needs a person",
+          checks: [
+            { check: "Unit tests", passed: true, status: "passed" },
+            // `status` wins over a contradicting `passed`.
+            { check: "Live login", passed: true, status: "not-checked", details: "No account" },
+            { check: "Legacy failure", passed: false },
+          ],
+        },
+      },
+      { at: AT, author: "verify", round: 0 },
+    );
+    expect(info.verifications[0]?.checks).toEqual([
+      { check: "Unit tests", passed: true, status: "passed" },
+      { check: "Live login", passed: false, status: "not-checked", details: "No account" },
+      { check: "Legacy failure", passed: false },
+    ]);
+    expect(info.verifications[0]?.checks.map(keyInformationCheckStatus)).toEqual([
+      "passed",
+      "not-checked",
+      "failed",
+    ]);
+    expect(isBuildPipelineKeyInformation(info)).toBe(true);
+  });
+
+  test("the snapshot guard accepts a recorded status and refuses an unknown one", () => {
+    const valid = built();
+    const withChecks = (checks: unknown[]) => ({
+      ...valid,
+      verifications: [{ round: 0, summary: "s", checks }],
+    });
+    expect(
+      isBuildPipelineKeyInformation(
+        withChecks([{ check: "a", passed: false, status: "not-checked", details: "why" }]),
+      ),
+    ).toBe(true);
+    expect(isBuildPipelineKeyInformation(withChecks([{ check: "a", passed: false }]))).toBe(true);
+    expect(
+      isBuildPipelineKeyInformation(withChecks([{ check: "a", passed: false, status: "skipped" }])),
+    ).toBe(false);
   });
 });
 

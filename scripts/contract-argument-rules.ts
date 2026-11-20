@@ -12,8 +12,8 @@
  * - `Schema.Number` exports `anyOf [number, "Infinity" | "-Infinity" | "NaN"]`.
  *   The string branch is the encoding Effect's JSON serializer would use; the
  *   decode the registry runs (`decodeCommandArgs`) refuses those strings, and
- *   JSON cannot carry a non-finite number at all. {@link withoutNonFiniteNumberBranch}
- *   removes that branch before fixtures are generated, which is exact.
+ *   JSON cannot carry a non-finite number at all. The fixture importer handles
+ *   the two known mis-exported pagination fields by their release digest.
  * - `Schema.optional(T)` (and `Schema.UndefinedOr(T)`) exports
  *   `anyOf [T, null]`, the same export as `Schema.optionalKey(Schema.NullOr(T))`,
  *   but refuses `null`. The stored schema cannot tell the two apart, so
@@ -28,74 +28,27 @@
  * read by its `_tag`s.
  */
 
-type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
-type JsonObject = { readonly [key: string]: Json };
-
-const NON_FINITE_NUMBER_STRINGS = ["Infinity", "-Infinity", "NaN"] as const;
-
-function isObject(value: Json | undefined): value is JsonObject {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+interface AstCheck {
+  readonly annotations?: { readonly representation?: { readonly id?: string } };
+  readonly checks?: readonly AstCheck[];
 }
 
-/**
- * The branch `Schema.Number` adds to its export for non-finite numbers:
- * exactly `{ type: "string", enum: ["Infinity", "-Infinity", "NaN"] }`.
- */
-export function isNonFiniteNumberBranch(node: Json | undefined): boolean {
-  if (!isObject(node)) return false;
-  const keys = Object.keys(node);
-  if (keys.length !== 2 || node.type !== "string") return false;
-  const values = node.enum;
-  return (
-    Array.isArray(values) &&
-    values.length === NON_FINITE_NUMBER_STRINGS.length &&
-    NON_FINITE_NUMBER_STRINGS.every((value, index) => values[index] === value)
-  );
-}
-
-/** Whether `node` is `Schema.Number`'s export: `anyOf` a number and the non-finite strings. */
-function isNumberWithNonFiniteBranch(node: JsonObject): boolean {
-  const anyOf = node.anyOf;
-  return (
-    Array.isArray(anyOf) &&
-    anyOf.some(isNonFiniteNumberBranch) &&
-    anyOf.some((branch) => isObject(branch) && branch.type === "number")
-  );
-}
-
-/**
- * `node` without `Schema.Number`'s non-finite string branch. Only an `anyOf`
- * that also has a `{ type: "number" }` branch is rewritten; a lone remaining
- * branch replaces the `anyOf` when the node has no other keys.
- */
-export function withoutNonFiniteNumberBranch<T extends JsonObject>(node: T): T | JsonObject {
-  if (!isNumberWithNonFiniteBranch(node)) return node;
-  const kept = (node.anyOf as readonly Json[]).filter((branch) => !isNonFiniteNumberBranch(branch));
-  const { anyOf: _anyOf, ...rest } = node;
-  if (kept.length === 1 && Object.keys(rest).length === 0) return kept[0] as JsonObject;
-  return { ...rest, anyOf: kept };
-}
-
-/** Paths, from the root of `schema`, of every `Schema.Number` export in it. */
-export function nonFiniteNumberPaths(schema: Json, path = "", depth = 0): string[] {
-  if (depth > 64) return [];
-  if (Array.isArray(schema)) {
-    return schema.flatMap((child, index) =>
-      nonFiniteNumberPaths(child, `${path}[${index}]`, depth + 1),
+function hasFiniteWireCheck(checks: readonly AstCheck[]): boolean {
+  return checks.some((check) => {
+    const id = check.annotations?.representation?.id;
+    return (
+      id === "effect/schema/isFinite" ||
+      id === "effect/schema/isInt" ||
+      hasFiniteWireCheck(check.checks ?? [])
     );
-  }
-  if (!isObject(schema)) return [];
-  const found = isNumberWithNonFiniteBranch(schema) ? [path] : [];
-  for (const [key, child] of Object.entries(schema)) {
-    if (key === "anyOf" && found.length > 0) continue;
-    found.push(...nonFiniteNumberPaths(child, `${path}/${key}`, depth + 1));
-  }
-  return found;
+  });
 }
 
 /** The part of an Effect `SchemaAST.AST` node this module reads. */
 interface AstNode {
   readonly _tag: string;
+  readonly checks?: readonly AstCheck[];
+  readonly encoding?: readonly { readonly to: AstNode }[];
   readonly types?: readonly AstNode[];
   readonly elements?: readonly AstNode[];
   readonly rest?: readonly AstNode[];
@@ -105,55 +58,51 @@ interface AstNode {
   readonly thunk?: () => AstNode;
 }
 
-/** Paths, as `.key` and `[]` steps, where `ast` admits `undefined` (`Schema.optional`, `UndefinedOr`). */
-export function undefinedMemberPaths(ast: AstNode): string[] {
-  const found = new Set<string>();
-  // Only a `Suspend` can close a cycle. Leaves such as `Undefined` are shared
-  // singletons, and a shared sub-schema is reported at every path it is used.
-  const suspended = new Set<AstNode>();
-  const walk = (node: AstNode | undefined, path: string, depth: number): void => {
-    if (node === undefined || depth > 64) return;
-    if (node._tag === "Undefined") found.add(path || "(root)");
-    if (node._tag === "Suspend" && node.thunk) {
-      if (suspended.has(node)) return;
-      suspended.add(node);
-      walk(node.thunk(), path, depth + 1);
+/** Walk the wire AST, ignoring annotations and stopping at recursive edges. */
+function argumentMemberPaths(ast: AstNode) {
+  const undefinedPaths = new Set<string>();
+  const numberPaths = new Set<string>();
+  const ancestors = new Set<AstNode>();
+  const walk = (node: AstNode, path: string): void => {
+    if (ancestors.has(node)) return;
+    ancestors.add(node);
+    const encoded = node.encoding?.at(-1)?.to;
+    if (encoded) {
+      walk(encoded, path);
+    } else {
+      if (node._tag === "Undefined") undefinedPaths.add(path || "(root)");
+      if (node._tag === "Number" && !hasFiniteWireCheck(node.checks ?? [])) {
+        numberPaths.add(path || "(root)");
+      }
+      if (node.thunk) walk(node.thunk(), path);
+      for (const child of node.types ?? []) walk(child, path);
+      for (const child of node.typeParameters ?? []) walk(child, path);
+      for (const child of [...(node.elements ?? []), ...(node.rest ?? [])]) {
+        walk(child, `${path}[]`);
+      }
+      for (const signature of node.propertySignatures ?? []) {
+        walk(signature.type, `${path}.${String(signature.name)}`);
+      }
+      for (const signature of node.indexSignatures ?? []) walk(signature.type, `${path}{}`);
     }
-    for (const child of node.types ?? []) walk(child, path, depth + 1);
-    for (const child of node.typeParameters ?? []) walk(child, path, depth + 1);
-    for (const child of [...(node.elements ?? []), ...(node.rest ?? [])]) {
-      walk(child, `${path}[]`, depth + 1);
-    }
-    for (const signature of node.propertySignatures ?? []) {
-      walk(signature.type, `${path}.${String(signature.name)}`, depth + 1);
-    }
-    for (const signature of node.indexSignatures ?? [])
-      walk(signature.type, `${path}{}`, depth + 1);
+    ancestors.delete(node);
   };
-  walk(ast, "", 0);
-  return [...found].sort();
+  walk(ast, "");
+  return {
+    undefinedPaths: [...undefinedPaths].sort(),
+    numberPaths: [...numberPaths].sort(),
+  };
 }
 
-/**
- * Every rule a command's argument schema breaks, as manifest problems.
- * `exported` is its JSON Schema export (`canonicalJsonSchema(def.args)`, parsed).
- */
-export function argumentSchemaProblems(
-  command: string,
-  args: { readonly ast: unknown },
-  exported: { readonly schema: Json; readonly definitions?: Json },
-): string[] {
+/** Every rule a command's argument schema breaks, as manifest problems. */
+export function argumentSchemaProblems(command: string, args: { readonly ast: unknown }): string[] {
   const problems: string[] = [];
-  const undefinedPaths = undefinedMemberPaths(args.ast as AstNode);
+  const { undefinedPaths, numberPaths } = argumentMemberPaths(args.ast as AstNode);
   if (undefinedPaths.length > 0) {
     problems.push(
       `${command} arguments admit undefined at ${undefinedPaths.join(", ")}: use Schema.optionalKey(...) (or optionalKey(Schema.NullOr(...)) where null must be accepted). Schema.optional exports anyOf [T, null] but refuses null.`,
     );
   }
-  const numberPaths = [
-    ...nonFiniteNumberPaths(exported.schema, "#"),
-    ...nonFiniteNumberPaths(exported.definitions ?? null, "#/definitions"),
-  ];
   if (numberPaths.length > 0) {
     problems.push(
       `${command} arguments use Schema.Number at ${numberPaths.join(", ")}: use Schema.Finite (or Schema.Int). Schema.Number exports "Infinity", "-Infinity" and "NaN" strings its decoder refuses.`,

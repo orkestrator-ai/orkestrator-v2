@@ -999,6 +999,7 @@ export class AcceptanceStack {
   policy!: ReadDemandFn;
   /** Observer reads in flight (the topic's provider read). */
   private observerReads = 0;
+  private gatewayMetrics!: () => { stream: { sourceBytes: number } };
   private dataDir = "";
   private storage!: StorageService;
   /** The service's wall clock: virtual time from a fixed date. */
@@ -1093,6 +1094,9 @@ export class AcceptanceStack {
     this.gateway = new OrkestratorGateway({
       backend: {
         commandAccess: registryCommandAccess,
+        attachGatewayMetrics: (read) => {
+          this.gatewayMetrics = read as typeof this.gatewayMetrics;
+        },
         ...(this.push ? { push: this.push } : {}),
         invoke: async (command, args) => {
           if (command === "get_native_agent_tool_output") {
@@ -1172,16 +1176,24 @@ export class AcceptanceStack {
     this.push?.observeEvent(event, payload);
   }
 
+  eventBytesWritten(): number {
+    return this.gatewayMetrics().stream.sourceBytes;
+  }
+
+  hasPendingWork(): boolean {
+    return (
+      this.observerReads > 0 ||
+      this.viewers.some((viewer) => viewer.inFlight > 0 || !viewer.streamDrained())
+    );
+  }
+
   /** Waits (in real time) until the I/O the last timer started has finished. */
-  async settle(): Promise<void> {
+  async settle(otherWorkPending: () => boolean = () => false): Promise<void> {
     let quiet = 0;
     const deadline = performance.now() + 30_000;
     while (quiet < 3) {
       await new Promise((resolve) => setImmediate(resolve));
-      const busy =
-        this.observerReads > 0 ||
-        this.viewers.some((viewer) => viewer.inFlight > 0 || !viewer.streamDrained());
-      if (busy) {
+      if (this.hasPendingWork() || otherWorkPending()) {
         quiet = 0;
         if (performance.now() > deadline) throw new Error("the stack did not settle");
         await new Promise((resolve) => setTimeout(resolve, 0));

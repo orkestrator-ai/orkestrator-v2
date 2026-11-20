@@ -234,9 +234,7 @@ export function buildContractManifest(
           resultDigest: schemaDigest(def.result),
         },
       ]);
-      problems.push(
-        ...argumentSchemaProblems(name, def.args, JSON.parse(canonicalJsonSchema(def.args))),
-      );
+      problems.push(...argumentSchemaProblems(name, def.args));
       continue;
     }
     if (mapped === undefined) {

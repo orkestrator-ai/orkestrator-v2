@@ -223,12 +223,43 @@ describe("argument schema rules", () => {
 
   test("refuses Schema.Number, which exports non-finite strings it refuses", () => {
     const problems = problemsOf(() =>
-      buildWith(Schema.Struct({ limit: Schema.optionalKey(Schema.Number) })),
+      buildWith(
+        Schema.Struct({
+          limit: Schema.optionalKey(Schema.Number.annotate({ identifier: "NamedNumber" })),
+        }),
+      ),
     );
     expect(problems).toEqual([
-      expect.stringContaining(
-        "fake_rule_breaker arguments use Schema.Number at #/properties/limit",
-      ),
+      expect.stringContaining("fake_rule_breaker arguments use Schema.Number at .limit"),
+    ]);
+  });
+
+  test("accepts finite numbers alongside explicit non-finite string spellings and examples", () => {
+    const strings = ["Infinity", "-Infinity", "NaN"] as const;
+    const manifest = buildWith(
+      Schema.Struct({
+        value: Schema.Union([Schema.Finite, Schema.Literals(strings)]),
+        metadata: Schema.Unknown.annotate({
+          examples: [{ anyOf: [{ type: "number" }, { type: "string", enum: strings }] }],
+        }),
+      }),
+    );
+    expect(Object.keys(manifest.commands)).toEqual(["fake_rule_breaker"]);
+  });
+
+  test("walks recursive argument schemas and reports each use of a shared schema", () => {
+    interface Tree {
+      readonly children: readonly Tree[];
+      readonly label?: string | undefined;
+    }
+    const tree = Schema.suspend((): Schema.Codec<Tree> => body);
+    const body = Schema.Struct({
+      children: Schema.Array(tree),
+      label: Schema.optional(Schema.String),
+    });
+    const problems = problemsOf(() => buildWith(Schema.Struct({ left: tree, right: tree })));
+    expect(problems).toEqual([
+      expect.stringContaining("admit undefined at .left.label, .right.label"),
     ]);
   });
 

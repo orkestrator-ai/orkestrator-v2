@@ -326,6 +326,20 @@ describe("gateway push for relayed nodes", () => {
         subscriptions: [],
       }),
     ).toMatchObject({ status: "applied", setRevision: 1 });
+    expect(
+      await setSubscriptions(viaGrant, {
+        streamId: offer.streamId,
+        setRevision: 2,
+        nodeId: null,
+        subscriptions: [{ topic: TOPIC, key: KEY_A }],
+      }),
+    ).toMatchObject({
+      status: "applied",
+      setRevision: 2,
+      subscriptions: [{ topic: TOPIC, key: KEY_A, status: "ok" }],
+    });
+    expect(leaf.calls).toEqual([]);
+    expect(push.metrics().nodeSets).toBe(0);
     stream.close();
   });
 

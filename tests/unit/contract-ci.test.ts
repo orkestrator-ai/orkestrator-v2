@@ -515,31 +515,38 @@ describe("argument schemas", () => {
     ).toThrow('"not"');
   });
 
-  test("Schema.Number's non-finite string branch generates no fixtures (stage 2)", async () => {
+  test("only the published tool-output digest samples pagination as numbers", async () => {
     const generator = await loadFixtureGenerator();
-    const nonFinite = { enum: ["Infinity", "-Infinity", "NaN"], type: "string" };
-    // `Schema.optionalKey(Schema.Number)` as 2.39.9-beta exported it.
-    const document = objectSchema({ limit: { anyOf: [{ type: "number" }, nonFinite] } }, ["limit"]);
-    const samples = generator.sample(document, 100, "non-finite") as { limit: unknown }[];
-    expect(samples).toHaveLength(100);
-    expect(samples.every((sample) => typeof sample.limit === "number")).toBe(true);
-    expect(importableSchemaNode({ anyOf: [{ type: "number" }, nonFinite] })).toEqual({
-      type: "number",
+    const contracts = path.join(root, "packages/protocol/contracts");
+    const digest = "sha256:eb8961fc38b6c10dadc228cb98abec41c3c7bd5852a77ea2acafa9ae36f806e1";
+    const document = readStoredSchema(contracts, digest)!;
+    const command = "get_native_agent_tool_output";
+    const legacy = { command, digest, releases: ["2.39.9-beta"], document };
+    const paginationIsNumeric = (_command: string, args: unknown) => {
+      const { cursor, limit } = args as { cursor?: unknown; limit?: unknown };
+      return [cursor, limit].some((value) => typeof value === "string")
+        ? "Refused a string pagination value"
+        : null;
+    };
+    expect(runArgumentFixtures([legacy], paginationIsNumeric, generator, 100)).toEqual({
+      checked: 100,
+      unconstrained: 0,
+      failures: [],
     });
-    expect(
-      importableSchemaNode({ description: "d", anyOf: [{ type: "number" }, nonFinite] }),
-    ).toEqual({ description: "d", anyOf: [{ type: "number" }] });
-    // Only next to a number branch: the same strings on their own stay accepted.
-    const strings = { anyOf: [{ type: "boolean" }, nonFinite] };
-    expect(importableSchemaNode(strings)).toBe(strings);
-    // A real refusal of a number is still evidence.
-    const report = runArgumentFixtures(
-      [{ command: "read", digest: documentDigest(document), releases: ["2.40.0"], document }],
-      () => "Expected string",
-      generator,
-      5,
-    );
-    expect(report.failures.map((failure) => failure.message)).toEqual(["Expected string"]);
+    // Keep the pagination shape identical, but give the document another digest.
+    const other = { ...document, definitions: { separate: { type: "boolean" } } };
+    for (const entry of [
+      { ...legacy, document: other, digest: documentDigest(other) },
+      { ...legacy, command: "other_command" },
+    ]) {
+      const report = runArgumentFixtures([entry], paginationIsNumeric, generator, 100);
+      expect(report.failures.map((failure) => failure.message)).toEqual([
+        "Refused a string pagination value",
+      ]);
+    }
+    expect(runArgumentFixtures([legacy], () => "Expected string", generator, 5).failures).toEqual([
+      expect.objectContaining({ message: "Expected string" }),
+    ]);
   });
 
   test("a refusal only inside an unconstrained value is counted, not failed (stage 2)", async () => {

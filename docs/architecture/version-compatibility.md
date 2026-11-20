@@ -545,7 +545,9 @@ digest:
   command whose arguments use `Schema.Number`, `Schema.optional` or
   `Schema.UndefinedOr` (`argumentSchemaProblems` in
   `scripts/contract-argument-rules.ts`), so the two rules above cannot be
-  broken unnoticed until a release snapshots the schema.
+  broken unnoticed until a release snapshots the schema. The guard walks
+  the argument AST, so explicit string literals and example metadata keep
+  their meaning.
 - A RegExp passed to `Schema.isPattern` has the `u` flag; without it the
   export has no `pattern`.
 - A named schema (`identifier` annotation) is one shared constant. Two
@@ -1337,13 +1339,11 @@ export const nodeMailClient = domainClient(nodeMail, {
   older stored schema (`SchemaRepresentation.fromJsonSchemaDocument`, then
   `effect/Arbitrary`, 25 seeded samples, sent as JSON) are refused by
   `decodeCommandArgs` with the definition the real registry registered, in
-  a sandboxed child. No handler runs. Before sampling, the
-  `"Infinity" | "-Infinity" | "NaN"` branch `Schema.Number` exports is
-  dropped (`withoutNonFiniteNumberBranch` in
-  `scripts/contract-argument-rules.ts`): its decoder never accepted those
-  strings, and JSON carries no non-finite number, so such a fixture is no
-  evidence. 2.39.9-beta published `get_native_agent_tool_output`'s `cursor`
-  and `limit` that way.
+  a sandboxed child. No handler runs. Before sampling the frozen
+  2.39.9-beta `get_native_agent_tool_output` argument digest, the fixture
+  checker uses numbers for `cursor` and `limit`. The release decoder
+  refused the non-finite string spellings advertised for those two fields.
+  Other digests are sampled with their original number and string branches.
 - **Mixed-version qualification** (plan item
   [1012](../../plans/unified/1012-mixed-version-qualification.md)) ran this
   checkout against a published release in both node topologies, weekly. It

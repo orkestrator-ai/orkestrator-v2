@@ -101,38 +101,90 @@ describe("push acceptance budgets", () => {
       leaves.set(id, leaf);
     }
 
+    const upstreams = new Map<AcceptanceStack, { connected: boolean; bytesRead: number }>();
+    let relayInvocations = 0;
     const relay = new NodePushSubscriptionController({
       timers: clock,
       leaf: {
         holdForPush: (nodeId) => {
           const leaf = leaves.get(nodeId)!;
+          const upstream = { connected: false, bytesRead: leaf.eventBytesWritten() };
+          upstreams.set(leaf, upstream);
+          const fetchImpl: typeof fetch = Object.assign(
+            async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+              const headers = new Headers(init?.headers);
+              headers.set("accept-encoding", "identity");
+              const response = await fetch(input, { ...init, headers });
+              const body = response.body?.pipeThrough(
+                new TransformStream<Uint8Array, Uint8Array>({
+                  transform(chunk, controller) {
+                    upstream.bytesRead += chunk.byteLength;
+                    controller.enqueue(chunk);
+                  },
+                }),
+              );
+              return new Response(body, response);
+            },
+            { preconnect: fetch.preconnect },
+          );
           const stream = new NodeEventStream({
+            fetchImpl,
             transport: () => ({
               baseUrl: leaf.info.url,
               headers: { authorization: `Bearer ${leaf.info.token}` },
             }),
             prefixes: ["native-agent-session-activity"],
-            onConnected: (info) => relay.upstreamConnected(nodeId, info.push),
-            onClosed: () => relay.upstreamClosed(nodeId),
+            onConnected: (info) => {
+              upstream.connected = true;
+              relay.upstreamConnected(nodeId, info.push);
+            },
+            onClosed: () => {
+              upstream.connected = false;
+              relay.upstreamClosed(nodeId);
+            },
             onEvent: (event, payload) => relay.upstreamFrame(nodeId, event, payload),
           });
           stream.start();
-          return () => stream.stop();
+          return () => {
+            upstreams.delete(leaf);
+            stream.stop();
+          };
         },
-        link: (nodeId) => leaves.get(nodeId) ?? null,
+        link: (nodeId) => {
+          const leaf = leaves.get(nodeId);
+          if (!leaf) return null;
+          return {
+            invoke: async <T>(command: string, args?: Record<string, unknown>) => {
+              relayInvocations += 1;
+              try {
+                return await leaf.invoke<T>(command, args ?? {});
+              } finally {
+                relayInvocations -= 1;
+              }
+            },
+          };
+        },
       },
     });
     relay.attachDownstream(command.push!.hub);
     command.push!.attachNodeSubscriptions(relay);
-    const advance = async (ms: number) => {
-      // Let the leaf's socket deliver before advancing beyond a coalescing
-      // interval. Its SSE reader is external to the viewers' quiescence check.
-      for (let elapsed = 0; elapsed < ms; elapsed += 25) {
-        await clock.advanceAsync(Math.min(25, ms - elapsed), async () => {
-          await Promise.all(stacks.map((stack) => stack.settle()));
-        });
-      }
-    };
+    const advance = (ms: number) =>
+      clock.advanceAsync(ms, () =>
+        command.settle(
+          () =>
+            relayInvocations > 0 ||
+            [...leaves.values()].some((leaf) => {
+              const upstream = upstreams.get(leaf);
+              // These leaves serve only the command node's SSE client. Wait
+              // for its socket before charging the next virtual millisecond.
+              return (
+                leaf.hasPendingWork() ||
+                (upstream !== undefined &&
+                  (!upstream.connected || upstream.bytesRead < leaf.eventBytesWritten()))
+              );
+            }),
+        ),
+      );
 
     try {
       for (const [nodeId, leaf] of leaves) {

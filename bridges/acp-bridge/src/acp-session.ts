@@ -9,6 +9,7 @@ import {
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { WEB_ANNOTATION_TOOL_NAMES } from "@orkestrator/protocol/web-annotations";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import { isArtifactServerToolCall } from "./acp-artifact-permission.js";
 import {
   workflowResultTurnAllows,
@@ -732,6 +733,7 @@ const ORKESTRATOR_AUTO_ALLOWED_TOOL_NAMES: readonly string[] = [
   ...AGENT_AUTO_PIPELINE_TOOL_NAMES,
   ...WEB_ANNOTATION_TOOL_NAMES,
   ...ARTIFACT_TOOL_NAMES,
+  ...RICH_INTERACTION_TOOL_NAMES,
 ];
 
 const ORKESTRATOR_AUTO_ALLOWED_TOOL_IDS = new Set(

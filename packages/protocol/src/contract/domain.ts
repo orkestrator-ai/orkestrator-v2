@@ -64,6 +64,8 @@ export const DOMAIN_NAMES = [
   "coordinator",
   "agent-servers",
   "claude-tmux",
+  // App-owned rich interactions in agent sessions (docs/architecture/rich-interactions.md).
+  "rich-interactions",
   // Appendix E's "Public API (`public_action`)" group (plan item 1006).
   "public-api",
 ] as const;

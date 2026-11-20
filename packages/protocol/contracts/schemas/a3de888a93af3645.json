@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:a3de888a93af3645789c25354a3c6a1817801014a355d8e8cdf2a8adedc3d986",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "actionId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "choice",
+            "form",
+            "plan",
+            "collection",
+            "code-review",
+            "feedback",
+            "result-review",
+            "document",
+            "diagnostics",
+            "chart-selection",
+            "diagram",
+            "widget-result",
+            "evidence",
+            "context-packet",
+            "criteria",
+            "alternatives",
+            "workflow-actions",
+            "voice-request",
+            "demonstration"
+          ],
+          "type": "string"
+        },
+        "result": {},
+        "sourceRefs": {},
+        "spec": {},
+        "tabId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "type": "string"
+        }
+      },
+      "required": [
+        "actionId",
+        "environmentId",
+        "idempotencyKey",
+        "kind",
+        "result",
+        "spec",
+        "tabId",
+        "title"
+      ],
+      "type": "object"
+    }
+  }
+}

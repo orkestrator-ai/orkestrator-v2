@@ -38,6 +38,7 @@ import {
 import { HEALTH_SUMMARY_STORE_LAYOUTS } from "./health-summary-layout.js";
 import { SCHEDULED_JOBS_STORE_LAYOUTS } from "./scheduled-jobs/layout.js";
 import { PERMISSION_RULE_STORE_LAYOUTS } from "./permission-rules/index.js";
+import { RICH_INTERACTION_STORE_LAYOUTS } from "./rich-interactions/layout.js";
 import { CREDENTIAL_STORE_LAYOUTS } from "./credentials/layout.js";
 import {
   TRANSCRIPT_ARTIFACT_ENGINE_STORE_LAYOUTS,
@@ -203,6 +204,7 @@ const ENGINE_STORE_LAYOUTS: Record<string, StoreLayout> = {
   ...HEALTH_SUMMARY_STORE_LAYOUTS,
   ...SCHEDULED_JOBS_STORE_LAYOUTS,
   ...PERMISSION_RULE_STORE_LAYOUTS,
+  ...RICH_INTERACTION_STORE_LAYOUTS,
   ...CREDENTIAL_STORE_LAYOUTS,
 };
 

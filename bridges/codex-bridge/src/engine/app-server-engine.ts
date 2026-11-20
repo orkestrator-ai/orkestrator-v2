@@ -30,6 +30,7 @@ import { AGENT_GOAL_TOOL_NAMES } from "@orkestrator/protocol/native-agent-goal";
 import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import {
   ARTIFACT_TOOL_NAMES,
   ORKESTRATOR_ARTIFACT_MCP_PATH,
@@ -165,6 +166,7 @@ const AGENT_MAIL_TOOL_APPROVALS = Object.fromEntries(
   [
     ...AGENT_MAIL_TOOL_NAMES,
     ...ARTIFACT_TOOL_NAMES,
+    ...RICH_INTERACTION_TOOL_NAMES,
     ...AGENT_GOAL_TOOL_NAMES,
     ...AGENT_SUBORK_TOOL_NAMES,
     ...AGENT_AUTO_PIPELINE_TOOL_NAMES,

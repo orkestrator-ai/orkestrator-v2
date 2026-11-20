@@ -32,6 +32,8 @@ export type CommandContext = {
   /** A leaf's container staging and environment cards under the command node (`environment-authority.ts`). */
   capabilityEnvironments?: import("./capabilities/environment-authority.js").CapabilityEnvironmentAuthority;
   webAnnotations?: import("./web-annotations/index.js").WebAnnotationService;
+  /** App-owned rich interactions (docs/architecture/rich-interactions.md). */
+  richInteractions?: import("./rich-interactions/service.js").RichInteractionService;
   /** Transcript artifacts: durable revisions, receipts and publications. */
   transcriptArtifacts?: import("./transcript-artifacts/index.js").TranscriptArtifactService;
   /** Backend rollout switch for web annotations (enabled / read-only / disabled). */

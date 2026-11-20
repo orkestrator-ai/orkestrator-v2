@@ -53,6 +53,7 @@ import { accountsClient } from "./domains/accounts/client.js";
 import { mcpClient } from "./domains/mcp/client.js";
 import { capabilitiesClient } from "./domains/capabilities/client.js";
 import { agentMailClient } from "./domains/agent-mail/client.js";
+import { richInteractionsClient } from "./domains/rich-interactions/client.js";
 
 /**
  * Every domain client definition. The pilot domains (plan item 1010) were the
@@ -73,6 +74,7 @@ export const DOMAIN_CLIENTS: readonly DomainClientDef[] = Object.freeze([
   pipelinesClient,
   nativeSessionsClient,
   nodeFilesClient,
+  richInteractionsClient,
   nodesClient,
   nodeMailClient,
   previewsClient,

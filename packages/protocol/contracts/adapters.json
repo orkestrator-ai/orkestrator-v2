@@ -27,6 +27,7 @@
     "previews": { "current": 1, "adapters": [1, 0] },
     "projects": { "current": 2, "adapters": [2, 1, 0] },
     "pull-requests": { "current": 4, "adapters": [4, 3, 2, 1, 0] },
+    "rich-interactions": { "current": 1, "adapters": [1, 0] },
     "system": { "current": 2, "adapters": [2, 1, 0] },
     "terminals": { "current": 2, "adapters": [2, 1, 0] },
     "ticket-sync": { "current": 1, "adapters": [1, 0] },

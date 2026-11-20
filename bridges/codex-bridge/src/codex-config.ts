@@ -4,6 +4,7 @@ import { AGENT_SUBORK_TOOL_NAMES } from "@orkestrator/protocol/suborks";
 import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipeline-tool";
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import {
   coordinatorCapabilityPolicy,
   coordinatorResearchMcpServersFromEnv,
@@ -859,6 +860,7 @@ export function codexAppServerConfigOverrides(
           for (const name of [
             ...AGENT_MAIL_TOOL_NAMES,
             ...ARTIFACT_TOOL_NAMES,
+            ...RICH_INTERACTION_TOOL_NAMES,
             ...AGENT_GOAL_TOOL_NAMES,
             ...AGENT_SUBORK_TOOL_NAMES,
             ...AGENT_AUTO_PIPELINE_TOOL_NAMES,

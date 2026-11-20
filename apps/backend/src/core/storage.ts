@@ -30,6 +30,7 @@ import type {
 } from "@orkestrator/protocol/environment-attention";
 import type { ScheduledJobStore } from "./scheduled-jobs/store.js";
 import type { PermissionRuleStore } from "./permission-rules/index.js";
+import type { RichInteractionStore } from "./rich-interactions/store.js";
 import type { CredentialRecordStore } from "./credentials/records.js";
 import {
   reconcileRetiredLoopedReviewSessions,
@@ -332,6 +333,11 @@ export class StorageService {
   /** Orkestrator's own permission rules (todo 0723 (retired)); per machine. */
   permissionRuleStore(): PermissionRuleStore {
     return this.repos.permissionRules.store();
+  }
+
+  /** App-owned rich interaction requests, receipts, drafts and deliverable metadata. */
+  richInteractionStore(): RichInteractionStore {
+    return this.repos.richInteractions.store();
   }
 
   /** Agent credential records (metadata only; values live in the credential vault). */

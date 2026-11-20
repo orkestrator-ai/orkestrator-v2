@@ -1,3 +1,5 @@
+import { createRichInteractionService } from "./rich-interactions/index.js";
+import type { RichInteractionService } from "./rich-interactions/service.js";
 import {
   connectCoordinatorNodeWakes,
   COORDINATOR_STATUS_COALESCE_MS,
@@ -466,6 +468,7 @@ export class OrkestratorBackend {
       >
     >;
   private readonly scheduledJobs: ScheduledJobService;
+  private readonly richInteractions: RichInteractionService;
   /** Agent credentials; set once the vault opens during `init`. */
   private credentials: CredentialService | null = null;
   /** Experimental self-improvement runs; idle while its switch is off. */
@@ -1792,6 +1795,17 @@ export class OrkestratorBackend {
     this.graphRunAttention = new GraphRunAttention(storage);
     this.buildPipelineActivity = new BuildPipelineActivity(storage);
     context.graphRuns = this.graphRuns;
+    // App-owned rich interactions: agent tools on the common server, renderer
+    // commands, and the follow-up outbox (started in init()).
+    this.richInteractions = createRichInteractionService({
+      storage,
+      nativeAgents: this.nativeAgents,
+      graphRuns: () => this.graphRuns,
+    });
+    context.richInteractions = this.richInteractions;
+    (
+      this.agentTools as { setRichInteractionService?: (service: RichInteractionService | null) => void }
+    ).setRichInteractionService?.(this.richInteractions);
     // System nodes (item 207): backend side effects, journaled per run.
     const graphShell = createGraphEnvironmentShell(
       context.runtime.environments.fence,
@@ -3037,6 +3051,8 @@ export class OrkestratorBackend {
     // Backend-owned timing for scheduled jobs. Fires need the registry writer
     // lease, the Control MCP (coordinator schedules) and the agent tools.
     this.scheduledJobs.start();
+    // Resume follow-ups committed before a restart (outbox recovery).
+    this.richInteractions.start();
     // The daily self-improvement check; it runs nothing while its switch is off.
     this.selfImprovement.start();
     // Restore watchers and PR polling before clients can read their state.
@@ -3403,6 +3419,7 @@ export class OrkestratorBackend {
       remove?.();
     });
     stopStepNow("container-oom", () => this.runtime.containerOom.stop());
+    stopStepNow("rich-interactions", () => this.richInteractions.stop());
     stopStepNow("container-logs", () => this.runtime.containerLogs.shutdown());
     stopStepNow("activity-jobs", () => {
       const jobs = this.activityJobs;

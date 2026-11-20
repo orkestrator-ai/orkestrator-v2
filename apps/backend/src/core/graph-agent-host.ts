@@ -309,7 +309,7 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
           const producers = new Set(reportProducers.map((producer) => producer.activation));
           const covered = new Set(
             run.activations
-              .filter((entry) => producers.has(entry.key))
+              .filter((entry) => entry.nodeId === reviewNode?.id && producers.has(entry.key))
               .map((entry) => entry.branchKey),
           );
           const failure = reviewChunkCoverageFailure(

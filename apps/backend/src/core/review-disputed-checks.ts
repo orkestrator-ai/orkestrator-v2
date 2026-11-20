@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 import {
   STRUCTURED_REVIEW_MAX_LIST_ITEMS,
-  STRUCTURED_REVIEW_MAX_REPORT_BYTES,
   utf8Bytes,
   type StructuredReviewReport,
   type ReviewContractValidationIssue,
 } from "@orkestrator/protocol/structured-review";
+import { WORKFLOW_RESULT_MAX_BYTES } from "@orkestrator/protocol/workflow-results";
 
 export const DISPUTED_CHECK_REASON =
   "Review reports disagree. No approved rerun on the reviewed snapshot is available.";
+
+const DISPUTE_LIMITATION_BYTES = 512;
 
 const CHECK_LIMITATION =
   "Disputed validation outcomes remain unverified. Consolidation has no approved runner on the reviewed snapshot.";
@@ -49,9 +51,9 @@ export function recordDisputedChecks(
   const pending: typeof commandsNotRun = [];
   // Leave room for the limitation and its omitted count in the final report.
   let remaining =
-    STRUCTURED_REVIEW_MAX_REPORT_BYTES -
+    WORKFLOW_RESULT_MAX_BYTES -
     utf8Bytes(JSON.stringify({ ...report, reviewScope: scope })) -
-    512;
+    DISPUTE_LIMITATION_BYTES;
   for (const command of disputes) {
     if (pending.length + commandsNotRun.length >= STRUCTURED_REVIEW_MAX_LIST_ITEMS) break;
     const entry = { command, reason: DISPUTED_CHECK_REASON };
@@ -88,6 +90,15 @@ export function disputedCheckSubmissionIssues(
   digests: readonly string[] | undefined,
 ): ReviewContractValidationIssue[] {
   if (!digests?.length) return [];
+  if (utf8Bytes(JSON.stringify(value)) > WORKFLOW_RESULT_MAX_BYTES - DISPUTE_LIMITATION_BYTES) {
+    return [
+      {
+        path: "$",
+        code: "invalid_value",
+        message: "Shorten the report to leave room for the backend's disputed-check limitation.",
+      },
+    ];
+  }
   const scope = (value as Partial<StructuredReviewReport>).reviewScope;
   if (!Array.isArray(scope?.commandsRun)) return [];
   const disputed = new Set(digests);

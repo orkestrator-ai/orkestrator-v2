@@ -33,6 +33,7 @@
  * Replay a failure with `ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS=<seed>`.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import { reviewerBlockedReason } from "@orkestrator/protocol/review-fanout";
 import { REVIEW_BLOCKED_ERROR_PREFIX } from "@orkestrator/protocol/structured-review";
@@ -927,6 +928,99 @@ test("a graph consolidator that could not review fails the review", async () => 
     expect(record.consolidatedReport).toBeUndefined();
     expect(record.phase).toBe("failed");
     expect(record.error).toContain(`${REVIEW_BLOCKED_ERROR_PREFIX}${reason}`);
+  } finally {
+    await world.cleanup();
+  }
+}, 30_000);
+
+test("graph consolidation repairs an unverified command claim before publishing pending evidence", async () => {
+  const command = "mise run test";
+  const withOutcome = (result: "passed" | "failed") => ({
+    ...INTERLEAVING_REPORT,
+    reviewScope: {
+      ...INTERLEAVING_REPORT.reviewScope,
+      commandsRun: [{ command, result, summary: "Reported by a reviewer." }],
+    },
+  });
+  let rejected: Record<string, unknown> | undefined;
+  let correction: string | undefined;
+  const world = await multiReviewInterleavingWorld({
+    realAgentNodes: [REAL_AGENT_NODE, "consolidate"],
+    script: async (turn, tools) => {
+      const position = positionOf(turn);
+      if (position === 0 && turn.index > 1) correction = turn.prompt;
+      const result =
+        position === 0 && turn.index > 1
+          ? INTERLEAVING_REPORT
+          : withOutcome(position === 1 ? "passed" : "failed");
+      const reply = await tools.call("submit_report", {
+        resultKey: turnSlots(turn).report,
+        result,
+      });
+      if (position === 0 && turn.index === 1) rejected = reply;
+      return "idle";
+    },
+  });
+  try {
+    const process = world.start();
+    await process.ready;
+    const started = await world.startReview({ reviewers: MODELS.slice(0, 2) });
+    let record = started;
+    for (let pass = 0; pass < 40 && !record.graphRun?.settled; pass++) {
+      await process.service.advanceNow(started.id);
+      await process.graphRuns.advanceNow(multiReviewGraphRunId(started.id)).catch(() => null);
+      await world.provider.settle();
+      record = await world.workflow(started.id);
+    }
+    expect(rejected?.structuredContent).toMatchObject({
+      ok: false,
+      error: { nextAction: "correct" },
+    });
+    expect(correction).toContain("Your last submission was rejected");
+    expect(record.phase).toBe("ready");
+    expect(record.consolidatedReport?.reviewScope.commandsRun).toEqual([]);
+    expect(record.consolidatedReport?.reviewScope.commandsNotRun).toEqual([
+      expect.objectContaining({ command, reason: expect.stringContaining("No approved rerun") }),
+    ]);
+  } finally {
+    await world.cleanup();
+  }
+}, 30_000);
+
+test("graph consolidation refuses a chunked package with an uncovered reviewer slot", async () => {
+  const world = await multiReviewInterleavingWorld({
+    realAgentNodes: [REAL_AGENT_NODE, "consolidate"],
+    script: async (turn, tools) => {
+      if (positionOf(turn) === 2) return "error";
+      await tools.call("submit_report", {
+        resultKey: turnSlots(turn).report,
+        result: INTERLEAVING_REPORT,
+      });
+      return "idle";
+    },
+  });
+  try {
+    const descriptor = graphBuiltInType("review-package@2")!.example as Record<string, unknown>;
+    world.fakes.scripts.set("package", () => ({ ...descriptor, diffChunkCount: 6 }));
+    const process = world.start();
+    await process.ready;
+    const started = await world.startReview({ reviewers: [...MODELS] });
+    let record = started;
+    for (let pass = 0; pass < 40 && !record.graphRun?.settled; pass++) {
+      await process.service.advanceNow(started.id);
+      await process.graphRuns.advanceNow(multiReviewGraphRunId(started.id)).catch(() => null);
+      await world.provider.settle();
+      record = await world.workflow(started.id);
+    }
+    expect(record.reviewers.map((reviewer) => reviewer.status)).toEqual([
+      "completed",
+      "failed",
+      "completed",
+    ]);
+    expect(record.phase).toBe("failed");
+    expect(record.error).toContain("No usable reviewer report covers parts 2, 5.");
+    expect(world.provider.turns().some((turn) => positionOf(turn) === 0)).toBe(false);
+    expect(record.consolidatedReport).toBeUndefined();
   } finally {
     await world.cleanup();
   }

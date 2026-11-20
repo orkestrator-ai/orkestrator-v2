@@ -428,7 +428,10 @@ describe("prompt contract edge cases", () => {
     expect(prompt).toContain("immediately before dispatch");
     // The reviewer reaches the evidence itself now, under instructions rather
     // than a tool restriction.
-    expect(prompt).toContain("Run that command yourself to read the diff");
+    expect(prompt).toContain(
+      "When there are no `diffChunks`, run that command yourself to read the diff",
+    );
+    expect(prompt).toContain("A file can span parts");
     // A read-only turn without the command sandbox cannot run Git at all
     // (to-do 0190 (retired)): it is sent to the sealed diff file instead.
     expect(prompt).toContain("When this session refuses Git commands");
@@ -454,7 +457,7 @@ describe("prompt contract edge cases", () => {
     // The inline shape has no `diffCommand` and no artifact files, so it must
     // not be sent after evidence it does not carry.
     expect(prompt).toContain("This package carries its own evidence");
-    expect(prompt).not.toContain("Run that command yourself to read the diff");
+    expect(prompt).not.toContain("run that command yourself to read the diff");
     expect(prompt).not.toContain("diffCommand");
     expect(prompt).not.toContain("diffArtifact");
     // The evidence itself still has to survive alongside the rules.

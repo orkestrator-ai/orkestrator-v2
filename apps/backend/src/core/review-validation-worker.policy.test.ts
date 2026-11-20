@@ -314,7 +314,7 @@ test("a command learns the slots it was granted and that review validation runs 
   expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toBe("3 1");
 });
 
-// The browser suites stop themselves a minute before this instant, so a run
+// The browser suites reserve some time before this instant so a run
 // cut short names its interrupted tests instead of ending in silence.
 test("a command learns the wall-clock instant it will be killed", async () => {
   const { root, run } = await fixture([
@@ -352,7 +352,7 @@ test.each([
     import { reviewValidationRunOptions } from ${JSON.stringify(config)};
     export default {
       ...reviewValidationRunOptions("line"),
-      ${mode === "timeout" ? "globalTimeout: 2_000," : ""}
+      ${mode === "timeout" ? "globalTimeout: 3_000," : ""}
       testMatch: "fixture.spec.ts",
       workers: 1,
     };
@@ -362,6 +362,7 @@ test.each([
       path.join(root, "fixture.spec.ts"),
       `
     import { expect, test } from "@playwright/test";
+    test("completed evidence", () => expect(1).toBe(1));
     test("fixture browser evidence", async () => {
       ${mode === "timeout" ? "await new Promise(() => {});" : "expect(1).toBe(2);"}
     });
@@ -380,6 +381,7 @@ test.each([
     });
     const result = done.results[0]!;
     const stdout = await readFile(path.join(root, result.stdoutPath!), "utf8");
+    expect(stdout).toContain("completed evidence");
     const stderr = await readFile(path.join(root, result.stderrPath!), "utf8");
     expect({
       status: result.status,

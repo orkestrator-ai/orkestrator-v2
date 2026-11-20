@@ -1108,27 +1108,29 @@ describe("WorkflowResultService", () => {
       const command = "mise run test";
       const digests = disputedCheckDigests(new Set([command]));
       const identity = { ...scope, resultKey, provider: "codex" as const };
-      await service.prepare(
+      const slot =
         kind === "consolidated-review"
-          ? {
+          ? ({
               ...identity,
               kind,
-              context: { type: kind, sources: {}, disputedCheckDigests: digests },
-            }
+              context: { type: kind, sources: {} },
+            } as const)
           : graphOutputSlotInput(
               identity,
               { name: "report" },
               graphBuiltInType("review-report@1")!,
-              {
-                disputedCheckDigests: digests,
-              },
-            ),
-      );
+            );
+      await service.prepare(slot);
+      const context = slot.context!;
+      if (context.type !== "consolidated-review" && context.type !== "graph-output")
+        throw new Error("Expected a review result slot");
       const corrected = structuredClone(emptyReport);
       const invalid = structuredClone(corrected);
       invalid.reviewScope.commandsRun = [
         { command, result: "failed", summary: "Re-run during consolidation: one failed." },
       ];
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject({ ok: true });
+      await service.prepare({ ...slot, context: { ...context, disputedCheckDigests: digests } });
       const rejection = {
         ok: false,
         error: {

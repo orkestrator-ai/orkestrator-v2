@@ -116,7 +116,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     ],
     profiles: ["builder"],
     backend:
-      "createMultiReviewPreparationPrompt (multi-review-prompts.ts); reviewValidationDiscoveryPrompt (review-validation-prompts.ts) in the Build Pipeline",
+      "createMultiReviewPreparationPrompt (review/multi-review-prompts.ts); reviewValidationDiscoveryPrompt (review/validation-prompts.ts) in the Build Pipeline",
     textMaxBytes: 16 * KIB,
   },
   {
@@ -156,7 +156,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     ],
     profiles: ["reviewer", "observer"],
     backend:
-      "createPackagedMultiReviewerPrompt (multi-review-prompts.ts); reviewPrompt (build-pipeline-prompts.ts) in the Build Pipeline",
+      "createPackagedMultiReviewerPrompt (review/multi-review-prompts.ts); reviewPrompt (build-pipeline-prompts.ts) in the Build Pipeline",
     textMaxBytes: 32 * KIB,
   },
   {
@@ -193,7 +193,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     // Today's consolidation is a read-only turn that may make targeted reads.
     profiles: ["observer", "reviewer"],
     backend:
-      "createMultiReviewConsolidationPrompt (multi-review-prompts.ts), with buildConsolidationEvidence",
+      "createMultiReviewConsolidationPrompt (review/multi-review-prompts.ts), with buildConsolidationEvidence",
     textMaxBytes: 16 * KIB,
   },
   {

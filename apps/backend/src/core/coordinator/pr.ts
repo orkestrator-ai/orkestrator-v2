@@ -10,7 +10,7 @@ import {
   launchPrAgent,
   launchResolveConflictsAgent,
   MULTI_REVIEW_AUTO_PR_EXISTS_MESSAGE,
-} from "../multi-review-auto-pr.js";
+} from "../review/index.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";
 
 type Dependencies = Pick<RegistryDependencies, "commands">;

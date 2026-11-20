@@ -217,7 +217,7 @@ target), with `MultiReviewInspector.tsx` below:
   is read only for the step using it now (`multiReviewStepSessionAccess`).
 - **Queue position.** A pending reviewer shows "queued · #3 of 7" or
   "starting" from `admissionState` and `queuePosition`
-  (`review-fanout-admission.ts`). They are observations and can trail the
+  (`review/fanout-admission.ts`). They are observations and can trail the
   scheduler by one admission; there is no expected start time.
 - **Findings so far.** `mergeReviewerFindings` lists accepted reports' issues
   plus `report_finding` rows (`reviewer.provisionalFindings`), deduplicated by

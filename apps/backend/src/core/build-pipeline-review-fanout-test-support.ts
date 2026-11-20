@@ -2,7 +2,7 @@
  * Shared fixture for the build pipeline multi-model review suites: a provider
  * whose answers depend on which session asked, and a service wired to it.
  */
-import type { RecordingEfficiencyObserver } from "./multi-review-efficiency.js";
+import type { RecordingEfficiencyObserver } from "./review/efficiency.js";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -19,7 +19,7 @@ import {
   BuildPipelineService,
   type BuildPipelineServiceOptions,
 } from "./build-pipeline-service.js";
-import { ReviewSnapshotChangedError } from "./review-fanout.js";
+import { ReviewSnapshotChangedError } from "./review/fanout.js";
 import { WorkflowResultRollout } from "./workflows/result-rollout.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 import type {

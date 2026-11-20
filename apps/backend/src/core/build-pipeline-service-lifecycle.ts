@@ -102,7 +102,7 @@ import {
   inspectCodeRewind,
   readWorktreeStatus,
 } from "./build-pipeline-code-rewind.js";
-import { probeReviewWorktree } from "./review-worktree-probe.js";
+import { probeReviewWorktree } from "./review/index.js";
 import {
   applyBuildPipelineRestartSelection,
   pipelineRestartSlot,

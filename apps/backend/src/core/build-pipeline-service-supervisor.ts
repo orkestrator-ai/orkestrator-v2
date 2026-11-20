@@ -66,8 +66,8 @@ import {
 import {
   reviewValidationDiscoveryPrompt,
   REVIEW_VALIDATION_PLAN_SCHEMA,
-} from "./review-validation-prompts.js";
-import { validationPreparation } from "./review-validation-service.js";
+} from "./review/validation-prompts.js";
+import { validationPreparation } from "./review/validation-service.js";
 import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,
@@ -103,7 +103,15 @@ import {
   BuildPipelineReviewFanout,
   type ReviewFanoutStep,
 } from "./build-pipeline-review-fanout.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import {
+  MultiReviewProgressTracker,
+  parseReviewPackageReference,
+  parseReviewPreparationResult,
+  probeReviewWorktree,
+  probeReviewWorktreeOnce,
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+  type ReviewWorktreeProbeOptions,
+} from "./review/index.js";
 import {
   recordPipelineSessionUsage,
   deferPipelineSessionUsage,
@@ -114,16 +122,6 @@ import {
   readTranscriptProgressSample,
   type ProgressSample,
 } from "./transcript-progress.js";
-import {
-  probeReviewWorktree,
-  probeReviewWorktreeOnce,
-  type ReviewWorktreeProbeOptions,
-} from "./review-worktree-probe.js";
-import {
-  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-  parseReviewPreparationResult,
-} from "./review-prompts.js";
-import { parseReviewPackageReference } from "./review-package.js";
 import type { BuildPipelineContext } from "./build-pipeline-context.js";
 import type { BuildPipelineAgents } from "./build-pipeline-service-agents.js";
 import type { BuildPipelineRecovery } from "./build-pipeline-service-recovery.js";

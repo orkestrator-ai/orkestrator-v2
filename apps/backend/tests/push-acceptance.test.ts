@@ -27,8 +27,8 @@ import {
 } from "./push-acceptance-fixture.js";
 
 import { HttpBridgeProvider } from "../src/core/http-bridge/provider.js";
-import { readReviewerTranscript } from "../src/core/multi-review-reviewer-transcript.js";
-import { SharedReviewTranscripts } from "../src/core/multi-review-transcript-push.js";
+import { readReviewerTranscript } from "../src/core/review/reviewer-transcript.js";
+import { SharedReviewTranscripts } from "../src/core/review/transcript-push.js";
 import { ReviewTranscriptPushTopic } from "../src/core/push/review-transcript-push-topic.js";
 import { formatReviewTranscriptPushKey } from "@orkestrator/protocol/push-events";
 

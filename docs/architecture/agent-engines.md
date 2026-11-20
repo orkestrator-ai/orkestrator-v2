@@ -1879,7 +1879,7 @@ the first submission the normal path:
   which field. `jsonSchemaField` reports the contract walker's issues instead:
   each path, the fields allowed beside an unknown one, and the type received.
 - The consolidation prompt carries a complete shape template of the report
-  (`review-consolidation-example.ts`), checked against the contract by its
+  (`review/consolidation-example.ts`), checked against the contract by its
   test, and names the misses that most often cost a resend.
 - A pipeline session's result turn runs its Claude CLI with fine-grained tool
   streaming off (`CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=0`,
@@ -1894,7 +1894,7 @@ the first submission the normal path:
 - A consolidation over the result tool does not retype the reviewers' scope
   lists. Its slot context carries `scope`, the union of the reviewers'
   `filesReviewed`, `filesSkipped`, `filesLeftUncommitted`, `commandsRun` and
-  `commandsNotRun` (`review-consolidation-scope.ts`). The model writes the full
+  `commandsNotRun` (`review/consolidation-scope.ts`). The model writes the full
   scope when the union exceeds a report list limit or 32 KiB, or contains text
   the result tool would reject. Otherwise initial and repair prompts and the
   published per-slot tool schema omit the five lists. The backend still accepts
@@ -2107,7 +2107,7 @@ confident in it, and says the submitted report must still list every one.
 
 - **Who may call it.** The tool is listed only on a `review-report` attempt the
   backend is following as a running tool-mode reviewer of a review in
-  progress (`ProvisionalFindingInbox`, `review-provisional-findings.ts`, fed
+  progress (`ProvisionalFindingInbox`, `review/provisional-findings.ts`, fed
   from every Multi Review save and load). Each call must name the capability's
   own result key, and the slot must still be `open`: a finished, superseded or
   cancelled attempt is refused (`attempt_closed`), and so is any attempt the

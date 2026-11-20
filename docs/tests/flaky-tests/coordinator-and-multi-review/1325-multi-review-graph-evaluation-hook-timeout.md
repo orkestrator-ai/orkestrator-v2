@@ -3,7 +3,7 @@
 - **ID:** 1325
 - **Status:** resolved
 - **Test:** an unnamed test whose `beforeEach`/`afterEach` hook timed out
-- **File:** `apps/backend/src/core/multi-review-graph-evaluation.test.ts`
+- **File:** `apps/backend/src/core/review/graph-evaluation.test.ts`
 
 On 2026-10-31, `mise run test` on the Settings layout branch (renderer-only
 change; nothing under `apps/backend` changed) reported `(fail) (unnamed)
@@ -62,7 +62,7 @@ changed, and the aggregate remains failed.
 
 ## Resolution (2026-11-15)
 
-- **Class:** default test budget (A). `src/core/multi-review-graph-evaluation.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses. The timed-out hook is one of its two `beforeAll` fixtures (a real `git init`, SQLite storage and the corpus runs); the later `Graph artifact is missing` error in one recurrence is the cascade of tests running against a fixture whose hook was cut off.
+- **Class:** default test budget (A). `src/core/review/graph-evaluation.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses. The timed-out hook is one of its two `beforeAll` fixtures (a real `git init`, SQLite storage and the corpus runs); the later `Graph artifact is missing` error in one recurrence is the cascade of tests running against a fixture whose hook was cut off.
 - **Root cause:** the recorded failure was Bun's former 5 s default per-test/hook budget expiring while the host was loaded; the owner passes alone in a few seconds and nothing it asserts depends on elapsed time.
 - **Fix:** none in this file. It now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets the default per-test and hook budget to 60 s as a hang watchdog.
 - **Reproduced:** no. Under contention with the old budget forced (`mise run test:logged -- --name a1325 -- bun scripts/test-under-contention.ts --core <n> --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-graph-evaluation.test.ts --timeout=5000`) the owner passed (14.9 s), so six burners on one core did not recreate the aggregate's load.

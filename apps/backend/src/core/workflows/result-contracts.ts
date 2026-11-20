@@ -31,25 +31,23 @@ import {
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import {
-  REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
-  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
-  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-  REVIEW_PR_RESULT_JSON_SCHEMA,
   parseAddressFindingsResult,
   parsePrResult,
   parseReviewPreparationResult,
-} from "../review-prompts.js";
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review-validation-prompts.js";
-import {
+  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_CONSOLIDATION_PROVENANCE,
   REVIEW_CONSOLIDATION_WORDING,
-} from "../review-consolidation-provenance.js";
+  REVIEW_PR_RESULT_JSON_SCHEMA,
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+  REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA,
+} from "../review/index.js";
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "../review/validation-prompts.js";
 import {
   CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA,
   CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA,
   completeConsolidatedReview,
   inspectScopeListText,
-} from "../review-consolidation-scope.js";
+} from "../review/consolidation-scope.js";
 import { inspectFinalText } from "./result-final-text.js";
 import { graphOutputKindDefinition } from "./result-graph-output.js";
 import { graphTemplateKindDefinition } from "./result-graph-template.js";

@@ -278,13 +278,16 @@ new.
     `mcp-management/`, `public-api/`, `http-bridge/`, `web-annotations/`,
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
-    `agent-accounts/`, `workflows/`) are reached only through their
+    `agent-accounts/`, `workflows/`, `review/`) are reached only through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
     runtime import cycle (the storage layer importing a domain's store layout,
     for example, `agent-accounts/store.ts`, or `workflows/result-final-text.ts`,
-    whose one importer the result contracts reach), or would pull in the graph that the leaf module exists to keep
+    whose one importer the result contracts reach, or
+    `review/validation-prompts.ts` and `review/consolidation-scope.ts`, which
+    `build-pipeline-prompts.ts` imports and `review/multi-review-prompts.ts`
+    reaches), or would pull in the graph that the leaf module exists to keep
     out (`plan-usage/cache.ts`, which the bridge provider imports without the
     plan reader's credential modules), name that file as an exception in the
     `apps/backend/src/**` pattern and say so in the `index.ts` header. Where
@@ -295,8 +298,10 @@ new.
     seven `git/` modules such as `git/pr-monitor-runtime.ts`, which reaches
     the PR monitor commands, and fourteen `coordinator/` modules such as
     `coordinator/review-actions.ts`, the command handlers the command registry
-    installs, and four `agent-accounts/` modules such as
-    `agent-accounts/accounts.ts`, which reaches the command layer),
+    installs, four `agent-accounts/` modules such as
+    `agent-accounts/accounts.ts`, which reaches the command layer, and six
+    `review/` modules such as `review/service.ts` and `review/fanout.ts`,
+    which reach the graph runtime and the workflow result contracts),
     leave it out of `index.ts` and name it as an exception. The same
     goes for a domain's test support imported by a test-only entrypoint whose
     file name the test globs do not match (`previews/test-support.ts`, which

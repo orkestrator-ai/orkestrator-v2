@@ -39,7 +39,7 @@ import { readProviderStatus, type BuildPipelineProvider } from "./build-pipeline
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { GraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import type { Environment } from "./models.js";
-import type { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import type { MultiReviewProgressTracker } from "./review/index.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent-execution-policy.js";
 import type { RecordUsageTurnsInput } from "./usage-history-store.js";
 import type { PersistedSuborkBatch, PersistedSuborkBranch } from "./storage-suborks.js";

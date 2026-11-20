@@ -16,15 +16,15 @@ import {
   AGENT_BRANCH_LOG_OWNER,
 } from "./agent-branch-types.js";
 import type { BuildPipelineProvider } from "./build-pipeline-provider.js";
-import type { EfficiencyEvent } from "./multi-review-efficiency.js";
 import {
   DEFAULT_STALL_ABANDON_MS,
   DEFAULT_STALL_WARNING_MS,
+  type EfficiencyEvent,
   noProgressElapsedMs,
-  stalledMinutes,
+  type PassTranscriptReader,
   type ProgressObservation,
-} from "./multi-review-progress.js";
-import type { PassTranscriptReader } from "./review-fanout-transcript.js";
+  stalledMinutes,
+} from "./review/index.js";
 import {
   hasProgressSnapshot,
   readTranscriptProgressSample,

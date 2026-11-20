@@ -1,4 +1,4 @@
-import { multiReviewAddressFindingsIdentity } from "./multi-review-address-findings-identity.js";
+import { multiReviewAddressFindingsIdentity } from "./review/index.js";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { pipelineWorkers } from "@orkestrator/protocol/pipeline-worker-mail";
 import { buildPipelineCriteriaReport } from "./build-pipeline-criteria-report.js";

@@ -73,7 +73,7 @@ import { createDockerContainer } from "./commands-containers.js";
 import { imageWithoutStagedInputsMessage } from "./commands-error-text.js";
 import { imageDeclaresStagedInputs } from "@orkestrator/protocol/image-manifest";
 import { assertEnvironmentBudgetEnforceable } from "./container-resources.js";
-import { stopEnvironmentReviewValidation } from "./review-validation-service.js";
+import { stopEnvironmentReviewValidation } from "./review/validation-service.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
 import { parseDockerPsSize } from "./docker-cleanup-inventory.js";

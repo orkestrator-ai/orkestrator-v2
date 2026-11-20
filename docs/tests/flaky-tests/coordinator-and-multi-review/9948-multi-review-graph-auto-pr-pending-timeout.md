@@ -6,7 +6,7 @@
 
 Test: `no saved revision of the run reads as an end the bespoke engine never
 shows > a clean report under auto-PR is pending its pull request from the save
-that holds it` in `apps/backend/src/core/multi-review-graph-surfaces.test.ts`.
+that holds it` in `apps/backend/src/core/review/graph-surfaces.test.ts`.
 
 Observed on `webkit-scroll-fix-d230c4f38350-r1` at `c20f90936`, base
 `498b68766f5c9f357a3a86782406d1e9e0977559`. The branch changes no backend
@@ -34,7 +34,7 @@ directory.
 
 ## Resolution (2026-11-15)
 
-- **Class:** default test budget (A). `src/core/multi-review-graph-surfaces.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses. Its waits use the harness's controlled clock (`time.jump`).
+- **Class:** default test budget (A). `src/core/review/graph-surfaces.test.ts` sets no budget of its own: no `setDefaultTimeout`, no third-argument or hook timeout, and no wall-clock wait deadline in the test or the helpers it uses. Its waits use the harness's controlled clock (`time.jump`).
 - **Root cause:** the recorded failure was Bun's former 5 s default per-test/hook budget expiring while the host was loaded; the owner passes alone in a few seconds and nothing it asserts depends on elapsed time.
 - **Fix:** none in this file. It now runs under `tests/default-test-timeout.ts` (imported by `tests/setup.ts` and `tests/setup-node.ts`), which sets the default per-test and hook budget to 60 s as a hang watchdog.
 - **Reproduced:** no. Under contention with the old budget forced (`mise run test:logged -- --name a9948 -- bun scripts/test-under-contention.ts --core <n> --burners 6 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/multi-review-graph-surfaces.test.ts --timeout=5000`) the owner passed (27.3 s), so six burners on one core did not recreate the aggregate's load.

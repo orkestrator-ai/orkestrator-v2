@@ -35,7 +35,7 @@ import {
 import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 import { StoreCorruptError, type StorageDatabase } from "../storage-database.js";
 import { openBackendDatabase } from "../storage-stores.js";
-import { isConsolidationScopeLists } from "../review-consolidation-scope.js";
+import { isConsolidationScopeLists } from "../review/consolidation-scope.js";
 import { validateWorkflowResult } from "./result-contracts.js";
 import {
   WORKFLOW_RESULT_MAX_ISSUES as WORKFLOW_RESULT_ISSUE_LIMIT,

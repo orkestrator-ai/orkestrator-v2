@@ -214,7 +214,7 @@ import {
   REVIEW_WORKTREE_FINGERPRINT_TIMEOUT_MS,
   REVIEW_WORKTREE_PROBE_TIMEOUT_MS,
   reviewWorktreeProbeArgs,
-} from "./review-worktree-fingerprint.js";
+} from "./review/index.js";
 import { KeyedTrailingFlight } from "./keyed-trailing-flight.js";
 import type { TerminalHistory } from "./terminal-history.js";
 import {

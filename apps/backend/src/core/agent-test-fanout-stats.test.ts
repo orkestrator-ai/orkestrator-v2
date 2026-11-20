@@ -18,8 +18,8 @@ import {
   recordEfficiency,
   RecordingEfficiencyObserver,
   type MultiReviewEfficiencyObserver,
-} from "./multi-review-efficiency.js";
-import { runBoundedTasks } from "./review-fanout-scheduler.js";
+} from "./review/efficiency.js";
+import { runBoundedTasks } from "./review/fanout-scheduler.js";
 
 const ISOLATED = { ORKESTRATOR_AGENT_TEST_ISOLATED: "1" } as NodeJS.ProcessEnv;
 const directories: string[] = [];

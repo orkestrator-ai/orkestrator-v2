@@ -37,7 +37,7 @@ import { commandWorkspaceProbe } from "./workspace-read-only-guard.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
+import { cleanupRetiredLoopedReviews } from "./review/retired-looped-review-cleanup.js";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
 import {
   bugReportReaperEnvironments,
@@ -115,7 +115,11 @@ import {
   recordCentralUsageReadings,
 } from "./agent-accounts/index.js";
 import { readSessionAgentAccount } from "./agent-accounts/session.js";
-import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
+import {
+  combineProvisionalFindingSinks,
+  multiReviewNativeAddressFindingsOptions,
+  type ProvisionalFindingSink,
+} from "./review/index.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -185,10 +189,6 @@ import {
   WEB_ANNOTATION_GC_EVERY_TICKS,
   type WebAnnotationToolHost,
 } from "./web-annotations/index.js";
-import {
-  combineProvisionalFindingSinks,
-  type ProvisionalFindingSink,
-} from "./review-provisional-findings.js";
 import {
   createMcpRuntimeProbe,
   mcpRolloutLoader,
@@ -269,8 +269,8 @@ import {
 import {
   dispatchMultiReviewAddressFindingsPrompt,
   recoverMissingMultiReviewAddressFindingsSession,
-} from "./multi-review-address-findings-dispatch.js";
-import { MultiReviewService } from "./multi-review-service.js";
+} from "./review/address-findings-dispatch.js";
+import { MultiReviewService } from "./review/service.js";
 import { FeaturePlanningService } from "./features/index.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import { AgentRegistry } from "./agent-registry.js";
@@ -305,10 +305,7 @@ import { GraphRunAttention } from "./graph-run-attention.js";
 import { BuildPipelineActivity } from "./build-pipeline-activity.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { GraphRunLaunchService } from "./graph-run-launch.js";
-import {
-  configuredMultiReviewEngine,
-  MultiReviewGraphEngine,
-} from "./multi-review-graph-engine.js";
+import { configuredMultiReviewEngine, MultiReviewGraphEngine } from "./review/graph-engine.js";
 import { launchSettingsTiers } from "./control-shared-actions.js";
 import { STRUCTURED_OUTPUT_PROVIDER_VALUES } from "@orkestrator/protocol/workflow-results";
 import {

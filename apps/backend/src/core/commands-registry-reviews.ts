@@ -1,7 +1,7 @@
 import {
   controlReviewValidation,
   readReviewValidationOutput,
-} from "./review-validation-service.js";
+} from "./review/validation-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type { RendererWorkflowRecord } from "./commands-terminal.js";
 import {

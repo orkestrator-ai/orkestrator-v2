@@ -341,7 +341,7 @@ test("a paused copy refuses file writers and new workers before deleting the sou
       ).rejects.toThrow("being moved");
     const { control } = await import("./public-api/exec-control.js");
     await expect(control(environment, context, { action: "start" })).rejects.toThrow("being moved");
-    const { controlReviewValidation } = await import("./review-validation-service.js");
+    const { controlReviewValidation } = await import("./review/validation-service.js");
     await expect(controlReviewValidation(environment.id, {}, "start", context)).rejects.toThrow(
       "being moved",
     );

@@ -38,18 +38,18 @@ Analysed 2026-11-11 against `main` at `498b68766`.
 
 **Investigation.**
 - The scale case is `e2e/agent-testing/multi-review-live.spec.ts:921` onward. It is Claude and Codex only by type, not just by data: `pick` takes `"claude" | "codex"` (`:935`), reviewers alternate `claude`/`codex` (`:966`), and the per-platform sampling loop names only those two (`:987`). Only `CLAUDE_MODEL` and `CODEX_MODEL` overrides exist (`:73`-`:74`). Extending it is more than "adding their model picks", as the file says: the type, the alternation and the sampling loop all need to change.
-- The protocol accepts any platform as a reviewer (`isAgentPlatform` in `packages/protocol/src/review-fanout.ts:334`), and `REVIEW_FANOUT_MAX_REVIEWERS` is still 32 (`review-fanout.ts:34`). The caps are unchanged (`apps/backend/src/core/review-fanout-scheduler.ts:18`-`:24`).
-- **The harness cannot observe the per-provider cap.** `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` bounds concurrent *operations* within one runner pass (`review-fanout-scheduler.ts:22`, tasks built at `review-fanout.ts:857`), not reviewers whose turn is running on the provider. The spec counts reviewers with `status === "running"` per platform (`multi-review-live.spec.ts:987`) and never asserts it. Only the admission figure is asserted (`:1022`). The 2026-10-25 "at most 4 per platform were running" follows from 8 reviewers alternating over two platforms (4 each), not from the cap. A 32-reviewer panel can have 16 Claude turns running at once without breaking any cap. The scheduler's real figures (`BoundedTaskStats.maxActiveByGroup`, `review-fanout-scheduler.ts:58`) only go to `this.record` (`review-fanout.ts:891`), which is `NOOP_EFFICIENCY_OBSERVER` in production (`multi-review-efficiency.ts:118`).
+- The protocol accepts any platform as a reviewer (`isAgentPlatform` in `packages/protocol/src/review-fanout.ts:334`), and `REVIEW_FANOUT_MAX_REVIEWERS` is still 32 (`review-fanout.ts:34`). The caps are unchanged (`apps/backend/src/core/review/fanout-scheduler.ts:18`-`:24`).
+- **The harness cannot observe the per-provider cap.** `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` bounds concurrent *operations* within one runner pass (`review/fanout-scheduler.ts:22`, `advanceReviewers` passes tasks to `runBoundedTasks` in [review/fanout.ts](../../../apps/backend/src/core/review/fanout.ts)). The spec counts reviewers with `status === "running"` per platform (`multi-review-live.spec.ts:987`) and never asserts it. Only the admission figure is asserted (`:1022`). The 2026-10-25 "at most 4 per platform were running" follows from 8 reviewers alternating over two platforms (4 each). A 32-reviewer panel can have 16 Claude turns running at once without breaking any cap. In the same `advanceReviewers` method, `this.branches.record` emits each `BoundedTaskStats.maxActiveByGroup` peak as `reviewer.provider_concurrency`. Recording is a no-op without an efficiency observer (`review/efficiency.ts`).
 - RSS is sampled for the backend pid only (`multi-review-live.spec.ts:955`). Bridges and agent CLIs are separate processes, so peak RSS excludes the processes that grow with panel size.
 - `dev:test` accepts `--credential-source` for all six platforms (`apps/desktop/scripts/dev/arguments.ts:28`, `:98`; `AGENT_PLATFORMS` in `packages/protocol/src/agent-platforms.ts:2`). The blocker is which credentials a given host holds, not the tooling. The pinned versions are Grok 1.0.67, Pi 1.4.0 and OpenCode 1.19.4 (`docker/Dockerfile:195`-`:197`). The earlier runs were on macOS; this Linux host was not checked for credentials (research only).
 
 **Done 2026-11-11.** Built with the recommended option of each decision below:
 - The scale case takes `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_PLATFORMS` (any of the six, round-robin; default `claude,codex`) and `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_<PLATFORM>_MODEL`, in `e2e/agent-testing/multi-review-scale-support.ts`.
-- Each fan-out pass records its admission peak and its per-platform peak as `reviewer.admission_concurrency` and `reviewer.provider_concurrency` efficiency events (`review-fanout.ts`). An isolated agent-test backend records their maxima to a file when the spec arms it (`agent-test-fanout-stats.ts`, gated like the dispatch hold), and the case asserts them against the caps.
+- Each fan-out pass records its admission peak and its per-platform peak as `reviewer.admission_concurrency` and `reviewer.provider_concurrency` efficiency events (`review/fanout.ts`). An isolated agent-test backend records their maxima to a file when the spec arms it (`agent-test-fanout-stats.ts`, gated like the dispatch hold), and the case asserts them against the caps.
 - The case samples the RSS of the profile backend's whole process tree as well as the backend's own (read-only `ps`, from the backend pid `dev:status` reports).
 - `ORKESTRATOR_AGENT_TEST_MULTI_REVIEW_SCALE_FAKE_MODEL=1` runs the case with no login, every slot on the profile's real Pi bridge against the scripted loopback model `auto-pipeline-fake-model.ts`. It passed at 8, 16 and 32 reviewers; see [Scale harness on a loopback model](#scale-harness-on-a-loopback-model-2026-11-11).
 
-Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-stats.test.ts` (4), `review-fanout-efficiency.test.ts` (the new events) and the three fake-model runs. The signed-in mixed run at 8 to 32 reviewers stays on the manual-test checklist (7568, 0027 task 1); its command there now names the platform variable.
+Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-stats.test.ts` (4), `review/fanout-efficiency.test.ts` (the new events) and the three fake-model runs. The signed-in mixed run at 8 to 32 reviewers stays on the manual-test checklist (7568, 0027 task 1); its command there now names the platform variable.
 
 **Decisions.**
 
@@ -87,7 +87,7 @@ Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-st
 
 **Context.** Deferred until measured. The file lists the design questions: garbage collection, reference counting, crash recovery, quotas, macOS and Windows, container and local parity.
 
-**Investigation.** No such store exists in `apps/backend/src/core`. The 2026-10-25 benchmark (`multi-review-large-evidence.bench.test.ts`) measured 511 ms per generation for 512 MiB on pinned Bun 1.4.4, with RSS growth under 20 MiB. Container hashing was not measured.
+**Investigation.** No such store exists in `apps/backend/src/core`. The 2026-10-25 benchmark (`review/large-evidence.bench.test.ts`) measured 511 ms per generation for 512 MiB on pinned Bun 1.4.4, with RSS growth under 20 MiB. Container hashing was not measured.
 
 **Decisions.**
 
@@ -123,9 +123,9 @@ Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-st
 
 **Context.** Deferred until real workflows exceed the budget. Merges must keep every source ID.
 
-**Investigation.** `CONSOLIDATION_MAX_EVIDENCE_BYTES` is unchanged (`apps/backend/src/core/review-consolidation-evidence.ts:38`, error class at `:119`). Nothing counted how often the error fires: no metric or counter referenced it outside that module and the prompt builder (`multi-review-prompts.ts:109`). So the trigger the item waits for could not be observed.
+**Investigation.** `CONSOLIDATION_MAX_EVIDENCE_BYTES` is unchanged (`apps/backend/src/core/review/consolidation-evidence.ts:38`, error class at `:119`). Nothing counted how often the error fires: no metric or counter referenced it outside that module and the prompt builder (`review/multi-review-prompts.ts:109`). So the trigger the item waits for could not be observed.
 
-**Counted since 2026-11-11.** Every `ConsolidationBudgetError` now first writes one essential log entry, `review` `consolidation.budget-exceeded`, with counts only: `reviewers`, `sourceFindings`, `compactBytes` and `maxBytes` (`buildConsolidationEvidence`; vocabulary in `packages/protocol/src/log-vocabulary/review.ts`, listed in [logging.md](../../architecture/logging.md)). Evidence: "an overflow is logged as counts only…" in `review-consolidation-evidence.test.ts`. This item reopens when that entry appears in a real essential log. The recommended "recurring metrics" counter became a log entry instead; see [Assumptions and decisions](#assumptions-and-decisions), item 15.
+**Counted since 2026-11-11.** Every `ConsolidationBudgetError` now first writes one essential log entry, `review` `consolidation.budget-exceeded`, with counts only: `reviewers`, `sourceFindings`, `compactBytes` and `maxBytes` (`buildConsolidationEvidence`; vocabulary in `packages/protocol/src/log-vocabulary/review.ts`, listed in [logging.md](../../architecture/logging.md)). Evidence: "an overflow is logged as counts only…" in `review/consolidation-evidence.test.ts`. This item reopens when that entry appears in a real essential log. The recommended "recurring metrics" counter became a log entry instead; see [Assumptions and decisions](#assumptions-and-decisions), item 15.
 
 **Decisions.**
 
@@ -188,7 +188,7 @@ Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-st
 
 **Done 2026-11-11.** Assumption 13 no longer says the recovery bugs ship. Following the first decision, the ten invariants, the load-bearing guarantees, the commit, fence and evidence rules, at-most-once dispatch and the error-scope table moved to [review preparation, "Fan-out supervision"](../../architecture/review-preparation.md#fan-out-supervision); 0223's pointer to them followed (0223 was retired on 2026-11-14). The file itself stays while tasks 3 to 5 are deferred: deleting it would lose their reopen conditions.
 
-**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review-fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to 0223 (retired 2026-11-14). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) was still present then, with `stableJitterMs` moved out to `multi-review-scheduling.ts:157` as stated; 0048 task 13 removed it on 2026-11-10.
+**Investigation.** Assumption 13's cons ("two known recovery bugs ship until 0112 is done") and the Related entry for 0112 are stale. Both bugs were fixed in #1288 (`71abfcfb`), `review/fanout-interleaving.test.ts` has no `test.todo` left, and 0112 is marked Finished in the folder index. Its residual work moved to 0223 (retired 2026-11-14). `WorkflowDueScheduler` (`apps/backend/src/core/multi-review-scheduler.ts:52`, 229 lines) was still present then, with `stableJitterMs` moved out to `review/scheduling.ts:157` as stated; 0048 task 13 removed it on 2026-11-10.
 
 **Decisions.**
 
@@ -218,10 +218,10 @@ platforms than Claude and Codex.
 ## Current state
 
 - **One runner, two owners.** `ReviewFanoutRunner`
-  (`apps/backend/src/core/review-fanout.ts`) drives standalone Multi Review
-  (`multi-review-service.ts`) and Build Pipeline review stages
+  (`apps/backend/src/core/review/fanout.ts`) drives standalone Multi Review
+  (`review/service.ts`) and Build Pipeline review stages
   (`build-pipeline-review-fanout.ts`). Each unsettled reviewer is one task in
-  `runBoundedTasks` (`review-fanout-scheduler.ts`). The limits are
+  `runBoundedTasks` (`review/fanout-scheduler.ts`). The limits are
   `DEFAULT_REVIEW_ADMISSION_CONCURRENCY` 4,
   `DEFAULT_REVIEW_OBSERVATION_CONCURRENCY` 8 and
   `DEFAULT_REVIEW_PROVIDER_CONCURRENCY` 4, clamped to
@@ -230,17 +230,17 @@ platforms than Claude and Codex.
 - **Commits.** Safety transitions commit immediately. Observations go through
   `ReviewFanoutRunner.stageObservation` and flush once per pass. All runner
   writes are serialised. The scheduler's queue is projected onto pending
-  reviewers as `admissionState` / `queuePosition` (`review-fanout-admission.ts`);
+  reviewers as `admissionState` / `queuePosition` (`review/fanout-admission.ts`);
   those are observations too, and cost no write of their own.
 - **Evidence.** `ReviewEvidencePermits` and `evidenceGenerationKey`
-  (`review-evidence-permits.ts`) give two verifications per evidence
+  (`review/evidence-permits.ts`) give two verifications per evidence
   generation: one before fan-out admission and one before consolidation
   (`MultiReviewService.assertReviewPackageIntegrity`). Permits live in memory
   only and expire after `DEFAULT_EVIDENCE_PERMIT_MAX_AGE_MS` (30 minutes).
-- **Transcript reads.** `PassTranscriptReader` (`review-fanout-transcript.ts`)
+- **Transcript reads.** `PassTranscriptReader` (`review/fanout-transcript.ts`)
   reads at most once per progress-probe interval
   (`MultiReviewProgressTracker.nextProbeAt`). The reviewer tab reads through
-  `multi-review-reviewer-transcript.ts`: `MAX_REVIEWER_TRANSCRIPT_MESSAGES` is
+  `review/reviewer-transcript.ts`: `MAX_REVIEWER_TRANSCRIPT_MESSAGES` is
   500, `MAX_REVIEWER_TRANSCRIPT_BYTES` is 2 MiB, the source token is scoped to
   the session, and unchanged polls answer `unchanged`. Every read goes through
   the provider's `transcriptSnapshot`; a provider without it fails the read
@@ -257,15 +257,15 @@ platforms than Claude and Codex.
   (`adaptiveScheduling: false`) and the `evidencePermits` gate are gone.
 - **Payload budgets.** `packages/protocol/src/structured-review/budgets.ts`
   (`STRUCTURED_REVIEW_MAX_*`) bounds each report. `CONSOLIDATION_MAX_EVIDENCE_BYTES`
-  (640 KiB, `review-consolidation-evidence.ts`) bounds consolidation input, and
+  (640 KiB, `review/consolidation-evidence.ts`) bounds consolidation input, and
   overflow throws `ConsolidationBudgetError` before dispatch, after one
   counts-only essential log entry (`consolidation.budget-exceeded`).
-- **Measurement.** `multi-review-efficiency.bench.test.ts` with
-  `multi-review-efficiency-fixtures.ts` covers 1, 2, 4, 8, 16 and 32 reviewers,
+- **Measurement.** `review/efficiency.bench.test.ts` with
+  `review/efficiency-fixtures.ts` covers 1, 2, 4, 8, 16 and 32 reviewers,
   an 8-reviewer panel over 50 retained workflows, a mixed-provider panel and a
   slow reviewer. `evidence.verify` reports the package's bytes plus every
   referenced validation artifact's (`bytes`) and the artifact count (`count`).
-  The opt-in `multi-review-large-evidence.bench.test.ts` times real hashing of
+  The opt-in `review/large-evidence.bench.test.ts` times real hashing of
   hundreds of MiB. Production passes no observer, so `recordEfficiency` events
   go to `NOOP_EFFICIENCY_OBSERVER`; that is deliberate (see
   [Assumptions and decisions](#assumptions-and-decisions)).
@@ -339,7 +339,7 @@ All done on 2026-10-25; evidence in
      `ORKESTRATOR_KEYED_SCHEDULING_ROLLBACK`. Their removal is owned by
      [0048-recurring-work-qualification.md](../transcripts-and-observation/0048-recurring-work-qualification.md)
      ("Code: after soak"). `stableJitterMs`, which the keyed path still
-     uses, moved to `multi-review-scheduling.ts` on 2026-10-25, so that
+     uses, moved to `review/scheduling.ts` on 2026-10-25, so that
      removal is now self-contained.
    - ~~Drop the rollback wording from `reviewFanoutConcurrency`~~: done.
 2. ~~**Retire the reviewer-transcript compatibility fallback.**~~ Done. The
@@ -351,11 +351,11 @@ All done on 2026-10-25; evidence in
    (2026-10-18) for stage turns and consolidation; this file was not updated
    then. The reminder shipped on 2026-10-25.
 4. ~~**Add seeded, CI-sized randomised interleaving tests.**~~ Done:
-   `review-fanout-interleaving.test.ts`.
+   `review/fanout-interleaving.test.ts`.
 5. ~~**Close the measurement gaps.**~~ Done.
    - ~~Referenced artifact bytes are not reported~~: `evidence.verify` now
      carries them for both owners.
-   - ~~No opt-in large-evidence case~~: `multi-review-large-evidence.bench.test.ts`.
+   - ~~No opt-in large-evidence case~~: `review/large-evidence.bench.test.ts`.
    - ~~No production sink for `recordEfficiency`~~: decided against; rollout
      observation is no longer a gate (Open questions).
 
@@ -427,8 +427,8 @@ Fixed in this change:
   same fault. Now the runner keeps the reviewer's state, Multi Review drops
   the dead provider so the next pass restarts the bridge, and the idle-poll
   bound still ends a bridge that never returns
-  (`review-fanout-unreachable.test.ts`, and "reconnects a reviewer whose
-  bridge became unreachable" in `multi-review-service-part-3.test.ts`).
+  (`review/fanout-unreachable.test.ts`, and "reconnects a reviewer whose
+  bridge became unreachable" in `review/service-part-3.test.ts`).
 - **The coordinator Multi Review agent-browser case** asserted text the flow
   graph no longer renders.
 
@@ -530,11 +530,11 @@ Fixed:
 
 Tests:
 
-- `review-fanout-restart-continuation.test.ts` covers continuing in the same
+- `review/fanout-restart-continuation.test.ts` covers continuing in the same
   session, the second restart failing closed, a report submitted before the
   restart, retiring the tool slot, and an ordinary failure still failing.
   Three of the five fail without the runner change.
-- `multi-review-service-part-2.test.ts` covers the preparation reminder and its bound,
+- `review/service-part-2.test.ts` covers the preparation reminder and its bound,
   a consolidation continued after a restart, a second restart failing the
   step, and one reminder before a pasted-report failure. All four fail without
   the service change.
@@ -649,7 +649,7 @@ Tests:
   bridge resumes the rollout), and fails closed on a second restart. Both
   cases fail without the bridge change; the step case also fails without the
   step unreachable fix.
-- `multi-review-service-part-2.test.ts`: a step whose bridge became unreachable
+- `review/service-part-2.test.ts`: a step whose bridge became unreachable
   keeps its request and continues once the reconnected bridge reports the
   interruption; one whose bridge never comes back fails after the bound. Both
   fail without the fix.
@@ -706,7 +706,7 @@ Code:
 - **Transcript fallback (item 2).** `readReviewerTranscript` throws when the
   provider has no `transcriptSnapshot` instead of reading `messages`. Tests
   whose fakes lacked the surface now give it one; five progress and usage
-  tests in the `multi-review-service-part-*.test.ts` files opt out because they exercise the
+  tests in the `review/service-part-*.test.ts` files opt out because they exercise the
   messages-based progress path, which is a separate surface.
 - **Build Pipeline reminders (item 3).** At the structured-result deadline
   (`awaitStructuredResult`) a tool-mode stage turn gets one reminder in the
@@ -719,8 +719,8 @@ Code:
   `prepareConsolidationFollowUp` with its continuation. Neither applies to
   structured-output turns, to a slot that already holds a result
   (`received`) or one whose correction budget is spent (`needs-attention`).
-- **Interleaving tests (item 4).** `review-fanout-interleaving.test.ts`
-  with `review-fanout-interleaving-support.ts`: a seeded PRNG (mulberry32)
+- **Interleaving tests (item 4).** `review/fanout-interleaving.test.ts`
+  with `review/fanout-interleaving-support.ts`: a seeded PRNG (mulberry32)
   holds every host commit and provider call (`save`, `provider()`,
   `createSession`, `send`, status reads, `structured`, `messages`,
   `abandonSession`, result-slot calls) pending and settles them in a
@@ -743,7 +743,7 @@ Code:
   29 s. It found three runner bugs. One is fixed here: accepting a
   tool-transport report swallowed a `*FenceError` from `consumeResult` as a
   "Deferred result consumption", so a fenced pass resolved instead of
-  rejecting (`review-fanout.ts` now rethrows; the case fails without it). The
+  rejecting (`review/fanout.ts` now rethrows; the case fails without it). The
   other two (a recovered `dispatching` request treated as sent without asking
   the provider, and a takeover mid-continuation counting the old restart
   twice) changed dispatch-recovery semantics, stayed as `test.todo` cases, and
@@ -765,11 +765,11 @@ Tests:
   still fails without one; a tool-mode consolidation gets one and either
   delivers or fails after its idle bound. The four tool-mode cases fail with
   the reminder calls disabled.
-- `review-validation-worker.lifecycle.test.ts`: local and container verification report
+- `review/validation-worker.lifecycle.test.ts`: local and container verification report
   artifact counts and bytes; a container artifact over 32 MiB is refused.
-  `review-validation-service.test.ts` checks the real runner's report
+  `review/validation-service.test.ts` checks the real runner's report
   (`artifacts: 2, artifactBytes: 8`).
-- `multi-review-reviewer-transcript.test.ts`: a provider without the surface
+- `review/reviewer-transcript.test.ts`: a provider without the surface
   fails the read without calling `messages`; joined history paging is still
   covered through a snapshot-only provider.
 - `recurring-baseline.test.ts`: the multi-review rollback scans every 15 s,
@@ -778,7 +778,7 @@ Tests:
 - `build-pipeline-artifact-turns.test.ts`: both consolidation turns (the
   original and the reminder) get and settle their own artifact grant.
 
-Large evidence, real hashing (`multi-review-large-evidence.bench.test.ts`,
+Large evidence, real hashing (`review/large-evidence.bench.test.ts`,
 local internal SSD):
 
 | Bun | Evidence | Artifacts | Verify per pass | Per generation (2 passes) | Peak RSS growth |

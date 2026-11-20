@@ -45,7 +45,7 @@ import { agentBranchSettled, type AgentBranchPollGate } from "./agent-branch-typ
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import { createGraphRunTranscriptCapture } from "./graph-run-transcripts.js";
 import type { AppConfig, Environment } from "./models.js";
-import { MultiReviewProgressTracker } from "./multi-review-progress.js";
+import { MultiReviewProgressTracker } from "./review/index.js";
 import {
   SuborkBranchHost,
   SuborkFenceError,

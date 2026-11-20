@@ -46,7 +46,7 @@ import type {
 import type { AgentBranchParsedResult } from "./agent-branch-types.js";
 import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 import { graphAgentResultKey } from "./graph-agent-state.js";
-import { reviewConsolidationProvenanceFields } from "./review-consolidation-provenance.js";
+import { reviewConsolidationProvenanceFields } from "./review/index.js";
 import {
   graphOutputCombinedSchema,
   graphOutputPortIssues,

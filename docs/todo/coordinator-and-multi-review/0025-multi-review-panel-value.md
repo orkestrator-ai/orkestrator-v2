@@ -19,7 +19,7 @@ Analysed 2026-11-11 against `main` at `498b68766`.
 
 **Context.** The README says to update or remove an item in the change that finishes it. Struck-through items with evidence are allowed and are how this file records them.
 
-**Investigation.** All still present at HEAD. `consolidationOverlap` is at `apps/backend/src/core/review-fanout-provenance.ts:204` and is stored at `apps/backend/src/core/multi-review-service.ts:4327`, with `build-pipeline-review-fanout.ts:88` importing it for the Consolidation session. `cacheReadTokens` is kept as a running maximum in `refreshReviewerUsage` (`apps/backend/src/core/review-fanout.ts:1563`, max at `:1587`). The nine corpus cases are at `apps/backend/src/core/multi-review-evaluation-corpus.ts:177` to `:525`, and `late-unique` now expects `with-fixes` (`:286`). The only commit touching this code since the check is `b9522a87` (#1176), which is the one that built it.
+**Investigation.** All still present at HEAD. `consolidationOverlap` is at `apps/backend/src/core/review/fanout-provenance.ts:204` and is stored at `apps/backend/src/core/review/service.ts:4327`, with `build-pipeline-review-fanout.ts:88` importing it for the Consolidation session. `cacheReadTokens` is kept as a running maximum in `refreshReviewerUsage` (`apps/backend/src/core/review/fanout.ts:1563`, max at `:1587`). The nine corpus cases are at `apps/backend/src/core/review/evaluation-corpus.ts:177` to `:525`, and `late-unique` now expects `with-fixes` (`:286`). The only commit touching this code since the check is `b9522a87` (#1176), which is the one that built it.
 
 **Decisions.**
 
@@ -37,7 +37,7 @@ Analysed 2026-11-11 against `main` at `498b68766`.
 
 **Split 2026-11-10.** The billed rounds (more samples, the four untested cases, Claude and Codex) are on the manual-test checklist (7568, 0025 task 2). What stayed here was the Codex driver the first decision below recommends; the sample and reopen decisions below are the rules that run follows.
 
-**Done 2026-11-11.** `bun scripts/multi-review-evaluation.ts live --provider codex` runs each consolidation through `codex exec --json --output-schema <file> --output-last-message <file>` (`scripts/multi-review-evaluation-drivers.ts`): ephemeral, read-only sandbox, approvals off, user config and rules ignored, and the session-title runner's tool-free feature profile (`session-title-runners.ts`), on the CLI's default model unless `--model` names one. Answers and `run.json` go under `output/multi-review-evaluation/live/codex/`. Evidence: `apps/backend/src/core/multi-review-evaluation-drivers.test.ts` (against fake Claude and Codex CLIs: the arguments, schema and answer files, usage from the last `turn.completed`, failures without content, and a CLI that ignores SIGTERM or exits without reading its prompt). Before the first call, `live --provider codex` runs a credential-free argument check (`consolidationArgsProblem`): the exact argument list with `--help` in place of the prompt, which the CLI's parser rejects on an unknown or misplaced flag without starting a turn. Run 2026-11-11 against the host's codex-cli 0.162.1 (the pin is 0.167.0) with an empty `CODEX_HOME`: accepted, with and without `--model`. It does not check `--config` values or `--disable` feature names, which the CLI reads only when a turn starts, nor the output shape. No consolidation turn has run on the real Codex CLI: that needs a signed-in Codex home, which this work did not touch; the first billed Codex round in 7568 checks the rest. A relative `--bin` or `CODEX_CLI_PATH`/`CLAUDE_CLI_PATH` is resolved against the script's working directory, since each turn runs in its own temporary directory.
+**Done 2026-11-11.** `bun scripts/multi-review-evaluation.ts live --provider codex` runs each consolidation through `codex exec --json --output-schema <file> --output-last-message <file>` (`scripts/multi-review-evaluation-drivers.ts`): ephemeral, read-only sandbox, approvals off, user config and rules ignored, and the session-title runner's tool-free feature profile (`session-title-runners.ts`), on the CLI's default model unless `--model` names one. Answers and `run.json` go under `output/multi-review-evaluation/live/codex/`. Evidence: `apps/backend/src/core/review/evaluation-drivers.test.ts` (against fake Claude and Codex CLIs: the arguments, schema and answer files, usage from the last `turn.completed`, failures without content, and a CLI that ignores SIGTERM or exits without reading its prompt). Before the first call, `live --provider codex` runs a credential-free argument check (`consolidationArgsProblem`): the exact argument list with `--help` in place of the prompt, which the CLI's parser rejects on an unknown or misplaced flag without starting a turn. Run 2026-11-11 against the host's codex-cli 0.162.1 (the pin is 0.167.0) with an empty `CODEX_HOME`: accepted, with and without `--model`. It does not check `--config` values or `--disable` feature names, which the CLI reads only when a turn starts, nor the output shape. No consolidation turn has run on the real Codex CLI: that needs a signed-in Codex home, which this work did not touch; the first billed Codex round in 7568 checks the rest. A relative `--bin` or `CODEX_CLI_PATH`/`CLAUDE_CLI_PATH` is resolved against the script's working directory, since each turn runs in its own temporary directory.
 
 **Context.** Still to do, per the file: at least three samples per prompt, the four untested cases (`clean-panel`, `invalid-and-failed`, `coverage-gaps`, `limit-boundaries`) and one non-Claude model. The "Needs verification" item asks the same question and is answered only for Claude.
 
@@ -71,13 +71,13 @@ Analysed 2026-11-11 against `main` at `498b68766`.
 
 **Split 2026-11-10.** The real Claude and Codex panels are on the manual-test checklist (7568, 0025 task 3). What stayed here was the working-directory check the Investigation names, which reads code only.
 
-**Done 2026-11-11: they share one.** Every reviewer of a Multi Review gets its provider from `MultiReviewService.providerInstance` (`apps/backend/src/core/multi-review-service.ts`), keyed by the workflow and the reviewer's platform and connected to the review environment's bridge for that platform. Build Pipeline reviewers get theirs from `provider(pipeline, agent)` (`build-pipeline-review-fanout.ts`), the pipeline environment's bridge. `ProviderCreateSessionOptions` carries no directory, and each bridge runs every session in its one process-wide workspace (`claudeWorkspaceCwd` in the Claude bridge, the app-server child's `cwd` in the Codex bridge, `workingDirectory` in the Pi bridge). So two same-platform reviewers of one review run in the same directory, and the directory alone does not break the Claude hit. Anything else the CLI puts before the prompt (for Claude Code, a snapshot of `git status`) is the same for reviewers that start on an unchanged worktree, which read-only reviewers do not change; that part is an inference, not a measurement.
+**Done 2026-11-11: they share one.** Every reviewer of a Multi Review gets its provider from `MultiReviewService.providerInstance` (`apps/backend/src/core/review/service.ts`), keyed by the workflow and the reviewer's platform and connected to the review environment's bridge for that platform. Build Pipeline reviewers get theirs from `provider(pipeline, agent)` (`build-pipeline-review-fanout.ts`), the pipeline environment's bridge. `ProviderCreateSessionOptions` carries no directory, and each bridge runs every session in its one process-wide workspace (`claudeWorkspaceCwd` in the Claude bridge, the app-server child's `cwd` in the Codex bridge, `workingDirectory` in the Pi bridge). So two same-platform reviewers of one review run in the same directory, and the directory alone does not break the Claude hit. Anything else the CLI puts before the prompt (for Claude Code, a snapshot of `git status`) is the same for reviewers that start on an unchanged worktree, which read-only reviewers do not change; that part is an inference, not a measurement.
 
 **Problem.** The stable prompt prefix was meant to make reviewers share prompt-cache reads. On Claude the consolidation measurements suggest it cannot, because Claude Code caches only at message boundaries and each reviewer prompt is a single user message. Real reviewer prompts have never been measured, so whether the prefix saves anything is unknown.
 
 **Context.** The working directory also breaks the hit, because the CLI puts it in context before the prompt. The measurement uses `cacheReadTokens` and `panel`'s `laterCacheReadShareDelta`. The counter is cumulative and includes each reviewer's own tool-loop hits.
 
-**Investigation.** `reviewerPanelSection` (`apps/backend/src/core/multi-review-prompts.ts:59`) is still the only per-reviewer text and is the last section. `laterCacheReadShareDelta` is computed in `summarizePanelValue` (`apps/backend/src/core/multi-review-evaluation.ts:365`, field at `:260`). The Claude bridge passes a `systemPrompt` preset (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:393`) and no explicit cache control, so moving the shared review instructions into a separately cached block would mean either the system-prompt append or a multi-block user message. Codex's consolidation prefix (about 340 tokens) is below OpenAI's 1,024-token cache minimum, but a real reviewer prompt should be well above it. Whether the reviewers of one review share a working directory needs checking before the run, since a different directory alone defeats the Claude hit.
+**Investigation.** `reviewerPanelSection` (`apps/backend/src/core/review/multi-review-prompts.ts:59`) is still the only per-reviewer text and is the last section. `laterCacheReadShareDelta` is computed in `summarizePanelValue` (`apps/backend/src/core/review/evaluation.ts:365`, field at `:260`). The Claude bridge passes a `systemPrompt` preset (`bridges/claude-bridge/src/services/session-manager-prompt-query.ts:393`) and no explicit cache control, so moving the shared review instructions into a separately cached block would mean either the system-prompt append or a multi-block user message. Codex's consolidation prefix (about 340 tokens) is below OpenAI's 1,024-token cache minimum, but a real reviewer prompt should be well above it. Whether the reviewers of one review share a working directory needs checking before the run, since a different directory alone defeats the Claude hit.
 
 **Decisions.**
 
@@ -134,7 +134,7 @@ providers, and a cache measurement of real reviewer panels.
 ## Current state
 
 - **Compact consolidation.** `buildConsolidationEvidence`
-  (`apps/backend/src/core/review-consolidation-evidence.ts`) builds
+  (`apps/backend/src/core/review/consolidation-evidence.ts`) builds
   `ReviewConsolidationEvidenceV1`. Scope, validation, test totals, change types
   and risk areas that every reviewer reported identically go under `shared`.
   Everything reviewer-specific stays on the reviewer, and source IDs keep
@@ -144,12 +144,12 @@ providers, and a cache measurement of real reviewer panels.
   it (see below).
 - **Report budgets.** `packages/protocol/src/structured-review/budgets.ts`
   applies where a fan-out or consolidation answer is accepted
-  (`parseStructuredReportResult` in `review-fanout.ts`), not in the base parser,
+  (`parseStructuredReportResult` in `review/fanout.ts`), not in the base parser,
   so stored and other review reports stay readable. The provider JSON schema
   carries no `maxLength` / `maxItems`, because several providers reject or
   strip them; the repair feedback states the limits instead.
 - **Stable prompt prefix.** `reviewerPanelSection`
-  (`multi-review-prompts.ts`) is the first per-reviewer text in the packaged,
+  (`review/multi-review-prompts.ts`) is the first per-reviewer text in the packaged,
   live-worktree and Build Pipeline reviewer prompts. Only the reviewer's lens
   (and, in the Build Pipeline, the reviewer's own instructions) follow it
   (`reviewerPanelTail`), so the invariant prefix is byte-identical across a
@@ -161,11 +161,11 @@ providers, and a cache measurement of real reviewer panels.
   `MultiReviewLaunchDialog.tsx` shows the warning in a polite live region
   without blocking or changing the launch.
 - **Telemetry.** Both owners record `launch.duplicate_reviewers`
-  (`multi-review-service.ts`, `build-pipeline-review-fanout.ts`), so
+  (`review/service.ts`, `build-pipeline-review-fanout.ts`), so
   coordinator and MCP launches are counted too. In production this goes to the
   no-op observer.
 - **Overlap metric (done).** `consolidationOverlap`
-  (`apps/backend/src/core/review-fanout-provenance.ts`) turns the cited
+  (`apps/backend/src/core/review/fanout-provenance.ts`) turns the cited
   `reviewSourceIds` into `ReviewPanelOverlapV1`
   (`packages/protocol/src/review-fanout.ts`). It holds counts and configured
   positions only. Per run it counts reviewers, source findings, cited source
@@ -179,14 +179,14 @@ providers, and a cache measurement of real reviewer panels.
   `PipelineSession.reviewOverlap` on the Consolidation session, because
   `reviewFanout` is deleted when addressing starts.
 - **Cache-read capture (done).** `ReviewerRecord.cacheReadTokens` is recorded
-  beside `tokenCount` by `refreshReviewerUsage` (`review-fanout.ts`) and reset
+  beside `tokenCount` by `refreshReviewerUsage` (`review/fanout.ts`) and reset
   with it. It is the largest value seen, never lowered. Build Pipeline reviewer
   sessions mirror it as `PipelineSession.cacheReadTokens` once the reviewer
   settles or is stopped.
-- **Evaluation corpus (done).** `multi-review-evaluation-corpus.ts` has nine
+- **Evaluation corpus (done).** `review/evaluation-corpus.ts` has nine
   synthetic cases. Each has reviewer records, a reference consolidation and,
   where relevant, answers that acceptance must reject.
-  `multi-review-evaluation.ts` provides `evaluationConsolidationPrompt`
+  `review/evaluation.ts` provides `evaluationConsolidationPrompt`
   (`compact`, or `full`: the `d680ccdb` evidence inside today's prompt),
   `referenceConsolidation`, `scoreConsolidation` and `summarizePanelValue`.
   `scripts/multi-review-evaluation.ts` (`prompts`, `score`, `panel`, and
@@ -211,9 +211,9 @@ providers, and a cache measurement of real reviewer panels.
   a panel without lenses gets the same prompt as before. Overlap counts and
   provenance are unchanged. Lenses are opt-in: with none set, every reviewer
   and consolidation prompt is byte-identical to before. Evidence:
-  `review-lens.test.ts`, `multi-review-prompts.test.ts` (byte-identical prefix
-  across a panel with different lenses), `review-consolidation-evidence.test.ts`,
-  `multi-review-evaluation.test.ts` ("reviewer lenses over the corpus": every
+  `review-lens.test.ts`, `review/multi-review-prompts.test.ts` (byte-identical prefix
+  across a panel with different lenses), `review/consolidation-evidence.test.ts`,
+  `review/evaluation.test.ts` ("reviewer lenses over the corpus": every
   corpus case with a lens on every reviewer keeps every source ID, names each
   reviewer's focus and still scores its reference perfectly). The durable
   description is in
@@ -226,10 +226,10 @@ providers, and a cache measurement of real reviewer panels.
 ### Code
 
 1. ~~**Content-free overlap metric.**~~ Done. Evidence:
-   `multi-review-evaluation.test.ts` ("panel overlap": position attribution of
+   `review/evaluation.test.ts` ("panel overlap": position attribution of
    a late unique finding, configured positions with failed reviewers, invalid
    and dropped citations, no text in the output). Persistence is covered by
-   `multi-review-service-part-2.test.ts` ("derives all provenance labels from cited
+   `review/service-part-2.test.ts` ("derives all provenance labels from cited
    source IDs") and `build-pipeline-review-fanout.test.ts` (Consolidation
    session `reviewOverlap`). The validator is covered by
    `packages/protocol/src/review-fanout.test.ts`.
@@ -240,13 +240,13 @@ providers, and a cache measurement of real reviewer panels.
    `coverage-gaps` (cross-kind IDs rejected), `limit-boundaries` (multi-byte
    text at exactly 16 KiB, a 1024-byte path and 100 issues accepted; one byte
    or item more rejected; a 101-finding consolidation accepted), and
-   `frame-injection`. Evidence: `multi-review-evaluation.test.ts`, 43 tests.
+   `frame-injection`. Evidence: `review/evaluation.test.ts`, 43 tests.
    Every reference answer is accepted and scores perfectly. Merges, splits,
    severity loss, dropped sources, invented findings, invalid citations and
    wrong verdicts are each detected. Both prompt variants keep one intact
    frame and every source ID.
 3. ~~**Per-reviewer cache-read capture.**~~ Done. Evidence:
-   `review-fanout-efficiency.test.ts` (recorded beside `tokenCount`, never
+   `review/fanout-efficiency.test.ts` (recorded beside `tokenCount`, never
    lowered, absent when not reported), `build-pipeline-review-fanout.test.ts`
    (mirrored to reviewer sessions), and `review-fanout.test.ts` (validator).
 
@@ -466,7 +466,7 @@ different default panel) are in 7568 (0025 task 6). Lenses shipped on
    - Pros: an evidence-only A/B; the frame boundary holds.
    - Cons: this is not byte-for-byte what shipped before #833.
    - Production keeps no flag. The variant exists only in
-     `multi-review-evaluation.ts`.
+     `review/evaluation.ts`.
 7. **A bounded live round, not the full qualification.** The first pass ran no
    live calls, to avoid spending provider quota unasked. After Multi Review,
    the coordinator asked for a small bounded run with the host's existing

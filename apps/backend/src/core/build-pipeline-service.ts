@@ -25,7 +25,7 @@
  * the graph, recovery opening the next stage, goes through the
  * `BuildPipelineStageDispatch` port wired here.
  */
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import type { ProvisionalFindingSink } from "./review/index.js";
 import type { CompletedBuildAttempt } from "./build-pipeline-completed-build.js";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type {

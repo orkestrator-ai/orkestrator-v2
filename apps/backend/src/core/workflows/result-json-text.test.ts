@@ -7,7 +7,7 @@ import { callToolInProcess } from "../mcp-in-process.js";
 import {
   CONSOLIDATED_REVIEW_EXAMPLE,
   CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS,
-} from "../review-consolidation-example.js";
+} from "../review/consolidation-example.js";
 import { decodeJsonTextResult, findJsonTextFault } from "./result-json-text.js";
 import { WorkflowResultService } from "./result-service.js";
 import { registerWorkflowResultBrokerTools, registerWorkflowResultTools } from "./result-tools.js";

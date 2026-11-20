@@ -120,7 +120,7 @@ describe("a stage turn without a workflow-result capability", () => {
   });
 });
 
-import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review-validation-prompts.js";
+import { REVIEW_VALIDATION_PLAN_SCHEMA } from "./review/validation-prompts.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 
 test("preparation mail retains its validation plan and commands run before review", async () => {

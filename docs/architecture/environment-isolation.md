@@ -87,7 +87,7 @@ Every process Orkestrator starts in a local environment's worktree:
 - the agent bridges (Claude, Codex, OpenCode, Cursor, Grok, Pi), so an
   agent's shell commands inherit them;
 - review validation: the worker that runs a review's planned commands
-  (`review-validation-service.ts`), so a suite started during review
+  (`review/validation-service.ts`), so a suite started during review
   preparation uses the environment's own services.
 
 A coordinator conversation (which works in the project checkout) and a bug

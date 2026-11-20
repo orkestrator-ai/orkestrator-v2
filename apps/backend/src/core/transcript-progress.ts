@@ -2,7 +2,7 @@
  * Cheap, content-scoped transcript samples for workflow progress supervision.
  *
  * Supervisors decide "slow" versus "wedged" by whether a session's transcript
- * is still moving (see `multi-review-progress.ts`). They used to answer that
+ * is still moving (see `review/progress.ts`). They used to answer that
  * with `provider.messages({ limit: 1 })`, which an HTTP bridge serves by
  * transferring the whole legacy `/messages` body and slicing it afterwards —
  * megabytes per probe just to hash one tail entry.

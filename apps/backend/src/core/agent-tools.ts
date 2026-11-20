@@ -65,7 +65,7 @@ import {
   registerAutoPipelineTool,
   type AutoPipelineToolHost,
 } from "./agent-tools-auto-pipeline.js";
-import type { ProvisionalFindingSink } from "./review-provisional-findings.js";
+import type { ProvisionalFindingSink } from "./review/index.js";
 import {
   registerSuborkRefusalTool,
   registerSuborkTools,

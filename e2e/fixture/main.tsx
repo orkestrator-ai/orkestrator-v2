@@ -47,6 +47,8 @@ import { NativeMessageSpacingFixture } from "./NativeMessageSpacingFixture";
 import { ChangeTrackingFixture, installChangeTrackingFixture } from "./changeTracking";
 import { StructuredReviewLayoutFixture } from "./StructuredReviewLayoutFixture";
 import { AnnotationDestinationLayoutFixture } from "./AnnotationDestinationLayoutFixture";
+import { PointAndTalk } from "../../apps/web/src/components/chat/interactions/composer/PointAndTalk";
+import { RichInteractionReviewFixture } from "./RichInteractionReviewFixture";
 import { ClaudeInteractionsFixture } from "./ClaudeInteractionsFixture";
 import { RememberRulePanelFixture } from "./RememberRulePanelFixture";
 import {
@@ -2366,6 +2368,14 @@ function fixtureForPath() {
   if (window.location.pathname === "/native-message-spacing")
     return <NativeMessageSpacingFixture />;
   if (window.location.pathname === "/monaco-runtime") return <MonacoRuntimeFixture />;
+  if (window.location.pathname === "/rich-interaction-speech")
+    return (
+      <main className="mx-auto max-w-lg p-4">
+        <PointAndTalk environmentId="fixture" logicalSessionKey="env-fixture:talk" targets={[]} />
+      </main>
+    );
+  if (window.location.pathname === "/rich-interaction-review")
+    return <RichInteractionReviewFixture />;
   if (window.location.pathname === "/claude-interactions") return <ClaudeInteractionsFixture />;
   if (window.location.pathname === "/remember-rule-panel") return <RememberRulePanelFixture />;
   if (window.location.pathname === "/focus-hairline") {

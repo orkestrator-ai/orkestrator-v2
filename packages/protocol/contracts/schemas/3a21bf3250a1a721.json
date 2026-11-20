@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:3a21bf3250a1a721d9a4fb871e4a421759cb0076a15ba42bba14c5244777e289",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "artifactId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "expectedRevision": {
+          "maximum": 9007199254740990,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "maxLength": 100,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "logicalSessionKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "selectedRevision": {
+          "anyOf": [
+            {
+              "maximum": 9007199254740990,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "userLabel": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["artifactId", "environmentId", "expectedRevision", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

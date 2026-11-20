@@ -1,4 +1,8 @@
 import {
+  clearArtifactResultCandidates,
+  publishArtifactResultCandidate,
+} from "@/lib/chat/artifact-result-candidates";
+import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -348,6 +352,11 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
     const bounds: ArtifactHostBounds = rect
       ? { x: rect.left, y: rect.top, width: rect.width, height: rect.height }
       : { x: 0, y: 0, width: 1, height: 1 };
+    let active = true;
+    const clearCandidates = () => {
+      active = false;
+      clearArtifactResultCandidates(session.artifactId, session.revision, session.generation);
+    };
     const unsubscribe = api.onEvent((event: ArtifactHostEvent) => {
       if (event.hostId !== hostId) return;
       switch (event.type) {
@@ -374,19 +383,33 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
             linkRequest: { href: event.href, hostname: event.hostname, label: event.label },
           });
           break;
+        case "result-candidate":
+          if (!active) break;
+          publishArtifactResultCandidate({
+            artifactId: session.artifactId,
+            revision: session.revision,
+            generation: session.generation,
+            candidateId: event.candidateId,
+            value: event.value,
+          });
+          break;
         case "navigation-blocked":
+          clearCandidates();
           report({
             phase: "navigation-blocked",
             message: "The interactive document tried to navigate and was stopped.",
           });
           break;
         case "crashed":
+          clearCandidates();
           report({ phase: "crashed", message: "The interactive view crashed." });
           break;
         case "unresponsive":
+          clearCandidates();
           report({ phase: "unresponsive", message: "The interactive view stopped responding." });
           break;
         case "closed":
+          clearCandidates();
           if (event.reason !== "requested")
             report({ phase: "crashed", message: "The interactive view was closed." });
           break;
@@ -411,6 +434,7 @@ function LiveHostSurface({ active }: { active: LiveHostSession }) {
       );
     return () => {
       unsubscribe();
+      clearCandidates();
       void api.close(hostId).catch(() => {});
     };
     // Theme changes are posted separately (below); reopening would reload the document.

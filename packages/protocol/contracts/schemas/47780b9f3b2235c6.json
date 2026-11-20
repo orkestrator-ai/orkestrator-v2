@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:47780b9f3b2235c670d533e7ac4294522cdca2fb4985d5bfd831e584c9df6f78",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "receiptId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "receiptId"],
+      "type": "object"
+    }
+  }
+}

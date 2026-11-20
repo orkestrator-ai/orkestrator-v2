@@ -271,6 +271,7 @@ const ARTIFACT_HOST_EVENT_TYPES = new Set<ArtifactHostEvent["type"]>([
   "ready",
   "size",
   "link-request",
+  "result-candidate",
   "navigation-blocked",
   "crashed",
   "unresponsive",
@@ -764,6 +765,16 @@ export function createOrkestratorElectronApi(rawIpcRenderer: IpcRendererLike) {
         return ipcRenderer.invoke("orkestrator:browser-preview:open-devtools", tabId);
       },
       capture: createBrowserPreviewCaptureApi(ipcRenderer),
+      trace: {
+        start: (tabId: string, label: string) =>
+          ipcRenderer.invoke("orkestrator:browser-preview:trace-start", tabId, label),
+        status: (tabId: string) =>
+          ipcRenderer.invoke("orkestrator:browser-preview:trace-status", tabId),
+        mark: (tabId: string, observation: string) =>
+          ipcRenderer.invoke("orkestrator:browser-preview:trace-mark", tabId, observation),
+        stop: (tabId: string, retain?: boolean) =>
+          ipcRenderer.invoke("orkestrator:browser-preview:trace-stop", tabId, retain),
+      },
       destroy(tabId: string): Promise<void> {
         return ipcRenderer.invoke("orkestrator:browser-preview:destroy", tabId);
       },

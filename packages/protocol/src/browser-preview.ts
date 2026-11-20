@@ -603,3 +603,46 @@ export interface BrowserPreviewCaptureDiagnostics {
    */
   anchorResolutions: Record<string, number>;
 }
+
+// ---------------------------------------------------------------------------
+// Demonstration recording (feature 20 of the interactive sessions plan)
+
+/** One recorded semantic step. Field values are never recorded. */
+export interface BrowserPreviewTraceStep {
+  stepId: string;
+  offsetMs: number;
+  action: "click" | "input" | "select" | "submit" | "navigate" | "keypress" | "mark";
+  target?: { role?: string; label?: string; text?: string };
+  /** Path only: never a query or fragment. */
+  route?: string;
+  documentSegment: number;
+  valueOmitted?: boolean;
+  userObservation?: string;
+  wrongHere?: boolean;
+}
+
+export interface BrowserPreviewTraceStatus {
+  recording: boolean;
+  steps: number;
+  elapsedMs: number;
+  stopReason: BrowserPreviewTraceResult["stopReason"] | null;
+  origin?: string;
+}
+
+export interface BrowserPreviewTraceResult {
+  service: { label: string; origin: string };
+  startedAt: string;
+  durationMs: number;
+  steps: BrowserPreviewTraceStep[];
+  gaps: Array<{ afterStepId?: string; reason: string }>;
+  stopReason:
+    "user" | "step-limit" | "time-limit" | "byte-limit" | "preview-closed" | "left-service";
+}
+
+/** `window.orkestrator.browserPreview.trace` (desktop only). */
+export interface BrowserPreviewTraceApi {
+  start(tabId: string, label: string): Promise<BrowserPreviewTraceStatus>;
+  status(tabId: string): Promise<BrowserPreviewTraceStatus>;
+  mark(tabId: string, observation: string): Promise<BrowserPreviewTraceStatus>;
+  stop(tabId: string, retain?: boolean): Promise<BrowserPreviewTraceResult>;
+}

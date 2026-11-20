@@ -4,6 +4,7 @@ import { AGENT_AUTO_PIPELINE_TOOL_NAMES } from "@orkestrator/protocol/auto-pipel
 import { KEY_INFORMATION_TOOL_NAMES } from "@orkestrator/protocol/build-pipeline-key-information";
 import { AGENT_MAIL_TOOL_NAMES } from "@orkestrator/protocol/agent-mail";
 import { ARTIFACT_TOOL_NAMES } from "@orkestrator/protocol/transcript-artifacts";
+import { RICH_INTERACTION_TOOL_NAMES } from "@orkestrator/protocol/rich-interaction-tools";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -703,6 +704,7 @@ describe("Codex app-server configuration", () => {
       ...[
         ...AGENT_MAIL_TOOL_NAMES,
         ...ARTIFACT_TOOL_NAMES,
+        ...RICH_INTERACTION_TOOL_NAMES,
         ...AGENT_GOAL_TOOL_NAMES,
         ...AGENT_SUBORK_TOOL_NAMES,
         ...AGENT_AUTO_PIPELINE_TOOL_NAMES,

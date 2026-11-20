@@ -24,6 +24,12 @@ function api() {
   return window.orkestrator?.browserPreview;
 }
 
+/** The desktop demonstration recorder (feature 20), or undefined on clients without it. */
+export function browserPreviewTraceApi():
+  import("@orkestrator/protocol/browser-preview").BrowserPreviewTraceApi | undefined {
+  return api()?.trace;
+}
+
 export function hasNativeBrowserPreview(): boolean {
   return Boolean(api());
 }

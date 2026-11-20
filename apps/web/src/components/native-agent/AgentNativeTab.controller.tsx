@@ -74,6 +74,7 @@ import {
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import type { MentionableInputRef } from "@/components/chat/MentionableInput";
 import { NativeAttachmentMenu } from "@/components/chat/NativeAttachmentMenu";
+import { SessionInteractionTools } from "@/components/chat/interactions/composer/SessionInteractionTools";
 import { NativeComposeBar } from "@/components/chat/NativeComposeBar";
 import { NativeChatShell } from "@/components/chat/NativeChatShell";
 import { ToolOutputTailContext } from "@/lib/chat/tool-output-tail";
@@ -4499,6 +4500,14 @@ export function SharedNativeAgentController({
           primaryControls={
             composer ? (
               <>
+                {richTranscriptScope ? (
+                  <RichTranscriptScopeContext.Provider value={richTranscriptScope}>
+                    <SessionInteractionTools
+                      environmentId={data.environmentId}
+                      logicalSessionKey={sessionKey}
+                    />
+                  </RichTranscriptScopeContext.Provider>
+                ) : null}
                 {canSearchFiles ? (
                   <NativeAttachmentMenu
                     disabled={queueEditPending || (sendLocked && !canQueue)}

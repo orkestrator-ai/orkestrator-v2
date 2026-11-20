@@ -23,6 +23,7 @@ import {
   stripInitialPromptAttachmentReferences,
 } from "@orkestrator/protocol/initial-prompt-attachments";
 import { parsePromptTranscriptReferences } from "./transcript-annotations";
+import { parseRichInteractionPrompt } from "@orkestrator/protocol/rich-interactions";
 import { agentMailToolCall } from "./agent-mail-tool-call";
 import { dedupeArtifactPublications } from "./artifact-publication-dedupe";
 
@@ -130,6 +131,21 @@ function parseNativeUserContent(
   cleanContent: string;
   parts: NativeMessagePart[];
 } {
+  // A submitted interaction decision: shown as its receipt, not as the
+  // agent-facing summary text it was delivered as.
+  const interaction = parseRichInteractionPrompt(content);
+  if (interaction) {
+    return {
+      cleanContent: "",
+      parts: [
+        {
+          type: "interaction-receipt" as const,
+          content: interaction.summary,
+          interaction: interaction.envelope,
+        },
+      ],
+    };
+  }
   const parsedReferences = parsePromptTranscriptReferences(content);
   const parsedAttachments = parseNativeAttachmentsFromContent(parsedReferences.cleanPrompt);
   const markedReferences = extractMarkedAttachmentReferences(parsedAttachments.cleanContent);
@@ -204,6 +220,7 @@ export function normalizeClaudePart(part: ClaudeMessagePart): NativeMessagePart 
   switch (part.type) {
     case "text":
     case "transcript-reference":
+    case "interaction-receipt":
     case "async-question":
     case "thinking":
     case "file":
@@ -269,6 +286,7 @@ function groupTaskParts(
     if (
       part.type === "text" ||
       part.type === "transcript-reference" ||
+      part.type === "interaction-receipt" ||
       part.type === "async-question" ||
       part.type === "file" ||
       part.type === "artifact"
@@ -499,6 +517,7 @@ export function messageHasVisibleContent(message: NativeMessage): boolean {
         return part.asyncQuestion.questions.length > 0;
       // A published artifact always renders a card (at least its summary).
       case "artifact":
+      case "interaction-receipt":
         return true;
       // Tool results are rendered inline with their invocation, never on their
       // own, so a message holding only results is still an empty block.
@@ -1892,6 +1911,7 @@ function isTextSectionPart(part: NativeMessagePart): boolean {
   return (
     part.type === "text" ||
     part.type === "transcript-reference" ||
+    part.type === "interaction-receipt" ||
     part.type === "async-question" ||
     part.type === "file" ||
     part.type === "artifact"

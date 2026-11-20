@@ -62,10 +62,26 @@ function evidenceOutputs(receipt: StoredReceipt): Array<{ sha256: string; byteLe
   }
 }
 
+export interface PublicationListOptions {
+  afterSequence?: unknown;
+  beforeSequence?: number | undefined;
+  limit?: unknown;
+  newestFirst?: boolean | undefined;
+  artifactId?: string | undefined;
+  revision?: number | undefined;
+}
+
 export class ArtifactUiReads {
   private readonly mermaidCache = new Map<string, MermaidRenderResponse>();
   private readonly mermaidInFlight = new Map<string, Promise<MermaidRenderResponse>>();
-  private readonly liveSessions = new Map<string, string>();
+  private readonly liveSessions = new Map<
+    string,
+    ArtifactConversationScope & {
+      artifactId: string;
+      revision: number;
+      expiresAt: string;
+    }
+  >();
 
   constructor(
     private readonly ctx: ArtifactServiceContext,
@@ -242,7 +258,7 @@ export class ArtifactUiReads {
 
   listPublications(
     scope: ArtifactConversationScope,
-    options: { afterSequence?: unknown; limit?: unknown },
+    options: PublicationListOptions,
   ): { publications: ArtifactPublicationView[]; nextSequence: number | null } {
     const after =
       typeof options.afterSequence === "number" && Number.isSafeInteger(options.afterSequence)
@@ -263,16 +279,31 @@ export class ArtifactUiReads {
         artifactError("storage_unavailable", "The publication ledger is unavailable"),
       );
     }
-    const all = records
-      .list("publication", { owner: scope.logicalSessionKey })
+    let candidates: StoredPublication[];
+    if (options.artifactId !== undefined && options.revision !== undefined) {
+      const id = records.publicationKey(options.artifactId, options.revision);
+      const exact = id ? records.get("publication", id) : null;
+      candidates = exact ? [exact] : [];
+    } else {
+      candidates = records.list("publication", { owner: scope.logicalSessionKey });
+    }
+    const all = candidates
       .filter(
         (publication) =>
           publication.owner.backendId === this.ctx.backendId() &&
           publication.owner.environmentId === scope.environmentId &&
           publication.owner.conversationKey === scope.logicalSessionKey &&
-          publication.conversationSequence > after,
+          publication.conversationSequence > after &&
+          (options.beforeSequence === undefined ||
+            publication.conversationSequence < options.beforeSequence) &&
+          (options.artifactId === undefined || publication.artifactId === options.artifactId) &&
+          (options.revision === undefined || publication.revision === options.revision),
       )
-      .sort((a, b) => a.conversationSequence - b.conversationSequence);
+      .sort((a, b) =>
+        options.newestFirst
+          ? b.conversationSequence - a.conversationSequence
+          : a.conversationSequence - b.conversationSequence,
+      );
     const page = all.slice(0, limit);
     const publications: ArtifactPublicationView[] = [];
     for (const publication of page) {
@@ -517,7 +548,13 @@ export class ArtifactUiReads {
       },
     });
     generation = minted.generation;
-    this.liveSessions.set(minted.generation, revision.artifactId);
+    this.liveSessions.set(minted.generation, {
+      environmentId,
+      logicalSessionKey: publication.owner.conversationKey,
+      artifactId: revision.artifactId,
+      revision: revision.revision,
+      expiresAt: minted.expiresAt,
+    });
     if (this.liveSessions.size > 256) {
       const oldest = this.liveSessions.keys().next().value;
       if (oldest !== undefined) this.liveSessions.delete(oldest);
@@ -534,6 +571,23 @@ export class ArtifactUiReads {
     };
   }
 
+  hasLiveGeneration(
+    scope: ArtifactConversationScope,
+    artifactId: string,
+    revision: number,
+    generation: string,
+  ): boolean {
+    const active = this.liveSessions.get(generation);
+    return Boolean(
+      active &&
+      active.environmentId === scope.environmentId &&
+      active.logicalSessionKey === scope.logicalSessionKey &&
+      active.artifactId === artifactId &&
+      active.revision === revision &&
+      Date.parse(active.expiresAt) > Date.now(),
+    );
+  }
+
   closeLiveSession(generation: unknown): void {
     if (typeof generation !== "string" || generation.length > 256) return;
     this.liveSessions.delete(generation);
@@ -542,8 +596,11 @@ export class ArtifactUiReads {
 
   /** Revoke every live capability for the given artifacts (environment deletion). */
   revokeArtifacts(artifactIds: Iterable<string>): void {
-    for (const artifactId of artifactIds)
-      this.ctx.runtime.contentServer?.revokeArtifact(artifactId);
+    const ids = new Set(artifactIds);
+    for (const [generation, active] of Array.from(this.liveSessions)) {
+      if (ids.has(active.artifactId)) this.closeLiveSession(generation);
+    }
+    for (const artifactId of ids) this.ctx.runtime.contentServer?.revokeArtifact(artifactId);
   }
 
   /**

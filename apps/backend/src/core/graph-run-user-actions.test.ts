@@ -298,3 +298,34 @@ describe("skip through the service", () => {
     expect(states(run, "after")).toEqual(["1:complete"]);
   });
 });
+
+test("a stale or mismatched workflow card leaves both active stages running", async () => {
+  const h = await harness();
+  h.world.fakes.held.add("build");
+  h.world.fakes.held.add("slow");
+  const launched = await launch(h, failingPlan({ onFailure: "skip" }));
+  const snapshot = await advanceUntil(
+    h,
+    launched.id,
+    (run) => latest(run, "build")?.state === "running" && latest(run, "slow")?.state === "running",
+  );
+  const node = latest(snapshot, "build")!;
+  const expected = {
+    environmentId: "e1",
+    revision: snapshot.revision,
+    nodeId: node.nodeId,
+    activationKey: node.key,
+  };
+  // Pause advances the real run after the card's snapshot.
+  const paused = await h.service.pause(snapshot.id);
+  expect(paused.revision).toBeGreaterThan(snapshot.revision);
+  await expect(h.service.cancel(snapshot.id, expected)).rejects.toThrow("advanced");
+  await expect(h.service.retry(snapshot.id, node.key, expected)).rejects.toThrow("advanced");
+  await expect(
+    h.service.cancel(snapshot.id, { ...expected, revision: paused.revision, nodeId: "slow" }),
+  ).rejects.toThrow("activation");
+  const current = (await h.service.get(snapshot.id))!;
+  expect(current.revision).toBe(paused.revision);
+  expect(latest(current, "build")?.state).toBe("running");
+  expect(latest(current, "slow")?.state).toBe("running");
+});

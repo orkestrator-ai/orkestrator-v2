@@ -25,6 +25,11 @@ import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { int, str, toolInput, withDefault } from "./tool-schema.js";
+import {
+  RICH_INTERACTION_TOOL_INSTRUCTIONS,
+  registerRichInteractionTools,
+} from "./rich-interactions/tools.js";
+import type { RichInteractionService } from "./rich-interactions/service.js";
 import { parseTicketSectionsPatch } from "@orkestrator/protocol/ticket-sections";
 import {
   ticketKindField,
@@ -717,6 +722,7 @@ async function createAgentToolServer(
     keyInformation = null,
     autoPipelineTools = null,
     credentialTools = null,
+    interactionTools = null,
   }: {
     instructions?: boolean;
     graphTools?: GraphActivationToolHost | null;
@@ -725,6 +731,7 @@ async function createAgentToolServer(
     keyInformation?: BuildPipelineKeyInformationHost | null;
     autoPipelineTools?: AutoPipelineToolHost | null;
     credentialTools?: CredentialToolHost | null;
+    interactionTools?: RichInteractionService | null;
   } = {},
 ): Promise<McpServer> {
   const pipelineScope = { environmentId: scope.environmentId, projectId: scope.projectId };
@@ -975,7 +982,8 @@ async function createAgentToolServer(
           ? ARTIFACT_TOOL_INSTRUCTIONS +
             artifactAuthoringNotice(artifactTools.authoringAvailability?.())
           : "") +
-        (credentialCaller ? CREDENTIAL_TOOL_INSTRUCTIONS : ""),
+        (credentialCaller ? CREDENTIAL_TOOL_INSTRUCTIONS : "") +
+        (interactionTools && scope.tabId ? RICH_INTERACTION_TOOL_INSTRUCTIONS : ""),
     },
   );
 
@@ -1032,6 +1040,13 @@ async function createAgentToolServer(
   if (artifactTools) registerTranscriptArtifactTools(server, artifactTools, scope);
 
   if (goalTools) registerGoalTools(server, goalTools, scope);
+
+  // Tab-scoped credentials only: an interaction's decisions go back to the tab that created it.
+  if (interactionTools && scope.tabId)
+    registerRichInteractionTools(server, interactionTools, {
+      environmentId: scope.environmentId,
+      tabId: scope.tabId,
+    });
 
   if (credentialTools && credentialCaller)
     registerCredentialTools(server, credentialTools, credentialCaller);
@@ -1112,6 +1127,7 @@ export class AgentToolsServer {
   private readonly mailRateWindows = new Map<string, number[]>();
   private webAnnotationToolHost: WebAnnotationToolHost | null = null;
   private goalToolHost: GoalToolHost | null = null;
+  private richInteractionService: RichInteractionService | null = null;
   private suborkToolHost: SuborkToolHost | null = null;
   private readonly webAnnotationToolLimiter = new WebAnnotationToolLimiter();
   private provisionalFindingSink: ProvisionalFindingSink | null = null;
@@ -1396,6 +1412,11 @@ export class AgentToolsServer {
   /** Where `report_goal` calls go. The tool is listed only while this is set. */
   setGoalToolHost(host: GoalToolHost | null): void {
     this.goalToolHost = host;
+  }
+
+  /** Where the interaction tools go. They are listed only while this is set, to tab-scoped credentials. */
+  setRichInteractionService(service: RichInteractionService | null): void {
+    this.richInteractionService = service;
   }
 
   /** Where `convert_to_pipeline` calls go. The tool is listed only while this is set. */
@@ -1799,6 +1820,7 @@ export class AgentToolsServer {
                   keyInformation: this.keyInformationHost,
                   autoPipelineTools: this.autoPipelineToolHost,
                   credentialTools: this.credentialToolHost,
+                  interactionTools: this.richInteractionService,
                 },
               ),
         { legacy: "stateless" },

@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1089,
-    "defined": 1089,
+    "commands": 1099,
+    "defined": 1099,
     "untyped": 0,
     "events": 48
   },
@@ -107,6 +107,10 @@
     },
     "pull-requests": {
       "version": 4,
+      "min": 1
+    },
+    "rich-interactions": {
+      "version": 1,
       "min": 1
     },
     "system": {
@@ -7688,6 +7692,96 @@
       "argsDigest": "sha256:a14f6addf3170a3a2b744782f9b10c936584033fbc59585c860cac787d6b4c9f",
       "resultDigest": "sha256:0555c595774d7825555cf7363a3f4214b227e6d0ae2cce9308e35aa18ec6112b"
     },
+    "rich_deliverable_update": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:3a21bf3250a1a721d9a4fb871e4a421759cb0076a15ba42bba14c5244777e289",
+      "resultDigest": "sha256:04fdccc8b74447df5d753a451e2ae98c2485e6efdd828bff085d04c7d94852b1"
+    },
+    "rich_deliverables_list": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:017d75b0933621f760e3fc3e60df26660bc5561abc5e9d6f17e4e2df676c89ed",
+      "resultDigest": "sha256:02b008936785b1457b30dd372a408a55b6cf22504950af8908f87edd02270c3b"
+    },
+    "rich_interaction_clear_draft": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:6c11680f6a89aa43750dcddd45697063c9ce494a5a2c6615ec589fe24bb7a74b",
+      "resultDigest": "sha256:b3b9ca150725b46d7766966fa9b073c4a4e6b9ffce9b40423f54e90fa61c5809"
+    },
+    "rich_interaction_compose": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["idempotencyKey"],
+      "argsDigest": "sha256:a3de888a93af3645789c25354a3c6a1817801014a355d8e8cdf2a8adedc3d986",
+      "resultDigest": "sha256:b942088af35f38db51a1c6abd12e80493e637f12b10138be932978938cfe479c"
+    },
+    "rich_interaction_dismiss": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision"],
+      "argsDigest": "sha256:d683f40435473fefbd0299f16c14aa0b82d9fd5c252309f3537f56246a3e4ced",
+      "resultDigest": "sha256:da4ec13484cc892fe8c00025197f949e90975d9c83d512a706986f433f5dbc1f"
+    },
+    "rich_interaction_get": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:6c11680f6a89aa43750dcddd45697063c9ce494a5a2c6615ec589fe24bb7a74b",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "rich_interaction_retry_delivery": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:47780b9f3b2235c670d533e7ac4294522cdca2fb4985d5bfd831e584c9df6f78",
+      "resultDigest": "sha256:b1fba7b2cc30fe791904cd3c6aafc6f4ecf20572c6b483024ccbda8bfe466bdc"
+    },
+    "rich_interaction_save_draft": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedDraftRevision"],
+      "argsDigest": "sha256:0500e66d25adbcffbb8b64306900ad795bda0b50deb3b4e3e6e4690ba92b3a2d",
+      "resultDigest": "sha256:ab783a0e7ad8e68f16edb3fa87ff30ff41368123ec5f2402cdd5bab0da36cb26"
+    },
+    "rich_interaction_submit": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": false,
+      "critical": ["expectedRevision", "idempotencyKey"],
+      "argsDigest": "sha256:fbe35fc6a02386811d1e032dceaa707b5190588c2ba3492ef859d8765c296603",
+      "resultDigest": "sha256:b1fba7b2cc30fe791904cd3c6aafc6f4ecf20572c6b483024ccbda8bfe466bdc"
+    },
+    "rich_interactions_list": {
+      "domain": "rich-interactions",
+      "since": 1,
+      "access": "workspace",
+      "read": true,
+      "critical": [],
+      "argsDigest": "sha256:1152bd1835510d02d0ed4042562529e57c5746870a937459902db366634093d2",
+      "resultDigest": "sha256:33f43f36c5e3b990e2803f1eca4d99cc213bddcf5e791431966179e5c141016d"
+    },
     "rollback_capability_package": {
       "domain": "capabilities",
       "since": 1,
@@ -9098,7 +9192,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:bfb3f577ecd3deac856d3252fabe073a1327b1fc9fdc9cb9e68532a7adbd9e16",
+      "argsDigest": "sha256:58d917827120d8a4a0fed58f8283a601f06a00586e24c6db8f00e579a5f84184",
       "resultDigest": "sha256:ed79516d7644d35e1c7c819d7ca96bf1845f409dfc10192c303e7dda5ce0f28d"
     },
     "transcript_artifact_open_live_session": {

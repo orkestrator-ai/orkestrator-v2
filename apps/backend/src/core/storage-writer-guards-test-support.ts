@@ -1861,4 +1861,5 @@ export const REPOSITORIES = [
   "AgentAccountsRepository",
   "ScheduledJobsRepository",
   "PermissionRulesRepository",
+  "RichInteractionsRepository",
 ];

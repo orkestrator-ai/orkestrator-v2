@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:017d75b0933621f760e3fc3e60df26660bc5561abc5e9d6f17e4e2df676c89ed",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "environmentId": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+        },
+        "logicalSessionKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": ["environmentId", "logicalSessionKey"],
+      "type": "object"
+    }
+  }
+}

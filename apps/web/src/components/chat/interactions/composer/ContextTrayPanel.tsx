@@ -10,7 +10,7 @@ import { useNodeScope } from "@/lib/node-scope/providers";
 import { contextTrayKey, contextTrayStore, useContextTrayStore } from "@/stores/contextTrayStore";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
-import { richInteractionErrorMessage } from "@/lib/backend/rich-interactions";
+import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
 import { cn } from "@/lib/utils";
 import { ContentRefPreview, RefChip, inputClass, textareaClass } from "../shared";
 import { ImageRegionPicker, newContextItemId } from "./composer-shared";

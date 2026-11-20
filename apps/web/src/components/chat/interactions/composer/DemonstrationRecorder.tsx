@@ -6,7 +6,7 @@ import type {
 } from "@orkestrator/protocol/browser-preview";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { richInteractionErrorMessage } from "@/lib/backend/rich-interactions";
+import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
 import { browserPreviewTraceApi } from "@/lib/native/browser-preview";
 import { useNodeScope } from "@/lib/node-scope/providers";

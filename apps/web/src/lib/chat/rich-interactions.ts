@@ -4,7 +4,7 @@ import type { RichInteractionReceipt } from "@orkestrator/protocol/rich-interact
 import {
   richInteractionErrorCode,
   richInteractionErrorMessage,
-} from "@/lib/backend/rich-interactions";
+} from "@/lib/chat/rich-interaction-errors";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 import { onResourceChanged, onResourceResync, onViewSafetyCheck } from "@/lib/resource-sync";
 

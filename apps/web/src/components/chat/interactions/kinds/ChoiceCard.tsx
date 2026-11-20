@@ -231,7 +231,7 @@ export function ChoiceCard({
         />
       ) : null}
       <Dialog open={expanded !== null} onOpenChange={(open) => !open && setExpanded(null)}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent size="5xl">
           <DialogTitle>{expanded?.option.label}</DialogTitle>
           <DialogDescription>{expanded?.option.preview?.description}</DialogDescription>
           {expanded?.option.preview ? (

@@ -7,7 +7,7 @@ import {
 } from "@orkestrator/protocol/rich-interactions";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { richInteractionErrorMessage } from "@/lib/backend/rich-interactions";
+import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
 import { newIdempotencyKey } from "@/lib/chat/rich-interactions";
 import { cn } from "@/lib/utils";
 import { textareaClass } from "../shared";

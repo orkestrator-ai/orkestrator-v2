@@ -5,7 +5,7 @@ import type { AnchorLocation } from "@orkestrator/protocol/rich-interactions";
 import type { ArtifactPublicationView } from "@orkestrator/protocol/transcript-artifact-commands";
 import { Button } from "@/components/ui/button";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { richInteractionErrorMessage } from "@/lib/backend/rich-interactions";
+import { richInteractionErrorMessage } from "@/lib/chat/rich-interaction-errors";
 import { newIdempotencyKey, useRichInteractionList } from "@/lib/chat/rich-interactions";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { onResourceChanged } from "@/lib/resource-sync";

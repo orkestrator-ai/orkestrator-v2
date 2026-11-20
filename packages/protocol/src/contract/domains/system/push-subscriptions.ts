@@ -37,7 +37,10 @@ export const pushSetSubscriptionsCommand = defineCommand({
     setRevision: Schema.Finite,
     subscriptions: Schema.Array(PushSubscriptionRequestSchema),
     // A node this command node relays (design D10); absent for its own keys.
-    nodeId: Schema.optional(Schema.String),
+    // `null` is accepted and means absent: 2.39.9-beta published this field
+    // as `anyOf [string, null]` (the export of `Schema.optional`), so a client
+    // built against that schema may send it.
+    nodeId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   }),
   result: ownedObject<PushSetSubscriptionsResult>(),
   critical: [],

@@ -5,7 +5,7 @@ Relocated tests from the recorded commands now live at
 `apps/backend/src/core/review/service-part-4.test.ts`.
 
 - **ID:** 10008
-- **Status:** open
+- **Status:** resolved
 - **Observed:** 2026-11-20 on the push-layer review fixes, based on
   `5e9835d0a6981a8d2c217d8941e2e065abbe3008`, after reviewed commit `f255a06da`.
 - **Test:** `push acceptance budgets > two relayed nodes share bridge reads across windows and meet the latency budget`
@@ -50,6 +50,40 @@ Relocated tests from the recorded commands now live at
   Evidence: `/tmp/orkestrator-test-run.QhGIbq/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 - **Isolated rerun:** `mise run test:logged -- --name refresh-main-push-acceptance-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
   passed the owning file in 10.7 seconds.
+
+## Recurrence on `main` CI, 2026-11-20
+
+- **Observed:** GitHub Actions run 44713370307, `CI` on `main` at
+  `a296c3777f65f1a5f8aaf1899851957e058d08ea`, `Tests (backend)` shard,
+  Linux x64. `mise run flaky:recurrence -- 10008 --base a296c3777f65f1a5f8aaf1899851957e058d08ea`
+  reported the case open.
+- **Failure:** virtual p95 of 300 ms against the 250 ms budget
+  (`push-acceptance.test.ts:163`), after 371.70 ms.
+- **Rerun alone:** the runner's single rerun of
+  `apps/backend/tests/push-acceptance.test.ts` failed too ("FAILED ALONE", 4.4 s).
+  This is the first observation of the case failing outside an aggregate run,
+  so aggregate load alone does not explain it.
+- **Next run:** `main` CI run 44720980632 at `6db2b4164` passed the backend
+  shard, case included.
+
+
+## Resolution (2026-11-20)
+
+- **Root cause:** the relay's leaf SSE client was outside the virtual
+  clock's quiescence check. The clock could advance past the command node's
+  next coalescing window while a leaf frame was still in transit on a real
+  socket. Smaller virtual steps did not ensure the frame had arrived.
+- **Fix:** the acceptance fixture waits for the relay handshake, leaf SSE
+  bytes, relay subscription calls and viewer reads before advancing virtual
+  time. The test uses the real sockets and keeps the 250 ms p95 budget and
+  revision and read-sharing assertions.
+- **Reproduced:** yes — eight isolated repetitions on reviewed commit
+  `8273d6369121e32214f3f2165b96ede0a096c902` (merge base
+  `6db2b41649cbc539281650dd5db35e3cc6bb1b18`) failed, including the
+  300 ms p95 and a viewer stopping one revision short. Evidence:
+  `/tmp/orkestrator-test-run.LwntbV/findings-latency-before.log.gz`.
+- **Stress:** `mise run test:logged -- --name findings-latency-after -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/push-acceptance.test.ts --parallel=1 --rerun-each=8 -t 'two relayed nodes'`
+  passed all eight repetitions with the relay included in quiescence.
 
 ## Isolated failures on 2026-11-20
 

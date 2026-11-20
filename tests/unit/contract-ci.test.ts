@@ -515,6 +515,40 @@ describe("argument schemas", () => {
     ).toThrow('"not"');
   });
 
+  test("only the published tool-output digest samples pagination as numbers", async () => {
+    const generator = await loadFixtureGenerator();
+    const contracts = path.join(root, "packages/protocol/contracts");
+    const digest = "sha256:eb8961fc38b6c10dadc228cb98abec41c3c7bd5852a77ea2acafa9ae36f806e1";
+    const document = readStoredSchema(contracts, digest)!;
+    const command = "get_native_agent_tool_output";
+    const legacy = { command, digest, releases: ["2.39.9-beta"], document };
+    const paginationIsNumeric = (_command: string, args: unknown) => {
+      const { cursor, limit } = args as { cursor?: unknown; limit?: unknown };
+      return [cursor, limit].some((value) => typeof value === "string")
+        ? "Refused a string pagination value"
+        : null;
+    };
+    expect(runArgumentFixtures([legacy], paginationIsNumeric, generator, 100)).toEqual({
+      checked: 100,
+      unconstrained: 0,
+      failures: [],
+    });
+    // Keep the pagination shape identical, but give the document another digest.
+    const other = { ...document, definitions: { separate: { type: "boolean" } } };
+    for (const entry of [
+      { ...legacy, document: other, digest: documentDigest(other) },
+      { ...legacy, command: "other_command" },
+    ]) {
+      const report = runArgumentFixtures([entry], paginationIsNumeric, generator, 100);
+      expect(report.failures.map((failure) => failure.message)).toEqual([
+        "Refused a string pagination value",
+      ]);
+    }
+    expect(runArgumentFixtures([legacy], () => "Expected string", generator, 5).failures).toEqual([
+      expect.objectContaining({ message: "Expected string" }),
+    ]);
+  });
+
   test("a refusal only inside an unconstrained value is counted, not failed (stage 2)", async () => {
     const generator = await loadFixtureGenerator();
     const opaque = objectSchema({ to: { type: "string" }, capture: {} }, ["to", "capture"]);

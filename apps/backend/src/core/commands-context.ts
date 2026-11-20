@@ -119,8 +119,8 @@ export type CommandContext = {
   nodeCoordination?: import("./nodes/index.js").NodeCoordination;
   /** Shared usage readings with the nodes this one controls; see `nodes/node-usage-sync.ts`. */
   usageSync?: { noteLocalChange(): void };
-  /** Automatic account switching; see `agent-accounts-auto-switch.ts`. */
-  accountAutoSwitch?: import("./agent-accounts-auto-switch.js").AgentAccountAutoSwitcher;
+  /** Automatic account switching; see `agent-accounts/auto-switch.ts`. */
+  accountAutoSwitch?: import("./agent-accounts/index.js").AgentAccountAutoSwitcher;
   projectGit?: ProjectGitService;
   controlMcp?: {
     getSettings(): ControlMcpSettings;

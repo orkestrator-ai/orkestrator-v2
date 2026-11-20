@@ -6,7 +6,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { bridgeRestarts } from "../src/core/bridge-restarts.js";
 import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
 import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
-import { buildRestrictContainerClaudeCredentialCommand } from "../src/core/agent-accounts-containers.js";
+import { buildRestrictContainerClaudeCredentialCommand } from "../src/core/agent-accounts/containers.js";
 
 import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";
 import { createCommandFixtures } from "./command-fixtures";

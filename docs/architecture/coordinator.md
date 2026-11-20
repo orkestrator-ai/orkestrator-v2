@@ -4329,7 +4329,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   causes (`session-manager-coordinator-skills.test.ts`), the hook refusing
   granted tools and skill scripts (`read-only-policy.test.ts`), all in
   claude-bridge; the launcher naming the account's skills directory
-  (`agent-accounts-active.test.ts`, `commands-servers-coordinator.test.ts`)
+  (`agent-accounts/active.test.ts`, `commands-servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
   test:agent:coordinator` runs its scenarios per platform in a disposable

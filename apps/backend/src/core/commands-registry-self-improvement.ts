@@ -16,7 +16,7 @@ import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import path from "node:path";
 import { resolveSelfImprovementSettings } from "@orkestrator/protocol/self-improvement";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
-import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
+import { applyActiveAgentAccountEnvironment } from "./agent-accounts/index.js";
 import { resolveClaudeBinary } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";

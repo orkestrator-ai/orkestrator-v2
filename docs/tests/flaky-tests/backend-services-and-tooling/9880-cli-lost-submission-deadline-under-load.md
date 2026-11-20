@@ -1,7 +1,7 @@
 # CLI lost-submission lookup misses the shared deadline under load
 
 - **ID:** 9880
-- **Status:** resolved
+- **Status:** open
 - **Date observed:** 2026-10-22
 - **Test:** `waiting through a lost submission response > submission and an absent-key lookup share one deadline`
 - **File:** `packages/cli/tests/client-waits.test.ts:351`
@@ -93,3 +93,23 @@ Full failure names, counts, evidence paths and unresolved limitations are in [98
   `recovered lifecycle bounds a stalled … read`, `ordinary admission retains…`)
   measure real elapsed time on purpose and have no recorded failure; they
   were not changed.
+
+## Agent-accounts folder validation (2026-11-20)
+
+- **Reviewed commit:** `8d3a72226b0c87a5bc32bb73ad068e784b982344`, base
+  `e102a0dd55fc6360de61959c4ff843c9032cadfe`. The recurrence check against
+  `origin/main` confirmed that the base contains the earlier fixes.
+- **Original command:** `mise run test:logged -- --name slow-tests -- mise run test:slow`,
+  with two isolated Bun workers in the CLI package.
+- **Failure:** `environment --wait through a lost submission response > recovered lifecycle bounds a stalled run.get read by the remaining deadline`
+  in `packages/cli/tests/client-waits.test.ts:803` expected exit 5 and
+  received 4 after 783.40 ms. CLI slow tests reported 61 passed and one failed
+  across four files (28.92 s).
+- **Complete owner rerun:** from `packages/cli`,
+  `bun test ./tests/client-waits.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
+  passed 43 tests (2.7 s logged).
+- **Evidence:** `orkestrator-test-run.B7Fj7m` in the host temporary directory,
+  including the workspace log and `rerun-packages-cli-tests-client-waits-test-ts.log.gz`.
+  This reopens the case for the sibling that still uses a 400 ms real
+  submission delay inside a 600 ms deadline. The cause of the failed run
+  remains unconfirmed.

@@ -23,7 +23,7 @@ import {
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import type { CommandContext } from "./commands-context.js";
 import { resolveClaudeBinary, resolveCodexBinary } from "./commands-agent-support.js";
-import { applyActiveAgentAccountEnvironment } from "./agent-accounts-active.js";
+import { applyActiveAgentAccountEnvironment } from "./agent-accounts/index.js";
 import { applyClaudeHostCredentialEnvironment } from "./host-agent-credentials.js";
 import { runCommand } from "./shell.js";
 import {
@@ -236,7 +236,7 @@ export function oneShotAgentRunDependencies(
     signedIn: async (strategy) => {
       const [{ readAgentSignInStatus }, { listAgentAccounts }] = await Promise.all([
         import("./agent-sign-in-status.js"),
-        import("./agent-accounts.js"),
+        import("./agent-accounts/accounts.js"),
       ]);
       const status = await readAgentSignInStatus(strategy, {
         listAccounts: () => listAgentAccounts(context),

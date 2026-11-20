@@ -113,3 +113,21 @@ Targeted repair validation on macOS (2026-11-05):
 
 Passing logs are removed by the logged runner. These isolated passes repair the
 filter assertion's evidence; they do not resolve the broader native delivery case.
+
+## Agent-accounts slow-tier rerun (2026-11-20)
+
+- **Branch base:** `e102a0dd55fc6360de61959c4ff843c9032cadfe`. The recurrence
+  check against `origin/main` confirmed the case was open.
+- **Original command:** `mise run test:logged -- --name slow-tests -- mise run test:slow`,
+  with Homebrew OpenSSL 3 first in `PATH` and two isolated Bun workers in the
+  backend package.
+- **Failure:** `real Git through the shared owner > a write under the ignored node_modules reaches no hint`
+  in `apps/backend/src/core/worktrees/snapshots-git.test.ts:361` observed a
+  `node_modules/pkg` hint after 809.54 ms. Backend reported 3,626 passed,
+  205 skipped and one failed across 246 files (513.03 s). Root and bridges passed.
+- **Complete owner rerun:** from `apps/backend`,
+  `bun test ./src/core/worktrees/snapshots-git.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
+  passed all eight tests (4.41 s Bun time). The aggregate still exited 1.
+  The new symptom is an unexpected hint. Its cause remains unconfirmed.
+- **Evidence:** `orkestrator-test-run.rz5ILn` in the host temporary directory,
+  including the workspace log and `rerun-apps-backend-src-core-worktrees-snapshots-git-test-ts.log.gz`.

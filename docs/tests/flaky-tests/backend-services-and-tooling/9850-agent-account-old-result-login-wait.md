@@ -1,5 +1,7 @@
 # An old login result does not settle within the test's polling budget
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 9850
 - **Status:** resolved
 - **Date observed:** 2026-11-06

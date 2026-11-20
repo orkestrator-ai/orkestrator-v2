@@ -164,7 +164,7 @@ test("added accounts expose independent rule files and deduplicate linked host f
   const root = await tempDir();
   process.env.CODEX_HOME = path.join(root, "host-codex");
   process.env.CLAUDE_CONFIG_DIR = path.join(root, "host-claude");
-  const { agentAccountHome } = await import("../agent-accounts-homes.js");
+  const { agentAccountHome } = await import("../agent-accounts/homes.js");
   const codex = agentAccountHome(root, "codex", "codex-account");
   const claude = agentAccountHome(root, "claude", "claude-account");
   await fs.mkdir(path.join(codex, "rules"), { recursive: true });

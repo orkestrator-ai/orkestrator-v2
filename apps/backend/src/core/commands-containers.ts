@@ -156,7 +156,7 @@ import {
   type ImageManifest,
 } from "@orkestrator/protocol/image-manifest";
 import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
-import { activeAgentAccountInputRoots } from "./agent-accounts-containers.js";
+import { activeAgentAccountInputRoots } from "./agent-accounts/index.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {

@@ -1,4 +1,4 @@
-import * as accounts from "./agent-accounts-active.js";
+import * as accounts from "./agent-accounts/active.js";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";

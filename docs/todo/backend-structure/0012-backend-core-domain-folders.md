@@ -4,12 +4,12 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, and 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, and 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18) and the `coordinator` move is done (2026-11-20), one change each (see "Assumptions and decisions"); the other five (`agent-accounts`, `workflows`, `review`, `build-pipeline`, `native-agent`) are open, one domain per change.
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: partly done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20) and the `agent-accounts` move is done (2026-11-20), one change each (see "Assumptions and decisions"); the other four (`workflows`, `review`, `build-pipeline`, `native-agent`) are open, one domain per change.
 3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
@@ -50,7 +50,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `plan-usage`, `features`, `coordinator`, `agent-accounts`, `worktrees`, `previews`, `git`, `workflows`, `review`, `build-pipeline`, `native-agent`.
 
-**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; PR #2394 was then open and added merge notices alongside changes to the PR monitor. Re-measured 2026-11-20 on `0b778d995` for the sixth slice: `coordinator-*` was 58 source (one test-support file included) / 62 tests (the table's 7 / 5 was stale), with 42 production importers outside the domain in `apps/backend/src` (all in `core/`, nine of them in `control-mcp/`, `nodes/`, `opencode2/` and `public-api/`) using 106 symbols from 44 modules, plus two `apps/backend/scripts` files, one `apps/backend/tests` file, one `e2e/agent-testing` spec and one claude-bridge live test; no pull request was open.
+**Investigation.** Prefix counts today (source / tests): `coordinator-*` 11/10, `agent-accounts*` 10/10, `preview-*` 8/9, `git-*` 4/2, `github*` 12/6, `pr-*` 3/4, `workflow-*` 11/9, review prefixes (`multi-review-*`, `review-*`, `looped-review-*`) 34/35, `build-pipeline-*` 25/21, `native-agent-*` 39/59. `native-agent-service.ts` (4,276 lines) and `native-agent-transcript-projection.ts` (5,589) were the subject of the size todo 0057 (retired 2026-11-17; the resulting collaborators are listed in [`native-agent-service.md`](../../architecture/native-agent-service.md#collaborators)). Re-measured 2026-11-13 on `17d28238c` for the first slice: `plan-usage*` was 2 source / 3 tests, with 10 production importers outside the domain, and no open pull request touched it (two were open). Re-measured 2026-11-14 on `dc90609bf` for the second slice: `feature-*` was 5 source / 4 tests, with 6 production importers outside the domain (five in `core/` and `apps/backend/scripts/recurring-baseline-workflows.ts`) using four symbols, and neither open pull request touched it. Re-measured 2026-11-16 on `c1fcc573b` for the third slice: `preview-*` was 8 source (7 modules and `preview-test-support.ts`) / 12 tests, with 12 production importers outside the domain (three in `core/` and nine `apps/backend/src/preview-*.ts` and `gateway-*.ts` files) using six symbols, plus the two test-only harness entrypoints (one more symbol and the test support); no pull request was open. Re-measured 2026-11-17 on `0265e7882` for the fourth slice: `worktree-*` was 8 source / 11 tests, with 13 production importers outside the domain (all in `core/`, two of them in `change-tracking/`) using 25 symbols from seven modules, plus five repository scripts and two `apps/backend/tests` files; no pull request was open. Re-measured 2026-11-18 on `b2c91abb9` for the fifth slice: `git-*`, `github*` and `pr-*` were 31 source (two test-support files included) / 28 tests (the table's 11 / 8 was stale), with 47 production importers outside the domain (all in `core/`) using about 100 symbols from 28 modules, plus two `apps/backend/scripts` files, 22 `apps/backend/tests` files and one renderer test; PR #2394 was then open and added merge notices alongside changes to the PR monitor. Re-measured 2026-11-20 on `0b778d995` for the sixth slice: `coordinator-*` was 58 source (one test-support file included) / 62 tests (the table's 7 / 5 was stale), with 42 production importers outside the domain in `apps/backend/src` (all in `core/`, nine of them in `control-mcp/`, `nodes/`, `opencode2/` and `public-api/`) using 106 symbols from 44 modules, plus two `apps/backend/scripts` files, one `apps/backend/tests` file, one `e2e/agent-testing` spec and one claude-bridge live test; no pull request was open. Re-measured 2026-11-20 on `e102a0dd5` for the seventh slice: `agent-accounts*` was 15 source / 23 tests (the table's 7 / 7 was stale), with 40 production importers outside the domain in `apps/backend/src` (all in `core/`, 13 of them in `capabilities/`, `coordinator/`, `git/`, `mcp-management/`, `opencode2/`, `permission-rules/` and `plan-usage/`) using 78 symbols from 12 modules, plus 21 tests in `apps/backend/src`, eight `apps/backend/tests` files and one `e2e/agent-testing` integration test; no open pull request touched the domain.
 
 **Decisions.**
 
@@ -207,8 +207,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `opencode2-*.ts` files import `opencode2/index.js` like any other caller.
   One leaf module is a named exception in the `apps/backend/src/**` pattern:
   `opencode2/container-credentials.js`, imported directly by
-  `agent-accounts-containers.ts` and `portable-input-status.ts`, because
-  `opencode2/index.ts` reaches `agent-accounts-containers.ts` through
+  `agent-accounts/containers.ts` and `portable-input-status.ts`, because
+  `opencode2/index.ts` reaches `agent-accounts/containers.ts` through
   `host-launch.ts`. The `self-improvement/` patterns use `**` rather than `*`
   so they also cover its `insights/` subfolder. See "Assumptions and
   decisions".
@@ -364,6 +364,22 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `mail-attachments.js`, `node-coordinator-mail.js`, `pr.js` and
   `usage-limit-account-routing.js`. The coordinator's MCP tools in
   `control-mcp/` stay there. See "Assumptions and decisions".
+- Done (task 2's `agent-accounts` slice, 2026-11-20, against `main` at
+  `e102a0dd5`): the 15 `agent-accounts*` source files and their 23 tests are
+  in `core/agent-accounts/` without the prefix (`agent-accounts/active.ts`,
+  `agent-accounts/auto-switch.ts`, `agent-accounts/containers.ts`,
+  `agent-accounts/store.ts`, …), and `agent-accounts.ts` itself is
+  `agent-accounts/accounts.ts`. `index.ts` re-exports 43 symbols from five
+  modules (`active.ts`, `auto-switch.ts`, `containers.ts`, `login.ts`,
+  `usage-sharing.ts`), and 31 of the 40 production importers outside the
+  folder import it. Seven modules are named exceptions in the
+  `apps/backend/src/**` pattern and are not re-exported, because routing
+  them through `index.ts` closes a runtime cycle: `accounts.js`,
+  `machines.js`, `session.js` and `runtime.js`, which reach the command
+  layer or `plan-usage/reader.ts`, and `store.js`, `homes.js` and
+  `auto-switch-notices.js`, whose importers (the storage layer,
+  `permission-rules/`, `coordinator/notice-router.ts`, …) the re-exported
+  modules reach. See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -396,7 +412,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   from 811 and 877 just before it, and after the `git` slice on 2026-11-18
   it holds 789 and 851, down from 820 and 879 just before it, and after the
   `coordinator` slice on 2026-11-20 it holds 754 and 809, down from 812 and
-  871 just before it).
+  871 just before it, and after the `agent-accounts` slice on 2026-11-20 it
+  holds 739 and 786, down from 754 and 809 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -409,7 +426,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | plan-usage | `plan-usage*` | done (2 / 3 moved, 2026-11-13) | |
   | features | `feature-*` | done (5 / 4 moved, 2026-11-14) | |
   | coordinator | `coordinator-*` | done (58 / 62 moved, 2026-11-20) | |
-  | agent-accounts | `agent-accounts*` | 7 | 7 |
+  | agent-accounts | `agent-accounts*` | done (15 / 23 moved, 2026-11-20) | |
   | worktrees | `worktree-*` | done (8 / 11 moved, 2026-11-17) | |
   | previews | `preview-*` | done (8 / 12 moved, 2026-11-16) | |
   | git | `git-*`, `github*`, `pr-*` | done (31 / 28 moved, 2026-11-18) | |
@@ -464,9 +481,9 @@ before the busy ones move.
    `mcp-management/` and `public-api/`; the `http-bridge`,
    `web-annotations`, `control-mcp` and `opencode` moves;
    `keyed-record-format.ts` placed in the shared kernel.)
-2. **Wave 2 (mid-tier):** `agent-accounts`, `workflows`, `review`,
-   `build-pipeline`, `native-agent`. (Done: `plan-usage`, `features`,
-   `previews`, `worktrees`, `git`, `coordinator`.)
+2. **Wave 2 (mid-tier):** `workflows`, `review`, `build-pipeline`,
+   `native-agent`. (Done: `plan-usage`, `features`, `previews`,
+   `worktrees`, `git`, `coordinator`, `agent-accounts`.)
 3. **Wave 3 (hubs):** `terminals`, `tmux`, `recurring`, `containers`,
    `environments`, `storage`. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
@@ -538,9 +555,122 @@ task 1's `web-annotations` slice with the codemod fix from todo 7490
 (2026-11-13), task 2's `features` slice (2026-11-14), task 2's
 `previews` slice (2026-11-16), task 1's `opencode` slice (2026-11-16),
 task 2's `worktrees` slice (2026-11-17), task 2's `git` slice
-(2026-11-18), and task 2's `coordinator` slice (2026-11-20).
+(2026-11-18), task 2's `coordinator` slice (2026-11-20), and task 2's
+`agent-accounts` slice (2026-11-20).
 The other moves in waves 2 to 4 (tasks 2 to 4) were left open on purpose:
 they move many files that other work in flight touches.
+
+### Task 2: `agent-accounts` as the seventh wave 2 slice
+
+- Chosen: one domain, `agent-accounts` (the `agent-accounts*` prefix
+  group), moved with `bun scripts/move-backend-modules.ts --map <file>`
+  against `main` at `e102a0dd5`. A map file was needed because
+  `--prefix agent-accounts-` does not match `agent-accounts.ts` and its test,
+  whose name is the bare prefix; they became `agent-accounts/accounts.ts` and
+  `agent-accounts/accounts.test.ts`. Every other file dropped the prefix
+  (`agent-accounts-auto-switch.ts` → `agent-accounts/auto-switch.ts`). No
+  name collides (`core/agent-accounts/` did not exist). No ordering rule
+  blocked it, and no open pull request touched the domain. Options for the
+  bare file's name: (a) `accounts.ts` (chosen): it holds the account
+  operations (list, switch, rename, remove, sign in, read usage) and keeps
+  the old name's meaning; (b) `service.ts`, as `coordinator/service.ts`:
+  the file is a set of functions over `CommandContext`, not a service class;
+  (c) `operations.ts`: accurate but a new word for readers who know the old
+  name.
+- Membership: every root `agent-accounts*` file. That is the account
+  operations, the registry store, account homes, the active account, sign-in,
+  the container side, automatic switching (including the fixes of #2350,
+  #2362 and #2385, moved unchanged) and its notices, the last, shared and
+  shared-out usage readings, other machines' accounts, session accounts,
+  promotion and the runtime state. All 23 tests moved too, including the
+  five automatic-switching scenario tests (`auto-switch-flap.test.ts`,
+  `auto-switch-five-hour.test.ts`, …). Options: (a) the prefix group only
+  (chosen): a pure move under the rule the earlier slices used; (b) also take
+  `agent-usage-limits.ts`: it reads which agent tabs stopped on a usage
+  limit from the session store and the plan-usage cache, and its importers
+  are mostly `native-agent-*`, `storage-native.ts` and `http-bridge/`, so it
+  belongs with the sessions rather than the accounts; (c) also take
+  `claude-host-login-refresh*.ts` and `codex-host-login-refresh.ts`: the
+  composition root owns them for the login keeper, beside
+  `container-claude-login-keeper.ts` and `container-login-file-watcher.ts`,
+  which belong to the `containers` prefix group; (d) also take
+  `commands-registry-accounts.ts` and `storage-agent-accounts.ts`: those
+  belong to the `commands` and `storage` groups, and `commands` moves last
+  by plan.
+- Measured before the move: see task 2's investigation. The codemod moved
+  38 files and rewrote 122, including `scripts/test-tiers.ts` (two slow-tier
+  tests: `containers.test.ts` and `accounts.test.ts`),
+  `tests/source-guards/baseline.json`, `docs/architecture/agent-accounts.md`,
+  an `e2e/agent-testing` integration test and the path columns of flake
+  records. No worker or bundle entry point names a moved file, and no
+  `<revision>:<path>` string did.
+- `index.ts` holds 43 symbols from five modules (`active.ts`,
+  `auto-switch.ts`, `containers.ts`, `login.ts`, `usage-sharing.ts`): the
+  production symbols other than those of the seven exception modules.
+  `last-usage.ts`, `promotion.ts` and `shared-usage.ts` have no production
+  importer outside the folder and are not re-exported. 31 of the 40
+  production importers import it; each importer's separate imports from
+  re-exported modules became one import. The type expression
+  `import("./agent-accounts/auto-switch.js").AgentAccountAutoSwitcher` in
+  `commands-context.ts` now names `agent-accounts/index.js`. Tests outside the
+  folder, the `apps/backend/tests` files and the e2e integration test keep
+  deep imports (procedure step 3).
+- Named exceptions: seven modules, the smallest set found that leaves no
+  runtime cycle and, among those, the one with the fewest importers left on
+  deep imports. Found with a graph of the runtime import edges (type-only
+  imports skipped, as `import/no-cycle` does): every subset of the 15 modules
+  was tried, and a subset is valid when no re-exported module reaches a file
+  that would import `index.ts`. Two sets of five or six modules are also
+  valid, but they keep `active.ts` and `containers.ts`, the two modules with
+  the most importers, out of `index.ts` and leave 31 importers on deep
+  imports instead of 9. The chosen seven: `accounts.ts`, `machines.ts` and
+  `session.ts` reach the command layer (`commands-servers.ts`,
+  `host-model-catalog-refresh.ts`, `commands-environment.ts`), and
+  `runtime.ts` reaches `plan-usage/reader.ts`, all of which import
+  `index.ts`; `store.ts`, `homes.ts` and `auto-switch-notices.ts` are
+  imported by the storage layer, `permission-rules/external-rules.ts`,
+  `coordinator/notice-router.ts` and other files the re-exported modules
+  reach, so those importers cannot import `index.ts`. Confirmed with oxlint
+  probes: re-exporting `accounts.ts` gave 89 `no-cycle` errors and
+  `runtime.ts` 4; routing `storage-agent-accounts.ts`,
+  `permission-rules/external-rules.ts` and `coordinator/notice-router.ts`
+  through `index.ts` gave 15, 20 and 25. Options: (a) the seven (chosen);
+  (b) five (`active.ts`, `auto-switch-notices.ts`, `containers.ts`,
+  `homes.ts`, `store.ts`): fewer exceptions but 31 deep importers; (c) break
+  the cycles by moving code, which is not a pure move. The reasons are
+  written in `index.ts`'s header. Cons: seven deep imports are allowed from
+  anywhere in `apps/backend/src`; the `tests/unit/**` pattern stays strict.
+  With them `bunx oxlint .` reports no errors.
+- Hand fixes after the codemod: bare `agent-accounts*` file names in source
+  comments (`commands-context.ts`, `commands-registry-accounts.ts`,
+  `git/index.ts`, `opencode2/index.ts`, `opencode2/credentials.ts`,
+  `capabilities/scoped-delivery.ts`, `apps/backend/tests/container-benchmarks.test.ts`,
+  `apps/backend/tests/commands-registry-docker.test.ts`),
+  living docs (`agent-accounts.md`, `agent-capabilities-management.md`,
+  `backend-runtime.md`, `coordinator.md`,
+  `coordinator-timers-and-accounts-decisions.md`) and to-dos (7543, 8314,
+  0039, and this file's "Current state") now read
+  `agent-accounts/<name>.ts`. `docs/development/linting.md`'s folder list
+  and exception examples name the new folder. Flake case files preserve the
+  paths used at the recorded revisions and list the current equivalents.
+  Flake indexes use the current paths. Earlier slices' records keep the names
+  they measured, as do dated plan logs under `plans/`.
+  `@orkestrator/protocol`'s own `agent-accounts.ts` and
+  `agent-account-*.ts` modules, the renderer's `lib/backend/agent-accounts.ts`
+  and the `agent-accounts` data directory are other things with the same
+  names and are untouched.
+- Lint patterns: `**/agent-accounts/*` with `!**/agent-accounts/index.js`
+  and the seven exceptions under `apps/backend/src/**`, and the
+  `**/backend/src/core/agent-accounts/*` form under `tests/unit/**`. No
+  backend import path had an `agent-accounts/` segment before the move
+  (`@orkestrator/protocol/agent-accounts` has none after it). Checked with
+  probe files (deleted): a deep import of `active.js` is reported under both
+  overrides, `index.js` under neither, and `accounts.js` only under
+  `tests/unit/**`.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, `verify:packaged-backend`) is agent work for
+  the validation stage, so nothing was added to the manual-test checklist
+  (7568).
 
 ### Task 2: `coordinator` as the sixth wave 2 slice
 

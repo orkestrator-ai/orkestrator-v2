@@ -1,5 +1,7 @@
 # Provider non-delivery proof (todo 0223) branch validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/active.test.ts`.
+
 - **ID:** 1147
 - **Status:** open
 - **Date observed:** 2026-10-27

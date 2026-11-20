@@ -1,5 +1,7 @@
 # Design-agent links main refresh validation
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0772
 - **Status:** environmental
 - **Date observed:** 2026-10-24, macOS arm64, Bun 1.4.3.

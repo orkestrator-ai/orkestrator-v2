@@ -11,7 +11,7 @@ import { coordinatorMainConversation } from "@orkestrator/protocol/coordinator";
 import { usageLimitAccountKey } from "@orkestrator/protocol/coordinator-notices";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
-import type { LimitedAccountMove, UsageLimitStopReport } from "../agent-accounts-auto-switch.js";
+import type { LimitedAccountMove, UsageLimitStopReport } from "../agent-accounts/auto-switch.js";
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
 import type { RepositoryNotice } from "./notice-router.js";
 import { CoordinatorUsageLimitNotices } from "./usage-limit-notices.js";

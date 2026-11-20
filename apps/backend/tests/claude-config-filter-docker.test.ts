@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "../src/core/agent-credential-files";
-import { refreshStagedAgentAccountLogins } from "../src/core/agent-accounts-containers";
+import { refreshStagedAgentAccountLogins } from "../src/core/agent-accounts/containers";
 import { CLAUDE_CONTAINER_CONFIG_KEYS } from "../src/core/claude-container-config";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { stagePortableInputs, stagedInputMountArguments } from "../src/core/portable-inputs";

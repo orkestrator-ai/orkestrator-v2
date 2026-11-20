@@ -6,7 +6,7 @@ import {
   beginAgentAccountLogin,
   ensureBrowserShim,
   type SpawnLike,
-} from "../agent-accounts-login.js";
+} from "../agent-accounts/index.js";
 import type { GitHubCliLoginProgress } from "./github-cli-login.js";
 import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { checkHostTool } from "../host-tools.js";

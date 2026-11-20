@@ -2,7 +2,7 @@ import type { LogPolicyService } from "./log-policy-service.js";
 import {
   AgentAccountsRuntime,
   type AgentAccountsRuntimeOptions,
-} from "./agent-accounts-runtime.js";
+} from "./agent-accounts/runtime.js";
 import { ContainerLogService, type ContainerLogServiceOptions } from "./container-log-service.js";
 import {
   ContainerOomEvents,

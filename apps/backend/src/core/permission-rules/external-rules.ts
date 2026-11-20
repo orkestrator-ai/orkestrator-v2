@@ -5,7 +5,7 @@ import {
   type ExternalPermissionRuleFile,
   type ExternalPermissionRulesSnapshot,
 } from "@orkestrator/protocol/permission-rules";
-import { agentAccountHome, hostClaudeConfigDir, hostCodexHome } from "../agent-accounts-homes.js";
+import { agentAccountHome, hostClaudeConfigDir, hostCodexHome } from "../agent-accounts/homes.js";
 import type { CommandContext } from "../commands-context.js";
 import { dockerExec } from "../commands-container-exec.js";
 import type { Environment } from "../models.js";

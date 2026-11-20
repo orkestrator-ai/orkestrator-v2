@@ -7,8 +7,8 @@ import type { AgentAccountsSnapshot } from "@orkestrator/protocol/agent-accounts
 import { defaultConfig } from "./storage.js";
 import { withTemporaryStorage } from "./storage-test-support.js";
 import type { CommandContext } from "./commands-context.js";
-import * as accounts from "./agent-accounts.js";
-import * as active from "./agent-accounts-active.js";
+import * as accounts from "./agent-accounts/accounts.js";
+import * as active from "./agent-accounts/active.js";
 import * as credentials from "./host-agent-credentials.js";
 import {
   createSessionTitleService,

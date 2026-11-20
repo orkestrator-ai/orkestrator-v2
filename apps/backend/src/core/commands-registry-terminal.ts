@@ -219,9 +219,9 @@ import { KeyedTrailingFlight } from "./keyed-trailing-flight.js";
 import type { TerminalHistory } from "./terminal-history.js";
 import {
   activeAgentAccountShellEnvironment,
+  applyActiveAgentAccountsForContainerTerminal,
   stripInheritedAgentCredentials,
-} from "./agent-accounts-active.js";
-import { applyActiveAgentAccountsForContainerTerminal } from "./agent-accounts-containers.js";
+} from "./agent-accounts/index.js";
 import { newContainerTerminalToken } from "./container-terminal-shell.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 

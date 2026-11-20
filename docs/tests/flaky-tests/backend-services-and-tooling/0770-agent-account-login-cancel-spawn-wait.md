@@ -1,5 +1,7 @@
 # Agent-account login cancellation misses its spawned child under load
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0770
 - **Status:** resolved
 - **Date observed:** 2026-10-24

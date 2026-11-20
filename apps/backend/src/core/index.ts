@@ -107,13 +107,14 @@ import {
   recordAgentAccountAutoSwitchKept,
   renewAgentAccountLogin,
   listAgentAccountUsageIdentities,
-} from "./agent-accounts.js";
+} from "./agent-accounts/accounts.js";
 import {
+  addedClaudeAccountHomes,
+  AgentAccountAutoSwitcher,
   centralUsageReadings,
   recordCentralUsageReadings,
-} from "./agent-accounts-usage-sharing.js";
-import { AgentAccountAutoSwitcher } from "./agent-accounts-auto-switch.js";
-import { readSessionAgentAccount } from "./agent-accounts-session.js";
+} from "./agent-accounts/index.js";
+import { readSessionAgentAccount } from "./agent-accounts/session.js";
 import { multiReviewNativeAddressFindingsOptions } from "./multi-review-native-address-findings.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { cleanupStaleManifestProbes } from "./docker-image.js";
@@ -192,7 +193,6 @@ import {
 } from "./capabilities/index.js";
 import { remoteScopedEnvironments } from "./capabilities/scoped-sources.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { addedClaudeAccountHomes } from "./agent-accounts-active.js";
 import {
   createCommandRegistry,
   scheduleMergeCleanupRecovery,

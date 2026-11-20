@@ -1,5 +1,7 @@
 # Duplicate agent-account login leaves an extra directory in the aggregate
 
+Current path for the recorded account file is `apps/backend/src/core/agent-accounts/accounts.test.ts`.
+
 - **ID:** 0239
 - **Status:** resolved
 - **Observed:** 2026-10-15, macOS, Bun 1.4.3.

@@ -21,7 +21,7 @@ import { dockerOwnerNamespace } from "../src/core/docker-ownership";
 import { waitForContainerBoot } from "../src/core/container-readiness";
 import { networkOwnerContainer } from "../src/core/container-network-owner";
 import { stopRuntimeContainer } from "../src/core/egress-gateway";
-import { startContainerWithAgentAccounts } from "../src/core/agent-accounts-containers";
+import { startContainerWithAgentAccounts } from "../src/core/agent-accounts/containers";
 import {
   formatGithubRangesSeed,
   githubRangesSeed,

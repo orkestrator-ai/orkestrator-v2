@@ -53,10 +53,19 @@ export {
 } from "./consolidation-provenance.js";
 export {
   MAX_REVIEW_DIFF_ARTIFACT_BYTES,
+  reviewChunkCoverageFailure,
   reviewDiffArgs,
   sealReviewDiff,
   verifyReviewDiffArtifact,
 } from "./diff-artifact.js";
+export {
+  disputedCheckDigests,
+  disputedCheckRerunRequest,
+  disputedCheckSubmissionIssues,
+  disputedReviewChecks,
+  recordDisputedChecks,
+  settleDisputedCheckReruns,
+} from "./disputed-checks.js";
 export {
   efficiencyPlatform,
   recordEfficiency,

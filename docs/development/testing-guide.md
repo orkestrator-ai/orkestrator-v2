@@ -1619,7 +1619,7 @@ The limits are:
 | Resource | Default behavior |
 | --- | --- |
 | Persisted output | 64 MiB per command group, then terminate the group |
-| Failure tail printed to the terminal | 256 KiB |
+| Failure output printed to the terminal | First 32 KiB and last 256 KiB, with a marker where the middle was left out |
 | Failure reports printed after the tail | Every `(fail)` line with up to 40 preceding lines of its own task, at most 25 per group |
 | No-output watchdog | 5 minutes |
 | Absolute group deadline | 30 minutes, or 60 minutes for the iOS group |
@@ -2022,7 +2022,11 @@ a third of the cores ([Component suite workers](#component-suite-workers)). Its 
 measured CPU use undercounts a suite that mostly waits on pages. Under review
 validation that suite also retries a failed test once. A test that passes on
 its retry is listed as flaky in the check's output; record it in the flake
-registry like any other.
+registry like any other. Both browser suites then also stream one line per test
+and stop themselves before the command's deadline with a margin of up to a
+minute. A Playwright global timeout keeps the interruption output and marks
+review validation incomplete
+([review preparation](../architecture/review-preparation.md#validation-commands)).
 
 Use `workspace:` resource names for workspace-local directories and services, and
 `workspace:*` to exclude other commands in the same worktree. Use `host:` names
@@ -2259,9 +2263,12 @@ ports, drive happy-dom) rather than CPU, so it parallelizes well:
   two package tasks active; the root group takes the remainder. iOS is opt-in through `test:all` and runs
   last and alone because the simulator is a single shared resource.
 
-Group output streams to private bounded files while only a failure tail and the
-Bun failure reports stay in memory. Passing groups print a summary; failing
-groups print both and retain compressed artifacts. **Every** failing group is reported rather than stopping at the first.
+Group output streams to private bounded files while only the head and tail of
+each group's output and the Bun failure reports stay in memory. The detailed
+section at the end starts with the guard stage and its output (one line per
+guard), then gives every group its banner and a `Tests:` line totalling Bun's
+summary counts across its packages; failing groups also print their head and
+tail and failure reports, and retain compressed artifacts. **Every** failing group is reported rather than stopping at the first.
 
 Always add `--parallel` when running a suite directly; a sequential run of
 `tests/` takes roughly three times as long.

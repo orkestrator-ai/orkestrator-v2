@@ -1,7 +1,8 @@
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
 import { describe, expect, spyOn, test } from "bun:test";
 import { RecordingEfficiencyObserver } from "../review/efficiency.js";
-import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
+import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import {
   MAX_BUILD_PIPELINE_REVIEWERS,
   REVIEW_PACKAGE_SESSION_LABEL,
@@ -1195,6 +1196,182 @@ describe("build pipeline multi-model review", () => {
         await advanceUntil(service, read, started.id, "addressing-findings", 5);
       },
       { toolMode: true },
+    );
+  });
+
+  test.each(["corrected", "exhausted"] as const)(
+    "tool-v1 Build Pipeline consolidation with disputes is %s",
+    async (outcome) => {
+      await withPipeline(
+        async ({ service, read, provider, workflowResults }) => {
+          provider.runningModels.add("opus");
+          provider.runningModels.add("sonnet");
+          provider.runningConsolidation = true;
+          const started = await service.start(startInput(fourReviewers().slice(0, 2)));
+          await advanceUntil(service, read, started.id, "reviewing");
+          for (let pass = 0; pass < 10; pass++) {
+            if (
+              (await read(started.id)).reviewFanout?.reviewers.every(
+                (reviewer) => reviewer.dispatchState === "sent",
+              )
+            )
+              break;
+            await service.advanceNow(started.id);
+          }
+          const scope = { environmentId: "env-1", projectId: "project-1" };
+          const command = "mise run test";
+          const withOutcome = (result: "passed" | "failed", summary: string) => {
+            const report = reportFor("Reviewed the pinned package.");
+            report.reviewScope.commandsRun.push({ command, result, summary });
+            return report;
+          };
+          const reviewers = (await read(started.id)).reviewFanout!.reviewers;
+          for (const [index, reviewer] of reviewers.entries()) {
+            expect(reviewer.resultTransport).toBe("tool-v1");
+            expect(
+              await workflowResults!.submit(
+                scope,
+                reviewer.requestId!,
+                withOutcome(index === 0 ? "passed" : "failed", "Reviewer outcome."),
+              ),
+            ).toMatchObject({ ok: true });
+          }
+          provider.runningModels.clear();
+          for (let pass = 0; pass < 10; pass++) {
+            if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+            await service.advanceNow(started.id);
+          }
+          const current = (await read(started.id)).reviewFanout!.consolidation!;
+          expect(current.resultTransport).toBe("tool-v1");
+          const disputed = withOutcome("failed", "Claimed outcome from consolidation.");
+          const refusal = await workflowResults!.submit(scope, current.requestId, disputed);
+          expect(refusal).toMatchObject({
+            ok: false,
+            error: {
+              nextAction: "correct",
+              issues: [expect.objectContaining({ path: "$.reviewScope.commandsRun[0]" })],
+            },
+          });
+          if (outcome === "corrected") {
+            expect(
+              await workflowResults!.submit(scope, current.requestId, reportFor("Merged review.")),
+            ).toMatchObject({ ok: true });
+            provider.runningConsolidation = false;
+            const verified = await advanceUntil(service, read, started.id, "verifying", 10);
+            expect(verified.structuredReview?.reviewScope.commandsNotRun).toEqual([
+              expect.objectContaining({
+                command,
+                reason: expect.stringContaining("Review reports disagree."),
+              }),
+            ]);
+          } else {
+            for (let attempt = 2; attempt <= 4; attempt++) {
+              disputed.reviewScope.commandsRun[0]!.summary = `Invalid attempt ${attempt}.`;
+              const submission = await workflowResults!.submit(scope, current.requestId, disputed);
+              expect(submission).toMatchObject({
+                ok: false,
+                error: { nextAction: attempt === 4 ? "stop" : "correct" },
+              });
+            }
+            provider.runningConsolidation = false;
+            const failed = await advanceUntil(service, read, started.id, "failed", 25);
+            expect(failed.structuredReview).toBeUndefined();
+          }
+        },
+        { toolMode: true, toolKinds: ["review-report", "consolidated-review"] },
+      );
+    },
+  );
+
+  test("a disputed planned check is re-run on the reviewed commit and recorded", async () => {
+    await withPipeline(
+      async ({ service, read, provider, storage, workflowResults, disputeReruns }) => {
+        provider.runningModels.add("opus");
+        provider.runningModels.add("sonnet");
+        provider.runningConsolidation = true;
+        disputeReruns.outcome = "failed";
+        const started = await service.start(startInput(fourReviewers().slice(0, 2)));
+        await advanceUntil(service, read, started.id, "reviewing");
+        for (let pass = 0; pass < 10; pass++) {
+          if (
+            (await read(started.id)).reviewFanout?.reviewers.every(
+              (reviewer) => reviewer.dispatchState === "sent",
+            )
+          )
+            break;
+          await service.advanceNow(started.id);
+        }
+        // The sealed validation plan the package came from, at its commit.
+        const record = (await storage.getBuildPipeline(started.id))!;
+        const snapshot = record.snapshot as BuildPipeline;
+        const headRef = (snapshot.reviewPackage as { headRef: string }).headRef;
+        snapshot.validationRun = {
+          ...newReviewValidationRun("review-validation-sealed", {
+            headRef,
+            commands: [
+              {
+                id: "test",
+                command: "mise run test",
+                cwd: ".",
+                dependsOn: [],
+                resources: [],
+                weight: 1,
+                timeoutMs: 60_000,
+              },
+            ],
+            limitations: [],
+          }),
+          status: "completed",
+        };
+        snapshot.validationRun.results[0]!.status = "passed";
+        snapshot.validationRun.results[0]!.exitCode = 0;
+        await storage.saveBuildPipeline(
+          started.id,
+          started.projectId,
+          started.environmentId,
+          record.version,
+          snapshot,
+          record.revision,
+        );
+        const scope = { environmentId: "env-1", projectId: "project-1" };
+        const command = "cd '.' && mise run test";
+        const reviewers = (await read(started.id)).reviewFanout!.reviewers;
+        for (const [index, reviewer] of reviewers.entries()) {
+          const report = reportFor("Reviewed the pinned package.");
+          report.reviewScope.commandsRun.push({
+            command,
+            result: index === 0 ? "passed" : "failed",
+            summary: "Reviewer outcome.",
+          });
+          expect(await workflowResults!.submit(scope, reviewer.requestId!, report)).toMatchObject({
+            ok: true,
+          });
+        }
+        provider.runningModels.clear();
+        for (let pass = 0; pass < 10; pass++) {
+          if ((await read(started.id)).reviewFanout?.consolidation?.state === "sent") break;
+          await service.advanceNow(started.id);
+        }
+        const current = (await read(started.id)).reviewFanout!.consolidation!;
+        expect(
+          await workflowResults!.submit(scope, current.requestId, reportFor("Merged review.")),
+        ).toMatchObject({ ok: true });
+        provider.runningConsolidation = false;
+        const next = await advanceUntil(service, read, started.id, "addressing-findings", 10);
+
+        expect(disputeReruns.runs.length).toBeGreaterThan(0);
+        expect(disputeReruns.runs[0]!.plan).toMatchObject({
+          headRef,
+          commands: [{ id: "test", command: "mise run test", dependsOn: [] }],
+        });
+        expect(next.structuredReview?.reviewScope.commandsRun).toContainEqual({
+          command,
+          result: "failed",
+          summary: expect.stringContaining(`on the reviewed commit ${headRef}: failed (exit 1)`),
+        });
+        expect(next.structuredReview?.reviewScope.commandsNotRun).toEqual([]);
+      },
+      { toolMode: true, toolKinds: ["review-report", "consolidated-review"] },
     );
   });
 

@@ -621,6 +621,38 @@ describe("pointer review package", () => {
     }
   });
 
+  test("accepts diff parts only beside a sealed diff, numbered from 1 at their own paths", () => {
+    const digest = "d".repeat(64);
+    const diffArtifact = {
+      path: `.orkestrator/review-artifacts/package-1/review-diff-${digest}.patch`,
+      bytes: 2_048,
+      sha256: digest,
+    };
+    const part = (index: number, extra: Record<string, unknown> = {}) => ({
+      index,
+      path: `.orkestrator/review-artifacts/package-1/review-diff-part-0${index}-${"e".repeat(64)}.patch`,
+      bytes: 1_024,
+      sha256: "e".repeat(64),
+      files: [`src/${index}.ts`],
+      ...extra,
+    });
+    expect(
+      isReviewPackage(pointerPackage({ diffArtifact, diffChunks: [part(1), part(2)] }), 1),
+    ).toBe(true);
+    for (const wrong of [
+      [],
+      [part(2)],
+      [part(1), part(1)],
+      [part(1, { files: [""] })],
+      [part(1, { extra: true })],
+      [part(1, { path: diffArtifact.path })],
+      Array.from({ length: 65 }, (_, i) => part(i + 1)),
+    ]) {
+      expect(isReviewPackage(pointerPackage({ diffArtifact, diffChunks: wrong }), 1)).toBe(false);
+    }
+    expect(isReviewPackage(pointerPackage({ diffChunks: [part(1)] }), 1)).toBe(false);
+  });
+
   test("ties artifact paths to whether the command actually ran", () => {
     const [entry] = pointerPackage().validation;
     expect(

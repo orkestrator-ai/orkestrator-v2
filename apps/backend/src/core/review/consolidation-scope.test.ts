@@ -161,12 +161,12 @@ describe("mergeConsolidationScopeLists", () => {
     expect(
       utf8Bytes(JSON.stringify({ ...MERGED, commandsRun: [...passed, failing] })),
     ).toBeLessThan(CONSOLIDATION_SCOPE_MAX_BYTES);
-    expect(consolidationScopeLists(reports)).toBeUndefined();
-    const atLimit = consolidationScopeLists([
-      reportWith({ commandsRun: passed.slice(0, -1) }),
-      reports[1]!,
-    ]);
+    expect(mergeConsolidationScopeLists(reports)).toBeUndefined();
+    const atLimitReports = [reportWith({ commandsRun: passed.slice(0, -1) }), reports[1]!];
+    const atLimit = mergeConsolidationScopeLists(atLimitReports);
     expect(atLimit?.commandsRun).toEqual([...passed.slice(0, -1), failing]);
+    // Disputed panels supply full lists. The backend projects the unresolved checks.
+    expect(consolidationScopeLists(atLimitReports)).toBeUndefined();
     expect(
       consolidationScopeLists([
         ...reports.slice(0, 1),

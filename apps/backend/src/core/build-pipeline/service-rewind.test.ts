@@ -1,3 +1,6 @@
+import { mkdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { runCommand } from "../shell.js";
 import { describe, expect, spyOn, test } from "bun:test";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 import {
@@ -234,6 +237,47 @@ describe("rewinding to an earlier step", () => {
         "review:2",
         "verify:2",
       ]);
+    });
+  });
+
+  test("Ship points to the complete follow-ups when a later failed check overflows", async () => {
+    await withService(async (service, storage, provider, _invocations, controls) => {
+      const worktree = path.join(controls.dataDir, "ship-follow-ups");
+      await mkdir(worktree);
+      await runCommand("git", ["init", "-q", worktree]);
+      const started = await service.start(startInput());
+      await storage.updateEnvironment(started.environmentId, { worktreePath: worktree });
+      const logPath = ".orkestrator/review-artifacts/last-check/validation-31.stdout.txt";
+      await mutateStored(storage, started.id, (snapshot) => {
+        applyAgentKeyInformationUpdate(snapshot, {
+          tests: Array.from({ length: 31 }, (_, index) => ({
+            name: `Check ${index + 1}`,
+            result: "failed",
+            details: index === 30 ? `See ${logPath}` : "Needs a rerun.",
+          })),
+        });
+      });
+      const completed = await advanceUntil(
+        service,
+        storage,
+        started.id,
+        (snapshot) => snapshot.phase === "complete",
+      );
+      const ship = completed.sessions.find((session) => session.phase === "pr")!;
+      const prompt = provider.sent.find((entry) => entry.sessionId === ship.sdkSessionId)!.prompt;
+      const relative = prompt.match(
+        /\.orkestrator\/review-artifacts\/ship-follow-ups\/[a-f0-9]{64}\.json/,
+      )?.[0];
+      expect(relative).toBeDefined();
+      expect(prompt).not.toContain(logPath);
+      const evidence = JSON.parse(await readFile(path.join(worktree, relative!), "utf8")) as Array<{
+        text: string;
+        detail: string;
+      }>;
+      expect(evidence).toContainEqual(
+        expect.objectContaining({ text: "Check 31", detail: `failed: See ${logPath}` }),
+      );
+      expect((await runCommand("git", ["-C", worktree, "status", "--porcelain"])).stdout).toBe("");
     });
   });
 

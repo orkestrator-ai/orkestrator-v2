@@ -7,6 +7,9 @@ import {
   WORKFLOW_RESULT_MAX_ENTRIES,
   WORKFLOW_RESULT_MAX_PENDING_CALLS_PER_KEY,
 } from "@orkestrator/protocol/workflow-results";
+import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
+import { disputedCheckDigests } from "../review/disputed-checks.js";
+import { graphOutputSlotInput } from "./result-graph-output.js";
 import { StorageDatabase } from "../storage-database.js";
 import {
   readStoredValue,
@@ -1096,6 +1099,89 @@ describe("WorkflowResultService", () => {
         summary: "",
       }),
     ).toMatchObject({ ok: false, error: { code: "attempt_closed" } });
+  });
+
+  test.each(["consolidated-review", "graph-output"] as const)(
+    "%s refuses disputed outcomes before acceptance and accepts a correction",
+    async (kind) => {
+      const resultKey = crypto.randomUUID();
+      const command = "mise run test";
+      const digests = disputedCheckDigests(new Set([command]));
+      const identity = { ...scope, resultKey, provider: "codex" as const };
+      const slot =
+        kind === "consolidated-review"
+          ? ({
+              ...identity,
+              kind,
+              context: { type: kind, sources: {} },
+            } as const)
+          : graphOutputSlotInput(
+              identity,
+              { name: "report" },
+              graphBuiltInType("review-report@1")!,
+            );
+      await service.prepare(slot);
+      const context = slot.context!;
+      if (context.type !== "consolidated-review" && context.type !== "graph-output")
+        throw new Error("Expected a review result slot");
+      const corrected = structuredClone(emptyReport);
+      const invalid = structuredClone(corrected);
+      invalid.reviewScope.commandsRun = [
+        { command, result: "failed", summary: "Re-run during consolidation: one failed." },
+      ];
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject({ ok: true });
+      await service.prepare({ ...slot, context: { ...context, disputedCheckDigests: digests } });
+      const rejection = {
+        ok: false,
+        error: {
+          code: "invalid_result",
+          nextAction: "correct",
+          issues: [expect.objectContaining({ path: "$.reviewScope.commandsRun[0]" })],
+        },
+      };
+      expect(await service.validate(scope, resultKey, invalid)).toMatchObject(rejection);
+      expect(await service.submit(scope, resultKey, invalid)).toMatchObject(rejection);
+      expect(await service.projection(resultKey)).toBe("correcting");
+      expect(await service.submit(scope, resultKey, corrected)).toMatchObject({ ok: true });
+    },
+  );
+
+  test("reopens a prepared legacy consolidation with scoped contradictory outcomes", async () => {
+    const resultKey = crypto.randomUUID();
+    const command = "mise run test";
+    const slot = {
+      ...scope,
+      kind: "consolidated-review" as const,
+      provider: "codex" as const,
+      resultKey,
+    };
+    const legacy = { ...emptyReport.reviewScope };
+    legacy.commandsRun = [
+      { command, result: "failed", summary: "First reviewer" },
+      { command, result: "passed", summary: "Second reviewer" },
+    ];
+    const context = { type: "consolidated-review" as const, sources: {} };
+    await service.prepare({
+      ...slot,
+      context: {
+        ...context,
+        scope: {
+          filesReviewed: legacy.filesReviewed,
+          filesSkipped: legacy.filesSkipped,
+          filesLeftUncommitted: legacy.filesLeftUncommitted,
+          commandsRun: legacy.commandsRun,
+          commandsNotRun: legacy.commandsNotRun,
+        },
+      },
+    });
+    await service.prepare({
+      ...slot,
+      context: { ...context, disputedCheckDigests: disputedCheckDigests(new Set([command])) },
+    });
+    expect(
+      await service.submit(scope, resultKey, { ...emptyReport, reviewScope: legacy }),
+    ).toMatchObject({ ok: false });
+    expect(await service.submit(scope, resultKey, emptyReport)).toMatchObject({ ok: true });
   });
 
   test("terminal slots discard bulky validation context and stay below the byte ceiling", async () => {

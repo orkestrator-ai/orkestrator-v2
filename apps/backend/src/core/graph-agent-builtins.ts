@@ -1,3 +1,4 @@
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
 /**
  * The text of a built-in prompt (`prompt: { builtIn: "<id>" }`, item 105) for
  * one agent-node activation (item 204).
@@ -143,6 +144,7 @@ export interface GraphBuiltInPromptContext {
   outputs: Readonly<Record<string, string>>;
   /** The environment's base branch the work targets ("main"). */
   targetBranch: string;
+  validationPlan?: ReviewValidationPlan;
   /** Project notes, when the project has any. */
   notes?: string;
   /** The node's lens (replicated over lenses). */
@@ -236,7 +238,7 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
           (context.reviewInstruction?.trim() ? context.reviewInstruction : instruction),
       );
     case "consolidation":
-      return consolidationText(inputs, target);
+      return consolidationText(inputs, target, context.validationPlan);
     case "address-findings":
       inputs.optional("code");
       return addressFindingsText(inputs, instruction);
@@ -327,7 +329,11 @@ function discoveryReviewText(
   return [discovery, reviewerPanelTail(index, count, lens)].join("\n\n");
 }
 
-function consolidationText(inputs: BuiltInInputs, target: string): string {
+function consolidationText(
+  inputs: BuiltInInputs,
+  target: string,
+  validationPlan?: ReviewValidationPlan,
+): string {
   const reports = inputs.list("reports").map((entry) => ({
     reviewerId: entry.artifactId,
     agent: entry.reviewer?.agent ?? UNKNOWN_REVIEWER_LABEL,
@@ -349,6 +355,7 @@ function consolidationText(inputs: BuiltInInputs, target: string): string {
     return createMultiReviewConsolidationPrompt({
       reports,
       targetBranch: target,
+      validationPlan,
       ...(reviewPackage ? { reviewPackage } : {}),
     });
   } catch (error) {

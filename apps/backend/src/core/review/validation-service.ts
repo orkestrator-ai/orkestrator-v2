@@ -266,7 +266,7 @@ export async function controlReviewValidation(
   value: unknown,
   action: "start" | "status" | "cancel" | "stop-command",
   context: CommandContext,
-  options: { resultId?: string; targetBranch?: string } = {},
+  options: { resultId?: string; targetBranch?: string; targetCommit?: string } = {},
 ): Promise<ReviewValidationRun> {
   const release =
     action === "start"
@@ -286,7 +286,7 @@ async function controlReviewValidationOnce(
   value: unknown,
   action: "start" | "status" | "cancel" | "stop-command",
   context: CommandContext,
-  options: { resultId?: string; targetBranch?: string },
+  options: { resultId?: string; targetBranch?: string; targetCommit?: string },
 ): Promise<ReviewValidationRun> {
   if (!isReviewValidationRun(value)) throw new Error("Invalid review validation run");
   const resultId =
@@ -316,11 +316,19 @@ async function controlReviewValidationOnce(
   if (!root) throw new Error("Review validation workspace is unavailable");
   // The worker reads the change against this ref to decide which on-demand
   // suites apply. Without it every command runs as planned.
+  if (
+    action === "start" &&
+    options.targetCommit !== undefined &&
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(options.targetCommit)
+  ) {
+    throw new Error("Validation comparison must be a full commit SHA");
+  }
   const targetRef =
     action === "start"
-      ? options.targetBranch === undefined
-        ? await validationTargetRef(environment, context)
-        : `origin/${validateGitRefName(options.targetBranch, "target branch")}`
+      ? (options.targetCommit ??
+        (options.targetBranch === undefined
+          ? await validationTargetRef(environment, context)
+          : `origin/${validateGitRefName(options.targetBranch, "target branch")}`))
       : undefined;
   // Compact transport only: neither command output nor file contents return here.
   const payload = Buffer.from(

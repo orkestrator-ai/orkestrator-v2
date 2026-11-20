@@ -26,6 +26,7 @@ import {
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "../review-results.js";
 import {
+  REVIEW_PACKAGE_MAX_DIFF_CHUNKS,
   REVIEW_VALIDATION_PLAN_SCHEMA,
   REVIEW_VALIDATION_PLAN_V1_SCHEMA,
 } from "../review-workflow.js";
@@ -639,6 +640,11 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
       sha256: { type: "string" },
       bytes: { type: "integer", minimum: 1 },
       changedFileCount: { type: "integer", minimum: 0 },
+      diffChunkCount: nullable({
+        type: "integer",
+        minimum: 1,
+        maximum: REVIEW_PACKAGE_MAX_DIFF_CHUNKS,
+      }),
       limitations: { type: "array", items: { type: "string" } },
     }),
     budgets: { maxBytes: REVIEW_PACKAGE_MAX_BYTES, maxItems: 128 },
@@ -1158,13 +1164,21 @@ export function validateGraphArtifactValue(
     definition.builtIn && definition.name === "decision" && context.choices
       ? graphDecisionSchema(context.choices)
       : definition.schema;
-  // A review report from before `reviewScope.outcome` existed reads as reviewed.
-  const structural = validateGraphSchemaValue(
-    schema,
-    definition.validator === "structured-review-report"
-      ? backfillLegacyReviewOutcome(value)
-      : value,
-  );
+  let schemaValue = value;
+  // Older reports and package references omit fields now present in the
+  // portable schema. The domain validators still receive the original value.
+  if (definition.validator === "structured-review-report") {
+    schemaValue = backfillLegacyReviewOutcome(value);
+  } else if (
+    definition.validator === "review-package-reference" &&
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !Object.hasOwn(value, "diffChunkCount")
+  ) {
+    schemaValue = { ...value, diffChunkCount: null };
+  }
+  const structural = validateGraphSchemaValue(schema, schemaValue);
   if (structural.length > 0) return structural;
   if (!definition.validator) return [];
   return graphBuiltInValidator(definition.validator).check(value, context).slice(0, MAX_ISSUES);

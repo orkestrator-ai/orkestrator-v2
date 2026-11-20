@@ -164,6 +164,12 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
     ...(input.projectNotes ? { projectNotes: input.projectNotes } : {}),
     ...(input.artifactDispatch ? { artifactDispatch: input.artifactDispatch } : {}),
     ...(input.captureTranscript ? { captureTranscript: input.captureTranscript } : {}),
+    // A consolidation's disputed checks re-run through the environment's
+    // validation worker, the runner every graph validation already uses.
+    rerunDisputedChecks: (environmentId, run, targetBranch, targetCommit) =>
+      input.invoke("start_review_validation", { environmentId, run, targetBranch, targetCommit }),
+    cancelDisputedChecks: (environmentId, run) =>
+      input.invoke("cancel_review_validation", { environmentId, run }),
     // The idle-result grace is counted on the run's observation cadence.
     pollGate: (() => {
       const gate = new ElapsedPollGate(GRAPH_RUN_OBSERVATION_MS);

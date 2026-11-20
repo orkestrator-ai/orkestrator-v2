@@ -563,9 +563,13 @@ export class BuildPipelineContext {
     return saved;
   }
 
+  get workspaceFence(): EnvironmentMutationFence {
+    return this.options.environmentFence ?? this.rewindFence;
+  }
+
   async withCodeRewindReservation<T>(pipeline: BuildPipeline, run: () => Promise<T>): Promise<T> {
     return withWorkspaceCodeRewindReservation({
-      fence: this.options.environmentFence ?? this.rewindFence,
+      fence: this.workspaceFence,
       storage: this.storage,
       environmentId: pipeline.environmentId,
       assertQuiet: async () => {

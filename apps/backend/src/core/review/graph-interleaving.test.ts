@@ -32,7 +32,23 @@
  *
  * Replay a failure with `ORKESTRATOR_FANOUT_INTERLEAVING_SEEDS=<seed>`.
  */
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  newReviewValidationRun,
+  type ReviewValidationRun,
+} from "@orkestrator/protocol/review-workflow";
+import {
+  cleanupReviewValidationFixtures,
+  completed,
+  control,
+  fixture,
+  observeUntil,
+} from "./validation-worker-test-support.js";
+import { REVIEW_VALIDATION_WORKER } from "./validation-worker.js";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import { reviewerBlockedReason } from "@orkestrator/protocol/review-fanout";
 import { REVIEW_BLOCKED_ERROR_PREFIX } from "@orkestrator/protocol/structured-review";
@@ -935,3 +951,280 @@ test("a graph consolidator that could not review fails the review", async () => 
     await world.cleanup();
   }
 }, 30_000);
+
+test("graph consolidation repairs an unverified command claim before publishing pending evidence", async () => {
+  const command = "mise run test";
+  const withOutcome = (result: "passed" | "failed") => ({
+    ...INTERLEAVING_REPORT,
+    reviewScope: {
+      ...INTERLEAVING_REPORT.reviewScope,
+      commandsRun: [{ command, result, summary: "Reported by a reviewer." }],
+    },
+  });
+  let rejected: Record<string, unknown> | undefined;
+  let correction: string | undefined;
+  const world = await multiReviewInterleavingWorld({
+    realAgentNodes: [REAL_AGENT_NODE, "consolidate"],
+    script: async (turn, tools) => {
+      const position = positionOf(turn);
+      if (position === 0 && turn.index > 1) correction = turn.prompt;
+      const result =
+        position === 0 && turn.index > 1
+          ? INTERLEAVING_REPORT
+          : withOutcome(position === 1 ? "passed" : "failed");
+      const reply = await tools.call("submit_report", {
+        resultKey: turnSlots(turn).report,
+        result,
+      });
+      if (position === 0 && turn.index === 1) rejected = reply;
+      return "idle";
+    },
+  });
+  try {
+    const process = world.start();
+    await process.ready;
+    const started = await world.startReview({ reviewers: MODELS.slice(0, 2) });
+    let record = started;
+    for (let pass = 0; pass < 40 && !record.graphRun?.settled; pass++) {
+      await process.service.advanceNow(started.id);
+      await process.graphRuns.advanceNow(multiReviewGraphRunId(started.id)).catch(() => null);
+      await world.provider.settle();
+      record = await world.workflow(started.id);
+    }
+    expect(rejected?.structuredContent).toMatchObject({
+      ok: false,
+      error: { nextAction: "correct" },
+    });
+    expect(correction).toContain("Your last submission was rejected");
+    expect(record.phase).toBe("ready");
+    expect(record.consolidatedReport?.reviewScope.commandsRun).toEqual([]);
+    expect(record.consolidatedReport?.reviewScope.commandsNotRun).toEqual([
+      expect.objectContaining({
+        command,
+        reason: expect.stringContaining("Review reports disagree."),
+      }),
+    ]);
+  } finally {
+    await world.cleanup();
+  }
+}, 30_000);
+
+test.each([false, true])(
+  "graph chunk coverage and pre-dispatch verification (tampered=%s)",
+  async (tampered) => {
+    const world = await multiReviewInterleavingWorld({
+      realAgentNodes: [REAL_AGENT_NODE, "consolidate"],
+      script: async (turn, tools) => {
+        if (positionOf(turn) === 2) return "error";
+        await tools.call("submit_report", {
+          resultKey: turnSlots(turn).report,
+          result: INTERLEAVING_REPORT,
+        });
+        return "idle";
+      },
+    });
+    try {
+      const descriptor = graphBuiltInType("review-package@2")!.example as Record<string, unknown>;
+      world.fakes.scripts.set("package", () => ({ ...descriptor, diffChunkCount: 6 }));
+      const environment = (await world.storage.getEnvironment(world.environmentId))!;
+      const folder = ".orkestrator/review-artifacts/chunk-fixture";
+      await mkdir(path.join(environment.worktreePath!, folder), { recursive: true });
+      const diffChunks = await Promise.all(
+        Array.from({ length: 6 }, async (_, index) => {
+          const relative = `${folder}/part-${index + 1}.diff`;
+          const original = Buffer.from(`part ${index + 1}\n`);
+          await writeFile(
+            path.join(environment.worktreePath!, relative),
+            tampered && index === 0 ? "changed" : original,
+          );
+          return {
+            path: relative,
+            bytes: original.byteLength,
+            sha256: createHash("sha256").update(original).digest("hex"),
+          };
+        }),
+      );
+      world.fakes.referenceContents = (value) =>
+        Buffer.from(JSON.stringify({ ...(value as object), diffChunks }));
+      const process = world.start();
+      await process.ready;
+      const started = await world.startReview({ reviewers: [...MODELS] });
+      let record = started;
+      for (let pass = 0; pass < 40 && !record.graphRun?.settled; pass++) {
+        await process.service.advanceNow(started.id);
+        await process.graphRuns.advanceNow(multiReviewGraphRunId(started.id)).catch(() => null);
+        await world.provider.settle();
+        record = await world.workflow(started.id);
+      }
+      if (tampered) {
+        expect(world.provider.turns()).toHaveLength(0);
+        expect(record.reviewers[0]?.error).toContain("Review diff evidence changed");
+        expect(record.phase).toBe("failed");
+        return;
+      }
+      expect(record.reviewers.map((reviewer) => reviewer.status)).toEqual([
+        "completed",
+        "failed",
+        "completed",
+      ]);
+      expect(record.phase).toBe("failed");
+      expect(record.error).toContain("No usable reviewer report covers parts 2, 5.");
+      expect(world.provider.turns().some((turn) => positionOf(turn) === 0)).toBe(false);
+      expect(record.consolidatedReport).toBeUndefined();
+    } finally {
+      await world.cleanup();
+    }
+  },
+  30_000,
+);
+
+test.each([false, true])(
+  "graph rerun joins its worker or cancels it (cancel=%s)",
+  async (cancel) => {
+    const check = "while [ ! -f .orkestrator/release ]; do sleep 0.05; done";
+    const worker = await fixture([
+      {
+        id: "check",
+        cwd: ".",
+        command: check,
+        dependsOn: [],
+        resources: [],
+        weight: 1,
+        timeoutMs: 15_000,
+        scope: "general",
+      },
+    ]);
+    const sealedCheck = `cd '.' && ${check}`;
+    const calls: {
+      command: string;
+      run: ReviewValidationRun;
+      targetBranch?: string;
+      targetCommit?: string;
+    }[] = [];
+    const world = await multiReviewInterleavingWorld({
+      realAgentNodes: [REAL_AGENT_NODE, "consolidate"],
+      invoke: async (command, args) => {
+        const run = args.run as ReviewValidationRun;
+        calls.push({
+          command,
+          run,
+          targetBranch: args.targetBranch as string,
+          targetCommit: args.targetCommit as string,
+        });
+        if (command === "cancel_review_validation") return control(worker.root, run, "cancel");
+        if (command !== "start_review_validation") throw new Error("Unexpected graph command");
+        return control(
+          worker.root,
+          run,
+          "start",
+          {},
+          undefined,
+          REVIEW_VALIDATION_WORKER,
+          args.targetCommit as string,
+        );
+      },
+      script: async (turn, tools) => {
+        const position = positionOf(turn);
+        await tools.call("submit_report", {
+          resultKey: turnSlots(turn).report,
+          result:
+            position === 0
+              ? INTERLEAVING_REPORT
+              : {
+                  ...INTERLEAVING_REPORT,
+                  reviewScope: {
+                    ...INTERLEAVING_REPORT.reviewScope,
+                    commandsRun: [
+                      {
+                        command: position === 1 ? sealedCheck : check,
+                        result: position === 1 ? "passed" : "failed",
+                        summary: "Observed.",
+                      },
+                    ],
+                  },
+                },
+        });
+        return "idle";
+      },
+    });
+    try {
+      const reference = {
+        ...(graphBuiltInType("review-package@2")!.example as object),
+        headRef: worker.run.plan.headRef,
+        baseRef: worker.run.plan.headRef,
+        targetBranch: "release",
+      };
+      world.fakes.scripts.set("package", () => reference);
+      world.fakes.scripts.set("plan", ({ port }) =>
+        port === "plan" ? worker.run.plan : undefined,
+      );
+      const process = world.start();
+      await process.ready;
+      const started = await world.startReview({
+        reviewers: MODELS.slice(0, 2),
+        targetBranch: "release",
+      });
+      const runId = multiReviewGraphRunId(started.id);
+      for (let pass = 0; pass < 40 && calls.length === 0; pass++) {
+        await process.service.advanceNow(started.id);
+        await process.graphRuns.advanceNow(runId);
+        await world.provider.settle();
+      }
+      if (!calls[0]) {
+        const run = await world.run(runId);
+        throw new Error(
+          JSON.stringify(
+            run?.activations.map(({ nodeId, state, error }) => ({ nodeId, state, error })),
+          ),
+        );
+      }
+      expect(calls[0]).toMatchObject({
+        command: "start_review_validation",
+        targetBranch: "release",
+        targetCommit: reference.baseRef,
+      });
+      expect((await world.workflow(started.id)).consolidatedReport).toBeUndefined();
+      const rerun = calls[0]!.run;
+      await observeUntil(worker.root, rerun, (next) => next.results[0]?.status === "running", 5000);
+      if (cancel) await process.graphRuns.cancel(runId);
+      else {
+        await writeFile(path.join(worker.root, ".orkestrator", "release"), "");
+        await observeUntil(worker.root, rerun, (next) => next.status === "completed", 5000);
+      }
+      for (
+        let pass = 0;
+        pass < 40 && !(await world.workflow(started.id)).graphRun?.settled;
+        pass++
+      ) {
+        await process.graphRuns.advanceNow(runId);
+        await process.service.advanceNow(started.id);
+        await world.provider.settle();
+      }
+      expect(new Set(calls.map(({ run }) => run.id))).toEqual(new Set([calls[0]!.run.id]));
+      const final = await world.workflow(started.id);
+      if (cancel) {
+        expect(calls.at(-1)?.command).toBe("cancel_review_validation");
+        expect(final.consolidatedReport).toBeUndefined();
+        expect((await control(worker.root, rerun, "status")).status).toBe("cancelled");
+        const next = newReviewValidationRun(`${rerun.id}-after-cancel`, {
+          ...rerun.plan,
+          commands: [{ ...rerun.plan.commands[0]!, command: "true" }],
+        });
+        expect((await completed(worker.root, next)).results[0]?.status).toBe("passed");
+      } else {
+        expect(final.consolidatedReport?.reviewScope.commandsRun).toEqual([
+          expect.objectContaining({ command: sealedCheck, result: "passed" }),
+        ]);
+        expect(final.consolidatedReport?.reviewScope.commandsNotRun).toEqual([]);
+      }
+    } finally {
+      try {
+        if (calls[0]) await control(worker.root, calls[0].run, "cancel");
+      } finally {
+        await cleanupReviewValidationFixtures();
+        await world.cleanup();
+      }
+    }
+  },
+  30_000,
+);

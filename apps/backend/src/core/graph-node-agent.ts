@@ -49,6 +49,7 @@ import {
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
 import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { isAgentBranchFenceError } from "./agent-branch-commits.js";
 import { AgentBranchRunner } from "./agent-branch-runner.js";
 import type { AgentBranchPollGate, AgentBranchRecord } from "./agent-branch-types.js";
@@ -84,6 +85,7 @@ import type { ArtifactTurnDispatch, WorkflowResultService } from "./workflows/in
 import type { WorkspaceSnapshotProbe } from "./workspace-read-only-guard.js";
 import {
   GraphAgentBranchHost,
+  cancelGraphDisputeReruns,
   type GraphAgentCallFacts,
   type GraphAgentCallState,
 } from "./graph-agent-host.js";
@@ -168,6 +170,21 @@ export interface GraphAgentExecutorDependencies {
     readTranscript: () => Promise<readonly unknown[]>;
     settling: boolean;
   }): Promise<GraphActivationSession["transcript"] | undefined>;
+  /**
+   * Starts or reads a re-run of a consolidation's disputed checks in the
+   * environment (`start_review_validation`). Without it disputed checks are
+   * recorded as not re-run.
+   */
+  rerunDisputedChecks?(
+    environmentId: string,
+    run: ReviewValidationRun,
+    targetBranch?: string,
+    targetCommit?: string,
+  ): Promise<ReviewValidationRun>;
+  cancelDisputedChecks?(
+    environmentId: string,
+    run: ReviewValidationRun,
+  ): Promise<ReviewValidationRun>;
   pollGate?: AgentBranchPollGate;
   progressTracker?: MultiReviewProgressTracker;
   stallWarningMs?: number;
@@ -240,6 +257,9 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
     context: GraphExecutorContext,
     reason: GraphCancelReason,
   ): Promise<GraphActivationReport> {
+    if (this.dependencies.cancelDisputedChecks) {
+      await cancelGraphDisputeReruns(context, this.dependencies.cancelDisputedChecks);
+    }
     const session = context.activation.session;
     if (session?.question) this.dependencies.questions.release(session.question.id);
     const binding = context.binding;

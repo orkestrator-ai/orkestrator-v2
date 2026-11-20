@@ -1,6 +1,7 @@
+import { disputedCheckRerunRequest, advanceDisputedCheckRerun } from "./disputed-checks.js";
 // Review validation worker: worktree drift, repository profiles, coverage, host grants and on-demand suites.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -108,7 +109,7 @@ done
   expect(done.error).toContain("Git status could not be read");
 });
 
-test("drops overlong drifted paths and makes a 1024-path cap observable", async () => {
+test("counts omitted drift from overlong paths and the 1024-path cap", async () => {
   const { root, run } = await fixture([command("check", "exit 0")]);
   await mkdir(path.join(root, "drift"));
   await Promise.all(
@@ -143,7 +144,7 @@ done
   );
   expect(overlong.status).toBe("completed");
   expect(overlong.environmentChanges).toEqual(["kept.txt"]);
-  expect(overlong.environmentChangesOmitted).toBeUndefined();
+  expect(overlong.environmentChangesOmitted).toBe(1);
 }, 30_000);
 
 test("environmentChangesOmitted must be a positive integer when present", () => {
@@ -313,6 +314,85 @@ test("a command learns the slots it was granted and that review validation runs 
   expect(done.results[0]).toMatchObject({ status: "passed", reservedWorkers: 3 });
   expect(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8")).toBe("3 1");
 });
+
+// The browser suites reserve some time before this instant so a run
+// cut short names its interrupted tests instead of ending in silence.
+test("a command learns the wall-clock instant it will be killed", async () => {
+  const { root, run } = await fixture([
+    command("deadline", 'printf %s "$ORKESTRATOR_VALIDATION_DEADLINE_MS"', { timeoutMs: 7000 }),
+  ]);
+  const before = Date.now();
+  // An inherited value must not stand in for this command's own deadline.
+  const done = await waitFor(root, run, 12000, { ORKESTRATOR_VALIDATION_DEADLINE_MS: "1" });
+  expect(done.results[0]!.status).toBe("passed");
+  const deadline = Number(await readFile(path.join(root, done.results[0]!.stdoutPath!), "utf8"));
+  expect(deadline).toBeGreaterThanOrEqual(before + 7000);
+  expect(deadline).toBeLessThanOrEqual(Date.now() + 7000);
+});
+
+test.each([
+  { mode: "timeout", exitCode: 130, status: "incomplete", output: "Timed out" },
+  { mode: "assertion", exitCode: 1, status: "failed", output: "Expected:" },
+] as const)(
+  "Playwright $mode is sealed with its distinct outcome",
+  async ({ mode, exitCode, status, output }) => {
+    const { root, run } = await fixture([
+      command("browser", "mise run test:browser", { timeoutMs: 10_000 }),
+    ]);
+    await writeFile(path.join(root, "package.json"), '{"type":"module"}');
+    const modules = path.resolve(import.meta.dir, "../../../../../node_modules");
+    await symlink(modules, path.join(root, "node_modules"), "dir");
+    const cli = path.join(modules, "playwright", "cli.js");
+    const config = path.resolve(
+      import.meta.dir,
+      "../../../../../tests/playwright-review-validation.ts",
+    );
+    await writeFile(
+      path.join(root, "playwright.config.ts"),
+      `
+    import { reviewValidationRunOptions } from ${JSON.stringify(config)};
+    export default {
+      ...reviewValidationRunOptions("line"),
+      ${mode === "timeout" ? "globalTimeout: 3_000," : ""}
+      testMatch: "fixture.spec.ts",
+      workers: 1,
+    };
+  `,
+    );
+    await writeFile(
+      path.join(root, "fixture.spec.ts"),
+      `
+    import { expect, test } from "@playwright/test";
+    test("completed evidence", () => expect(1).toBe(1));
+    test("fixture browser evidence", async () => {
+      ${mode === "timeout" ? "await new Promise(() => {});" : "expect(1).toBe(2);"}
+    });
+  `,
+    );
+    // Exercise mise and the actual Playwright CLI against a temporary suite,
+    // without a browser download, web server or any shared ports.
+    await writeFile(
+      path.join(root, "mise.toml"),
+      `
+[tasks."test:browser"]
+run = 'unset JEST_WORKER_ID; node "$ORK_TEST_PLAYWRIGHT_CLI" test'
+`,
+    );
+    const done = await waitFor(root, run, 12_000, {
+      MISE_TRUSTED_CONFIG_PATHS: root,
+      ORK_TEST_PLAYWRIGHT_CLI: cli,
+    });
+    const result = done.results[0]!;
+    const stdout = await readFile(path.join(root, result.stdoutPath!), "utf8");
+    expect(stdout).toContain("completed evidence");
+    const stderr = await readFile(path.join(root, result.stderrPath!), "utf8");
+    expect({
+      status: result.status,
+      exitCode: result.exitCode,
+      log: stdout + stderr,
+    }).toMatchObject({ status, exitCode, log: expect.stringContaining(output) });
+  },
+);
 
 test("an unusable scheduling config degrades to plain scheduling instead of losing every result", async () => {
   const { root, run } = await fixture([
@@ -608,7 +688,11 @@ describe("repository-declared on-demand suites", () => {
     expect(final.status).toBe("completed");
     const [full, docker, browser] = final.results;
     // The record keeps the planned command; the limitation says what ran.
-    expect(full).toMatchObject({ command: "printf full", status: "passed" });
+    expect(full).toMatchObject({
+      command: "printf full",
+      executedCommand: "printf fallback",
+      status: "passed",
+    });
     expect(await output(root, full!)).toBe("fallback");
     expect(full!.limitation).toBe(
       "Ran printf fallback in its place: .orkestrator-test-scheduler.json runs printf full only when the change touches scripts/test-tiers.ts, and this change does not",
@@ -618,6 +702,34 @@ describe("repository-declared on-demand suites", () => {
     expect(browser).toMatchObject({ status: "passed", limitation: null });
     expect(await output(root, browser!)).toBe("browser");
   }, 20000);
+
+  test("a scheduled substitute cannot certify the requested rerun", async () => {
+    const { root, run: validation } = await onDemandFixture();
+    const request = disputedCheckRerunRequest({
+      disputes: new Set(["printf full"]),
+      plan: validation.plan,
+      headRef: validation.plan.headRef,
+      scopeKey: "substitute",
+    })!;
+    try {
+      const projected = await advanceDisputedCheckRerun(request, (planned) =>
+        run(root, planned, "origin/main"),
+      );
+      expect(projected).toEqual(
+        new Map([
+          [
+            "printf full",
+            expect.objectContaining({
+              result: "not-run",
+              reason: expect.stringContaining("printf fallback"),
+            }),
+          ],
+        ]),
+      );
+    } finally {
+      await control(root, request.run!, "cancel");
+    }
+  });
 
   test("failed diff lookup keeps all planned suites", async () => {
     const { root, run: validation } = await onDemandFixture();
@@ -652,7 +764,7 @@ describe("repository-declared on-demand suites", () => {
       toolchainBinDir: path.dirname(process.execPath),
       runtime: new BackendRuntime({ emit: () => undefined }),
     } as unknown as CommandContext;
-    const validate = async (id: string, targetBranch?: string) => {
+    const validate = async (id: string, targetBranch?: string, targetCommit?: string) => {
       const validation = { ...context.run, id };
       const previous = process.env.ORKESTRATOR_TEST_SCHEDULER_DIR;
       process.env.ORKESTRATOR_TEST_SCHEDULER_DIR = path.join(
@@ -661,7 +773,10 @@ describe("repository-declared on-demand suites", () => {
         "scheduler",
       );
       try {
-        await controlReviewValidation("env", validation, "start", commandContext, { targetBranch });
+        await controlReviewValidation("env", validation, "start", commandContext, {
+          targetBranch,
+          targetCommit,
+        });
         return await observeUntil(
           context.root,
           validation,
@@ -676,6 +791,10 @@ describe("repository-declared on-demand suites", () => {
     };
     const main = await validate("against-main", "main");
     const dev = await validate("against-dev");
+    const sealedDev = context.git("rev-parse", "origin/dev");
+    context.git("update-ref", "refs/remotes/origin/dev", "origin/main");
+    const pinned = await validate("against-pinned-dev", "dev", sealedDev);
+    expect(pinned.results.find((result) => result.id === "browser")?.status).toBe("skipped");
     expect(main.results.find((result) => result.id === "browser")?.status).toBe("passed");
     expect(dev.results.find((result) => result.id === "browser")?.status).toBe("skipped");
   }, 20000);
@@ -725,3 +844,43 @@ describe("repository-declared on-demand suites", () => {
     expect(await output(root, final.results[0]!)).toBe("full");
   }, 20000);
 });
+
+test.each(["clean", "missing-setup", "drift"] as const)(
+  "an actual disputed validation worker reports %s inputs correctly",
+  async (mode) => {
+    const check = "test -f .orkestrator/setup && grep -q original source.txt";
+    const { root, run } = await fixture([
+      command("setup", mode === "missing-setup" ? "exit 2" : "touch .orkestrator/setup"),
+      { ...command("check", check), dependsOn: ["setup"] },
+    ]);
+    if (mode === "drift") await writeFile(path.join(root, "source.txt"), "changed\n");
+    const request = disputedCheckRerunRequest({
+      disputes: new Set([check]),
+      plan: run.plan,
+      headRef: run.plan.headRef,
+      scopeKey: mode,
+    })!;
+    try {
+      const projected = await advanceDisputedCheckRerun(request, (planned) =>
+        completed(root, planned),
+      );
+      expect(projected).toEqual(
+        new Map([
+          [
+            check,
+            mode === "clean"
+              ? expect.objectContaining({ result: "passed" })
+              : expect.objectContaining({
+                  result: "not-run",
+                  reason: expect.stringContaining(
+                    mode === "drift" ? "workspace differed" : "prerequisites",
+                  ),
+                }),
+          ],
+        ]),
+      );
+    } finally {
+      await control(root, request.run!, "cancel");
+    }
+  },
+);

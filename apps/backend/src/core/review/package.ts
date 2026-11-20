@@ -93,6 +93,9 @@ export function reviewPackageReference(
     sha256,
     bytes: contents.byteLength,
     changedFileCount: reviewPackage.changedFiles.length,
+    ...(reviewPackage.diffChunks?.length
+      ? { diffChunkCount: reviewPackage.diffChunks.length }
+      : {}),
     limitations: [...reviewPackage.limitations],
     ...(reviewPackage.failureTriage
       ? { failureSummary: summarizeValidationFailureTriage(reviewPackage.failureTriage) }

@@ -161,6 +161,15 @@ timeouts range from one second to two hours. Cancellation, timeout, and output
 overflow terminate the command's process group. A worker-death watchdog also
 terminates its command groups. Intentionally detached commands are unsupported.
 
+Each non-cooperative command receives `ORKESTRATOR_VALIDATION_DEADLINE_MS`, the
+epoch millisecond at which its timeout kills it; a cooperative command's budget
+is execution time, so it gets none. The browser suites
+(`tests/playwright-review-validation.ts`) use it: under review validation they
+stream one line per finished test (Playwright's `list` reporter) and set
+Playwright's `globalTimeout` to stop before that deadline, reserving up to a minute, so a run cut
+short ends with Playwright's own report of the tests it interrupted rather than
+silence.
+
 A repository can mark a slow suite as on demand in
 `.orkestrator-test-scheduler.json` (`commandProfiles[<command>].onDemand`,
 parsed by `testSchedulingPolicy`): `when` lists path globs (`*` within a
@@ -202,6 +211,30 @@ Reviewer prompts request summaries first, targeted reads of failure evidence,
 and no duplicate full validation pass. Large successful logs are not injected
 into reviewer prompts. Read-only files and hashes detect accidental changes;
 they are not a security sandbox against a malicious project command.
+
+The backend also seals the reviewed diff beside the package (`diffArtifact`,
+`review/diff-artifact.ts`). A diff above 512 KiB is additionally sealed as
+parts targeting 256 KiB, preferring file and hunk boundaries (`diffChunks`: at most 64,
+each with its 1-based `index`, digest-named path, byte count, SHA-256 and the
+changed paths it holds; their bytes concatenate to the whole diff). Reviewer
+N of a panel of M reads parts N, N + M, N + 2M and so on in full and the other
+parts' file lists for context. A single oversized file can span several parts,
+and an oversized hunk can be continued in the next part. Bespoke panels with
+enough usable reports consolidate and record any uncovered part numbers in the
+report. Multi Review Retry restores stopped slots that own uncovered parts.
+Graph consolidation requires full part coverage. Its file permit checks the
+package and every referenced part before dispatch. A lone reviewer reads every part in turn
+(`PACKAGED_REVIEW_WORKING_RULES`). A 2.9 MB diff had otherwise left reviewers
+spot-checking it with searches. Integrity verification checks every part as
+it checks the diff, and a part that cannot be written leaves the package with
+the whole diff and a limitation. An older backend ignores `diffChunks`.
+
+Reviewer locations are pinned to the reviewed commit: the packaged reviewer
+prompt names `headRef`, and every `line` a reviewer reports is the line at that
+commit (`git show <headRef>:<path>`, or the new side of the diff), never one
+read from a worktree that may have moved since; one it cannot place there is
+`null` with a `symbol`. Address Findings is told the same and finds a moved
+location by file and symbol.
 
 ## Failure triage
 
@@ -720,6 +753,48 @@ The report therefore says whether the review happened:
   error, which is all a graph run keeps of a failed step. The Multi Review and
   Build Pipeline graphs label the reviewer "Could not review" and show the
   reason on its node, not "Complete" or a bare "Failed".
+
+### Disputed checks
+
+Reviewers sometimes record conflicting outcomes for the same command.
+Consolidation compares each reviewer's latest outcome for the same check.
+It resolves unambiguous bare and cwd-qualified spellings against the sealed
+plan and preserves whitespace inside shell arguments. Reviewer text supplies evidence only. A consolidation slot refuses
+a disputed outcome claim before accepting a report, on both the graph and
+bespoke paths, and the consolidation prompt tells the consolidator to leave
+disputed checks out and not to run them.
+
+The backend then re-runs them
+([`review/disputed-checks.ts`](../../apps/backend/src/core/review/disputed-checks.ts)).
+Only a command of the sealed validation plan is re-run: the plan the package
+was sealed from, discovered at the package's commit. A disputed command
+matches a planned one in its sealed form (`cd '<cwd>' && <command>`) or, when
+exactly one planned command has that text, as the bare command. Up to four
+matched checks run together in one run of the environment's validation worker,
+with their transitive prerequisites and a 30-minute cap per command. On-demand
+selection uses the package's comparison commit. The worker refuses a different
+HEAD, and any observed workspace drift, missing prerequisite, or scheduler
+substitution leaves the planned check unverified.
+
+- **Where it runs.** Standalone Multi Review and the Build Pipeline panel
+  re-run when they accept the consolidated report, and retry on their next pass
+  while the run is still going. A graph consolidation also yields between
+  observations while the worker runs. Its plan is the package artifact's
+  `validation-plan` input. An explicit stop cancels the environment-owned run.
+- **Restart-safe.** The run id is derived from the consolidation attempt and
+  sealed plan, so each observation and backend restart joins the run already
+  claimed in the environment instead of starting another.
+- **What is recorded.** A re-run that produced a result goes into
+  `reviewScope.commandsRun` with the observed result, the commit, the exit code
+  and the output paths in its summary. Every other disputed check goes into
+  `reviewScope.commandsNotRun` with the reason it was not re-run (not a planned
+  command, no plan, a plan from another commit, over the cap, cancelled, timed
+  out or no runner). A limitation counts both, and the checks the report budget
+  could not hold. A check that could not be re-run is never recorded as passed.
+- **Read back.** A report the backend already recorded (an accepted graph
+  artifact projected onto the Multi Review record) keeps the backend's re-run
+  entries, which start with a fixed summary prefix; a model cannot submit that
+  prefix because every disputed `commandsRun` claim is refused at submission.
 
 ## Fan-out budgets and benchmark
 

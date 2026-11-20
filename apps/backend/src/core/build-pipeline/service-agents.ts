@@ -1,3 +1,4 @@
+import { buildPipelineDisputedCheckInput } from "./review-fanout.js";
 /**
  * Agent harness resolution for build pipelines: the cached provider per
  * environment and harness, the bridge connection behind it, the model, effort
@@ -35,7 +36,7 @@ import { stagePromptImages } from "../prompt-attachments.js";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { BuildPipelineContext } from "./context.js";
 import { managedProvider, retireProvider } from "../provider-retirement.js";
-import { clearReviewerAdmission } from "../review/index.js";
+import { clearReviewerAdmission, disputedCheckRerunRequest } from "../review/index.js";
 
 /** Tiers and catalogue access shared by every selection in one operation. */
 interface BuildSelectionContext {
@@ -358,6 +359,15 @@ export class BuildPipelineAgents {
   ): Promise<unknown[]> {
     const fanout = pipeline.reviewFanout;
     if (!fanout) return [];
+    if (fanout.consolidation && !fanout.report) {
+      const request = disputedCheckRerunRequest(buildPipelineDisputedCheckInput(pipeline, fanout));
+      if (request?.run) {
+        await this.ctx.invoke("cancel_review_validation", {
+          environmentId: pipeline.environmentId,
+          run: request.run,
+        });
+      }
+    }
     const now = new Date().toISOString();
     const targets: Array<{ agent: BuildPipelineAgent; sessionId: string }> = [];
     for (const reviewer of fanout.reviewers) {

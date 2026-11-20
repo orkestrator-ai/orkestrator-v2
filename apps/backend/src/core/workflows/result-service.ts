@@ -5,6 +5,7 @@ import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-
 import {
   graphOutputContextProblem,
   graphOutputToolPort,
+  isDisputedCheckDigests,
 } from "@orkestrator/protocol/graphs/output-slots";
 import { graphTemplateResultContextProblem } from "@orkestrator/protocol/graphs/describe";
 import {
@@ -317,6 +318,8 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   return (
     value.type === "consolidated-review" &&
     (value.scope === undefined || isConsolidationScopeLists(value.scope)) &&
+    (value.disputedCheckDigests === undefined ||
+      isDisputedCheckDigests(value.disputedCheckDigests)) &&
     value.sources !== null &&
     typeof value.sources === "object" &&
     !Array.isArray(value.sources) &&
@@ -342,10 +345,39 @@ function gainsConsolidationScope(
   return serialize(previous) === serialize(rest);
 }
 
-/** Bind a held validation to the scope used to complete the submitted report. */
+/** A resumed slot can adopt the dispute fence without changing its result identity. */
+function gainsDisputedCheckFence(
+  previous: WorkflowResultSlotInput["context"],
+  next: WorkflowResultSlotInput["context"],
+): boolean {
+  if (
+    (previous?.type !== "consolidated-review" && previous?.type !== "graph-output") ||
+    previous.type !== next?.type ||
+    previous.disputedCheckDigests !== undefined
+  )
+    return false;
+  const { disputedCheckDigests, ...rest } = next;
+  if (!disputedCheckDigests?.length) return false;
+  if (
+    previous.type === "consolidated-review" &&
+    rest.type === "consolidated-review" &&
+    rest.scope === undefined
+  ) {
+    const { scope: _scope, ...prior } = previous;
+    return serialize(prior) === serialize(rest);
+  }
+  return serialize(previous) === serialize(rest);
+}
+
+/** Bind a held validation to all review context that can change its outcome. */
 function completionContext(entry: StoredWorkflowResult): string | undefined {
+  const context = entry.context;
+  if (context?.type === "consolidated-review" || context?.type === "graph-output") {
+    if (context.disputedCheckDigests?.length)
+      return createHash("sha256").update(serialize(context)).digest("hex");
+  }
   if (entry.kind !== "consolidated-review") return undefined;
-  const scope = entry.context?.type === "consolidated-review" ? entry.context.scope : undefined;
+  const scope = context?.type === "consolidated-review" ? context.scope : undefined;
   return createHash("sha256")
     .update(serialize(scope ?? null))
     .digest("hex");
@@ -841,11 +873,11 @@ export class WorkflowResultService {
         if (serialize(existing.context ?? null) === serialize(input.context ?? null))
           return { result: undefined };
         if (
-          existing.kind !== "consolidated-review" ||
-          !gainsConsolidationScope(existing.context, input.context)
+          !gainsConsolidationScope(existing.context, input.context) &&
+          !gainsDisputedCheckFence(existing.context, input.context)
         )
           throw new Error("Workflow result key is already bound to another attempt");
-        // Only an open consolidation may adopt the lists from a newer backend.
+        // Only an open slot may adopt context from a newer backend.
         if (existing.lifecycle !== "open" || existing.receipt) return { result: undefined };
         existing.context = input.context;
         existing.updatedAt = new Date().toISOString();

@@ -102,8 +102,10 @@ export interface FakeScriptCall {
  * names its own file's SHA-256, size and path, as `run-validation-and-seal`
  * seals it, so the built-in prompts that read it accept it (item 301).
  */
-function sealedContents(value: unknown): { contents: Buffer; value: unknown } {
-  const contents = Buffer.from(JSON.stringify(value));
+function sealedContents(
+  value: unknown,
+  contents: Buffer = Buffer.from(JSON.stringify(value)),
+): { contents: Buffer; value: unknown } {
   if (!isReviewPackageReference(value)) return { contents, value };
   const sha256 = createHash("sha256").update(contents).digest("hex");
   return {
@@ -120,6 +122,7 @@ function sealedContents(value: unknown): { contents: Buffer; value: unknown } {
 /** Pass-through executors for every node kind, with knobs for the tests. */
 export class FakeGraphExecutors {
   readonly calls: FakeExecutorCall[] = [];
+  referenceContents?: (value: unknown) => Buffer;
   /** Kinds `register` leaves out, for the real executors. */
   readonly skipKinds = new Set<GraphExecutableNodeKind>();
   /**
@@ -248,7 +251,7 @@ export class FakeGraphExecutors {
         graphTypeStorage(context.run.plan, port.type) === "reference"
           ? await context.artifacts.putFile({
               ...common,
-              ...sealedContents(value),
+              ...sealedContents(value, this.referenceContents?.(value)),
               extension: "json",
             })
           : await context.artifacts.putValue({ ...common, value });

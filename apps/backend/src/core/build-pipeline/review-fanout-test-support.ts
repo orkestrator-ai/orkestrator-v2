@@ -12,6 +12,7 @@ import type {
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { WorkflowResultKind } from "@orkestrator/protocol/workflow-results";
 import { StorageService } from "../storage.js";
@@ -442,6 +443,11 @@ export async function withPipeline(
     };
     commands: string[];
     workflowResults?: WorkflowResultService;
+    /**
+     * How the fake environment settles a `start_review_validation` re-run of
+     * disputed checks: `null` answers nothing, as before re-runs existed.
+     */
+    disputeReruns: { outcome: "passed" | "failed" | null; runs: ReviewValidationRun[] };
   }) => Promise<void>,
   options: {
     environmentGit?: BuildPipelineServiceOptions["environmentGit"];
@@ -506,8 +512,28 @@ export async function withPipeline(
     failUnexpectedly: false,
   };
   const commands: string[] = [];
+  const disputeReruns: { outcome: "passed" | "failed" | null; runs: ReviewValidationRun[] } = {
+    outcome: null,
+    runs: [],
+  };
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     commands.push(command);
+    if (command === "start_review_validation" && disputeReruns.outcome !== null) {
+      const run = _args.run as ReviewValidationRun;
+      disputeReruns.runs.push(run);
+      const outcome = disputeReruns.outcome;
+      return {
+        ...run,
+        status: "completed",
+        results: run.results.map((result) => ({
+          ...result,
+          status: outcome,
+          exitCode: outcome === "passed" ? 0 : 1,
+          stdoutPath: `.orkestrator/review-artifacts/${run.id}/validation-01.stdout.txt`,
+          stderrPath: `.orkestrator/review-artifacts/${run.id}/validation-01.stderr.txt`,
+        })),
+      } as T;
+    }
     if (command === "get_environment_uncommitted_paths") {
       if (worktree.fail || (worktree.failAfterPackage && packageGeneration.count > 0)) {
         throw new Error("probe failed");
@@ -614,6 +640,7 @@ export async function withPipeline(
       packageGeneration,
       commands,
       workflowResults,
+      disputeReruns,
     });
   } finally {
     await service.shutdown();

@@ -66,7 +66,11 @@ import {
   type WorkflowResultSlotView,
   workflowResultKindDefinition,
 } from "./result-registry.js";
-import { isReviewConsolidationProvenance, REVIEW_CONSOLIDATION_WORDING } from "../review/index.js";
+import {
+  disputedCheckSubmissionIssues,
+  isReviewConsolidationProvenance,
+  REVIEW_CONSOLIDATION_WORDING,
+} from "../review/index.js";
 
 /** The contract of a `graph-output` slot that names no port type: any object. */
 export const GRAPH_OUTPUT_GENERIC_SCHEMA: JsonSchema = Object.freeze({ type: "object" });
@@ -266,15 +270,20 @@ export const graphOutputKindDefinition: WorkflowResultKindDefinition = {
     return workflowResultKindDefinition(resultKind).finalContent?.(value, {}) ?? [];
   },
   contextValidator: (value, slot) => {
-    const provenance = graphOutputContext(slot)?.provenance;
-    if (!provenance) return [];
+    const context = graphOutputContext(slot);
+    const provenance = context?.provenance;
+    const disputes = disputedCheckSubmissionIssues(value, context?.disputedCheckDigests);
+    if (!provenance) return disputes;
     // Multi Review's consolidation contract keeps the wording it always had.
-    return validateGraphProvenance(
-      value,
-      provenance,
-      provenance.sources,
-      isReviewConsolidationProvenance(provenance) ? REVIEW_CONSOLIDATION_WORDING : undefined,
-    );
+    return [
+      ...disputes,
+      ...validateGraphProvenance(
+        value,
+        provenance,
+        provenance.sources,
+        isReviewConsolidationProvenance(provenance) ? REVIEW_CONSOLIDATION_WORDING : undefined,
+      ),
+    ].slice(0, WORKFLOW_RESULT_MAX_ISSUES);
   },
   environmentValidator: (slot) => {
     const context = graphOutputContext(slot);
@@ -308,6 +317,7 @@ export function graphOutputSlotInput(
     provenanceFields?: GraphProvenanceField[];
     /** A consolidation's raised review-report caps (item 301). */
     reviewLimits?: { maxIssues: number; maxCoverageGaps: number };
+    disputedCheckDigests?: string[];
   } = {},
 ): WorkflowResultSlotInput {
   const problem = graphOutputPortProblem(port.name);
@@ -342,6 +352,9 @@ export function graphOutputSlotInput(
       ? { criterionIds: [...options.criterionIds] }
       : {}),
     ...(provenance ? { provenance } : {}),
+    ...(options.disputedCheckDigests?.length
+      ? { disputedCheckDigests: options.disputedCheckDigests }
+      : {}),
     ...(options.reviewLimits && type.name === "review-report"
       ? { reviewLimits: { ...options.reviewLimits } }
       : {}),

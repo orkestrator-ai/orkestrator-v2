@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import os from "node:os";
 import path from "node:path";
+import { reviewValidationRunOptions } from "../tests/playwright-review-validation";
 import { installPlaywrightRunnerSigterm } from "../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../tests/private-tmpdir";
 
@@ -67,7 +68,9 @@ export default defineConfig({
   // docs/tests/flaky-tests/ as for any flake.
   retries: process.env.ORKESTRATOR_REVIEW_VALIDATION === "1" ? 1 : 0,
   forbidOnly: Boolean(process.env.CI),
-  reporter: "line",
+  // Review validation streams one line per test and stops the run before its
+  // deadline (tests/playwright-review-validation.ts).
+  ...reviewValidationRunOptions("line"),
   // Checks the fixture server belongs to this checkout, then ends the run if it
   // stops answering (Playwright watches it only while it starts).
   globalSetup: "./fixture-server-setup.ts",

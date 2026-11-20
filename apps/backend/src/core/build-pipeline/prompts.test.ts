@@ -32,6 +32,7 @@ import {
   MAX_REPORTED_UNCOMMITTED_PATHS,
   MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   prPrompt,
+  MAX_PULL_REQUEST_FOLLOW_UP_BYTES,
   resolveConflictsLocallyPrompt,
   resolveConflictsPrompt,
   reviewPrompt,
@@ -101,15 +102,55 @@ describe("build pipeline prompts", () => {
       "n".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1),
     );
 
-    expect(bounded.context.ticketTitle?.length).toBeLessThanOrEqual(REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    // Overlong fields are left out whole rather than cut part-way.
+    expect(bounded.context.ticketTitle).toBeUndefined();
+    expect(bounded.context.projectNotes).toBeUndefined();
     expect(bounded.context.comments?.length).toBeLessThanOrEqual(REVIEW_MAX_CONTEXT_LIST_ENTRIES);
     expect(bounded.context.imageNames?.length).toBeLessThanOrEqual(REVIEW_MAX_CONTEXT_LIST_ENTRIES);
     expect(Buffer.byteLength(JSON.stringify(bounded.context), "utf8")).toBeLessThanOrEqual(
       REVIEW_MAX_CONTEXT_BYTES,
     );
-    expect(bounded.limitations.join("\n")).toContain("Ticket title was truncated");
-    expect(bounded.limitations.join("\n")).toContain("Ticket comments was truncated");
-    expect(bounded.limitations.join("\n")).toContain("Ticket context was reduced");
+    // Every string that survives is exactly one of the ticket's own values.
+    const originals = new Set([
+      value.taskSnapshot.description,
+      ...value.taskSnapshot.comments.map((comment) => comment.text),
+      ...value.taskSnapshot.images.map((image) => image.filename),
+    ]);
+    for (const entry of [
+      bounded.context.ticketDescription,
+      bounded.context.acceptanceCriteria,
+      ...(bounded.context.comments ?? []),
+      ...(bounded.context.imageNames ?? []),
+    ]) {
+      if (entry !== undefined)
+        expect(originals.has(entry) || entry === value.taskSnapshot.acceptanceCriteria).toBe(true);
+    }
+    const limitations = bounded.limitations.join("\n");
+    expect(limitations).toContain("Ticket title (100001 characters) was left out");
+    expect(limitations).toContain("Ticket comments after the first 128 entries were left out");
+    expect(limitations).toContain("Ticket context was reduced");
+  });
+
+  test("ticket context drops a whole field to fit the aggregate bound", () => {
+    const value = pipeline();
+    value.taskSnapshot.description = "d".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    value.taskSnapshot.acceptanceCriteria = "a".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    value.taskSnapshot.comments = Array.from({ length: 6 }, () => ({
+      text: "c".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH),
+    }));
+
+    const bounded = buildPipelineReviewPackageContext(
+      value,
+      "n".repeat(REVIEW_MAX_CONTEXT_TEXT_LENGTH),
+    );
+
+    expect(bounded.context.projectNotes).toBeUndefined();
+    expect(bounded.context.ticketDescription).toBe(value.taskSnapshot.description);
+    expect(bounded.context.acceptanceCriteria).toBe(value.taskSnapshot.acceptanceCriteria);
+    for (const comment of bounded.context.comments ?? []) {
+      expect(comment).toHaveLength(REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    }
+    expect(bounded.limitations.join("\n")).toContain("left out whole: projectNotes");
   });
 
   test("buildPrompt includes the complete ticket and optional project notes", () => {
@@ -547,13 +588,19 @@ describe("build pipeline prompts", () => {
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(
       MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
     );
-    expect(prompt).toContain("… [truncated]");
-    expect(prompt).toContain("25 included errors have an overlong path or message shortened");
-    // Escaping remains intact after truncation: payload content cannot close the
-    // frame or become instruction prose.
+    expect(prompt).toContain("25 included errors have an overlong path or message replaced");
+    expect(prompt).not.toContain("[truncated]");
+    // No payload text reaches the frame, so it cannot close the frame or
+    // become instruction prose, and no string stops part-way.
+    expect(prompt).not.toContain("<&🚀");
     expect(prompt.split("</structured-review-contract-errors-json>")).toHaveLength(2);
-    expect(prompt).toContain("\\u003c");
-    expect(prompt).toContain("\\u0026");
+    const frame = prompt
+      .split("<structured-review-contract-errors-json>\n")[1]!
+      .split("\n</structured-review-contract-errors-json>")[0]!;
+    for (const issue of JSON.parse(frame) as Array<{ path: string; message: string }>) {
+      expect(issue.path).toMatch(/^\(path omitted: \d+ bytes\)$/);
+      expect(issue.message).toMatch(/^This error's message \(\d+ bytes\) was omitted/);
+    }
   });
 
   test("structuredReportRepairPrompt reports omission and truncation in the same frame", () => {
@@ -577,11 +624,10 @@ describe("build pipeline prompts", () => {
       `The frame lists ${MAX_REPORTED_CONTRACT_ISSUES} of the ${issues.length} validation errors, covering every distinct error code`,
     );
     expect(prompt).toContain("1 further error was omitted");
-    expect(prompt).toContain("1 included error has an overlong path or message shortened");
-    // The truncated payload never reaches the frame, and the surviving prefix
-    // stays fenced rather than becoming instruction prose.
-    expect(prompt).not.toContain(oversized);
-    expect(prompt).toContain("… [truncated]");
+    expect(prompt).toContain("1 included error has an overlong path or message replaced");
+    // The overlong payload never reaches the frame, even as a prefix.
+    expect(prompt).not.toContain("a".repeat(100));
+    expect(prompt).toContain("was omitted to keep the prompt bounded");
     expect(prompt.split("</structured-review-contract-errors-json>")).toHaveLength(2);
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(
       MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
@@ -651,7 +697,7 @@ describe("build pipeline prompts", () => {
     );
   });
 
-  test("only the repeated criterion list is shortened; the snapshot and ticket context keep full text", () => {
+  test("an overlong criterion is named in the list, never cut; the snapshot and ticket context keep full text", () => {
     const text = "x".repeat(10_000) + "required tail";
     const taskSnapshot = {
       ...pipeline().taskSnapshot,
@@ -666,7 +712,12 @@ describe("build pipeline prompts", () => {
     const serialized = section
       .split("<acceptance-criteria-json>\n")[1]!
       .split("\n</acceptance-criteria-json>")[0]!;
-    expect(JSON.parse(serialized)).toEqual([{ id: "ac-9", text: "x".repeat(10_000) }]);
+    expect(JSON.parse(serialized)).toEqual([
+      {
+        id: "ac-9",
+        text: `(This criterion is ${text.length} characters, longer than this list holds. Judge it from its full text in the ticket above.)`,
+      },
+    ]);
     expect(taskSnapshot.acceptanceCriteriaItems[0]!.text).toBe(text);
     expect(verificationPrompt({ ...pipeline(), taskSnapshot }, "", "main")).toContain(text);
   });
@@ -1228,7 +1279,45 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("2 more items are in the pipeline's notes");
     expect(prompt).toContain("Item 29");
     expect(prompt).not.toContain("Item 30");
-    expect(prompt).not.toContain("x".repeat(500));
+  });
+
+  test("prPrompt never cuts a follow-up mid-string, and leaves whole items out by size", () => {
+    const logPath = `/workspace/.orkestrator/review-artifacts/${"r".repeat(700)}/validation-03.stdout.txt`;
+    const big = "y".repeat(30 * 1024);
+    const prompt = prPrompt("main", {
+      followUps: [
+        { kind: "test", text: "mise run test", detail: `failed: see ${logPath}` },
+        { kind: "not-done", text: `A ${big}` },
+        { kind: "not-done", text: `B ${big}` },
+        { kind: "not-done", text: `C ${big}` },
+      ],
+    });
+    const frame = prompt.slice(
+      prompt.indexOf("<needs-a-look-json>") + "<needs-a-look-json>".length,
+      prompt.indexOf("</needs-a-look-json>"),
+    );
+    const shown = JSON.parse(frame) as Array<{ text: string; detail?: string }>;
+
+    expect(shown[0]!.detail).toBe(`failed: see ${logPath}`);
+    expect(shown.map((item) => item.text)).toEqual(["mise run test", `A ${big}`, `B ${big}`]);
+    expect(frame).not.toContain("…");
+    expect(Buffer.byteLength(frame)).toBeLessThan(MAX_PULL_REQUEST_FOLLOW_UP_BYTES + 1024);
+    expect(prompt).toContain("1 more item is in the pipeline's notes");
+    expect(prompt).toContain("Copy each text and detail in full");
+  });
+
+  test("an oversized criterion cannot hide later failure evidence", () => {
+    const prompt = prPrompt("main", {
+      followUps: [
+        { kind: "not-done", text: "First criterion" },
+        { kind: "not-done", text: "x".repeat(MAX_PULL_REQUEST_FOLLOW_UP_BYTES) },
+        { kind: "test", text: "Component tests", detail: "See output/browser.log" },
+        { kind: "not-done", text: "Last criterion" },
+      ],
+    });
+    expect(prompt).toContain("See output/browser.log");
+    expect(prompt).toContain("Last criterion");
+    expect(prompt).toContain("1 more item is in the pipeline's notes");
   });
 
   test("prPrompt has no follow-up section when nothing is outstanding", () => {

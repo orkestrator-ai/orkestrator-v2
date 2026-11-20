@@ -586,6 +586,7 @@ export async function readEnvironmentWorkspaceFile(
   environment: Environment,
   runner: EnvironmentCommandRunner,
   relativePath: string,
+  maxBytes?: number,
 ): Promise<Buffer> {
   if (environment.environmentType === "local") {
     const worktreePath = environment.worktreePath!;
@@ -609,7 +610,16 @@ export async function readEnvironmentWorkspaceFile(
     if (!info.isFile()) {
       throw new Error(`Review artifact is not a regular file: ${relativePath}`);
     }
-    return fs.readFile(resolved);
+    if (maxBytes === undefined) return fs.readFile(resolved);
+    const file = await fs.open(resolved, "r");
+    try {
+      const contents = Buffer.alloc(maxBytes + 1);
+      const { bytesRead } = await file.read({ buffer: contents });
+      if (bytesRead > maxBytes) throw new Error("Review artifact exceeds its sealed byte count");
+      return contents.subarray(0, bytesRead);
+    } finally {
+      await file.close();
+    }
   }
 
   const workspacePath = workspaceFilePath(relativePath);
@@ -627,7 +637,21 @@ export async function readEnvironmentWorkspaceFile(
   if (resolved !== workspacePath) {
     throw new Error(`Review artifact must not traverse symbolic links: ${relativePath}`);
   }
-  const base64 = (await runner("base64", ["-w", "0", "--", resolved], 30_000)).trim();
+  const base64 = (
+    maxBytes === undefined
+      ? await runner("base64", ["-w", "0", "--", resolved], 30_000)
+      : await runner(
+          "bash",
+          [
+            "-c",
+            'set -o pipefail; head -c "$1" -- "$2" | base64 -w 0',
+            "review-artifact",
+            String(maxBytes + 1),
+            resolved,
+          ],
+          30_000,
+        )
+  ).trim();
   return Buffer.from(base64, "base64");
 }
 
@@ -939,8 +963,18 @@ export async function verifyEnvironmentReviewPackage(
       return { valid: false, reason: "Review package SHA-256 changed" };
     }
     const pkg = JSON.parse(contents.toString("utf8")) as ReviewPackage;
-    if (pkg.diffArtifact) {
-      const reason = await verifyReviewDiffArtifact(pkg.diffArtifact, (filePath) =>
+    if (
+      reference.diffChunkCount !== undefined &&
+      reference.diffChunkCount !== pkg.diffChunks?.length
+    ) {
+      return { valid: false, reason: "Review package diff part count changed" };
+    }
+    // The diff and each of its parts are evidence every reviewer reads.
+    for (const artifact of [
+      ...(pkg.diffArtifact ? [pkg.diffArtifact] : []),
+      ...(pkg.diffChunks ?? []),
+    ]) {
+      const reason = await verifyReviewDiffArtifact(artifact, (filePath) =>
         readEnvironmentWorkspaceFile(environment, runner, filePath),
       );
       if (reason) return { valid: false, reason };
@@ -1177,6 +1211,7 @@ export async function generateReviewPackage(
     },
     diffCommand,
     ...(sealedDiff.artifact ? { diffArtifact: sealedDiff.artifact } : {}),
+    ...(sealedDiff.chunks ? { diffChunks: sealedDiff.chunks } : {}),
     changedFiles,
     validation: hydratedValidation,
     ...(options.validationPlan ? { validationPlan: options.validationPlan } : {}),

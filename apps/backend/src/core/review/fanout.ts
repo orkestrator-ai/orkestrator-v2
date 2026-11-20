@@ -1,3 +1,6 @@
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
+import { disputedReviewChecks, disputedCheckProjectionBudgetIssues } from "./disputed-checks.js";
+import { reviewChunkCoverageFailure } from "./diff-artifact.js";
 /**
  * The reviewer fan-out, shared by Multi Review and the build pipeline.
  *
@@ -245,6 +248,7 @@ export function promptWorktreeSnapshot(
 // Report provenance lives in review/fanout-provenance.ts; re-exported for owners.
 export {
   attributeReportFindings,
+  completedReviewerReports,
   consolidationOverlap,
   consolidationReports,
   consolidationResultContext,
@@ -280,6 +284,7 @@ export function reviewerFailureSummary(reviewers: readonly ReviewerRecord[]): st
 export function parseStructuredReportResult(
   result: StructuredOutputResult<unknown>,
   consolidationReviewers?: readonly ReviewerRecord[],
+  validationPlan?: ReviewValidationPlan,
 ) {
   if (!result.ok) {
     if (
@@ -331,6 +336,15 @@ export function parseStructuredReportResult(
         }
       : undefined,
   );
+  if (
+    sourceReports &&
+    disputedReviewChecks(
+      sourceReports.map((reviewer) => reviewer.report!),
+      validationPlan,
+    ).size > 0
+  ) {
+    budget.push(...disputedCheckProjectionBudgetIssues(parsed.data));
+  }
   if (budget.length > 0) {
     return {
       success: false as const,
@@ -381,6 +395,7 @@ export interface ReviewFanoutHost {
   readonly reviewInstruction?: string;
   /** Names the owner in user-facing failure text. */
   readonly label: string;
+  readonly diffChunkCount?: number;
   /** The environment its reviewers run in. */
   readonly environmentId?: string;
   /** Package consumers use provider plan/read-only mode, including repair turns. */
@@ -701,13 +716,17 @@ export class ReviewFanoutRunner {
     await this.branches.flushObservations();
 
     if (!reviewersSettled(reviewers)) return { kind: "working" };
+    const coverageFailure = reviewChunkCoverageFailure(
+      this.host.diffChunkCount,
+      reviewers.map((reviewer) => reviewer.status === "completed" && reviewer.report !== undefined),
+    );
     const reports = usableReviewerReports(reviewers);
     if (reports.length >= REVIEW_FANOUT_FAN_IN.minSuccessful) return { kind: "ready", reports };
     // Reviewers fail locally, so an environment-wide cause (an unreachable
     // bridge, a deleted worktree) reaches here as the same message on every
     // reviewer. Carry the distinct causes up rather than reporting a bare
     // "no valid report", which reads as a model-quality problem instead.
-    return { kind: "no-reports", error: reviewerFailureSummary(reviewers) };
+    return { kind: "no-reports", error: coverageFailure ?? reviewerFailureSummary(reviewers) };
   }
 
   /**

@@ -1083,9 +1083,13 @@ Publishing the same or an older completion revision again is a backend no-op,
 including after the user has selected another tab.
 
 The Ship stage passes the same list to `prPrompt`, which has the description
-carry a `## Needs a look` section, so the person merging sees it. Only the
-pipeline's Ship stage does this. A graph's `pull-request-description` builder
-does not receive the list yet.
+carry a `## Needs a look` section, so the person merging sees it. Items go into
+the prompt whole or not at all, with test evidence first: at most 30 items,
+within 64 KiB of serialized JSON. Oversized items are skipped so shorter
+items can still fit. When entries overflow, Ship writes the complete list to
+a read-only, Git-excluded artifact and names its path in the prompt. This keeps
+each log path and item intact. A graph's `pull-request-description` builder does
+not receive the list yet.
 
 ## Worker mailboxes
 

@@ -5630,3 +5630,57 @@ test("stale-snapshot retry abandons both separate review and fix sessions", asyn
     { packageFlow: true },
   );
 });
+
+test.each(["retry", "skip", "stop"] as const)(
+  "chunked Multi Review handles %s with one missing slot",
+  async (action) => {
+    const provider = new Provider();
+    provider.statusValue = "running";
+    await withService(
+      `env-chunk-${action}`,
+      provider,
+      async ({ start, service, storage, snapshot }) => {
+        const started = await start([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]);
+        await service.advanceNow(started.id);
+        await mutateStoredWorkflow(storage, started.id, (workflow) => {
+          workflow.reviewPackage = {
+            ...testGeneratedReviewPackage({
+              packageId: "chunk-test",
+              round: 1,
+              targetBranch: "main",
+            }),
+            diffChunkCount: 6,
+          } as unknown as NonNullable<MultiReviewWorkflow["reviewPackage"]>;
+          workflow.reviewers[0]!.status = "completed";
+          workflow.reviewers[0]!.report = consolidatedReport;
+          if (action === "retry") {
+            workflow.phase = "failed";
+            workflow.reviewers[1]!.status = "cancelled";
+          }
+        });
+        if (action === "retry") {
+          const retried = await service.retry(started.id);
+          expect(retried.phase).toBe("reviewing");
+          expect(retried.reviewers.map((reviewer) => reviewer.status)).toEqual([
+            "completed",
+            "pending",
+          ]);
+          return;
+        }
+        if (action === "skip") await service.skipStep(started.id, "review");
+        else await service.stopReviewer(started.id, started.reviewers[1]!.id);
+        provider.statusValue = "idle";
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return Boolean((await snapshot(started.id))?.consolidatedReport);
+        });
+        expect((await snapshot(started.id))?.consolidatedReport?.reviewScope.limitations).toContain(
+          "Diff review incomplete. No usable reviewer report covers parts 2, 4, 6.",
+        );
+      },
+    );
+  },
+);

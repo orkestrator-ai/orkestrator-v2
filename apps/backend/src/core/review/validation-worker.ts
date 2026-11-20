@@ -130,10 +130,10 @@ function recordEnvironmentChanges(files) {
   for (const file of recorded) seenDriftPaths.add(file);
   let omitted = Number.isSafeInteger(run.environmentChangesOmitted) ? run.environmentChangesOmitted : 0;
   for (const file of files) {
-    if (typeof file !== "string" || file.length === 0 || file.length > ${REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX}) continue;
+    if (typeof file !== "string" || file.length === 0) continue;
     if (seenDriftPaths.has(file)) continue;
     seenDriftPaths.add(file);
-    if (recorded.length < ${REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX}) recorded.push(file);
+    if (file.length <= ${REVIEW_VALIDATION_ENVIRONMENT_CHANGE_PATH_MAX} && recorded.length < ${REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX}) recorded.push(file);
     else omitted++;
   }
   recorded.sort();
@@ -263,6 +263,7 @@ async function execute(cmd, index, readyAt) {
     throw error;
   }
   for (const stream of streams) result[stream.name + "Path"] = path.relative(root, stream.file).split(path.sep).join("/");
+  if (cmd.command !== result.command) result.executedCommand = cmd.command;
   result.status = "running";
   delete result.queueReason;
   result.startedAt = new Date().toISOString();
@@ -279,8 +280,14 @@ async function execute(cmd, index, readyAt) {
     delete env.ORKESTRATOR_TEST_PARENT_RESERVATION;
     delete env.ORKESTRATOR_VALIDATION_RESOURCES;
     delete env.ORKESTRATOR_VALIDATION_GRANTED_WORKERS;
+    delete env.ORKESTRATOR_VALIDATION_DEADLINE_MS;
     // Lets a suite tell review validation from a person's run of it.
     env.ORKESTRATOR_REVIEW_VALIDATION = "1";
+    // The wall-clock instant (epoch ms) this command is killed, so a suite can
+    // stop itself first and report what was still running (Playwright's
+    // globalTimeout). A cooperative command's budget is execution time, not
+    // wall time, so it has no fixed deadline to pass.
+    if (!cooperative) env.ORKESTRATOR_VALIDATION_DEADLINE_MS = String(Date.now() + cmd.timeoutMs);
     // Consumers such as Playwright explicitly opt in to the host grant. Do not
     // overwrite ORKESTRATOR_TEST_WORKERS: package runners use it independently,
     // and bridge suites must retain their serial default.
@@ -380,7 +387,10 @@ async function execute(cmd, index, readyAt) {
       killTree(child, "SIGKILL");
       if (forceKill) clearTimeout(forceKill);
       result.exitCode = typeof code === "number" ? code : null;
-      const unavailable = failure ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
+      // Review Playwright reporters preserve timeout output and use the CLI's
+      // interrupted exit status, which wrappers pass through unchanged.
+      const interrupted = code === 130 ? "Validation command was interrupted (exit 130); inspect captured output" : null;
+      const unavailable = failure ?? interrupted ?? (code === null ? "Validation command ended without an exit code" : code === 75 ? "Validation reported infrastructure unavailability (exit 75); inspect captured output" : cooperative && (!projection || !["completed", "incomplete"].includes(projection.state)) ? "Cooperative runner did not seal its scheduling result" : projection?.state === "incomplete" ? "One or more groups could not complete; inspect captured output" : null);
       result.status = unavailable ? "incomplete" : code === 0 ? "passed" : "failed";
       delete result.queueReason;
       // A replaced on-demand suite keeps saying what ran in its place.
@@ -485,15 +495,18 @@ async function main() {
     // A repository-declared on-demand suite (commandProfiles[...].onDemand)
     // runs only when the change touches one of its trigger paths. Otherwise
     // its declared replacement runs in its place, or it is skipped. The plan
-    // and each result keep the planned command line; the limitation says what
-    // ran instead and why. When the changed paths cannot be read, every
-    // command runs as planned.
+    // and each result keep the planned command line. Execution records a
+    // replacement separately. A moving branch can use the full plan when its
+    // paths are unavailable; a sealed comparison must be readable.
     const onDemandSkipped = new Map();
     const onDemandReplacements = new Map();
     const onDemandRules = run.plan.commands.map(cmd => cmd.cwd === "." ? policy.profiles[cmd.command]?.onDemand : undefined);
     if (onDemandRules.some(Boolean) && typeof input.targetRef === "string") {
       const diff = spawnSync("git", ["diff", "--name-only", "-z", input.targetRef + "...HEAD"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20000 });
       const changed = diff.status === 0 ? diff.stdout.split("\0").filter(Boolean) : null;
+      if (!changed && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.targetRef)) {
+        throw new Error("The sealed validation comparison could not be read");
+      }
       const globToRegExp = pattern => new RegExp("^" + pattern.split("**").map(part => part.split("*").map(piece => piece.replace(/[.+?^$(){}|[\]\\]/g, "\\$&")).join("[^/]*")).join(".*") + "$");
       if (changed) {
         for (const [index, rule] of onDemandRules.entries()) {

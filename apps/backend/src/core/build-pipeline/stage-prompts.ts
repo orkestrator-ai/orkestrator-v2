@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import {
+  createGitEnvironmentCommandRunner,
+  writeEnvironmentReviewArtifact,
+} from "../commands-review.js";
 /**
  * What each Build Pipeline stage is told when its session opens.
  *
@@ -37,6 +42,7 @@ import {
   reworkPrompt,
   keyInformationInstruction,
   prPrompt,
+  pullRequestFollowUpEvidence,
   pushBranchPrompt,
   resolveConflictsPrompt,
   verificationPrompt,
@@ -229,11 +235,28 @@ export class BuildPipelineStagePrompts {
         ? ((await this.ctx.storage.getEnvironment(pipeline.environmentId))?.prUrl ?? undefined)
         : undefined;
       const forcePush = forcePushUpstream(pipeline);
+      const followUps = pipelineFollowUps(pipeline);
+      const evidence = pullRequestFollowUpEvidence(followUps);
+      let followUpsPath: string | undefined;
+      if (evidence.omitted > 0) {
+        const environment = await this.ctx.storage.getEnvironment(pipeline.environmentId);
+        if (!environment) throw new Error("Ship follow-up workspace is unavailable");
+        const contents = Buffer.from(JSON.stringify(evidence.full, null, 2) + "\n");
+        const digest = createHash("sha256").update(contents).digest("hex");
+        followUpsPath = `.orkestrator/review-artifacts/ship-follow-ups/${digest}.json`;
+        await writeEnvironmentReviewArtifact(
+          environment,
+          createGitEnvironmentCommandRunner(environment, this.ctx.workspaceFence),
+          followUpsPath,
+          contents,
+        );
+      }
       return {
         prompt: prPrompt(target, {
           ...(existingPullRequestUrl ? { existingPullRequestUrl } : {}),
           ...(forcePush ? { forcePushUpstream: forcePush } : {}),
-          followUps: pipelineFollowUps(pipeline),
+          followUps,
+          followUpsPath,
         }),
         images: [],
       };

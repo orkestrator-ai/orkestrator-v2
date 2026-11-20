@@ -864,8 +864,7 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     const host = this.host;
     const failure = host.resultFailure?.(branch, data) ?? null;
     if (failure === null) {
-      const accepted = host.acceptResult(branch, data);
-      if (accepted) await accepted;
+      if ((await host.acceptResult(branch, data)) === "pending") return "continue";
       branch.status = "completed";
     } else {
       // A valid answer that says the work could not be done: the turn ran, so

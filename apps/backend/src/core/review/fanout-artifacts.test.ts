@@ -1,3 +1,4 @@
+import { deriveConsolidatedProvenance } from "./fanout-provenance.js";
 /**
  * Transcript-artifact authority for reviewer turns (Multi Review and the
  * build pipeline's fan-out): each dispatched turn gets an artifact grant owned
@@ -11,6 +12,8 @@ import {
   ProviderDispatchPreparationError,
   type BuildPipelineProvider,
 } from "../build-pipeline/provider.js";
+import { CONSOLIDATED_REVIEW_EXAMPLE } from "./consolidation-example.js";
+import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import { MultiReviewProgressTracker } from "./progress.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";
 import {
@@ -206,3 +209,27 @@ describe("beginWorkflowArtifactTurn", () => {
     expect(turn?.agentMcp?.token).toBe(CONNECTION.token);
   });
 });
+
+test.each(["failed", "cancelled"] as const)(
+  "a %s middle reviewer leaves an explicit limitation in chunked fan-in",
+  async (status) => {
+    const { host, reviewer, sends } = harness("claude", "idle");
+    const report = CONSOLIDATED_REVIEW_EXAMPLE as unknown as StructuredReviewReport;
+    const reviewers: ReviewerRecord[] = [
+      { ...reviewer, id: "r1", status: "completed", report },
+      { ...reviewer, id: "r2", status },
+      { ...reviewer, id: "r3", status: "completed", report },
+    ];
+    await expect(
+      new ReviewFanoutRunner({ ...host, diffChunkCount: 6 }).advanceReviewers(reviewers),
+    ).resolves.toMatchObject({ kind: "ready" });
+    expect(
+      deriveConsolidatedProvenance(report, reviewers, undefined, undefined, 6).report.reviewScope
+        .limitations[0],
+    ).toBe("Diff review incomplete. No usable reviewer report covers parts 2, 5.");
+    await expect(
+      new ReviewFanoutRunner({ ...host, diffChunkCount: 1 }).advanceReviewers(reviewers),
+    ).resolves.toMatchObject({ kind: "ready" });
+    expect(sends).toEqual([]);
+  },
+);

@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { reviewDiffArtifactPath } from "@orkestrator/protocol/review-artifacts";
+import {
+  reviewDiffArtifactPath,
+  reviewDiffChunkArtifactPath,
+} from "@orkestrator/protocol/review-artifacts";
 import { isReviewPackage, type ReviewPackage } from "@orkestrator/protocol/review-workflow";
 import { BackendRuntime } from "../backend-runtime.js";
 import {
@@ -12,7 +15,14 @@ import {
   readEnvironmentWorkspaceFile,
   writeEnvironmentReviewArtifact,
 } from "../commands-review.js";
-import { reviewDiffArgs, sealReviewDiff, verifyReviewDiffArtifact } from "./diff-artifact.js";
+import {
+  REVIEW_DIFF_CHUNK_THRESHOLD_BYTES,
+  reviewDiffArgs,
+  reviewDiffHeaderPath,
+  sealReviewDiff,
+  splitReviewDiff,
+  verifyReviewDiffArtifact,
+} from "./diff-artifact.js";
 import { CommandFailedError } from "../shell.js";
 import { StorageService } from "../storage.js";
 
@@ -117,8 +127,111 @@ describe("sealReviewDiff", () => {
       "--no-ext-diff",
       "--no-textconv",
       "--no-renames",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
       "a...b",
     ]);
+  });
+});
+
+function fileDiff(file: string, lines: number, width = 40): string {
+  return `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -0,0 +1,${lines} @@\n${Array.from({ length: lines }, (_, i) => `+${String(i).padEnd(width, "x")}\n`).join("")}`;
+}
+
+describe("splitReviewDiff", () => {
+  test("cuts only between file diffs, and the parts concatenate to the diff", () => {
+    const diff = ["a.ts", "dir with space/b.ts", "c.ts", "d.ts"]
+      .map((file) => fileDiff(file, 20))
+      .join("");
+    const parts = splitReviewDiff(diff, 1_500);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(Buffer.concat(parts.map((part) => part.contents)).toString("utf8")).toBe(diff);
+    for (const part of parts) expect(part.contents.toString("utf8")).toStartWith("diff --git ");
+    expect(parts.flatMap((part) => part.files)).toEqual([
+      "a.ts",
+      "dir with space/b.ts",
+      "c.ts",
+      "d.ts",
+    ]);
+  });
+
+  test("splits one oversized file diff and never makes more than 64 parts", () => {
+    const diff = `${fileDiff("big.ts", 400)}${fileDiff("small.ts", 2)}`;
+    const parts = splitReviewDiff(diff, 100);
+    expect(parts.filter((part) => part.files.includes("big.ts")).length).toBeGreaterThan(1);
+    expect(Buffer.concat(parts.map((part) => part.contents)).toString("utf8")).toBe(diff);
+    const many = Array.from({ length: 200 }, (_, i) => fileDiff(`f${i}.ts`, 1)).join("");
+    const bounded = splitReviewDiff(many, 1);
+    expect(bounded.length).toBeLessThanOrEqual(64);
+    expect(Buffer.concat(bounded.map((part) => part.contents)).toString("utf8")).toBe(many);
+  });
+
+  test("reads quoted and unquoted headers", () => {
+    expect(reviewDiffHeaderPath("diff --git a/x y.ts b/x y.ts")).toBe("x y.ts");
+    expect(reviewDiffHeaderPath('diff --git "a/tab\\there" "b/tab\\there"')).toBe("tab\there");
+    expect(reviewDiffHeaderPath("diff --git a/x b/y")).toBeUndefined();
+  });
+});
+
+describe("sealReviewDiff parts", () => {
+  test("seals a large diff's parts beside it, each under its digest", async () => {
+    const diff = ["a.ts", "b.ts", "c.ts"].map((file) => fileDiff(file, 30)).join("");
+    const writes = new Map<string, Buffer>();
+    const sealed = await sealReviewDiff({
+      packageId: "p",
+      diff: async () => diff,
+      write: async (filePath, contents) => {
+        writes.set(filePath, contents);
+      },
+      chunkThresholdBytes: 100,
+      chunkTargetBytes: 1_500,
+    });
+    expect(sealed.limitation).toBeUndefined();
+    const chunks = sealed.chunks!;
+    expect(chunks.map((chunk) => chunk.index)).toEqual([1, 2, 3]);
+    for (const chunk of chunks) {
+      const contents = writes.get(chunk.path)!;
+      expect(chunk).toEqual({
+        index: chunk.index,
+        path: reviewDiffChunkArtifactPath("p", chunk.index, sha(contents)),
+        bytes: contents.byteLength,
+        sha256: sha(contents),
+        files: [["a.ts", "b.ts", "c.ts"][chunk.index - 1]!],
+      });
+    }
+  });
+
+  test("only the diff under the threshold has no parts", async () => {
+    const small = await sealReviewDiff({
+      packageId: "p",
+      diff: async () => fileDiff("a.ts", 3),
+      write: async () => {},
+    });
+    expect(small.chunks).toBeUndefined();
+    const single = await sealReviewDiff({
+      packageId: "p",
+      diff: async () => fileDiff("a.ts", 300),
+      write: async () => {},
+      chunkThresholdBytes: 10,
+      chunkTargetBytes: 10,
+    });
+    expect(single.chunks!.length).toBeGreaterThan(1);
+    expect(single.chunks!.every((chunk) => chunk.files.includes("a.ts"))).toBe(true);
+  });
+
+  test("a part that cannot be written keeps the whole diff and says why", async () => {
+    const sealed = await sealReviewDiff({
+      packageId: "p",
+      diff: async () => `${fileDiff("a.ts", 30)}${fileDiff("b.ts", 30)}`,
+      write: async (filePath) => {
+        if (filePath.includes("review-diff-part-")) throw new Error("disk full");
+      },
+      chunkThresholdBytes: 100,
+      chunkTargetBytes: 100,
+    });
+    expect(sealed.artifact).toBeDefined();
+    expect(sealed.chunks).toBeUndefined();
+    expect(sealed.limitation).toContain("could not be split into parts");
   });
 });
 
@@ -211,7 +324,7 @@ describe("review package diff artifact", () => {
 
     expect(isReviewPackage(written, 1)).toBe(true);
     expect(written.diffCommand).toBe(
-      `git diff --no-color --no-ext-diff --no-textconv --no-renames ${written.baseRef}...${written.headRef}`,
+      `git diff --no-color --no-ext-diff --no-textconv --no-renames --src-prefix=a/ --dst-prefix=b/ ${written.baseRef}...${written.headRef}`,
     );
     const expected = await git(worktree, ...written.diffCommand.split(" ").slice(1));
     expect(expected).toContain("+export const value = 1;");
@@ -256,6 +369,48 @@ describe("review package diff artifact", () => {
     expect(verification.valid).toBe(false);
     expect(verification.reason).toContain("Review diff byte count changed");
   });
+});
+
+test("a very large diff is sealed in parts the package names and verification checks", async () => {
+  const { worktree, context } = await reviewedEnvironment();
+  await git(worktree, "config", "diff.noprefix", "true");
+  await git(worktree, "config", "core.quotePath", "true");
+  const name = "α large.ts";
+  const lines = Array.from({ length: 20_000 }, (_, i) => `export const line${i} = ${i};`);
+  await fs.writeFile(path.join(worktree, name), `${lines.join("\n")}\n`);
+  await git(worktree, "add", "--", name);
+  await git(worktree, "commit", "-m", "feat: large change");
+  const reference = await generateReviewPackage("env-1", "large", 1, "main", [], [], [], context);
+  const written = JSON.parse(
+    await fs.readFile(path.join(worktree, reference.filePath), "utf8"),
+  ) as ReviewPackage;
+
+  expect(isReviewPackage(written, 1)).toBe(true);
+  expect(written.diffArtifact!.bytes).toBeGreaterThan(REVIEW_DIFF_CHUNK_THRESHOLD_BYTES);
+  const chunks = written.diffChunks!;
+  expect(chunks.length).toBeGreaterThan(1);
+  const parts = await Promise.all(
+    chunks.map((chunk) => fs.readFile(path.join(worktree, chunk.path))),
+  );
+  const whole = await fs.readFile(path.join(worktree, written.diffArtifact!.path));
+  expect(Buffer.concat(parts).equals(whole)).toBe(true);
+  expect(reference.diffChunkCount).toBe(chunks.length);
+  expect(chunks.filter((chunk) => chunk.files.includes(name)).length).toBeGreaterThan(1);
+  expect(Math.max(...chunks.map((chunk) => chunk.bytes))).toBeLessThanOrEqual(256 * 1024);
+  expect(Array.from(new Set(chunks.flatMap((chunk) => chunk.files))).sort()).toEqual(
+    ["added.ts", "tracked.txt", name].sort(),
+  );
+  expect(await git(worktree, "status", "--porcelain")).toBe("");
+  expect(await verifyEnvironmentReviewPackage("env-1", reference, context)).toMatchObject({
+    valid: true,
+  });
+
+  const file = path.join(worktree, chunks[1]!.path);
+  await fs.chmod(file, 0o644);
+  await fs.appendFile(file, "+an injected line\n");
+  const verification = await verifyEnvironmentReviewPackage("env-1", reference, context);
+  expect(verification.valid).toBe(false);
+  expect(verification.reason).toContain("Review diff byte count changed");
 });
 
 test("non-UTF-8 Git output is omitted with an explicit fidelity limitation", async () => {

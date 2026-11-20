@@ -100,3 +100,22 @@ Relocated tests from the recorded commands now live at
   observations it did not pass alone, so on this host (macOS, Apple Silicon)
   it now fails deterministically on `main`. The move does not touch the push
   layer; only the test's import path changed.
+
+## Merge validation on 2026-11-20
+
+- **Observed.** Merging `11fca66ca0` into `d1d1f7139`, with merge base
+  `8e5d0081cb300512267659942e2cb5b7d0a91b9a`. The recurrence check against
+  that base reported the case open.
+- **Aggregate.** `mise run test:logged -- --name merge-default -- mise run test`
+  used four Bun workers for the backend. The relayed case measured 300 ms
+  against the 250 ms virtual p95 limit and failed after 308.96 ms. The backend
+  reported 20,095 passed, 152 skipped, and 3 failed across 1,424 files. The other
+  two failures concerned graph-review package reads. Evidence is in
+  `/tmp/orkestrator-test-run.Lm4TT1/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
+- **Isolated reruns.** The aggregate runner's one-worker rerun repeated the
+  300 ms p95 failure (8 passed, 1 failed). A separate
+  `mise run test:logged -- --name merge-push-acceptance -- bun test --cwd apps/backend ./tests/push-acceptance.test.ts --parallel=1 --only-failures`
+  also reported 8 passed and 1 failed, with one viewer at revision 25 when
+  the bridge was at 26. Evidence is in
+  `/tmp/orkestrator-test-run.Lm4TT1/rerun-apps-backend-tests-push-acceptance-test-ts.log.gz`
+  and `/tmp/orkestrator-test-run.aDDbUi/merge-push-acceptance.log.gz`.

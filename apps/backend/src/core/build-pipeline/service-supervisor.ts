@@ -262,6 +262,13 @@ export class BuildPipelineSupervisor {
         captureWorkspaceBaseline: (pipeline) => this.readOnly.capturePanel(pipeline),
         workspaceChanged: (pipeline) => this.readOnly.panelChanged(pipeline),
         provisionalFindings: this.ctx.provisionalFindings,
+        rerunDisputedChecks: (pipeline, run) =>
+          this.ctx.invoke<ReviewValidationRun>("start_review_validation", {
+            environmentId: pipeline.environmentId,
+            run,
+            targetBranch: pipeline.reviewPackage?.targetBranch,
+            targetCommit: pipeline.reviewPackage?.baseRef,
+          }),
         concurrency: this.ctx.options.reviewFanoutConcurrency,
         efficiency: this.ctx.options.efficiency,
         pollGate: (pipeline) => ({

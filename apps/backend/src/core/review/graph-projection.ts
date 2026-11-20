@@ -56,7 +56,9 @@ import {
 import type { ReviewAddressFindingsResult } from "@orkestrator/protocol/review-results";
 import {
   isReviewPackageReference,
+  isReviewValidationPlan,
   type ReviewPackageReference,
+  type ReviewValidationPlan,
 } from "@orkestrator/protocol/review-workflow";
 import {
   isStructuredReviewReport,
@@ -442,7 +444,32 @@ async function readConsolidation(
   if (!value) return undefined;
   const translation = await sourceIdTranslation(run, consolidate, branches, read);
   const translated = translateSourceIds(value, translation);
-  const derived = deriveConsolidatedProvenance(translated, reviewers);
+  const packageId = consolidate.inputs.package;
+  const outcomes = new Set(
+    reviewers.flatMap((reviewer) =>
+      (reviewer.report?.reviewScope?.commandsRun ?? []).map((entry) => entry.result),
+    ),
+  );
+  let plan: ReviewValidationPlan | undefined;
+  // The plan can identify command aliases when both outcomes were reported.
+  if (outcomes.size > 1 && typeof packageId === "string") {
+    const reviewPackage = await read(packageId);
+    const reference = artifactValue(reviewPackage);
+    for (const inputId of reviewPackage?.inputs ?? []) {
+      const input = await read(inputId);
+      const value = artifactValue(input);
+      if (
+        input?.type.startsWith("validation-plan@") &&
+        isReviewValidationPlan(value) &&
+        isReviewPackageReference(reference) &&
+        value.headRef === reference.headRef
+      ) {
+        plan = value;
+        break;
+      }
+    }
+  }
+  const derived = deriveConsolidatedProvenance(translated, reviewers, undefined, plan);
   return { report: derived.report, overlap: consolidationOverlap(translated, reviewers) };
 }
 

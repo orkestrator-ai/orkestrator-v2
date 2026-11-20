@@ -31,6 +31,8 @@ import type {
   ConsolidationScopeLists,
   WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
+import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
+import { disputedReviewChecks } from "./disputed-checks.js";
 import { inspectFinalText } from "../workflows/result-final-text.js";
 
 /** The `reviewScope` fields the backend fills in, in schema order. */
@@ -83,8 +85,7 @@ function uniqueBy<T>(items: Iterable<T>, key: (item: T) => string, limit: number
  *   the first spelling in each list for display.
  * - A command one reviewer ran is not also listed as not run.
  * - The same command run with the same outcome is listed once, with the first
- *   reviewer's summary; one that passed for one reviewer and failed for
- *   another is listed twice, so the disagreement stays visible.
+ *   reviewer's summary. Disputed outcomes are projected separately.
  */
 export function mergeConsolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
@@ -127,10 +128,14 @@ export function mergeConsolidationScopeLists(
 
 /**
  * A complete union that fits the slot and passes the result tool's scope checks.
+ * Disputed panels submit full lists so the backend can project unresolved
+ * checks consistently across transports.
  */
 export function consolidationScopeLists(
   reports: readonly Pick<StructuredReviewReport, "reviewScope">[],
+  plan?: ReviewValidationPlan,
 ): ConsolidationScopeLists | undefined {
+  if (disputedReviewChecks(reports, plan).size > 0) return undefined;
   const scope = mergeConsolidationScopeLists(reports);
   if (!scope || utf8Bytes(JSON.stringify(scope)) > CONSOLIDATION_SCOPE_MAX_BYTES) return undefined;
   const issues: WorkflowResultValidationIssue[] = [];

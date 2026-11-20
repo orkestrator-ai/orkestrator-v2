@@ -31,6 +31,7 @@ import {
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import {
+  disputedCheckSubmissionIssues,
   parseAddressFindingsResult,
   parsePrResult,
   parseReviewPreparationResult,
@@ -280,12 +281,15 @@ function validateConsolidationContext(
   value: Record<string, unknown>,
   context: ConsolidationContext,
 ): WorkflowResultValidationIssue[] {
-  return validateGraphProvenance(
-    value,
-    REVIEW_CONSOLIDATION_PROVENANCE,
-    context.sources,
-    REVIEW_CONSOLIDATION_WORDING,
-  ).slice(0, MAX_ISSUES);
+  return [
+    ...disputedCheckSubmissionIssues(value, context.disputedCheckDigests),
+    ...validateGraphProvenance(
+      value,
+      REVIEW_CONSOLIDATION_PROVENANCE,
+      context.sources,
+      REVIEW_CONSOLIDATION_WORDING,
+    ),
+  ].slice(0, MAX_ISSUES);
 }
 
 function validateReconciliationContext(

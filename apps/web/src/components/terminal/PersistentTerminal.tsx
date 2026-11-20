@@ -5,6 +5,7 @@ import { writeText } from "@/lib/native/clipboard";
 import { createTerminalTargetIdentity } from "@/hooks/terminal-target-identity";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useTerminalSizeClaim } from "./use-terminal-size-claim";
+import { useHiddenTerminalWrites } from "./use-hidden-terminal-writes";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -416,6 +417,9 @@ export function PersistentTerminal({
 
   // Extract terminal and addons from terminalData
   const { terminal, fitAddon, serializeAddon } = terminalData;
+  // A hidden tab's output is parsed in idle time, after the shown tab's frames
+  // (to-do 8312 task 2). Every byte still reaches xterm, in order.
+  const hiddenWrites = useHiddenTerminalWrites(terminal, isActive && isEnvironmentVisible);
 
   // Track selection state for clipboard actions
   useEffect(() => {
@@ -592,11 +596,17 @@ export function PersistentTerminal({
 
       const releaseClipboard = replay ? suppressOsc52Clipboard(terminal) : () => {};
       const applied = new Promise<void>((resolve) =>
-        terminal.write(data, () => {
-          releaseClipboard();
-          onApplied?.();
-          resolve();
-        }),
+        hiddenWrites.write(
+          data,
+          () => {
+            releaseClipboard();
+            onApplied?.();
+            resolve();
+          },
+          // A replay may reset the terminal next; everything received before
+          // it reaches xterm first.
+          { immediate: replay },
+        ),
       );
       if (data.length > 0) {
         hasRenderedOutputRef.current = true;
@@ -677,7 +687,7 @@ export function PersistentTerminal({
       }
       return applied;
     },
-    [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady],
+    [terminal, hiddenWrites, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady],
   );
 
   const handleReplay = useCallback(
@@ -1625,6 +1635,7 @@ export function PersistentTerminal({
       // Serialize buffer BEFORE cleanup while DOM is still connected
       // This captures the full buffer content for restoration if needed after remount
       // The effect will decide whether to use this based on whether pane actually changed
+      hiddenWrites.flush();
       try {
         const bufferContent = serializeLegacyTerminalBuffer(
           (options) => serializeAddon.serialize(options),
@@ -1679,6 +1690,7 @@ export function PersistentTerminal({
     };
   }, [
     terminal,
+    hiddenWrites,
     fitAddon,
     serializeAddon,
     terminalIsOpened,
@@ -2360,6 +2372,7 @@ export function PersistentTerminal({
         <ContextMenuTrigger asChild>
           <div
             ref={terminalRef}
+            data-terminal-tab-id={tabId}
             onClick={handleTerminalClick}
             onInputCapture={claimTerminalSizeOnInput}
             onPasteCapture={claimTerminalSizeOnInput}

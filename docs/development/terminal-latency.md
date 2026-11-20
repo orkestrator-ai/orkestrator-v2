@@ -1,8 +1,8 @@
 # Terminal key-to-echo latency under load
 
 How responsive an interactive shell stays while other terminals, agents and
-clients are busy: the benchmark that measures it, what it found, and what was
-changed. Follow-up work is in
+clients are busy: the loopback benchmark and the real-browser measurement,
+what they found, and what was changed. Follow-up work is in
 [8312](../todo/cross-cutting/8312-terminal-echo-under-load-follow-ups.md).
 
 The idea comes from Paseo's terminal performance notes and typing-latency
@@ -136,6 +136,19 @@ Renderer-side measurement is follow-up work (8312 task 2).
    screen can replace one still waiting for disk I/O. This preserves partial
    crash recovery during a sustained backlog and when a later boundary ends
    inside an oversized unfinished escape sequence.
+4. **Hidden tabs parse in idle time** (`apps/web/src/lib/terminal-background-writes.ts`,
+   used by `PersistentTerminal` through `use-hidden-terminal-writes.ts`; 8312
+   task 2). A hidden terminal tab stays subscribed and receives every byte, as
+   decided on 2026-10-27, but its writes wait in a FIFO and reach xterm.js one
+   32 KiB slice at a time from `requestIdleCallback` (200 ms timeout), with one
+   slice in flight across the page. Input and rendering run before idle
+   callbacks, so the shown tab's echo waits behind at most one slice's parse
+   instead of every hidden tab's 12 ms parse tasks. Showing the tab, a replay,
+   a buffer capture before a pane move and unmount flush the queue first; a
+   queue past 4 MiB or 4,096 writes flushes straight into xterm.js rather than
+   growing. The local-storage key `orkestrator-terminal-background-writes` set
+   to `off` before a terminal mounts writes straight through, as before; it
+   exists for the measurement below.
 
 ## Historical before and after
 
@@ -159,13 +172,128 @@ key timed out in any run. The median key-to-echo stayed under 1.6 ms at every
 level. Desyncs at heavy (slow-consumer resyncs of terminal streams) fell from
 232 to 88.
 
+## In a real browser
+
+`e2e/agent-testing/terminal-echo-latency-live.spec.ts` (8312 task 3) types into
+a real terminal tab in headless Chromium against an isolated `dev:test`
+profile and times each echo in the page with `performance.now()`: from the
+keydown event's own timestamp, so time the key waited behind other
+main-thread work counts, to the mutation of xterm.js's rows that shows the
+echo (xterm.js's DOM renderer updates rows in an animation frame, so this is
+the frame that paints it). The typing terminal runs `cat` in raw mode, as the
+loopback benchmark's does. After 10 warm-up keys it types 200 (150 in the A/B
+run), each 30 ms after the previous echo. The page also records long tasks and
+animation-frame gaps. The backend's own event-loop monitor is read from
+`/__orkestrator/metrics` around each run; it counts ticks at least 100 ms late,
+and none was in any run below.
+
+```bash
+env -u DISPLAY -u WAYLAND_DISPLAY ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run dev:test --profile echo8312 --fixture --no-agent-credentials --no-host-seed \
+  --headless --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=echo8312 ORKESTRATOR_AGENT_TEST_LIVE_TERMINAL_ECHO=1 \
+  ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43312 \
+  mise run test:logged -- --name terminal-echo -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts terminal-echo-latency-live.spec.ts
+mise run dev:stop --profile echo8312
+mise run dev:reset --profile echo8312
+```
+
+`ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS`, `_ROUNDS`, `_KEYS`, `_BUILD`, `_TOOL`,
+`_AGENTS` and `_STREAM` select the variants, rounds, keys, load terminals,
+agents and streamed answer length. Evidence (numbers only) is written as
+`evidence-terminal-echo-<time>.json` beside the run's Playwright artifacts. The
+spec's second case checks that a hidden tab shows all of a 150,000-line run,
+in order, once revealed.
+
+**Load shape.** The loopback benchmark's `busy` level, minus observers:
+three fixture terminals running `producer.ts build` at 256 KiB/s, two running
+`producer.ts tool` (2 MiB every 1.5 s), and four native Claude agents (the
+real CLI and bridge) each streaming a 1,600-line answer (2,000 in the A/B run)
+from the loopback model in `fake-anthropic-model.ts`, one delta every 25 ms.
+Nothing is billed. The heavy check uses six build and three tool terminals
+with the same four agents.
+
+**Variants.** Each runs in its own fixture environment, so only its parts
+mount in the page:
+
+| Variant | The page shows | The page receives and parses |
+| --- | --- | --- |
+| idle | the typing terminal | nothing else; no load runs |
+| backend-only | the typing terminal | nothing else; the load runs in terminals and agents of other environments |
+| agent-visible | the typing terminal beside a streaming agent | that agent's transcript |
+| hidden-tabs | as agent-visible, with the five load terminals as hidden tabs beside the typing tab | the transcript and all five load terminals |
+| hidden-tabs-direct | hidden-tabs with the measurement switch off (writes straight into xterm.js, as before this change) | the same |
+
+Measured on 2026-11-20 on `beelink2` (Linux x64, 16 threads, Bun 1.4.4,
+the `dev:test` Vite renderer, headless Chromium), against `main` at
+`0b778d995` plus this change. Figures are the medians of the per-round
+percentiles, in ms; variants rotate between rounds. No key timed out.
+
+**Before the change** (three rounds; load average fell from 25 to 3 during
+the run):
+
+| Variant | p50 | p95 | p99 | Long tasks per run, ms |
+| --- | --- | --- | --- | --- |
+| idle | 37.0 | 38.3 | 40.9 | 0 |
+| backend-only | 27.6 | 40.1 | 44.1 | 0 |
+| agent-visible | 34.5 | 81.6 | 97.4 | 1,165 |
+| hidden-tabs (writes straight into xterm.js) | 39.3 | 79.7 | 109.2 | 1,201 |
+
+**Idle with no agents anywhere** (four rounds, load average about 1): p50
+25.1, p95 26.9, p99 33.9, every round's p50 between 24.7 and 25.3. Up to one
+16.7 ms frame of it is the wait for the animation frame that paints the echo.
+
+**Heavy terminal load, backend only** (six build and three tool terminals,
+four agents; three rounds, load average about 1):
+
+| Variant | p50 | p95 | p99 |
+| --- | --- | --- | --- |
+| idle | 32.0 | 35.3 | 36.2 |
+| backend-only | 27.0 | 31.4 | 42.3 |
+
+**Hidden-tab writes, A/B** (three rounds of 150 keys, 2,000-line answers so
+every agent streamed throughout, load average about 1):
+
+| Variant | p50 | p95 | p99 | max |
+| --- | --- | --- | --- | --- |
+| agent-visible | 36.6 | 83.6 | 120.4 | 127.5 |
+| hidden-tabs (idle-time writes) | 35.4 | 64.2 | 91.3 | 101.7 |
+| hidden-tabs-direct | 35.5 | 80.4 | 100.7 | 101.5 |
+
+What this says:
+
+- **The backend's stall is not felt in the browser at these loads.** With the
+  load running only on the backend, typing is as fast as idle at the busy
+  level and about 6 ms slower at p99 at the heavy terminal level, and the backend
+  never had a tick 100 ms late. Moving headless parsing into a worker (8312
+  task 1) is therefore not built; the task stays open with this evidence.
+- **The renderer's largest cost is a visible streaming agent**, not terminals:
+  showing one beside the typing terminal adds about 40 ms at p95 and 50 ms at
+  p99, with about a second of long tasks per run.
+- **Hidden tabs' parsing is a smaller share**, about 10 to 15 ms at p99 before
+  the change (hidden-tabs against agent-visible in the first run;
+  hidden-tabs-direct against hidden-tabs in the A/B). Idle-time writes took
+  16 ms off p95 and 9 ms off p99 against direct writes in the same run. The
+  A/B's agent-visible row being higher than both shows the run-to-run spread
+  (about 20 ms at p95 and p99 under load): read the A/B as the difference
+  between its two hidden-tabs rows.
+- **Echo slows as agents' transcripts grow.** In every loaded run the same
+  variant's p50 rose round by round (idle 25, 37, 45 ms in the first run) while
+  the idle-only run, with no agent turns, stayed flat. Each round adds four
+  long agent turns; what grows with them is not yet known (8312 task 4).
+
 ## Limitations
 
-- One host, loopback only; no real browser or renderer. The typing client's
+- The loopback benchmark has no real browser or renderer: its typing client's
   headless parse stands in for the renderer's xterm.js parse, but not for its
-  rendering.
-- Agents are simulated: their transcript reads follow the live-update shape,
-  not the real projection's cost.
+  rendering. The real-browser figures above cover the renderer, on one host,
+  over loopback, with the development (Vite) renderer and headless Chromium,
+  whose frame timing and rendering differ from a desktop window's.
+- In the loopback benchmark agents are simulated: their transcript reads
+  follow the live-update shape, not the real projection's cost. The browser
+  run uses the real Claude CLI and bridge on a loopback model, whose answers
+  are plain streamed text with no tool calls.
 - Observers count desync notices and exercise snapshot reads under load. They do
   not reconstruct a renderer or reapply the returned screen.
 - Variation between runs is a few milliseconds at p95 and up to about 15 ms

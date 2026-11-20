@@ -320,7 +320,7 @@ The brand palette lives on the site; the app still ships older values: blue `#3b
 
 **The Outcome Color Rule.** Results always keep their color: a tool row's "success" is green, "failure" red and "running..." yellow, so a run of results can be read at a glance.
 
-**The Update Arrow.** A machine that runs an older Orkestrator than the command node, with an update on offer, is marked by a small up arrow in App All-Clear Green (`success`) outlined in `zinc-950`, in the top-right corner of its sidebar machine tile. The black outline is what keeps it legible on every machine colour, the green ones included; it never covers the initials or the CPU reading, and the tile's name and tooltip say the version difference in words.
+**The Update Arrow.** A machine that runs an older Orkestrator than the command node, with an update on offer, is marked by a small up arrow in App All-Clear Green (`success`) outlined in `zinc-950`, in the top-right corner of its sidebar machine tile. The black outline is what keeps it legible on every machine colour, the green ones included. In forced colours, the arrow uses `Canvas` for the fill and `CanvasText` for the outline. The arrow clears the initials and CPU reading. The tile's tooltip also serves as its accessible description and gives the version difference in words.
 
 **The Platform Hue Exception.** `emerald` and other accent hues that distinguish agent platforms in the model picker are identity, not status. Never use them to mean success.
 

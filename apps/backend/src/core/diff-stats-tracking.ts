@@ -18,7 +18,7 @@ import {
   SharedScanQueue,
   SharedWatcherRegistry,
 } from "./change-tracking/index.js";
-import { startWorktreeWatcher } from "./worktrees/index.js";
+import { startWorktreeWatcher, worktreeTargetKey, type WorktreeLookup } from "./worktrees/index.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { localGitScanCacheGauges } from "./local-git-scan-caches.js";
@@ -52,6 +52,9 @@ import type { Environment } from "./models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("diff-stats");
+
+const MAX_RECENT_FILE_WORKSPACES = 128;
+const MAX_RECENT_ROOT_FILES = 32;
 
 /**
  * How long an *unwatched* target's file list or tree (a container, or a local
@@ -193,6 +196,9 @@ export class DiffStatsTracking {
   private readonly baselineCandidates = new Map<string, BaselineCandidate>();
   /** In-flight checks, and whether another scan asked for one meanwhile. */
   private readonly baselineChecks = new Map<string, { rerun: boolean }>();
+  // A full root listing has no expandable parent. Give recent creates space
+  // within the normal budget, while still admitting only files the walk sees.
+  private readonly recentRootFiles = new Map<string, Set<string>>();
   private baselineStorage: Pick<CommandContext, "storage"> | null = null;
 
   constructor(options: DiffStatsTrackingOptions) {
@@ -287,11 +293,14 @@ export class DiffStatsTracking {
               containerStatus,
             ),
       walkTree: async (request) => {
-        if (request.kind === "local") return buildFileTree(request.worktreePath!);
+        const recent = this.recentRootFiles.get(worktreeTargetKey(request));
+        if (request.kind === "local")
+          return buildFileTree(request.worktreePath!, undefined, recent);
+        const priorityArgs = recent ? ` '' ${quoteShell(JSON.stringify([...recent]))}` : "";
         return parseContainerFileTree(
           await dockerExec(
             request.containerId!,
-            `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}`,
+            `node -e ${quoteShell(CONTAINER_FILE_TREE_LISTER)} -- /workspace ${MAX_FILE_TREE_NODES}${priorityArgs}`,
           ),
         );
       },
@@ -299,6 +308,20 @@ export class DiffStatsTracking {
         log.warn(event, { environmentId, error: formatLogError(error) });
       },
     });
+  }
+
+  fileCreated(lookup: WorktreeLookup, filePath: string): void {
+    if (!filePath.includes("/")) {
+      const key = worktreeTargetKey(lookup);
+      const previous = this.recentRootFiles.get(key);
+      const recent = [filePath, ...Array.from(previous ?? []).filter((name) => name !== filePath)];
+      this.recentRootFiles.delete(key);
+      this.recentRootFiles.set(key, new Set(recent.slice(0, MAX_RECENT_ROOT_FILES)));
+      if (this.recentRootFiles.size > MAX_RECENT_FILE_WORKSPACES) {
+        this.recentRootFiles.delete(this.recentRootFiles.keys().next().value!);
+      }
+    }
+    this.service.invalidateChanges(lookup);
   }
 
   /** One physical scan; equal concurrent requests join through {@link SharedScanQueue}. */
@@ -580,6 +603,7 @@ export class DiffStatsTracking {
   /** Releases every diff watcher and timer; called on backend shutdown. */
   shutdown(): void {
     this.stopped = true;
+    this.recentRootFiles.clear();
     this.invalidatePendingSync();
     this.service.shutdown();
     this.removeFetchPolicyDiagnostics();

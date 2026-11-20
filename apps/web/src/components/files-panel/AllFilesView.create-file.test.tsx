@@ -57,10 +57,19 @@ describe("New file in the All files view", () => {
   });
 
   test("creates an empty file inside a right-clicked folder and opens it", async () => {
-    const onCreateFile = mock(async (parentDirectory: string, fileName: string) =>
-      joined(parentDirectory, fileName),
-    );
-    appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: [] });
+    const store = appCommandStore(filesPanelStore);
+    const onCreateFile = mock(async (parentDirectory: string, fileName: string) => {
+      const path = joined(parentDirectory, fileName);
+      store.setState({
+        fileTree: fileTree.map((node) =>
+          node.path === parentDirectory
+            ? { ...node, children: [{ name: fileName, path, isDirectory: false }] }
+            : node,
+        ),
+      });
+      return path;
+    });
+    store.setState({ fileTree, expandedFolders: [] });
     renderWithTerminal(<AllFilesView onCreateFile={onCreateFile} />);
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "archive" }));
@@ -80,6 +89,7 @@ describe("New file in the All files view", () => {
     // The folder opens so the new file is visible, and the file is opened for editing.
     expect(appCommandStore(filesPanelStore).getState().expandedFolders).toContain("archive");
     expect(createFileTab).toHaveBeenCalledWith("archive/notes.md");
+    expect(await screen.findByRole("button", { name: "notes.md" })).toBeTruthy();
   });
 
   test("creates the file in a right-clicked file's folder", async () => {
@@ -117,6 +127,27 @@ describe("New file in the All files view", () => {
     fireEvent.change(screen.getByLabelText("File name"), { target: { value: "README.md" } });
     fireEvent.click(screen.getByRole("button", { name: "Create file" }));
     await waitFor(() => expect(onCreateFile).toHaveBeenLastCalledWith(".", "README.md"));
+  });
+
+  test("selects a newly listed blank design without trying to import it", async () => {
+    const store = appCommandStore(filesPanelStore);
+    store.setState({ fileTree });
+    const onCreateFile = mock(async (_parent: string, fileName: string) => {
+      store.setState({
+        fileTree: [...fileTree, { name: fileName, path: fileName, isDirectory: false }],
+      });
+      return fileName;
+    });
+    renderWithTerminal(<AllFilesView onCreateFile={onCreateFile} />);
+
+    fireEvent.contextMenu(screen.getByLabelText("Workspace empty space"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "New file" }));
+    fireEvent.change(screen.getByLabelText("File name"), { target: { value: "blank.orkdes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create file" }));
+
+    const row = await screen.findByRole("button", { name: "blank.orkdes" });
+    await waitFor(() => expect(row.getAttribute("aria-pressed")).toBe("true"));
+    expect(createFileTab).not.toHaveBeenCalled();
   });
 
   test("lists New file beside New folder, and only when creation is available", async () => {

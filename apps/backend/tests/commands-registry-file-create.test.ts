@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
+import { MAX_FILE_TREE_NODES } from "../src/core/commands-files";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {
@@ -61,6 +62,41 @@ describe("create_local_file / create_container_file", () => {
         context,
       ),
     ).rejects.toThrow("Expected fileName to be a string");
+  });
+
+  test("refreshes a full root listing with the created file and drops it on deletion", async () => {
+    const { worktree } = await createGitWorktreeWithOrigin();
+    for (let start = 0; start < MAX_FILE_TREE_NODES; start += 100) {
+      await Promise.all(
+        Array.from({ length: 100 }, (_, offset) =>
+          fs.writeFile(path.join(worktree, `a-${start + offset}.txt`), ""),
+        ),
+      );
+    }
+    const commands = createCommandRegistry();
+    const environment = createEnvironment({ worktreePath: worktree });
+    const { context } = createContext(environment);
+    const read = commands.get("get_local_file_tree")!;
+    const create = commands.get("create_local_file")!;
+    const fileName = "zz-created.txt";
+    const readPaths = async (refresh?: boolean) =>
+      ((await read({ worktreePath: worktree, refresh }, context)) as { path: string }[]).map(
+        (node) => node.path,
+      );
+
+    const before = await readPaths();
+    expect(before).toHaveLength(MAX_FILE_TREE_NODES);
+    expect(before).not.toContain(fileName);
+    await expect(
+      create({ environmentId: environment.id, parentDirectory: ".", fileName }, context),
+    ).resolves.toBe(fileName);
+    const after = await readPaths();
+    expect(after).toHaveLength(MAX_FILE_TREE_NODES);
+    expect(after).toContain(fileName);
+    expect(await readPaths(true)).toEqual(after);
+
+    await fs.unlink(path.join(worktree, fileName));
+    expect(await readPaths(true)).toEqual(before);
   });
 
   test("creates container files through the pinned exclusive writer", async () => {

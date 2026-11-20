@@ -8,14 +8,13 @@
  * ancestor directory is pinned so a swapped-in symlink cannot redirect the
  * write outside the workspace.
  */
-import path from "node:path";
-import { MAX_WORKSPACE_FILE_NAME_BYTES } from "@orkestrator/protocol/contract/domains/files";
 import {
   CONTAINER_PINNED_ATTACHMENT_WRITE,
-  validateWorkspaceMutationPath,
+  containerAttachmentWriteFailure,
+  resolveWorkspaceLeafCreate,
 } from "./commands-files.js";
 import { writeConfinedFile, type ConfinedCreateTestHooks } from "./path-safety.js";
-import { CommandFailedError, type runCommand } from "./shell.js";
+import type { runCommand } from "./shell.js";
 
 export interface WorkspaceFileCreate {
   /** Existing parent directory, `.` for the workspace root. */
@@ -38,35 +37,12 @@ export function resolveWorkspaceFileCreate(
   parentDirectory: string,
   fileName: string,
 ): WorkspaceFileCreate {
-  const name = fileName.trim();
-  if (name.length === 0) {
-    throw new Error("Invalid fileName: name is required");
-  }
-  if (Buffer.byteLength(name, "utf8") > MAX_WORKSPACE_FILE_NAME_BYTES) {
-    throw new Error(`Invalid fileName: name exceeds ${MAX_WORKSPACE_FILE_NAME_BYTES} bytes`);
-  }
-  if (name === "." || name === "..") {
-    throw new Error("Invalid fileName: path must stay inside the workspace");
-  }
-  if (name.toLowerCase() === ".git") {
-    throw new Error("Invalid fileName: Git metadata cannot be modified");
-  }
-  if (name.includes("/") || name.includes("\\")) {
-    throw new Error("Invalid fileName: path separators are not allowed");
-  }
-
-  const directory =
-    parentDirectory === "."
-      ? "."
-      : validateWorkspaceMutationPath(parentDirectory, "parentDirectory");
-  const filePath = validateWorkspaceMutationPath(
-    directory === "." ? name : path.posix.join(directory, name),
-    "filePath",
+  const { directory, name, entryPath } = resolveWorkspaceLeafCreate(
+    parentDirectory,
+    fileName,
+    "file",
   );
-  if (path.posix.basename(filePath) !== name) {
-    throw new Error("Invalid fileName: path must stay inside the workspace");
-  }
-  return { directory, fileName: name, filePath };
+  return { directory, fileName: name, filePath: entryPath };
 }
 
 function alreadyExists(filePath: string): Error {
@@ -132,15 +108,10 @@ export function containerCreateFileArgs(
 
 /** Turn the container writer's exit into the same messages the local path gives. */
 export function containerFileCreateFailure(error: unknown, created: WorkspaceFileCreate): Error {
-  const message = error instanceof Error ? error.message : String(error);
-  const exitCode = error instanceof CommandFailedError ? error.exitCode : undefined;
-  if ((exitCode === 76 || exitCode === undefined) && message.includes("EEXIST")) {
-    return alreadyExists(created.filePath);
-  }
-  if ((exitCode === 77 || exitCode === undefined) && message.includes("ENOENT_ANCESTOR")) {
-    return parentMissing(created.directory);
-  }
-  if (exitCode === 73) {
+  const failure = containerAttachmentWriteFailure(error);
+  if (failure === "exists") return alreadyExists(created.filePath);
+  if (failure === "missing-parent") return parentMissing(created.directory);
+  if (failure === "invalid-parent") {
     return new Error(
       `Invalid parentDirectory: not a folder inside the workspace: ${created.directory}`,
     );

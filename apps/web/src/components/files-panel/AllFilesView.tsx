@@ -2,6 +2,7 @@ import { useMemo, useState, type DragEvent, type MouseEvent, type ReactNode } fr
 import { useFilesPanelStore } from "@/stores";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
+import { isDesignFilePath } from "@/components/design/design-open-file";
 import {
   externalFilesFromDataTransfer,
   FILE_DRAG_TYPE,
@@ -241,9 +242,10 @@ export function AllFilesView({
       setFolderExpanded(parentDirectory, true);
     }
     setCreateFileParentDirectory(null);
-    // The new file is the one being worked on: select it and open it.
+    // An empty design export cannot be imported. Keep its row selected.
     setSelectedPaths([created]);
     setAnchorPath(created);
+    if (isDesignFilePath(created)) return;
     const openFile = createFileTab ?? onOpenFile;
     if (!openFile) return;
     openFile(created);

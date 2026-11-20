@@ -55,6 +55,36 @@ describe("workspace file creation", () => {
     expect((await fs.readdir(path.join(worktreePath, "src"))).sort()).toEqual(["App.tsx"]);
   });
 
+  test("refuses literal backslash parents without writing in either directory", async () => {
+    const literal = "src\\nested";
+    await fs.mkdir(path.join(worktreePath, literal));
+    await fs.mkdir(path.join(worktreePath, "src", "nested"));
+
+    await expect(createLocalFile(worktreePath, literal, "notes.md")).rejects.toThrow(
+      "folder paths cannot contain a backslash",
+    );
+    expect(await fs.readdir(path.join(worktreePath, literal))).toEqual([]);
+    expect(await fs.readdir(path.join(worktreePath, "src", "nested"))).toEqual([]);
+  });
+
+  test("concurrent same-name requests publish exactly one empty file", async () => {
+    const results = await Promise.allSettled([
+      createLocalFile(worktreePath, "src/", "race.txt"),
+      createLocalFile(worktreePath, "src", "race.txt"),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toEqual([
+      { status: "fulfilled", value: "src/race.txt" },
+    ]);
+    expect(results.filter((result) => result.status === "rejected")).toEqual([
+      { status: "rejected", reason: new Error("A file or folder already exists at src/race.txt") },
+    ]);
+    expect(await fs.readFile(path.join(worktreePath, "src", "race.txt"), "utf8")).toBe("");
+    expect((await fs.readdir(path.join(worktreePath, "src"))).sort()).toEqual([
+      "App.tsx",
+      "race.txt",
+    ]);
+  });
+
   test("validates the name the same way folder creation does", () => {
     expect(() => resolveWorkspaceFileCreate("src", "")).toThrow("name is required");
     expect(() => resolveWorkspaceFileCreate("src", "   ")).toThrow("name is required");
@@ -160,7 +190,7 @@ describe("container file creation", () => {
   });
 
   test("the writer creates an empty file and refuses an existing name", async () => {
-    expect(await runWriter("src", "notes.md")).toEqual([0, ""]);
+    expect(await runWriter("src/", "notes.md")).toEqual([0, ""]);
     expect(await fs.readFile(path.join(workspace, "src", "notes.md"), "utf8")).toBe("");
     expect(await runWriter(".", "root.txt")).toEqual([0, ""]);
     expect(await fs.readFile(path.join(workspace, "root.txt"), "utf8")).toBe("");
@@ -181,6 +211,14 @@ describe("container file creation", () => {
       code: "ENOENT",
     });
     expect((await fs.readdir(path.join(workspace, "src"))).sort()).toEqual(["App.tsx", "notes.md"]);
+  });
+
+  test("the writer publishes a leaf of exactly 213 UTF-8 bytes", async () => {
+    const name = "é".repeat(Math.floor(MAX_WORKSPACE_FILE_NAME_BYTES / 2)) + "x";
+    expect(Buffer.byteLength(name)).toBe(MAX_WORKSPACE_FILE_NAME_BYTES);
+    expect(await runWriter("src/", name)).toEqual([0, ""]);
+    expect(await fs.readFile(path.join(workspace, "src", name), "utf8")).toBe("");
+    expect((await fs.readdir(path.join(workspace, "src"))).sort()).toEqual(["App.tsx", name]);
   });
 
   test("the writer refuses a symlinked parent", async () => {

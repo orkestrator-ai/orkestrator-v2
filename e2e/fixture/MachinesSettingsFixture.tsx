@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { FederationProvider } from "../../apps/web/src/components/federation/FederationProvider";
-import { MachineCpuReadings } from "../../apps/web/src/components/federation/MachineCpuReadings";
+import {
+  useMachineCpu,
+  useMachineScopeLookup,
+} from "../../apps/web/src/components/federation/useMachineCpu";
+import type { MachineView } from "../../apps/web/src/lib/federation/aggregate";
+import { useMachineViews } from "../../apps/web/src/components/federation/useMachineViews";
 import { AppDialogHost } from "../../apps/web/src/components/layout/AppDialogHost";
 import { SystemUsageIndicator } from "../../apps/web/src/components/layout/SystemUsageIndicator";
 import { portalStore } from "../../apps/web/src/lib/portal/portal-store";
@@ -386,6 +391,43 @@ function installMachinesFixture() {
   return true;
 }
 
+/**
+ * Each machine's CPU, in machine order, read through the hooks the sidebar's
+ * machine tiles use, so the spec can check the order every list follows.
+ */
+function FleetCpuReadings() {
+  const machines = useMachineViews();
+  const scopeOf = useMachineScopeLookup();
+  return (
+    <div role="group" aria-label="CPU usage by machine" className="flex gap-2 p-2">
+      {machines.map((machine) => (
+        <FleetCpuReading key={machine.connectionId} machine={machine} scopeOf={scopeOf} />
+      ))}
+    </div>
+  );
+}
+
+function FleetCpuReading({
+  machine,
+  scopeOf,
+}: {
+  machine: MachineView;
+  scopeOf: ReturnType<typeof useMachineScopeLookup>;
+}) {
+  const { cpu } = useMachineCpu({
+    nodeId: machine.backendId,
+    bound: machine.bound,
+    connected: machine.bound || machine.transport === "connected",
+    scope: scopeOf(machine),
+  });
+  const reading = cpu === null ? "unavailable" : `${Math.round(cpu)}%`;
+  return (
+    <span role="img" aria-label={`${machine.name} CPU usage: ${reading}`}>
+      {reading}
+    </span>
+  );
+}
+
 export function MachinesSettingsFixture() {
   useState(installMachinesFixture);
   const [showMachines, setShowMachines] = useState(true);
@@ -397,9 +439,9 @@ export function MachinesSettingsFixture() {
           data-testid="fleet-title-bar"
           className="flex h-[var(--desktop-title-bar-height)] items-center justify-end border-b border-border/80 bg-chrome pr-1.5"
         >
-          <MachineCpuReadings />
           <SystemUsageIndicator />
         </header>
+        <FleetCpuReadings />
         <main className="p-4">
           <MachinesSettings />
         </main>

@@ -1976,16 +1976,18 @@ function WorkspaceBarHeightFixture() {
       <aside className="flex w-72 shrink-0 flex-col border-r border-border/80">
         <div
           data-testid="workspace-sidebar-header"
-          className="flex h-12 shrink-0 items-center border-b border-border/80 bg-chrome px-3"
+          className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border/80 bg-chrome px-2"
         >
-          Sidebar
+          <ProjectSearchBar
+            projects={[]}
+            environments={[]}
+            onSelectProject={() => undefined}
+            onSelectEnvironment={() => undefined}
+          />
+          <button type="button" className="size-7 shrink-0" aria-label="Add project">
+            +
+          </button>
         </div>
-        <ProjectSearchBar
-          projects={[]}
-          environments={[]}
-          onSelectProject={() => undefined}
-          onSelectEnvironment={() => undefined}
-        />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <div

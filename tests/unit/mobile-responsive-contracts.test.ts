@@ -69,12 +69,8 @@ describe("mobile responsive layout contracts", () => {
       "overflow-x-auto",
       "md:min-h-[32px]",
     ],
-    [
-      "apps/web/src/components/sidebar/ProjectSearchBar.tsx",
-      "WORKSPACE_BAR_HEIGHT_CLASS",
-      "shrink-0",
-      "md:h-7",
-    ],
+    ["apps/web/src/components/sidebar/ProjectSearchBar.tsx", "min-w-0", "w-full", "md:h-7"],
+    ["apps/web/src/components/sidebar/HierarchicalSidebar.tsx", "data-sidebar-header", "h-12"],
     ["apps/web/src/components/ui/alert-dialog.tsx", "max-h-[calc(100dvh-1rem)]", "overflow-y-auto"],
     ["apps/web/src/components/ui/dialog.tsx", "max-h-[calc(100dvh-1rem)]", "overflow-y-auto"],
   ])("keeps %s usable at narrow widths", (file, ...contracts) => {

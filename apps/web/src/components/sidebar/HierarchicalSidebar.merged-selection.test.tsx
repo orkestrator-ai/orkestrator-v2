@@ -246,7 +246,6 @@ test("a tile click shows only its machine, and a click on a faded tile adds it b
   expect(rowsOnScreen()).toEqual(["a1", "r1"]);
   expect(tile("bk_a").getAttribute("aria-pressed")).toBe("true");
   expect(tile("bk_a").getAttribute("aria-label")).toMatch(/^Machine A, CPU .*, shown$/);
-  expect(screen.queryByTestId("machines-selection") === null).toBe(true);
 
   fireEvent.click(tile("bk_a"));
   expect(filter()).toEqual(["bk_a"]);
@@ -255,15 +254,12 @@ test("a tile click shows only its machine, and a click on a faded tile adds it b
   expect(tile(SELF_NODE_ID).dataset.state).toBe("faded");
   expect(tile(SELF_NODE_ID).getAttribute("aria-pressed")).toBe("false");
   expect(tile(SELF_NODE_ID).getAttribute("aria-label")).toMatch(/, hidden$/);
-  // The machines menu's trigger shows the same selection.
-  expect(screen.getByTestId("machines-selection").textContent).toBe("1/2");
 
   fireEvent.click(tile(SELF_NODE_ID));
   // Every machine is shown again, which is no filter at all.
   expect(filter()).toEqual([]);
   await waitFor(() => expect(rowsOnScreen()).toEqual(["a1", "r1"]));
   expect(tile(SELF_NODE_ID).dataset.state).toBe("all");
-  expect(screen.queryByTestId("machines-selection") === null).toBe(true);
 });
 
 test("clicking the only selected tile clears the filter", async () => {
@@ -272,7 +268,6 @@ test("clicking the only selected tile clears the filter", async () => {
   fireEvent.click(tile(SELF_NODE_ID));
   expect(filter()).toEqual([SELF_NODE_ID]);
   await waitFor(() => expect(rowsOnScreen()).toEqual(["a1"]));
-  expect(screen.getByTestId("machines-selection").textContent).toBe("1/2");
 
   fireEvent.click(tile(SELF_NODE_ID));
   expect(filter()).toEqual([]);

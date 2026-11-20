@@ -122,9 +122,8 @@ There is no deeper hierarchy.
 - Web and iOS connect to a command node (or directly to a leaf) exactly as
   they connect to a backend today, and receive the UI from it.
 - **The command node changes only when the user changes it**: with the
-  switch on the "Command node" row of the sidebar's machines menu, in
-  Settings → Machines, or by opening a machine in a new window. The switch
-  hands command over (see [Handing command over](#handing-command-over)),
+  title bar's command-node switcher, in Settings → Machines, or by opening a
+  machine in a new window. The switch hands command over (see [Handing command over](#handing-command-over)),
   so the machine chosen really becomes the command node. Opening an
   environment on another machine, or creating one there, shows that
   machine's workspace in the window's central region and never changes the
@@ -669,9 +668,11 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   Settings > Machines, and the machine
   lists outside the sidebar follow it with the command node always first
   (`inMachineOrder`): that list, the Settings machine strip, the agent accounts
-  table and the title bar's per-machine CPU readings
-  (`MachineCpuReadings`, one coordinated read per machine, routed through the
-  command node). Ordered by machine, a node's environment order belongs to
+  table. The command-node switcher follows the device's saved connection
+  order (Local first on desktop). In a browser tab it shows the current
+  command node first, followed by machines with an enabled HTTPS route in
+  registry order. The machine tiles show each machine's CPU (`useMachineCpu`, one coordinated read per machine, routed
+  through the command node). Ordered by machine, a node's environment order belongs to
   that node: a drag within its run is written to the owner
   (`reorder_environments`).
 - **Presentation.** Per-node state (layouts, drafts) is namespaced by node

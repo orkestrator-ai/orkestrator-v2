@@ -10,7 +10,6 @@ import { emptyPortalLayout } from "@orkestrator/protocol/portal-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { FederationProvider } from "./FederationProvider";
 import { MachineTiles } from "./MachineTiles";
-import { MachinesFilter } from "./MachinesFilter";
 import { useMachineViews } from "./useMachineViews";
 
 const invokeMock = nativeInvoke as ReturnType<typeof mock>;
@@ -85,20 +84,15 @@ afterEach(() => {
   localStorage.removeItem("machine-view-storage");
 });
 
-function Tiles({ withFilter = false }: { withFilter?: boolean }) {
+function Tiles() {
   const machines = useMachineViews();
-  return (
-    <>
-      {withFilter ? <MachinesFilter machines={machines} /> : null}
-      <MachineTiles machines={machines} />
-    </>
-  );
+  return <MachineTiles machines={machines} />;
 }
 
-const renderTiles = (withFilter = false) =>
+const renderTiles = () =>
   renderInAppCommandScope(
     <FederationProvider>
-      <Tiles withFilter={withFilter} />
+      <Tiles />
     </FederationProvider>,
   );
 
@@ -158,18 +152,15 @@ test("Enter and Space toggle a focused tile, as on any button", async () => {
   expect(useMachineViewStore.getState().machineFilter).toEqual(["bk_self"]);
 });
 
-test("the machines menu shows the same selection the tiles set", async () => {
-  renderTiles(true);
+test("the tiles follow a filter set in the store, and clearing it shows them all", async () => {
+  renderTiles();
   await waitFor(() => expect(tiles()).toHaveLength(4));
   fireEvent.click(tile("beelink2"));
   fireEvent.click(tile("omarchy-hp"));
-  const trigger = screen.getByTestId("machines-filter");
-  expect(screen.getByTestId("machines-selection").textContent).toBe("2/4");
-  expect(trigger.getAttribute("aria-label")).toContain("2 of 4 shown");
+  expect(useMachineViewStore.getState().machineFilter).toHaveLength(2);
   act(() => useMachineViewStore.getState().setMachineFilter([]));
-  expect(trigger.textContent).toContain("All machines");
   expect(tiles().every((entry) => entry.getAttribute("data-state") === "all")).toBe(true);
-  // A filter set elsewhere (the menu) is reflected in the tiles.
+  // A filter set elsewhere (revealing a project on a hidden machine, say) is reflected in the tiles.
   act(() => useMachineViewStore.getState().setMachineFilter(["bk_gram"]));
   expect(tile("omarchy-gram").getAttribute("data-state")).toBe("selected");
   expect(tile("mini").getAttribute("data-state")).toBe("faded");

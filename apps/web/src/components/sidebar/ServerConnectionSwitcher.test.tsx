@@ -435,9 +435,31 @@ describe("server connection switcher", () => {
     });
   });
 
-  test("falls back to the Projects label without a connections API", () => {
-    renderInAppCommandScope(<ServerConnectionSwitcher />);
-    expect(screen.getByText("Projects")).toBeTruthy();
+  test("renders nothing without a connections API, so the title bar keeps no gap", () => {
+    const { container } = renderInAppCommandScope(<ServerConnectionSwitcher />);
+    expect(container.textContent).toBe("");
+    expect(screen.queryByTestId("server-connection-switcher") === null).toBe(true);
+  });
+
+  test("the compact trigger names the server only in its label", async () => {
+    installConnections({
+      activeConnectionId: "local",
+      connections: [
+        {
+          id: "local",
+          name: "Local",
+          address: null,
+          kind: "local",
+          active: true,
+          requiresToken: false,
+        },
+      ],
+    });
+    renderInAppCommandScope(<ServerConnectionSwitcher compact />);
+    const trigger = await screen.findByRole("button", { name: "Connected server: Local" });
+    expect(trigger.textContent).toBe("");
+    expect(trigger.className).toContain("h-9");
+    expect(trigger.className).toContain("w-9");
   });
 
   test("rehydrates from published connection snapshots and unsubscribes on unmount", async () => {

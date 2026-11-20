@@ -1,3 +1,4 @@
+import { requestAppShortcut } from "@/lib/app-shortcuts";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import {
@@ -446,40 +447,6 @@ describe("HierarchicalSidebar", () => {
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
-  test("renders the active server switcher in the sidebar header", async () => {
-    const originalApi = window.orkestrator;
-    window.orkestrator = {
-      ...originalApi,
-      connections: {
-        list: mock(async () => ({
-          activeConnectionId: "local",
-          connections: [
-            {
-              id: "local",
-              name: "Local",
-              address: null,
-              kind: "local" as const,
-              active: true,
-              requiresToken: false,
-            },
-          ],
-        })),
-        probe: mock(async () => true),
-        connect: mock(async () => ({ activeConnectionId: "local", connections: [] })),
-        use: mock(async () => ({ activeConnectionId: "local", connections: [] })),
-        forget: mock(async () => ({ activeConnectionId: "local", connections: [] })),
-        updateToken: mock(async () => ({ activeConnectionId: "local", connections: [] })),
-      },
-    } as Window["orkestrator"];
-    try {
-      renderInAppCommandScope(<HierarchicalSidebar />);
-      expect(await screen.findByRole("button", { name: "Connected server: Local" })).toBeTruthy();
-    } finally {
-      cleanup();
-      window.orkestrator = originalApi;
-    }
-  });
-
   test("renders a local project icon outside federation", () => {
     const icon = "data:image/png;base64,YQ==";
     projectsValue = [{ ...project, icon }];
@@ -489,9 +456,46 @@ describe("HierarchicalSidebar", () => {
     expect(within(row).queryByTestId("machine-home-icon") === null).toBe(true);
   });
 
-  test("shows a project and environment search bar under the host switcher", () => {
+  test("embeds project search beside the sort, refresh and add-project controls", () => {
+    const { container } = renderInAppCommandScope(<HierarchicalSidebar />);
+    const header = container.querySelector<HTMLElement>("[data-sidebar-header]")!;
+    expect(
+      within(header).getByRole("button", { name: "Search projects and environments" }),
+    ).toBeTruthy();
+    expect(within(header).getByRole("button", { name: /^Sort environments/ })).toBeTruthy();
+    expect(within(header).getByRole("button", { name: /^Refresh projects/ })).toBeTruthy();
+    expect(within(header).getByRole("button", { name: "Add project" })).toBeTruthy();
+    expect(within(header).queryAllByRole("button", { name: /^Connected server:/ })).toHaveLength(0);
+  });
+
+  test("project search remains usable and mounted during bulk selection", async () => {
+    environmentsValue = [{ ...createdEnvironment, id: "env-1" }];
     renderInAppCommandScope(<HierarchicalSidebar />);
-    expect(screen.getByRole("button", { name: "Search projects and environments" })).toBeTruthy();
+    const search = screen.getByRole("button", { name: "Search projects and environments" });
+    fireEvent.click(search);
+    const palette = await screen.findByRole("dialog", { name: "Search projects and environments" });
+    act(() => appCommandStore(uiStore).setState({ selectedEnvironmentIds: ["env-1"] }));
+    expect(screen.getByRole("dialog", { name: "Search projects and environments" })).toBe(palette);
+    fireEvent.keyDown(palette, { key: "Escape" });
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+
+    expect(screen.getByRole("button", { name: "Search projects and environments" })).toBe(search);
+    fireEvent.click(search);
+    const reopened = await screen.findByRole("dialog", {
+      name: "Search projects and environments",
+    });
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-1"]);
+
+    act(() => requestAppShortcut("search-projects"));
+    expect(
+      await screen.findByRole("dialog", { name: "Search projects and environments" }),
+    ).toBeTruthy();
+    act(() => requestAppShortcut("search-projects"));
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+    expect(appCommandStore(uiStore).getState().selectedEnvironmentIds).toEqual(["env-1"]);
   });
 
   test("expands a collapsed folder and project when a search result is chosen", async () => {

@@ -9,7 +9,7 @@ import { environmentStore } from "@/stores";
 import { prMonitorStore } from "@/stores/prMonitorStore";
 import { useMachineViewStore } from "@/stores/machineViewStore";
 import { uiStore } from "@/stores/uiStore";
-import { TAB_STRIP_CLASS, WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
+import { WORKSPACE_BAR_HEIGHT_CLASS } from "@/components/pane-layout/TabShell";
 import { ProjectSearchBar, searchShortcutLabel } from "./ProjectSearchBar";
 import { appCommandStore } from "@/test/app-command-store";
 
@@ -148,35 +148,37 @@ describe("ProjectSearchBar", () => {
     ]);
   });
 
-  test("matches the responsive workspace tab bar height", () => {
+  test("sits in the sidebar header's row, taking the width its buttons leave", () => {
     renderSearchBar();
 
     const wrapper = screen.getByTestId("project-search-bar");
     const trigger = screen.getByTestId("project-search-trigger");
-    const wrapperClass = wrapper.className;
+    const wrapperClasses = wrapper.className.split(" ");
 
-    expect(TAB_STRIP_CLASS).toContain(WORKSPACE_BAR_HEIGHT_CLASS);
-    for (const token of WORKSPACE_BAR_HEIGHT_CLASS.split(" ")) {
-      expect(wrapperClass).toContain(token);
+    // No row of its own: no border, height or background of a separate bar.
+    expect(wrapperClasses).toEqual(expect.arrayContaining(["flex", "min-w-0", "flex-1"]));
+    for (const token of [
+      "border-b",
+      "bg-chrome",
+      "shrink-0",
+      ...WORKSPACE_BAR_HEIGHT_CLASS.split(" "),
+    ]) {
+      expect(wrapperClasses).not.toContain(token);
     }
-    expect(wrapperClass).toContain("shrink-0");
-    expect(wrapperClass).not.toContain("py-2");
     expect(trigger.className).toContain("h-8");
     expect(trigger.className).toContain("md:h-7");
   });
 
-  test("renders a borderless field aligned to the header, with the shortcut badge", () => {
+  test("renders a borderless field with the shortcut badge", () => {
     renderSearchBar();
 
-    const wrapper = screen.getByTestId("project-search-bar");
     const trigger = screen.getByTestId("project-search-trigger");
     const triggerClasses = trigger.className.split(" ");
 
-    expect(wrapper.className.split(" ")).toContain("px-2");
     expect(triggerClasses).not.toContain("border");
     expect(triggerClasses).toContain("bg-input-surface");
-    expect(triggerClasses).toContain("pl-[3px]");
-    expect(triggerClasses).toContain("pr-[9px]");
+    expect(triggerClasses).toContain("px-2");
+    expect(triggerClasses).toContain("min-w-0");
     expect(trigger.getAttribute("aria-keyshortcuts")).toBe("Meta+K Control+K");
 
     const badge = screen.getByTestId("project-search-shortcut");

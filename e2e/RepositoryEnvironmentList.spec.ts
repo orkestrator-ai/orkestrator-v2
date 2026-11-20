@@ -339,12 +339,11 @@ test("the 390 px sidebar fits seven tiles and keyboard and menu filters stay in 
   await expect(page.getByTestId("filter")).toHaveText('["bk_mini"]');
   await page.keyboard.press("Space");
   await expect(page.getByTestId("filter")).toHaveText("[]");
-  await page.getByTestId("machines-filter").click();
-  const menu = page.getByRole("menu");
-  await menu.getByRole("menuitemcheckbox", { name: /^mbp3/ }).click();
+  // A tap on a tile is the same filter.
+  await tile(page, "mbp3").click();
   await expect(tile(page, "mbp3")).toHaveAttribute("data-state", "selected");
   await expect(mini).toHaveAttribute("data-state", "faded");
-  await menu.getByRole("menuitemcheckbox", { name: "All machines" }).click();
+  await tile(page, "mbp3").click();
   await expect(mini).toHaveAttribute("data-state", "all");
 });
 

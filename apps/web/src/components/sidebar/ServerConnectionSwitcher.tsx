@@ -35,6 +35,7 @@ import { getNodeStatus } from "@/lib/backend/command-nodes";
 import { reloadAfterConnectionChange } from "@/lib/client-platform";
 import { requestCommandHandover } from "@/lib/command-handover";
 import { subscribeToConnections } from "@/lib/connections";
+import { cn } from "@/lib/utils";
 
 type ConnectionsApi = NonNullable<NonNullable<Window["orkestrator"]>["connections"]>;
 type Readiness = "checking" | "ready" | "unavailable";
@@ -59,7 +60,13 @@ function readinessLabel(readiness: DisplayReadiness): string {
   return readiness;
 }
 
-export function ServerConnectionSwitcher() {
+/**
+ * The title bar's server connection while federation is off: the saved
+ * server this window is connected to, with its readiness, and a menu to
+ * switch to another or add one. `compact` is the mobile title bar's icon
+ * button, which names the server only in its label.
+ */
+export function ServerConnectionSwitcher({ compact = false }: { compact?: boolean }) {
   const [connections, setConnections] = useState<ConnectionList | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [address, setAddress] = useState("");
@@ -269,9 +276,8 @@ export function ServerConnectionSwitcher() {
     }
   };
 
-  if (!getConnectionsApi()) {
-    return <span className="text-sm font-medium text-foreground">Projects</span>;
-  }
+  // A browser tab is served by the one server it was opened from.
+  if (!getConnectionsApi()) return null;
 
   return (
     <>
@@ -279,11 +285,16 @@ export function ServerConnectionSwitcher() {
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="group flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left outline-none transition-colors hover:bg-white/[0.045] focus-hairline"
+            data-testid="server-connection-switcher"
+            className={cn(
+              "group flex min-w-0 items-center rounded-md text-left outline-none transition-colors hover:bg-white/[0.045] focus-hairline",
+              compact ? "h-9 w-9 justify-center" : "h-6 max-w-[14rem] gap-1.5 px-1.5",
+            )}
             aria-label={`Connected server: ${active?.name ?? "Loading"}`}
+            title={compact ? `Connected server: ${active?.name ?? "Loading"}` : undefined}
           >
-            <span className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-zinc-800 ring-1 ring-white/[0.06]">
-              <RadioTower className="h-3 w-3 text-zinc-300" aria-hidden="true" />
+            <span className="relative flex h-4 w-4 shrink-0 items-center justify-center rounded-[5px] bg-zinc-800 ring-1 ring-white/[0.06]">
+              <RadioTower className="h-2.5 w-2.5 text-zinc-300" aria-hidden="true" />
               <span
                 aria-hidden="true"
                 data-status={
@@ -300,16 +311,20 @@ export function ServerConnectionSwitcher() {
                 }`}
               />
             </span>
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-              {active?.name ?? "Loading…"}
-            </span>
-            <ChevronDown
-              className="h-3.5 w-3.5 shrink-0 text-zinc-500 transition-colors group-hover:text-zinc-300"
-              aria-hidden="true"
-            />
+            {compact ? null : (
+              <>
+                <span className="min-w-0 truncate text-xs font-medium text-foreground">
+                  {active?.name ?? "Loading…"}
+                </span>
+                <ChevronDown
+                  className="h-3 w-3 shrink-0 text-zinc-500 transition-colors group-hover:text-zinc-300"
+                  aria-hidden="true"
+                />
+              </>
+            )}
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-72" sideOffset={6}>
+        <DropdownMenuContent align="end" className="w-72" sideOffset={6}>
           <DropdownMenuLabel className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
             Servers
           </DropdownMenuLabel>

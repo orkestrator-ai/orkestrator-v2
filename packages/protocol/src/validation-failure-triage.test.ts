@@ -120,3 +120,15 @@ test("summary provenance excludes shared, uncertain, and conflicting failures", 
   expect(isValidationFailureSummary({ ...summary, baseIds: summary.relatedIds })).toBe(false);
   expect(isValidationFailureSummary({ ...summary, baseIds: ["f".repeat(16)] })).toBe(false);
 });
+
+test("a named baseline pass cannot become shared pre-existing evidence", () => {
+  const withPass = structuredClone(triage);
+  const passing = withPass.commands[0]!.failures[1]!;
+  const id = validationFailureId(passing.key);
+  passing.reasons.push("passed-on-merge-base");
+  // Even a second command reporting the same key as unrelated is not independent proof.
+  withPass.commands[1]!.failures.push(failure("subtracts", "unrelated"));
+  expect(summarizeValidationFailureTriage(withPass).baseIds).toEqual([]);
+  passing.reasons.push("failed-on-target-ci");
+  expect(summarizeValidationFailureTriage(withPass).baseIds).toEqual([id]);
+});

@@ -247,7 +247,8 @@ iteration cap. Package generation (`generateReviewPackage`) therefore writes
 `failureTriage` into the sealed package
 (`packages/protocol/src/validation-failure-triage.ts`): every failing test the
 failed and incomplete commands' output names, classified from evidence that
-already exists. It never runs a test, and on the real failing artifacts of a
+already exists, plus one bounded rerun on the merge base (below). The
+classification itself runs no test, and on the real failing artifacts of a
 production pipeline it took about half a second (two seconds with the CI read).
 
 The classifier (`validation-failure-classifier.ts`) runs inside the environment,
@@ -322,7 +323,38 @@ one self-contained function. It reads:
 The backend (`validation-failure-triage-service.ts`) then adds the one source
 only it holds: another pipeline in the project on the same merge-base that
 recorded the same failure without its own change being `related` to it
-(`failed-on-same-base`, `failuresSharedOnBase`). Package references and
+(`failed-on-same-base`, `failuresSharedOnBase`), and then reruns failing
+tests on the merge base itself (`validation-merge-base-rerun.ts`):
+
+- **Which failures.** A candidate is an unchanged Bun test file with a known
+  path and no target-CI or same-base failure evidence. The rerun checks that
+  each file is tracked on the baseline and has supported Bun setup, then takes
+  up to eight eligible files, prioritizing related and undetermined failures.
+- **Snapshot and setup.** The review package pins the target and head commits
+  before collecting its diff. Triage computes the merge base from those same
+  commits and verifies the detached checkout's HEAD before testing. Dependencies
+  install from the applicable frozen Bun lockfile with lifecycle scripts
+  disabled. Tests run from their owning package, with its Bun configuration
+  and supported explicit preloads. Supported build prerequisites run first.
+  Local reruns use the backend's managed Bun and their own reserved port block
+  and Compose project.
+- **Evidence.** A completed single-file run must name the test explicitly and
+  account for its results. A failure with matching diagnostics adds
+  `failed-on-merge-base` and the report labels it `pre-existing`. An explicit
+  pass adds `passed-on-merge-base` as context and is excluded from shared
+  pre-existing evidence unless independent evidence confirms a base failure.
+  Skips, different failure diagnostics, load errors and partial output do
+  not change the original verdict.
+- **Bounds and cleanup.** Baseline work waits up to thirty seconds for a host
+  validation reservation. Its steps share a five-minute budget, with up to
+  three minutes per install or build and ninety seconds per test file.
+  A supervisor in the execution environment enforces each deadline, including
+  inside Docker. Cleanup checks that the specific worktree registration and
+  directory are gone. It leaves the checkout in place when process termination
+  is uncertain. Limits and setup failures carry bounded diagnostic categories
+  in the report.
+
+Package references and
 archived validation summaries carry a compact `failureSummary` (64-bit digests
 of each test's key, never titles) for that lookup and for the loop breaker.
 
@@ -345,9 +377,11 @@ is what every reader starts with:
   `changed` command, or validation that does not line up with the plan).
 - `failures`: every failing test the triage listed, with one label:
   `caused-by-change` (verdict `related`), `pre-existing` (it also failed on the
-  merge base: `failed-on-target-ci` or `failed-on-same-base`), `flaky`
+  merge base: `failed-on-merge-base`, `failed-on-target-ci` or
+  `failed-on-same-base`), `flaky`
   (passed on retry), `unrelated` or `undetermined`. Merge-base evidence decides
-  the label first, as it decides the triage verdict.
+  the label first, as it decides the triage verdict. `onMergeBase` says what
+  the merge-base rerun showed for that test (`failed` or `passed`), when it ran.
 - `unexplainedCommands`: commands that did not pass without a listed test
   accounting for it, to be judged from their output.
 

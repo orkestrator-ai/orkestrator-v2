@@ -1,5 +1,6 @@
 import { environmentPortBlockAvailable } from "./environment-port-probe.js";
 import { chooseEnvironmentPortBase, isEnvironmentPortBase } from "./environment-isolation.js";
+import type { Environment } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 
@@ -13,6 +14,7 @@ import type { StorageRepositories } from "./storage-repositories.js";
  * deleting a row never makes a still-bound service port available for reuse.
  */
 export class EnvironmentIsolationRepository {
+  private readonly temporaryBlocks = new Set<number>();
   constructor(
     private readonly context: StorageContext,
     private readonly repos: StorageRepositories,
@@ -33,23 +35,17 @@ export class EnvironmentIsolationRepository {
       // given up by whichever of the two asks first; the other keeps it.
       if (
         isEnvironmentPortBase(current) &&
+        !this.temporaryBlocks.has(current) &&
         !environments.some(
           (other) => other.id !== environmentId && other.isolationPortBase === current,
         )
       ) {
         return current;
       }
-      const taken = new Set(
-        environments
-          .filter((other) => other.id !== environmentId)
-          .map((other) => other.isolationPortBase)
-          .filter(isEnvironmentPortBase),
+      const base = await this.findAvailableBase(
+        environmentId,
+        environments.filter((other) => other.id !== environmentId),
       );
-      let base = chooseEnvironmentPortBase(environmentId, taken);
-      while (base !== null && !(await environmentPortBlockAvailable(base))) {
-        taken.add(base);
-        base = chooseEnvironmentPortBase(environmentId, taken);
-      }
       if (base === null) return null;
       environment.isolationPortBase = base;
       projects.saveEnvironment(environment);
@@ -57,10 +53,44 @@ export class EnvironmentIsolationRepository {
       return base;
     });
   }
+
+  /** Allocate under the same lease as persistent environments without adding an environment row. */
+  async reserveTemporaryPortBase(id: string): Promise<{ base: number; release(): void } | null> {
+    const projects = this.repos.projects;
+    return projects.enqueueEnvironmentMutation(async () => {
+      const base = await this.findAvailableBase(id, await projects.loadEnvironments());
+      if (base === null) return null;
+      this.temporaryBlocks.add(base);
+      let released = false;
+      return {
+        base,
+        release: () => {
+          if (released) return;
+          released = true;
+          this.temporaryBlocks.delete(base);
+        },
+      };
+    });
+  }
+
+  private async findAvailableBase(id: string, environments: Environment[]): Promise<number | null> {
+    const taken = new Set([
+      ...this.temporaryBlocks,
+      ...environments
+        .map((environment) => environment.isolationPortBase)
+        .filter(isEnvironmentPortBase),
+    ]);
+    let base = chooseEnvironmentPortBase(id, taken);
+    while (base !== null && !(await environmentPortBlockAvailable(base))) {
+      taken.add(base);
+      base = chooseEnvironmentPortBase(id, taken);
+    }
+    return base;
+  }
 }
 
 /** What code outside the storage files may call (`storage.environmentIsolation`). */
 export type EnvironmentIsolationStorage = Pick<
   EnvironmentIsolationRepository,
-  "assignEnvironmentPortBase"
+  "assignEnvironmentPortBase" | "reserveTemporaryPortBase"
 >;

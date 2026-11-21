@@ -11,8 +11,8 @@
  * scoped to this change's own tests (`scope: "changed"`) with their results,
  * apart from every other command. `failures` lists every failing test the
  * failure triage named, each with one plain label; `pre-existing` marks a test
- * that also failed on the merge base (the target branch's CI there, or another
- * pipeline validated on the same merge base). It is derived from the package's
+ * that also failed on the merge base (rerun on a checkout of it, the target
+ * branch's CI there, or another pipeline validated on the same merge base). It is derived from the package's
  * own `validation`, `validationPlan` and `failureTriage` when the package is
  * sealed, and never runs anything. Browser-safe.
  */
@@ -32,9 +32,10 @@ export const VALIDATION_REPORT_VERSION = 1;
  * One label per failing test, in the order a reader should care about them.
  *
  * - `caused-by-change`: the triage verdict is `related`.
- * - `pre-existing`: the same test also failed on the merge base: on the
- *   target branch's CI there, or in another pipeline validated on that base
- *   without having changed it.
+ * - `pre-existing`: the same test also failed on the merge base: when its
+ *   file was rerun on a checkout of that commit, on the target branch's CI
+ *   there, or in another pipeline validated on that base without having
+ *   changed it.
  * - `flaky`: it failed and then passed when the runner retried it.
  * - `unrelated`: the triage established it is not this branch's doing on
  *   other evidence (its complete import graph reaches no changed file).
@@ -67,6 +68,12 @@ export interface ValidationReportFailure {
   file: string | null;
   name: string;
   label: ValidationReportFailureLabel;
+  /**
+   * What rerunning the test's file on a checkout of the merge base showed:
+   * `failed` there too, or `passed` (the rerun did not report it failing).
+   * Absent when it was not rerun.
+   */
+  onMergeBase?: "failed" | "passed";
 }
 
 export interface ValidationReport {
@@ -111,6 +118,7 @@ export function validationReportFailureLabel(
   // Merge-base evidence comes first: the triage itself makes either reason
   // `unrelated`, whatever the import graph said.
   if (
+    failure.reasons.includes("failed-on-merge-base") ||
     failure.reasons.includes("failed-on-target-ci") ||
     failure.reasons.includes("failed-on-same-base")
   )
@@ -166,6 +174,11 @@ export function buildValidationReport(input: {
         file: failure.file,
         name: failure.name,
         label: validationReportFailureLabel(failure),
+        ...(failure.reasons.includes("failed-on-merge-base")
+          ? { onMergeBase: "failed" as const }
+          : failure.reasons.includes("passed-on-merge-base")
+            ? { onMergeBase: "passed" as const }
+            : {}),
       })),
     )
     // Stable: equal labels keep the triage's own order.
@@ -250,7 +263,10 @@ export function isValidationReport(value: unknown): value is ValidationReport {
         VALIDATION_FAILURE_RUNNERS.includes(entry.runner as ValidationFailureRunner) &&
         (entry.file === null || isText(entry.file)) &&
         isText(entry.name) &&
-        VALIDATION_REPORT_FAILURE_LABELS.includes(entry.label as ValidationReportFailureLabel),
+        VALIDATION_REPORT_FAILURE_LABELS.includes(entry.label as ValidationReportFailureLabel) &&
+        (entry.onMergeBase === undefined ||
+          entry.onMergeBase === "failed" ||
+          entry.onMergeBase === "passed"),
     ) ||
     !isCount(value.omittedFailures) ||
     !Array.isArray(value.unexplainedCommands) ||
@@ -297,7 +313,10 @@ export function renderValidationReportMarkdown(report: ValidationReport): string
   }
   for (const failure of report.failures) {
     const where = failure.file ? `${failure.file}: ` : "";
-    lines.push(`- ${where}${failure.name} — ${LABEL_TEXT[failure.label]}`);
+    // A failure the merge base does not share points at the change (or a
+    // flake that only shows under load), whatever its label.
+    const base = failure.onMergeBase === "passed" ? "; passes when rerun on the merge base" : "";
+    lines.push(`- ${where}${failure.name} — ${LABEL_TEXT[failure.label]}${base}`);
   }
   if (report.omittedFailures > 0) {
     lines.push(`- ${report.omittedFailures} more failing tests were counted but not listed.`);

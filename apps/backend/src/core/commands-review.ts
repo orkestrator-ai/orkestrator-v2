@@ -1164,14 +1164,28 @@ export async function generateReviewPackage(
     };
   });
 
-  // Which failing tests this branch caused, from the recorded output and
-  // existing evidence only. Never fatal: the package seals without it.
+  // Which failing tests this branch caused, from recorded output and a
+  // bounded comparison against the pinned merge base.
   const triage = await triageValidationFailures({
     environment,
     runner,
     context,
-    targetRef: baseName,
+    baseRef,
+    headRef,
     changedFiles: changedFiles.map((file) => file.path),
+    resources: [
+      ...new Set(
+        options.validationPlan?.commands.flatMap((command) =>
+          hydratedValidation.some(
+            (entry) =>
+              (entry.status === "failed" || entry.status === "incomplete") &&
+              entry.command === `cd ${quoteShell(command.cwd)} && ${command.command}`,
+          )
+            ? command.resources
+            : [],
+        ),
+      ),
+    ],
     commands: hydratedValidation.flatMap((entry) =>
       entry.status === "failed" || entry.status === "incomplete"
         ? [

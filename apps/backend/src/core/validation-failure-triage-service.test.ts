@@ -1,4 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import os from "node:os";
+import path from "node:path";
 import {
   summarizeValidationFailureTriage,
   validationFailureId,
@@ -9,12 +11,14 @@ import {
   applySharedBaseEvidence,
   classifierPayload,
   MAX_TRIAGE_PAYLOAD_BASE64_BYTES,
+  mergeBaseRerunExec,
   sharedFailureSummaries,
   triageValidationFailures,
 } from "./validation-failure-triage-service.js";
 import type { ValidationFailureClassifierInput } from "./validation-failure-classifier.js";
 
 import * as shell from "./shell.js";
+import { CommandFailedError } from "./shell.js";
 
 const BASE = "c".repeat(40);
 const e2eKey = validationFailureKey("playwright", "e2e/a.spec.ts", "opens the pane");
@@ -250,3 +254,137 @@ for (const environmentType of ["local", "container"] as const) {
     }
   });
 }
+
+describe("merge-base rerun", () => {
+  const bunKey = validationFailureKey("bun", "tests/a.test.ts", "suite > breaks");
+  const bunTriage: ValidationFailureTriage = {
+    version: 1,
+    mergeBase: BASE,
+    commands: [
+      {
+        command: "mise run test",
+        failures: [
+          {
+            key: bunKey,
+            runner: "bun",
+            file: "tests/a.test.ts",
+            name: "suite > breaks",
+            outcome: "failed",
+            verdict: "undetermined",
+            reasons: ["reaches-changed-file-indirectly"],
+          },
+        ],
+        omittedFailures: 0,
+        unattributed: false,
+      },
+    ],
+    limitations: [],
+  };
+
+  test("maps a non-zero exit to a result and keeps other errors", async () => {
+    const exec = mergeBaseRerunExec(async () => {
+      throw new CommandFailedError("failed", { stdout: "(fail) x", exitCode: 1 });
+    });
+    expect(await exec("true", [], 10)).toEqual({
+      exitCode: 1,
+      output: "(fail) x",
+      timedOut: false,
+    });
+    const broken = mergeBaseRerunExec(async () => {
+      throw new Error("no runner");
+    });
+    await expect(broken("true", [], 10)).rejects.toThrow("no runner");
+  });
+
+  for (const environmentType of ["local", "container"] as const) {
+    test(`runs through the ${environmentType} environment runner and labels the failure`, async () => {
+      const bashCalls: string[][] = [];
+      const outcome = await triageValidationFailures({
+        environment: {
+          id: "env",
+          projectId: "project",
+          environmentType,
+          worktreePath: "/test-worktree",
+          containerId: "test-container",
+        } as never,
+        runner: async (command, args) => {
+          if (command === "git") return BASE;
+          expect(command).toBe("bash");
+          expect(args.slice(0, 1)).toEqual(["-lc"]);
+          expect(args[2]).toBe("merge-base-rerun");
+          bashCalls.push(args.slice(3));
+          const script = args[1]!;
+          if (script.includes("ls-files")) {
+            return ["package.json", "bun.lock", "bunfig.toml", "tests/a.test.ts"].join("\n");
+          }
+          if (script.includes(" test ")) {
+            throw new CommandFailedError("failed", {
+              stdout: "(fail) suite > breaks [2ms]\n 0 pass\n 1 fail\n",
+              exitCode: 1,
+            });
+          }
+          return "";
+        },
+        context: {
+          storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+        } as never,
+        targetRef: "origin/main",
+        changedFiles: ["src/x.ts"],
+        commands: [
+          {
+            command: "mise run test",
+            cwd: ".",
+            status: "failed",
+            stdoutPath: null,
+            stderrPath: null,
+          },
+        ],
+        execute: async () => JSON.stringify(bunTriage),
+      });
+      expect(outcome.triage!.commands[0]!.failures[0]).toMatchObject({
+        verdict: "unrelated",
+        reasons: ["reaches-changed-file-indirectly", "failed-on-merge-base"],
+      });
+      const checkout = bashCalls[0]![0]!;
+      expect(checkout).toContain("orkestrator-merge-base-");
+      // Never inside the reviewed worktree.
+      expect(checkout.startsWith("/test-worktree")).toBe(false);
+      expect(path.dirname(checkout)).toBe(environmentType === "local" ? os.tmpdir() : "/tmp");
+      // Checkout, listing, install, test, cleanup: all in the same directory.
+      expect(bashCalls).toHaveLength(5);
+      expect(bashCalls.every((args) => args[0]!.startsWith(checkout))).toBe(true);
+    });
+  }
+
+  test("mergeBaseExec false skips the rerun", async () => {
+    const outcome = await triageValidationFailures({
+      environment: {
+        id: "env",
+        projectId: "project",
+        environmentType: "container",
+        containerId: "c",
+      } as never,
+      runner: async (command) => {
+        expect(command).toBe("git");
+        return BASE;
+      },
+      context: {
+        storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+      } as never,
+      targetRef: "origin/main",
+      changedFiles: [],
+      commands: [
+        {
+          command: "mise run test",
+          cwd: ".",
+          status: "failed",
+          stdoutPath: null,
+          stderrPath: null,
+        },
+      ],
+      execute: async () => JSON.stringify(bunTriage),
+      mergeBaseExec: false,
+    });
+    expect(outcome.triage).toEqual(bunTriage);
+  });
+});

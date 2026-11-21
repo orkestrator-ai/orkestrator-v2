@@ -247,7 +247,8 @@ iteration cap. Package generation (`generateReviewPackage`) therefore writes
 `failureTriage` into the sealed package
 (`packages/protocol/src/validation-failure-triage.ts`): every failing test the
 failed and incomplete commands' output names, classified from evidence that
-already exists. It never runs a test, and on the real failing artifacts of a
+already exists, plus one bounded rerun on the merge base (below). The
+classification itself runs no test, and on the real failing artifacts of a
 production pipeline it took about half a second (two seconds with the CI read).
 
 The classifier (`validation-failure-classifier.ts`) runs inside the environment,
@@ -322,7 +323,44 @@ one self-contained function. It reads:
 The backend (`validation-failure-triage-service.ts`) then adds the one source
 only it holds: another pipeline in the project on the same merge-base that
 recorded the same failure without its own change being `related` to it
-(`failed-on-same-base`, `failuresSharedOnBase`). Package references and
+(`failed-on-same-base`, `failuresSharedOnBase`), and then reruns failing
+tests on the merge base itself (`validation-merge-base-rerun.ts`):
+
+- **Which failures.** Bun failures whose file is known, exists on the merge
+  base and was not changed by the branch, and that no CI or same-base evidence
+  already marks; open (`related`, `undetermined`) failures first, at most
+  `MAX_MERGE_BASE_RERUN_FILES` (8) files. Other runners are not rerun: an
+  end-to-end spec needs the whole application and its ports.
+- **Where.** A detached `git worktree` of the merge base in a new temporary
+  directory outside the reviewed worktree (`os.tmpdir()` locally, `/tmp` in a
+  container), created with hooks disabled. Dependencies are installed with
+  `bun install --frozen-lockfile --ignore-scripts` in each lockfile's project;
+  a file with no Bun lockfile above it on the merge base is not rerun. Each
+  file runs with `bun test ./<file>` from its nearest `bunfig.toml` (else
+  `package.json`) inside that project, so its preloads apply, using the Bun
+  the reviewed worktree resolves. The checkout is removed afterwards,
+  whatever happened. The reviewed worktree, its HEAD and its status are never
+  touched.
+- **What counts.** The same test, by normalized title, failing there adds
+  `failed-on-merge-base` and makes the verdict `unrelated`, which the
+  validation report labels `pre-existing`. A file whose rerun did not report
+  the test failing adds `passed-on-merge-base`, context only (it never changes
+  the verdict; the report shows it as `onMergeBase: "passed"`). A file that
+  could not load or timed out there, a failed checkout or install, and the
+  budget running out are limitations, never evidence.
+- **Bounds.** Five minutes in all, three for each install and ninety seconds
+  for each test file (`MERGE_BASE_RERUN_BUDGET_MS`). It runs only when
+  validation left a Bun failure, so a green round pays nothing.
+
+Before the rerun, `pre-existing` depended on the target branch's CI having
+run and failed the same test on the merge base, so a suite CI does not run,
+or a green CI for a test that only fails locally, left a failure already
+broken on the base `undetermined` and the reader reproducing it by hand. A
+base failure caused by the fresh checkout (a dependency's install script that
+`--ignore-scripts` skipped, a build output the base does not have) can only
+make the same title fail there, which is why only an exact title match counts.
+
+Package references and
 archived validation summaries carry a compact `failureSummary` (64-bit digests
 of each test's key, never titles) for that lookup and for the loop breaker.
 
@@ -345,9 +383,11 @@ is what every reader starts with:
   `changed` command, or validation that does not line up with the plan).
 - `failures`: every failing test the triage listed, with one label:
   `caused-by-change` (verdict `related`), `pre-existing` (it also failed on the
-  merge base: `failed-on-target-ci` or `failed-on-same-base`), `flaky`
+  merge base: `failed-on-merge-base`, `failed-on-target-ci` or
+  `failed-on-same-base`), `flaky`
   (passed on retry), `unrelated` or `undetermined`. Merge-base evidence decides
-  the label first, as it decides the triage verdict.
+  the label first, as it decides the triage verdict. `onMergeBase` says what
+  the merge-base rerun showed for that test (`failed` or `passed`), when it ran.
 - `unexplainedCommands`: commands that did not pass without a listed test
   accounting for it, to be judged from their output.
 

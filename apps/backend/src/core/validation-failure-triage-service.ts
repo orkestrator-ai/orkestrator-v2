@@ -1,13 +1,18 @@
 /**
  * Runs the failure classifier against a sealed validation run, inside the
  * environment that ran it, and adds the evidence only the backend holds:
- * failures other pipelines recorded on the same merge-base.
+ * failures other pipelines recorded on the same merge-base, and a bounded
+ * rerun of the failing Bun test files on a throwaway checkout of the merge
+ * base (`validation-merge-base-rerun.ts`).
  *
  * The triage is evidence for review, never a gate on producing the package:
  * any failure here becomes a package limitation and the package is sealed
- * without it, exactly as before triage existed. Nothing here runs a test.
- * See `@orkestrator/protocol/validation-failure-triage`.
+ * without it, exactly as before triage existed. The reviewed worktree is
+ * never touched. See `@orkestrator/protocol/validation-failure-triage`.
  */
+import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import {
@@ -25,7 +30,11 @@ import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
 import { gitHubCli, gitHubCliEnv } from "./git/index.js";
 import type { Environment } from "./models.js";
-import { runCommand } from "./shell.js";
+import { CommandFailedError, runCommand } from "./shell.js";
+import {
+  rerunFailuresOnMergeBase,
+  type MergeBaseRerunExec,
+} from "./validation-merge-base-rerun.js";
 import {
   VALIDATION_FAILURE_CLASSIFIER_SCRIPT,
   type ValidationFailureClassifierCommand,
@@ -58,6 +67,40 @@ export interface TriageValidationFailuresOptions {
   commands: ValidationFailureClassifierCommand[];
   /** Replaces the environment exec, for tests. */
   execute?: (script: string, payload: string, env: NodeJS.ProcessEnv) => Promise<string>;
+  /**
+   * Replaces the merge-base rerun's exec, for tests. `false` skips the rerun
+   * (its unit tests drive it directly).
+   */
+  mergeBaseExec?: MergeBaseRerunExec | false;
+}
+
+/**
+ * The rerun's commands go through the environment runner as `bash -lc`, from
+ * the reviewed worktree, as validation ran its own. A non-zero exit is a
+ * result, not an error.
+ */
+export function mergeBaseRerunExec(runner: EnvironmentCommandRunner): MergeBaseRerunExec {
+  return async (script, args, timeoutMs) => {
+    try {
+      const output = await runner(
+        "bash",
+        ["-lc", script, "merge-base-rerun", ...args],
+        Math.max(1_000, timeoutMs),
+      );
+      return { exitCode: 0, output, timedOut: false };
+    } catch (error) {
+      if (!(error instanceof CommandFailedError)) throw error;
+      return { exitCode: error.exitCode, output: error.stdout, timedOut: error.timedOut };
+    }
+  };
+}
+
+/** A new, unique directory outside the reviewed worktree. */
+function mergeBaseCheckoutDir(environment: Pick<Environment, "environmentType">): string {
+  const name = `orkestrator-merge-base-${randomUUID()}`;
+  return environment.environmentType === "local"
+    ? path.join(os.tmpdir(), name)
+    : path.posix.join("/tmp", name);
 }
 
 /**
@@ -191,10 +234,19 @@ export async function triageValidationFailures(
         limitation: "Failure triage was skipped: the classifier returned an invalid result",
       };
     }
-    const triage = applySharedBaseEvidence(
+    const shared = applySharedBaseEvidence(
       parsed,
       await sharedFailureSummaries(context, environment).catch(() => []),
     );
+    const triage =
+      options.mergeBaseExec === false
+        ? shared
+        : await rerunFailuresOnMergeBase({
+            triage: shared,
+            changedFiles: options.changedFiles,
+            exec: options.mergeBaseExec ?? mergeBaseRerunExec(runner),
+            checkoutDir: mergeBaseCheckoutDir(environment),
+          });
     return { triage };
   } catch (error) {
     log.warn("failure-triage.failed", {

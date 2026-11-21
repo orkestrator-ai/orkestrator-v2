@@ -53,3 +53,20 @@ host temporary directory.
   a possible cause.
 - **Evidence:** `orkestrator-test-run.HiqeYP` in the host temporary directory,
   including the workspace log and `rerun-apps-backend-src-core-multi-review-evaluation-drivers-test-ts.log.gz`.
+
+
+## Merge-base validation review (2026-11-21)
+
+The default review command, `mise run test:logged -- --name review-default-tests -- mise run test`,
+ran against `6ba08a5191274f5771fda72b7608422120683dc7` with base
+`8a199a67e91fc54d858a8235393c4e1c0d9c1924` on macOS. The recurrence check
+confirmed this case was open. In the two-worker backend suite, both cases
+failed to read the fake CLI's `pid` file with `ENOENT` at 405.94 ms (Claude)
+and 405.77 ms (Codex). The backend group reported five failures across
+20,309 tests and 1,427 files in 297.68 s.
+
+The runner retried `apps/backend/src/core/review/evaluation-drivers.test.ts`
+alone. It passed all 22 tests in 3.25 s using
+`bun test ./src/core/review/evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
+from `apps/backend`. The workspace and isolated rerun logs are in
+`orkestrator-test-run.x1Z7Da` under the host temporary directory.

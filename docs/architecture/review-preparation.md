@@ -326,39 +326,33 @@ recorded the same failure without its own change being `related` to it
 (`failed-on-same-base`, `failuresSharedOnBase`), and then reruns failing
 tests on the merge base itself (`validation-merge-base-rerun.ts`):
 
-- **Which failures.** Bun failures whose file is known, exists on the merge
-  base and was not changed by the branch, and that no CI or same-base evidence
-  already marks; open (`related`, `undetermined`) failures first, at most
-  `MAX_MERGE_BASE_RERUN_FILES` (8) files. Other runners are not rerun: an
-  end-to-end spec needs the whole application and its ports.
-- **Where.** A detached `git worktree` of the merge base in a new temporary
-  directory outside the reviewed worktree (`os.tmpdir()` locally, `/tmp` in a
-  container), created with hooks disabled. Dependencies are installed with
-  `bun install --frozen-lockfile --ignore-scripts` in each lockfile's project;
-  a file with no Bun lockfile above it on the merge base is not rerun. Each
-  file runs with `bun test ./<file>` from its nearest `bunfig.toml` (else
-  `package.json`) inside that project, so its preloads apply, using the Bun
-  the reviewed worktree resolves. The checkout is removed afterwards,
-  whatever happened. The reviewed worktree, its HEAD and its status are never
-  touched.
-- **What counts.** The same test, by normalized title, failing there adds
-  `failed-on-merge-base` and makes the verdict `unrelated`, which the
-  validation report labels `pre-existing`. A file whose rerun did not report
-  the test failing adds `passed-on-merge-base`, context only (it never changes
-  the verdict; the report shows it as `onMergeBase: "passed"`). A file that
-  could not load or timed out there, a failed checkout or install, and the
-  budget running out are limitations, never evidence.
-- **Bounds.** Five minutes in all, three for each install and ninety seconds
-  for each test file (`MERGE_BASE_RERUN_BUDGET_MS`). It runs only when
-  validation left a Bun failure, so a green round pays nothing.
-
-Before the rerun, `pre-existing` depended on the target branch's CI having
-run and failed the same test on the merge base, so a suite CI does not run,
-or a green CI for a test that only fails locally, left a failure already
-broken on the base `undetermined` and the reader reproducing it by hand. A
-base failure caused by the fresh checkout (a dependency's install script that
-`--ignore-scripts` skipped, a build output the base does not have) can only
-make the same title fail there, which is why only an exact title match counts.
+- **Which failures.** A candidate is an unchanged Bun test file with a known
+  path and no target-CI or same-base failure evidence. The rerun checks that
+  each file is tracked on the baseline and has supported Bun setup, then takes
+  up to eight eligible files, prioritizing related and undetermined failures.
+- **Snapshot and setup.** The review package pins the target and head commits
+  before collecting its diff. Triage computes the merge base from those same
+  commits and verifies the detached checkout's HEAD before testing. Dependencies
+  install from the applicable frozen Bun lockfile with lifecycle scripts
+  disabled. Tests run from their owning package, with its Bun configuration
+  and supported explicit preloads. Supported build prerequisites run first.
+  Local reruns use the backend's managed Bun and their own reserved port block
+  and Compose project.
+- **Evidence.** A completed single-file run must name the test explicitly and
+  account for its results. A failure with matching diagnostics adds
+  `failed-on-merge-base` and the report labels it `pre-existing`. An explicit
+  pass adds `passed-on-merge-base` as context and is excluded from shared
+  pre-existing evidence unless independent evidence confirms a base failure.
+  Skips, different failure diagnostics, load errors and partial output do
+  not change the original verdict.
+- **Bounds and cleanup.** Baseline work waits up to thirty seconds for a host
+  validation reservation. Its steps share a five-minute budget, with up to
+  three minutes per install or build and ninety seconds per test file.
+  A supervisor in the execution environment enforces each deadline, including
+  inside Docker. Cleanup checks that the specific worktree registration and
+  directory are gone. It leaves the checkout in place when process termination
+  is uncertain. Limits and setup failures carry bounded diagnostic categories
+  in the report.
 
 Package references and
 archived validation summaries carry a compact `failureSummary` (64-bit digests

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   validationFailureKey,
   type TriagedValidationFailure,
@@ -6,12 +7,10 @@ import {
 } from "@orkestrator/protocol/validation-failure-triage";
 import { buildValidationReport } from "@orkestrator/protocol/validation-report";
 import {
-  bunFailedTestNames,
   MAX_MERGE_BASE_RERUN_FILES,
   rerunFailuresOnMergeBase,
-  type MergeBaseRerunExec,
-  type MergeBaseRerunResult,
 } from "./validation-merge-base-rerun.js";
+import type { MergeBaseRerunExec, MergeBaseRerunResult } from "./validation-merge-base-process.js";
 
 const BASE = "a".repeat(40);
 const CHECKOUT = "/tmp/orkestrator-merge-base-test";
@@ -45,6 +44,19 @@ function triage(
   };
 }
 
+const FINGERPRINT = createHash("sha256").update("error: same failure").digest("hex");
+function results(file: string, body: string, pass: number, fail: number, skip = 0): string {
+  return `bun test v1.4.4
+
+${file}:
+${body}
+
+ ${pass} pass
+ ${skip} skip
+ ${fail} fail
+Ran ${pass + fail + skip} tests across 1 file. [1ms]
+`;
+}
 const ok = (output = ""): MergeBaseRerunResult => ({ exitCode: 0, output, timedOut: false });
 const fail = (output: string, exitCode = 1): MergeBaseRerunResult => ({
   exitCode,
@@ -53,7 +65,7 @@ const fail = (output: string, exitCode = 1): MergeBaseRerunResult => ({
 });
 
 interface Call {
-  step: "checkout" | "list" | "install" | "test" | "cleanup";
+  step: "checkout" | "list" | "setup" | "build" | "install" | "test" | "cleanup";
   args: string[];
   timeoutMs: number;
 }
@@ -67,6 +79,9 @@ function fakeExec(options: {
   tests?: Record<string, MergeBaseRerunResult>;
   checkout?: MergeBaseRerunResult;
   install?: MergeBaseRerunResult;
+  cleanup?: MergeBaseRerunResult;
+  setups?: Record<string, MergeBaseRerunResult>;
+  build?: MergeBaseRerunResult;
 }) {
   const calls: Call[] = [];
   const exec: MergeBaseRerunExec = async (script, args, timeoutMs) => {
@@ -74,45 +89,46 @@ function fakeExec(options: {
       ? "checkout"
       : script.includes("ls-files")
         ? "list"
-        : script.includes(" install ")
-          ? "install"
-          : script.includes(" test ")
-            ? "test"
-            : "cleanup";
+        : script.includes("manifestPath")
+          ? "setup"
+          : script.includes(" run build")
+            ? "build"
+            : script.includes(" install ")
+              ? "install"
+              : script.includes(' test "./')
+                ? "test"
+                : "cleanup";
     calls.push({ step, args, timeoutMs });
-    if (step === "checkout") return options.checkout ?? ok();
-    if (step === "list") {
-      const [, ...queried] = args;
-      return ok(queried.filter((path) => options.files.includes(path)).join("\n"));
-    }
+    if (step === "checkout") return options.checkout ?? ok(BASE + "\n");
+    if (step === "list") return ok(options.files.join("\0") + "\0");
+    if (step === "setup") return options.setups?.[args[1]!] ?? ok('{"preloads":[],"build":null}');
+    if (step === "build") return options.build ?? ok();
     if (step === "install") return options.install ?? ok();
     if (step === "test") {
       const [directory, relative] = args;
       const prefix = directory === CHECKOUT ? "" : `${directory!.slice(CHECKOUT.length + 1)}/`;
-      return options.tests?.[`${prefix}${relative}`] ?? ok(" 3 pass\n 0 fail\n");
+      return options.tests?.[`${prefix}${relative}`] ?? ok(results(relative!, "(pass) t", 1, 0));
     }
-    return ok();
+    return options.cleanup ?? ok();
   };
   return { exec, calls };
 }
 
 const ROOT_CONFIG = ["package.json", "bun.lock", "bunfig.toml"];
 
-describe("bunFailedTestNames", () => {
-  test("reads (fail) lines without colour or timings", () => {
-    const names = bunFailedTestNames(
-      "\u001b[31m(fail)\u001b[0m suite > breaks [12.50ms]\n(pass) suite > works\n(fail) other\r\n",
-    );
-    expect([...names]).toEqual(["suite > breaks", "other"]);
-  });
-});
-
 describe("rerunFailuresOnMergeBase", () => {
   test("labels a test that also fails on the merge base pre-existing", async () => {
     const { exec, calls } = fakeExec({
       files: [...ROOT_CONFIG, "tests/unit/a.test.ts"],
       tests: {
-        "tests/unit/a.test.ts": fail("(fail) suite > breaks [3ms]\n 1 pass\n 1 fail\n"),
+        "tests/unit/a.test.ts": fail(
+          results(
+            "tests/unit/a.test.ts",
+            "error: same failure\n(fail) suite > breaks [3ms]\n(pass) suite > new regression",
+            1,
+            1,
+          ),
+        ),
       },
     });
     const input = triage([
@@ -121,6 +137,7 @@ describe("rerunFailuresOnMergeBase", () => {
     ]);
     const result = await rerunFailuresOnMergeBase({
       triage: input,
+      fingerprints: new Map([[input.commands[0]!.failures[0]!, FINGERPRINT]]),
       changedFiles: ["src/x.ts"],
       exec,
       checkoutDir: CHECKOUT,
@@ -141,13 +158,14 @@ describe("rerunFailuresOnMergeBase", () => {
     expect(calls.map((call) => call.step)).toEqual([
       "checkout",
       "list",
+      "setup",
       "install",
       "test",
       "cleanup",
     ]);
     expect(calls[0]!.args).toEqual([CHECKOUT, BASE]);
-    expect(calls[2]!.args).toEqual([CHECKOUT]);
-    expect(calls[3]!.args).toEqual([CHECKOUT, "tests/unit/a.test.ts"]);
+    expect(calls[3]!.args).toEqual([CHECKOUT]);
+    expect(calls[4]!.args).toEqual([CHECKOUT, "tests/unit/a.test.ts"]);
     expect(calls.at(-1)!.args).toEqual([CHECKOUT]);
 
     const report = buildValidationReport({
@@ -213,7 +231,8 @@ describe("rerunFailuresOnMergeBase", () => {
       exec,
       checkoutDir: CHECKOUT,
     });
-    expect(result).toEqual(input);
+    expect(result.commands).toEqual(input.commands);
+    expect(result.limitations[0]).toContain("lack a tracked test");
     // Only the new file was a candidate, and it does not exist on the base.
     expect(calls.map((call) => call.step)).toEqual(["checkout", "list", "cleanup"]);
   });
@@ -258,8 +277,8 @@ describe("rerunFailuresOnMergeBase", () => {
     });
     expect(result.commands).toEqual(input.commands);
     expect(result.limitations).toEqual([
-      "tests/a.test.ts could not run on the merge base",
-      "tests/b.test.ts did not finish on the merge base in time",
+      "No complete Bun results for tests/a.test.ts on the merge base (module or preload unresolved)",
+      "No complete Bun results for tests/b.test.ts on the merge base (timed out)",
     ]);
   });
 
@@ -299,9 +318,11 @@ describe("rerunFailuresOnMergeBase", () => {
       },
       checkoutDir: CHECKOUT,
     });
-    expect(result.limitations).toEqual(["The merge-base rerun could not run"]);
-    // The cleanup was attempted too.
-    expect(calls).toHaveLength(2);
+    expect(result.limitations).toEqual([
+      "The merge-base rerun could not run",
+      expect.stringContaining("cleanup was withheld"),
+    ]);
+    expect(calls).toHaveLength(1);
   });
 
   test("bounds the files it reruns and the time it spends", async () => {
@@ -318,7 +339,7 @@ describe("rerunFailuresOnMergeBase", () => {
     });
     expect(calls.filter((call) => call.step === "test")).toHaveLength(MAX_MERGE_BASE_RERUN_FILES);
     expect(result.limitations).toEqual([
-      `3 failing test files were not rerun on the merge base (limit ${MAX_MERGE_BASE_RERUN_FILES})`,
+      `3 eligible test files were not rerun on the merge base (limit ${MAX_MERGE_BASE_RERUN_FILES})`,
     ]);
 
     let clock = 0;
@@ -332,11 +353,11 @@ describe("rerunFailuresOnMergeBase", () => {
       changedFiles: [],
       exec: slow,
       checkoutDir: CHECKOUT,
-      budgetMs: 150_000,
+      budgetMs: 190_000,
       now: () => clock,
     });
     const tests = timed.calls.filter((call) => call.step === "test");
-    // checkout, list and install spend 120 s; one test fits before the rest.
+    // checkout, list, setup and install spend 160 s; one test fits before the rest.
     expect(tests).toHaveLength(1);
     expect(tests[0]!.timeoutMs).toBeLessThanOrEqual(30_000);
     expect(bounded.limitations).toContain(
@@ -363,5 +384,152 @@ describe("rerunFailuresOnMergeBase", () => {
       checkoutDir: CHECKOUT,
     });
     expect(calls.find((call) => call.step === "test")!.args[1]).toBe("tests/open.test.ts");
+  });
+
+  test("requires a named result and matching diagnostics from a complete run", async () => {
+    const file = "tests/a.test.ts";
+    const input = triage([
+      failure(file, "skipped"),
+      failure(file, "missing"),
+      failure(file, "different error", { verdict: "related" }),
+    ]);
+    const output = results(
+      file,
+      "(skip) skipped\nerror: missing fixture\n(fail) different error",
+      0,
+      1,
+      1,
+    );
+    for (const result of [
+      fail(output),
+      fail(output.replace("Ran 2", " 1 error\nRan 2")),
+      fail(output.replace(/Ran .*$/, "")),
+      { ...fail(output), truncated: true },
+    ]) {
+      const { exec } = fakeExec({ files: [...ROOT_CONFIG, file], tests: { [file]: result } });
+      const triaged = await rerunFailuresOnMergeBase({
+        triage: input,
+        fingerprints: new Map([[input.commands[0]!.failures[2]!, FINGERPRINT]]),
+        changedFiles: [],
+        exec,
+        checkoutDir: CHECKOUT,
+      });
+      expect(triaged.commands).toEqual(input.commands);
+      expect(triaged.limitations.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("checks eligibility before the cap and preserves Unicode paths", async () => {
+    const valid = "tests/été.test.ts";
+    const absent = Array.from({ length: 8 }, (_, i) => failure(`tests/absent-${i}.test.ts`, "t"));
+    const { exec, calls } = fakeExec({ files: [...ROOT_CONFIG, valid] });
+    const result = await rerunFailuresOnMergeBase({
+      triage: triage([...absent, failure(valid, "t")]),
+      changedFiles: [],
+      exec,
+      checkoutDir: CHECKOUT,
+    });
+    expect(calls.filter((call) => call.step === "test").map((call) => call.args[1])).toEqual([
+      valid,
+    ]);
+    expect(result.limitations).toEqual([expect.stringContaining("8 failing test files lack")]);
+  });
+
+  test("records a budget exhausted before a second install", async () => {
+    const file = "tests/a.test.ts";
+    const nested = "nested/b.test.ts";
+    const fixture = fakeExec({
+      files: [...ROOT_CONFIG, file, nested, "nested/bun.lock", "nested/package.json"],
+    });
+    let clock = 0;
+    const result = await rerunFailuresOnMergeBase({
+      triage: triage([failure(file, "t"), failure(nested, "t")]),
+      changedFiles: [],
+      checkoutDir: CHECKOUT,
+      budgetMs: 30_000,
+      now: () => clock,
+      exec: async (script, args, ms) => {
+        if (args[1] === file) clock += 29_000;
+        return fixture.exec(script, args, ms);
+      },
+    });
+    expect(fixture.calls.filter((call) => call.step === "install")).toHaveLength(1);
+    expect(result.limitations).toEqual([expect.stringContaining("ran out of time")]);
+  });
+
+  test("reports a failed cleanup even after a failed checkout", async () => {
+    const { exec } = fakeExec({
+      files: ROOT_CONFIG,
+      checkout: fail("fatal: invalid reference", 128),
+      cleanup: fail("permission denied"),
+    });
+    const result = await rerunFailuresOnMergeBase({
+      triage: triage([failure("tests/a.test.ts", "t")]),
+      changedFiles: [],
+      exec,
+      checkoutDir: CHECKOUT,
+    });
+    expect(result.limitations).toEqual([
+      expect.stringContaining("Git commit unavailable"),
+      expect.stringContaining("cleanup could not be verified"),
+    ]);
+  });
+
+  test("uses an eligible package directory with its explicit preload and requires its build", async () => {
+    const directory = "packages/cli";
+    const file = `${directory}/src/a.test.ts`;
+    const { exec, calls } = fakeExec({
+      files: [...ROOT_CONFIG, `${directory}/package.json`, file],
+      setups: { [directory]: ok('{"build":"@ork/cli","preloads":["../../tests/setup-node.ts"]}') },
+    });
+    await rerunFailuresOnMergeBase({
+      triage: triage([failure(file, "t")]),
+      changedFiles: [],
+      exec,
+      checkoutDir: CHECKOUT,
+    });
+    expect(calls.at(-3)).toMatchObject({
+      step: "build",
+      args: [CHECKOUT, `${CHECKOUT}/${directory}`, "@ork/cli"],
+    });
+    expect(calls.at(-2)).toMatchObject({
+      step: "test",
+      args: [`${CHECKOUT}/${directory}`, "src/a.test.ts", "--preload", "../../tests/setup-node.ts"],
+    });
+  });
+
+  test("a clean run that skips the target cannot supply a baseline pass", async () => {
+    const file = "tests/a.test.ts";
+    const fixture = fakeExec({
+      files: [...ROOT_CONFIG, file],
+      tests: { [file]: ok(results(file, "(skip) target\n(pass) other", 1, 0, 1)) },
+    });
+    const input = triage([failure(file, "target")]);
+    const result = await rerunFailuresOnMergeBase({
+      triage: input,
+      changedFiles: [],
+      exec: fixture.exec,
+      checkoutDir: CHECKOUT,
+    });
+    expect(result.commands).toEqual(input.commands);
+    expect(result.limitations).toEqual([expect.stringContaining("skipped or unreported")]);
+  });
+
+  test("leaves evidence unset if the recorded explicit preload differs", async () => {
+    const file = "tests/a.test.ts";
+    const input = triage([failure(file, "t")]);
+    input.commands[0]!.command = "bun test --preload ./tests/other.ts ./tests/a.test.ts";
+    const fixture = fakeExec({ files: [...ROOT_CONFIG, file] });
+    const result = await rerunFailuresOnMergeBase({
+      triage: input,
+      changedFiles: [],
+      exec: fixture.exec,
+      checkoutDir: CHECKOUT,
+    });
+    expect(result.commands).toEqual(input.commands);
+    expect(result.limitations).toEqual([expect.stringContaining("preload arguments differ")]);
+    expect(fixture.calls.some((call) => call.step === "install" || call.step === "test")).toBe(
+      false,
+    );
   });
 });

@@ -58,13 +58,13 @@ export const VALIDATION_FAILURE_REASONS = [
   /** Another pipeline on the same merge-base failed it without having changed it. */
   "failed-on-same-base",
   /**
-   * The same test, by normalized title, failed when its file was rerun on a
+   * The same test failed with matching diagnostics when its file was rerun on a
    * fresh checkout of the merge base (`validation-merge-base-rerun.ts`).
    */
   "failed-on-merge-base",
   /**
-   * Its file was rerun on a fresh checkout of the merge base and the run did
-   * not report this test failing. Context only: it never changes the
+   * Its file was rerun on a fresh checkout of the merge base and the run
+   * reported this test passing. Context only: it never changes the
    * verdict, because a test that fails only under a loaded aggregate run
    * also passes alone.
    */
@@ -366,6 +366,20 @@ export function summarizeValidationFailureTriage(
         .map((failure) => validationFailureId(failure.key)),
     ),
   ].sort();
+  const observedPasses = new Set(
+    failures
+      .filter((failure) => failure.reasons.includes("passed-on-merge-base"))
+      .map((failure) => validationFailureId(failure.key)),
+  );
+  const confirmedBaseFailures = new Set(
+    failures
+      .filter(
+        (failure) =>
+          failure.reasons.includes("failed-on-target-ci") ||
+          failure.reasons.includes("failed-on-merge-base"),
+      )
+      .map((failure) => validationFailureId(failure.key)),
+  );
   const omitted = triage.commands.some((command) => command.omittedFailures > 0);
   const truncated = omitted || ids.length > MAX_VALIDATION_FAILURE_SUMMARY_IDS;
   return {
@@ -386,7 +400,9 @@ export function summarizeValidationFailureTriage(
       .sort()
       .filter(
         (id) =>
-          ids.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS).includes(id) && !relatedIds.includes(id),
+          ids.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS).includes(id) &&
+          !relatedIds.includes(id) &&
+          (!observedPasses.has(id) || confirmedBaseFailures.has(id)),
       ),
     related: failures.filter((failure) => failure.verdict === "related").length,
     unrelated: failures.filter((failure) => failure.verdict === "unrelated").length,

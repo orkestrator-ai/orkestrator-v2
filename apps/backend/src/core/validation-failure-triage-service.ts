@@ -10,16 +10,19 @@
  * without it, exactly as before triage existed. The reviewed worktree is
  * never touched. See `@orkestrator/protocol/validation-failure-triage`.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
 import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import {
   failuresSharedOnBase,
+  MAX_TRIAGE_LIMITATIONS,
   isValidationFailureSummary,
   isValidationFailureTriage,
   validationFailureId,
+  type TriagedValidationFailure,
   type ValidationFailureSummary,
   type ValidationFailureTriage,
 } from "@orkestrator/protocol/validation-failure-triage";
@@ -28,13 +31,15 @@ import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentCommandRunner } from "./commands-review.js";
 import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
 import { withContainerRuntimeCredential } from "./container-scripts.js";
+import {
+  environmentIsolationVariables,
+  withEnvironmentIsolation,
+} from "./environment-isolation.js";
 import { gitHubCli, gitHubCliEnv } from "./git/index.js";
 import type { Environment } from "./models.js";
-import { CommandFailedError, runCommand } from "./shell.js";
-import {
-  rerunFailuresOnMergeBase,
-  type MergeBaseRerunExec,
-} from "./validation-merge-base-rerun.js";
+import { runCommand } from "./shell.js";
+import { mergeBaseRerunExec, type MergeBaseRerunExec } from "./validation-merge-base-process.js";
+import { rerunFailuresOnMergeBase, needsMergeBaseRerun } from "./validation-merge-base-rerun.js";
 import {
   VALIDATION_FAILURE_CLASSIFIER_SCRIPT,
   type ValidationFailureClassifierCommand,
@@ -61,9 +66,11 @@ export interface TriageValidationFailuresOptions {
   environment: Environment;
   runner: EnvironmentCommandRunner;
   context: CommandContext;
-  /** `origin/<target branch>`. */
-  targetRef: string;
+  /** Immutable comparison used to generate the review diff. */
+  baseRef: string;
+  headRef: string;
   changedFiles: string[];
+  resources?: string[];
   commands: ValidationFailureClassifierCommand[];
   /** Replaces the environment exec, for tests. */
   execute?: (script: string, payload: string, env: NodeJS.ProcessEnv) => Promise<string>;
@@ -74,25 +81,36 @@ export interface TriageValidationFailuresOptions {
   mergeBaseExec?: MergeBaseRerunExec | false;
 }
 
-/**
- * The rerun's commands go through the environment runner as `bash -lc`, from
- * the reviewed worktree, as validation ran its own. A non-zero exit is a
- * result, not an error.
- */
-export function mergeBaseRerunExec(runner: EnvironmentCommandRunner): MergeBaseRerunExec {
-  return async (script, args, timeoutMs) => {
-    try {
-      const output = await runner(
-        "bash",
-        ["-lc", script, "merge-base-rerun", ...args],
-        Math.max(1_000, timeoutMs),
-      );
-      return { exitCode: 0, output, timedOut: false };
-    } catch (error) {
-      if (!(error instanceof CommandFailedError)) throw error;
-      return { exitCode: error.exitCode, output: error.stdout, timedOut: error.timedOut };
+const BASELINE_QUEUE_TIMEOUT_MS = 30_000;
+
+type BaselineScheduler = Pick<
+  ReturnType<typeof createHostTestScheduler>,
+  "capacity" | "enqueue" | "poll" | "release"
+>;
+
+export async function withMergeBaseAdmission<T>(
+  scheduler: BaselineScheduler,
+  owner: string,
+  run: () => Promise<T>,
+  queueTimeoutMs = BASELINE_QUEUE_TIMEOUT_MS,
+  resources: string[] = [],
+): Promise<T | undefined> {
+  const capacity = scheduler.capacity();
+  const ticket = scheduler.enqueue({
+    owner,
+    workers: 1,
+    memoryMiB: Math.min(2_048, capacity.memoryMiB),
+    resources,
+  });
+  const deadline = performance.now() + queueTimeoutMs;
+  try {
+    while (performance.now() < deadline) {
+      if (scheduler.poll(ticket).state === "running") return await run();
+      await Bun.sleep(Math.min(100, Math.max(0, deadline - performance.now())));
     }
-  };
+  } finally {
+    scheduler.release(ticket);
+  }
 }
 
 /** A new, unique directory outside the reviewed worktree. */
@@ -204,7 +222,7 @@ export async function triageValidationFailures(
     let mergeBase: string | null = null;
     try {
       const output = (
-        await runner("git", ["merge-base", "HEAD", options.targetRef], 30_000)
+        await runner("git", ["merge-base", options.headRef, options.baseRef], 30_000)
       ).trim();
       mergeBase = /^[a-f0-9]{40}$/.test(output) ? output : null;
     } catch {
@@ -221,6 +239,7 @@ export async function triageValidationFailures(
         ? { repository, gh: local ? gitHubCli(context.runtime.gitHubCli) : "gh" }
         : null,
       budgetMs: CLASSIFIER_BUDGET_MS,
+      includeBaselineFingerprints: true,
     });
     const env = local ? await gitHubCliEnv(context.storage).catch(() => process.env) : process.env;
     const execute =
@@ -229,31 +248,100 @@ export async function triageValidationFailures(
         executeInEnvironment(environment, context, script, data, environmentVariables));
     const stdout = await execute(VALIDATION_FAILURE_CLASSIFIER_SCRIPT, payload, env);
     const parsed: unknown = JSON.parse(stdout);
-    if (!isValidationFailureTriage(parsed)) {
+    const result = parsed as { triage?: unknown; fingerprints?: unknown };
+    const report = result?.triage ?? parsed;
+    if (!isValidationFailureTriage(report) || report.mergeBase !== mergeBase) {
       return {
         limitation: "Failure triage was skipped: the classifier returned an invalid result",
       };
     }
+    const rows = result?.fingerprints;
+    const fingerprints = new Map<TriagedValidationFailure, string>();
+    if (Array.isArray(rows)) {
+      report.commands.forEach((command, commandIndex) => {
+        const row: unknown = rows[commandIndex];
+        if (!Array.isArray(row)) return;
+        command.failures.forEach((failure, index) => {
+          const digest: unknown = row[index];
+          if (typeof digest === "string" && /^[a-f0-9]{64}$/.test(digest)) {
+            fingerprints.set(failure, digest);
+          }
+        });
+      });
+    }
     const shared = applySharedBaseEvidence(
-      parsed,
+      report,
       await sharedFailureSummaries(context, environment).catch(() => []),
     );
-    const triage =
-      options.mergeBaseExec === false
-        ? shared
-        : await rerunFailuresOnMergeBase({
-            triage: shared,
-            changedFiles: options.changedFiles,
-            exec: options.mergeBaseExec ?? mergeBaseRerunExec(runner),
-            checkoutDir: mergeBaseCheckoutDir(environment),
-          });
-    return { triage };
+    return { triage: await runMergeBaseTriage(options, shared, fingerprints) };
   } catch (error) {
     log.warn("failure-triage.failed", {
       environmentId: environment.id,
       error: formatLogError(error),
     });
     return { limitation: "Failure triage was skipped: the classifier could not run" };
+  }
+}
+
+async function runMergeBaseTriage(
+  options: TriageValidationFailuresOptions,
+  triage: ValidationFailureTriage,
+  fingerprints: ReadonlyMap<TriagedValidationFailure, string>,
+): Promise<ValidationFailureTriage> {
+  const { environment, runner, context, changedFiles, mergeBaseExec } = options;
+  if (mergeBaseExec === false || !needsMergeBaseRerun(triage, changedFiles)) return triage;
+  const checkoutDir = mergeBaseCheckoutDir(environment);
+  const run = (exec: MergeBaseRerunExec) =>
+    rerunFailuresOnMergeBase({ triage, changedFiles, fingerprints, exec, checkoutDir });
+  if (mergeBaseExec) return run(mergeBaseExec);
+  const unavailable = (reason: string): ValidationFailureTriage => ({
+    ...triage,
+    limitations: [...triage.limitations.slice(0, MAX_TRIAGE_LIMITATIONS - 1), reason],
+  });
+  try {
+    const scheduler = createHostTestScheduler();
+    try {
+      const owner =
+        environment.environmentType === "local"
+          ? scheduler.owner(environment.worktreePath!)
+          : createHash("sha256").update(environment.id).digest("hex");
+      const resources = scheduler.resources(owner, ["workspace:*", ...(options.resources ?? [])]);
+      return (
+        (await withMergeBaseAdmission(
+          scheduler,
+          owner,
+          async () => {
+            if (environment.environmentType !== "local") return run(mergeBaseRerunExec(runner));
+            const id = randomUUID();
+            const reservation =
+              await context.storage.environmentIsolation.reserveTemporaryPortBase(id);
+            if (!reservation)
+              return unavailable("The merge-base rerun could not reserve isolated local ports");
+            try {
+              return await run(
+                mergeBaseRerunExec(runner, {
+                  bun: resolveBunBinary(context),
+                  env: withEnvironmentIsolation(
+                    process.env,
+                    environmentIsolationVariables(id, reservation.base),
+                  ),
+                }),
+              );
+            } finally {
+              reservation.release();
+            }
+          },
+          BASELINE_QUEUE_TIMEOUT_MS,
+          resources,
+        )) ?? unavailable("The merge-base rerun timed out waiting for host validation capacity")
+      );
+    } finally {
+      scheduler.close();
+    }
+  } catch {
+    return unavailable(
+      "The merge-base rerun could not acquire validation capacity or local isolation",
+    );
   }
 }
 

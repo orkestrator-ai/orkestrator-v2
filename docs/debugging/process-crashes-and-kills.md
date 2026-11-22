@@ -291,7 +291,7 @@ known ways to get it without a crash:
 
 | Cause | What the log shows | Status |
 | --- | --- | --- |
-| An AppImage update. The updater starts the new version as soon as the old one releases the single-instance lock, while the old one is still quitting | `started`, `started`, then the old process's `stopped` after the second start | Fixed: `prepareAppImageInstall` writes `essential.stopped` before releasing the lock |
+| An AppImage update used to start the new version as soon as the old one released the single-instance lock, while the old one was still quitting | `started`, `started`, then the old process's `stopped` after the second start | Fixed: the updater applies the image, then schedules a restart after orderly exit only when the stop marker has been confirmed. An unconfirmed stop leaves the installed image for manual launch |
 | "Close application" on the missing-CLI dialog, which called `app.exit(0)` and skipped `will-quit` (and with it the backend's drain) | The backend's last lines, no `quit.stopping-backend`, no `stopped` | Fixed: exit code 0 is an ordinary `app.quit()` (`exitApplication`) |
 | Logout, reboot or shutdown on Omarchy. Omarchy sets `DefaultTimeoutStopSec=5s`, so `user@1000.service` gets 5 s (`systemctl show user@1000.service -p TimeoutStopUSec`, seen on beelink2), while a quit may wait up to 20 s for the backend's drain before it writes `stopped` | `quit.stopping-backend` and some of the backend's drain, then nothing | Open, not reproduced ([to-do 8315](../todo/cross-cutting/8315-desktop-killed-during-system-shutdown.md)): the system would SIGKILL the app; the previous boot's journal (`journalctl -b -1`) shows a stop timeout |
 

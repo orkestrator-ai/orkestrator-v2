@@ -51,7 +51,7 @@ describe("isAutoUpdateSupported", () => {
 
 function createHarness(
   checkResult: UpdateCheckResult | Error | null = {},
-  prepareForInstall?: () => Promise<void>,
+  installAppImage?: () => boolean,
   currentVersion = "2.19.9",
 ) {
   const listeners = new Map<string, (arg: never) => void>();
@@ -92,7 +92,7 @@ function createHarness(
     showMessageBox,
     log,
     onCheckResult,
-    prepareForInstall,
+    installAppImage,
   });
   const emit = (event: string, arg: unknown) => listeners.get(event)?.(arg as never);
   return { updater, showMessageBox, controller, emit, log, onCheckResult };
@@ -503,25 +503,26 @@ test("remote staging joins a concurrent check before reserving the staged versio
   expect(harness.updater.checkForUpdates).toHaveBeenCalledTimes(1);
 });
 
-test("the updater cannot spawn the replacement until install preparation finishes", async () => {
-  let finish!: () => void;
-  const harness = createHarness(
-    {},
-    () =>
-      new Promise<void>((resolve) => {
-        finish = resolve;
-      }),
-  );
+test("an AppImage install failure is returned to remote callers without a generic restart", async () => {
+  const install = mock(() => false);
+  const harness = createHarness({}, install);
   harness.updater.checkForUpdates = mock(async () => {
     harness.emit("update-downloaded", { version: "2.22.0" });
     return { isUpdateAvailable: true };
   });
   await harness.controller.stageForRemote();
-  const install = harness.controller.installStaged("2.22.0");
+  expect(await harness.controller.installStaged("2.22.0")).toBe(false);
+  expect(install).toHaveBeenCalledTimes(1);
   expect(harness.updater.quitAndInstall).not.toHaveBeenCalled();
-  finish();
-  expect(await install).toBe(true);
-  expect(harness.updater.quitAndInstall).toHaveBeenCalledWith(true, true);
+});
+
+test("the local Restart Now prompt uses the same AppImage installer", async () => {
+  const install = mock(() => true);
+  const harness = createHarness({}, install);
+  harness.emit("update-downloaded", { version: "2.22.0" });
+  await Promise.resolve();
+  expect(install).toHaveBeenCalledTimes(1);
+  expect(harness.updater.quitAndInstall).not.toHaveBeenCalled();
 });
 
 test.each(["metadata", "download", "failure"] as const)(

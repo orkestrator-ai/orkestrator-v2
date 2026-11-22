@@ -72,6 +72,13 @@ describe("relaunchApplication", () => {
     expect(unref).toHaveBeenCalled();
   });
 
+  test("restarts from the installer's destination when the image name changed", () => {
+    const { value, spawned } = context();
+    const updated = "/home/user/AppImages/Orkestrator 3.0.0.AppImage";
+    relaunchApplication({ relaunch: () => undefined }, value, updated);
+    expect(spawned[0]!.args.slice(3)).toEqual(["4242", updated, "orkestrator://open"]);
+  });
+
   test("never starts from a working directory inside a mount", () => {
     const { value, spawned } = context();
     value.env.OWD = `${MOUNT}/resources`;

@@ -98,8 +98,8 @@ export function appImageRelaunchEnvironment(env: NodeJS.ProcessEnv): NodeJS.Proc
 export function relaunchApplication(
   app: Pick<Electron.App, "relaunch">,
   context: RelaunchContext = defaultContext(),
+  image = context.env.APPIMAGE,
 ): void {
-  const image = context.env.APPIMAGE;
   if (context.platform !== "linux" || !image) {
     app.relaunch();
     return;
@@ -150,7 +150,7 @@ export function relaunchApplication(
   // Electron's relauncher is the better fallback than no relaunch at all.
   waiter.once("error", (error) => {
     log.error("relaunch.schedule-failed", { error: formatLogError(error) });
-    app.relaunch();
+    app.relaunch({ execPath: image, args: context.argv.slice(1) });
   });
   waiter.unref();
 }

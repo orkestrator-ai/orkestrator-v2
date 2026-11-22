@@ -493,13 +493,14 @@ choice is for. Three limits follow from it:
   waits asynchronously for up to two seconds, then reports a counted write loss.
 - **A rejected desktop launch** installs no writer or shutdown marker: ownership
   starts only after winning Electron's single-instance lock.
-- **Releasing that lock hands the file over.** An AppImage update starts the new
-  version before the old one quits, as soon as the old one releases the lock
-  (`prepareAppImageInstall` in `backend-lifecycle.ts`). The old process writes
-  `essential.stopped` before releasing it, bounded at two seconds, so the new
-  `essential.started` never lands while the old writer still looks open, which
-  read as a desktop that died on every update. What the old process logs after
-  the handover is not written; its backend has already exited by then.
+- **An explicit AppImage update holds the lock until Electron exits.** The
+  updater applies the image without starting a replacement. A failed install
+  leaves the current backend and writer active. A successful install begins
+  the normal quit, drains the backend, and checks that the final
+  `essential.stopped` append succeeded. Only then does the final quit schedule
+  the updated image to start after process exit. The quit hold is bounded. If
+  backend drain or the append cannot be confirmed, the desktop closes and the
+  user can launch the installed update manually.
 
 ### What it holds
 

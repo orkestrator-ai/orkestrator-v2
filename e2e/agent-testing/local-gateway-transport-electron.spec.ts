@@ -1004,3 +1004,80 @@ for (const mode of ["relay", "gateway"] as const) {
     }
   });
 }
+
+test("renderer Close application drains the backend before persisting the desktop stop marker", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-renderer-quit-"));
+  let stack: Awaited<ReturnType<typeof startTransportStack>> | undefined;
+  let app: ElectronApplication | undefined;
+  try {
+    stack = await startTransportStack("relay", root, "renderer-quit");
+    const headless = headlessElectronRequested();
+    app = await electron.launch({
+      executablePath: electronExecutable,
+      args: [
+        ...ELECTRON_TEST_SWITCHES,
+        ...(headless ? HEADLESS_ELECTRON_SWITCHES : []),
+        electronMain,
+      ],
+      cwd: repositoryRoot,
+      env: electronSpecEnvironment(
+        headless ? withoutDisplay(stack.electronEnv) : stack.electronEnv,
+      ),
+    });
+    recordElectronDiagnostics(app);
+    const startup = watchElectronStartup(app);
+    dismissStartupDialogs(app);
+    const window = await app.firstWindow();
+    await startup.waitForTitle(window, stack.profile.electronTitle, { timeoutMs: 60_000 });
+
+    const child = app.process();
+    // This IPC destroys the renderer that sent it, so the invocation may
+    // lose its reply. The process exit and persisted log are the outcome.
+    await window
+      .evaluate(() => (globalThis.window as RendererWindow).orkestrator!.process.exit(0))
+      .catch((error: unknown) => {
+        if (
+          !(error instanceof Error) ||
+          !error.message.includes("Target page, context or browser has been closed")
+        )
+          throw error;
+      });
+    await expect.poll(() => child.exitCode, { timeout: 30_000 }).toBe(0);
+
+    const log = await readFile(
+      path.join(stack.profile.dataDir, "logs", "essential", "essential.jsonl"),
+      "utf8",
+    );
+    const entries = log
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            area: string;
+            event: string;
+            fields?: { code?: number; owner?: string };
+          },
+      );
+    const start = entries.findIndex(
+      (entry) => entry.event === "essential.started" && entry.fields?.owner === "desktop",
+    );
+    const backend = entries.findIndex(
+      (entry) =>
+        entry.area === "backend" && entry.event === "shutdown.finished" && entry.fields?.code === 0,
+    );
+    const stop = entries.findIndex(
+      (entry) => entry.event === "essential.stopped" && entry.fields?.owner === "desktop",
+    );
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(backend).toBeGreaterThan(start);
+    expect(stop).toBeGreaterThan(backend);
+  } finally {
+    try {
+      if (app) await closeElectronWithin(app);
+    } finally {
+      if (stack) await stopProcessGroup(stack.vite);
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});

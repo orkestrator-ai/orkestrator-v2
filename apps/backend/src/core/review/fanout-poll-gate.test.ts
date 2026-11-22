@@ -11,7 +11,7 @@ import type { StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { WorkflowResultSubmissionState } from "@orkestrator/protocol/workflow-results";
 import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
-import { ManualTime } from "../recurring-test-support.js";
+import { ManualTime } from "../recurring/test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";
 import { ElapsedPollGate, type PollTrigger } from "../workflows/poll-gate.js";
 import { WorkflowResultService } from "../workflows/result-service.js";

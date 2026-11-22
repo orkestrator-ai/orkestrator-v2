@@ -39,7 +39,7 @@ const core = path.resolve(arg("core", path.join(import.meta.dir, "../apps/backen
 
 const { getLocalGitStatusDetailed } = await import(path.join(core, "commands-files.ts"));
 const { observeCommandInvocations } = await import(path.join(core, "shell.ts"));
-const { recurringWorkMetrics } = await import(path.join(core, "recurring-work-metrics.ts"));
+const { recurringWorkMetrics } = await import(path.join(core, "recurring/work-metrics.ts"));
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {

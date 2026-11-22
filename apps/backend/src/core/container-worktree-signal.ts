@@ -6,7 +6,7 @@ import {
   type SignalDemotionReason,
   type SignalHealthState,
   type SignalHealthStatus,
-} from "./recurring-diagnostics.js";
+} from "./recurring/index.js";
 import type { WorktreeChangeHint, WorktreeWatcher } from "./worktrees/index.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

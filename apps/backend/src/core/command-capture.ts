@@ -1,5 +1,5 @@
 import { setCommandCaptureMetrics } from "@orkestrator/protocol/node/command-capture";
-import { recurringWorkMetrics, spawnWorkUnit } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, spawnWorkUnit } from "./recurring/index.js";
 
 /**
  * The capture itself lives in protocol, where the bridges share it. Every

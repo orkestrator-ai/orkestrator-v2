@@ -10,7 +10,7 @@ import {
   type DiffStatsWarning,
 } from "../src/core/diff-stats-service";
 import { diffTargetPresent } from "../src/core/diff-stats-tracking";
-import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
+import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";
 
 // A local environment whose worktree sits on an unmounted drive (or was
 // deleted) used to run `git -C <missing>` on every poll; each run failed and

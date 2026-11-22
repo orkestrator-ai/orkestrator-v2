@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/work-metrics.js";
 import { StorageService } from "./storage.js";
 import { openBackendDatabase } from "./storage-stores.js";
 import { WorkflowResultService } from "./workflows/result-service.js";

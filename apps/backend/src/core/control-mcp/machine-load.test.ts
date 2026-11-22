@@ -20,8 +20,8 @@ import { coordinatorRoleCapabilities } from "./tools.js";
 import { MachineLoadSampler } from "../machine-load.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "../nodes/node-link.js";
 import { isNodeRoutingExcludedCommand, isReadCommand, routeToNode } from "../nodes/node-routing.js";
-import { flushMicrotasks } from "../recurring-test-support.js";
-import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { flushMicrotasks } from "../recurring/test-support.js";
+import { RecurringWorkMetrics } from "../recurring/work-metrics.js";
 
 /**
  * `list_nodes` over the real Control MCP endpoint with a coordinator's

@@ -3,7 +3,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { createEnvironment } from "../storage.js";
-import { recurringWorkDiagnostics } from "../recurring-diagnostics.js";
+import { recurringWorkDiagnostics } from "../recurring/diagnostics.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 const harnesses: PublicApiHarness[] = [];

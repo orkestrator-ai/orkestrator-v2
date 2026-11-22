@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { commandInvocationCount, runCommand } from "./shell.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/work-metrics.js";
 import { runGit } from "@orkestrator/protocol/node/workspace-change-probe";
 
 function diffScanStats() {

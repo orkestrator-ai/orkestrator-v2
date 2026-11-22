@@ -3,7 +3,7 @@ import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-mon
 import { boundedConsoleStats } from "../bounded-console.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import { coordinatorEnvironmentRefusals } from "./coordinator/index.js";
-import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
+import { recurringWorkDiagnostics } from "./recurring/index.js";
 
 /**
  * Everything in `/__orkestrator/metrics` that is not the gateway's own, also read

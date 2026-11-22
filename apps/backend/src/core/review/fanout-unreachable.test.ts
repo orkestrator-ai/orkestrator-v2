@@ -9,7 +9,7 @@ import {
   type BuildPipelineProvider,
 } from "../build-pipeline/provider.js";
 import { MultiReviewProgressTracker } from "./progress.js";
-import { ManualTime } from "../recurring-test-support.js";
+import { ManualTime } from "../recurring/test-support.js";
 import { ReviewFanoutRunner, type ReviewFanoutHost } from "./fanout.js";
 import { reportFor } from "../build-pipeline/review-fanout-test-support.js";
 import { ElapsedPollGate } from "../workflows/poll-gate.js";

@@ -34,7 +34,7 @@ import {
   nonEmptyString,
 } from "../agent-provider-runtime.js";
 import { bridgeAuthorityHeaders } from "../bridge-authority-keys.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;

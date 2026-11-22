@@ -7,7 +7,7 @@ import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-
 import { getLocalGitStatusDetailed } from "../commands-files.js";
 import { DiffStatsService, LOCAL_SCAN_MIN_GAP_MS } from "../diff-stats-service.js";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
-import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { RecurringWorkMetrics } from "../recurring/work-metrics.js";
 import { worktreeWatchPlanIo } from "./watch-plan.js";
 import { startWorktreeWatcher } from "./watcher.js";
 

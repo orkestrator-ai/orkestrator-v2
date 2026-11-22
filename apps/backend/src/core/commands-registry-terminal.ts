@@ -207,7 +207,7 @@ import {
 import { conditionalSnapshot } from "./commands-terminal.js";
 import { createContainerFile, createLocalFile } from "./commands-file-create.js";
 import type { GitFileChange } from "./commands-helpers.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
 import {
   parseReviewWorktreeFingerprint,

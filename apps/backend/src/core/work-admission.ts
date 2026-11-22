@@ -8,8 +8,9 @@ import {
 import {
   recurringDiagnosticsRegistry,
   type RecurringDiagnosticsRegistry,
-} from "./recurring-diagnostics.js";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+  recurringWorkMetrics,
+  type RecurringWorkMetrics,
+} from "./recurring/index.js";
 
 /**
  * Bounded, fair admission for expensive physical work, per work class and per

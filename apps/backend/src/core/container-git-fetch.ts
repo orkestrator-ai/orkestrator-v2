@@ -3,7 +3,7 @@ import type {
   WorktreeRemoteFetchFailure,
   WorktreeRemoteFreshness,
 } from "@orkestrator/protocol/worktree-snapshots";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
 import { worktreeTargetKey } from "./worktrees/index.js";
 

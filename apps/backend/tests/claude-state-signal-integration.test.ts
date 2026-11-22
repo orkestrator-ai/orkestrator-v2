@@ -5,7 +5,7 @@ import {
   claudeStateSignalSupport,
   claudeStateSignalInstaller,
 } from "../src/core/claude-state-signal.js";
-import { ManualTime, flushMicrotasks } from "../src/core/recurring-test-support.js";
+import { ManualTime, flushMicrotasks } from "../src/core/recurring/test-support.js";
 import type { ClaudeStateSignalSupport } from "../src/core/tmux-poll.js";
 import type { ManifestRead } from "../src/core/docker-image.js";
 import {

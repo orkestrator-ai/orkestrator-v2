@@ -6,16 +6,13 @@ import {
   type RecurringJobKind,
   type RecurringPriorityClass,
 } from "@orkestrator/protocol/recurring-work";
-import {
-  recurringDiagnosticsRegistry,
-  type RecurringDiagnosticsRegistry,
-} from "./recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry, type RecurringDiagnosticsRegistry } from "./diagnostics.js";
 import {
   recurringErrorCategory,
   recurringWorkMetrics,
   type RecurringWorkMetrics,
   type RecurringWorkSpan,
-} from "./recurring-work-metrics.js";
+} from "./work-metrics.js";
 
 /**
  * A small, bounded, process-local scheduler for keyed recurring work.

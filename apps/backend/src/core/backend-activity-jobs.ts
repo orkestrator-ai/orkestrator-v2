@@ -2,13 +2,13 @@ import type {
   RecurringJobKind,
   RecurringPriorityClass,
 } from "@orkestrator/protocol/recurring-work";
-import type { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import {
+  type RecurringDiagnosticsRegistry,
   RecurringScheduler,
   type RecurringSchedulerStatus,
   type RecurringTimerFactory,
-} from "./recurring-scheduler.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+  RecurringWorkMetrics,
+} from "./recurring/index.js";
 
 /**
  * The backend's activity bundle as named due jobs (step 08, tasks 10–11).

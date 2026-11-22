@@ -29,7 +29,7 @@ import type {
   MailboxDescriptor,
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import {
   AGENT_MAIL_MAX_VERIFY_ATTEMPTS,
   isRideAlongMessage,

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { recurringWorkDiagnostics } from "../recurring-diagnostics.js";
+import { recurringWorkDiagnostics } from "../recurring/diagnostics.js";
 import { createHarness, type Harness } from "./service-test-support.js";
 
 const HOUR = 60 * 60 * 1000;

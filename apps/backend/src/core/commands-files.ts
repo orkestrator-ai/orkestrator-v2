@@ -81,7 +81,7 @@ import type { WorktreeRemoteFreshness } from "@orkestrator/protocol/worktree-sna
 import { UNTRACKED_SCAN_CONCURRENCY, UNTRACKED_SCAN_MAX_FILES } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import { statStamp } from "./stat-stamp.js";
 import {
   countUntrackedFileLines,

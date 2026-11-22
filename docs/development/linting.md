@@ -279,13 +279,15 @@ new.
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
-    `native-agent/`) are reached only through their
+    `native-agent/`, `recurring/`) are reached only through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
     runtime import cycle (the storage layer importing a domain's store layout,
     for example, `agent-accounts/store.ts`, or `workflows/result-final-text.ts`,
     whose one importer the result contracts reach, or
+    `recurring/work-metrics.ts`, which `native-session-invalidation-metrics.ts`
+    imports and `recurring/diagnostics.ts` reaches, or
     `review/validation-prompts.ts` and `review/consolidation-scope.ts`, which
     `build-pipeline/prompts.ts` imports and `review/multi-review-prompts.ts`
     reaches), or would pull in the graph that the leaf module exists to keep
@@ -324,8 +326,10 @@ new.
 
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import
-    `previews/test-support.ts`, and `public-api/test-provider.ts` imports
-    `native-agent/service-test-collaborators.ts`.
+    `previews/test-support.ts`, `public-api/test-provider.ts` imports
+    `native-agent/service-test-collaborators.ts`, and
+    `review/fanout-interleaving-support.ts` (test support whose name the
+    `*test-support*` glob does not match) imports `recurring/test-support.ts`.
 
     The `tests/unit/**` patterns admit only `index.ts` and named exceptions.
     Add an internal module as an exception in that override when a `tests/unit`

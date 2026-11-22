@@ -2,7 +2,7 @@ import { eventSink } from "../backend-emit.js";
 import { afterEach, expect, test } from "bun:test";
 import type { NodeProjectSummary } from "@orkestrator/protocol/node-summaries";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry } from "../recurring/diagnostics.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { NodeReadModel, NODE_SUMMARY_EVENT_PREFIXES } from "./node-read-model.js";
 import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";

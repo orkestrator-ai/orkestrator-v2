@@ -27,7 +27,7 @@ import {
 } from "./graph-run-executor-test-support.js";
 import { GraphRunRewindError, graphCodeRewindBackupRef } from "./graph-run-rewind.js";
 import type { GraphRunService, GraphRunServiceOptions } from "./graph-run-service.js";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 import type { EnvironmentGit } from "./workspace-code-rewind.js";
 
 const worlds: GraphRunWorld[] = [];

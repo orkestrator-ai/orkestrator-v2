@@ -6,8 +6,7 @@ import {
   changeLedgerMigration,
   moveChangeLedgerMigration,
 } from "./change-tracking/ledger-schema.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
-import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import { recurringWorkMetrics, recurringDiagnosticsRegistry } from "./recurring/index.js";
 import { snapshotBeforeMigration } from "./storage-backups.js";
 import {
   buildPipelineReviewReportUpgradeMigration,

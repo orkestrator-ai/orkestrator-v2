@@ -42,7 +42,7 @@ import { nativeAsyncQuestionItemId } from "@orkestrator/protocol/native-agent";
 import { coordinatorRuntimeEnvironment } from "../coordinator/index.js";
 import { runtimeStillLive } from "./runtime-liveness.js";
 import { ProviderRegistry, providerCacheKey } from "./provider-registry.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 import {
   NativeAgentObservationBroker,
   nativeAgentObservationGroupKey,

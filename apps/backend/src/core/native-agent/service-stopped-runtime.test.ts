@@ -8,7 +8,7 @@ import {
   withService,
 } from "./service-projection-test-support.js";
 import { collaborators } from "./service-test-collaborators.js";
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 import type { StorageService } from "../storage.js";
 
 type Transition = Parameters<NonNullable<NativeAgentServiceOptions["onActivityTransition"]>>[0];

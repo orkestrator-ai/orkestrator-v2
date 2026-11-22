@@ -6,7 +6,7 @@ import type {
 } from "../agent-provider-contract.js";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import { type ActivityGroupRead, readActivityGroup } from "./activity-reads.js";
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 
 interface Session {
   key: string;

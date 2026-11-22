@@ -9,7 +9,7 @@ import {
   type NativeSessionInvalidationScope,
   type NativeSessionInvalidationSnapshot,
 } from "@orkestrator/protocol/native-agent-observation";
-import { recurringMetricsEnabled } from "./recurring-work-metrics.js";
+import { recurringMetricsEnabled } from "./recurring/work-metrics.js";
 
 const AGENT_PLATFORM_SET: ReadonlySet<string> = new Set(AGENT_PLATFORMS);
 const DISCOVERY_SECTION_SET: ReadonlySet<string> = new Set(NATIVE_AGENT_DISCOVERY_SECTIONS);

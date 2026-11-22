@@ -14,7 +14,7 @@ import {
   systemWorld,
   type SystemWorld,
 } from "./graph-system-test-support.js";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 
 const worlds: SystemWorld[] = [];
 const services: GraphRunService[] = [];

@@ -16,7 +16,7 @@ import {
   type IncompleteTurnRecoveryStrategy,
   type NativeAgentTurnRecoveryDependencies,
 } from "./turn-recovery.js";
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 
 /*
  * The collaborator is platform-neutral: these tests register a stand-in

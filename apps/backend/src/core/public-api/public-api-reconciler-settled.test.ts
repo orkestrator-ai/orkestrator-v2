@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { RegistryDependencies } from "../commands-registry-types.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/work-metrics.js";
 import { createPublicActionContext } from "./dispatch.js";
 import { PublicOperationReconciler, RECONCILE_FULL_PASS_MS, stopReconciler } from "./reconciler.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";

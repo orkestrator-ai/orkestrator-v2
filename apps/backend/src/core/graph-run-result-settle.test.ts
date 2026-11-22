@@ -22,7 +22,7 @@ import {
 } from "./graph-run-executor-test-support.js";
 import { GRAPH_RUN_OBSERVATION_MS, GRAPH_RUN_RESULT_SETTLE_MS } from "./graph-run-pass.js";
 import type { GraphRunService } from "./graph-run-service.js";
-import { ManualTime, advanceKeyedWork, settleKeyedWork } from "./recurring-test-support.js";
+import { ManualTime, advanceKeyedWork, settleKeyedWork } from "./recurring/test-support.js";
 
 const worlds: GraphRunWorld[] = [];
 

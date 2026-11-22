@@ -10,7 +10,7 @@ import { OrkestratorBackend } from "./index.js";
 import { RECURRING_JOB_CATALOGUE } from "@orkestrator/protocol/recurring-work";
 import type { BackendActivityJob } from "./backend-activity-jobs.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import { createEnvironment, StorageService } from "./storage.js";

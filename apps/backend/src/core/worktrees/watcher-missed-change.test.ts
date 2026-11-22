@@ -10,8 +10,8 @@ import {
   DIFF_SAFETY_NET_INTERVAL_MS,
   DiffStatsService,
 } from "../diff-stats-service.js";
-import { ManualTime } from "../recurring-test-support.js";
-import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { ManualTime } from "../recurring/test-support.js";
+import { RecurringWorkMetrics } from "../recurring/work-metrics.js";
 import type { WatchHandle } from "../watch-host.js";
 import {
   startWorktreeWatcher,

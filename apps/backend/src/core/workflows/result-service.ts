@@ -33,7 +33,7 @@ import {
   type WorkflowResultValidation,
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 import { StoreCorruptError, type StorageDatabase } from "../storage-database.js";
 import { openBackendDatabase } from "../storage-stores.js";
 import { isConsolidationScopeLists } from "../review/consolidation-scope.js";

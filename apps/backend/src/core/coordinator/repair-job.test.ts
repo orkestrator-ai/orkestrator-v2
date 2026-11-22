@@ -12,7 +12,7 @@ import path from "node:path";
 import { AGENT_TEST_TIMING_FILE, createAgentTestTiming } from "../agent-test-timing.js";
 import { BackendActivityJobs } from "../backend-activity-jobs.js";
 import { coordinatorRepairJob } from "./repair-job.js";
-import { ManualTime } from "../recurring-test-support.js";
+import { ManualTime } from "../recurring/test-support.js";
 
 const INTERVAL_MS = 60_000;
 const directories: string[] = [];

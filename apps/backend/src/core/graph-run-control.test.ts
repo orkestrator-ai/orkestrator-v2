@@ -25,7 +25,7 @@ import {
 import { graphLoopState } from "./graph-run-loops.js";
 import type { GraphRunService } from "./graph-run-service.js";
 import { GraphRunView } from "./graph-run-view.js";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 
 const worlds: GraphRunWorld[] = [];
 

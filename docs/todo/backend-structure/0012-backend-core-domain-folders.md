@@ -4,13 +4,13 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice, and 2026-11-20 against `main` at `9a5a84f63` for the `native-agent` slice; task 7 re-checked 2026-11-20 against `main` at `9a5a84f63` for `pi-model-catalog-seeding.ts`.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice, and 2026-11-20 against `main` at `9a5a84f63` for the `native-agent` slice; task 3 re-checked 2026-11-22 against `main` at `dd1391427` for the `recurring` slice and the codemod's permalink fix; task 7 re-checked 2026-11-20 against `main` at `9a5a84f63` for `pi-model-catalog-seeding.ts`.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
-2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20), the `agent-accounts` move is done (2026-11-20), the `workflows` move is done (2026-11-20), the `review` move is done (2026-11-20), the `build-pipeline` move is done (2026-11-20) and the `native-agent` move is done (2026-11-20), one change each (see "Assumptions and decisions"). Wave 2 is done; wave 3 is next.
-3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: open (next).
+2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20), the `agent-accounts` move is done (2026-11-20), the `workflows` move is done (2026-11-20), the `review` move is done (2026-11-20), the `build-pipeline` move is done (2026-11-20) and the `native-agent` move is done (2026-11-20), one change each (see "Assumptions and decisions"). Wave 2 is done; wave 3 is in progress (task 3).
+3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: in progress: the `recurring` move is done (2026-11-22, see "Assumptions and decisions"); `terminals`, `tmux`, `containers`, `environments` and `storage` are open, one change each.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
 6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11; to-do 7800 (retired 2026-11-11) gave each an `index.ts` and both lint patterns (see "Current state").
@@ -68,7 +68,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
 
-**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)).
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)). Re-measured 2026-11-22 on `dd1391427` for the first slice: `recurring-*` was 4 source (`recurring-test-support.ts` included) / 3 tests (the table's 4 / 2 was stale on tests), with 50 production importers outside the domain in `apps/backend/src` (49 in `core/`, 17 of them in `build-pipeline/`, `change-tracking/`, `features/`, `git/`, `http-bridge/`, `native-agent/`, `public-api/`, `workflows/` and `worktrees/`, and `main.ts`) using 20 symbols from three modules, plus 68 tests and test-support files in `apps/backend/src`, 15 `apps/backend/tests` files, four `apps/backend/scripts` files and two repository scripts; no `tests/unit` file imports it. The domain's own runtime dependencies are the protocol's `recurring-work` module and `native-session-invalidation-metrics.ts`, which `recurring-diagnostics.ts` reads.
 
 **Decisions.**
 
@@ -472,6 +472,27 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   native commands (`commands-registry-native*.ts`) and
   `native-session-invalidation-metrics.ts` stay at the root. Wave 2 is done;
   wave 3 is next. See "Assumptions and decisions".
+- Done (task 3's `recurring` slice, 2026-11-22, against `main` at
+  `dd1391427`): the four `recurring-*` source files and their three tests
+  are in `core/recurring/` without the prefix (`recurring/scheduler.ts`,
+  `recurring/work-metrics.ts`, `recurring/diagnostics.ts`,
+  `recurring/test-support.ts`, `recurring/scheduler.test.ts`,
+  `recurring/work-metrics.test.ts`, `recurring/diagnostics-caches.test.ts`),
+  with an `index.ts` and both lint patterns. `index.ts` re-exports 20
+  symbols from three modules, and 49 of the 50 production importers outside
+  the folder import it. Two modules are named exceptions in the
+  `apps/backend/src/**` pattern: `work-metrics.js`, which
+  `native-session-invalidation-metrics.ts` imports directly because
+  `diagnostics.ts` reads those metrics at runtime (routing it through
+  `index.ts` closes a cycle; the module is still re-exported for everyone
+  else), and `test-support.js`, which `review/fanout-interleaving-support.ts`
+  imports (test support whose name the tests-off override does not match).
+  The `tests/unit/**` pattern has no exception. The owners that schedule
+  recurring work (`backend-activity-jobs.ts`, `work-admission.ts`,
+  `machine-load.ts`, `host-suspend-detector.ts`, …) and
+  `native-session-invalidation-metrics.ts` stay at the root. Wave 3 is in
+  progress: `terminals`, `tmux`, `containers`, `environments` and `storage`
+  are left, one change each. See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -512,7 +533,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `build-pipeline` slice on 2026-11-20 it holds 619 and 655, down from 679
   and 723 just before it, and after the `native-agent` slice on 2026-11-20
   it holds 539 and 531, down from 619 and 655 just before it; 541 and 531
-  once rebased onto `a01039913`, which added two root files).
+  once rebased onto `a01039913`, which added two root files; and after the
+  `recurring` slice on 2026-11-22 it holds 541 and 530, down from 545 and
+  533 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -535,17 +558,19 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | native-agent | `native-agent-*`, `native-terminal-messages.ts`, `workflow-account-handoff.test.ts` | done (80 / 124 moved, 2026-11-20) | |
   | terminals | `terminal-*`, `transcript-*` | 8 | 14 |
   | tmux | `tmux*` | 14 | 14 |
-  | recurring | `recurring-*` | 4 | 3 |
+  | recurring | `recurring-*` | done (4 / 3 moved, 2026-11-22) | |
   | containers | `container-*`, `docker-*` | 47 | 27 |
   | environments | `environment-*` | 18 | 18 |
-  | storage | `storage*` | 84 | 105 |
-  | commands | `commands*` | 85 | 85 |
+  | storage | `storage*` | 85 | 105 |
+  | commands | `commands*` | 86 | 85 |
   | (unplaced) | `pi-model-catalog-seeding.ts` | 1 | 1 |
   | (unplaced) | `auto-pipeline*.ts` | 3 | 2 |
 
   The wave 3, `commands` and unplaced rows were re-counted on 2026-11-20 at
   `9a5a84f63`, after the `native-agent` slice; their earlier figures dated
-  from the plan. These are file counts only. Importer and dependency counts go stale within a
+  from the plan; the `storage` and `commands` rows were re-counted on
+  2026-11-22 at `dd1391427`, before the `recurring` slice. These are file
+  counts only. Importer and dependency counts go stale within a
   day, so each slice re-measures them (step 1 below).
 - `keyed-record-*` is now one file, `keyed-record-format.ts`: the keyed-record
   engine went with #969. Its importers are two `build-pipeline/transcript-*.ts`
@@ -592,8 +617,9 @@ before the busy ones move.
 2. **Wave 2 (mid-tier):** done. (`plan-usage`, `features`, `previews`,
    `worktrees`, `git`, `coordinator`, `agent-accounts`, `workflows`,
    `review`, `build-pipeline` and `native-agent`.)
-3. **Wave 3 (hubs), next:** `terminals`, `tmux`, `recurring`, `containers`,
-   `environments`, `storage`. Many files import these, and `containers` is
+3. **Wave 3 (hubs), in progress:** `recurring` is done (2026-11-22);
+   `terminals`, `tmux`, `containers`, `environments` and `storage` are left,
+   one PR each. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
    touch the most files.
 4. **Last: `commands`.** It depends on most other domains. Its former
@@ -679,10 +705,130 @@ task 2's `worktrees` slice (2026-11-17), task 2's `git` slice
 (2026-11-18), task 2's `coordinator` slice (2026-11-20), task 2's
 `agent-accounts` slice (2026-11-20), task 2's `workflows` slice
 (2026-11-20), task 2's `review` slice (2026-11-20), task 2's
-`build-pipeline` slice (2026-11-20), and task 2's `native-agent` slice
-(2026-11-20).
-The other moves in waves 2 to 4 (tasks 2 to 4) were left open on purpose:
+`build-pipeline` slice (2026-11-20), task 2's `native-agent` slice
+(2026-11-20), and task 3's `recurring` slice with the codemod's permalink
+fix (2026-11-22).
+The other moves in waves 3 and 4 (tasks 3 and 4) were left open on purpose:
 they move many files that other work in flight touches.
+
+### Task 3: the codemod skips commit-pinned GitHub permalinks
+
+- Chosen: a second negative look-behind in the path-string rewrite, beside
+  the `<revision>:<path>` one from todo 7490. A path is left alone when it
+  follows `github.com/<owner>/<repo>/(blob|tree|raw)/<revision>/` or
+  `raw.githubusercontent.com/<owner>/<repo>/<revision>/` plus any leading
+  directories, where the revision is a hex SHA of 7 to 40 characters, a
+  `vX.Y.Z` tag (with an optional `-suffix`) or a `refs/tags/` name. Any other
+  segment there (`main`, `feature/x`, `refs/heads/main`) is a branch, whose
+  link follows the file, so it is rewritten as before. Relative imports are
+  unaffected: they go through the specifier rewrite, not the path strings.
+- Why: the `native-agent` slice found a permalink pinned to a commit
+  (`…/blob/f2d21713…/apps/backend/src/core/native-agent-service.ts` in
+  `plans/credentials/credentials.md`) rewritten and restored it by hand; at
+  that commit the file had its old name, so the rewritten link was dead.
+- Options: (a) a look-behind on the URL's revision segment (chosen): one
+  regular expression, the same shape as the 7490 rule, and a branch link
+  still follows the file; (b) skip every GitHub URL: simpler, but a link to
+  `main` would then point at a file that no longer exists there; (c) resolve
+  each revision with `git rev-parse`: exact for this repository's own SHAs
+  and tags, but it needs the history present, says nothing about other
+  repositories' links, and still cannot tell a tag from a branch that
+  happens to have a tag-like name. A branch named like a SHA or a `vX.Y.Z`
+  tag is read as pinned and left alone; none exists here.
+- Tests: `tests/unit/move-backend-modules.test.ts` adds a case covering full
+  and abbreviated SHAs, `blob/`, `tree/`, `raw/`,
+  `raw.githubusercontent.com`, a release tag, a `refs/tags/` name and a link
+  in angle brackets (all left alone) against `main`, a slashed branch,
+  `refs/heads/main`, a non-hex lookalike and a bare path after a pinned URL
+  (all rewritten), and a moved importer whose relative import is rewritten
+  beside a pinned link in its comment that is not.
+
+### Task 3: `recurring` as the first wave 3 slice
+
+- Chosen: one domain, `recurring`, moved with
+  `bun scripts/move-backend-modules.ts --prefix recurring- --into recurring`
+  against `main` at `dd1391427`, after the codemod fix above (a separate
+  commit). It goes first because it is the smallest wave 3 domain. Every
+  file dropped the prefix (`recurring-scheduler.ts` →
+  `recurring/scheduler.ts`, `recurring-diagnostics-caches.test.ts` →
+  `recurring/diagnostics-caches.test.ts`); no two moved files map to the
+  same name. No backend import path had a `recurring/` segment, and the
+  protocol's `@orkestrator/protocol/recurring-work` has none, so
+  `**/recurring/*` catches nothing else.
+  - Left at the root: the owners that schedule or measure recurring work
+    (`backend-activity-jobs.ts`, `work-admission.ts`, `machine-load.ts`,
+    `host-suspend-detector.ts`, `system-usage.ts`, `health-summary.ts`) and
+    `native-session-invalidation-metrics.ts`. They are not `recurring-*`
+    files, and moving them would widen a pure prefix move into a
+    regrouping.
+  - The `apps/backend/scripts/recurring-baseline*.ts` scripts and
+    `apps/backend/tests/recurring-baseline.test.ts` keep their names: they
+    are outside `core/`.
+- Measured before the move: see task 3's investigation. The codemod moved 7
+  files and rewrote 146. No worker or bundle entry point names a moved file,
+  no `<revision>:<path>` string did, and no GitHub permalink did. No
+  slow-tier glob in `scripts/test-tiers.ts` names a moved test (the one
+  `recurring` entry is `tests/recurring-baseline.test.ts`, which did not
+  move), so the tier lists are unchanged. The one flake record the codemod
+  touched (1318) names `recurring/diagnostics.ts` in its hypothesis prose,
+  not in a recorded command, so the rewrite stays, as in the earlier
+  slices.
+- `index.ts` holds 20 symbols from three modules (`diagnostics.ts`,
+  `scheduler.ts`, `work-metrics.ts`): every symbol production importers
+  outside the folder use, other than the exception's
+  `recurringMetricsEnabled`. 49 of the 50 production importers in
+  `apps/backend/src` import it, including the type-only
+  `import("…/scheduler.js")` expressions in `core/index.ts` and
+  `native-agent/service-shared.ts`; each importer's separate imports from
+  the three modules became one import (all-type imports stay
+  `import type`). Tests and test support, the `apps/backend/tests` and
+  `apps/backend/scripts` files and the repository scripts keep deep imports
+  (procedure step 3).
+- Named exceptions: two, under `apps/backend/src/**` only.
+  `work-metrics.js` for `native-session-invalidation-metrics.ts`:
+  `diagnostics.ts` imports that module at runtime for the invalidation
+  snapshot, so routing its `recurringMetricsEnabled` import through
+  `index.ts` closes a runtime cycle. Checked with a probe (reverted): with
+  the import pointed at `index.js` and `recurringMetricsEnabled`
+  re-exported, `bunx oxlint` reports `import(no-cycle)` in `index.ts`,
+  `diagnostics.ts`, `scheduler.ts` and the importer; with the exception it
+  reports none. Options: (a) name the importer's deep import as the
+  exception and keep `work-metrics.ts` re-exported (chosen, as
+  `plan-usage/cache.js`): one file imports deep; (b) leave `diagnostics.ts`
+  and `scheduler.ts` (which reaches it) out of `index.ts`: 20 importers of
+  the registry and the scheduler would import deep instead; (c) move the invalidation metrics read out of
+  `diagnostics.ts`, which is not a pure move. `test-support.js` for
+  `review/fanout-interleaving-support.ts`, test support whose name the
+  tests-off override's `*test-support*` glob does not match, as the
+  `previews` slice named `previews/test-support.js` for its harnesses.
+  Options there: (a) a named exception (chosen): no file changes name;
+  (b) rename the review file to match the glob, which is outside this
+  slice's pure move of `recurring-*` files; (c) re-export the test helpers
+  from `index.ts`, which would put test-only code on the production
+  surface. `tests/unit/**` has no exception: no `tests/unit` file imports
+  the domain. The reasons are written in `index.ts`'s header and in
+  `docs/development/linting.md`.
+- Paths built from a moved file's own location: no moved file uses
+  `import.meta.dir`, `import.meta.url` or `__dirname`.
+  `scripts/benchmark-local-diff-scan.ts` loads the metrics through
+  `path.join(core, "recurring-work-metrics.ts")`, a bare file name the
+  codemod does not rewrite; it now names `recurring/work-metrics.ts`.
+- Hand fixes after the codemod: the bare `recurring-diagnostics.ts` and
+  `recurring-diagnostics-caches.test.ts` names in
+  `docs/architecture/recurring-work.md`, to-do 0048 and the protocol's
+  system contract schema comment now read `recurring/diagnostics.ts` and
+  `recurring/diagnostics-caches.test.ts`. `docs/development/linting.md`'s
+  folder list and exception examples name the new folder. The area index's
+  0012 row records wave 3 as in progress.
+- Lint patterns: `**/recurring/*` with `!**/recurring/index.js`,
+  `!**/recurring/test-support.js` and `!**/recurring/work-metrics.js` under
+  `apps/backend/src/**`, and `**/backend/src/core/recurring/*` with
+  `!…/index.js` under `tests/unit/**`. Before the `test-support.js`
+  exception was added, `mise run lint` reported exactly one finding, the
+  review support file's import; with it, lint is clean.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, `verify:packaged-backend`) is agent work for the
+  validation stage, so nothing was added to the manual-test checklist (7568).
 
 ### Task 2: `native-agent` as the eleventh wave 2 slice
 

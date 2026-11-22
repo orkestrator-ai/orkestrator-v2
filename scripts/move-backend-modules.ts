@@ -16,8 +16,10 @@
  * `.ts` or none) is kept. In every tracked text file (tests, scripts, docs,
  * AGENTS.md) it then rewrites `…/<dir>/<old file>` path strings. Bare file
  * names in prose are not rewritten, and neither is a path that is part of a
- * Git `<revision>:<path>` expression (`git show 0d254a3a^:apps/…`): at that
- * revision the file still had its old name.
+ * Git `<revision>:<path>` expression (`git show 0d254a3a^:apps/…`) or of a
+ * commit-pinned GitHub permalink (`github.com/<owner>/<repo>/blob/<sha>/apps/…`):
+ * at that revision the file still had its old name. Links to a branch
+ * (`blob/main/…`) follow the file and are rewritten.
  */
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -166,6 +168,21 @@ const revisionToken = String.raw`(?:[0-9a-fA-F]{7,40}|(?:FETCH_|ORIG_)?HEAD|main
  */
 const revisionPathLead = String.raw`(?<![\w./-])${revisionToken}:(?:[\w.-]+\/)*`;
 
+/**
+ * A fixed revision in a GitHub URL: an abbreviated or full commit SHA, a
+ * release tag (`v2.36.5-beta`) or a `refs/tags/` name. A branch name (`main`,
+ * `feature/x`) is not fixed: the link follows the file, so it is rewritten.
+ */
+const pinnedUrlRevision = String.raw`(?:[0-9a-fA-F]{7,40}|v\d+\.\d+\.\d+(?:-[\w.]+)?|refs\/tags\/[\w.-]+)`;
+
+/**
+ * Matches when the text before a path string is a commit-pinned GitHub
+ * permalink plus any leading directories of the path:
+ * `github.com/<owner>/<repo>/(blob|tree|raw)/<revision>/apps/backend/src/` or
+ * `raw.githubusercontent.com/<owner>/<repo>/<revision>/apps/backend/src/`.
+ */
+const permalinkPathLead = String.raw`(?:\bgithub\.com\/[\w.-]+\/[\w.-]+\/(?:blob|tree|raw)|\braw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+)\/${pinnedUrlRevision}\/(?:[\w.-]+\/)*`;
+
 /** `core/design-service.ts` → `core/design/service.ts`, and the `.js` spelling. */
 function pathStringRewrites(moves: Map<string, string>): Array<[RegExp, string]> {
   const rewrites: Array<[RegExp, string]> = [];
@@ -188,7 +205,10 @@ function pathStringRewrites(moves: Map<string, string>): Array<[RegExp, string]>
     }
     for (const [oldText, newText] of variants) {
       rewrites.push([
-        new RegExp(`(?<![\\w-])(?<!${revisionPathLead})${escapeRegExp(oldText)}(?![\\w-])`, "g"),
+        new RegExp(
+          `(?<![\\w-])(?<!${revisionPathLead})(?<!${permalinkPathLead})${escapeRegExp(oldText)}(?![\\w-])`,
+          "g",
+        ),
         newText,
       ]);
     }

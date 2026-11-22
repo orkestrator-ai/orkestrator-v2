@@ -243,6 +243,52 @@ describe("move-backend-modules CLI", () => {
     );
   }, 20_000);
 
+  test("leaves commit-pinned GitHub permalinks under their old name and rewrites branch links", async () => {
+    const oldPath = `${core}/design-service.ts`;
+    const newPath = `${core}/design/service.ts`;
+    const oldJs = oldPath.replace(/\.ts$/, ".js");
+    const repo = "https://github.com/acme/orkestrator";
+    const sha = "f2d217138d938f4302ffdc312503a71b92178643";
+    const pinned = [
+      `[O1]: ${repo}/blob/${sha}/${oldPath}`,
+      `[short](${repo}/blob/f2d2171/${oldPath}#L10-L20)`,
+      `${repo}/tree/${sha}/${oldPath}`,
+      `${repo}/raw/${sha}/${oldJs}`,
+      `https://raw.githubusercontent.com/acme/orkestrator/${sha}/${oldPath}`,
+      `${repo}/blob/v2.36.5-beta/${oldPath}`,
+      `${repo}/blob/refs/tags/v2.36.5/${oldPath}`,
+      `<github.com/acme/orkestrator/blob/${sha}/${oldPath}>`,
+    ];
+    const branch = (target: string) => [
+      `[guide](${repo}/blob/main/${target})`,
+      `${repo}/tree/feature/design-split/${target}`,
+      `${repo}/blob/refs/heads/main/${target}`,
+      `https://raw.githubusercontent.com/acme/orkestrator/main/${target}`,
+      `${repo}/blob/f2d217-not-a-sha/${target}`,
+      `${repo}/blob/${sha} was later moved to ${target}`,
+    ];
+    const root = await fixture({
+      [oldPath]: "export {};\n",
+      [`${core}/caller.ts`]: [
+        'import "./design-service.js";',
+        `// Was ${repo}/blob/${sha}/${oldPath}; now ${repo}/blob/main/${oldPath}.`,
+        "",
+      ].join("\n"),
+      "docs/links.md": [...pinned, ...branch(oldPath), ""].join("\n"),
+    });
+
+    move(root);
+
+    expect(await read(root, "docs/links.md")).toBe([...pinned, ...branch(newPath), ""].join("\n"));
+    expect(await read(root, `${core}/caller.ts`)).toBe(
+      [
+        'import "./design/service.js";',
+        `// Was ${repo}/blob/${sha}/${oldPath}; now ${repo}/blob/main/${newPath}.`,
+        "",
+      ].join("\n"),
+    );
+  }, 20_000);
+
   test("honors repository formatter exclusions while rewriting tracked references", async () => {
     const oldPath = `${core}/design-service.ts`;
     const newPath = `${core}/design/service.ts`;

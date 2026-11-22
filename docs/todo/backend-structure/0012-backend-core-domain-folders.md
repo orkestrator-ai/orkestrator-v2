@@ -563,7 +563,13 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   revision the file had it. A revision here is a hex SHA of 7 to 40
   characters, `HEAD`, `ORIG_HEAD`, `FETCH_HEAD`, `main`, `master`, an
   `origin/` or `upstream/` name, a `refs/` name or a `vX.Y.Z` tag, each with
-  any `^`/`~` steps; a path after any other `word:` is rewritten.
+  any `^`/`~` steps; a path after any other `word:` is rewritten. Since
+  2026-11-22 it also leaves a path inside a commit-pinned GitHub permalink
+  (`github.com/<owner>/<repo>/blob/<sha>/apps/…`, likewise `tree/` and
+  `raw/`, and `raw.githubusercontent.com/<owner>/<repo>/<sha>/apps/…`) under
+  its old name. A pinned revision there is a hex SHA of 7 to 40 characters,
+  a `vX.Y.Z` tag or a `refs/tags/` name; a link to `main` or another branch
+  follows the file and is rewritten.
 - Lint: each domain has a pattern in two `.oxlintrc.json` overrides. The
   `apps/backend/src/**` override comes before the tests-off override (so
   co-located tests and test-support files may reach internals) and repeats the
@@ -618,7 +624,10 @@ change, no edits beyond paths, the new `index.ts` and the lint patterns):
      (`` `<sha>^:apps/backend/src/core/<old>.ts` `` in test comments and
      `git show <sha>:…` commands in flake records) alone, but only for the
      revision forms listed under "Current state"; grep the diff for `:apps/`
-     and revert any other revision spelling it rewrote;
+     and revert any other revision spelling it rewrote. It likewise leaves
+     commit-pinned GitHub permalinks alone; grep the diff for `/blob/`,
+     `/tree/` and `/raw/` and revert a pinned link it rewrote with another
+     revision spelling;
    - it does not rewrite bare file names (`` `http-bridge-provider.ts` ``) in
      source comments, living docs, `AGENTS.md` globs, or file-name lists that
      tests read by path (`agent-provider-boundaries.test.ts`). Grep for the old

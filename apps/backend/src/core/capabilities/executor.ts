@@ -46,6 +46,7 @@ import {
   installName,
   installedDigest,
   locationDirectory,
+  readMarker,
   markerContent,
   readLocationIndex,
   writeLocationIndex,
@@ -58,6 +59,7 @@ import {
   removeManagedPath,
   replaceDirectoryAtomically,
   recoverDirectoryReplacement,
+  assertCapabilityDirectory,
   treeDigest,
   writeFileAtomically,
   type PackageFile,
@@ -360,7 +362,11 @@ export class CapabilityExecutor {
     return results;
   }
 
-  private locate(locationId: string): { location: CapabilityLocation; directory: string } {
+  private locate(locationId: string): {
+    location: CapabilityLocation;
+    directory: string;
+    isolationRoot?: string;
+  } {
     if (this.deps.locate) {
       const located = this.deps.locate(locationId);
       if (!located) throw new CapabilityError("invalid-request", "Unknown capability location.");
@@ -368,7 +374,12 @@ export class CapabilityExecutor {
     }
     const location = capabilityLocation(locationId);
     if (!location) throw new CapabilityError("invalid-request", "Unknown capability location.");
-    return { location, directory: locationDirectory(location.id, this.deps.homes()) };
+    const homes = this.deps.homes();
+    return {
+      location,
+      directory: locationDirectory(location.id, homes),
+      isolationRoot: homes.isolationRoot,
+    };
   }
 
   private async applyOne(
@@ -398,13 +409,13 @@ export class CapabilityExecutor {
         reason: "No location for this component.",
       };
     }
-    const { location, directory } = this.locate(target.locationId);
+    const { location, directory, isolationRoot } = this.locate(target.locationId);
     const name = installName(target.componentName, target.pathOrKey, location.layout);
     const entry = location.layout === "file" ? `${name}.md` : name;
     if (location.layout === "directory") recoverDirectoryReplacement(path.join(directory, entry));
 
     if (target.action === "remove")
-      return this.removeFileComponent(target, location.layout, directory, entry, fence);
+      return this.removeFileComponent(target, location, directory, entry, isolationRoot, fence);
 
     if (!target.artifactDigest)
       throw new CapabilityError("invalid-request", "The plan names no artifact.");
@@ -416,7 +427,7 @@ export class CapabilityExecutor {
     const writtenFiles = installedComponentFiles(files, location.layout, entry);
     const digest = treeDigest(writtenFiles);
 
-    const ownership = await this.ownership(location.layout, directory, entry);
+    const ownership = await this.ownership(location.layout, directory, entry, isolationRoot);
     if (
       previous?.digest === digest &&
       ownership.kind === "managed" &&
@@ -424,7 +435,7 @@ export class CapabilityExecutor {
       ownership.componentId === target.componentId &&
       ownership.digest === digest
     ) {
-      const current = await installedDigest(location, directory, entry);
+      const current = await installedDigest(location, directory, entry, { isolationRoot });
       if (current === digest) {
         return {
           key: target.key,
@@ -440,7 +451,7 @@ export class CapabilityExecutor {
     const adopting =
       ownership.kind === "external" &&
       target.force === true &&
-      (await installedDigest(location, directory, entry)) === digest;
+      (await installedDigest(location, directory, entry, { isolationRoot })) === digest;
     if (ownership.kind === "external" && !adopting) {
       return {
         key: target.key,
@@ -465,6 +476,7 @@ export class CapabilityExecutor {
       }
       const current = await installedDigest(location, directory, entry, {
         recordedDigest: ownership.digest,
+        isolationRoot,
       });
       if (current !== null && current !== ownership.digest && current !== digest && !target.force) {
         return {
@@ -485,30 +497,37 @@ export class CapabilityExecutor {
     };
     await fence?.();
     if (location.layout === "directory") {
-      await replaceDirectoryAtomically(path.join(directory, entry), writtenFiles, [
-        { path: CAPABILITY_MARKER_FILE, content: markerContent(marker) },
-      ]);
+      await replaceDirectoryAtomically(
+        path.join(directory, entry),
+        writtenFiles,
+        [{ path: CAPABILITY_MARKER_FILE, content: markerContent(marker) }],
+        isolationRoot,
+      );
     } else {
-      await fs.mkdir(directory, { recursive: true });
-      const index = await readLocationIndex(directory);
+      const index = await readLocationIndex(directory, { isolationRoot });
       const indexed = Object.hasOwn(index.files, entry);
       if (!indexed) {
         // Publish ownership before new bytes can be seen by portable-input copying.
         index.files[entry] = marker;
-        await writeLocationIndex(directory, index);
+        await writeLocationIndex(directory, index, isolationRoot);
       }
       try {
-        await writeFileAtomically(path.join(directory, entry), writtenFiles[0]!.content);
+        await writeFileAtomically(
+          path.join(directory, entry),
+          writtenFiles[0]!.content,
+          0o644,
+          isolationRoot,
+        );
       } catch (error) {
         if (!indexed) {
           delete index.files[entry];
-          await writeLocationIndex(directory, index).catch(() => undefined);
+          await writeLocationIndex(directory, index, isolationRoot).catch(() => undefined);
         }
         throw error;
       }
       if (indexed) {
         index.files[entry] = marker;
-        await writeLocationIndex(directory, index);
+        await writeLocationIndex(directory, index, isolationRoot);
       }
     }
     this.record(target, digest);
@@ -524,11 +543,13 @@ export class CapabilityExecutor {
     layout: "directory" | "file",
     directory: string,
     entry: string,
+    isolationRoot?: string,
   ): Promise<
     | { kind: "absent" }
     | { kind: "external" }
     | { kind: "managed"; packageId: string; componentId: string; digest: string }
   > {
+    assertCapabilityDirectory(directory, isolationRoot);
     const exists = await fs
       .lstat(path.join(directory, entry))
       .catch((error: NodeJS.ErrnoException) => {
@@ -542,6 +563,12 @@ export class CapabilityExecutor {
     )
       return { kind: "external" };
     if (layout === "directory") {
+      if (isolationRoot) {
+        const item = path.join(directory, entry);
+        assertCapabilityDirectory(item, isolationRoot);
+        const marker = await readMarker(path.join(item, CAPABILITY_MARKER_FILE));
+        return marker ? { kind: "managed", ...marker } : { kind: "external" };
+      }
       try {
         const marker = JSON.parse(
           await fs.readFile(path.join(directory, entry, CAPABILITY_MARKER_FILE), "utf8"),
@@ -563,7 +590,7 @@ export class CapabilityExecutor {
       }
       return { kind: "external" };
     }
-    const index = await readLocationIndex(directory);
+    const index = await readLocationIndex(directory, { isolationRoot });
     const managed = index.files[entry];
     return managed
       ? {
@@ -577,12 +604,14 @@ export class CapabilityExecutor {
 
   private async removeFileComponent(
     target: NodePlanTarget,
-    layout: "directory" | "file",
+    location: CapabilityLocation,
     directory: string,
     entry: string,
+    isolationRoot?: string,
     fence?: () => Promise<void>,
   ): Promise<NodePlanResult> {
-    const ownership = await this.ownership(layout, directory, entry);
+    const { layout } = location;
+    const ownership = await this.ownership(layout, directory, entry, isolationRoot);
     if (ownership.kind === "absent") {
       this.forget(target);
       return {
@@ -610,9 +639,9 @@ export class CapabilityExecutor {
         reason: "Another component now manages this item; it was left in place.",
       };
     }
-    const { location } = this.locate(target.locationId!);
     const current = await installedDigest(location, directory, entry, {
       recordedDigest: ownership.digest,
+      isolationRoot,
     });
     if (current !== ownership.digest && !target.force) {
       return {
@@ -623,11 +652,11 @@ export class CapabilityExecutor {
       };
     }
     await fence?.();
-    await removeManagedPath(directory, entry);
+    await removeManagedPath(directory, entry, isolationRoot);
     if (layout === "file") {
-      const index = await readLocationIndex(directory);
+      const index = await readLocationIndex(directory, { isolationRoot });
       delete index.files[entry];
-      await writeLocationIndex(directory, index);
+      await writeLocationIndex(directory, index, isolationRoot);
     }
     this.forget(target);
     return { key: target.key, status: "ready", verification: "requested" };

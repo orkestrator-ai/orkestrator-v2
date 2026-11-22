@@ -6,7 +6,7 @@
  * directory's `capability-test-home`, never the host's provider homes.
  *
  * Covered: enrolling the leaf and applying a skill; the leaf going offline,
- * a setup change, and the reconnect delivering only the latest revision; a
+ * a setup change, and convergence to the latest revision after reconnect; a
  * leaf launch resolved and recorded by the command node over the leaf's real
  * event stream and an internal answer; the command handover moving the
  * capability state and epoch to the leaf, after which the old controller is
@@ -185,7 +185,7 @@ test("capabilities across two real backends: delivery, offline catch-up, leaf la
       resolvedBy: (await command.invoke<{ nodeId: string }>("get_node_status")).nodeId,
     });
 
-    // The leaf goes offline; the setup changes; the reconnect applies only the latest.
+    // The leaf goes offline; the setup changes; the leaf catches up after reconnect.
     await remote.gateway.stop();
     const source = first.inspection.source;
     if (source.kind !== "managed") throw new Error("Expected an authored package.");

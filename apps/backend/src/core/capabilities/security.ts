@@ -11,7 +11,13 @@
  * the backend chose, so no caller can name a destination.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants, lstatSync, promises as fs, renameSync } from "node:fs";
+import {
+  constants as fsConstants,
+  lstatSync,
+  promises as fs,
+  realpathSync,
+  renameSync,
+} from "node:fs";
 import path from "node:path";
 
 import {
@@ -57,6 +63,35 @@ export const CAPABILITY_LOCATION_INDEX = ".orkestrator-capabilities.json";
 function isInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** Check every existing directory below the canonical agent-test data root. */
+export function assertCapabilityDirectory(directory: string, isolationRoot?: string): void {
+  if (!isolationRoot) return;
+  const unsafe = () =>
+    new CapabilityError(
+      "unsafe-content",
+      "The capability directory is outside the isolated profile or uses a symbolic link.",
+    );
+  try {
+    if (
+      !isInside(isolationRoot, directory) ||
+      realpathSync(isolationRoot) !== isolationRoot ||
+      !lstatSync(isolationRoot).isDirectory()
+    )
+      throw unsafe();
+    let current = isolationRoot;
+    const relative = path.relative(isolationRoot, directory);
+    for (const segment of relative ? relative.split(path.sep) : []) {
+      current = path.join(current, segment);
+      const existing = lstatSync(current, { throwIfNoEntry: false });
+      // With a verified parent, a missing suffix can be created safely.
+      if (!existing) return;
+      if (!existing.isDirectory()) throw unsafe();
+    }
+  } catch {
+    throw unsafe();
+  }
 }
 
 /** `root/<relative>`, after validating `relative`; throws when it would escape. */
@@ -274,7 +309,11 @@ export function recoverDirectoryReplacement(destination: string): void {
 }
 
 /** Repairs a missing installation before directory observations enumerate entries. */
-export async function recoverLocationReplacements(directory: string): Promise<void> {
+export async function recoverLocationReplacements(
+  directory: string,
+  isolationRoot?: string,
+): Promise<void> {
+  assertCapabilityDirectory(directory, isolationRoot);
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (
@@ -286,7 +325,9 @@ export async function recoverLocationReplacements(directory: string): Promise<vo
     const name = entry.name.slice(1, -RETIRED_DIRECTORY_SUFFIX.length);
     if (!name || name === "." || name === "..") continue;
     const marker = path.join(directory, entry.name, CAPABILITY_MARKER_FILE);
+    assertCapabilityDirectory(path.dirname(marker), isolationRoot);
     if (!(await fs.lstat(marker).catch(() => null))?.isFile()) continue;
+    assertCapabilityDirectory(directory, isolationRoot);
     recoverDirectoryReplacement(path.join(directory, name));
   }
 }
@@ -296,30 +337,37 @@ export async function replaceDirectoryAtomically(
   destination: string,
   files: readonly PackageFile[],
   extra: ReadonlyArray<{ path: string; content: string }> = [],
+  isolationRoot?: string,
 ): Promise<void> {
   const parent = path.dirname(destination);
+  assertCapabilityDirectory(parent, isolationRoot);
   await fs.mkdir(parent, { recursive: true });
   const token = randomBytes(6).toString("hex");
   const staging = path.join(parent, `.${path.basename(destination)}.orkestrator-new-${token}`);
   const retired = retiredDirectory(destination);
+  assertCapabilityDirectory(parent, isolationRoot);
   recoverDirectoryReplacement(destination);
   await fs.mkdir(staging, { recursive: false });
   try {
     for (const file of files) {
       const target = confinedPath(staging, file.path);
+      assertCapabilityDirectory(path.dirname(target), isolationRoot);
       await fs.mkdir(path.dirname(target), { recursive: true });
+      assertCapabilityDirectory(path.dirname(target), isolationRoot);
       await fs.writeFile(target, file.content, {
         mode: file.executable ? 0o755 : 0o644,
         flag: "wx",
       });
     }
     for (const file of extra) {
+      assertCapabilityDirectory(staging, isolationRoot);
       await fs.writeFile(confinedPath(staging, file.path), file.content, {
         mode: 0o644,
         flag: "wx",
       });
     }
     // Keep the two renames adjacent so an in-process observer cannot see the gap.
+    assertCapabilityDirectory(staging, isolationRoot);
     recoverDirectoryReplacement(destination);
     const existing = lstatSync(destination, { throwIfNoEntry: false });
     if (existing && !existing.isDirectory()) {
@@ -347,6 +395,7 @@ export async function replaceDirectoryAtomically(
       await fs.rm(discard, { recursive: true, force: true });
     }
   } finally {
+    assertCapabilityDirectory(parent, isolationRoot);
     await fs.rm(staging, { recursive: true, force: true }).catch(() => undefined);
   }
 }
@@ -356,13 +405,18 @@ export async function writeFileAtomically(
   destination: string,
   content: Buffer | string,
   mode = 0o644,
+  isolationRoot?: string,
 ): Promise<void> {
-  await fs.mkdir(path.dirname(destination), { recursive: true });
+  const parent = path.dirname(destination);
+  assertCapabilityDirectory(parent, isolationRoot);
+  await fs.mkdir(parent, { recursive: true });
+  assertCapabilityDirectory(parent, isolationRoot);
   const existing = await fs.lstat(destination).catch(() => null);
   if (existing?.isSymbolicLink()) {
     throw new CapabilityError("unsafe-content", "The installation path is a symbolic link.");
   }
   const temporary = `${destination}.orkestrator-${randomBytes(6).toString("hex")}`;
+  assertCapabilityDirectory(parent, isolationRoot);
   const handle = await fs.open(
     temporary,
     fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY,
@@ -374,17 +428,24 @@ export async function writeFileAtomically(
   } finally {
     await handle.close();
   }
+  assertCapabilityDirectory(parent, isolationRoot);
   await fs.rename(temporary, destination);
 }
 
 /** Removes a managed directory or file; refuses links and anything outside `root`. */
-export async function removeManagedPath(root: string, relative: string): Promise<boolean> {
+export async function removeManagedPath(
+  root: string,
+  relative: string,
+  isolationRoot?: string,
+): Promise<boolean> {
+  assertCapabilityDirectory(root, isolationRoot);
   const target = confinedPath(root, relative);
   const stat = await fs.lstat(target).catch(() => null);
   if (!stat) return false;
   if (stat.isSymbolicLink()) {
     throw new CapabilityError("unsafe-content", "Refusing to remove through a symbolic link.");
   }
+  assertCapabilityDirectory(root, isolationRoot);
   await fs.rm(target, { recursive: true, force: true });
   return true;
 }

@@ -17,8 +17,7 @@
  *    put the delivered skill in the run's skill list. A turn that used any
  *    tool is inconclusive and fails;
  * 3. removes it from the setup through the same commands, checks the files
- *    are gone, and asks a fresh session the same question, which must not
- *    name it.
+ *    are gone, and asks a fresh session the same question, which must return NONE or a list of other matching skill names.
  *
  * Two billed turns. Opt-in (`ORKESTRATOR_AGENT_TEST_LIVE_CAPABILITIES=1`);
  * the profile must authorize Cursor's login (`--credential-source cursor`).
@@ -36,6 +35,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
+import { cursorSkillNames, retryCursorSkillRemoval } from "./capability-cursor-live-support";
 import { dispatchProbeTurn, invokeCommand } from "./mcp-apply-live-support";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -205,6 +205,9 @@ test.describe("live Cursor capability conformance", () => {
 
     const name = `${PREFIX}${randomBytes(4).toString("hex")}`;
     summary.skill = name;
+    const home = path.join(dataDir, "agent-credentials", "home");
+    const skillDirectory = path.join(home, ".cursor", "skills", name);
+    const skillFile = path.join(skillDirectory, "SKILL.md");
     let packageId: string | undefined;
     let environmentId: string | undefined;
     try {
@@ -242,8 +245,6 @@ test.describe("live Cursor capability conformance", () => {
         expect(["ready", "installed-next-session"]).toContain(target.status);
       }
       // The copy is in the profile's isolated HOME, the directory its Cursor bridge reads.
-      const home = path.join(dataDir, "agent-credentials", "home");
-      const skillFile = path.join(home, ".cursor", "skills", name, "SKILL.md");
       const testHomeFile = path.join(dataDir, "capability-test-home", ".cursor", "skills", name);
       summary.copyInIsolatedHome = existsSync(skillFile);
       expect(existsSync(skillFile), "the skill is in the profile's ~/.cursor/skills").toBe(true);
@@ -370,18 +371,21 @@ test.describe("live Cursor capability conformance", () => {
       };
 
       const present = await ask(tabs[0]!);
+      const presentNames = cursorSkillNames(present.reply, PREFIX);
       summary.present = {
-        named: present.reply.includes(name),
-        none: /^\s*NONE\s*$/.test(present.reply),
+        named: presentNames?.includes(name) ?? false,
+        none: presentNames?.length === 0,
         tools: present.tools,
         approvals: present.approvals,
       };
       expect(present.tools, "the turn used a tool, so its answer proves nothing").toEqual([]);
-      expect(present.reply, "the Cursor run lists the delivered skill").toContain(name);
+      expect(present.approvals).toBe(0);
+      expect(presentNames, "the Cursor run lists the delivered skill by its exact name").toContain(
+        name,
+      );
 
       // 3. Remove it through the same commands; a new session no longer has it.
       const removed = await applyChange(call, { kind: "remove-from-setup", packageId });
-      packageId = undefined;
       summary.remove = {
         state: removed.state,
         targets: removed.targets
@@ -389,17 +393,25 @@ test.describe("live Cursor capability conformance", () => {
           .map((target) => ({ locationId: target.locationId, status: target.status })),
       };
       expect(removed.state, removed.error).toBe("completed");
-      expect(existsSync(path.dirname(skillFile)), "the skill directory is removed").toBe(false);
+      expect(existsSync(skillDirectory), "the skill directory is removed").toBe(false);
+      packageId = undefined;
 
       const absent = await ask(tabs[1]!);
+      const absentNames = cursorSkillNames(absent.reply, PREFIX);
       summary.absent = {
-        named: absent.reply.includes(name),
-        none: /^\s*NONE\s*$/.test(absent.reply),
+        named: absentNames?.includes(name) ?? false,
+        none: absentNames?.length === 0,
+        conclusive: absentNames !== null,
         tools: absent.tools,
         approvals: absent.approvals,
       };
       expect(absent.tools).toEqual([]);
-      expect(absent.reply, "a session started after removal does not list it").not.toContain(name);
+      expect(absent.approvals).toBe(0);
+      expect(
+        absentNames,
+        "the fresh session answers NONE or lists matching skill names",
+      ).not.toBeNull();
+      expect(absentNames, "the fresh session's list omits the removed skill").not.toContain(name);
       summary.result = "passed";
     } catch (error) {
       summary.result = "failed";
@@ -407,7 +419,12 @@ test.describe("live Cursor capability conformance", () => {
       throw error;
     } finally {
       if (packageId) {
-        await applyChange(call, { kind: "remove-from-setup", packageId }).catch(() => undefined);
+        summary.cleanup = await retryCursorSkillRemoval(
+          call,
+          (change) => applyChange(call, change),
+          packageId,
+          () => existsSync(skillDirectory),
+        );
       }
       if (environmentId) {
         await call("stop_environment", { environmentId }).catch(() => undefined);

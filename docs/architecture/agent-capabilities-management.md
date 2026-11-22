@@ -536,7 +536,7 @@ credential-free listing. Run 2026-11-19 on Linux x64:
 | Pi SDK 1.5.2 (same version as the pinned `pi` binary) | Skills in `~/.pi/agent/skills` and `~/.agents/skills` and templates in `~/.pi/agent/prompts` are listed, also with project resources off; the repository's `.pi/` resources are not; `~/.claude/skills` is never read | the bridge's resource-only loader (`readResourceCommands`), `bridges/pi-bridge/src/capability-delivery-conformance.test.ts`, default tier | pass |
 | Claude Code 2.1.326 | The `init` event reports the session plugin's content-addressed directory, which `loadedPrivatePlugin` (`runtime-proof.ts`) matches; without `--plugin-dir` it does not | `init` event `plugins[].path` | pass |
 | Grok Build 1.0.88 | Executor skills in `~/.grok/skills` and `~/.agents/skills` are listed at their installed `SKILL.md` paths, graded `advertised` by path, and gone after removal | `grok inspect --json` (no login needed) | pass |
-| Cursor SDK 1.4.1 | Executor skill in `~/.cursor/skills` (the isolated profile's own HOME) is in an authenticated run's skill list by its nonce name, with no tool used; after removal the directory is gone and a new session does not name it. Run 2026-11-22 on macOS arm64 in a `dev:test` profile, two billed turns | an authenticated Cursor run (`e2e/agent-testing/capability-cursor-live.spec.ts`; the SDK has no credential-free listing) | pass |
+| Cursor SDK 1.4.1 | Executor skill in `~/.cursor/skills` (the isolated profile's own HOME) is in an authenticated run's skill list by its nonce name, with no tool used; after removal the directory is gone and a new session answers `NONE`. Rechecked on macOS arm64 in the `cap-cursor-review-8314` profile, two billed turns | an authenticated Cursor run (`e2e/agent-testing/capability-cursor-live.spec.ts`; the SDK has no credential-free listing) | pass |
 
 Matrix levels follow the evidence: Claude native-plugin install, update and
 remove are `supported`. OpenCode subagents and commands stay `unqualified`:
@@ -918,7 +918,9 @@ the setup together with the approved operation.
 - Trees are bounded (2,000 files, 32 MiB, 8 MiB per file, depth 24); special
   files and escaping links are refused.
 - Writes go through `confinedPath` under a location the backend chose; no
-  command takes a destination path or a command to run.
+  command takes a destination path or a command to run. Agent-test provider
+  homes and destinations are checked under the canonical profile data directory
+  at filesystem access. Symlinked directories there are refused.
 - MCP definitions keep environment and header keys only; literal values are
   removed before computing the artifact digest. Detected credentials block package
   inspection and revision approval. Git repository URLs with embedded credentials
@@ -1008,8 +1010,9 @@ loopback (`tests/capabilities-two-node.integration.test.ts`: delivery, offline
 catch-up, a leaf launch, handover to the leaf), and between two real machines
 by `scripts/qa-capabilities-two-machine.ts` (2026-11-22, macOS and Linux:
 isolated backends of one commit linked through an SSH forward; delivery,
-offline catch-up with only the latest revision, handover with epoch 2 and the
-old controller refused). Not proven on real machines: a leaf launch, a third
+offline convergence to the latest revision, handover with epoch 2 and the
+old controller refused). The check observes the copies on disk after reconnect.
+It does not measure intermediate installations. Not proven on real machines: a leaf launch, a third
 machine moving with the handover (the forward is a loopback route, which does
 not move), and an unknown outcome from a write cut off mid-flight. Capability authority moves with the handover as a whole:
 machines the user leaves behind with the old command node keep what they last

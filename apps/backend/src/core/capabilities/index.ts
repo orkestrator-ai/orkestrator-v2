@@ -296,7 +296,10 @@ export function mcpManagementInstaller(
  * homes: the isolated profile's own provider homes when it has them, so its
  * agents read what was delivered (`agentTestCapabilityHomes`).
  */
-export function capabilityHomes(context: CommandContext) {
+export function capabilityHomes(context: {
+  runtimeFlavor?: CommandContext["runtimeFlavor"];
+  storage: Pick<CommandContext["storage"], "getDataDir">;
+}) {
   return context.runtimeFlavor === "agent-test"
     ? agentTestCapabilityHomes(context.storage.getDataDir())
     : defaultCapabilityHomes();
@@ -312,16 +315,18 @@ function capabilityProviderCli(context: CommandContext, provider: "claude" | "co
     ...(provider === "grok" ? { timeoutMs: 30_000 } : {}),
     binary: () => resolveAgentBinary(context, provider),
     cwd: () => homes().home,
-    env: () => ({
-      ...envWithManagedBinaries(context),
-      ...(isolated
-        ? {
-            HOME: homes().home,
-            CLAUDE_CONFIG_DIR: homes().claudeConfigDir,
-            CODEX_HOME: homes().codexHome,
-          }
-        : {}),
-    }),
+    env: () => {
+      const env = envWithManagedBinaries(context);
+      if (!isolated) return env;
+      const home = homes();
+      return {
+        ...env,
+        HOME: home.home,
+        CLAUDE_CONFIG_DIR: home.claudeConfigDir,
+        CODEX_HOME: home.codexHome,
+        XDG_CONFIG_HOME: home.xdgConfigHome,
+      };
+    },
   });
 }
 
@@ -345,9 +350,11 @@ export async function setCapabilityPluginEnabled(
         : "Only Codex plugins have a persisted switch Orkestrator can edit.",
     );
   }
+  const { codexHome, isolationRoot } = capabilityHomes(context);
   const result = await toggleCodexPlugin(
     {
-      codexHome: capabilityHomes(context).codexHome,
+      codexHome,
+      isolationRoot,
       cli: capabilityProviderCli(context, "codex"),
       ...(context.mcpManagement
         ? {

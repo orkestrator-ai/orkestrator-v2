@@ -164,6 +164,48 @@ describe("validation report", () => {
     ).toBe("pre-existing");
   });
 
+  test("a merge-base rerun labels a failure and says what the base showed", () => {
+    const rerun: ValidationFailureTriage = {
+      ...triage,
+      commands: [
+        {
+          command: "cd . && mise run test",
+          failures: [
+            failure("fails on the base too", "unrelated", [
+              "imports-changed-file",
+              "failed-on-merge-base",
+            ]),
+            failure("new here", "related", ["imports-changed-file", "passed-on-merge-base"]),
+          ],
+          omittedFailures: 0,
+          unattributed: false,
+        },
+      ],
+    };
+    const report = buildValidationReport({
+      validation,
+      validationPlan: plan,
+      failureTriage: rerun,
+    });
+    expect(
+      report.failures.map(({ name, label, onMergeBase }) => [name, label, onMergeBase]),
+    ).toEqual([
+      ["new here", "caused-by-change", "passed"],
+      ["fails on the base too", "pre-existing", "failed"],
+    ]);
+    expect(isValidationReport(report)).toBe(true);
+    const markdown = renderValidationReportMarkdown(report);
+    expect(markdown).toContain(
+      "- src/x.test.ts: new here — caused by this change; passes when rerun on the merge base",
+    );
+    expect(markdown).toContain(
+      "- src/x.test.ts: fails on the base too — pre-existing (also fails on the merge base)",
+    );
+    const bad = structuredClone(report);
+    (bad.failures[0] as { onMergeBase: string }).onMergeBase = "maybe";
+    expect(isValidationReport(bad)).toBe(false);
+  });
+
   test("says why there is no changed-tests result", () => {
     expect(buildValidationReport({ validation }).changedTestsNote).toBe(CHANGED_TESTS_NOTE_NO_PLAN);
     const legacy: ReviewValidationPlan = {

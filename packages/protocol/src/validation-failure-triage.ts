@@ -9,8 +9,10 @@
  * names each failing test the command's output reports and classifies it from
  * data that already exists: the branch diff, the test's static import graph,
  * the runner's own retry verdict, the repository's flake registry, the target
- * branch's CI result and other pipelines validated on the same base. It never
- * runs a test.
+ * branch's CI result and other pipelines validated on the same base. The one
+ * test it runs is a bounded rerun of failing Bun test files on a throwaway
+ * checkout of the merge base (`failed-on-merge-base`), never of the reviewed
+ * worktree.
  *
  * The package generator (`commands-review.ts`) writes it into the sealed
  * review package; the reference persisted on a workflow carries the compact
@@ -55,6 +57,18 @@ export const VALIDATION_FAILURE_REASONS = [
   "failed-on-target-ci",
   /** Another pipeline on the same merge-base failed it without having changed it. */
   "failed-on-same-base",
+  /**
+   * The same test failed with matching diagnostics when its file was rerun on a
+   * fresh checkout of the merge base (`validation-merge-base-rerun.ts`).
+   */
+  "failed-on-merge-base",
+  /**
+   * Its file was rerun on a fresh checkout of the merge base and the run
+   * reported this test passing. Context only: it never changes the
+   * verdict, because a test that fails only under a loaded aggregate run
+   * also passes alone.
+   */
+  "passed-on-merge-base",
   /** The branch changed the test file itself. */
   "test-file-changed",
   /**
@@ -352,6 +366,20 @@ export function summarizeValidationFailureTriage(
         .map((failure) => validationFailureId(failure.key)),
     ),
   ].sort();
+  const observedPasses = new Set(
+    failures
+      .filter((failure) => failure.reasons.includes("passed-on-merge-base"))
+      .map((failure) => validationFailureId(failure.key)),
+  );
+  const confirmedBaseFailures = new Set(
+    failures
+      .filter(
+        (failure) =>
+          failure.reasons.includes("failed-on-target-ci") ||
+          failure.reasons.includes("failed-on-merge-base"),
+      )
+      .map((failure) => validationFailureId(failure.key)),
+  );
   const omitted = triage.commands.some((command) => command.omittedFailures > 0);
   const truncated = omitted || ids.length > MAX_VALIDATION_FAILURE_SUMMARY_IDS;
   return {
@@ -361,6 +389,7 @@ export function summarizeValidationFailureTriage(
     baseIds: [
       ...new Set(
         failures
+          // A merge-base rerun is this pipeline's own evidence, so it counts.
           .filter(
             (failure) =>
               failure.verdict === "unrelated" && !failure.reasons.includes("failed-on-same-base"),
@@ -371,7 +400,9 @@ export function summarizeValidationFailureTriage(
       .sort()
       .filter(
         (id) =>
-          ids.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS).includes(id) && !relatedIds.includes(id),
+          ids.slice(0, MAX_VALIDATION_FAILURE_SUMMARY_IDS).includes(id) &&
+          !relatedIds.includes(id) &&
+          (!observedPasses.has(id) || confirmedBaseFailures.has(id)),
       ),
     related: failures.filter((failure) => failure.verdict === "related").length,
     unrelated: failures.filter((failure) => failure.verdict === "unrelated").length,

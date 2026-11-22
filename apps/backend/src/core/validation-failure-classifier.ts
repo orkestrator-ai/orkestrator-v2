@@ -1,3 +1,5 @@
+import { bunFailureFingerprint } from "./validation-bun-diagnostics.js";
+
 /**
  * Environment-side classifier for a review package's failing tests.
  *
@@ -38,12 +40,19 @@ export interface ValidationFailureClassifierInput {
   ci: { repository: string; gh: string } | null;
   /** Wall-clock budget for the whole classification. */
   budgetMs?: number;
+  includeBaselineFingerprints?: boolean;
 }
 
-export function classifyValidationFailures(input: ValidationFailureClassifierInput, req: any): any {
+export function classifyValidationFailures(
+  input: ValidationFailureClassifierInput,
+  req: any,
+  fingerprint = bunFailureFingerprint,
+): any {
   const fs = req("node:fs");
   const path = req("node:path");
   const childProcess = req("node:child_process");
+  const { createHash } = req("node:crypto");
+  const hashDiagnostic = (text: string) => createHash("sha256").update(text).digest("hex");
   const deadline = Date.now() + Math.max(1_000, Math.min(120_000, input.budgetMs ?? 45_000));
   const root: string = fs.realpathSync(input.root);
   const limitations: string[] = [];
@@ -178,7 +187,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
   }
 
   function leafTitle(name: string): string {
-    const parts = name.split(/ > | › /);
+    const parts = normalizeName(name).split(/ > | › /);
     return parts[parts.length - 1]!.trim();
   }
 
@@ -214,6 +223,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     file: string | null;
     name: string;
     outcome: "failed" | "flaky";
+    fingerprint?: string;
   };
   type ParsedOutput = { failures: ParsedFailure[]; unattributed: string | null };
 
@@ -258,7 +268,13 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     type BunStream = {
       header: string | null;
       stackFile: string | null;
-      fails: Array<{ name: string; stackFile: string | null; header: string | null }>;
+      fails: Array<{
+        name: string;
+        stackFile: string | null;
+        header: string | null;
+        fingerprint?: string;
+      }>;
+      diagnostic: string[];
       failTotal: number | null;
       errors: number;
       exited: boolean;
@@ -287,6 +303,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
           header: null,
           stackFile: null,
           fails: [],
+          diagnostic: [],
           failTotal: null,
           errors: 0,
           exited: false,
@@ -298,6 +315,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       const header = /^(\S[^:]*\.[cm]?[jt]sx?):$/.exec(line);
       if (header) {
         state.header = header[1]!;
+        state.diagnostic = [];
         state.stackFile = null;
         continue;
       }
@@ -305,16 +323,29 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
         /^\s+at\s.*?\(?((?:[A-Za-z]:)?[^\s()]*\.(?:test|spec)\.[cm]?[jt]sx?):\d+:\d+\)?\s*$/.exec(
           line,
         );
-      if (stack) {
-        state.stackFile ??= stack[1]!;
-        continue;
-      }
+      if (stack) state.stackFile ??= stack[1]!;
       const bunFail = /^\(fail\) (.+)$/.exec(line);
       if (bunFail) {
-        state.fails.push({ name: bunFail[1]!, stackFile: state.stackFile, header: state.header });
+        state.fails.push({
+          name: bunFail[1]!,
+          stackFile: state.stackFile,
+          header: state.header,
+          fingerprint: fingerprint(state.diagnostic, hashDiagnostic),
+        });
+        state.diagnostic = [];
         state.stackFile = null;
         continue;
       }
+      if (/^\((?:pass|skip|todo)\) /.test(line)) {
+        state.diagnostic = [];
+        state.stackFile = null;
+      } else if (
+        state.diagnostic.length <= 128 &&
+        (state.diagnostic.length || line.startsWith("error: "))
+      ) {
+        state.diagnostic.push(line.slice(0, 8_193));
+      }
+
       const bunTotal = /^\s*(\d+) fail$/.exec(line);
       if (bunTotal) {
         state.failTotal = (state.failTotal ?? 0) + Number(bunTotal[1]);
@@ -433,8 +464,16 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
           const candidate = toRepositoryPath(fail.header, bases);
           if (candidate && fileMentionsTitle(candidate, fail.name)) file = candidate;
         }
+        const labeledFile = file;
         file ??= findByTitle(fail.name);
-        failures.push({ runner: "bun", file, name: fail.name, outcome: "failed" });
+        failures.push({
+          runner: "bun",
+          file,
+          name: fail.name,
+          outcome: "failed",
+          // A title-only search is enough to classify, but not to attribute diagnostics.
+          fingerprint: labeledFile ? fail.fingerprint : undefined,
+        });
         keys.add(keyOf("bun", file, fail.name));
       }
       if (state.fails.length > 0 && state.failTotal === null) {
@@ -1121,6 +1160,7 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
   }
 
   const commands: any[] = [];
+  const fingerprints: Array<Array<string | null>> = [];
   let listedTotal = 0;
   for (const command of input.commands.slice(0, 32)) {
     const text = `${readArtifact(command.stdoutPath)}\n${readArtifact(command.stderrPath)}`;
@@ -1132,11 +1172,17 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
       // A test listed as both failed and flaky (two projects) stays failed.
       if (!existing || (existing.outcome === "flaky" && failure.outcome === "failed")) {
         unique.set(key, failure);
+      } else if (existing.fingerprint !== failure.fingerprint) {
+        existing.fingerprint = undefined;
       }
     }
     const room = Math.max(0, Math.min(100, 200 - listedTotal));
     const all = [...unique.values()];
-    const listed = all.slice(0, room).map(classify);
+    const selected = all.slice(0, room);
+    const listed = selected.map(classify);
+    if (input.includeBaselineFingerprints) {
+      fingerprints.push(selected.map((failure) => failure.fingerprint ?? null));
+    }
     listedTotal += listed.length;
     let unattributed = parsed.unattributed;
     if (command.status === "incomplete") {
@@ -1178,14 +1224,10 @@ export function classifyValidationFailures(input: ValidationFailureClassifierInp
     );
   }
 
-  return {
-    version: 1,
-    mergeBase: input.mergeBase,
-    commands,
-    limitations,
-  };
+  const triage = { version: 1, mergeBase: input.mergeBase, commands, limitations };
+  return input.includeBaselineFingerprints ? { triage, fingerprints } : triage;
 }
 
 /** `bun -e` source: decodes the base64 JSON input in argv[1] and prints the triage. */
 export const VALIDATION_FAILURE_CLASSIFIER_SCRIPT = `const input = JSON.parse(Buffer.from(process.argv[1], "base64").toString());
-process.stdout.write(JSON.stringify((${classifyValidationFailures.toString()})(input, require)));`;
+process.stdout.write(JSON.stringify((${classifyValidationFailures.toString()})(input, require, (${bunFailureFingerprint.toString()}))));`;

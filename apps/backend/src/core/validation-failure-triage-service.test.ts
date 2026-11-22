@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   summarizeValidationFailureTriage,
   validationFailureId,
@@ -9,14 +10,19 @@ import {
   applySharedBaseEvidence,
   classifierPayload,
   MAX_TRIAGE_PAYLOAD_BASE64_BYTES,
+  withMergeBaseAdmission,
   sharedFailureSummaries,
   triageValidationFailures,
 } from "./validation-failure-triage-service.js";
 import type { ValidationFailureClassifierInput } from "./validation-failure-classifier.js";
 
 import * as shell from "./shell.js";
+import { CommandFailedError } from "./shell.js";
+import { mergeBaseRerunExec } from "./validation-merge-base-process.js";
 
 const BASE = "c".repeat(40);
+const HEAD = "d".repeat(40);
+const TARGET = "e".repeat(40);
 const e2eKey = validationFailureKey("playwright", "e2e/a.spec.ts", "opens the pane");
 
 function triage(
@@ -141,13 +147,14 @@ for (const environmentType of ["local", "container"] as const) {
       } as never,
       runner: async (command, args) => {
         expect(command).toBe("git");
-        expect(args).toEqual(["merge-base", "HEAD", "origin/develop"]);
+        expect(args).toEqual(["merge-base", HEAD, TARGET]);
         return BASE;
       },
       context: {
         storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
       } as never,
-      targetRef: "origin/develop",
+      headRef: HEAD,
+      baseRef: TARGET,
       changedFiles: [],
       commands: [
         { command: "test", cwd: ".", status: "incomplete", stdoutPath: null, stderrPath: null },
@@ -180,7 +187,8 @@ for (const failure of ["merge-base", "invalid", "exec"] as const) {
       context: {
         storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
       } as never,
-      targetRef: "origin/main",
+      headRef: HEAD,
+      baseRef: TARGET,
       changedFiles: [],
       commands: [
         { command: "test", cwd: ".", status: "incomplete", stdoutPath: null, stderrPath: null },
@@ -221,7 +229,8 @@ for (const environmentType of ["local", "container"] as const) {
           resourceRoot: "/missing-resources",
           storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
         } as never,
-        targetRef: "origin/main",
+        headRef: HEAD,
+        baseRef: TARGET,
         changedFiles: [],
         commands: [
           { command: "test", cwd: ".", status: "incomplete", stdoutPath: null, stderrPath: null },
@@ -250,3 +259,145 @@ for (const environmentType of ["local", "container"] as const) {
     }
   });
 }
+
+describe("merge-base rerun", () => {
+  const bunKey = validationFailureKey("bun", "tests/a.test.ts", "suite > breaks");
+  const bunTriage: ValidationFailureTriage = {
+    version: 1,
+    mergeBase: BASE,
+    commands: [
+      {
+        command: "mise run test",
+        failures: [
+          {
+            key: bunKey,
+            runner: "bun",
+            file: "tests/a.test.ts",
+            name: "suite > breaks",
+            outcome: "failed",
+            verdict: "undetermined",
+            reasons: ["reaches-changed-file-indirectly"],
+          },
+        ],
+        omittedFailures: 0,
+        unattributed: false,
+      },
+    ],
+    limitations: [],
+  };
+
+  test("requires an acknowledgement from the runner before the removal step", async () => {
+    const exec = mergeBaseRerunExec(async () => {
+      throw new CommandFailedError("client went away", {
+        stdout: "",
+        exitCode: null,
+        timedOut: true,
+      });
+    });
+    expect(await exec("true", [], 10)).toMatchObject({ timedOut: true, quiescent: false });
+  });
+
+  test("runs through the service with the pinned merge base and strips diagnostic fingerprints", async () => {
+    const input = structuredClone(bunTriage);
+    const fingerprint = createHash("sha256").update("error: same failure").digest("hex");
+    const result = await triageValidationFailures({
+      environment: {
+        id: "env",
+        projectId: "project",
+        environmentType: "container",
+        containerId: "c",
+      } as never,
+      runner: async (command, args) => {
+        expect(command).toBe("git");
+        expect(args).toEqual(["merge-base", HEAD, TARGET]);
+        return BASE;
+      },
+      context: {
+        storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+      } as never,
+      headRef: HEAD,
+      baseRef: TARGET,
+      changedFiles: [],
+      commands: [
+        { command: "test", cwd: ".", status: "failed", stdoutPath: null, stderrPath: null },
+      ],
+      execute: async () => JSON.stringify({ triage: input, fingerprints: [[fingerprint]] }),
+      mergeBaseExec: async (script, args) => {
+        let output = "";
+        let exitCode = 0;
+        if (script.includes("worktree add")) {
+          expect(args[1]).toBe(BASE);
+          output = BASE;
+        } else if (script.includes("ls-files")) {
+          output = "package.json\0bun.lock\0tests/a.test.ts\0";
+        } else if (script.includes("manifestPath")) {
+          output = '{"build":null,"preloads":[]}';
+        } else if (script.includes(' test "./')) {
+          exitCode = 1;
+          output =
+            "bun test v1.4.4\n\ntests/a.test.ts:\nerror: same failure\n(fail) suite > breaks\n\n 0 pass\n 1 fail\nRan 1 test across 1 file. [1ms]";
+        }
+        return { exitCode, output, timedOut: false };
+      },
+    });
+    expect(result.limitation).toBeUndefined();
+    const observation = result.triage!.commands[0]!.failures[0]!;
+    expect(observation.reasons).toContain("failed-on-merge-base");
+    expect(observation).not.toHaveProperty("baselineFingerprint");
+  });
+
+  test("waits for scheduler admission and releases an expired ticket", async () => {
+    let polls = 0;
+    const ticket = "a-b-c-d-e" as const;
+    const released: string[] = [];
+    const scheduler = {
+      capacity: () => ({ workers: 1, memoryMiB: 1024 }),
+      enqueue: () => ticket,
+      poll: () =>
+        ({ state: ++polls < 2 ? "queued" : "running" }) as ReturnType<
+          Parameters<typeof withMergeBaseAdmission>[0]["poll"]
+        >,
+      release: (ticket: string) => {
+        released.push(ticket);
+      },
+    };
+    expect(await withMergeBaseAdmission(scheduler, TARGET, async () => polls)).toBe(2);
+    expect(
+      await withMergeBaseAdmission(scheduler, TARGET, async () => "unexpected", 0),
+    ).toBeUndefined();
+    expect(released).toEqual([ticket, ticket]);
+  });
+
+  test("mergeBaseExec false skips the rerun", async () => {
+    const outcome = await triageValidationFailures({
+      environment: {
+        id: "env",
+        projectId: "project",
+        environmentType: "container",
+        containerId: "c",
+      } as never,
+      runner: async (command) => {
+        expect(command).toBe("git");
+        return BASE;
+      },
+      context: {
+        storage: { getProject: async () => null, listAllBuildPipelines: async () => [] },
+      } as never,
+      headRef: HEAD,
+      baseRef: TARGET,
+      changedFiles: [],
+      commands: [
+        {
+          command: "mise run test",
+          cwd: ".",
+          status: "failed",
+          stdoutPath: null,
+          stderrPath: null,
+        },
+      ],
+      execute: async () => JSON.stringify(bunTriage),
+      mergeBaseExec: false,
+    });
+    expect(outcome.triage).toEqual(bunTriage);
+  });
+});

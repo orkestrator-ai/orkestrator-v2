@@ -168,30 +168,105 @@ const revisionToken = String.raw`(?:[0-9a-fA-F]{7,40}|(?:FETCH_|ORIG_)?HEAD|main
  */
 const revisionPathLead = String.raw`(?<![\w./-])${revisionToken}:(?:[\w.-]+\/)*`;
 
-/**
- * A fixed revision in a GitHub URL: an abbreviated or full commit SHA, a
- * release tag (`v2.36.5-beta`) or a `refs/tags/` name. A branch name (`main`,
- * `feature/x`) is not fixed: the link follows the file, so it is rewritten.
- */
-const pinnedUrlRevision = String.raw`(?:[0-9a-fA-F]{7,40}|v\d+\.\d+\.\d+(?:-[\w.]+)?|refs\/tags\/[\w.-]+)`;
+const githubRemote =
+  /^(?:(?:https?|ssh):\/\/(?:[^/\s@]+@)?github\.com\/|(?:[^/\s@]+@)?github\.com:)([\w.-]+\/[\w.-]+)\/?$/i;
+const githubUrlLead =
+  /(?:^|[\s<>"'\x60()[\]{}])(?:https?:\/\/|\/\/)?([\w.-]+)(?::\d+)?\/([\w.-]+\/[\w.-]+)\/([^\s<>"'\x60()[\]{}?#]+)\/$/i;
+const githubFileRoute = /^(?:blob|tree|raw)\//;
+const commitId = /^[0-9a-f]{7,40}$/i;
+const versionTag = /^v?\d+\.\d+\.\d+(?:-[\w-]+(?:\.[\w-]+)*)?(?:\+[\w-]+(?:\.[\w-]+)*)?$/;
 
-/**
- * Matches when the text before a path string is a commit-pinned GitHub
- * permalink plus any leading directories of the path:
- * `github.com/<owner>/<repo>/(blob|tree|raw)/<revision>/apps/backend/src/` or
- * `raw.githubusercontent.com/<owner>/<repo>/<revision>/apps/backend/src/`.
- */
-const permalinkPathLead = String.raw`(?:\bgithub\.com\/[\w.-]+\/[\w.-]+\/(?:blob|tree|raw)|\braw\.githubusercontent\.com\/[\w.-]+\/[\w.-]+)\/${pinnedUrlRevision}\/(?:[\w.-]+\/)*`;
+function readGitHubRefs() {
+  const config = Bun.spawnSync(["git", "config", "--null", "--get-regexp", "^remote\\..*\\.url$"], {
+    cwd: root,
+    stdout: "pipe",
+  });
+  if (config.exitCode > 1) throw new Error("Could not read Git remotes");
+  const repositories = new Map<string, string>();
+  for (const entry of config.stdout.toString().split("\0")) {
+    const remote = /^remote\.(.+)\.url\n(.*)$/.exec(entry);
+    if (!remote?.[1] || !remote[2]) continue;
+    const repository = githubRemote.exec(remote[2])?.[1];
+    if (repository) {
+      repositories.set(remote[1], repository.replace(/\.git$/i, "").toLowerCase());
+    }
+  }
+
+  // Local tags and heads have no remote namespace. Treat those as evidence
+  // for origin only, and use remote-tracking heads for other repositories.
+  const origin = repositories.get("origin");
+  const tags = new Set<string>();
+  const branches = new Set<string>();
+  if (repositories.size === 0) return { origin, tags, branches };
+  const refs = Bun.spawnSync(
+    ["git", "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes", "refs/tags"],
+    { cwd: root, stdout: "pipe" },
+  );
+  if (refs.exitCode !== 0) throw new Error("Could not read Git refs");
+  for (const ref of refs.stdout.toString().split("\n")) {
+    if (origin && ref.startsWith("refs/tags/")) {
+      tags.add(ref.slice("refs/tags/".length));
+    } else if (origin && ref.startsWith("refs/heads/")) {
+      branches.add(`${origin}:${ref.slice("refs/heads/".length)}`);
+    } else if (ref.startsWith("refs/remotes/")) {
+      const trackingName = ref.slice("refs/remotes/".length);
+      for (const [remote, repository] of repositories) {
+        if (trackingName.startsWith(`${remote}/`)) {
+          branches.add(`${repository}:${trackingName.slice(remote.length + 1)}`);
+        }
+      }
+    }
+  }
+  return { origin, tags, branches };
+}
+
+function isPinnedGitHubPath(
+  source: string,
+  offset: number,
+  fileLead: string,
+  refs: ReturnType<typeof readGitHubRefs>,
+): boolean {
+  const lineStart = offset === 0 ? 0 : source.lastIndexOf("\n", offset - 1) + 1;
+  const link = githubUrlLead.exec(source.slice(lineStart, offset));
+  if (!link?.[1] || !link[2] || !link[3]) return false;
+  const host = link[1].toLowerCase();
+  let revision = link[3];
+  if (host === "github.com") {
+    const route = githubFileRoute.exec(revision);
+    if (!route) return false;
+    revision = revision.slice(route[0].length);
+  } else if (host !== "raw.githubusercontent.com") {
+    return false;
+  }
+
+  // The rewrite may match only "core/file.ts". Strip the preceding
+  // "apps/backend/src" so a slash in the ref stays part of the ref.
+  if (fileLead && revision.endsWith(fileLead)) {
+    revision = revision.slice(0, -fileLead.length);
+  }
+  try {
+    revision = decodeURIComponent(revision);
+  } catch {
+    return false;
+  }
+  if (revision.startsWith("refs/heads/")) return false;
+  if (revision.startsWith("refs/tags/")) return true;
+  const repository = link[2].toLowerCase();
+  if (repository === refs.origin && refs.tags.has(revision)) return true;
+  if (refs.branches.has(`${repository}:${revision}`)) return false;
+  return commitId.test(revision) || versionTag.test(revision);
+}
 
 /** `core/design-service.ts` → `core/design/service.ts`, and the `.js` spelling. */
-function pathStringRewrites(moves: Map<string, string>): Array<[RegExp, string]> {
-  const rewrites: Array<[RegExp, string]> = [];
+function pathStringRewrites(moves: Map<string, string>) {
+  const rewrites: Array<{ pattern: RegExp; replacement: string; fileLead: string }> = [];
   for (const [from, to] of moves) {
     const fromParts = path.relative(root, from).split(path.sep);
     const toParts = path.relative(root, to).split(path.sep);
     let common = 0;
     while (common < fromParts.length - 1 && fromParts[common] === toParts[common]) common += 1;
     const anchor = Math.max(common - 1, 0);
+    const fileLead = anchor > 0 ? "/" + fromParts.slice(0, anchor).join("/") : "";
     const oldTail = fromParts.slice(anchor).join("/");
     const newTail = toParts.slice(anchor).join("/");
     const variants: Array<[string, string]> = [[oldTail, newTail]];
@@ -204,13 +279,14 @@ function pathStringRewrites(moves: Map<string, string>): Array<[RegExp, string]>
       ]);
     }
     for (const [oldText, newText] of variants) {
-      rewrites.push([
-        new RegExp(
-          `(?<![\\w-])(?<!${revisionPathLead})(?<!${permalinkPathLead})${escapeRegExp(oldText)}(?![\\w-])`,
+      rewrites.push({
+        pattern: new RegExp(
+          `(?<![\\w-])(?<!${revisionPathLead})${escapeRegExp(oldText)}(?![\\w-])`,
           "g",
         ),
-        newText,
-      ]);
+        replacement: newText,
+        fileLead,
+      });
     }
   }
   return rewrites;
@@ -240,12 +316,15 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const moves = await buildMoves(options);
   const pathRewrites = pathStringRewrites(moves);
+  const refs = readGitHubRefs();
   const changed: string[] = [];
   for (const file of await trackedFiles()) {
     const source = await readFile(file, "utf8");
     let rewritten = codeExtension.test(file) ? rewriteSpecifiers(file, source, moves) : source;
-    for (const [pattern, replacement] of pathRewrites) {
-      rewritten = rewritten.replace(pattern, replacement);
+    for (const { pattern, replacement, fileLead } of pathRewrites) {
+      rewritten = rewritten.replace(pattern, (match, offset: number, text: string) =>
+        isPinnedGitHubPath(text, offset, fileLead, refs) ? match : replacement,
+      );
     }
     if (rewritten === source) continue;
     changed.push(path.relative(root, file));

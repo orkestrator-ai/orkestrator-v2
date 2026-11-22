@@ -592,9 +592,12 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   2026-11-22 it also leaves a path inside a commit-pinned GitHub permalink
   (`github.com/<owner>/<repo>/blob/<sha>/apps/…`, likewise `tree/` and
   `raw/`, and `raw.githubusercontent.com/<owner>/<repo>/<sha>/apps/…`) under
-  its old name. A pinned revision there is a hex SHA of 7 to 40 characters,
-  a `vX.Y.Z` tag or a `refs/tags/` name; a link to `main` or another branch
-  follows the file and is rewritten.
+  its old name. It compares the complete GitHub hostname case-insensitively
+  and uses the source file's repository-relative path to read the full ref.
+  It preserves 7–40 character hex SHAs, explicit `refs/tags/` and tags
+  available locally for `origin`. For refs absent from the local checkout,
+  it recognises version tags with an optional `v` and prerelease or build
+  suffix. Explicit `refs/heads/` and known branches still follow the file.
 - Lint: each domain has a pattern in two `.oxlintrc.json` overrides. The
   `apps/backend/src/**` override comes before the tests-off override (so
   co-located tests and test-support files may reach internals) and repeats the
@@ -713,35 +716,25 @@ they move many files that other work in flight touches.
 
 ### Task 3: the codemod skips commit-pinned GitHub permalinks
 
-- Chosen: a second negative look-behind in the path-string rewrite, beside
-  the `<revision>:<path>` one from todo 7490. A path is left alone when it
-  follows `github.com/<owner>/<repo>/(blob|tree|raw)/<revision>/` or
-  `raw.githubusercontent.com/<owner>/<repo>/<revision>/` plus any leading
-  directories, where the revision is a hex SHA of 7 to 40 characters, a
-  `vX.Y.Z` tag (with an optional `-suffix`) or a `refs/tags/` name. Any other
-  segment there (`main`, `feature/x`, `refs/heads/main`) is a branch, whose
-  link follows the file, so it is rewritten as before. Relative imports are
-  unaffected: they go through the specifier rewrite, not the path strings.
-- Why: the `native-agent` slice found a permalink pinned to a commit
-  (`…/blob/f2d21713…/apps/backend/src/core/native-agent-service.ts` in
-  `plans/credentials/credentials.md`) rewritten and restored it by hand; at
-  that commit the file had its old name, so the rewritten link was dead.
-- Options: (a) a look-behind on the URL's revision segment (chosen): one
-  regular expression, the same shape as the 7490 rule, and a branch link
-  still follows the file; (b) skip every GitHub URL: simpler, but a link to
-  `main` would then point at a file that no longer exists there; (c) resolve
-  each revision with `git rev-parse`: exact for this repository's own SHAs
-  and tags, but it needs the history present, says nothing about other
-  repositories' links, and still cannot tell a tag from a branch that
-  happens to have a tag-like name. A branch named like a SHA or a `vX.Y.Z`
-  tag is read as pinned and left alone; none exists here.
-- Tests: `tests/unit/move-backend-modules.test.ts` adds a case covering full
-  and abbreviated SHAs, `blob/`, `tree/`, `raw/`,
-  `raw.githubusercontent.com`, a release tag, a `refs/tags/` name and a link
-  in angle brackets (all left alone) against `main`, a slashed branch,
-  `refs/heads/main`, a non-hex lookalike and a bare path after a pinned URL
-  (all rewritten), and a moved importer whose relative import is rewritten
-  beside a pinned link in its comment that is not.
+- Chosen: identify the exact GitHub hostname and separate the full ref from
+  the moved file's repository-relative path. Explicit tags and SHAs protect
+  historical paths even in shallow checkouts. Local tags and heads are
+  associated with `origin`, and remote-tracking heads with their configured
+  remote. Unresolved version tags use the version-spelling fallback.
+- Why: the `native-agent` slice restored a link pinned to a commit after the
+  codemod moved its historical path. Review of the initial look-behind found
+  that it also rewrote some release tags, misread a tag-shaped branch prefix
+  and treated hostnames inconsistently.
+- Options: (a) use repository-relative paths and locally available refs
+  (chosen). This handles slashed refs and works offline; an arbitrary
+  unqualified tag outside the local refs needs an explicit `refs/tags/`
+  link to be recognised. (b) Use version syntax alone. This works offline
+  and requires no ref lookup, but cannot recognise named tags or known
+  version-shaped branches.
+- Tests: `tests/unit/move-backend-modules.test.ts` checks full and abbreviated
+  SHAs, blob, tree and raw links, bare and explicit tags, mixed-case
+  hostnames and non-GitHub lookalikes, shorthand and explicit slashed
+  branches, scoped local refs, and relative imports beside a pinned URL.
 
 ### Task 3: `recurring` as the first wave 3 slice
 

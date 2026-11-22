@@ -1882,7 +1882,10 @@ the first submission the normal path:
   each path, the fields allowed beside an unknown one, and the type received.
 - The consolidation prompt carries a complete shape template of the report
   (`review/consolidation-example.ts`), checked against the contract by its
-  test, and names the misses that most often cost a resend.
+  test, and names the misses that most often cost a resend. One of them is
+  derived from the template's key order: the last array (`testCoverageGaps`)
+  is followed by more keys inside the same object, so no `}` belongs after its
+  `]`. That stray `}` was the usual fault in a failed first submission.
 - A pipeline session's result turn runs its Claude CLI with fine-grained tool
   streaming off (`CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=0`,
   `buffersToolInput` in `bridges/claude-bridge/src/services/runtime-env.ts`).
@@ -2023,6 +2026,19 @@ broker's `validate_workflow_result`) lets a string through its input check
   at its own position. `JSON.parse` gives no position under Bun, so a
   small scanner of its own finds the fault, and runs only on text
   `JSON.parse` already refused.
+- Text whose only fault is one closing bracket too many is accepted without
+  that bracket: a `}` that closes the root before more fields, an extra `}` or
+  `]` at the end, or a closer that does not match the open container. It was
+  the most common reason a consolidation's first submission failed (the root
+  closed right after `testCoverageGaps`, then `verdict` followed). Only the
+  one bracket the scanner names is removed, and the repair is used only when
+  the slot's acceptance schema refuses undeclared fields at every level
+  (`acceptsOnlyDeclaredFields`) and the repaired object passes it. A wrong
+  repair moves fields into another object, which such a schema refuses, so
+  the original JSON-text refusal is sent instead, followed by what the check
+  found in the repaired object (two replayed consolidations had a missing
+  `reviewScope` field as well as the stray brace). Graph outputs and the
+  broker's any-object validation tool have open schemas and never repair.
 
 **Refused calls are counted.** A call refused before validation (by the input
 check, or as unparseable text) never reaches `validate`/`submit`, so the slot

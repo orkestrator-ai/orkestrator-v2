@@ -28,7 +28,7 @@ import {
 // Registers the built-in kinds the registry functions below look up.
 import "./result-contracts.js";
 import { graphOutputContext } from "./result-graph-output.js";
-import { decodeJsonTextResult } from "./result-json-text.js";
+import { acceptsOnlyDeclaredFields, decodeJsonTextResult } from "./result-json-text.js";
 import {
   workflowResultAnySlotSchema,
   workflowResultKindDefinition,
@@ -174,6 +174,23 @@ function countInputRefusal(
 type DecodedResultArgument =
   { ok: true; result: unknown } | { ok: false; refusal: WorkflowResultSubmission; reason: string };
 
+/** How a tool checks a decoded `result`, and whether it may repair JSON text. */
+interface ResultAcceptance {
+  check: (value: unknown) => true | string;
+  /**
+   * Whether the schema refuses every undeclared field at every level, so a
+   * bracket repair that moved fields to the wrong level cannot pass `check`.
+   */
+  repairsBrackets: boolean;
+}
+
+function resultAcceptance(schema: JsonSchema): ResultAcceptance {
+  return {
+    check: jsonSchemaFieldCheck(schema),
+    repairsBrackets: acceptsOnlyDeclaredFields(schema),
+  };
+}
+
 /**
  * `result` as the tool's handler should use it. An object (already checked by
  * the input schema) or a missing value passes through. A string is JSON text:
@@ -181,14 +198,30 @@ type DecodedResultArgument =
  * gives an object. Text that does not parse is refused with where it breaks,
  * so the model can repair that one point (issue #2470). Like an input-schema
  * refusal, this uses no correction attempt.
+ *
+ * Text whose only fault is one closing bracket too many is used without that
+ * bracket, when the schema refuses every undeclared field and the repaired
+ * object passes it. It was the most common reason a consolidation agent's
+ * first submission failed, and the agent then resent the whole report with
+ * the bracket removed. A repaired object that fails the check gets the original
+ * JSON-text refusal, because the repair itself may be what broke it, followed
+ * by what the check found in the repaired object, so a report with a second
+ * fault can be fixed in one resend.
  */
 function decodeResultArgument(
   result: unknown,
-  check: (value: unknown) => true | string,
+  acceptance: ResultAcceptance,
 ): DecodedResultArgument {
   if (typeof result !== "string") return { ok: true, result };
   const decoded = decodeJsonTextResult(result);
   if (!decoded.ok) {
+    let afterRepair = "";
+    if (decoded.repaired && acceptance.repairsBrackets) {
+      const repairedCheck = acceptance.check(decoded.repaired.value);
+      if (repairedCheck === true) return { ok: true, result: decoded.repaired.value };
+      // Named too, so one resend can fix both faults.
+      afterRepair = ` If the extra bracket is the \`${decoded.repaired.bracket}\` at character ${decoded.repaired.offset}, the object without it still does not match the contract: ${repairedCheck}.`;
+    }
     return {
       ok: false,
       reason: decoded.summary,
@@ -197,13 +230,13 @@ function decodeResultArgument(
         error: {
           code: "invalid_result",
           nextAction: "correct",
-          message: decoded.message,
+          message: `${decoded.message}${afterRepair}`,
           issues: [{ path: "$", code: "invalid_json_text", message: decoded.summary }],
         },
       },
     };
   }
-  const checked = check(decoded.value);
+  const checked = acceptance.check(decoded.value);
   if (checked === true) return { ok: true, result: decoded.value };
   const reason = `\`result\` was sent as a string of JSON text. It parses, but the object does not match the contract: ${checked}`;
   return {
@@ -401,7 +434,7 @@ export function registerWorkflowResultSlotTools(
         : publishedSchema;
     // A string is decoded by the handler, which reports where JSON text breaks.
     const resultSchema = jsonSchemaField(publishedSchema, acceptanceSchema, { jsonText: true });
-    const acceptResult = jsonSchemaFieldCheck(acceptanceSchema);
+    const acceptResult = resultAcceptance(acceptanceSchema);
     const onRefused = countInputRefusal(workflowResults, scope, [scope.workflowResultKey]);
     const graphPort = graphOutputContext(view);
     const port = portDescription(scope);
@@ -631,7 +664,7 @@ async function brokerAttempt(
 
 /** Any object: the broker's validation tool serves every kind, and the service checks the slot. */
 const BROKER_VALIDATION_RESULT_SCHEMA = { type: "object" } as const;
-const acceptBrokerValidationResult = jsonSchemaFieldCheck(BROKER_VALIDATION_RESULT_SCHEMA);
+const acceptBrokerValidationResult = resultAcceptance(BROKER_VALIDATION_RESULT_SCHEMA);
 
 /**
  * Registers the stable OpenCode broker surface.
@@ -685,7 +718,7 @@ export function registerWorkflowResultBrokerTools(
 
   for (const kind of WORKFLOW_RESULT_KINDS) {
     const anySlotSchema = workflowResultAnySlotSchema(kind);
-    const acceptResult = jsonSchemaFieldCheck(anySlotSchema);
+    const acceptResult = resultAcceptance(anySlotSchema);
     server.registerTool(
       workflowResultToolName(kind),
       {

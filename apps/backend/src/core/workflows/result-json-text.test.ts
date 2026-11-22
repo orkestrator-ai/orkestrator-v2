@@ -3,12 +3,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
+import { WORKFLOW_RESULT_KINDS } from "@orkestrator/protocol/workflow-results";
 import { callToolInProcess } from "../mcp-in-process.js";
 import {
   CONSOLIDATED_REVIEW_EXAMPLE,
   CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS,
 } from "../review/consolidation-example.js";
-import { decodeJsonTextResult, findJsonTextFault } from "./result-json-text.js";
+import {
+  acceptsOnlyDeclaredFields,
+  decodeJsonTextResult,
+  findJsonTextFault,
+} from "./result-json-text.js";
+import { CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA } from "../review/consolidation-scope.js";
+import { workflowResultAnySlotSchema, workflowResultProviderSchema } from "./result-registry.js";
 import { WorkflowResultService } from "./result-service.js";
 import { registerWorkflowResultBrokerTools, registerWorkflowResultTools } from "./result-tools.js";
 
@@ -54,6 +61,20 @@ function strayBraceText(): { text: string; brace: number } {
   const marker = '"verdict":';
   const at = valid.indexOf(marker) - 1; // the `,` before `"verdict"`
   return { text: `${valid.slice(0, at)}}${valid.slice(at)}`, brace: at };
+}
+
+/**
+ * The stray brace with a second fault after it (an extra `}` at the end), so
+ * removing either bracket alone does not make the text parse.
+ */
+function unrepairableStrayBraceText(): { text: string; brace: number } {
+  const { text, brace } = strayBraceText();
+  return { text: `${text}}`, brace };
+}
+
+/** `text` with one character inserted before `offset`. */
+function insertAt(text: string, offset: number, char: string): string {
+  return `${text.slice(0, offset)}${char}${text.slice(offset)}`;
 }
 
 describe("decodeJsonTextResult", () => {
@@ -161,8 +182,101 @@ describe("decodeJsonTextResult", () => {
     }
   });
 
+  test("a stray brace that closes the root early is offered as a one-bracket repair", () => {
+    const { text, brace } = strayBraceText();
+    const decoded = decodeJsonTextResult(text);
+    if (decoded.ok) throw new Error("expected a refusal");
+    expect(decoded.repaired).toEqual({ value: report, offset: brace, bracket: "}" });
+  });
+
+  test.each([
+    ["an extra `}` at the end", '{"a":[1],"b":{"c":2}}}', 21, "}"],
+    ["an extra `]` after an array field", '{"a":[1]],"b":2}', 8, "]"],
+    ["an extra `}` after an array item", '{"a":[{"b":1}},{"b":2}]}', 13, "}"],
+  ] as const)("offers a repair for %s", (_name, text, offset, bracket) => {
+    const decoded = decodeJsonTextResult(text);
+    if (decoded.ok) throw new Error("expected a refusal");
+    expect(decoded.repaired).toMatchObject({ offset, bracket });
+    expect(decoded.repaired?.value).toEqual(
+      JSON.parse(text.slice(0, offset) + text.slice(offset + 1)),
+    );
+  });
+
+  test.each([
+    ["a second fault after the first", unrepairableStrayBraceText().text],
+    ["a missing closing bracket", '{"issues":[{"title":"A"}]'],
+    ["a raw line break in a string", '{"a":"x\ny"}'],
+    ["a trailing comma", '{"a":1,}'],
+    ["a second JSON value", '{"a":1} {"b":2}'],
+    ["text that repairs to an array", "[1]]"],
+  ] as const)("offers no repair for %s", (_name, text) => {
+    const decoded = decodeJsonTextResult(text);
+    if (decoded.ok) throw new Error("expected a refusal");
+    expect(decoded.repaired).toBeUndefined();
+  });
+
   test("deep nesting is scanned without recursion", () => {
     expect(findJsonTextFault("[".repeat(200_000))).toMatchObject({ offset: 200_000 });
+  });
+});
+
+describe("acceptsOnlyDeclaredFields", () => {
+  test("every built-in result kind refuses undeclared fields at every level", () => {
+    const builtIn = WORKFLOW_RESULT_KINDS.filter(
+      (kind) => kind !== "graph-output" && kind !== "graph-template",
+    );
+    for (const kind of builtIn) {
+      expect({
+        kind,
+        closed: acceptsOnlyDeclaredFields(workflowResultAnySlotSchema(kind)),
+      }).toEqual({ kind, closed: true });
+      expect({
+        kind,
+        closed: acceptsOnlyDeclaredFields(workflowResultProviderSchema(kind, {})),
+      }).toEqual({ kind, closed: true });
+    }
+    expect(acceptsOnlyDeclaredFields(CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA)).toBe(true);
+  });
+
+  test.each([
+    ["any object", { type: "object" }],
+    ["no type", {}],
+    [
+      "an object that allows more fields",
+      { type: "object", properties: {}, additionalProperties: true },
+    ],
+    [
+      "a nested open object",
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: { a: { type: "object", properties: {} } },
+      },
+    ],
+    ["a reference", { $ref: "#/$defs/a" }],
+    ["pattern properties", { type: "object", additionalProperties: false, patternProperties: {} }],
+    [
+      "an array of open items",
+      { type: "array", items: { type: "object", additionalProperties: true } },
+    ],
+    ["an open alternative", { anyOf: [{ type: "null" }, { type: "object" }] }],
+  ] as const)("counts %s as open", (_name, schema) => {
+    expect(acceptsOnlyDeclaredFields(schema)).toBe(false);
+  });
+
+  test("closed objects, arrays, scalars, enums and alternatives count as closed", () => {
+    expect(
+      acceptsOnlyDeclaredFields({
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          a: { type: ["string", "null"] },
+          b: { type: "array", items: { enum: ["x", "y"] } },
+          c: { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false }] },
+          d: { const: 1 },
+        },
+      }),
+    ).toBe(true);
   });
 });
 
@@ -205,7 +319,8 @@ describe("result tools take a result sent as JSON text", () => {
   });
 
   test("broken JSON text is refused with its position and counted, without spending a correction", async () => {
-    const { text, brace } = strayBraceText();
+    // A second fault leaves no one-bracket repair, so the text is refused.
+    const { text, brace } = unrepairableStrayBraceText();
     for (const tool of ["validate_workflow_result", "submit_review_report"]) {
       const refused = await callToolInProcess(factory, tool, { resultKey, result: text });
       expect(refused.isError).toBe(true);
@@ -241,6 +356,57 @@ describe("result tools take a result sent as JSON text", () => {
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain("It parses, but the object does not match the contract");
     expect(refused.text).toContain("$.testResults: Required field is missing");
+    expect(service.refusals(resultKey)).toMatchObject({ count: 1, processed: 0 });
+    expect(await service.projection(resultKey)).toBe("preparing");
+  });
+
+  test("a stray brace that closes the report early is repaired and accepted on the first call", async () => {
+    const { text } = strayBraceText();
+    const accepted = await callToolInProcess(factory, "submit_review_report", {
+      resultKey,
+      result: text,
+    });
+    expect(accepted.isError).toBe(false);
+    expect(await service.structured<unknown>(resultKey)).toMatchObject({ ok: true, value: report });
+    expect(service.refusals(resultKey)).toBeUndefined();
+  });
+
+  test("validation repairs the same bracket, and its digest commits the repaired report", async () => {
+    const { text } = strayBraceText();
+    const checked = await callToolInProcess(factory, "validate_workflow_result", {
+      resultKey,
+      result: text,
+    });
+    expect(checked.isError).toBe(false);
+    const validatedDigest = checked.structuredContent?.validatedDigest;
+    expect(validatedDigest).toMatch(/^[a-f0-9]{64}$/);
+    const accepted = await callToolInProcess(factory, "submit_review_report", {
+      resultKey,
+      validatedDigest,
+    });
+    expect(accepted.isError).toBe(false);
+    expect(await service.structured<unknown>(resultKey)).toMatchObject({ ok: true, value: report });
+  });
+
+  test("a repair that would move fields to another level is refused with the original fault", async () => {
+    // The extra `}` closes `reviewScope` before `blockedReason`. Removing the
+    // bracket the scanner names would make `blockedReason` a top-level field,
+    // which the contract refuses, so the JSON fault is reported as it is.
+    const valid = JSON.stringify(report);
+    const text = insertAt(valid, valid.indexOf(',"blockedReason":'), "}");
+    const decoded = decodeJsonTextResult(text);
+    if (decoded.ok) throw new Error("expected a refusal");
+    expect(decoded.repaired?.value).toHaveProperty("blockedReason", null);
+    const refused = await callToolInProcess(factory, "submit_review_report", {
+      resultKey,
+      result: text,
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("`result` is a string, and it is not valid JSON");
+    expect(refused.text).toContain("already closed the top-level value");
+    // What the check found without the bracket is named too.
+    expect(refused.text).toContain("the object without it still does not match the contract");
+    expect(refused.text).toContain("$.reviewScope.blockedReason: Required field is missing");
     expect(service.refusals(resultKey)).toMatchObject({ count: 1, processed: 0 });
     expect(await service.projection(resultKey)).toBe("preparing");
   });
@@ -301,7 +467,7 @@ describe("result tools take a result sent as JSON text", () => {
     expect(service.refusals(resultKey)).toBeUndefined();
   });
 
-  test.each(["direct", "validated digest"] as const)(
+  test.each(["direct", "validated digest", "stray brace"] as const)(
     "scoped consolidation accepts JSON text by %s",
     async (mode) => {
       const key = crypto.randomUUID();
@@ -327,7 +493,10 @@ describe("result tools take a result sent as JSON text", () => {
         });
         return server;
       };
-      const result = JSON.stringify(CONSOLIDATED_REVIEW_EXAMPLE);
+      const valid = JSON.stringify(CONSOLIDATED_REVIEW_EXAMPLE);
+      // The real consolidation fault: the root closed right after `testCoverageGaps`.
+      const result =
+        mode === "stray brace" ? insertAt(valid, valid.indexOf(',"verdict":'), "}") : valid;
       let input: Record<string, unknown> = { resultKey: key, result };
       if (mode === "validated digest") {
         const checked = await callToolInProcess(

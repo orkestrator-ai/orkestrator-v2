@@ -1,5 +1,6 @@
 import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
+import { isPipelineLongCheckList, type PipelineLongCheck } from "./build-pipeline-long-checks.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
 import {
@@ -1484,6 +1485,12 @@ export interface BuildPipeline {
   structuredReview?: StructuredReviewReport;
   /** Backend projection of this iteration's environment-owned validation. */
   validationRun?: ReviewValidationRun;
+  /**
+   * Slow checks stage agents handed to the pipeline (`start_long_check`), run
+   * on the environment's validation worker and held against their stage until
+   * their result reaches it (`build-pipeline-long-checks.ts`).
+   */
+  longChecks?: PipelineLongCheck[];
   /** Immutable Git evidence shared by this iteration's reviewers. */
   reviewPackage?: PersistedReviewPackage;
   structuredReviewRequestId?: string;
@@ -2456,6 +2463,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     !isOptionalString(value.verificationFeedback) ||
     (value.structuredReview !== undefined && !isStructuredReviewReport(value.structuredReview)) ||
     (value.validationRun !== undefined && !isReviewValidationRun(value.validationRun)) ||
+    (value.longChecks !== undefined && !isPipelineLongCheckList(value.longChecks)) ||
     (value.reviewPackage !== undefined && !isPersistedReviewPackage(value.reviewPackage)) ||
     !isOptionalNonBlankString(value.structuredReviewRequestId) ||
     (value.pausedFromPhase !== undefined &&

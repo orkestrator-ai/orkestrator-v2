@@ -822,8 +822,16 @@ export function verificationPrompt(
     addressFindingsReport,
     validationAncestry,
   });
-  return `${task}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
+  return `${task}\n\n${VERIFICATION_LONG_CHECK_INSTRUCTION}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
 }
+
+/**
+ * How a pipeline's Verify hands a slow check to the pipeline
+ * (`long-checks.ts`) rather than running it in its turn. Only the pipeline's
+ * own Verify carries it: a graph's Verify node has no long check tools.
+ */
+export const VERIFICATION_LONG_CHECK_INSTRUCTION =
+  "**Long checks**: when the only way to settle a criterion is a command that may run for more than a few minutes (a corpus or parity comparison, a byte-identity run, a full browser, test or performance suite), do not run it in this turn, in the background or under a monitor. Start it with the Orkestrator `start_long_check` tool: one call holding every command it needs, the narrowest run over what this change touched first with scope `changed`, and the criterion it settles. The pipeline runs it outside your turn, posts the result on the ticket and sends it to you in a new turn when it finishes. Then end your turn without polling; you may submit your verdict once you have the result. Never mark a criterion passed on a check that has not finished or did not complete.";
 
 /**
  * {@link verificationPrompt} from its parts and without

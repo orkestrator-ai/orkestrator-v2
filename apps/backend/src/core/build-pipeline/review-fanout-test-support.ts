@@ -461,6 +461,7 @@ export async function withPipeline(
     efficiency?: RecordingEfficiencyObserver;
     artifactDispatch?: BuildPipelineServiceOptions["artifactDispatch"];
     structuredResultDeadlineMs?: number;
+    longCheckPollMs?: number;
     /**
      * Workers get their own mail identity on turns without a result tool:
      * `worker:<tabId>` connections, and OpenCode's signed capability. Result
@@ -589,6 +590,9 @@ export async function withPipeline(
       transcriptPersistIntervalMs: options.transcriptPersistIntervalMs,
       ...(options.structuredResultDeadlineMs !== undefined
         ? { structuredResultDeadlineMs: options.structuredResultDeadlineMs }
+        : {}),
+      ...(options.longCheckPollMs !== undefined
+        ? { longCheckPollMs: options.longCheckPollMs }
         : {}),
       ...(options.efficiency ? { efficiency: options.efficiency } : {}),
       ...(options.artifactDispatch ? { artifactDispatch: options.artifactDispatch } : {}),

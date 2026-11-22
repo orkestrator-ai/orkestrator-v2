@@ -146,6 +146,11 @@ import {
 } from "./prompt-dispatch.js";
 import { WorkspaceBusyError } from "../workspace-writers.js";
 import { stopAfterBuild } from "./build-stop.js";
+import {
+  BuildPipelineLongChecks,
+  longCheckResultsPrompt,
+  undeliveredLongChecks,
+} from "./long-checks.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("build-pipeline");
@@ -203,6 +208,9 @@ export class BuildPipelineSupervisor {
   /** Sends the journaled `pendingPromptAttempt`, at most once. */
   private readonly promptDispatch: BuildPipelinePromptDispatch;
 
+  /** Polls the slow checks stages handed to the pipeline (`long-checks.ts`). */
+  readonly longChecks: BuildPipelineLongChecks;
+
   constructor(
     private readonly ctx: BuildPipelineContext,
     private readonly agents: BuildPipelineAgents,
@@ -217,6 +225,13 @@ export class BuildPipelineSupervisor {
       this.assertReviewPackageIntegrity(environmentId, reviewPackage),
     );
     this.promptDispatch = new BuildPipelinePromptDispatch(ctx, agents);
+    this.longChecks = new BuildPipelineLongChecks({
+      invoke: (command, args) => ctx.invoke(command, args),
+      save: async (pipeline) => {
+        await ctx.save(pipeline, pipeline.backendRevision);
+      },
+      ...(ctx.options.longCheckPollMs !== undefined ? { pollMs: ctx.options.longCheckPollMs } : {}),
+    });
   }
 
   reviewFanout(): BuildPipelineReviewFanout {
@@ -457,6 +472,12 @@ export class BuildPipelineSupervisor {
     if (!pipeline.environmentId) {
       throw new Error("Build pipeline has no environment");
     }
+
+    // Long checks run outside every agent turn. Their status is read here, on
+    // every pass of an active pipeline, whatever its stage is doing.
+    // A save there advances the revision the branches below write against.
+    await this.longChecks.poll(pipeline);
+    record.revision = pipeline.backendRevision;
 
     if (pipeline.phase === "starting-environment") {
       await this.recovery.configureEnvironment(pipeline);
@@ -994,6 +1015,9 @@ export class BuildPipelineSupervisor {
     // Mail queued for this worker while its turn ran is its next turn, before
     // the pipeline moves on and the worker ends.
     if (await this.dispatchWorkerMail(pipeline, provider, session)) return;
+
+    // A stage whose long checks have not reached it does not finish yet.
+    if (await this.holdForLongChecks(pipeline, provider, session)) return;
 
     switch (pipeline.phase) {
       case "building":
@@ -2067,6 +2091,41 @@ export class BuildPipelineSupervisor {
   }
 
   /**
+   * Holds a stage whose turn ended while long checks it started this round
+   * are still running, and hands their results back to it as a follow-up
+   * turn once they have all settled. Resolves whether the stage was held or
+   * sent that turn; the stage's own completion runs only when it was not.
+   *
+   * The follow-up runs under a new result key, so a result the stage
+   * submitted before its checks finished is superseded: no criterion is
+   * judged on a run that has not ended. Marking the checks delivered is saved
+   * with the follow-up's attempt, so a restart neither drops nor repeats it.
+   */
+  private async holdForLongChecks(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<boolean> {
+    const checks = undeliveredLongChecks(pipeline, session);
+    if (!checks) return false;
+    if (checks.some((check) => check.status === "running")) return true;
+    const phase = resumablePhase(pipeline.phase);
+    if (!phase) return false;
+    const deliveredAt = new Date().toISOString();
+    for (const check of checks) check.deliveredAt = deliveredAt;
+    const resultKind = session.structuredRequestId
+      ? await this.ctx.boundWorkflowResultKind(pipeline, session)
+      : undefined;
+    await this.sendStageFollowUp(pipeline, provider, session, {
+      phase,
+      validationPlan: resultKind === "validation-plan",
+      keepBuildOutcome: true,
+      prompt: longCheckResultsPrompt(checks),
+    });
+    return true;
+  }
+
+  /**
    * One automatic follow-up turn in the stage's own session, under a new
    * durable dispatch and result key. The spent flag is saved with the attempt,
    * so a restart before dispatch retries this follow-up instead of earning
@@ -2081,6 +2140,12 @@ export class BuildPipelineSupervisor {
       spend?: "restartContinuationSent" | "resultReminderSent";
       validationPlan: boolean;
       prompt: string;
+      /**
+       * Keep the Build turn's reported outcome. A long check's results turn
+       * continues the same work, so a "no work needed" or "blocked" report
+       * stands unless that turn reports again.
+       */
+      keepBuildOutcome?: boolean;
     },
   ): Promise<void> {
     const { phase } = followUp;
@@ -2088,7 +2153,7 @@ export class BuildPipelineSupervisor {
     const requestId = randomUUID();
     const startedAt = new Date().toISOString();
     if (followUp.spend) session[followUp.spend] = true;
-    delete session.buildOutcome;
+    if (!followUp.keepBuildOutcome) delete session.buildOutcome;
     session.turnStartedAt = startedAt;
     delete session.completedAt;
     delete session.usageFinalizationPolls;

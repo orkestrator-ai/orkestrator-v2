@@ -52,6 +52,8 @@ export { buildPipelineDetailFingerprint } from "./detail-fingerprint.js";
 export { settleTicketsOfDeletedEnvironment } from "./kanban-environment-deleted.js";
 export { buildPipelineKanbanUpdate, type BuildPipelineKanbanUpdate } from "./kanban-lifecycle.js";
 export type { BuildPipelineKeyInformationHost } from "./key-information.js";
+export { registerLongCheckTools } from "./long-check-tools.js";
+export type { BuildPipelineLongCheckHost } from "./long-checks.js";
 export {
   authenticatePipelineWorkerMailCapability,
   type PipelineWorkerMailTurn,

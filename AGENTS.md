@@ -24,6 +24,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Coordinator qualification (`coordinator/providers.ts`) | [`docs/architecture/coordinator.md`](docs/architecture/coordinator.md#changing-qualification) |
 | Agent Capabilities (`core/capabilities/`, `capability-resources*`, the `capabilities` domain, `settings/capabilities/`) | [`docs/architecture/agent-capabilities-management.md`](docs/architecture/agent-capabilities-management.md) |
 | Scheduled jobs (`scheduled-jobs/`, `schedule.*` actions, schedule tools) | [`docs/architecture/scheduled-jobs.md`](docs/architecture/scheduled-jobs.md) |
+| Pipeline long checks (`build-pipeline/long-check*`, `start_long_check`, `get_long_checks`) | [`docs/architecture/pipeline-long-checks.md`](docs/architecture/pipeline-long-checks.md) |
 | Agent credentials (`apps/backend/src/core/credentials/`, `credential_*` commands, `request_credential` and the other credential tools) | [`docs/architecture/agent-credentials.md`](docs/architecture/agent-credentials.md) |
 | Slash-command discovery or dispatch | [`docs/architecture/native-agent-commands.md`](docs/architecture/native-agent-commands.md) |
 | Agent SDK/CLI version bumps | [`docs/development/upgrade-agents.md`](docs/development/upgrade-agents.md) |

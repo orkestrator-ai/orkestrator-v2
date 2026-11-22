@@ -153,6 +153,7 @@
     "./build-pipeline-address-findings-report": "./src/build-pipeline-address-findings-report.ts",
     "./build-pipeline-build-outcome": "./src/build-pipeline-build-outcome.ts",
     "./build-pipeline-key-information": "./src/build-pipeline-key-information.ts",
+    "./build-pipeline-long-checks": "./src/build-pipeline-long-checks.ts",
     "./build-pipeline-notes": "./src/build-pipeline-notes.ts",
     "./build-pipeline-stage-instructions": "./src/build-pipeline-stage-instructions.ts",
     "./connections": "./src/connections.ts",

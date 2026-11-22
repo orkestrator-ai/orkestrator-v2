@@ -53,6 +53,10 @@ import { BuildPipelineRecovery } from "./service-recovery.js";
 import { BuildPipelineSupervisor } from "./service-supervisor.js";
 import { BuildPipelineWorkerMail } from "./worker-mail.js";
 import {
+  createBuildPipelineLongCheckHost,
+  type BuildPipelineLongCheckHost,
+} from "./long-checks.js";
+import {
   createBuildPipelineKeyInformationHost,
   type BuildPipelineKeyInformationHost,
 } from "./key-information.js";
@@ -311,6 +315,20 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       listPipelines: (scope) =>
         this.context.storage.listBuildPipelinesForEnvironment(scope.projectId, scope.environmentId),
       mutate: (pipelineId, mutation) => this.context.mutate(pipelineId, mutation),
+    });
+  }
+
+  /**
+   * Where the stage agents' long check tools start and read checks: the
+   * pipeline that owns the caller's environment, recorded under its lock
+   * before the environment's validation worker is asked to run them.
+   */
+  longCheckHost(): BuildPipelineLongCheckHost {
+    return createBuildPipelineLongCheckHost({
+      listPipelines: (scope) =>
+        this.context.storage.listBuildPipelinesForEnvironment(scope.projectId, scope.environmentId),
+      mutate: (pipelineId, mutation) => this.context.mutate(pipelineId, mutation),
+      invoke: (command, args) => this.context.invoke(command, args),
     });
   }
 

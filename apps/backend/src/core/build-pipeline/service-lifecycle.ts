@@ -9,6 +9,7 @@ import { adoptCompletedBuild, type CompletedBuildAttempt } from "./completed-bui
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS, buildPhaseForSessionPhase } from "./stages.js";
 import { createHash, randomUUID } from "node:crypto";
 import { buildPipelineKanbanUpdate } from "./kanban-lifecycle.js";
+import { BuildPipelineLongChecks } from "./long-checks.js";
 import {
   BUILD_CANCELLED_ERROR,
   type BuildPipeline,
@@ -1804,6 +1805,11 @@ export class BuildPipelineLifecycle {
           run: pipeline.validationRun,
         });
       }
+      // Long checks outlive turns and pauses, not a cancelled pipeline.
+      await new BuildPipelineLongChecks({
+        invoke: (command, args) => this.ctx.invoke(command, args),
+        save: async () => {},
+      }).cancelAll(pipeline);
 
       if (pipeline.reviewFanout) {
         abortErrors = await this.agents.abandonReviewFanout(pipeline, "idle");

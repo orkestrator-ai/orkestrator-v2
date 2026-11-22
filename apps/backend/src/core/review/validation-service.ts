@@ -476,9 +476,19 @@ export async function stopEnvironmentReviewValidation(
       typeof record.snapshot !== "object"
     )
       continue;
-    const snapshot = record.snapshot as { validationRun?: unknown };
-    if (!isReviewValidationRun(snapshot.validationRun)) continue;
-    if (!["planned", "running"].includes(snapshot.validationRun.status)) continue;
-    await controlReviewValidation(environmentId, snapshot.validationRun, "cancel", context);
+    const snapshot = record.snapshot as { validationRun?: unknown; longChecks?: unknown };
+    // A build pipeline's long checks run on the same worker
+    // (`build-pipeline/long-checks.ts`).
+    const runs = [
+      snapshot.validationRun,
+      ...(Array.isArray(snapshot.longChecks)
+        ? snapshot.longChecks.map((check: { run?: unknown } | null) => check?.run)
+        : []),
+    ];
+    for (const run of runs) {
+      if (!isReviewValidationRun(run)) continue;
+      if (!["planned", "running"].includes(run.status)) continue;
+      await controlReviewValidation(environmentId, run, "cancel", context);
+    }
   }
 }

@@ -74,6 +74,39 @@ export function testCapabilityHomes(home: string): CapabilityHomes {
   };
 }
 
+/**
+ * The homes an `agent-test` backend writes capabilities into. Never the
+ * host's: by default a directory of the data directory's own
+ * (`capability-test-home`), which no agent reads. An isolated `dev:test`
+ * profile (`ORKESTRATOR_AGENT_TEST_ISOLATED=1`) gives its backend and bridges
+ * a HOME, CLAUDE_CONFIG_DIR, CODEX_HOME and XDG_CONFIG_HOME under its data
+ * directory (`createBackendProcessEnvironment`); when every one of them is
+ * there, those are the homes, so a delivered capability reaches the
+ * profile's own agents and a live spec can qualify it. One home outside the
+ * data directory falls back to `capability-test-home` for all of them.
+ */
+export function agentTestCapabilityHomes(
+  dataDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CapabilityHomes {
+  const fallback = testCapabilityHomes(path.join(dataDir, "capability-test-home"));
+  if (env.ORKESTRATOR_AGENT_TEST_ISOLATED !== "1") return fallback;
+  const home = env.HOME?.trim();
+  if (!home || !path.isAbsolute(home)) return fallback;
+  const homes: CapabilityHomes = {
+    home: path.resolve(home),
+    claudeConfigDir: path.resolve(env.CLAUDE_CONFIG_DIR?.trim() || path.join(home, ".claude")),
+    codexHome: path.resolve(env.CODEX_HOME?.trim() || path.join(home, ".codex")),
+    xdgConfigHome: path.resolve(env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config")),
+  };
+  const root = path.resolve(dataDir);
+  const inside = (candidate: string) => {
+    const relative = path.relative(root, candidate);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  };
+  return Object.values(homes).every(inside) ? homes : fallback;
+}
+
 const LOCATION_PATHS: Record<string, (homes: CapabilityHomes) => string> = {
   "claude-user-skills": (h) => path.join(h.claudeConfigDir, "skills"),
   "agents-shared-skills": (h) => path.join(h.home, ".agents", "skills"),

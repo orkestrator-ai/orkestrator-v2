@@ -16,7 +16,6 @@
  *   listings (`discoverAgentPlugins`) and MCP management's catalog.
  */
 import { createHash } from "node:crypto";
-import path from "node:path";
 
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { UNRESTRICTED_CAPABILITY_CEILING } from "@orkestrator/protocol/capability-resources-resolve";
@@ -41,7 +40,7 @@ import type { McpManagementService } from "../mcp-management/index.js";
 import { CapabilityEnvironmentAuthority } from "./environment-authority.js";
 import type { McpInstaller } from "./executor.js";
 import type { InventoryMcpServer, InventoryPlugin } from "./inventory.js";
-import { defaultCapabilityHomes, testCapabilityHomes } from "./native-ownership.js";
+import { agentTestCapabilityHomes, defaultCapabilityHomes } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { ClaudePluginAdapter } from "./provider-adapters/claude-plugins.js";
 import { toggleCodexPlugin } from "./provider-adapters/codex-plugins.js";
@@ -292,10 +291,14 @@ export function mcpManagementInstaller(
   };
 }
 
-/** An isolated agent-test profile writes into its own data directory, never the host's homes. */
+/**
+ * An agent-test backend writes into its own data directory, never the host's
+ * homes: the isolated profile's own provider homes when it has them, so its
+ * agents read what was delivered (`agentTestCapabilityHomes`).
+ */
 export function capabilityHomes(context: CommandContext) {
   return context.runtimeFlavor === "agent-test"
-    ? testCapabilityHomes(path.join(context.storage.getDataDir(), "capability-test-home"))
+    ? agentTestCapabilityHomes(context.storage.getDataDir())
     : defaultCapabilityHomes();
 }
 

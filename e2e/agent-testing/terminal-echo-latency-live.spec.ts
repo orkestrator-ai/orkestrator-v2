@@ -120,6 +120,19 @@ const KEYS = integerOption("ORKESTRATOR_AGENT_TEST_ECHO_KEYS", 200, 20);
 const WARMUP_KEYS = 10;
 /** Pause between an echo and the next key, as the loopback benchmark uses. */
 const KEY_GAP_MS = 30;
+/**
+ * Up to one 60 Hz frame added to each gap, so keys land at every phase of the
+ * page's frame clock as a person's do. Chromium defers ordinary tasks after a
+ * key until the next frame, so an echo paints one or two frames after its key
+ * depending on that phase. With a fixed gap the phase was set by Playwright's
+ * own round trips, which slow as a case records steps, and the median drifted
+ * from one cluster to the other between rounds (to-do 8312 task 4).
+ */
+const KEY_PHASE_SPREAD_MS = 1000 / 60;
+/** The `index`th gap's spread: a golden-ratio sequence, even over the frame. */
+function keyPhaseOffsetMs(index: number): number {
+  return ((index * 0.618_033_988_75) % 1) * KEY_PHASE_SPREAD_MS;
+}
 const ECHO_TIMEOUT_MS = 5_000;
 /** The load shape: the loopback benchmark's `busy` level. */
 const LOAD = {
@@ -138,6 +151,28 @@ const STREAM_DELTAS = integerOption(
   MAX_STREAM_DELTAS,
 );
 const KEY_CYCLE = "abcdefghijklmnopqrstuvwxyz0123456789";
+/**
+ * Opt-in: record a Chromium CPU profile of the measured page over each cell's
+ * measured keys, written beside the evidence as `page-<variant>-r<round>.cpuprofile`
+ * (function names and source locations only). Sampling slows the page, so a
+ * profiled run's latencies are not comparable with an unprofiled one's.
+ */
+const PAGE_CPU_PROFILE = LIVE && process.env.ORKESTRATOR_AGENT_TEST_ECHO_CPU_PROFILE === "1";
+/**
+ * Opt-in: record a Chromium performance trace of the measured page over each
+ * cell's measured keys, as `trace-<variant>-r<round>.json` (timeline events
+ * only, no screenshots).
+ */
+const PAGE_TRACE = LIVE && process.env.ORKESTRATOR_AGENT_TEST_ECHO_TRACE === "1";
+const TRACE_CATEGORIES = [
+  "devtools.timeline",
+  "disabled-by-default-devtools.timeline",
+  "toplevel",
+  "input",
+  "loading",
+  "v8",
+  "blink.user_timing",
+];
 const PRODUCER = path.join(repositoryRoot, "apps/backend/scripts/terminal-latency/producer.ts");
 const TYPING_TAB = "echo-typing";
 const AGENT_TAB = "echo-agent";
@@ -209,6 +244,9 @@ function summarise(values: number[]) {
   const sorted = [...values].sort((first, second) => first - second);
   return {
     samples: sorted.length,
+    mean: sorted.length
+      ? Number((sorted.reduce((sum, value) => sum + value, 0) / sorted.length).toFixed(1))
+      : null,
     p50: percentile(sorted, 0.5),
     p95: percentile(sorted, 0.95),
     p99: percentile(sorted, 0.99),
@@ -438,18 +476,53 @@ async function installProbe(page: Page) {
       if (frameRunning) requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
+    // Split each key's latency into the keystroke's own command request and
+    // the echo's way back: the page's own `fetch` call time (`sent`), then
+    // resource timing (URLs and timings only) for the rest.
+    const sentAt: number[] = [];
+    const originalFetch = window.fetch;
+    window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/__orkestrator/invoke")) sentAt.push(performance.now());
+      return originalFetch(input, init);
+    }, originalFetch);
+    performance.setResourceTimingBufferSize(100_000);
+    performance.clearResourceTimings();
+    const writes: Record<
+      "sent" | "start" | "queued" | "server" | "duration" | "echoAfterStart",
+      number[]
+    > = { sent: [], start: [], queued: [], server: [], duration: [], echoAfterStart: [] };
+    const recordWrite = () => {
+      if (!armed || armed.keyAt === null || armed.echoAt === null) return;
+      const keyAt = armed.keyAt;
+      const sent = sentAt.find((at) => at >= keyAt);
+      if (sent !== undefined) writes.sent.push(sent - keyAt);
+      sentAt.splice(0);
+      const entry = (performance.getEntriesByType("resource") as PerformanceResourceTiming[]).find(
+        (candidate) =>
+          candidate.name.includes("/__orkestrator/invoke") && candidate.startTime >= keyAt,
+      );
+      if (!entry) return;
+      writes.start.push(entry.startTime - keyAt);
+      writes.queued.push(entry.requestStart - entry.startTime);
+      writes.server.push(entry.responseStart - entry.requestStart);
+      writes.duration.push(entry.duration);
+      writes.echoAfterStart.push(armed.echoAt - entry.startTime);
+    };
     (window as unknown as { __echoProbe: unknown }).__echoProbe = {
       arm(suffix: string) {
         armed = { suffix, keyAt: null, echoAt: null };
       },
       wait(timeoutMs: number) {
         if (armed && armed.echoAt !== null) {
+          recordWrite();
           return Promise.resolve({ keyAt: armed.keyAt, echoAt: armed.echoAt });
         }
         return new Promise<{ keyAt: number | null; echoAt: number | null }>((done) => {
           const finish = () => {
             clearTimeout(timer);
             resolve = null;
+            recordWrite();
             done({ keyAt: armed?.keyAt ?? null, echoAt: armed?.echoAt ?? null });
           };
           const timer = setTimeout(finish, timeoutMs);
@@ -460,7 +533,12 @@ async function installProbe(page: Page) {
       stats() {
         const gaps = frameGaps.splice(0);
         const tasks = longTasks.splice(0);
+        const requests = Object.fromEntries(
+          Object.entries(writes).map(([name, values]) => [name, values.splice(0)]),
+        );
+        performance.clearResourceTimings();
         return {
+          requests,
           longTasks: tasks.length,
           longTaskMs: Math.round(tasks.reduce((sum, value) => sum + value, 0)),
           longestTaskMs: Math.round(Math.max(0, ...tasks)),
@@ -468,6 +546,7 @@ async function installProbe(page: Page) {
         };
       },
       stop() {
+        window.fetch = originalFetch;
         observer.disconnect();
         longTaskObserver?.disconnect();
         host.removeEventListener("keydown", onKey, { capture: true });
@@ -480,8 +559,13 @@ async function installProbe(page: Page) {
 /** Every key typed into each typing session so far, so a suffix stays unique across runs. */
 const typedCount = new Map<string, number>();
 
-async function typeAndTime(page: Page, sessionId: string) {
+async function typeAndTime(page: Page, sessionId: string, profileName?: string) {
   await installProbe(page);
+  const cdp = profileName && PAGE_CPU_PROFILE ? await page.context().newCDPSession(page) : null;
+  if (cdp) {
+    await cdp.send("Profiler.enable");
+    await cdp.send("Profiler.setSamplingInterval", { interval: 500 });
+  }
   await page.locator(`[data-terminal-tab-id="${TYPING_TAB}"]`).click();
   // Discard the probe's setup frames.
   await page.evaluate(() =>
@@ -494,12 +578,23 @@ async function typeAndTime(page: Page, sessionId: string) {
     longTaskMs: number;
     longestTaskMs: number;
     frameGaps: number[];
+    requests: Record<string, number[]>;
   } | null = null;
   for (let index = 0; index < WARMUP_KEYS + KEYS; index += 1) {
     if (index === WARMUP_KEYS) {
       await page.evaluate(() =>
         (window as unknown as { __echoProbe: { stats(): unknown } }).__echoProbe.stats(),
       );
+      if (cdp) await cdp.send("Profiler.start");
+      if (PAGE_TRACE && profileName) {
+        await page
+          .context()
+          .browser()!
+          .startTracing(page, {
+            path: test.info().outputPath(`trace-${profileName}.json`),
+            categories: TRACE_CATEGORIES,
+          });
+      }
     }
     const count = (typedCount.get(sessionId) ?? 0) + 1;
     typedCount.set(sessionId, count);
@@ -531,7 +626,15 @@ async function typeAndTime(page: Page, sessionId: string) {
         latencies.push(result.echoAt - result.keyAt);
       else timeouts += 1;
     }
-    await page.waitForTimeout(KEY_GAP_MS);
+    await page.waitForTimeout(KEY_GAP_MS + keyPhaseOffsetMs(index));
+  }
+  if (PAGE_TRACE && profileName) await page.context().browser()!.stopTracing();
+  if (cdp && profileName) {
+    const { profile } = await cdp.send("Profiler.stop");
+    const file = test.info().outputPath(`page-${profileName}.cpuprofile`);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(profile));
+    await cdp.detach();
   }
   stats = await page.evaluate(() =>
     (
@@ -542,6 +645,7 @@ async function typeAndTime(page: Page, sessionId: string) {
             longTaskMs: number;
             longestTaskMs: number;
             frameGaps: number[];
+            requests: Record<string, number[]>;
           };
           stop(): void;
         };
@@ -551,10 +655,14 @@ async function typeAndTime(page: Page, sessionId: string) {
   await page.evaluate(() =>
     (window as unknown as { __echoProbe: { stop(): void } }).__echoProbe.stop(),
   );
-  const { frameGaps, ...tasks } = stats;
+  const { frameGaps, requests, ...tasks } = stats;
   return {
     keyToEchoMs: { ...summarise(latencies), timeouts },
     frameGapMs: summarise(frameGaps),
+    /** Each key's first command request after its keydown, from resource timing. */
+    keyRequestMs: Object.fromEntries(
+      Object.entries(requests).map(([name, values]) => [name, summarise(values)]),
+    ),
     ...tasks,
   };
 }
@@ -704,6 +812,7 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
     keys: KEYS,
     warmupKeys: WARMUP_KEYS,
     keyGapMs: KEY_GAP_MS,
+    keyPhaseSpreadMs: KEY_PHASE_SPREAD_MS,
     load: LOAD,
     streamDeltas: STREAM_DELTAS,
     commit: spawnSync("git", ["rev-parse", "--short=9", "HEAD"], {
@@ -911,7 +1020,12 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
           .toBe(true);
         const slicesBefore = hiddenTabs ? await idleSlices(measured) : null;
         const startedAt = Date.now();
-        const result = await typeAndTime(measured, typing.get(environment.id)!);
+        const monotonicAtStart = process.hrtime.bigint();
+        const result = await typeAndTime(
+          measured,
+          typing.get(environment.id)!,
+          PAGE_CPU_PROFILE || PAGE_TRACE ? `${variant}-r${round + 1}` : undefined,
+        );
         const endedAt = Date.now();
         const hiddenIdleSlices =
           slicesBefore === null ? null : (await idleSlices(measured)) - slicesBefore;
@@ -941,6 +1055,9 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
         const cell = {
           variant,
           round: round + 1,
+          startedAt: new Date(startedAt).toISOString(),
+          /** The runner's monotonic clock at `startedAt`, to slice a `--cpu-prof` profile. */
+          monotonicStartUs: Number(monotonicAtStart / 1000n),
           durationMs: endedAt - startedAt,
           agentsStreamedThroughout,
           hiddenIdleSlices,
@@ -1196,6 +1313,19 @@ test("echo probe resolves an echo observed before the wait", async ({ page }) =>
     }
   }, TYPING_TAB);
   expect(result).toEqual({ keyAt: expect.any(Number), echoAt: expect.any(Number) });
+});
+
+test("key gaps spread over every phase of a frame", () => {
+  const offsets = Array.from({ length: 200 }, (_, index) => keyPhaseOffsetMs(index));
+  expect(Math.min(...offsets)).toBeGreaterThanOrEqual(0);
+  expect(Math.max(...offsets)).toBeLessThan(KEY_PHASE_SPREAD_MS);
+  // Every quarter of the frame gets a quarter of the keys, within a few.
+  for (let quarter = 0; quarter < 4; quarter += 1) {
+    const inQuarter = offsets.filter(
+      (offset) => Math.floor((offset / KEY_PHASE_SPREAD_MS) * 4) === quarter,
+    ).length;
+    expect(Math.abs(inQuarter - 50)).toBeLessThanOrEqual(3);
+  }
 });
 
 test("harness rejects invalid setup and incomplete measurements", async () => {

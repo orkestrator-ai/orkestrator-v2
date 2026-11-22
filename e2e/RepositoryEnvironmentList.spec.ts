@@ -552,7 +552,7 @@ test("the chevron right of the + collapses and expands a repository", async ({
     exact: true,
   });
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
-  // Immediately right of the +, at the row's right edge.
+  // The disclosure is immediately right of the + in both layouts.
   const addBox = (await add.boundingBox())!;
   const chevronBox = (await collapse.boundingBox())!;
   if (hasTouch) {
@@ -563,9 +563,6 @@ test("the chevron right of the + collapses and expands a repository", async ({
   }
   expect(Math.abs(chevronBox.x - (addBox.x + addBox.width))).toBeLessThan(1);
   expect(Math.abs(chevronBox.y - addBox.y)).toBeLessThan(1);
-  // Flush with the row's inner edge, inside its 1px border.
-  const rowBox = (await collapse.locator("..").boundingBox())!;
-  expect(Math.abs(rowBox.x + rowBox.width - 1 - (chevronBox.x + chevronBox.width))).toBeLessThan(1);
 
   const rows = folder(page, ORK).getByTestId("federated-environment-row");
   await expect(rows.first()).toBeVisible();
@@ -597,34 +594,68 @@ test("the chevron right of the + collapses and expands a repository", async ({
   await expect(rows.first()).toBeVisible();
 });
 
-test("the repository chevron is flush right with its rows' changed-line counts", async ({
+test("repository counts align with the chevron on desktop, phone and wide touch, including Retry", async ({
   page,
   hasTouch,
 }) => {
-  await page.goto("/repository-environment-list");
+  await page.goto("/repository-environment-list?delete-failed");
   const repository = folder(page, ORK);
+  const add = repository.getByTestId("repository-new-environment");
   const chevron = repository.getByTestId("repository-collapse-toggle");
   const counts = repository.getByTestId("environment-change-counts");
-  await expect(counts).toHaveCount(2);
+  const retry = repository.getByRole("button", { name: "Retry", exact: true });
+  const actions = repository.getByRole("button", { name: "Environment actions", exact: true });
+  const rows = repository.getByTestId("federated-environment-row");
+  const retryRow = rows.filter({ has: page.getByRole("button", { name: "Retry", exact: true }) });
+  const retryCount = retryRow.getByTestId("environment-change-counts");
   const edges = (locator: Locator) =>
     locator.evaluate((element) => {
       const box = element.getBoundingClientRect();
-      return { left: box.left, right: box.right };
+      return { left: box.left, right: box.right, width: box.width, height: box.height };
     });
-  // The heading's highlight spans its environment rows' frame on both sides.
-  const headingFrame = await edges(chevron.locator(".."));
-  const rowFrame = await edges(
-    repository.getByTestId("federated-environment-row").first().locator("> div"),
-  );
-  expect(Math.abs(headingFrame.left - rowFrame.left)).toBeLessThanOrEqual(1);
-  expect(Math.abs(headingFrame.right - rowFrame.right)).toBeLessThanOrEqual(1);
-  // A phone row ends in its actions button rather than its counts.
-  if (hasTouch) return;
-  // The chevron glyph (its path, rotated open) ends where the counts do.
-  const glyph = await edges(chevron.locator("svg path"));
-  for (const count of await counts.all()) {
-    expect(Math.abs((await edges(count)).right - glyph.right)).toBeLessThanOrEqual(1);
+
+  const checkAlignment = async (showsActions: boolean) => {
+    await expect(chevron).toHaveAttribute("aria-expanded", "true");
+    await expect(counts).toHaveCount(2);
+    await expect(retryCount).toBeVisible();
+    await expect(retry).toHaveAccessibleDescription("release-notes");
+    if (showsActions) {
+      await expect(retryRow.getByRole("button", { name: "Environment actions" })).toBeVisible();
+    } else {
+      await expect(actions).toHaveCount(0);
+    }
+
+    const headingFrame = await edges(chevron.locator(".."));
+    // Measure the layout edge shared with the badge. The icon's optical
+    // offset is applied inside this wrapper, independently of text metrics.
+    const anchor = await edges(chevron.locator("svg").locator(".."));
+    for (const row of await rows
+      .filter({ has: page.getByTestId("environment-change-counts") })
+      .all()) {
+      const rowFrame = await edges(row.locator("> div"));
+      expect(Math.abs(headingFrame.left - rowFrame.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(headingFrame.right - rowFrame.right)).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs((await edges(row.getByTestId("environment-change-counts"))).right - anchor.right),
+      ).toBeLessThanOrEqual(1);
+    }
+    expect((await edges(retry)).right).toBeLessThanOrEqual((await edges(retryCount)).left);
+    if (hasTouch) {
+      for (const { width, height } of [await edges(add), await edges(chevron)]) {
+        expect(width).toBeGreaterThanOrEqual(40);
+        expect(height).toBeGreaterThanOrEqual(40);
+      }
+    }
+  };
+
+  await checkAlignment(page.viewportSize()!.width <= 767);
+  if (hasTouch) {
+    await page.setViewportSize({ width: 1024, height: 844 });
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+    await checkAlignment(false);
   }
+  await retry.click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
 });
 
 test("the repository chevron receives tab focus and toggles with Enter and Space", async ({

@@ -41,6 +41,7 @@ import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
  * - `?ordering=manual`: environments ordered by hand (`environmentOrder`).
  * - `?offline=<machine>`: that machine is unavailable (its tile dims, its rows go).
  * - `?machine-updates`: older releases across the full machine tile palette.
+ * - `?delete-failed`: release-notes has a failed delete and still shows counts.
  *
  * The fake command node records portal layout writes (`updates`) and writes
  * routed to a machine (`reorders`); it answers each machine's CPU read.
@@ -223,7 +224,7 @@ function view(machine: FakeMachine, connected: boolean): NodeView {
   } as NodeView;
 }
 
-function summary(machine: FakeMachine, connected: boolean): NodeSummary {
+function summary(machine: FakeMachine, connected: boolean, deleteFailed: boolean): NodeSummary {
   const nodeId = machine.nodeId as BackendId;
   let order = 0;
   return {
@@ -259,6 +260,12 @@ function summary(machine: FakeMachine, connected: boolean): NodeSummary {
             environmentType: "local",
             lastActivityAt: new Date(Date.now() - order * 7 * 60_000).toISOString(),
             ...environment,
+            ...(deleteFailed && environment.name === "release-notes"
+              ? {
+                  deletionRequestedAt: "2026-11-06T00:00:00Z",
+                  deletionError: "fixture cleanup refused",
+                }
+              : {}),
           },
           index,
         )!;
@@ -333,6 +340,7 @@ function install() {
     const node = summary(
       params.get("empty") === machine.name ? { ...machine, projects: [] } : machine,
       !offline.has(machine.name),
+      params.has("delete-failed"),
     );
     return machineUpdates ? { ...node, version: "2.38.0" } : node;
   });

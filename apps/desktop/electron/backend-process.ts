@@ -5,6 +5,7 @@ import {
 } from "@orkestrator/protocol/push-events";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
+import { BackendExitWatch, type BackendExitDiagnosis } from "./backend-exit-diagnosis.js";
 import { fromCodedWire } from "@orkestrator/protocol/contract/errors";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -49,6 +50,13 @@ import {
 
 const clientLog = createLogger("backend.client");
 const desktopLog = createLogger("desktop");
+/**
+ * How long an unexpected exit waits for the backend's stdio to close before it
+ * is reported: Bun writes its crash report to stderr as it dies, and `exit` can
+ * precede those lines. Bounded, because a grandchild holding the pipe open
+ * would otherwise delay the report forever.
+ */
+const UNEXPECTED_EXIT_DRAIN_MS = 1_000;
 
 /**
  * Relays one line of the backend's stdio into this process's log. A logger entry
@@ -1213,7 +1221,7 @@ export class BackendProcess {
     /** False when no window will need terminal output from this client's stream. */
     relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
-    onUnexpectedExit?: (error: Error) => void;
+    onUnexpectedExit?: (error: Error, exit: BackendExitDiagnosis) => void;
     onLogPolicyChanged?: BackendLogPolicyListener;
   }): Promise<BackendHttpClient> {
     if (this.client) return this.client;
@@ -1252,7 +1260,7 @@ export class BackendProcess {
     /** False when no window will need terminal output from this client's stream. */
     relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
-    onUnexpectedExit?: (error: Error) => void;
+    onUnexpectedExit?: (error: Error, exit: BackendExitDiagnosis) => void;
     onLogPolicyChanged?: BackendLogPolicyListener;
   }): Promise<BackendHttpClient> {
     const bun = options.isDev ? "bun" : path.join(options.resourceRoot, "bin", "bun");
@@ -1344,14 +1352,15 @@ export class BackendProcess {
     // Line-oriented: production logging tees `console`, so a chunk boundary
     // must not become a log-entry boundary or split a single record. Bounded:
     // a backend line with no newline cannot grow this process's memory.
+    const exitWatch = new BackendExitWatch();
     if (child.stderr) {
       forEachBoundedLine(child.stderr, (line) => {
+        exitWatch.stderrLine(line);
         relayBackendLine("stderr", line, options.onLogPolicyChanged);
       });
     }
 
     let startupComplete = false;
-    let unexpectedExitReported = false;
     let rejectStartup: ((error: Error) => void) | null = null;
     const clearState = () => {
       if (this.child !== child) return;
@@ -1360,16 +1369,33 @@ export class BackendProcess {
       this.child = null;
       this.info = null;
     };
-    const childFailure = (error: Error) => {
+    const childFailure = (
+      error: Error,
+      exit: { exitCode: number | null; signal: string | null },
+    ) => {
       rejectStartup?.(error);
       if (this.child !== child) return;
+      const onUnexpectedExit = startupComplete ? options.onUnexpectedExit : undefined;
+      if (onUnexpectedExit) exitWatch.captureExit();
       clearState();
-      if (startupComplete && !unexpectedExitReported) {
-        unexpectedExitReported = true;
-        options.onUnexpectedExit?.(error);
+      if (!onUnexpectedExit) return;
+
+      const report = () => onUnexpectedExit(error, exitWatch.diagnose(exit));
+      if (child.stdout?.closed !== false && child.stderr?.closed !== false) {
+        report();
+        return;
       }
+      const onClose = () => {
+        clearTimeout(drain);
+        report();
+      };
+      const drain = setTimeout(() => {
+        child.off("close", onClose);
+        report();
+      }, UNEXPECTED_EXIT_DRAIN_MS);
+      child.once("close", onClose);
     };
-    child.once("error", (error) => childFailure(error));
+    child.once("error", (error) => childFailure(error, { exitCode: null, signal: null }));
     child.once("exit", (code, signal) =>
       childFailure(
         // As fields too: the essential log keeps these and never the message.
@@ -1379,22 +1405,28 @@ export class BackendProcess {
           ),
           { exitCode: code ?? undefined, signal: signal ?? undefined },
         ),
+        { exitCode: code, signal },
       ),
     );
 
     try {
       const ready = await new Promise<ReadyMessage>((resolve, reject) => {
-        rejectStartup = reject;
         const timeout = setTimeout(
           () => reject(new Error("Timed out waiting for the backend service")),
           30_000,
         );
+        rejectStartup = (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        };
         if (!child.stdout) {
           clearTimeout(timeout);
           reject(new Error("Backend service stdout is unavailable"));
           return;
         }
         const finish = (message: ReadyMessage) => {
+          if (!rejectStartup) return;
+          exitWatch.ready(child.pid);
           clearTimeout(timeout);
           rejectStartup = null;
           resolve(message);
@@ -1425,7 +1457,8 @@ export class BackendProcess {
     } catch (error) {
       rejectStartup = null;
       clearState();
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null)
+        child.kill("SIGTERM");
       throw error;
     }
   }

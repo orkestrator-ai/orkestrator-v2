@@ -1,5 +1,14 @@
 import { defineLogAreas, ESSENTIAL_ERROR_FIELDS, THROTTLE_LOG_EVENTS } from "./define.js";
 
+/** What `backend.exited` keeps: the error's identity and how the exit was classified. */
+const BACKEND_EXIT_FIELDS = {
+  ...ESSENTIAL_ERROR_FIELDS,
+  exitCause: "label",
+  ranForMs: "number",
+  oomKills: "number",
+  crashReport: "boolean",
+} as const;
+
 export const DESKTOP_LOG_AREAS = defineLogAreas({
   desktop: {
     description: "The Electron main process: startup, windows, quit and the Local backend's life.",
@@ -8,20 +17,21 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
         "An agent-test profile fell back to the default Docker context.",
       "backend.exited": {
         description:
-          "The Local backend exited unexpectedly; Local work is unavailable. `error.exitCode` and `error.signal` say how.",
+          "The Local backend exited unexpectedly; Local work is unavailable. `error.exitCode` and `error.signal` say how, `exitCause` classifies it (`backend-exit.ts`), `ranForMs` is how long it had been ready, `oomKills` the OOM kills its cgroup counted meanwhile (Linux) and `crashReport` whether Bun printed a crash report.",
         essential: true,
-        fields: ESSENTIAL_ERROR_FIELDS,
+        fields: BACKEND_EXIT_FIELDS,
       },
       "backend.exited-recovering": {
         description:
-          "The Local backend exited just after a remote update; relaunching unattended. `error.exitCode` and `error.signal` say how.",
+          "The Local backend exited just after a remote update; relaunching unattended. The same fields as `backend.exited`.",
         essential: true,
-        fields: ESSENTIAL_ERROR_FIELDS,
+        fields: BACKEND_EXIT_FIELDS,
       },
       "backend.keychain-link-remove-failed":
         "An agent-test profile kept a legacy link to the host keychain.",
       "backend.start-failed": {
-        description: "The Local backend did not start; continuing with remote machines.",
+        description:
+          "The Local backend did not start. Saved remote machines can still be used when available.",
         essential: true,
         fields: ESSENTIAL_ERROR_FIELDS,
       },

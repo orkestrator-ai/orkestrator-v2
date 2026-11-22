@@ -9,7 +9,8 @@ Arch host running the AppImage build. Most steps apply to any Linux host.
 
 | Symptom | Process that died | Where it is recorded |
 | --- | --- | --- |
-| "Orkestrator AI backend stopped … signal SIGKILL" | Local backend (`resources/bin/bun … backend/main.js`) | App log: `[desktop] backend.exited error.message="Backend service exited (code …, signal …)"` |
+| "Orkestrator AI backend stopped … signal SIGKILL" | Local backend (`resources/bin/bun … backend/main.js`) | App log: `[desktop] backend.exited error.message="Backend service exited (code …, signal …)"`; the essential log keeps `exitCause` (`killed`, `crashed`, `terminated`, `exit-code`), `ranForMs`, `oomKills` and `crashReport`, which a self-improvement digest summarizes |
+| Local backend could not start | Local backend launcher | The essential event `backend.start-failed` keeps OS error fields such as `error.code=ENOENT` when the runtime executable is missing. |
 | Window white, backend still reachable from another machine | Main window renderer (`orkestrator-v2 --type=renderer`) | App log: `[DesktopStartup] renderer-gone reason=…`, then `Render frame was disposed before WebFrameMain could be accessed` repeated |
 | App gone, core dump `SIGTRAP` at startup | A relaunched main process | `coredumpctl`; core memory contains `Invalid file descriptor to ICU data` |
 | Core dump `SIGBUS`, `--type=utility` network service, on quit | Chromium child outliving the main process | `coredumpctl`; journal shows `tmp-.mount_orkest….mount: Deactivated` the same second |
@@ -40,6 +41,15 @@ How to read the result:
   the process a signal. It did not crash. Electron's `killed` means "sent
   SIGTERM or otherwise killed externally". Go to section 3; only an audit
   trail can name the sender.
+- **`exitCause=killed` with `oomKills > 0`** means the backend received
+  SIGKILL and its shared Linux cgroup counted at least one OOM victim between
+  readiness and exit. The victim can be any process in that cgroup or its
+  descendants. Check the kernel journal for the victim PID. The digest shows
+  the maximum sampled delta across exits. A zero means a sample was available,
+  and the field is omitted when all samples were unavailable.
+- **`crashReport=true`** means a Bun crash marker appeared on stderr. The app
+  log contains the stderr output just before the exit. The digest counts
+  explicit `crashReport.true` and `crashReport.false` observations.
 - **`crashed`, `oom`, or a core dump with SIGSEGV/SIGABRT** is a real crash.
   Use the `diagnose-crash` skill (`coredumpctl`, gdb).
 - **No OOM:** check `journalctl -k | grep -i oom` and the app scope's

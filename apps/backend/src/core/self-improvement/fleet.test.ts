@@ -116,6 +116,68 @@ describe("signals from several machines", () => {
     expect(disk.score).toBe(alone.score);
   });
 
+  test.each(["backend.exited", "backend.exited-recovering"])(
+    "merges %s evidence even when the lead machine has only historical exits",
+    (event) => {
+      const from = NOW - DAY;
+      const exited = (fields: EssentialLine["fields"], count: number) =>
+        repeat(from, count, HOUR, {
+          level: "error",
+          area: "desktop",
+          event,
+          fields: { "error.name": "Error", ...fields },
+        });
+      const killed = { exitCause: "killed", "error.signal": "SIGKILL", crashReport: false };
+      const merged = mergeMachineSignals([
+        {
+          nodeId: "a",
+          name: "Desk",
+          extracted: extractSignals(bundleData(machine("2.30.0", exited({}, 5)), "a")),
+        },
+        {
+          nodeId: "b",
+          name: "VPS",
+          extracted: extractSignals(
+            bundleData(machine("2.31.0", exited({ ...killed, oomKills: 3, ranForMs: 8 }, 2)), "b"),
+          ),
+        },
+        {
+          nodeId: "c",
+          name: "Laptop",
+          extracted: extractSignals(
+            bundleData(
+              machine("2.31.0", [
+                ...exited({ ...killed, oomKills: 0 }, 1),
+                ...exited(
+                  {
+                    exitCause: "crashed",
+                    "error.signal": "SIGABRT",
+                    crashReport: true,
+                    ranForMs: 15,
+                  },
+                  1,
+                ),
+              ]),
+              "c",
+            ),
+          ),
+        },
+      ]);
+      const exits = merged.signals.find((signal) => signal.signature === `desktop:${event}:Error`);
+      expect(exits?.count).toBe(9);
+      expect(exits?.evidence).toMatchObject({
+        "exitCause.killed": 3,
+        "exitCause.crashed": 1,
+        "error.signal.SIGKILL": 3,
+        "error.signal.SIGABRT": 1,
+        "crashReport.false": 3,
+        "crashReport.true": 1,
+        oomKills: 3,
+        ranForMs: 15,
+      });
+    },
+  );
+
   test("rates use only the hours of machines that observed their source", () => {
     const watched = extractSignals(
       bundleData({

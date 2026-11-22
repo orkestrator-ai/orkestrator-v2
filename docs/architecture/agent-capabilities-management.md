@@ -329,7 +329,16 @@ review), whose boundary admits no skill frontmatter hooks or tool grants.
   delivers it whole). Other providers have no per-session plugin channel in
   their pinned bridges, so a launch-only selection for Codex, Cursor, Grok,
   OpenCode or Pi, or for a container, is still reported as unsupported and a
-  required one stops the launch.
+  required one stops the launch. Re-checked 2026-11-22 against the pins: Codex
+  app-server 0.169.0 has `skills/extraRoots/set`, but it sets one list per
+  app-server connection, and the bridge runs one app-server for every session
+  of an environment; the Cursor SDK 1.4.1 loads skills from `local.dirs` only
+  with the `project` setting source, which on the host also loads the
+  repository's rules and MCP servers and is off unless the environment trusts
+  project resources; Grok (ACP) and OpenCode 2 take no per-session skill or
+  plugin set. The Pi SDK 1.5.2's `additionalSkillPaths` is per session, but
+  the bridge passes it only for coordinator project skills; carrying a
+  session-private set through it is a Pi bridge change.
 
 **Added accounts.** Added Claude and Codex accounts link their `skills`,
 `commands`, `agents` (Claude) and `skills`, `prompts` (Codex) directories to
@@ -527,14 +536,16 @@ credential-free listing. Run 2026-11-19 on Linux x64:
 | Pi SDK 1.5.2 (same version as the pinned `pi` binary) | Skills in `~/.pi/agent/skills` and `~/.agents/skills` and templates in `~/.pi/agent/prompts` are listed, also with project resources off; the repository's `.pi/` resources are not; `~/.claude/skills` is never read | the bridge's resource-only loader (`readResourceCommands`), `bridges/pi-bridge/src/capability-delivery-conformance.test.ts`, default tier | pass |
 | Claude Code 2.1.326 | The `init` event reports the session plugin's content-addressed directory, which `loadedPrivatePlugin` (`runtime-proof.ts`) matches; without `--plugin-dir` it does not | `init` event `plugins[].path` | pass |
 | Grok Build 1.0.88 | Executor skills in `~/.grok/skills` and `~/.agents/skills` are listed at their installed `SKILL.md` paths, graded `advertised` by path, and gone after removal | `grok inspect --json` (no login needed) | pass |
-| Cursor SDK 1.4.1 | Not run: the SDK discovers skills only inside an authenticated run and has no CLI or credential-free listing; the bridge's own read-only skill tool for coordinators is covered by `bridges/cursor-bridge` tests | | skipped |
+| Cursor SDK 1.4.1 | Executor skill in `~/.cursor/skills` (the isolated profile's own HOME) is in an authenticated run's skill list by its nonce name, with no tool used; after removal the directory is gone and a new session answers `NONE`. Rechecked on macOS arm64 in the `cap-cursor-review-8314` profile, two billed turns | an authenticated Cursor run (`e2e/agent-testing/capability-cursor-live.spec.ts`; the SDK has no credential-free listing) | pass |
 
 Matrix levels follow the evidence: Claude native-plugin install, update and
 remove are `supported`. OpenCode subagents and commands stay `unqualified`:
 the binary lists the agent, but Orkestrator's OpenCode 2 session configuration
 mirror is not covered, and OpenCode 2.3.1 has no credential-free command
-listing. Codex prompts, Cursor commands and Cursor skill loading stay
-as they were; Grok skill delivery is proven against Grok's own listing (re-run
+listing. Codex prompts and Cursor commands stay as they were (Cursor
+commands are invoked by a user, not listed to the model, and the bridge has no
+command catalogue, so a run cannot show one loaded); Cursor skill delivery is
+proven against an authenticated run; Grok skill delivery is proven against Grok's own listing (re-run
 2026-11-19, all ten live cases pass on Linux x64). The Pi run found two defects, both fixed: the Pi bridge loaded
 no skill or template at all unless the session enabled project resources
 (user-level ones now load; the project's stay behind project trust), and the
@@ -907,7 +918,9 @@ the setup together with the approved operation.
 - Trees are bounded (2,000 files, 32 MiB, 8 MiB per file, depth 24); special
   files and escaping links are refused.
 - Writes go through `confinedPath` under a location the backend chose; no
-  command takes a destination path or a command to run.
+  command takes a destination path or a command to run. Agent-test provider
+  homes and destinations are checked under the canonical profile data directory
+  at filesystem access. Symlinked directories there are refused.
 - MCP definitions keep environment and header keys only; literal values are
   removed before computing the artifact digest. Detected credentials block package
   inspection and revision approval. Git repository URLs with embedded credentials
@@ -948,7 +961,7 @@ the setup together with the approved operation.
 
 ## Not yet qualified
 
-Live conformance against the Cursor SDK (no credential-free listing), runtime
+Runtime
 proof for providers other than Claude sessions and Grok's machine listing, a live
 Orkestrator OpenCode 2 session loading delivered agents and commands, switching
 another machine's Codex plugins from this window, per-session delivery for
@@ -994,9 +1007,14 @@ Command-node handover of capabilities is proven over the real `NodeService`
 handover and node links on the in-memory network (`handover.test.ts`,
 `launch-authority.test.ts`) and across two real backends with real gateways on
 loopback (`tests/capabilities-two-node.integration.test.ts`: delivery, offline
-catch-up, a leaf launch, handover to the leaf). Not proven on real machines: a
-third machine moving with the handover (loopback routes do not move) and
-separate OS processes. Capability authority moves with the handover as a whole:
+catch-up, a leaf launch, handover to the leaf), and between two real machines
+by `scripts/qa-capabilities-two-machine.ts` (2026-11-22, macOS and Linux:
+isolated backends of one commit linked through an SSH forward; delivery,
+offline convergence to the latest revision, handover with epoch 2 and the
+old controller refused). The check observes the copies on disk after reconnect.
+It does not measure intermediate installations. Not proven on real machines: a leaf launch, a third
+machine moving with the handover (the forward is a loopback route, which does
+not move), and an unknown outcome from a write cut off mid-flight. Capability authority moves with the handover as a whole:
 machines the user leaves behind with the old command node keep what they last
 applied but get no new plans until they join the new one, and a node that
 handed over does not take the authority back unless command is handed back to

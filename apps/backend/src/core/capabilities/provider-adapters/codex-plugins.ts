@@ -33,7 +33,7 @@ import {
   TomlEditError,
   updateTomlEntry,
 } from "../../mcp-management/index.js";
-import { CapabilityError, writeFileAtomically } from "../security.js";
+import { assertCapabilityDirectory, CapabilityError, writeFileAtomically } from "../security.js";
 import type { ProviderCli } from "./provider-cli.js";
 
 const PLUGIN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}@[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -96,6 +96,7 @@ export async function setCodexPluginEnabled(input: {
   pluginId: string;
   enabled: boolean;
   installed: readonly CodexInstalledPlugin[];
+  isolationRoot?: string;
   withSourceLock?: ConfigLock;
 }): Promise<CodexPluginToggleResult> {
   const { pluginId, enabled } = input;
@@ -110,14 +111,17 @@ export async function setCodexPluginEnabled(input: {
   }
   const file = path.join(input.codexHome, "config.toml");
   const lock = input.withSourceLock ?? sourceLock.withLock.bind(sourceLock);
-  return lock(file, () => editCodexPluginFlag(file, pluginId, enabled));
+  return lock(file, () => editCodexPluginFlag(file, pluginId, enabled, input.isolationRoot));
 }
 
 async function editCodexPluginFlag(
   file: string,
   pluginId: string,
   enabled: boolean,
+  isolationRoot?: string,
 ): Promise<CodexPluginToggleResult> {
+  const directory = path.dirname(file);
+  assertCapabilityDirectory(directory, isolationRoot);
   const stat = await fs.lstat(file).catch(() => null);
   if (!stat?.isFile()) {
     throw new CapabilityError(
@@ -165,14 +169,16 @@ async function editCodexPluginFlag(
     );
   }
   // Compare-and-swap against a writer (Codex, MCP settings) that changed the file meanwhile.
+  assertCapabilityDirectory(directory, isolationRoot);
   if ((await fs.readFile(file, "utf8")) !== text) {
     throw new CapabilityError(
       "conflict",
       "Codex's config.toml changed while it was being edited; try again.",
     );
   }
-  await writeFileAtomically(file, next, stat.mode & 0o777);
+  await writeFileAtomically(file, next, stat.mode & 0o777, isolationRoot);
 
+  assertCapabilityDirectory(directory, isolationRoot);
   const after = pluginEntry(parseToml(await fs.readFile(file, "utf8")), pluginId);
   if (after?.enabled !== enabled) {
     throw new CapabilityError(
@@ -185,7 +191,12 @@ async function editCodexPluginFlag(
 
 /** Reads Codex's installed list, flips the flag, and confirms the change with Codex itself. */
 export async function toggleCodexPlugin(
-  deps: { codexHome: string; cli: ProviderCli; withSourceLock?: ConfigLock },
+  deps: {
+    codexHome: string;
+    cli: ProviderCli;
+    isolationRoot?: string;
+    withSourceLock?: ConfigLock;
+  },
   pluginId: string,
   enabled: boolean,
 ): Promise<CodexPluginToggleResult> {
@@ -203,6 +214,7 @@ export async function toggleCodexPlugin(
     pluginId,
     enabled,
     installed: await list(),
+    isolationRoot: deps.isolationRoot,
     ...(deps.withSourceLock ? { withSourceLock: deps.withSourceLock } : {}),
   });
   const confirmed = (await list()).find((entry) => entry.pluginId === pluginId);

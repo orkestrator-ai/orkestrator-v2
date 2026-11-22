@@ -93,6 +93,7 @@ export default defineConfig({
     "conditional-reads-live.spec.ts",
     "transcript-read-bytes-live.spec.ts",
     "mcp-apply-live.spec.ts",
+    "capability-cursor-live.spec.ts",
     "claude-warm-runtime-live.spec.ts",
     "mcp-overlay-recovery.spec.ts",
     "mcp-overlay-terminal.spec.ts",

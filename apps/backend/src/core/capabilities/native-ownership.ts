@@ -16,7 +16,7 @@
  * match the recorded digest has **local changes** (drift) and is preserved
  * until the user decides.
  */
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -33,6 +33,7 @@ import {
   CAPABILITY_MARKER_FILE,
   type PackageFile,
   CapabilityError,
+  assertCapabilityDirectory,
   readPackageTree,
   recoverDirectoryReplacement,
   recoverLocationReplacements,
@@ -47,6 +48,8 @@ export interface CapabilityHomes {
   claudeConfigDir: string;
   codexHome: string;
   xdgConfigHome: string;
+  /** Canonical data directory for agent-test filesystem access. */
+  isolationRoot?: string;
 }
 
 export function defaultCapabilityHomes(env: NodeJS.ProcessEnv = process.env): CapabilityHomes {
@@ -74,6 +77,59 @@ export function testCapabilityHomes(home: string): CapabilityHomes {
   };
 }
 
+/**
+ * The homes an `agent-test` backend writes capabilities into. Never the
+ * host's: by default a directory of the data directory's own
+ * (`capability-test-home`), which no agent reads. An isolated `dev:test`
+ * profile (`ORKESTRATOR_AGENT_TEST_ISOLATED=1`) gives its backend and bridges
+ * a HOME, CLAUDE_CONFIG_DIR, CODEX_HOME and XDG_CONFIG_HOME under its data
+ * directory (`createBackendProcessEnvironment`); when every one of them is
+ * there, those are the homes, so a delivered capability reaches the
+ * profile's own agents and a live spec can qualify it. One home outside the
+ * data directory falls back to `capability-test-home` for all of them.
+ */
+export function agentTestCapabilityHomes(
+  dataDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CapabilityHomes {
+  const root = path.resolve(dataDir);
+  const isolationRoot = realpathSync(root);
+  const home = env.HOME?.trim();
+  let selected = testCapabilityHomes(path.join(root, "capability-test-home"));
+  if (env.ORKESTRATOR_AGENT_TEST_ISOLATED === "1" && home && path.isAbsolute(home)) {
+    const configured = {
+      home: path.resolve(home),
+      claudeConfigDir: path.resolve(env.CLAUDE_CONFIG_DIR?.trim() || path.join(home, ".claude")),
+      codexHome: path.resolve(env.CODEX_HOME?.trim() || path.join(home, ".codex")),
+      xdgConfigHome: path.resolve(env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config")),
+    };
+    if (
+      Object.values(configured).every((candidate) => {
+        const relative = path.relative(root, candidate);
+        return (
+          relative !== "" &&
+          relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        );
+      })
+    )
+      selected = configured;
+  }
+  const confined = (candidate: string) => {
+    const directory = path.join(isolationRoot, path.relative(root, candidate));
+    assertCapabilityDirectory(directory, isolationRoot);
+    return directory;
+  };
+  return {
+    home: confined(selected.home),
+    claudeConfigDir: confined(selected.claudeConfigDir),
+    codexHome: confined(selected.codexHome),
+    xdgConfigHome: confined(selected.xdgConfigHome),
+    isolationRoot,
+  };
+}
+
 const LOCATION_PATHS: Record<string, (homes: CapabilityHomes) => string> = {
   "claude-user-skills": (h) => path.join(h.claudeConfigDir, "skills"),
   "agents-shared-skills": (h) => path.join(h.home, ".agents", "skills"),
@@ -96,7 +152,9 @@ export function locationDirectory(locationId: string, homes: CapabilityHomes): s
   if (!resolve || !capabilityLocation(locationId)) {
     throw new CapabilityError("invalid-request", "Unknown capability location.");
   }
-  return resolve(homes);
+  const directory = resolve(homes);
+  assertCapabilityDirectory(directory, homes.isolationRoot);
+  return directory;
 }
 
 export interface OwnershipMarker {
@@ -148,8 +206,9 @@ export async function readMarker(
 
 export async function readLocationIndex(
   directory: string,
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; isolationRoot?: string } = {},
 ): Promise<LocationIndex> {
+  assertCapabilityDirectory(directory, options.isolationRoot);
   const value = (await readJson(
     path.join(directory, CAPABILITY_LOCATION_INDEX),
   )) as Partial<LocationIndex> | null;
@@ -174,10 +233,16 @@ export async function readLocationIndex(
   return { formatVersion: 1, files };
 }
 
-export async function writeLocationIndex(directory: string, index: LocationIndex): Promise<void> {
+export async function writeLocationIndex(
+  directory: string,
+  index: LocationIndex,
+  isolationRoot?: string,
+): Promise<void> {
   await writeFileAtomically(
     path.join(directory, CAPABILITY_LOCATION_INDEX),
     `${JSON.stringify(index, null, 2)}\n`,
+    0o644,
+    isolationRoot,
   );
 }
 
@@ -233,13 +298,18 @@ export async function installedDigest(
   location: CapabilityLocation,
   directory: string,
   entry: string,
-  options: { recover?: boolean; recordedDigest?: string } = {},
+  options: { recover?: boolean; recordedDigest?: string; isolationRoot?: string } = {},
 ): Promise<string | null> {
+  assertCapabilityDirectory(directory, options.isolationRoot);
   try {
     if (location.layout === "directory") {
       const destination = path.join(directory, entry);
       if (options.recover !== false) recoverDirectoryReplacement(destination);
-      const files = await readPackageTree(destination);
+      assertCapabilityDirectory(destination, options.isolationRoot);
+      const files = await readPackageTree(
+        destination,
+        options.isolationRoot ? { within: directory } : {},
+      );
       return treeDigest(files);
     }
     const target = path.join(directory, entry);
@@ -266,17 +336,25 @@ export async function listLocation(
   limit = 500,
 ): Promise<LocatedItem[]> {
   const directory = locationDirectory(location.id, homes);
-  if (location.layout === "directory") await recoverLocationReplacements(directory);
+  const { isolationRoot } = homes;
+  if (location.layout === "directory") await recoverLocationReplacements(directory, isolationRoot);
+  assertCapabilityDirectory(directory, isolationRoot);
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
-  const index = location.layout === "file" ? await readLocationIndex(directory) : null;
+  const index =
+    location.layout === "file" ? await readLocationIndex(directory, { isolationRoot }) : null;
   const items: LocatedItem[] = [];
   for (const entry of entries.slice(0, limit)) {
     if (entry.name.startsWith(".")) continue;
     if (location.layout === "directory") {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      const skillFile = path.join(directory, entry.name, "SKILL.md");
-      const exists = await fs.stat(skillFile).catch(() => null);
+      const itemDirectory = path.join(directory, entry.name);
+      assertCapabilityDirectory(itemDirectory, isolationRoot);
+      const skillFile = path.join(itemDirectory, "SKILL.md");
+      const exists = await (isolationRoot ? fs.lstat(skillFile) : fs.stat(skillFile)).catch(
+        () => null,
+      );
       if (!exists?.isFile()) continue;
+      assertCapabilityDirectory(itemDirectory, isolationRoot);
       const marker = parseMarker(
         await readJson(path.join(directory, entry.name, CAPABILITY_MARKER_FILE)),
       );
@@ -285,7 +363,7 @@ export async function listLocation(
         name: entry.name,
         entry: entry.name,
         managed: marker,
-        digest: await installedDigest(location, directory, entry.name),
+        digest: await installedDigest(location, directory, entry.name, { isolationRoot }),
       });
     } else {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
@@ -297,6 +375,7 @@ export async function listLocation(
         managed,
         digest: await installedDigest(location, directory, entry.name, {
           recordedDigest: managed?.digest,
+          isolationRoot,
         }),
       });
     }

@@ -25,8 +25,10 @@ import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { ControlMcpInvoker } from "../../apps/backend/src/core/control-shared-actions.ts";
+import { watchChild } from "./owned-process.ts";
 
 export const ROOT = path.resolve(import.meta.dir, "..", "..");
 
@@ -57,7 +59,7 @@ function directoryOf(executable: string): string | null {
 export function backendEnvironment(
   base: Readonly<Record<string, string | undefined>>,
   node: { readonly home: string; readonly tmp: string; readonly token: string },
-  pathDirectories: readonly string[] = [directoryOf("bun"), directoryOf("git")].filter(
+  pathDirectories: readonly string[] = [path.dirname(process.execPath), directoryOf("git")].filter(
     (entry): entry is string => entry !== null,
   ),
 ): Record<string, string> {
@@ -140,6 +142,7 @@ function errorText(value: unknown): string {
 /** One backend of this checkout in a two-node pair. */
 export class PeerNode {
   child: ChildProcess | null = null;
+  private process: ReturnType<typeof watchChild> | null = null;
   readonly output: string[] = [];
   /** `get_node_status().nodeId`, once started. */
   id = "";
@@ -152,6 +155,8 @@ export class PeerNode {
     readonly dir: string,
     readonly port: number,
     readonly token: string,
+    private readonly sourceRoot = ROOT,
+    private readonly abort?: AbortSignal,
   ) {}
 
   get origin(): string {
@@ -166,6 +171,7 @@ export class PeerNode {
     pathname: string,
     init: { method?: string; body?: unknown } = {},
   ): Promise<{ status: number; json: unknown }> {
+    const timeout = AbortSignal.timeout(120_000);
     const response = await fetch(`${this.origin}${pathname}`, {
       method: init.method ?? (init.body === undefined ? "GET" : "POST"),
       headers: {
@@ -173,7 +179,7 @@ export class PeerNode {
         ...(init.body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-      signal: AbortSignal.timeout(120_000),
+      signal: this.abort ? AbortSignal.any([timeout, this.abort]) : timeout,
     });
     const text = await response.text();
     try {
@@ -221,17 +227,27 @@ export class PeerNode {
       path.join(this.dir, "worktrees"),
       ...(this.role === "command" ? ["--command-node"] : []),
     ];
-    const child = spawn("bun", [path.join(ROOT, "apps", "backend", "src", "main.ts"), ...args], {
-      cwd: path.join(ROOT, "apps", "backend"),
+    this.abort?.throwIfAborted();
+    const backend = path.join(this.sourceRoot, "apps", "backend");
+    const child = spawn(process.execPath, [path.join(backend, "src", "main.ts"), ...args], {
+      cwd: backend,
       env: backendEnvironment(process.env, { home, tmp, token: this.token }),
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const owned = watchChild(child);
+    this.process = owned;
     this.child = child;
     child.stdout!.on("data", (chunk: Buffer) => this.output.push(chunk.toString()));
     child.stderr!.on("data", (chunk: Buffer) => this.output.push(chunk.toString()));
     const deadline = Date.now() + 120_000;
     while (Date.now() < deadline) {
-      if (child.exitCode !== null || child.signalCode !== null) {
+      this.abort?.throwIfAborted();
+      if (
+        owned.failure() ||
+        owned.closed() ||
+        child.exitCode !== null ||
+        child.signalCode !== null
+      ) {
         throw new SetupError(
           `${this.label} exited early (${child.exitCode ?? child.signalCode}): ${
             this.output.join("").match(/\w*Error: [^\n]*/u)?.[0] ?? "no error line"
@@ -243,21 +259,16 @@ export class PeerNode {
         this.id = (await this.invoke<{ nodeId: string }>("get_node_status")).nodeId;
         return;
       } catch {
-        await Bun.sleep(500);
+        await delay(500, undefined, { signal: this.abort });
       }
     }
     throw new SetupError(`${this.label} did not answer within 120 s.`);
   }
 
   async stop(): Promise<void> {
-    const child = this.child;
+    await this.process?.stop(15_000);
+    this.process = null;
     this.child = null;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    child.kill("SIGTERM");
-    const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
-    await exited;
-    clearTimeout(timer);
   }
 }
 
@@ -266,6 +277,8 @@ export async function makeNode(input: {
   name: string;
   role: Role;
   root: string;
+  sourceRoot?: string;
+  signal?: AbortSignal;
 }): Promise<PeerNode> {
   const dir = await mkdtemp(path.join(input.root, `${input.name.toLowerCase()}-`));
   return new PeerNode(
@@ -274,6 +287,8 @@ export async function makeNode(input: {
     dir,
     await freePort(),
     randomBytes(24).toString("base64url"),
+    input.sourceRoot,
+    input.signal,
   );
 }
 
@@ -283,18 +298,20 @@ export async function until<T>(
   read: () => Promise<T>,
   ok: (value: T) => boolean,
   ms = 60_000,
+  signal?: AbortSignal,
 ): Promise<T> {
   const deadline = Date.now() + ms;
   let last: T | undefined;
   let lastError = "";
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     try {
       last = await read();
       if (ok(last)) return last;
     } catch (error) {
       lastError = String(error).slice(0, 200);
     }
-    await Bun.sleep(500);
+    await delay(500, undefined, { signal });
   }
   throw new Error(
     `Timed out waiting for ${label}: ${JSON.stringify(last)?.slice(0, 300) ?? lastError}`,

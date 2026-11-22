@@ -664,6 +664,6 @@ describe.skipIf(!grok)(`Grok Build ${PINNED_TOOLCHAIN_VERSIONS.grok}`, () => {
 // Pi is qualified through its pinned SDK (bridges/pi-bridge,
 // capability-delivery-conformance.test.ts). The Cursor SDK has no
 // credential-free listing: it discovers skills only inside an authenticated
-// run, so its entries stay `unqualified` here; the bridge's own read-only
-// skill tool is qualified in bridges/cursor-bridge.
-test.skip("Cursor SDK: no credential-free listing qualified", () => {});
+// run, so it is qualified by a billed run in an isolated dev:test profile
+// instead (e2e/agent-testing/capability-cursor-live.spec.ts).
+test.skip("Cursor SDK: qualified by e2e/agent-testing/capability-cursor-live.spec.ts", () => {});

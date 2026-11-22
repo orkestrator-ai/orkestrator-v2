@@ -44,6 +44,7 @@ import {
 
 import type { CapabilityHomes } from "../native-ownership.js";
 import {
+  assertCapabilityDirectory,
   boundedReason,
   CapabilityError,
   readPackageTree,
@@ -280,7 +281,15 @@ export function parseClaudeMarketplaceList(stdout: string): ClaudeMarketplace[] 
 }
 
 export function claudeMarketplaceDirectory(homes: CapabilityHomes): string {
-  return path.join(homes.claudeConfigDir, MARKETPLACE_DIRECTORY);
+  const directory = path.join(homes.claudeConfigDir, MARKETPLACE_DIRECTORY);
+  assertCapabilityDirectory(directory, homes.isolationRoot);
+  return directory;
+}
+
+function claudePluginCache(homes: CapabilityHomes): string {
+  const directory = path.join(homes.claudeConfigDir, "plugins");
+  assertCapabilityDirectory(directory, homes.isolationRoot);
+  return directory;
 }
 
 function digestHex(digest: string): string {
@@ -330,7 +339,15 @@ export class ClaudePluginAdapter {
   }
 
   private pluginDir(name: string, digest: string): string {
-    return path.join(this.marketplaceDir, "plugins", name, digestHex(digest));
+    const homes = this.deps.homes();
+    const directory = path.join(
+      claudeMarketplaceDirectory(homes),
+      "plugins",
+      name,
+      digestHex(digest),
+    );
+    assertCapabilityDirectory(directory, homes.isolationRoot);
+    return directory;
   }
 
   private qualified(name: string): string {
@@ -421,10 +438,7 @@ export class ClaudePluginAdapter {
         observed,
       };
     }
-    const cached = await digestUnder(
-      path.join(homes.claudeConfigDir, "plugins"),
-      entry.installPath,
-    );
+    const cached = await digestUnder(claudePluginCache(homes), entry.installPath);
     if (cached !== digest) {
       return {
         ok: false,
@@ -450,10 +464,7 @@ export class ClaudePluginAdapter {
       const entry = listed.find((plugin) => plugin.id === this.qualified(name));
       const source = entry ? await digestUnder(this.marketplaceDir, entry.readFromFolder) : null;
       const cached = entry
-        ? await digestUnder(
-            path.join(this.deps.homes().claudeConfigDir, "plugins"),
-            entry.installPath,
-          )
+        ? await digestUnder(claudePluginCache(this.deps.homes()), entry.installPath)
         : null;
       const digest = source === managed.digest ? cached : source;
       result.push({
@@ -478,6 +489,8 @@ export class ClaudePluginAdapter {
     await writeFileAtomically(
       path.join(this.marketplaceDir, INDEX_FILE),
       `${JSON.stringify(index, null, 2)}\n`,
+      0o644,
+      this.deps.homes().isolationRoot,
     );
   }
 
@@ -496,6 +509,8 @@ export class ClaudePluginAdapter {
         null,
         2,
       )}\n`,
+      0o644,
+      this.deps.homes().isolationRoot,
     );
   }
 
@@ -504,7 +519,7 @@ export class ClaudePluginAdapter {
     const directory = this.pluginDir(name, digest);
     const existing = await digestUnder(this.marketplaceDir, directory);
     if (existing === digest) return;
-    await replaceDirectoryAtomically(directory, files);
+    await replaceDirectoryAtomically(directory, files, [], this.deps.homes().isolationRoot);
     if ((await digestUnder(this.marketplaceDir, directory)) !== digest) {
       throw new CapabilityError(
         "unsafe-content",
@@ -516,13 +531,18 @@ export class ClaudePluginAdapter {
   /** Removes digest directories of `name` other than `keep`. */
   private async pruneRevisions(name: string, keep: string | null): Promise<void> {
     const parent = path.join(this.marketplaceDir, "plugins", name);
+    const { isolationRoot } = this.deps.homes();
+    assertCapabilityDirectory(parent, isolationRoot);
     const entries = await fs.readdir(parent).catch(() => [] as string[]);
     for (const entry of entries) {
       if (keep && entry === digestHex(keep)) continue;
       if (!/^[0-9a-f]{64}$/.test(entry)) continue;
-      await removeManagedPath(parent, entry).catch(() => undefined);
+      await removeManagedPath(parent, entry, isolationRoot).catch(() => undefined);
     }
-    if (!keep) await fs.rmdir(parent).catch(() => undefined);
+    if (!keep) {
+      assertCapabilityDirectory(parent, isolationRoot);
+      await fs.rmdir(parent).catch(() => undefined);
+    }
   }
 
   /** Registers the marketplace with Claude, refusing a same-named one Orkestrator did not add. */
@@ -585,10 +605,7 @@ export class ClaudePluginAdapter {
       const homes = this.deps.homes();
       if (input.force) {
         for (const entry of enabledExternal) {
-          const cached = await digestUnder(
-            path.join(homes.claudeConfigDir, "plugins"),
-            entry.installPath,
-          );
+          const cached = await digestUnder(claudePluginCache(homes), entry.installPath);
           if (cached === digest && !owner) {
             return {
               status: "installed-next-session",

@@ -1474,6 +1474,28 @@ ORKESTRATOR_AGENT_TEST_PROFILE=mcp-fake ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
   --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts
 ```
 
+The live Cursor capability spec (`e2e/agent-testing/capability-cursor-live.spec.ts`)
+has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_CAPABILITIES=1`, and makes two
+billed Cursor turns. It authors a skill whose name carries a fresh nonce, adds
+it to My setup for Cursor alone through the capability commands, and checks
+that the executor wrote it to the profile's own `~/.cursor/skills` (an
+isolated profile's capability homes are its own provider homes,
+`agentTestCapabilityHomes`). It then asks a Cursor session, with tools
+forbidden, for its skills with the nonce's prefix; the reply must name the
+skill and the turn must use no tool. After removal through the same commands
+the directory must be gone, and a fresh session must not name the skill. A
+missing Cursor login skips. `ORKESTRATOR_AGENT_TEST_CAPABILITY_MODEL` picks
+the model. The summary goes to
+`output/agent-testing/<run>/capability-cursor-live/cursor.json`.
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile cap-cursor-live \
+  --fixture --agent-platforms cursor --credential-source cursor --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=cap-cursor-live ORKESTRATOR_AGENT_TEST_LIVE_CAPABILITIES=1 \
+  mise run test:logged -- --name capability-cursor-live -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts capability-cursor-live.spec.ts --workers=1
+```
+
 The live idle-observation spec (`e2e/agent-testing/idle-observation-live.spec.ts`)
 has its own opt-in, `ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1`. For each
 provider in `ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS` (default all six) it runs

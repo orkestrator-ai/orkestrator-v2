@@ -21,7 +21,7 @@ import {
   type WorktreeSnapshotRevisionsSnapshot,
   type WorktreeSnapshotState,
 } from "@orkestrator/protocol/worktree-snapshots";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
 import {
   AdhocWorktreeReads,
   responseDigest,

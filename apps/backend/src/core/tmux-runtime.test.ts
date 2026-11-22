@@ -1,7 +1,7 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
-import { deferred, flushMicrotasks, ManualTime } from "./recurring-test-support.js";
+import { deferred, flushMicrotasks, ManualTime } from "./recurring/test-support.js";
 import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
 import { TmuxBackend } from "./tmux-backend.js";

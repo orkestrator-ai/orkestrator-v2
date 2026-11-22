@@ -10,7 +10,7 @@ import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environment-name.js";
 import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("tmux");

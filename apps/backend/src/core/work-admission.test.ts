@@ -8,10 +8,10 @@ import {
   type AdmissionPoolName,
   type AdmissionRequest,
 } from "./work-admission.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
-import { RecurringScheduler } from "./recurring-scheduler.js";
-import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
+import { RecurringDiagnosticsRegistry } from "./recurring/diagnostics.js";
+import { RecurringScheduler } from "./recurring/scheduler.js";
+import { ManualTime, deferred, flushMicrotasks } from "./recurring/test-support.js";
 
 const SECRET_TARGET = "/Users/alice/secret-repo#ghp_TOKEN123";
 

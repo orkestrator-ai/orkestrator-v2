@@ -22,7 +22,7 @@ import {
   selectGraphAdmissions,
 } from "./graph-run-scheduling.js";
 import type { GraphRunService } from "./graph-run-service.js";
-import { ManualTime, advanceKeyedWork } from "./recurring-test-support.js";
+import { ManualTime, advanceKeyedWork } from "./recurring/test-support.js";
 
 const worlds: GraphRunWorld[] = [];
 

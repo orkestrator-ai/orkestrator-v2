@@ -7,7 +7,7 @@ import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import { environmentToPrMonitorTarget } from "../commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
-import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry } from "../recurring/diagnostics.js";
 import { createEnvironment, type StorageService } from "../storage.js";
 
 for (const initialized of [false, true]) {

@@ -35,8 +35,7 @@ import {
   type SystemUsageSnapshot,
 } from "./system-usage.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkDiagnostics, recurringWorkMetrics } from "./recurring/index.js";
 import type { KeyedWorkflowOwner } from "./workflows/index.js";
 
 /**

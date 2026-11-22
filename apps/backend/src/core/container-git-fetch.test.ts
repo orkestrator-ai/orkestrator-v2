@@ -16,8 +16,8 @@ import {
   type ContainerFetchScope,
 } from "./container-git-fetch.js";
 import { DiffStatsService } from "./diff-stats-service.js";
-import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring/test-support.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 
 /**

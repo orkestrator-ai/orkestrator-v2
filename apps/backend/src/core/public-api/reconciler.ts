@@ -5,7 +5,7 @@ import type { PublicOperationRecord } from "./operation-ledger.js";
 import { PROJECT_REMOVE_EFFECTS, publicEnvironmentSummary } from "./summaries.js";
 import type { OperationPatch, PublicActionContext } from "./types.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 
 const log = createLogger("public-api");
 

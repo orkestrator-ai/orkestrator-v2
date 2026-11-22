@@ -45,7 +45,7 @@ vocabulary:
   counted them, event-stream connects included.
 
 The backend recorder, `recurringWorkMetrics`
-(`apps/backend/src/core/recurring-work-metrics.ts`), keeps one fixed record
+(`apps/backend/src/core/recurring/work-metrics.ts`), keeps one fixed record
 per kind (requested, coalesced, started, completed, failed, rejected,
 changed/unchanged, cache hits, bytes, duration and queue-delay histograms,
 work units, error categories) and tracks at most
@@ -54,7 +54,7 @@ recorded as finite categories, never messages. `ORKESTRATOR_RECURRING_METRICS=0`
 turns it off. A few backend kinds are catalogued but not yet recorded
 (`instrumented: false`).
 
-`recurringWorkDiagnostics()` (`recurring-diagnostics.ts`) is the one
+`recurringWorkDiagnostics()` (`recurring/diagnostics.ts`) is the one
 read-only surface: recorder snapshot, every live scheduler, admission pool,
 fetch policy and container change signal (`signals`: per-state counts of the
 Claude state and worktree signals, how many containers run their fallback
@@ -99,7 +99,7 @@ own concurrency, never queued behind anything else), `interactive` (a user is
 waiting), `recovery` (repairs durable obligations; reserved capacity),
 `progress`, `discovery` and `maintenance`.
 
-**`RecurringScheduler`** (`apps/backend/src/core/recurring-scheduler.ts`) runs
+**`RecurringScheduler`** (`apps/backend/src/core/recurring/scheduler.ts`) runs
 keyed recurring work for one owner (`worktree-snapshots`, `pr-monitor`,
 `agent-observation`, `workflows`, `maintenance`):
 

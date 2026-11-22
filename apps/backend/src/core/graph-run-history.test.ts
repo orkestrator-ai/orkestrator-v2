@@ -9,7 +9,7 @@ import { GRAPH_LAUNCH_BOUNDS } from "@orkestrator/protocol/graphs/launch";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { graphRunWorld, type GraphRunWorld } from "./graph-run-executor-test-support.js";
 import { graphArtifactFixture, graphRunFixture } from "./graph-run-test-support.js";
-import { ManualTime, advanceKeyedWork } from "./recurring-test-support.js";
+import { ManualTime, advanceKeyedWork } from "./recurring/test-support.js";
 
 const worlds: GraphRunWorld[] = [];
 

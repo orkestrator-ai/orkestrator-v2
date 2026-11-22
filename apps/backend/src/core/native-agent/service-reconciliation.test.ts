@@ -45,7 +45,7 @@ import { AgentMailService } from "../agent-mail-service.js";
 import { httpProvider } from "../agent-provider-test-support.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 
 import {
   COORDINATOR_EXECUTION_POLICY,

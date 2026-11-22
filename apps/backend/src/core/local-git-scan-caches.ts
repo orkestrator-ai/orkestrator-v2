@@ -3,7 +3,7 @@ import path from "node:path";
 import { statSettled, statStamp } from "./stat-stamp.js";
 import { FILE_LINE_COUNT_CHUNK_BYTES, UNTRACKED_SCAN_MAX_FILES } from "./commands-validation.js";
 import { MAX_BINARY_FILE_BYTES, validateRelativeFilePath } from "./path-safety.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 
 /**
  * What a local diff scan remembers about one worktree so a later scan does not

@@ -8,14 +8,12 @@ import {
   recurringWorkMetrics,
   type RecurringWorkMetrics,
   type RecurringWorkSpan,
-} from "./recurring-work-metrics.js";
-import {
   armedSignalHealth,
   emptySignalHealthStates,
   type SignalDemotionReason,
   type SignalHealthState,
   type SignalHealthStatus,
-} from "./recurring-diagnostics.js";
+} from "./recurring/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   CLAUDE_SIGN_IN_NOTICE_CHECK_MS,

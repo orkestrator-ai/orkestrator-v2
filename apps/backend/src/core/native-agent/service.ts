@@ -1,5 +1,5 @@
 import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
-import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry } from "../recurring/index.js";
 import type { TurnFailureKind } from "@orkestrator/protocol/agent-usage-limits";
 import { turnOutcomeFailureKind } from "../agent-usage-limits.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

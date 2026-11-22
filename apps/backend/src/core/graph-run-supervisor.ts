@@ -36,7 +36,7 @@
  */
 import { isGraphRunTerminal, type GraphRun } from "@orkestrator/protocol/graphs/run";
 import { isGraphActivationAdmitted } from "./graph-run-transitions.js";
-import type { RecurringTimerFactory } from "./recurring-scheduler.js";
+import type { RecurringTimerFactory } from "./recurring/index.js";
 import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
 import {

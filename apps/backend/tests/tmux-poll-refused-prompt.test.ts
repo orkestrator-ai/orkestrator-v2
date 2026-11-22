@@ -28,7 +28,7 @@ import {
   CLAUDE_STATE_POLL_INTERVAL_MS,
   ClaudeStatePollManager,
 } from "../src/core/tmux-poll.js";
-import { ManualTime, flushMicrotasks } from "../src/core/recurring-test-support.js";
+import { ManualTime, flushMicrotasks } from "../src/core/recurring/test-support.js";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures.js";
 
 const HOOK = join(import.meta.dir, "../../../docker/orkestrator-state-signal.sh");

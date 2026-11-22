@@ -243,6 +243,97 @@ describe("move-backend-modules CLI", () => {
     );
   }, 20_000);
 
+  test("leaves commit-pinned GitHub permalinks under their old name and rewrites branch links", async () => {
+    const oldPath = `${core}/design-service.ts`;
+    const newPath = `${core}/design/service.ts`;
+    const oldJs = oldPath.replace(/\.ts$/, ".js");
+    const repo = "https://github.com/acme/orkestrator";
+    const sha = "f2d217138d938f4302ffdc312503a71b92178643";
+    const pinned = [
+      `[O1]: ${repo}/blob/${sha}/${oldPath}`,
+      `[short](${repo}/blob/f2d2171/${oldPath}#L10-L20)`,
+      `${repo}/tree/${sha}/${oldPath}`,
+      `${repo}/raw/${sha}/${oldJs}`,
+      `https://raw.githubusercontent.com/acme/orkestrator/${sha}/${oldPath}`,
+      `${repo}/blob/v2.36.5-beta/${oldPath}`,
+      `${repo}/blob/2.36.5/${oldPath}`,
+      `${repo}/blob/v2.36.5-rc-1/${oldPath}`,
+      `${repo}/blob/refs/tags/releases/legacy/${oldPath}`,
+      `https://GitHub.com/acme/orkestrator/blob/${sha}/${oldPath}`,
+      `https://GitHub.com:443/acme/orkestrator/blob/${sha}/${oldPath}`,
+      `<GITHUB.com/acme/orkestrator/blob/${sha}/${oldPath}>`,
+      `https://Raw.GitHubUserContent.com/acme/orkestrator/${sha}/${oldPath}`,
+      `${repo}/blob/refs/tags/v2.36.5/${oldPath}`,
+      `<github.com/acme/orkestrator/blob/${sha}/${oldPath}>`,
+    ];
+    const branch = (target: string) => [
+      `[guide](${repo}/blob/main/${target})`,
+      `${repo}/tree/feature/design-split/${target}`,
+      `${repo}/blob/refs/heads/main/${target}`,
+      `${repo}/blob/v2.36.5/docs/${target}`,
+      `${repo}/blob/refs/heads/v2.36.5/docs/${target}`,
+      `https://mirror-github.com/acme/orkestrator/blob/${sha}/${target}`,
+      `https://mirror.raw.githubusercontent.com/acme/orkestrator/${sha}/${target}`,
+      `https://example.com/mirror?link=github.com/acme/orkestrator/blob/${sha}/${target}`,
+      `https://raw.githubusercontent.com/acme/orkestrator/main/${target}`,
+      `${repo}/blob/f2d217-not-a-sha/${target}`,
+      `${repo}/blob/${sha} was later moved to ${target}`,
+    ];
+    const root = await fixture({
+      [oldPath]: "export {};\n",
+      [`${core}/caller.ts`]: [
+        'import "./design-service.js";',
+        `// Was ${repo}/blob/${sha}/${oldPath}; now ${repo}/blob/main/${oldPath}.`,
+        "",
+      ].join("\n"),
+      "docs/links.md": [...pinned, ...branch(oldPath), ""].join("\n"),
+    });
+
+    move(root);
+
+    expect(await read(root, "docs/links.md")).toBe([...pinned, ...branch(newPath), ""].join("\n"));
+    expect(await read(root, `${core}/caller.ts`)).toBe(
+      [
+        'import "./design/service.js";',
+        `// Was ${repo}/blob/${sha}/${oldPath}; now ${repo}/blob/main/${newPath}.`,
+        "",
+      ].join("\n"),
+    );
+  }, 20_000);
+
+  test("uses locally available tags and branches for their GitHub repository", async () => {
+    const oldPath = `${core}/design-service.ts`;
+    const newPath = `${core}/design/service.ts`;
+    const repo = "https://github.com/acme/orkestrator";
+    const otherRepo = "https://github.com/elsewhere/orkestrator";
+    const pinned = [
+      `${repo}/blob/releases/legacy/${oldPath}`,
+      `https://raw.githubusercontent.com/acme/orkestrator/releases/legacy/${oldPath}`,
+      `${repo}/tree/v2.36.5/${oldPath}`,
+      `${otherRepo}/blob/v2.36.5-rc-1/${oldPath}`,
+    ];
+    const branches = (target: string) => [
+      `${repo}/blob/v2.36.5/docs/${target}`,
+      `${otherRepo}/blob/releases/legacy/${target}`,
+      `${repo}/blob/v2.36.5-rc-1/${target}`,
+    ];
+    const root = await fixture({
+      [oldPath]: "export {};\n",
+      "docs/links.md": [...pinned, ...branches(oldPath), ""].join("\n"),
+    });
+    run(root, ["git", "remote", "add", "origin", "git@github.com:Acme/Orkestrator.git"]);
+    run(root, ["git", "update-ref", "refs/tags/releases/legacy", "HEAD"]);
+    run(root, ["git", "update-ref", "refs/tags/v2.36.5", "HEAD"]);
+    run(root, ["git", "update-ref", "refs/remotes/origin/v2.36.5/docs", "HEAD"]);
+    run(root, ["git", "update-ref", "refs/remotes/origin/v2.36.5-rc-1", "HEAD"]);
+
+    move(root);
+
+    expect(await read(root, "docs/links.md")).toBe(
+      [...pinned, ...branches(newPath), ""].join("\n"),
+    );
+  }, 20_000);
+
   test("honors repository formatter exclusions while rewriting tracked references", async () => {
     const oldPath = `${core}/design-service.ts`;
     const newPath = `${core}/design/service.ts`;

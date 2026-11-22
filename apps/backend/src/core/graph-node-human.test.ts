@@ -23,7 +23,7 @@ import {
   type GraphRunWorld,
 } from "./graph-run-executor-test-support.js";
 import type { GraphRunService } from "./graph-run-service.js";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 
 const BASE = Date.parse("2026-10-29T12:00:00.000Z");
 const BRIEF = { text: "Export reports as CSV." };

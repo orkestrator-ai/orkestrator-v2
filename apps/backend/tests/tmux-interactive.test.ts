@@ -10,7 +10,7 @@ import {
 } from "../src/core/tmux";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
+import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";
 import { deferred, waitFor } from "./tmux-test-harness.js";
 
 const LEASE_MS = 45_000;

@@ -30,7 +30,7 @@ import {
 import type { DiffScanEvent } from "../diff-stats-service.js";
 import type { NativeAgentChangeTrackingHooks } from "../native-agent/service-shared.js";
 import type { StorageDatabase } from "../storage-database.js";
-import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry, recurringWorkMetrics } from "../recurring/index.js";
 import { encodePath } from "./capture.js";
 import { ChangeLedger, TERMINAL_TURN_LIFECYCLES } from "./change-ledger.js";
 import { DiffBodyService } from "./diff-bodies.js";
@@ -72,7 +72,6 @@ import {
   type TurnStartResult,
 } from "./turn-boundaries.js";
 import { RemoteSlots, WorktreeRegistry, type WorktreeTarget } from "./worktree-owner.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
 import type { DatabaseRetentionSummary } from "@orkestrator/protocol/backend-diagnostics";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

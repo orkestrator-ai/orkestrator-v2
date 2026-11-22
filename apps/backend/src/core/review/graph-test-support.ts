@@ -27,7 +27,7 @@ import {
 import { RecordingEfficiencyObserver } from "./efficiency.js";
 import { MultiReviewGraphEngine } from "./graph-engine.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./service.js";
-import { ManualTime } from "../recurring-test-support.js";
+import { ManualTime } from "../recurring/test-support.js";
 import { runCommand } from "../shell.js";
 
 export const GRAPH_REVIEW_HEAD = "1".repeat(40);

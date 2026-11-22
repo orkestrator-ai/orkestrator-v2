@@ -317,7 +317,7 @@ export const MachineLoadReportSchema: ModelSchema<MachineLoadReport> =
 
 /**
  * Bounded, content-free recurring-work diagnostics (`RecurringWorkDiagnostics`,
- * backend `recurring-diagnostics.ts`): the sections are listed, their entries
+ * backend `recurring/diagnostics.ts`): the sections are listed, their entries
  * stay open records.
  */
 export const RecurringWorkDiagnosticsSchema = openRecord({

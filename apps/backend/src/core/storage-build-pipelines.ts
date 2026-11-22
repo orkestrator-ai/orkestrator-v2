@@ -39,7 +39,7 @@ import {
   transcriptSessionKey,
 } from "./build-pipeline/index.js";
 import { StoreCorruptError } from "./storage-database.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import type { StorageRepositories } from "./storage-repositories.js";

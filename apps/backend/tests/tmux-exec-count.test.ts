@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as backendModule from "../src/core/tmux-backend";
 import * as sessionModule from "../src/core/tmux-session-manager";
-import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
+import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";
 import { SCENARIOS, measureTmuxExecs } from "../scripts/tmux-exec-count";
 
 /**

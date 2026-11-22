@@ -4,8 +4,8 @@ import {
   DISCOVERY_RENEWAL_PATH_LIMIT,
   NativeSessionInvalidationMetrics,
 } from "./native-session-invalidation-metrics.js";
-import { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { RecurringDiagnosticsRegistry } from "./recurring/diagnostics.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 
 describe("NativeSessionInvalidationMetrics", () => {
   test("counts by cause and by the platform or environment an invalidation named", () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PrDetection } from "../src/core/git/pr-monitor";
 import { DEFAULT_PR_MONITOR_POLICY } from "../src/core/git/pr-monitor-policy";
-import { deferred, type Deferred } from "../src/core/recurring-test-support";
+import { deferred, type Deferred } from "../src/core/recurring/test-support";
 import { PR1, createLifecycleHarness, localTarget } from "./pr-monitor-test-harness";
 
 /**

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AGENT_MAIL_MAX_STORE_BYTES } from "@orkestrator/protocol/agent-mail";
-import { recurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../src/core/recurring/work-metrics.js";
 import type {
   AgentMailStore,
   PersistedAgentMailStore,

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import { GitFetchScheduler } from "../src/core/git/fetch-scheduler";
-import { RecurringWorkMetrics } from "../src/core/recurring-work-metrics";
+import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";
 import { CommandFailedError } from "../src/core/shell";
 
 /** A background fetch: one explicit remote-tracking ref, no FETCH_HEAD write. */

@@ -16,7 +16,7 @@ import {
 import { recurringPriorityRank } from "@orkestrator/protocol/recurring-work";
 import { PR_CLOSED_COMMENT, PR_MERGED_COMMENT } from "../kanban-merge-closure.js";
 import type { GitHubPullRequestMergeability } from "@orkestrator/protocol/github-pull-requests";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring/index.js";
 import {
   AdmissionRejectedError,
   WorkAdmissionPool,

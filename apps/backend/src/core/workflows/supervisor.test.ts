@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
-import { ManualTime, deferred, flushMicrotasks, type Deferred } from "../recurring-test-support.js";
+import { RecurringWorkMetrics } from "../recurring/work-metrics.js";
+import { ManualTime, deferred, flushMicrotasks, type Deferred } from "../recurring/test-support.js";
 import { WorkAdmissionPool } from "../work-admission.js";
 import {
   KEYED_SCHEDULING_DOMAINS,

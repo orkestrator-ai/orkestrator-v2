@@ -132,7 +132,7 @@ import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./previews/index.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, recurringDiagnosticsRegistry } from "./recurring/index.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
 import { pauseBackgroundCheckpoints } from "./storage-checkpointer.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
@@ -155,7 +155,6 @@ import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
 import { backendClaudeStateSettler } from "./claude-terminal-settle.js";
 import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
-import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { Effect } from "effect";
 import {
@@ -452,8 +451,7 @@ export class OrkestratorBackend {
   /** Step 08 named due jobs: the activity bundle and maintenance. */
   private activityJobs: BackendActivityJobs | null = null;
   private readonly activityJobClock:
-    | { now: () => number; timers: import("./recurring-scheduler.js").RecurringTimerFactory }
-    | undefined;
+    { now: () => number; timers: import("./recurring/index.js").RecurringTimerFactory } | undefined;
   private setupStartupReconciled = false;
   private terminalStartupReconciled = false;
   private readonly reapPidServers: typeof reapOrphanedLocalServers;
@@ -599,7 +597,7 @@ export class OrkestratorBackend {
     /** Test seam: the activity jobs' monotonic clock and timers. */
     activityJobClock?: {
       now: () => number;
-      timers: import("./recurring-scheduler.js").RecurringTimerFactory;
+      timers: import("./recurring/index.js").RecurringTimerFactory;
     };
     /** Test seam; defaults to a Docker-backed checker outside `bun test`. */
     containerHostReachability?: ContainerHostReachabilityService;

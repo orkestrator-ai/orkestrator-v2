@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-readiness";
 import type { PrDetection } from "../src/core/git/pr-monitor";
-import { deferred } from "../src/core/recurring-test-support";
+import { deferred } from "../src/core/recurring/test-support";
 import { createLifecycleHarness, localTarget } from "./pr-monitor-test-harness";
 
 /**

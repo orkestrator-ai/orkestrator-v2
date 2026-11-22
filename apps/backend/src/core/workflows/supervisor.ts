@@ -1,13 +1,13 @@
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
-import type { RecurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
 import {
+  type RecurringDiagnosticsRegistry,
   RecurringScheduler,
   type RecurringRunContext,
   type RecurringRunResult,
   type RecurringSchedulerLimits,
   type RecurringTimerFactory,
-} from "../recurring-scheduler.js";
-import type { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+  type RecurringWorkMetrics,
+} from "../recurring/index.js";
 import {
   AdmissionRejectedError,
   type AdmissionLease,

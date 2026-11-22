@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ManualTime } from "../recurring-test-support.js";
+import { ManualTime } from "../recurring/test-support.js";
 import { ElapsedPollGate } from "./poll-gate.js";
 
 describe("ElapsedPollGate", () => {

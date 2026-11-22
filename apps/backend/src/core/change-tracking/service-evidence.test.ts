@@ -4,7 +4,7 @@ import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/
 import type { ChangeProjection } from "@orkestrator/protocol/change-resources";
 import { createHarness, spoolSource, type Harness } from "./service-test-support.js";
 import { mergeLifecycle } from "./evidence-ingestion.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/work-metrics.js";
 
 const harnesses: Harness[] = [];
 afterEach(() => {

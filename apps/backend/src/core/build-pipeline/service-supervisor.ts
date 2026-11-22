@@ -76,7 +76,7 @@ import {
   workflowResultReminderPrompt,
   workflowUsageLimitContinuationPrompt,
 } from "../workflows/index.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 import { carriesReworkBaseline, retainRoundReviewReport } from "./rewind.js";
 import { recordReviewIssuesInKeyInformation } from "./key-information.js";
 import { archiveValidationRun } from "./validation-history.js";

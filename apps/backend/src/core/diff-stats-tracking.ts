@@ -20,7 +20,7 @@ import {
 } from "./change-tracking/index.js";
 import { startWorktreeWatcher, worktreeTargetKey, type WorktreeLookup } from "./worktrees/index.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
-import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry } from "./recurring/index.js";
 import { localGitScanCacheGauges } from "./local-git-scan-caches.js";
 import {
   ContainerWorktreeSignals,

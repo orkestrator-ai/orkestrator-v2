@@ -1,8 +1,8 @@
 import { expect, mock, spyOn, test } from "bun:test";
 import { claudeTmuxEvent } from "@orkestrator/protocol/contract/domains/events";
-import { TmuxBackend } from "./tmux-backend.js";
-import { TmuxSession } from "./tmux-session-manager.js";
-import type { CommandContext } from "./commands.js";
+import { TmuxBackend } from "./backend.js";
+import { TmuxSession } from "./session-manager.js";
+import type { CommandContext } from "../commands.js";
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -89,7 +89,7 @@ test("resume/fork ownership appended beyond 64 KiB is discovered from a bounded 
   const { promises: fs } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const { newestJsonlInDir } = await import("./tmux-hooks.js");
+  const { newestJsonlInDir } = await import("./hooks.js");
   const dir = await fs.mkdtemp(join(tmpdir(), "transcript-owner-"));
   try {
     const file = join(dir, "fork.jsonl");

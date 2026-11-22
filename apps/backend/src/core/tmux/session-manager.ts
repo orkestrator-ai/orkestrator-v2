@@ -1,7 +1,7 @@
 import {
   localEnvironmentIsolationEnv,
   environmentIsolationShellPrefix,
-} from "./environment-isolation.js";
+} from "../environment-isolation.js";
 import {
   claudeTmuxEvent,
   tmuxAgentUsageEvent,
@@ -10,10 +10,10 @@ import {
 } from "@orkestrator/protocol/contract/domains/events";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
-import * as shared from "./tmux-shared.js";
+import * as shared from "./shared.js";
 import { claudeCliReasoningSelection } from "@orkestrator/protocol/claude-model-catalog";
-import { LOW_PRIORITY_SHELL_PREFIX } from "./process-priority.js";
-import * as hooks from "./tmux-hooks.js";
+import { LOW_PRIORITY_SHELL_PREFIX } from "../process-priority.js";
+import * as hooks from "./hooks.js";
 import {
   AsyncMutex,
   COMMAND_AFTER_IDLE_SETTLE_MS,
@@ -55,11 +55,11 @@ import {
   shellArg,
   tmuxSelectionPromptFingerprint,
   tmuxSessionName,
-} from "./tmux-shared.js";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import { TmuxTranscriptReader, type TmuxTranscriptPage } from "./tmux-transcript-reader.js";
-import type { TerminalRuntime } from "./terminal-runtime.js";
+} from "./shared.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring/index.js";
+import { TmuxBackend } from "./backend.js";
+import { TmuxTranscriptReader, type TmuxTranscriptPage } from "./transcript-reader.js";
+import type { TerminalRuntime } from "../terminal-runtime.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
   TranscriptTail,
@@ -80,7 +80,7 @@ import {
   sessionHookPaths,
   uninstallWorkspaceHooks,
   workspaceHookPaths,
-} from "./tmux-hooks.js";
+} from "./hooks.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 type CommandContext = shared.CommandContext;
 
@@ -690,7 +690,7 @@ export class TmuxSession {
     let quietTicks = 0;
     let nextDiscoveryAt = 0;
     let discoveryInterval = TMUX_DISCOVERY_MIN_INTERVAL_MS;
-    // The hook doorbell of this tab's container (`tmux-hook-signal.ts`).
+    // The hook doorbell of this tab's container (`hook-signal.ts`).
     const containerId = this.backend.kind === "container" ? this.backend.containerId : undefined;
     const doorbell = containerId
       ? context.runtime?.tmux?.hookSignals?.attach(containerId, context, () => this.wakePollLoop())

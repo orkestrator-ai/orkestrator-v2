@@ -6,14 +6,14 @@ import {
   claudeStateSignalInstaller,
 } from "../src/core/claude-state-signal.js";
 import { ManualTime, flushMicrotasks } from "../src/core/recurring/test-support.js";
-import type { ClaudeStateSignalSupport } from "../src/core/tmux-poll.js";
+import type { ClaudeStateSignalSupport } from "../src/core/tmux/poll.js";
 import type { ManifestRead } from "../src/core/docker-image.js";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
   withDockerScript,
 } from "./container-lifecycle-fixtures.js";
-import { ClaudeStatePollManager, parseClaudeStateSnapshot } from "../src/core/tmux-poll.js";
+import { ClaudeStatePollManager, parseClaudeStateSnapshot } from "../src/core/tmux/poll.js";
 
 const credential = {
   url: "http://host.docker.internal:43123/claude-state-signal",

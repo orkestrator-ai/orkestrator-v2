@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { containsSignInNotice, normalizeTerminalText } from "../src/core/claude-terminal-settle.js";
-import { TmuxBackend } from "../src/core/tmux-backend.js";
+import { TmuxBackend } from "../src/core/tmux/backend.js";
 import {
   drainPending,
   ensureSessionDirs,
@@ -30,7 +30,7 @@ import {
   sessionHookPaths,
   workspaceHookPaths,
   type PendingHookEvent,
-} from "../src/core/tmux-hooks.js";
+} from "../src/core/tmux/hooks.js";
 import { bundledPinnedClaudeCli } from "./bundled-claude-cli.js";
 
 const cli = bundledPinnedClaudeCli();

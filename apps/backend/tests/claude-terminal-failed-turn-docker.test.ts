@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { StorageService } from "../src/core/storage.js";
 import { claudeStateSignalSupport } from "../src/core/claude-state-signal.js";
 import { readImageManifest } from "../src/core/docker-image.js";
-import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux-poll.js";
+import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux/poll.js";
 import { ManualTime } from "../src/core/recurring/test-support.js";
 import { runCommand } from "../src/core/shell.js";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";

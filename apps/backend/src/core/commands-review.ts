@@ -58,7 +58,7 @@ import {
   validateWorkspaceMutationPath,
 } from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
-import { gitExcludeSetupScript } from "./tmux-hooks.js";
+import { gitExcludeSetupScript } from "./tmux/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("pull-request");

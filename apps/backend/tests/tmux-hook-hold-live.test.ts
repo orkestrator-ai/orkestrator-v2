@@ -4,7 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdir, writeFile, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { PINNED_TOOLCHAIN_VERSIONS } from "../../../packages/toolchain/src/manifest.js";
-import { TmuxBackend } from "../src/core/tmux-backend.js";
+import { TmuxBackend } from "../src/core/tmux/backend.js";
 import {
   hookScript,
   hooksBlock,
@@ -12,7 +12,7 @@ import {
   replyToHook,
   workspaceHookPaths,
   sessionHookPaths,
-} from "../src/core/tmux-hooks.js";
+} from "../src/core/tmux/hooks.js";
 import {
   scriptedAnthropicEndpoint,
   scriptedClaudeEnv,

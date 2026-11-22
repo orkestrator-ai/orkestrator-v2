@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import type { CommandContext } from "./commands-context.js";
-import type { Environment } from "./models.js";
-import type { PtyProcess } from "./pty.js";
-import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
-import { ManualTime, flushMicrotasks } from "./recurring/test-support.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
-import { CLAUDE_STATE_ABSENT_MARKER, ClaudeStatePollManager } from "./tmux-poll.js";
-import { TmuxHookSignalManager } from "./tmux-hook-signal.js";
+import type { CommandContext } from "../commands-context.js";
+import type { Environment } from "../models.js";
+import type { PtyProcess } from "../pty.js";
+import { ContainerLifecycleReactor } from "../container-lifecycle-events.js";
+import { ManualTime, flushMicrotasks } from "../recurring/test-support.js";
+import { TerminalRuntime } from "../terminal-runtime.js";
+import { CLAUDE_STATE_ABSENT_MARKER, ClaudeStatePollManager } from "./poll.js";
+import { TmuxHookSignalManager } from "./hook-signal.js";
 
 function harness(hooks = new TmuxHookSignalManager()) {
   const time = new ManualTime();

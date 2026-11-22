@@ -1,10 +1,10 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import { TmuxBackend } from "./tmux-backend.js";
+import { TmuxBackend } from "./backend.js";
 import {
   paneHasSelectionPrompt,
   TmuxSession,
   type TmuxSessionTimingOptions,
-} from "./tmux-session-manager.js";
+} from "./session-manager.js";
 
 const selection = "Choose a theme\n❯ 1. Dark\n  2. Light\nEnter to confirm · Esc to cancel";
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));

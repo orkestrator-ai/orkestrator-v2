@@ -11,7 +11,7 @@ import {
   claudeStateSignalInstallCommand,
   tmuxHookSignalInstallCommand,
 } from "./claude-state-signal.js";
-import { TMUX_HOOK_SIGNAL_CONFIG_PATH } from "./tmux-hook-signal.js";
+import { TMUX_HOOK_SIGNAL_CONFIG_PATH } from "./tmux/hook-signal.js";
 
 const SCRIPT = join(import.meta.dir, "../../../../docker/orkestrator-state-signal.sh");
 const credential = {

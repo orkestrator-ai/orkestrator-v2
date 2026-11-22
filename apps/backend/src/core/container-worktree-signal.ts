@@ -27,7 +27,7 @@ const log = createLogger("diff-stats");
  * This module is the watcher `DiffStatsService.startContainerWatcher` gets: it
  * turns rings into the same {@link WorktreeChangeHint}s a local watcher sends,
  * so the service stays the one scan owner. It mirrors the Claude state signal
- * (`tmux-poll.ts`):
+ * (`tmux/poll.ts`):
  *
  * - **Lineage.** One credential per `startContainerWatcher` call. The service
  *   starts one for every tracking lineage (a container start, a retarget, a

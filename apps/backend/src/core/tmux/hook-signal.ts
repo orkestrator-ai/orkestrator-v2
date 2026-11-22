@@ -1,13 +1,13 @@
-import type { StateSignalCredential } from "./agent-tools.js";
-import type { CommandContext } from "./commands-context.js";
+import type { StateSignalCredential } from "../agent-tools.js";
+import type { CommandContext } from "../commands-context.js";
 import {
   armedSignalHealth,
   emptySignalHealthStates,
   type SignalDemotionReason,
   type SignalHealthState,
   type SignalHealthStatus,
-} from "./recurring/index.js";
-import type { ClaudeStateSignalSupport } from "./tmux-poll.js";
+} from "../recurring/index.js";
+import type { ClaudeStateSignalSupport } from "./poll.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("tmux");

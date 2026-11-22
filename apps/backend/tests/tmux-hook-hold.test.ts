@@ -14,14 +14,14 @@ import {
   hooksBlock,
   parseBlockingHookTiming,
   requestHookHold,
-} from "../src/core/tmux-hooks.js";
+} from "../src/core/tmux/hooks.js";
 import {
   HOOK_COMMAND_TIMEOUT_SECS,
   HOOK_HOLD_PROTOCOL,
   HOOK_LIMIT_MARGIN_SECS,
   type SessionHookPaths,
-} from "../src/core/tmux-shared.js";
-import type { TmuxBackend } from "../src/core/tmux-backend.js";
+} from "../src/core/tmux/shared.js";
+import type { TmuxBackend } from "../src/core/tmux/backend.js";
 import {
   createHandlers,
   deferred,

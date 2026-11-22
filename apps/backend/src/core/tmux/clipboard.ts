@@ -1,5 +1,5 @@
-import type { TmuxSession } from "./tmux-session-manager.js";
-import { spawnPty, type PtyProcess } from "./pty.js";
+import type { TmuxSession } from "./session-manager.js";
+import { spawnPty, type PtyProcess } from "../pty.js";
 
 /** Only clipboard escapes leave this client; screen output remains snapshot-based. */
 export class TmuxClipboardParser {

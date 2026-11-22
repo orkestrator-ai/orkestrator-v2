@@ -44,7 +44,7 @@ import {
   parseTmuxSessionNames,
   RUNTIME_ROOT_PREFIX,
   selectReapableTmuxSessions,
-} from "./tmux.js";
+} from "./tmux/index.js";
 import type { Environment } from "./models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";

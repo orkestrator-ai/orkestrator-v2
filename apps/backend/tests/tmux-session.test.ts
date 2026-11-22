@@ -5,39 +5,40 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   agentMcpConfigJson,
   agentToolConnectionTarget,
-  boundedInfoEventMessage,
   containerExecArgs,
   confirmTmuxSessionGone,
-  fastModeFromPane,
-  fastModeRejectionFromPane,
   isDirectJsonlChild,
   isMissingTmuxSessionError,
   isTmuxNoServerMessage,
   jsonlByMtimeFindCommand,
   listLocalJsonlByMtime,
   LIVENESS_CHECK_EVERY_TICKS,
-  newestJsonlFindCommand,
-  newestJsonlInDir,
   parseFreshJsonlFindOutput,
-  TRANSCRIPT_HEAD_BYTES,
-  transcriptHeadClaimsSession,
   parseTmuxSessionNames,
   parseTranscriptHeadOutput,
   PREVIOUS_SESSION_STAT_CONCURRENCY,
-  probeThinkingDisplaySupport,
   selectReapableTmuxSessions,
   tailFromOffsetCommand,
-  thinkingDisplayProbeArgs,
-  thinkingDisplayProbeIndicatesSupport,
-  TMUX_HOOK_PAYLOAD_MAX_BYTES,
   TMUX_IDLE_AFTER_QUIET_TICKS,
   TMUX_IDLE_POLL_INTERVAL_MS,
   tmuxSessionName,
   tmuxSessionNamePrefix,
-  transcriptContainsSessionId,
   transcriptHeadCommand,
+} from "../src/core/tmux/shared";
+import {
+  boundedInfoEventMessage,
+  newestJsonlFindCommand,
+  newestJsonlInDir,
+  TRANSCRIPT_HEAD_BYTES,
+  transcriptHeadClaimsSession,
+  probeThinkingDisplaySupport,
+  thinkingDisplayProbeArgs,
+  thinkingDisplayProbeIndicatesSupport,
+  TMUX_HOOK_PAYLOAD_MAX_BYTES,
+  transcriptContainsSessionId,
   TranscriptTail,
-} from "../src/core/tmux";
+} from "../src/core/tmux/hooks";
+import { fastModeFromPane, fastModeRejectionFromPane } from "../src/core/tmux/session-manager";
 import {
   tmuxSelectionPromptFingerprint,
   type TmuxSelectionPrompt,
@@ -45,8 +46,8 @@ import {
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs, realpathSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { localClaudeAccountPrefix } from "../src/core/tmux-session-manager";
-import type { ExecOutput } from "../src/core/tmux-shared";
+import { localClaudeAccountPrefix } from "../src/core/tmux/session-manager";
+import type { ExecOutput } from "../src/core/tmux/shared";
 
 import {
   createHandlers,

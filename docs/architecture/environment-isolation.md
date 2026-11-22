@@ -149,7 +149,7 @@ status and cancel do not allocate blocks.
 `environment-isolation.integration.test.ts` keeps a listener alive after deleting
 its environment, then allocates an id with the same hash start. It also checks
 IPv6-only occupancy and reuse after the listener stops.
-`tmux-environment-isolation.integration.test.ts` launches two fixture Claude
+`tmux/environment-isolation.integration.test.ts` launches two fixture Claude
 processes through the real session launcher on one private tmux server, checks
 both child environments, and confirms the server's values are unchanged.
 

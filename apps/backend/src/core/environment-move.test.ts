@@ -13,9 +13,9 @@ import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
-import * as tmux from "./tmux-commands.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux-shared.js";
+import * as tmux from "./tmux/commands.js";
+import { TmuxBackend } from "./tmux/backend.js";
+import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux/shared.js";
 import { realTmux, withPrivateTmux } from "../../tests/tmux-lifecycle-fixture.js";
 import { StorageService } from "./storage.js";
 import {

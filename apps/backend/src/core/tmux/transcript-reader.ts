@@ -1,8 +1,8 @@
-import { TaskSnapshotHistory, TranscriptTaskTracker } from "./claude-transcript-tasks.js";
-import type { TmuxBackend } from "./tmux-backend.js";
-import { TranscriptTail } from "./tmux-hooks.js";
-import { AsyncMutex, type TaskListSnapshot } from "./tmux-shared.js";
-import { transcriptToolDiffs } from "./tmux-transcript-tool-diffs.js";
+import { TaskSnapshotHistory, TranscriptTaskTracker } from "../claude-transcript-tasks.js";
+import type { TmuxBackend } from "./backend.js";
+import { TranscriptTail } from "./hooks.js";
+import { AsyncMutex, type TaskListSnapshot } from "./shared.js";
+import { transcriptToolDiffs } from "./transcript-tool-diffs.js";
 
 /**
  * Bytes of transcript one page covers. A reopen reads this much from the tail

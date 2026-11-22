@@ -22,11 +22,11 @@ import {
 import { readImageManifest } from "../src/core/docker-image.js";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
 import { runCommand } from "../src/core/shell.js";
-import { TmuxBackend } from "../src/core/tmux-backend.js";
-import type { TmuxHookDoorbell } from "../src/core/tmux-hook-signal.js";
-import { hookScript } from "../src/core/tmux-hooks.js";
-import { TmuxSession, TmuxSessionManager } from "../src/core/tmux-session-manager.js";
-import { tmuxSessionName } from "../src/core/tmux-shared.js";
+import { TmuxBackend } from "../src/core/tmux/backend.js";
+import type { TmuxHookDoorbell } from "../src/core/tmux/hook-signal.js";
+import { hookScript } from "../src/core/tmux/hooks.js";
+import { TmuxSession, TmuxSessionManager } from "../src/core/tmux/session-manager.js";
+import { tmuxSessionName } from "../src/core/tmux/shared.js";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures.js";
 
 // Build this checkout with `mise run docker:build:dev`; never use `latest`.

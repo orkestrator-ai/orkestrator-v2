@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { TmuxClipboardControlParser, TmuxClipboardParser } from "../src/core/tmux-clipboard";
+import { TmuxClipboardControlParser, TmuxClipboardParser } from "../src/core/tmux/clipboard";
 
 test("clipboard stream preserves chunk boundaries, consumes queries and bounds escapes", () => {
   const output: string[] = [];

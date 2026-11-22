@@ -4,15 +4,15 @@ import { mkdtemp, readFile, writeFile, readdir, open, rm, access } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { TmuxBackend } from "../src/core/tmux-backend.js";
+import { TmuxBackend } from "../src/core/tmux/backend.js";
 import {
   hookScript,
   requestHookHold,
   replyToHook,
   workspaceHookPaths,
   sessionHookPaths,
-} from "../src/core/tmux-hooks.js";
-import { HOOK_HOLD_PROTOCOL } from "../src/core/tmux-shared.js";
+} from "../src/core/tmux/hooks.js";
+import { HOOK_HOLD_PROTOCOL } from "../src/core/tmux/shared.js";
 
 async function until(predicate: () => Promise<boolean>, ms = 10_000) {
   const end = Date.now() + ms;

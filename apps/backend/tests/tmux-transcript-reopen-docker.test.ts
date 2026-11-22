@@ -1,7 +1,7 @@
 /**
  * A claude-tmux tab reopen through a real `docker exec` (to-do 5120 task 2).
  *
- * `tmux-transcript-reader.test.ts` runs the window script under the host's
+ * `tmux/transcript-reader.test.ts` runs the window script under the host's
  * `/bin/sh`, and `scripts/tmux-reopen-read-size.ts` counts its bytes through a
  * fake `docker`. This runs the real `TmuxSession` and `TmuxBackend` against a
  * container of the environment image, with a 37 MB transcript (the longest
@@ -19,9 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
 import { runCommand } from "../src/core/shell.js";
-import { TmuxBackend } from "../src/core/tmux-backend.js";
-import { TmuxSession } from "../src/core/tmux-session-manager.js";
-import { TMUX_TRANSCRIPT_PAGE_BYTES } from "../src/core/tmux-transcript-reader.js";
+import { TmuxBackend } from "../src/core/tmux/backend.js";
+import { TmuxSession } from "../src/core/tmux/session-manager.js";
+import { TMUX_TRANSCRIPT_PAGE_BYTES } from "../src/core/tmux/transcript-reader.js";
 
 const image = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim();
 const enabled = process.env.RUN_LIVE_DOCKER_TESTS === "1" && Boolean(image);

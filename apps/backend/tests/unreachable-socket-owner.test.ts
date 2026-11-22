@@ -5,12 +5,12 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
-import { confirmTmuxSessionGone, type ExecOutput } from "../src/core/tmux-shared";
+import { confirmTmuxSessionGone, type ExecOutput } from "../src/core/tmux/shared";
 import {
   TMUX_SOCKET_OWNER_PROBE,
   noProcessServesTmuxSocket,
   tmuxSocketPathFromMessage,
-} from "../src/core/tmux-socket-owner";
+} from "../src/core/tmux/socket-owner";
 
 // A case can run several subprocesses, each bounded to 10 seconds.
 setDefaultTimeout(60_000);

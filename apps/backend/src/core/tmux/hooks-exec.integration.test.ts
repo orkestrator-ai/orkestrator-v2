@@ -2,9 +2,9 @@ import { expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { runCommand } from "./command-capture.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import { ensureClaudeSettingsGitIgnored } from "./tmux-hooks.js";
+import { runCommand } from "../command-capture.js";
+import { TmuxBackend } from "./backend.js";
+import { ensureClaudeSettingsGitIgnored } from "./hooks.js";
 
 test("exclude setup finishes while a login-profile redirected helper survives", async () => {
   const directory = await fs.mkdtemp(path.join(tmpdir(), "ork-exclude-login-"));

@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { claudeStateReadCommand } from "../src/core/tmux-poll.js";
+import { claudeStateReadCommand } from "../src/core/tmux/poll.js";
 import {
   buildContainerGitStatusScript,
   CONTAINER_FILE_TREE_LISTER,

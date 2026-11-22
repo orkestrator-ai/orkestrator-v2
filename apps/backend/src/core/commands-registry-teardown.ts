@@ -6,7 +6,7 @@ import {
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
-import { registerTmuxBackendCommands } from "./tmux.js";
+import { registerTmuxBackendCommands } from "./tmux/index.js";
 import {
   nativeAgentSessionResumeIdentity,
   type Environment,

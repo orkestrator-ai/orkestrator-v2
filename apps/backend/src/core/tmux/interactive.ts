@@ -1,11 +1,11 @@
-import { attachTmuxClipboard } from "./tmux-clipboard.js";
+import { attachTmuxClipboard } from "./clipboard.js";
 import { terminalOutputEvents } from "@orkestrator/protocol/contract/domains/events";
 import { CLAUDE_TMUX_INTERACTIVE_LEASE_MS } from "@orkestrator/protocol/contract/domains/claude-tmux";
-import * as shared from "./tmux-shared.js";
-import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
-import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
+import * as shared from "./shared.js";
+import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./shared.js";
+import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./session-manager.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring/index.js";
 
 const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;

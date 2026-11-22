@@ -215,7 +215,7 @@ import {
   coordinatorBridgeEnvironmentFields,
   coordinatorBridgeIdentityFromEnvironment,
 } from "./commands-local-server-lifecycle.js";
-import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
+import { claudeTmuxRuntimeRootPrefix } from "./tmux/index.js";
 import { StorageService } from "./storage.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";

@@ -1,4 +1,4 @@
-import * as shared from "./tmux-shared.js";
+import * as shared from "./shared.js";
 import {
   AGENT_INTERACTION_HOLD_CEILING_MS,
   type AgentInteractionHold,
@@ -30,9 +30,9 @@ import {
   responseFilename,
   shellArg,
   shellDq,
-} from "./tmux-shared.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import { claudeProjectSlug } from "./claude-project-slug.js";
+} from "./shared.js";
+import { TmuxBackend } from "./backend.js";
+import { claudeProjectSlug } from "../claude-project-slug.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
@@ -258,7 +258,7 @@ export const TMUX_HOOK_DOORBELL_COMMAND = "/usr/local/bin/orkestrator-state-sign
 
 /**
  * `doorbell` (container hooks) rings the backend after each hook file is
- * written (`tmux-hook-signal.ts`). An image without the `hook` mode, or a
+ * written (`hook-signal.ts`). An image without the `hook` mode, or a
  * container with no doorbell config, makes the ring a no-op; the backend then
  * keeps polling, so the hook is never delayed by it.
  */

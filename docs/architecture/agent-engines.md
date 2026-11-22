@@ -356,7 +356,7 @@ head a bridge's transcript bound cut off (the snapshot reports
 `omittedParts`) is not a title source until hydration reads it whole
 (`firstUserMessageOf`), because the bound keeps the envelope's tail and drops
 the request. The Codex bridge's resume-list label (`session-title-index.ts`)
-and the Claude tmux resume list (`titleFromTranscriptHead`, `tmux-hooks.ts`)
+and the Claude tmux resume list (`titleFromTranscriptHead`, `tmux/hooks.ts`)
 strip the envelope the same way.
 
 ## Sub-agent models
@@ -651,7 +651,7 @@ It was qualified live in a container, including a restart that left a lock
 naming a reused pid, on 2026-11-06
 ([container-qualification.md](../development/container-qualification.md#claude-preference-lock-with-a-reused-pid-docker-desktop-2026-11-06)).
 
-Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux.ts`
+Claude also has a second, unrelated execution mode: `apps/backend/src/core/tmux/`
 drives the Claude Code CLI inside a tmux session and observes its terminal
 output. That path does not use the bridge or the SDK at all.
 
@@ -668,7 +668,7 @@ running, and `launch_terminal_job` itself is not gated, so the live scripts that
 call it directly still work.
 
 Its chat tab reads the session's JSONL through `TmuxTranscriptReader`
-(`tmux-transcript-reader.ts`). The file is found under
+(`tmux/transcript-reader.ts`). The file is found under
 `<claudeHome>/projects/<slug>/`, where the slug is Claude Code's own name for the
 working directory: every character that is not an ASCII letter or digit becomes
 `-`, and a name over 200 characters is cut and given the path's hash
@@ -1553,7 +1553,7 @@ and clicking again restarts a fresh window.
 - Claude in tmux mode pauses through its hook script: the blocking hooks run
   as `hook.sh <Kind> hold-v1` with a 48 h hook `timeout`, and the script's wait
   loop consumes a hold request file and rewrites its timing file
-  (`tmux-hooks.ts`, command `claude_tmux_hold_hook`). A hook without
+  (`tmux/hooks.ts`, command `claude_tmux_hold_hook`). A hook without
   `hold-v1` (an older install, or a CLI started before the upgrade) keeps an
   unpausable countdown (`hook-outdated`).
 - The public CLI lists `hold` and pauses or resumes a countdown

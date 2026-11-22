@@ -1,7 +1,8 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { cleanupEnvironmentTmux, RUNTIME_ROOT_PREFIX, tmuxSessionName } from "../src/core/tmux";
+import { RUNTIME_ROOT_PREFIX, tmuxSessionName } from "../src/core/tmux/shared";
+import { cleanupEnvironmentTmux } from "../src/core/tmux/commands";
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 

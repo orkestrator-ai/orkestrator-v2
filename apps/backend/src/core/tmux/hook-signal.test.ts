@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { StateSignalCredential } from "./agent-tools.js";
-import type { CommandContext } from "./commands-context.js";
+import type { StateSignalCredential } from "../agent-tools.js";
+import type { CommandContext } from "../commands-context.js";
 import {
   TMUX_HOOK_SIGNAL_RETRY_MS,
   TmuxHookSignalManager,
   type TmuxHookSignalInstaller,
-} from "./tmux-hook-signal.js";
-import type { ClaudeStateSignalSupport } from "./tmux-poll.js";
+} from "./hook-signal.js";
+import type { ClaudeStateSignalSupport } from "./poll.js";
 
 const flush = async () => {
   for (let index = 0; index < 20; index += 1) await Promise.resolve();

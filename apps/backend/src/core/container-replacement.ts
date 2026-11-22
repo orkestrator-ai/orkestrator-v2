@@ -33,7 +33,7 @@ import {
   removeRuntimeContainer,
   stopRuntimeContainer,
 } from "./egress-gateway.js";
-import { shutdownClaudeStatePolling } from "./tmux.js";
+import { shutdownClaudeStatePolling } from "./tmux/index.js";
 import type { CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import {

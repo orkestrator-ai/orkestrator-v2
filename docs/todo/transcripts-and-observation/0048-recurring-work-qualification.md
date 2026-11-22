@@ -467,7 +467,7 @@ after a restart. Follow-ups needing a decision were in 7120 (retired
 
 **Context.** The idle A/B decides none. The feature-planning keyed row read was decided from the harness (decision 4).
 
-**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux-interactive.ts`) and B20 (`review/validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
+**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux/interactive.ts`) and B20 (`review/validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
 
 **Decisions.**
 
@@ -1786,8 +1786,8 @@ What each pays at its cadence, from the rows above:
   of one core and a changing one (4 captures a second) about 25 %. The loop
   stops only on an explicit detach, the environment's tmux cleanup or backend
   shutdown; the client detaches on unmount, which a reload, a closed window
-  or a lost connection never runs (read from `tmux-interactive.ts`,
-  `tmux-commands.ts` and `ClaudeTmuxInteractiveTerminal.tsx`). Observed live
+  or a lost connection never runs (read from `tmux/interactive.ts`,
+  `tmux/commands.ts` and `ClaudeTmuxInteractiveTerminal.tsx`). Observed live
   on 2026-11-11 (to-do 7745 task 2, retired): one orphaned terminal in a
   container added 57.5 `docker exec` captures a minute, and a leased one
   nobody renewed added none once its 45 s lease had passed.
@@ -1997,7 +1997,7 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
   built (decision C3).
 - ~~The validation reader's in-environment `bun` spawn per poll.~~ Decided
   2026-11-11: kept (decision C4).
-- ~~Demand gating for interactive tmux capture (B19, `tmux-interactive.ts`).~~
+- ~~Demand gating for interactive tmux capture (B19, `tmux/interactive.ts`).~~
   Decided 2026-11-11: needed only for terminals no client detached, done by
   to-do 7745 (decision C5; retired 2026-11-11, the client lease).
 - ~~Splitting the validation worker's 500 ms liveness write from changed-result

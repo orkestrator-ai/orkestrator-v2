@@ -1,9 +1,9 @@
 import { claudeStateEvents } from "@orkestrator/protocol/contract/domains/events";
-import * as shared from "./tmux-shared.js";
-import { TranscriptTaskTracker, runCommand } from "./tmux-shared.js";
-import type { StateSignalCredential } from "./agent-tools.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
+import * as shared from "./shared.js";
+import { TranscriptTaskTracker, runCommand } from "./shared.js";
+import type { StateSignalCredential } from "../agent-tools.js";
+import { TmuxBackend } from "./backend.js";
+import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./session-manager.js";
 import {
   recurringWorkMetrics,
   type RecurringWorkMetrics,
@@ -13,7 +13,7 @@ import {
   type SignalDemotionReason,
   type SignalHealthState,
   type SignalHealthStatus,
-} from "./recurring/index.js";
+} from "../recurring/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   CLAUDE_SIGN_IN_NOTICE_CHECK_MS,
@@ -22,7 +22,7 @@ import {
   type ClaudeStateSettleTarget,
   type ClaudeStateSettler,
   type ClaudeTerminalScreens,
-} from "./claude-terminal-settle.js";
+} from "../claude-terminal-settle.js";
 
 const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;

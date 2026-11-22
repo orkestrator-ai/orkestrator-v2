@@ -26,7 +26,7 @@ import { seedFilesDir } from "./nodes/index.js";
 import { removeOpenCodeCommandChangeJournals } from "./change-tracking/index.js";
 import { stopEnvironmentExecWorkers } from "./public-api/exec-control.js";
 import { stopEnvironmentReviewValidation } from "./review/validation-service.js";
-import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux.js";
+import { cleanupEnvironmentTmux, shutdownClaudeStatePolling } from "./tmux/index.js";
 import { transcriptMediaPins } from "./transcript-media-pins.js";
 import { environmentDeletionSteps } from "./environment-deletion-steps.js";
 import type { EnvironmentDeletionStep } from "@orkestrator/protocol/node-summaries";

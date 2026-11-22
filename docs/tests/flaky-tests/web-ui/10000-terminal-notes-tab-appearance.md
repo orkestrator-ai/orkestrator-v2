@@ -14,3 +14,12 @@
 - **Aggregate evidence:** `orkestrator-test-run.BtAXFZ/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` in the host temporary directory.
 
 The cause is unconfirmed. The test failed while waiting for the pipeline's Notes control to appear. Reproduce under contention and verify whether the pipeline graph can lose its first render before adjusting the test.
+
+## Recurrence on 2026-11-22
+
+- **Branch and base:** `move-tmux-domain-32f62767dcd1-r1` at `02023f1a03bf72a0d8fac833bd0a2056aeacf597`, base `81a501415eab64566939eb76afe1d59432330e32`. The registry recurrence check confirmed case 10000 was open.
+- **Original command:** `mise run test:full`, with the web package using Bun `--parallel=2`.
+- **Failure:** The first Notes tab lookup again reported `Unable to find role="tab" and name /\^Notes/` after 1,433.77 ms.
+- **Suite counts:** 16,137 passed, 10 skipped and 1 failed across 1,147 web test files.
+- **Isolated rerun:** The aggregate runner ran `bun test ./src/components/terminal/TerminalContainer.notes.test.tsx --only-failures --parallel=1` from `apps/web`. Its one test passed in 1.34 s.
+- **Aggregate evidence:** `orkestrator-test-run.slc14y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.slc14y/rerun-apps-web-src-components-terminal-terminalcontainer-notes-test-tsx.log.gz` in the host temporary directory. The cause remains unconfirmed.

@@ -3,16 +3,18 @@ import { describe, expect, mock, test } from "bun:test";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import {
-  CLAUDE_STATE_POLL_INTERVAL_MS,
-  CLAUDE_STATE_READ_TIMEOUT_MS,
-  ClaudeStatePollManager,
-  claudeStateReadCommand,
   LIVENESS_CHECK_EVERY_TICKS,
   parsePollSnapshotExecOutput,
   parsePollSnapshotOutput,
   pollSnapshotScript,
+} from "../src/core/tmux/shared";
+import {
+  CLAUDE_STATE_POLL_INTERVAL_MS,
+  CLAUDE_STATE_READ_TIMEOUT_MS,
+  ClaudeStatePollManager,
+  claudeStateReadCommand,
   shutdownClaudeStatePolling,
-} from "../src/core/tmux";
+} from "../src/core/tmux/poll";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { createEnvironment, deferred, harnessRuntime, waitFor } from "./tmux-test-harness.js";

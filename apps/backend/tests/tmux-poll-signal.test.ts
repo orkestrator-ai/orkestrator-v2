@@ -9,8 +9,8 @@ import {
   CLAUDE_STATE_SIGNAL_RETRY_MS,
   ClaudeStatePollManager,
   type ClaudeStateSignalSupport,
-} from "../src/core/tmux";
-import { CLAUDE_STATE_ABSENT_MARKER, terminalClaudeDemand } from "../src/core/tmux-poll";
+} from "../src/core/tmux/poll";
+import { CLAUDE_STATE_ABSENT_MARKER, terminalClaudeDemand } from "../src/core/tmux/poll";
 import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";
 import { ManualTime, deferred, flushMicrotasks } from "../src/core/recurring/test-support";
 import { createEnvironment } from "./tmux-test-harness.js";

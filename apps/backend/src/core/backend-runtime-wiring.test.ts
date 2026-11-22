@@ -16,7 +16,7 @@ import type { Environment } from "./models.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
-import { localClaudeAccountPrefix } from "./tmux-session-manager.js";
+import { localClaudeAccountPrefix } from "./tmux/session-manager.js";
 import { tmuxLocalClaudeConfigDirectory } from "./commands-servers.js";
 import { deferred, flushMicrotasks } from "./recurring/test-support.js";
 

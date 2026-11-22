@@ -3,13 +3,13 @@ import path from "node:path";
 import os from "node:os";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { CommandContext } from "./commands.js";
-import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "./agent-tools.js";
-import type { Environment } from "./models.js";
-import type { JsonRecord } from "./storage.js";
-import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
-import { TranscriptTaskTracker } from "./claude-transcript-tasks.js";
-import { noProcessServesTmuxSocket, tmuxSocketPathFromMessage } from "./tmux-socket-owner.js";
+import type { CommandContext } from "../commands.js";
+import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "../agent-tools.js";
+import type { Environment } from "../models.js";
+import type { JsonRecord } from "../storage.js";
+import { CommandFailedError, runCommand, runCommandBuffer } from "../shell.js";
+import { TranscriptTaskTracker } from "../claude-transcript-tasks.js";
+import { noProcessServesTmuxSocket, tmuxSocketPathFromMessage } from "./socket-owner.js";
 import type { TaskListSnapshot } from "@orkestrator/protocol/task-list";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -65,7 +65,7 @@ export const TMUX_IDLE_LIVENESS_CHECK_EVERY_TICKS = 2;
 export const TMUX_DISCOVERY_MIN_INTERVAL_MS = 2_000;
 /**
  * The safety read of an idle tab whose container's hook doorbell works
- * (`tmux-hook-signal.ts`). Hooks are read when they ring; this read catches a
+ * (`hook-signal.ts`). Hooks are read when they ring; this read catches a
  * lost ring and carries liveness and the pane, so it stays under the 3 s pane
  * observation cadence and the 3 s liveness age mail presence accepts.
  */

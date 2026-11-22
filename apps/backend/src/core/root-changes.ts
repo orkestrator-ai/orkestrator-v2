@@ -8,7 +8,7 @@ import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import { runGitWithFsmonitorFallback } from "./git/index.js";
 import { CommandFailedError, runCommand, runCommandBuffer } from "./shell.js";
-import { containerExecArgs } from "./tmux-shared.js";
+import { containerExecArgs } from "./tmux/index.js";
 
 /**
  * The project checkout's uncommitted changes, and a user-approved patch of

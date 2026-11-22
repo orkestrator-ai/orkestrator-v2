@@ -2,15 +2,13 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
 import type { Environment } from "../src/core/models";
-import {
-  cleanupEnvironmentTmux,
-  killEnvironmentTmuxSessions,
-  tmuxSessionName,
-} from "../src/core/tmux";
+import { tmuxSessionName } from "../src/core/tmux/shared";
+import { killEnvironmentTmuxSessions } from "../src/core/tmux/session-manager";
+import { cleanupEnvironmentTmux } from "../src/core/tmux/commands";
 import { BackendRuntime } from "../src/core/backend-runtime";
-import { QUIET_ENVIRONMENT_RECHECK_MS } from "../src/core/tmux-runtime";
-import { TmuxBackend } from "../src/core/tmux-backend";
-import type { TmuxSession } from "../src/core/tmux-session-manager";
+import { QUIET_ENVIRONMENT_RECHECK_MS } from "../src/core/tmux/runtime";
+import { TmuxBackend } from "../src/core/tmux/backend";
+import type { TmuxSession } from "../src/core/tmux/session-manager";
 import { existsSync, promises as fs } from "node:fs";
 import {
   readHostTmuxSessions,

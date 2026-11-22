@@ -7,7 +7,7 @@ import { type CommandContext } from "./commands.js";
 import { moveEnvironmentTask, recoverInterruptedEnvironmentMoves } from "./environment-move.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
-import * as tmux from "./tmux-commands.js";
+import * as tmux from "./tmux/commands.js";
 import * as pathSafety from "./path-safety.js";
 import { parseWorktreeMoveRecord } from "./storage-projects.js";
 import {

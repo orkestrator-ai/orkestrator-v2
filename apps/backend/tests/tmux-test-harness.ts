@@ -25,11 +25,9 @@ import path from "node:path";
 
 import { setTimeout as delay } from "node:timers/promises";
 
-import {
-  registerTmuxBackendCommands,
-  RUNTIME_ROOT_PREFIX,
-  type TmuxSessionTimingOptions,
-} from "../src/core/tmux";
+import { RUNTIME_ROOT_PREFIX } from "../src/core/tmux/shared";
+import type { TmuxSessionTimingOptions } from "../src/core/tmux/session-manager";
+import { registerTmuxBackendCommands } from "../src/core/tmux/commands";
 
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { claudeProjectSlug } from "../src/core/claude-project-slug";

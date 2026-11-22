@@ -9,8 +9,12 @@ import { findEnvironmentByContainerId } from "./commands-review.js";
 import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
 import { readImageManifest } from "./docker-image.js";
 import { runCommand } from "./shell.js";
-import type { ClaudeStateSignalInstaller, ClaudeStateSignalSupport } from "./tmux-poll.js";
-import { TMUX_HOOK_SIGNAL_CONFIG_PATH, type TmuxHookSignalInstaller } from "./tmux-hook-signal.js";
+import {
+  TMUX_HOOK_SIGNAL_CONFIG_PATH,
+  type ClaudeStateSignalInstaller,
+  type ClaudeStateSignalSupport,
+  type TmuxHookSignalInstaller,
+} from "./tmux/index.js";
 
 /**
  * Container side of the Claude terminal state signal (`claude-state-signal=2`,
@@ -63,7 +67,7 @@ export function claudeStateSignalInstallCommand(
   return signalInstallCommand(containerId, credential, INSTALL_SCRIPT);
 }
 
-/** The same install for the claude-tmux hook doorbell (`tmux-hook-signal.ts`). */
+/** The same install for the claude-tmux hook doorbell (`tmux/hook-signal.ts`). */
 export function tmuxHookSignalInstallCommand(
   containerId: string,
   credential: Pick<StateSignalCredential, "url" | "token">,

@@ -2198,7 +2198,7 @@ bypass permissions as the default mode and records its consent
 reads it, so a **Claude CLI** tab opens straight to the prompt on every start;
 the image also sets `DISABLE_AUTOUPDATER=1` and `FORCE_AUTOUPDATE_PLUGINS=1`,
 so the pinned CLI never replaces itself in the container. `ClaudeStatePollManager`
-(`tmux-poll.ts`) reads the file with one `docker exec` and persists and emits
+(`tmux/poll.ts`) reads the file with one `docker exec` and persists and emits
 `claude-state-<containerId>` only on change.
 
 Version 2 hooks call `orkestrator-state-signal working|waiting`, which serializes
@@ -2285,7 +2285,7 @@ write to a container.
 #### claude-tmux tabs and a refused prompt
 
 A claude-tmux tab, host or container, leaves working only on its own `Stop`
-or `StopFailure` hook (`tmux-hooks.ts`, `TmuxSession.updateBusyFromHookKind`)
+or `StopFailure` hook (`tmux/hooks.ts`, `TmuxSession.updateBusyFromHookKind`)
 and has no screen settle. It does not need one with the pinned CLI (to-do
 8094, retired): on 2026-11-16 Claude Code 2.1.319, run as a claude-tmux tab
 runs it (interactive, in tmux, with Orkestrator's hook script and settings,
@@ -2396,7 +2396,7 @@ On an image with the capability, the container's hook script runs
 `orkestrator-state-signal hook` after writing a hook file. That rings
 `/tmux-hook-signal` with a per-container credential from its own config,
 `/tmp/.orkestrator-tmux-hook-signal`, and writes no Claude state.
-`TmuxHookSignalManager` (`tmux-hook-signal.ts`) arms it as the Claude state
+`TmuxHookSignalManager` (`tmux/hook-signal.ts`) arms it as the Claude state
 signal is armed (capability check, host preparation, config from stdin, probe
 ring) once per container, and a ring wakes every tab loop of that container.
 

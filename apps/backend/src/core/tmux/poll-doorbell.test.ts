@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import type { CommandContext } from "./commands.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import type { TmuxHookDoorbell } from "./tmux-hook-signal.js";
-import { TMUX_HOOK_DOORBELL_COMMAND, hookScript, workspaceHookPaths } from "./tmux-hooks.js";
-import { TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
+import type { CommandContext } from "../commands.js";
+import { TmuxBackend } from "./backend.js";
+import type { TmuxHookDoorbell } from "./hook-signal.js";
+import { TMUX_HOOK_DOORBELL_COMMAND, hookScript, workspaceHookPaths } from "./hooks.js";
+import { TmuxSession, TmuxSessionManager } from "./session-manager.js";
 import {
   TMUX_IDLE_POLL_INTERVAL_MS,
   TMUX_IDLE_AFTER_QUIET_TICKS,
   TMUX_SIGNALLED_IDLE_INTERVAL_MS,
   type PollSnapshotExtras,
   type TmuxPollSnapshot,
-} from "./tmux-shared.js";
+} from "./shared.js";
 
 const settle = async () => {
   for (let index = 0; index < 10; index += 1) await new Promise((r) => setImmediate(r));

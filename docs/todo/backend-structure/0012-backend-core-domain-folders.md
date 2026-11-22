@@ -4,13 +4,13 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice, and 2026-11-20 against `main` at `9a5a84f63` for the `native-agent` slice; task 3 re-checked 2026-11-22 against `main` at `dd1391427` for the `recurring` slice and the codemod's permalink fix; task 7 re-checked 2026-11-20 against `main` at `9a5a84f63` for `pi-model-catalog-seeding.ts`.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice, and 2026-11-20 against `main` at `9a5a84f63` for the `native-agent` slice; task 3 re-checked 2026-11-22 against `main` at `dd1391427` for the `recurring` slice and the codemod's permalink fix, and 2026-11-22 against `main` at `81a501415` for the `tmux` slice; task 7 re-checked 2026-11-20 against `main` at `9a5a84f63` for `pi-model-catalog-seeding.ts`.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20), the `agent-accounts` move is done (2026-11-20), the `workflows` move is done (2026-11-20), the `review` move is done (2026-11-20), the `build-pipeline` move is done (2026-11-20) and the `native-agent` move is done (2026-11-20), one change each (see "Assumptions and decisions"). Wave 2 is done; wave 3 is in progress (task 3).
-3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: in progress: the `recurring` move is done (2026-11-22, see "Assumptions and decisions"); `terminals`, `tmux`, `containers`, `environments` and `storage` are open, one change each.
+3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: in progress: the `recurring` and `tmux` moves are done (2026-11-22, one change each; see "Assumptions and decisions"); `terminals`, `containers`, `environments` and `storage` are open, one change each.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
 6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11; to-do 7800 (retired 2026-11-11) gave each an `index.ts` and both lint patterns (see "Current state").
@@ -68,12 +68,12 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
 
-**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)). Re-measured 2026-11-22 on `dd1391427` for the first slice: `recurring-*` was 4 source (`recurring-test-support.ts` included) / 3 tests (the table's 4 / 2 was stale on tests), with 50 production importers outside the domain in `apps/backend/src` (49 in `core/`, 17 of them in `build-pipeline/`, `change-tracking/`, `features/`, `git/`, `http-bridge/`, `native-agent/`, `public-api/`, `workflows/` and `worktrees/`, and `main.ts`) using 20 symbols from three modules, plus 68 tests and test-support files in `apps/backend/src`, 15 `apps/backend/tests` files, four `apps/backend/scripts` files and two repository scripts; no `tests/unit` file imports it. The domain's own runtime dependencies are the protocol's `recurring-work` module and `native-session-invalidation-metrics.ts`, which `recurring-diagnostics.ts` reads.
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)). Re-measured 2026-11-22 on `dd1391427` for the first slice: `recurring-*` was 4 source (`recurring-test-support.ts` included) / 3 tests (the table's 4 / 2 was stale on tests), with 50 production importers outside the domain in `apps/backend/src` (49 in `core/`, 17 of them in `build-pipeline/`, `change-tracking/`, `features/`, `git/`, `http-bridge/`, `native-agent/`, `public-api/`, `workflows/` and `worktrees/`, and `main.ts`) using 20 symbols from three modules, plus 68 tests and test-support files in `apps/backend/src`, 15 `apps/backend/tests` files, four `apps/backend/scripts` files and two repository scripts; no `tests/unit` file imports it. The domain's own runtime dependencies are the protocol's `recurring-work` module and `native-session-invalidation-metrics.ts`, which `recurring-diagnostics.ts` reads. Re-measured 2026-11-22 on `81a501415` for the second slice: `tmux*` was 14 source (the seven-module `export *` barrel `tmux.ts` included) / 14 tests (the table's 14 / 14 held; the 11 / 3 above was stale), with 11 production importers outside the domain in `apps/backend/src` (all at the `core/` root, none in a domain folder) using 17 symbols from six modules, plus eight tests and test-support files in `apps/backend/src`, 27 `apps/backend/tests` files and four `apps/backend/scripts` files; no repository script, `tests/unit` file or renderer file imports it (the renderer's and the protocol's `tmux-*` modules are different files). The tmux module state is in the runtime (`runtime.tmux`, todo 0133, retired), so nothing held this slice back.
 
 **Decisions.**
 
-- **Should `storage` and `tmux` wait for 0214 and 0133?**
-  - **Yes, sequence each slice after its refactor (recommended).**
+- **Should `storage` and `tmux` wait for 0214 and 0133?** Both refactors are done (0214 retired 2026-10-29, 0133 retired with #1427), so neither waits any more; `tmux` moved on 2026-11-22.
+  - **Yes, sequence each slice after its refactor (recommended; chosen).**
     - Pros: same reasoning as `native-agent`: move files once.
     - Cons: both refactors are rated Low and may not be scheduled soon.
   - **Move them in wave order regardless.**
@@ -493,6 +493,23 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   `native-session-invalidation-metrics.ts` stay at the root. Wave 3 is in
   progress: `terminals`, `tmux`, `containers`, `environments` and `storage`
   are left, one change each. See "Assumptions and decisions".
+- Done (task 3's `tmux` slice, 2026-11-22, against `main` at
+  `81a501415`): the 14 `tmux*` source files and their 14 tests are in
+  `core/tmux/` without the prefix (`tmux/session-manager.ts`,
+  `tmux/backend.ts`, `tmux/hooks.ts`, `tmux/poll.ts`, `tmux/runtime.ts`,
+  `tmux/commands.ts`, …). The root barrel `tmux.ts`, which re-exported seven
+  modules with `export *`, became `tmux/index.ts` with explicit named
+  re-exports: 17 symbols from six modules, and all 11 production importers
+  outside the folder import it. Neither lint pattern has an exception: no
+  runtime cycle results, and no `tests/unit` file imports the domain. The
+  eight `apps/backend/tests` files that imported the old barrel now import
+  each symbol from its own module. `claude-state-signal.ts` (both container
+  doorbells' install), `local-server-reaper.ts`, the command registry file
+  that installs the `claude_tmux_*` handlers (`commands-registry-teardown.ts`)
+  and the other `commands-*`, `container-*` and `environment-*` callers stay
+  at the root.
+  Wave 3 is in progress: `terminals`, `containers`, `environments` and
+  `storage` are left, one change each. See "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -535,7 +552,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   it holds 539 and 531, down from 619 and 655 just before it; 541 and 531
   once rebased onto `a01039913`, which added two root files; and after the
   `recurring` slice on 2026-11-22 it holds 541 and 530, down from 545 and
-  533 just before it).
+  533 just before it; and after the `tmux` slice on 2026-11-22 it holds 528
+  and 516, down from 542 and 530 just before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -557,19 +575,21 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | build-pipeline | `build-pipeline-*`, `control-workflow-summary.ts`, `pipeline-worker-*` | done (60 / 68 moved, 2026-11-20) | |
   | native-agent | `native-agent-*`, `native-terminal-messages.ts`, `workflow-account-handoff.test.ts` | done (80 / 124 moved, 2026-11-20) | |
   | terminals | `terminal-*`, `transcript-*` | 8 | 14 |
-  | tmux | `tmux*` | 14 | 14 |
+  | tmux | `tmux*` | done (14 / 14 moved, 2026-11-22) | |
   | recurring | `recurring-*` | done (4 / 3 moved, 2026-11-22) | |
   | containers | `container-*`, `docker-*` | 47 | 27 |
   | environments | `environment-*` | 18 | 18 |
   | storage | `storage*` | 85 | 105 |
-  | commands | `commands*` | 86 | 85 |
+  | commands | `commands*` | 87 | 85 |
   | (unplaced) | `pi-model-catalog-seeding.ts` | 1 | 1 |
   | (unplaced) | `auto-pipeline*.ts` | 3 | 2 |
 
   The wave 3, `commands` and unplaced rows were re-counted on 2026-11-20 at
   `9a5a84f63`, after the `native-agent` slice; their earlier figures dated
   from the plan; the `storage` and `commands` rows were re-counted on
-  2026-11-22 at `dd1391427`, before the `recurring` slice. These are file
+  2026-11-22 at `dd1391427`, before the `recurring` slice; and every open
+  row was re-counted on 2026-11-22 at `81a501415`, before the `tmux` slice
+  (only `commands` changed, from 86 to 87 source files). These are file
   counts only. Importer and dependency counts go stale within a
   day, so each slice re-measures them (step 1 below).
 - `keyed-record-*` is now one file, `keyed-record-format.ts`: the keyed-record
@@ -620,9 +640,9 @@ before the busy ones move.
 2. **Wave 2 (mid-tier):** done. (`plan-usage`, `features`, `previews`,
    `worktrees`, `git`, `coordinator`, `agent-accounts`, `workflows`,
    `review`, `build-pipeline` and `native-agent`.)
-3. **Wave 3 (hubs), in progress:** `recurring` is done (2026-11-22);
-   `terminals`, `tmux`, `containers`, `environments` and `storage` are left,
-   one PR each. Many files import these, and `containers` is
+3. **Wave 3 (hubs), in progress:** `recurring` and `tmux` are done
+   (2026-11-22); `terminals`, `containers`, `environments` and `storage` are
+   left, one PR each. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
    touch the most files.
 4. **Last: `commands`.** It depends on most other domains. Its former
@@ -709,10 +729,136 @@ task 2's `worktrees` slice (2026-11-17), task 2's `git` slice
 `agent-accounts` slice (2026-11-20), task 2's `workflows` slice
 (2026-11-20), task 2's `review` slice (2026-11-20), task 2's
 `build-pipeline` slice (2026-11-20), task 2's `native-agent` slice
-(2026-11-20), and task 3's `recurring` slice with the codemod's permalink
-fix (2026-11-22).
+(2026-11-20), task 3's `recurring` slice with the codemod's permalink
+fix (2026-11-22), and task 3's `tmux` slice (2026-11-22).
 The other moves in waves 3 and 4 (tasks 3 and 4) were left open on purpose:
 they move many files that other work in flight touches.
+
+### Task 3: `tmux` as the second wave 3 slice
+
+- Chosen: one domain, `tmux`, moved with
+  `bun scripts/move-backend-modules.ts --map <file>` against `main` at
+  `81a501415`. A map file was needed because the root barrel `tmux.ts` has
+  no `tmux-` prefix to drop; the map sends it to `tmux/index.ts` and every
+  `tmux-*` file to `tmux/<name>` without the prefix
+  (`tmux-session-manager.ts` → `tmux/session-manager.ts`,
+  `tmux-poll-doorbell.test.ts` → `tmux/poll-doorbell.test.ts`). No two moved
+  files map to the same name. No backend import path had a `tmux/` segment:
+  the protocol's `tmux-prompt` and `tmux-observation` modules, the renderer's
+  `claude-tmux-*` files and the contract's `domains/claude-tmux/` folder have
+  none, so `**/tmux/*` catches nothing else. The codemod must run under the
+  pinned Bun (`mise exec -- bun …`): an older `bun` on `PATH` has no
+  `bun fmt` and fails after the rewrites, which the reset in procedure step
+  2 undoes.
+- Membership: the claude-tmux mode, which is exactly the `tmux*` files
+  (sessions and their poll loop, the tmux/`docker exec` backend, hooks and the
+  hook doorbell, the per-container state poll, the interactive pane terminal
+  and its clipboard clients, transcript reads, the process census, the
+  runtime slice and the command handlers). Edge cases, each decided here:
+  - `tmux.ts` became `tmux/index.ts`. Options: (a) replace it with the
+    folder's `index.ts` (chosen): it already was the domain's barrel, and
+    its importers keep one entry point; (b) keep it at the root beside a new
+    `index.ts`: a second public surface, and its `export *` is what the
+    procedure forbids. The old barrel re-exported every symbol of seven
+    modules; `index.ts` names only the 17 that production importers outside
+    the folder use. Eight `apps/backend/tests` files and
+    `local-server-reaper.test.ts` used other symbols through the barrel and
+    now import them from their own modules (procedure step 3); no test
+    changed otherwise.
+  - `claude-state-signal.ts` stays at the root. Options: (a) leave it
+    (chosen): it installs both container doorbells (the Claude state signal
+    and the tmux hook doorbell), and its importers include `agent-tools.ts`
+    and the container signal installs, not only tmux files; (b) move it in:
+    it is not a `tmux*` file, and its container importers would reach into
+    the folder.
+  - `local-server-reaper.ts` stays at the root. It reaps local servers and
+    tmux sessions alike and only reads the session-name helpers, through
+    `index.ts`.
+  - `tmux/commands.ts` (the `claude_tmux_*` handlers) moved, not left for the
+    `commands` slice. Options: (a) move it (chosen): it has the prefix, and
+    the handlers and environment teardown are the domain's own;
+    (b) leave it with the `commands*` files: its name does not start with
+    `commands`, so it would stay unplaced. `commands-registry-teardown.ts`,
+    which registers it, stays at the root for the last slice.
+  - The renderer's `claude-tmux-*` and `ClaudeTmux*` files, the protocol's
+    `tmux-*` modules and `apps/backend/tests/tmux-*` and
+    `apps/backend/scripts/tmux-*` keep their names: they are outside `core/`.
+- Measured before the move: see task 3's investigation. The codemod moved 28
+  files and rewrote 85. No worker or bundle entry point names a moved file,
+  no `<revision>:<path>` string did, and no GitHub permalink did. One
+  slow-tier glob named the moved tests (`src/core/tmux*.test.ts`); it is now
+  `src/core/tmux/*.test.ts`, which matches the same 14 files.
+  `tests/source-guards/baseline.json` names only
+  `apps/backend/tests/tmux-poll.test.ts`, which did not move.
+  The codemod rewrote two flake records' `apps/backend/src/core/tmux.ts:331`
+  and `tmux.ts:2013` (stack locations recorded on 2026-08-07 and
+  2026-08-15 in the 4,322-line `tmux.ts` that #417 split into the barrel on
+  2026-08-16) to `tmux/index.ts`; both were restored, with no current-path
+  note, because no current file holds that code under one name. Its rewrite of `tmux-shared.ts` in the cause prose of flake records
+  0236, 0245 and 0786 stays, as in the `recurring` slice.
+- `index.ts` holds 17 symbols from six modules (`commands.ts`,
+  `hook-signal.ts`, `hooks.ts`, `poll.ts`, `runtime.ts`, `shared.ts`). All
+  11 production importers in `apps/backend/src` import it, including the
+  five that imported modules directly before (`backend-runtime.ts` for
+  `TmuxRuntime`, `claude-state-signal.ts`, `commands-review.ts`,
+  `environment-move.ts` and `root-changes.ts`); `claude-state-signal.ts`'s two
+  imports became one. Tests and test support, the `apps/backend/tests` and
+  `apps/backend/scripts` files keep deep imports (procedure step 3).
+  `environment-move.test.ts` and `environment-move.recovery.test.ts` spy on
+  `cleanupEnvironmentTmux` through the `tmux/commands.js` namespace while
+  `environment-move.ts` now imports it through `index.ts`; both files pass,
+  so the spy still reaches the caller through the re-export.
+- Named exceptions: none, in either override. Checked with `bunx oxlint
+  apps/backend/src`: with every production importer routed through
+  `index.ts` it reports no `import(no-cycle)` and no restricted import. A
+  probe (reverted) that made `tmux/shared.ts` import `backend-runtime.ts`
+  reported 122 `import(no-cycle)` errors, so the check does see cycles
+  through this `index.ts`; a probe file deep-importing `tmux/backend.js` was
+  reported by the new pattern. Options: (a) route every importer through
+  `index.ts` with no exception (chosen): the smallest set is empty;
+  (b) keep the five direct importers deep as exceptions, as they were before
+  the move: nothing requires it. The reason is written in `index.ts`'s
+  header and in `docs/development/linting.md`.
+- Paths built from a moved file's own location: no moved file uses
+  `import.meta.dir`, `import.meta.url` or `__dirname`.
+  `apps/backend/scripts/tmux-exec-count.ts` loads the session manager and
+  backend from a `--src` directory (`core/tmux-session-manager.ts`, which
+  the codemod rewrote to `core/tmux/session-manager.ts`). Its documented use
+  is measuring another checkout's sources for before numbers, which are
+  pre-move sources, so it now takes `core/tmux/<name>.ts` and falls back to
+  `core/tmux-<name>.ts` when that is absent. Options: (a) the fallback
+  (chosen): both layouts load, checked against this tree and a `git archive`
+  of `81a501415`; (b) the codemod's rewrite alone: a pure path change, but
+  `--src` on any pre-move checkout would fail with a missing module.
+- Hand fixes after the codemod: bare `tmux-*.ts` file names in source
+  comments (`claude-state-signal.ts`, `commands-context.ts`,
+  `container-worktree-signal.ts`, four moved files, which now name their
+  sibling `hook-signal.ts` without a folder,
+  `apps/backend/tests/tmux-transcript-reopen-docker.test.ts` and the
+  protocol's `contract/domains/claude-tmux/commands.ts`), living docs under
+  `docs/architecture/` (`agent-engines.md`, `backend-runtime.md`,
+  `change-tracking.md`, `container-lifecycle.md`, `environment-deletion.md`,
+  `environment-isolation.md`, `platform-inconsistencies.md`,
+  `recurring-work.md`) and to-dos 0030, 0048 and 5120 now read
+  `tmux/<name>.ts`. Where the codemod turned `core/tmux.ts` into
+  `core/tmux/index.ts` in prose that means the whole mode (`AGENTS.md`'s
+  backend key-files table, `agent-engines.md`, `upgrade-agents.md`), and
+  where `platform-inconsistencies.md` named `core/tmux-*.ts`, the text now
+  names the folder, `apps/backend/src/core/tmux/`. Left alone: recurring-work
+  kinds and capability names that look like file names (`tmux-poll`,
+  `tmux-interactive-capture`, `tmux-hook-signal=1`), the test harness's note
+  that it was split out of `tmux-backend.test.ts`, flake-record commands,
+  dated plan logs under `plans/`, and the earlier slices' entries in this
+  section. `docs/development/linting.md`'s folder list names the new folder
+  and says why it has no exception. The area index's 0012 row records
+  `tmux` as done.
+- Lint patterns: `**/tmux/*` with `!**/tmux/index.js` under
+  `apps/backend/src/**`, and `**/backend/src/core/tmux/*` with `!…/index.js`
+  under `tests/unit/**`.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, the slow tier, `verify:packaged-backend`) is
+  agent work for the validation stage, so nothing was added to the
+  manual-test checklist (7568).
 
 ### Task 3: the codemod skips commit-pinned GitHub permalinks
 

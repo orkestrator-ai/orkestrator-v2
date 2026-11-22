@@ -2,15 +2,15 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { TmuxBackend } from "./tmux-backend.js";
-import { TmuxSession } from "./tmux-session-manager.js";
-import { StorageService, createEnvironment } from "./storage.js";
-import { runCommand } from "./shell.js";
+import { TmuxBackend } from "./backend.js";
+import { TmuxSession } from "./session-manager.js";
+import { StorageService, createEnvironment } from "../storage.js";
+import { runCommand } from "../shell.js";
 import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,
   environmentIsolationVariables,
-} from "./environment-isolation.js";
-import type { CommandContext } from "./commands-context.js";
+} from "../environment-isolation.js";
+import type { CommandContext } from "../commands-context.js";
 
 test("two Claude panes on an existing tmux server replace its inherited project and ports", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ork-tmux-isolation-"));

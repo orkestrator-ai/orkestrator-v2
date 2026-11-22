@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { WORKLOADS, measureTmuxReopen } from "../scripts/tmux-reopen-read-size";
-import { TMUX_TRANSCRIPT_PAGE_BYTES } from "../src/core/tmux-transcript-reader";
+import { TMUX_TRANSCRIPT_PAGE_BYTES } from "../src/core/tmux/transcript-reader";
 
 /**
  * The read a tab reopen costs in a container (BG-14), measured by the same

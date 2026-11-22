@@ -141,7 +141,14 @@ export function localServerFields(kind: LocalServerKind): {
   if (kind === "codex") return { port: "localCodexPort", pid: "codexBridgePid" };
   if (kind === "cursor") return { port: "localCursorPort", pid: "cursorBridgePid" };
   if (kind === "pi") return { port: "localPiPort", pid: "piBridgePid" };
-  return { port: "localGrokPort", pid: "grokBridgePid" };
+  if (kind === "antigravity") {
+    return { port: "localAntigravityPort", pid: "antigravityBridgePid" };
+  }
+  if (kind === "grok") return { port: "localGrokPort", pid: "grokBridgePid" };
+  // Exhaustive: a new kind must name its own fields rather than fall through
+  // to another provider's port and process record.
+  const unhandled: never = kind;
+  throw new Error(`No local server fields for ${String(unhandled)}`);
 }
 
 export function aggregateRejectedResults(

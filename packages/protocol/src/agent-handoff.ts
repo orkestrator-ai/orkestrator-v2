@@ -62,6 +62,7 @@ export const AGENT_HANDOFF_PROVIDER_LABELS: Record<AgentHandoffProvider, string>
   grok: "Grok",
   opencode: "OpenCode",
   pi: "Pi",
+  antigravity: "Antigravity",
 };
 
 /**

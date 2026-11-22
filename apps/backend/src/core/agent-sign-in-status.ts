@@ -64,6 +64,7 @@ export const SETTINGS_SIGN_IN_ROUTES: Readonly<Record<AgentPlatform, NativeAgent
   grok: { kind: "terminal", hint: "Open a terminal and run grok login." },
   opencode: { kind: "terminal", hint: "Sign each model provider in under Provider Sign-in." },
   pi: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+  antigravity: { kind: "terminal", hint: "Open a terminal and run agy acp --login." },
 };
 
 export interface AgentSignInStatusDependencies {
@@ -205,6 +206,20 @@ export async function readAgentSignInStatus(
       return {
         state: (await grokSignedIn(env, home, readText)) ? "signed-in" : "signed-out",
         signIn: SETTINGS_SIGN_IN_ROUTES.grok,
+        signOut: false,
+      };
+    case "antigravity":
+      // agy keeps its Google login in the OS keyring, which cannot be read
+      // from here; only the keyring-less token file proves a login. Anything
+      // else is unknown, never signed out: a session request is what tells.
+      return {
+        state:
+          (await readText(
+            path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
+          )) !== undefined
+            ? "signed-in"
+            : "unknown",
+        signIn: SETTINGS_SIGN_IN_ROUTES.antigravity,
         signOut: false,
       };
     case "pi": {

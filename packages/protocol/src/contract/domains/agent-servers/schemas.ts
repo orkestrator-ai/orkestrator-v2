@@ -27,8 +27,19 @@ const StringArray = Schema.Array(Schema.String);
 
 // --- Bridges --------------------------------------------------------------
 
-/** The six agent bridges a container or a local environment runs. */
-export const AGENT_SERVER_KINDS = ["opencode", "claude", "codex", "cursor", "grok", "pi"] as const;
+/**
+ * The agent bridges a container or a local environment runs. Antigravity
+ * shares the ACP bridge's code with Grok but runs as its own process.
+ */
+export const AGENT_SERVER_KINDS = [
+  "opencode",
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+  "pi",
+  "antigravity",
+] as const;
 export type AgentServerKind = (typeof AGENT_SERVER_KINDS)[number];
 
 /** `start_<agent>_server`: the container bridge's host port and its per-process token. */
@@ -210,7 +221,7 @@ export interface PersistedAgentModelCatalog<T> {
 
 /**
  * `AgentModelCatalogCache`: the host-wide last-known-good catalogues used
- * before any environment bridge has started. Cursor, Grok and Pi persist the
+ * before any environment bridge has started. Cursor, Grok, Pi and Antigravity persist the
  * provider-neutral models their ACP bridge normalises. OpenCode stays
  * project-scoped ({@link OpenCodeModelCatalogSnapshotSchema}) because its
  * provider list can differ between repositories.
@@ -222,6 +233,7 @@ export const AgentModelCatalogCacheSchema = openRecord({
   cursor: Schema.optional(persistedCatalogOf(AgentModelSchema)),
   grok: Schema.optional(persistedCatalogOf(AgentModelSchema)),
   pi: Schema.optional(persistedCatalogOf(AgentModelSchema)),
+  antigravity: Schema.optional(persistedCatalogOf(AgentModelSchema)),
 });
 /**
  * The cache's type: the schema's, with each platform's catalogue as
@@ -230,13 +242,14 @@ export const AgentModelCatalogCacheSchema = openRecord({
  */
 export type AgentModelCatalogCache = Omit<
   Mutable<typeof AgentModelCatalogCacheSchema.Type>,
-  "claude" | "codex" | "cursor" | "grok" | "pi"
+  "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity"
 > & {
   claude?: PersistedAgentModelCatalog<ClaudeModelCatalogEntry>;
   codex?: PersistedAgentModelCatalog<CodexModelCatalogEntry>;
   cursor?: PersistedAgentModelCatalog<AgentModel>;
   grok?: PersistedAgentModelCatalog<AgentModel>;
   pi?: PersistedAgentModelCatalog<AgentModel>;
+  antigravity?: PersistedAgentModelCatalog<AgentModel>;
 };
 
 /**

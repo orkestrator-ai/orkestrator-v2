@@ -211,6 +211,7 @@ ENV VISUAL=nano
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
 #   OPENCODE2_CLI_VERSION ↔ PINNED_TOOLCHAIN_VERSIONS.opencode2 (OpenCode 2.x, the only OpenCode)
 #   PI_CLI_VERSION        ↔ the four @earendil-works/pi-* pins in bridges/pi-bridge/package.json
+#   ANTIGRAVITY_CLI_VERSION ↔ PINNED_TOOLCHAIN_VERSIONS.antigravity
 # Claude CLI has its own release train, distinct from
 # @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.326
@@ -218,6 +219,7 @@ ARG CODEX_CLI_VERSION=0.169.0
 ARG OPENCODE2_CLI_VERSION=2.3.1
 ARG GROK_BUILD_VERSION=1.0.88
 ARG PI_CLI_VERSION=1.5.2
+ARG ANTIGRAVITY_CLI_VERSION=1.5.12
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies. Every global npm install
@@ -303,8 +305,30 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   ln -s /opt/pi/pi /usr/local/bin/pi && \
   chmod 755 /opt/pi/pi && \
   rm -f /tmp/pi.tar.gz
+
+# Google's Antigravity CLI (`agy`) from its official GitHub release: one
+# `antigravity` executable per archive, pinned and hash verified like the
+# others. `agy` is the documented command name. Auto-update is off so the
+# container keeps running the manifest's version.
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) ANTIGRAVITY_ARCH=x64; ANTIGRAVITY_SHA=0f0cb851cdc9fbedd50432570aa6ae9c4c398b9ea3f1e23e7776f707643c5b3e ;; \
+    arm64) ANTIGRAVITY_ARCH=arm64; ANTIGRAVITY_SHA=594046de1b91561f7fe16476365e3843038ecca56f5f59af45cf9d3091e43bd4 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  curl -fsSL --retry 5 --retry-max-time 300 --connect-timeout 30 --max-time 300 \
+    "https://github.com/google-antigravity/antigravity-cli/releases/download/${ANTIGRAVITY_CLI_VERSION}/agy_cli_linux_${ANTIGRAVITY_ARCH}.tar.gz" -o /tmp/agy.tar.gz && \
+  printf '%s  %s\n' "$ANTIGRAVITY_SHA" /tmp/agy.tar.gz | sha256sum -c - && \
+  install -d -o root -g root -m 0755 /opt/antigravity && \
+  tar -xzf /tmp/agy.tar.gz -C /opt/antigravity --no-same-owner antigravity && \
+  chown root:root /opt/antigravity/antigravity && \
+  chmod 755 /opt/antigravity/antigravity && \
+  ln -s /opt/antigravity/antigravity /usr/local/bin/agy && \
+  rm -f /tmp/agy.tar.gz
 USER node
 ENV PI_CLI_PATH=/usr/local/bin/pi
+ENV ANTIGRAVITY_CLI_PATH=/usr/local/bin/agy
+ENV AGY_CLI_DISABLE_AUTO_UPDATE=1
 
 # Fail the image build immediately if an installer completed without leaving a
 # runnable CLI at the path the backend will use.
@@ -312,7 +336,8 @@ RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
  && "$OPENCODE2_CLI_PATH" --version \
  && grok --version \
- && "$PI_CLI_PATH" --version
+ && "$PI_CLI_PATH" --version \
+ && "$ANTIGRAVITY_CLI_PATH" --version
 
 # Codex spawns `codex-code-mode-host` from its own directory for every code-mode
 # turn, and the models that default to code mode are unusable without it. The

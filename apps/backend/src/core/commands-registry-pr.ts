@@ -83,6 +83,7 @@ import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failu
 import {
   awaitBridgeReadyCommand,
   cleanupStaleLocalServersCommand,
+  getLocalAntigravityServerStatusCommand,
   getLocalClaudeServerStatusCommand,
   getLocalCodexServerStatusCommand,
   getLocalCursorServerStatusCommand,
@@ -91,12 +92,14 @@ import {
   getLocalPiServerStatusCommand,
   peekContainerAgentBridgeCommand,
   peekLocalAgentBridgeCommand,
+  startLocalAntigravityServerCommand,
   startLocalClaudeServerCommand,
   startLocalCodexServerCommand,
   startLocalCursorServerCommand,
   startLocalGrokServerCommand,
   startLocalOpencodeServerCommand,
   startLocalPiServerCommand,
+  stopLocalAntigravityServerCommand,
   stopLocalClaudeServerCommand,
   stopLocalCodexServerCommand,
   stopLocalCursorServerCommand,
@@ -140,6 +143,11 @@ const LOCAL_SERVER_COMMANDS = {
     start: startLocalPiServerCommand,
     stop: stopLocalPiServerCommand,
     status: getLocalPiServerStatusCommand,
+  },
+  antigravity: {
+    start: startLocalAntigravityServerCommand,
+    stop: stopLocalAntigravityServerCommand,
+    status: getLocalAntigravityServerStatusCommand,
   },
 } as const satisfies Record<LocalServerKind, unknown>;
 

@@ -26,6 +26,7 @@ import {
   CURSOR_BRIDGE_PORT,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
+  ANTIGRAVITY_ACP_BRIDGE_PORT,
   PI_BRIDGE_PORT,
   OPENCODE2_SERVER_PORT,
   resolveCodexMaxConcurrentThreads,
@@ -46,7 +47,14 @@ import {
   waitForLocalServerHealth,
   openCodeHealthHeaders,
   bearerBridgeHeaders,
+  usesBearerBridgeHealth,
 } from "./commands-server-health.js";
+import {
+  acpBridgeProviderArgument,
+  acpProviderLaunchEnv,
+  isAcpLocalServerKind,
+  type AcpLocalServerKind,
+} from "./acp-provider-launch.js";
 import type { AgentAccountsRuntime } from "./agent-accounts/runtime.js";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { Environment } from "./models.js";
@@ -459,6 +467,7 @@ export function localServerPort(
   if (kind === "codex") return environment?.localCodexPort;
   if (kind === "cursor") return environment?.localCursorPort;
   if (kind === "pi") return environment?.localPiPort;
+  if (kind === "antigravity") return environment?.localAntigravityPort;
   return environment?.localGrokPort;
 }
 
@@ -477,6 +486,9 @@ export const CONTAINER_BRIDGE_PORTS: Record<LocalServerKind, number> = {
   grok: GROK_ACP_BRIDGE_PORT,
   pi: PI_BRIDGE_PORT,
   opencode: OPENCODE2_SERVER_PORT,
+  // Never published: Antigravity has no container bridge yet
+  // (`acpContainerUnavailableReason`), so a lookup finds no host port.
+  antigravity: ANTIGRAVITY_ACP_BRIDGE_PORT,
 };
 
 /**
@@ -526,7 +538,7 @@ export async function peekLocalAgentBridgeState(
     localServerHealthPath(kind),
     kind === "opencode"
       ? openCodeHealthHeaders(authToken)
-      : kind === "cursor" || kind === "grok" || kind === "pi"
+      : usesBearerBridgeHealth(kind)
         ? bearerBridgeHeaders(authToken)
         : undefined,
   );
@@ -565,7 +577,7 @@ export async function peekContainerAgentBridge(
     localServerHealthPath(kind),
     kind === "opencode"
       ? openCodeHealthHeaders(authToken)
-      : kind === "cursor" || kind === "grok" || kind === "pi"
+      : usesBearerBridgeHealth(kind)
         ? bearerBridgeHeaders(authToken)
         : undefined,
   );
@@ -579,10 +591,13 @@ export async function peekContainerAgentBridge(
  * three serve `/global/models` identically behind a bearer token, so a second
  * copy of this would be the same function with one string changed.
  */
+/** The bridges that serve `/global/models` behind a bearer token. */
+export type AcpModelBridgeKind = "cursor" | "grok" | "pi" | "antigravity";
+
 export async function fetchAcpNormalizedModels(
   environment: Environment,
   context: CommandContext,
-  kind: "cursor" | "grok" | "pi",
+  kind: AcpModelBridgeKind,
   timeoutMs?: number,
 ): Promise<AgentModel[]> {
   return (await fetchAcpNormalizedModelsResult(environment, context, kind, timeoutMs)).models;
@@ -597,7 +612,7 @@ export type AcpNormalizedModelsResult = {
 export async function fetchAcpNormalizedModelsResult(
   environment: Environment,
   context: CommandContext,
-  kind: "cursor" | "grok" | "pi",
+  kind: AcpModelBridgeKind,
   timeoutMs?: number,
 ): Promise<AcpNormalizedModelsResult> {
   try {
@@ -623,7 +638,7 @@ export async function fetchAcpNormalizedModelsResult(
  * retain their tighter bound while Pi's own bounded refresh is allowed to
  * finish instead of being aborted just before it can seed the cache.
  */
-export function acpModelFetchTimeoutMs(kind: "cursor" | "grok" | "pi"): number {
+export function acpModelFetchTimeoutMs(kind: AcpModelBridgeKind): number {
   return kind === "pi" ? 35_000 : 8_000;
 }
 
@@ -634,7 +649,7 @@ export const HOST_ACP_MODEL_FETCH_TIMEOUT_MS = 35_000;
 export async function fetchAcpNormalizedModelsAt(
   port: number,
   authToken: string,
-  kind: "cursor" | "grok" | "pi",
+  kind: AcpModelBridgeKind,
   timeoutMs?: number,
   maximumTimeoutMs = acpModelFetchTimeoutMs(kind),
 ): Promise<AgentModel[]> {
@@ -647,7 +662,7 @@ export async function fetchAcpNormalizedModelsAt(
 export async function fetchAcpNormalizedModelsAtResult(
   port: number,
   authToken: string,
-  kind: "cursor" | "grok" | "pi",
+  kind: AcpModelBridgeKind,
   timeoutMs?: number,
   maximumTimeoutMs = acpModelFetchTimeoutMs(kind),
 ): Promise<AcpNormalizedModelsResult> {
@@ -799,7 +814,7 @@ async function startLocalServerAttempt(
     const healthHeaders = authToken
       ? kind === "opencode"
         ? openCodeHealthHeaders(authToken)
-        : kind === "cursor" || kind === "grok" || kind === "pi"
+        : usesBearerBridgeHealth(kind)
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
@@ -1205,47 +1220,38 @@ async function startLocalServerAttempt(
   } else {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "acp-bridge");
-    env.ACP_PROVIDER = kind;
-    env.ACP_STATE_DIR = path.join(
-      environmentStateDirectory(context.storage.getDataDir(), "acp-bridge-state", environmentId),
-      kind,
-    );
     // Toolchains are downloaded once at app startup from the stored platform
     // selection, so a platform enabled mid-session has no managed binary yet.
     // Say that plainly instead of failing with a bare spawn ENOENT. Startup
     // aborts unless every selected platform activated, so this is reachable
     // only for a platform enabled after this backend generation started, which
     // is exactly what the message tells the user to fix.
-    const managedAcpBinary = resolveManagedAcpBinary(context, kind);
+    const acpKind: AcpLocalServerKind = kind;
+    const managedAcpBinary = resolveManagedAcpBinary(context, acpKind);
     if (!managedAcpBinary) {
       throw new Error(
-        `${AGENT_PLATFORM_LABELS[kind]} is enabled but not installed yet.` +
+        `${AGENT_PLATFORM_LABELS[acpKind]} is enabled but not installed yet.` +
           " Restart Orkestrator to finish downloading it.",
       );
     }
-    env.ACP_AGENT_PATH = managedAcpBinary;
-    env.ACP_PROVIDER_CONFIG = JSON.stringify({
-      id: kind,
-      name: AGENT_PLATFORM_LABELS[kind],
-      executable: managedAcpBinary,
-      argv: ["--always-approve", "agent", "{{model}}", "{{effort}}", "stdio"],
-      env: {},
-      requiresAuthenticate: true,
-      authMethodEnv: "GROK_AUTH_METHOD_ID",
-      modeMap: {
-        agent: "build",
-        code: "build",
-        build: "build",
-        agentic: "build",
-        plan: "plan",
-        architect: "plan",
-        ask: "plan",
-      },
-      extensionPrefixes: ["x.ai/", "_x.ai/"],
-      acknowledgedExtensionMethods: [],
-      modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
-      sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
-    });
+    // One launcher record per provider, shared with the catalogue probe and
+    // the container launch (`acp-provider-launch.ts`), and a state directory
+    // of its own so Grok and Antigravity never share a journal.
+    Object.assign(
+      env,
+      acpProviderLaunchEnv(acpKind, {
+        executable: managedAcpBinary,
+        stateDirectory: path.join(
+          environmentStateDirectory(
+            context.storage.getDataDir(),
+            "acp-bridge-state",
+            environmentId,
+          ),
+          acpKind,
+        ),
+        appVersion: APP_VERSION,
+      }),
+    );
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
@@ -1314,7 +1320,11 @@ async function startLocalServerAttempt(
   }
   localServers.recordBridgeToken(kind, environmentId, bridgeToken);
 
-  const args = openCodeLaunch ? openCodeLaunch.args : [bridgeEntrypoint];
+  const args = openCodeLaunch
+    ? openCodeLaunch.args
+    : isAcpLocalServerKind(kind)
+      ? [bridgeEntrypoint, acpBridgeProviderArgument(kind)]
+      : [bridgeEntrypoint];
   const childEnv = openCodeLaunch ? openCodeLaunch.env : env;
   // Every host OpenCode server shares one database, which a start migrates:
   // held from spawn until healthy or failed (`opencode2/host-server-state.ts`).
@@ -1393,7 +1403,7 @@ async function startLocalServerAttempt(
         kind,
         kind === "opencode"
           ? openCodeHealthHeaders(authToken)
-          : kind === "cursor" || kind === "grok" || kind === "pi"
+          : usesBearerBridgeHealth(kind)
             ? bearerBridgeHeaders(authToken)
             : undefined,
         // OpenCode's own health check already requires its password.

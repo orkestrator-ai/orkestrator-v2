@@ -170,13 +170,22 @@ export function localServerHealthPath(kind: LocalServerKind): string {
   return kind === "opencode" ? "/api/info" : "/global/health";
 }
 
+/**
+ * The bridges whose health route wants the bearer bridge token: the SDK and
+ * ACP bridges (Cursor, Grok, Pi, Antigravity). Claude and Codex use their own
+ * header forms; OpenCode its password.
+ */
+export function usesBearerBridgeHealth(kind: LocalServerKind): boolean {
+  return kind === "cursor" || kind === "grok" || kind === "pi" || kind === "antigravity";
+}
+
 export function localServerHealthAttempts(kind: LocalServerKind): number {
-  // Cursor, Grok, and Pi use the longer budget because their cold
+  // Cursor, Grok, Pi and Antigravity use the longer budget because their cold
   // start builds a model runtime and may refresh a provider catalogue over the
   // network before it can answer, which is slower than a bridge that only has
   // to bind a port.
   if (kind === "opencode") return OPENCODE_LOCAL_SERVER_HEALTH_ATTEMPTS;
-  return kind === "cursor" || kind === "grok" || kind === "pi"
+  return usesBearerBridgeHealth(kind)
     ? ACP_LOCAL_SERVER_HEALTH_ATTEMPTS
     : LOCAL_SERVER_HEALTH_ATTEMPTS;
 }

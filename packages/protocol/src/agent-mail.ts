@@ -738,9 +738,11 @@ export function resolveTabDisplayName(input: ResolveTabDisplayNameInput): string
               ? "Grok"
               : input.agent === "pi"
                 ? "Pi"
-                : input.tabType === "plain" || input.tabType === "root"
-                  ? "Terminal"
-                  : "Agent";
+                : input.agent === "antigravity"
+                  ? "Antigravity"
+                  : input.tabType === "plain" || input.tabType === "root"
+                    ? "Terminal"
+                    : "Agent";
   const detail =
     input.customSessionName?.trim() ||
     input.nativeSessionTitle?.trim() ||

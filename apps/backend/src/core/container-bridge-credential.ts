@@ -32,6 +32,7 @@ import {
   CODEX_BRIDGE_PORT,
   CURSOR_BRIDGE_PORT,
   GROK_ACP_BRIDGE_PORT,
+  ANTIGRAVITY_ACP_BRIDGE_PORT,
   OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
@@ -92,6 +93,9 @@ export const CONTAINER_TOKEN_FILES: Record<ContainerBridgeKind, string> = {
   cursor: "/tmp/cursor-bridge-token",
   grok: "/tmp/grok-acp-bridge-token",
   pi: "/tmp/pi-bridge-token",
+  // Named for completeness: no Antigravity container bridge starts yet
+  // (`acpContainerUnavailableReason`), so nothing writes or reads it.
+  antigravity: "/tmp/antigravity-acp-bridge-token",
 };
 
 const TOKEN_ENV: Record<ContainerBridgeKind, string> = {
@@ -100,6 +104,7 @@ const TOKEN_ENV: Record<ContainerBridgeKind, string> = {
   cursor: "CURSOR_BRIDGE_TOKEN",
   grok: "ACP_BRIDGE_TOKEN",
   pi: "PI_BRIDGE_TOKEN",
+  antigravity: "ACP_BRIDGE_TOKEN",
 };
 
 /**
@@ -201,6 +206,7 @@ const CONTAINER_BRIDGE_PORTS: Record<ContainerBridgeKind, number> = {
   cursor: CURSOR_BRIDGE_PORT,
   grok: GROK_ACP_BRIDGE_PORT,
   pi: PI_BRIDGE_PORT,
+  antigravity: ANTIGRAVITY_ACP_BRIDGE_PORT,
 };
 
 export function containerBridgeLaunch(

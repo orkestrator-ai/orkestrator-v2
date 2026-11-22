@@ -45,7 +45,20 @@ import type { PromptTurnClock } from "./acp-prompt-clock.js";
 import { formatAcpRpcError } from "./acp-errors.js";
 import { terminateAcpProcessTree } from "./acp-process-tree.js";
 import { JsonlLineFramer } from "./acp-jsonl-framer.js";
-import { assertAcpSignedIn } from "./acp-credentials.js";
+import {
+  assertAcpSignedIn,
+  acpSignInRequiredMessage,
+  CredentialError,
+  noteAcpSignedIn,
+  noteAcpSignInRefused,
+} from "./acp-credentials.js";
+import {
+  ANTIGRAVITY_AUTHENTICATE_TIMEOUT_MS,
+  ANTIGRAVITY_PROVIDER_ID,
+  antigravityAppendsSystemPrompt,
+  isAntigravityLoginBanner,
+  isAntigravitySignInFailure,
+} from "./antigravity-acp.js";
 import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
 import {
@@ -985,6 +998,7 @@ export class AcpProcess {
       reject(error: Error): void;
       timer: ReturnType<typeof setTimeout>;
       cleanupAbort?: () => void;
+      method: string;
     }
   >();
   #closed = false;
@@ -1024,6 +1038,11 @@ export class AcpProcess {
    * (`sessionInstructionsCarrier`).
    */
   systemPromptSupported = false;
+  /**
+   * Whether this child's `initialize` declared Antigravity's own carrier,
+   * `_meta.antigravity.systemPrompt.append` (`sessionInstructionsCarrier`).
+   */
+  antigravitySystemPromptAppend = false;
 
   constructor(spawnOptions: AcpSpawnOptions = {}) {
     if (!executable) {
@@ -1129,7 +1148,12 @@ export class AcpProcess {
         session: { configOptions: { boolean: {} }, notices: {} },
         _meta: { parameterizedModelPicker: true },
       },
-      clientInfo: { name: "orkestrator", title: "Orkestrator", version: "1.0.0" },
+      // The real application version (the backend exports it to every bridge).
+      clientInfo: {
+        name: "orkestrator",
+        title: "Orkestrator",
+        version: process.env.ORKESTRATOR_VERSION?.trim().slice(0, 64) || "0.0.0",
+      },
     };
     const result = await this.request("initialize", initializeRequest, RPC_TIMEOUT_MS, signal);
     const initialized = isObject(result) ? result : {};
@@ -1142,6 +1166,8 @@ export class AcpProcess {
     rememberAgentRuntime(initialized);
     this.sessionCloseSupported = supportsSessionCapability(initialized, "close");
     this.systemPromptSupported = supportsSessionCapability(initialized, "systemPrompt");
+    this.antigravitySystemPromptAppend =
+      provider === ANTIGRAVITY_PROVIDER_ID && antigravityAppendsSystemPrompt(initialized);
     await this.authenticateIfRequired(initialized, signal);
     return initialized;
   }
@@ -1153,6 +1179,10 @@ export class AcpProcess {
     // With no login at all, Grok's `authenticate` waits on an interactive
     // sign-in instead of failing. Refuse before asking.
     const env = { ...process.env, ...providerConfig.env };
+    if (provider === ANTIGRAVITY_PROVIDER_ID) {
+      await this.authenticateAntigravity(env, signal);
+      return;
+    }
     await assertAcpSignedIn(provider, providerConfig.authMethodEnv, env);
     const meta = isObject(initialized._meta) ? initialized._meta : {};
     const required =
@@ -1171,6 +1201,32 @@ export class AcpProcess {
       return;
     }
     await this.request("authenticate", { methodId }, RPC_TIMEOUT_MS, signal);
+    agentRuntime.authenticated = true;
+  }
+
+  /**
+   * Antigravity authenticates only when the backend names a method
+   * (`ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD`, for an API key or Agent Platform).
+   * Its Google login is the one `agy acp --login` stored on this machine, and
+   * agy uses it for session requests without an `authenticate` call; asking
+   * would start an interactive browser sign-in instead (1.5.12). Without a
+   * login, the session request fails with `Authentication required`, which
+   * `request` turns into a sign-in-required `CredentialError`.
+   */
+  private async authenticateAntigravity(
+    env: NodeJS.ProcessEnv,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const methodId = providerConfig.authMethodEnv
+      ? env[providerConfig.authMethodEnv]?.trim()
+      : undefined;
+    if (!methodId) return;
+    await this.request(
+      "authenticate",
+      { methodId: methodId.slice(0, 128) },
+      Math.min(RPC_TIMEOUT_MS, ANTIGRAVITY_AUTHENTICATE_TIMEOUT_MS),
+      signal,
+    );
     agentRuntime.authenticated = true;
   }
 
@@ -1217,7 +1273,7 @@ export class AcpProcess {
         signal.addEventListener("abort", onAbort, { once: true });
         cleanupAbort = () => signal.removeEventListener("abort", onAbort);
       }
-      this.#pending.set(id, { resolve: resolvePromise, reject, timer, cleanupAbort });
+      this.#pending.set(id, { resolve: resolvePromise, reject, timer, cleanupAbort, method });
       onTimeoutArmed?.((timeoutAt) => {
         const pending = this.#pending.get(id);
         if (!pending) return;
@@ -1290,6 +1346,16 @@ export class AcpProcess {
 
   #acceptLine(line: string): void {
     if (!line.trim()) return;
+    if (provider === ANTIGRAVITY_PROVIDER_ID && isAntigravityLoginBanner(line)) {
+      // agy started an interactive sign-in on its stdout. Neither recorded nor
+      // logged: the line carries a sign-in link. Every pending request fails
+      // as sign-in required, and the child goes, taking the sign-in with it.
+      noteAcpSignInRefused(provider);
+      agentRuntime.authenticated = false;
+      this.#close(new CredentialError(acpSignInRequiredMessage(provider)));
+      void this.#terminateChild("rejected");
+      return;
+    }
     replayRecorder?.rawLine(this.#replayKey, line);
     this.#diagnostics?.streamEvent();
     let message: JsonObject;
@@ -1313,6 +1379,14 @@ export class AcpProcess {
       pending.cleanupAbort?.();
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonObject;
+        if (provider === ANTIGRAVITY_PROVIDER_ID && isAntigravitySignInFailure(error)) {
+          // Recorded for `/status` readiness; the message is fixed text, never
+          // the agent's own (which may name an account).
+          noteAcpSignInRefused(provider);
+          agentRuntime.authenticated = false;
+          pending.reject(new CredentialError(acpSignInRequiredMessage(provider)));
+          return;
+        }
         pending.reject(
           new AcpRpcError(
             formatAcpRpcError(error, provider),
@@ -1321,6 +1395,10 @@ export class AcpProcess {
           ),
         );
       } else {
+        if (provider === ANTIGRAVITY_PROVIDER_ID && pending.method.startsWith("session/")) {
+          noteAcpSignedIn(provider);
+          if (agentRuntime.authenticated === false) agentRuntime.authenticated = undefined;
+        }
         pending.resolve(message.result);
       }
       return;

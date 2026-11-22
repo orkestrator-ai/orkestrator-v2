@@ -401,14 +401,15 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
       args.schema && typeof args.schema === "object" && !Array.isArray(args.schema)
         ? (args.schema as import("@orkestrator/protocol/structured-output").JsonSchema)
         : undefined,
-    // Cursor and Grok preserve their session's current mode unless explicit,
-    // and Pi has no mode at all. Everything else defaults to read-only mode.
+    // Cursor and the ACP agents (Grok, Antigravity) preserve their session's
+    // current mode unless explicit, and Pi has no mode at all. Everything else
+    // defaults to read-only mode.
     mode:
       args.mode === "build"
         ? "build"
         : args.mode === "plan"
           ? "plan"
-          : agent === "cursor" || agent === "grok" || agent === "pi"
+          : agent === "cursor" || agent === "grok" || agent === "pi" || agent === "antigravity"
             ? undefined
             : "plan",
     fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,

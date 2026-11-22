@@ -157,7 +157,8 @@ export function claudeNativeParameterValues(
 /**
  * What each platform does when no tier has an opinion.
  *
- * Cursor is SDK-only and therefore always native. Claude also ships native;
+ * Cursor is SDK-only and therefore always native. Antigravity has only a
+ * native (ACP) integration, so it is native too. Claude also ships native;
  * the remaining CLI-backed platforms default to terminal mode.
  */
 export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchMode>> =
@@ -168,6 +169,7 @@ export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchM
     grok: "terminal",
     opencode: "terminal",
     pi: "terminal",
+    antigravity: "native",
   });
 
 function tierPlatform(

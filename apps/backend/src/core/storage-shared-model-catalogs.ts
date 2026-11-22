@@ -243,7 +243,7 @@ export function normalizeCodexModelCatalogEntries(value: unknown): CodexModelCat
 
 export function normalizeAcpModelCatalogEntries(
   value: unknown,
-  platform: "cursor" | "grok" | "pi",
+  platform: "cursor" | "grok" | "pi" | "antigravity",
 ): AgentModel[] {
   if (!Array.isArray(value)) return [];
   const normalized: AgentModel[] = [];
@@ -361,6 +361,9 @@ export function parsePersistedAgentModelCatalogCache(value: unknown): AgentModel
     normalizeAcpModelCatalogEntries(models, "grok"),
   );
   const pi = parseCatalog(value.pi, (models) => normalizeAcpModelCatalogEntries(models, "pi"));
+  const antigravity = parseCatalog(value.antigravity, (models) =>
+    normalizeAcpModelCatalogEntries(models, "antigravity"),
+  );
   return {
     schemaVersion: 1,
     ...(claude ? { claude } : {}),
@@ -368,5 +371,6 @@ export function parsePersistedAgentModelCatalogCache(value: unknown): AgentModel
     ...(cursor ? { cursor } : {}),
     ...(grok ? { grok } : {}),
     ...(pi ? { pi } : {}),
+    ...(antigravity ? { antigravity } : {}),
   };
 }

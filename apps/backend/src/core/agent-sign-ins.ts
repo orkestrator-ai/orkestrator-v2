@@ -133,11 +133,42 @@ export async function readPiSignIn(
   return { state: "signed-out" };
 }
 
+/**
+ * Where agy 1.5 keeps a Google sign-in when the machine has no OS keyring
+ * (`<gemini dir>/<app data dir>/antigravity-oauth-token`, defaults `~/.gemini`
+ * and `antigravity-cli`; T3 Code's `antigravityUsageLimits.ts`). With a
+ * keyring the sign-in is in the keyring and no file exists.
+ */
+export function antigravityOAuthTokenFile(home: string): string {
+  return path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+}
+
+/**
+ * Antigravity's sign-in, as far as files can tell: the token file above means
+ * signed in. Its absence proves nothing, because agy normally keeps the login
+ * in the OS keyring, so the platform is then left out of the answer (unknown)
+ * rather than reported signed out. The bridge's own answer, from a real
+ * session request, is the authoritative one (`acp-credentials.ts`).
+ */
+export async function readAntigravitySignIn(
+  env: ProcessEnvironment = process.env,
+  home = env.HOME?.trim() || homedir(),
+): Promise<HostAgentSignIn | undefined> {
+  if ((await readSmallFile(antigravityOAuthTokenFile(home))) !== undefined) {
+    return { state: "signed-in", source: "Stored login" };
+  }
+  return undefined;
+}
+
 export async function readHostAgentSignIns(
   env: ProcessEnvironment = process.env,
 ): Promise<HostAgentSignIns> {
-  const [grok, pi] = await Promise.all([readGrokSignIn(env), readPiSignIn(env)]);
-  return { grok, pi };
+  const [grok, pi, antigravity] = await Promise.all([
+    readGrokSignIn(env),
+    readPiSignIn(env),
+    readAntigravitySignIn(env),
+  ]);
+  return { grok, pi, ...(antigravity ? { antigravity } : {}) };
 }
 
 /**
@@ -148,6 +179,10 @@ export async function readHostAgentSignIns(
 const SIGN_IN_COMMANDS: Record<HostSignInPlatform, string> = {
   grok: "grok login",
   pi: "pi",
+  // agy's own ACP terminal sign-in ("Log in with Google interactively, then
+  // exit"), the login the bridge's sessions then use. Auto-update stays off,
+  // as it is for the bridge's children, so the pinned binary is the one run.
+  antigravity: "AGY_CLI_DISABLE_AUTO_UPDATE=1 agy acp --login",
 };
 
 /** The same readiness `launch_terminal_job` requires before it opens a terminal. */
@@ -189,7 +224,7 @@ export async function openAgentSignInTerminal(
       "Start a local environment on this machine first: the sign-in runs in one of its terminals.",
     );
   }
-  const label = platform === "grok" ? "Grok" : "Pi";
+  const label = platform === "grok" ? "Grok" : platform === "pi" ? "Pi" : "Antigravity";
   const { tabId } = await options.launchTerminalJob({
     environmentId: environment.id,
     requestId: `agent-sign-in-${platform}-${Date.now()}`,

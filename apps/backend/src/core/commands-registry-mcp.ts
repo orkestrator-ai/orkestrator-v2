@@ -75,6 +75,7 @@ const PORT_FIELD: Record<AgentPlatform, keyof Environment> = {
   grok: "localGrokPort",
   opencode: "localOpencodePort",
   pi: "localPiPort",
+  antigravity: "localAntigravityPort",
 };
 
 const PID_FIELD: Record<AgentPlatform, keyof Environment> = {
@@ -84,6 +85,7 @@ const PID_FIELD: Record<AgentPlatform, keyof Environment> = {
   grok: "grokBridgePid",
   opencode: "opencodePid",
   pi: "piBridgePid",
+  antigravity: "antigravityBridgePid",
 };
 
 /**

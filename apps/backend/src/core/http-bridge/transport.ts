@@ -35,6 +35,7 @@ import {
 } from "../agent-provider-runtime.js";
 import { bridgeAuthorityHeaders } from "../bridge-authority-keys.js";
 import { recurringWorkMetrics } from "../recurring/index.js";
+import { servesSharedBridgeSurface } from "./bridge-agents.js";
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
@@ -454,11 +455,7 @@ function authHeaders(connection: BridgeConnection): Headers {
     headers.set("X-Orkestrator-Claude-Token", connection.authToken);
   } else if (connection.agent === "codex") {
     headers.set("X-Orkestrator-Codex-Token", connection.authToken);
-  } else if (
-    connection.agent === "cursor" ||
-    connection.agent === "grok" ||
-    connection.agent === "pi"
-  ) {
+  } else if (servesSharedBridgeSurface(connection.agent)) {
     headers.set("Authorization", `Bearer ${connection.authToken}`);
   }
   return headers;
@@ -471,10 +468,7 @@ function bridgeRequestTimeoutMs(
   if (connection.requestTimeoutMs !== undefined) {
     return Math.max(1, connection.requestTimeoutMs);
   }
-  if (
-    kind === "session-start" &&
-    (connection.agent === "cursor" || connection.agent === "grok" || connection.agent === "pi")
-  ) {
+  if (kind === "session-start" && servesSharedBridgeSurface(connection.agent)) {
     return ACP_SESSION_START_TIMEOUT_MS;
   }
   // Unlike session start this is not narrowed to these slower-starting bridges: every bridge
@@ -690,7 +684,7 @@ export function bridgePromptAttachments(
   agent: ProviderAgent,
   attachments: PromptAttachment[] | undefined,
 ): PromptAttachment[] | undefined {
-  if (!attachments || (agent !== "cursor" && agent !== "grok" && agent !== "pi")) {
+  if (!attachments || !servesSharedBridgeSurface(agent)) {
     return attachments;
   }
   return attachments.map((attachment) => ({

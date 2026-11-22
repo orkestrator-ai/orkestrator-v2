@@ -22,6 +22,7 @@ import {
 } from "./agent-settings.js";
 import {
   MAX_BUILD_PIPELINE_REVIEWERS,
+  isPipelineQualifiedAgent,
   type BuildPipelineAgent,
   type BuildStepConfig,
   type BuildStepConfigs,
@@ -83,7 +84,7 @@ function actionSelection(
   const configuredFallback = resolveDefaultAgent(tiers);
   const fallbackAgent = enabledAgents.includes(configuredFallback)
     ? configuredFallback
-    : (enabledAgents[0] ?? configuredFallback);
+    : (enabledAgents[0] ?? pipelineAgentOr(configuredFallback));
   const action = resolveActionDefault(resolveActionDefaults(tiers), key, {
     fallbackAgent,
     enabledAgents,
@@ -93,11 +94,23 @@ function actionSelection(
   const reasoningEffort = pinOrOmit(action.reasoningEffort ?? platform.reasoningEffort);
   const fastMode = action.fastMode ?? platform.fastMode;
   return {
-    agent: action.agent,
+    agent: pipelineAgentOr(action.agent),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
   };
+}
+
+/** A platform that cannot run a pipeline step falls back to Claude, the shipped default. */
+function pipelineAgentOr(platform: AgentPlatform): BuildPipelineAgent {
+  return isPipelineQualifiedAgent(platform) ? platform : "claude";
+}
+
+/** The enabled platforms a pipeline step may use (`isPipelineQualifiedAgent`). */
+export function enabledBuildPipelineAgents(
+  enabledAgents: readonly AgentPlatform[],
+): BuildPipelineAgent[] {
+  return enabledAgents.filter(isPipelineQualifiedAgent);
 }
 
 function configuredReviewer(
@@ -112,7 +125,7 @@ function configuredReviewer(
   const reasoningEffort = pinOrOmit(entry.reasoningEffort ?? platform.reasoningEffort);
   const fastMode = entry.fastMode ?? platform.fastMode;
   return {
-    agent: entry.platform,
+    agent: pipelineAgentOr(entry.platform),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
@@ -136,12 +149,14 @@ function actionHasUsablePlatform(
  */
 export function buildPipelineConfiguredDefaults(
   tiers: AgentSettingsTiers,
-  enabledAgents: readonly AgentPlatform[],
+  enabledPlatforms: readonly AgentPlatform[],
 ): BuildPipelineConfiguredDefaults {
+  const enabledAgents = enabledBuildPipelineAgents(enabledPlatforms);
   const configuredActions = resolveActionDefaults(tiers);
   const review = actionSelection(tiers, "review", enabledAgents);
   const review2 =
     configuredActions.review2?.platform &&
+    isPipelineQualifiedAgent(configuredActions.review2.platform) &&
     enabledAgents.includes(configuredActions.review2.platform)
       ? actionSelection(tiers, "review2", enabledAgents)
       : review;
@@ -195,5 +210,10 @@ export function defaultBuildPipelineAgent(
   tiers: AgentSettingsTiers,
   enabledAgents: readonly AgentPlatform[],
 ): BuildPipelineAgent {
-  return firstEnabledAgentPlatform(enabledAgents, resolveDefaultAgent(tiers)) as BuildPipelineAgent;
+  return pipelineAgentOr(
+    firstEnabledAgentPlatform(
+      enabledBuildPipelineAgents(enabledAgents),
+      resolveDefaultAgent(tiers),
+    ),
+  );
 }

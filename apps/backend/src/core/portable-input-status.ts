@@ -244,6 +244,8 @@ export const IMPORTED_CREDENTIAL_FILES: Record<AgentPlatform, readonly string[]>
   grok: ["/home/node/.grok/auth.json", "/home/node/.grok/xai-api-key"],
   pi: ["/home/node/.pi/agent/auth.json"],
   cursor: [CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_SDK_AUTH_FILE],
+  // Nothing is imported: Antigravity does not run in containers yet.
+  antigravity: [],
 };
 
 export interface RevocationResult {
@@ -268,6 +270,9 @@ const PROVIDER_PROCESS_PATTERNS: Record<AgentPlatform, string> = {
   pi: "[/]opt/pi-bridge/",
   grok: "[/]opt/acp-bridge/",
   opencode: "[o]pencode(2)? serve",
+  // No Antigravity container bridge starts yet; named so a future one is not
+  // mistaken for Grok's.
+  antigravity: "[/]opt/acp-bridge/dist/index.js --provider=[a]ntigravity",
 };
 
 /**

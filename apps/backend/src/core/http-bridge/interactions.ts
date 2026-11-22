@@ -35,6 +35,7 @@ import {
   truncatedText,
 } from "../agent-provider-runtime.js";
 import { assertOk, boundedJson, bridgeFetch } from "./transport.js";
+import { isAcpBridgeAgent } from "./bridge-agents.js";
 import type { HttpBridgeStateReads } from "./state-revision.js";
 import { acpRuleDetail, claudeRuleDetail, codexRuleDetail } from "../permission-rules/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -143,10 +144,15 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
   private readonly ruleDetails = new Map<string, PermissionRuleRequestDetail>();
 
   constructor(
-    readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi",
+    readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity",
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
   ) {}
+
+  /** The short name ACP interaction cards use ("Grok", "Antigravity"). */
+  private get acpLabel(): string {
+    return this.agent === "antigravity" ? "Antigravity" : "Grok";
+  }
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.interactionTracker.register(sessionId, interaction);
@@ -687,7 +693,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       !Number.isSafeInteger(requestedAt) ||
       !Number.isSafeInteger(expiresAt)
     ) {
-      throw new ProviderUnavailableError("Grok returned a malformed interaction");
+      throw new ProviderUnavailableError(`${this.acpLabel} returned a malformed interaction`);
     }
     if (request.kind === "mcp-form" || request.kind === "mcp-url") {
       return this.mapServerElicitation(sessionId, providerRequestId, request, request.kind, {
@@ -721,7 +727,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       return mapped;
     }
     if (request.kind !== "question" || !Array.isArray(request.questions)) {
-      throw new ProviderUnavailableError("Grok returned an unknown interaction kind");
+      throw new ProviderUnavailableError(`${this.acpLabel} returned an unknown interaction kind`);
     }
     const questions: AgentInteractionQuestion[] = request.questions.map(
       (candidate, questionIndex) => {
@@ -730,11 +736,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         const prompt = nonEmptyString(question?.question);
         const options = question?.options;
         if (!id || !prompt || !Array.isArray(options)) {
-          throw new ProviderUnavailableError("Grok returned a malformed question");
+          throw new ProviderUnavailableError(`${this.acpLabel} returned a malformed question`);
         }
         return {
           id: boundedText(id, id, AGENT_INTERACTION_LIMITS.maxIdLength),
-          prompt: boundedText(prompt, "Grok needs input"),
+          prompt: boundedText(prompt, `${this.acpLabel} needs input`),
           required: true,
           multiple: question?.multiple === true,
           secret: false,
@@ -744,7 +750,9 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
             const providerValue = nonEmptyString(option?.id);
             const label = nonEmptyString(option?.label);
             if (!providerValue || !label) {
-              throw new ProviderUnavailableError("Grok returned a malformed question option");
+              throw new ProviderUnavailableError(
+                `${this.acpLabel} returned a malformed question option`,
+              );
             }
             return {
               id: opaqueOptionId(questionIndex, optionIndex),
@@ -764,7 +772,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     );
     return this.interactionRequest(sessionId, providerRequestId, "question", request, {
       kind: "question",
-      presentation: { title: "Grok needs input", questions },
+      presentation: { title: `${this.acpLabel} needs input`, questions },
       createdAt: requestedAt as number,
       updatedAt: requestedAt as number,
       expiresAt: expiresAt as number,
@@ -1026,11 +1034,14 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       for (const request of claudeInteractions) {
         mapRequest(request, (raw) => this.mapClaudeInteraction(sessionId, raw));
       }
-    } else if (this.agent === "cursor" || this.agent === "grok") {
+    } else if (this.agent === "cursor" || isAcpBridgeAgent(this.agent)) {
       for (const request of firstRequests) {
         mapRequest(request, (raw) => this.mapAcpApproval(sessionId, raw));
       }
-      if (this.agent === "grok") {
+      // The ACP bridge parks questions (Grok's `ask_user_question`,
+      // Antigravity's `interaction_*` permission requests), plan approvals and
+      // MCP elicitations in one shape for every provider it runs.
+      if (isAcpBridgeAgent(this.agent)) {
         for (const request of secondRequests) {
           mapRequest(request, (raw) => this.mapGrokInteraction(sessionId, raw));
         }
@@ -1349,7 +1360,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       };
     }
 
-    if (this.agent === "grok" && request.kind === "question") {
+    if (isAcpBridgeAgent(this.agent) && request.kind === "question") {
       const byQuestion = new Map(
         resolution.answer?.answers.map((answer) => [answer.questionId, answer]),
       );
@@ -1378,7 +1389,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       };
     }
 
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "cursor" || isAcpBridgeAgent(this.agent)) {
       if (
         request.kind !== "permission" &&
         request.kind !== "command-approval" &&

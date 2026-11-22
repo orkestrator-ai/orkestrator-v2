@@ -9,6 +9,7 @@ import type {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import { loadAcpProviderConfig } from "./acp-provider-config.js";
+import { isAntigravityApprovalPolicyMode } from "./antigravity-acp.js";
 
 export type AcpProvider = AgentPlatform;
 
@@ -128,7 +129,7 @@ export function normalizeAcpSessionConfig(
 ): AcpNormalizedSessionConfig {
   const root = isObject(result) ? result : {};
   const configOptions = parseConfigOptions(root.configOptions);
-  const modes = parseAvailableModes(root.modes);
+  const modes = conversationModesOnly(provider, parseAvailableModes(root.modes));
   const grokModels = parseGrokModelCatalog(root.models);
   const usesSetModel = grokModels.models.length > 0;
   const availableModeIds = modeIdMap(modes.available);
@@ -662,6 +663,25 @@ function parseAvailableModes(value: unknown): { currentId?: string; available: P
     currentId: typeof value.currentModeId === "string" ? value.currentModeId : undefined,
     available,
   };
+}
+
+/**
+ * Leave out native modes that are approval policies rather than
+ * conversation modes (Antigravity's `auto` and `accept-edits`), so a mode
+ * switch cannot bypass Orkestrator's own permission selector. A current mode
+ * that is one of them is reported as none.
+ */
+function conversationModesOnly(
+  provider: AcpProvider,
+  modes: { currentId?: string; available: ParsedMode[] },
+): { currentId?: string; available: ParsedMode[] } {
+  if (provider !== "antigravity") return modes;
+  const available = modes.available.filter((mode) => !isAntigravityApprovalPolicyMode(mode.id));
+  const currentId =
+    modes.currentId && !isAntigravityApprovalPolicyMode(modes.currentId)
+      ? modes.currentId
+      : undefined;
+  return { available, ...(currentId ? { currentId } : {}) };
 }
 
 function modeIdMap(available: ParsedMode[]): AcpConfigWire["availableModeIds"] {

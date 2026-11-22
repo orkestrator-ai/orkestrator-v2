@@ -7,6 +7,8 @@ import {
   getCodexServerStatusCommand,
   getCursorServerLogCommand,
   getCursorServerStatusCommand,
+  getAntigravityServerLogCommand,
+  getAntigravityServerStatusCommand,
   getGrokServerLogCommand,
   getGrokServerStatusCommand,
   getOpencodeModelCatalogCacheCommand,
@@ -18,18 +20,21 @@ import {
   startClaudeServerCommand,
   startCodexServerCommand,
   startCursorServerCommand,
+  startAntigravityServerCommand,
   startGrokServerCommand,
   startOpencodeServerCommand,
   startPiServerCommand,
   stopClaudeServerCommand,
   stopCodexServerCommand,
   stopCursorServerCommand,
+  stopAntigravityServerCommand,
   stopGrokServerCommand,
   stopOpencodeServerCommand,
   stopPiServerCommand,
 } from "@orkestrator/protocol/contract/domains/agent-servers";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import { containerBridgeOperationId } from "./container-bridge-operations.js";
+import { acpContainerUnavailableReason, acpProviderLaunchRecord } from "./acp-provider-launch.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import {
@@ -186,6 +191,12 @@ export function containerBridgeStartRegistrar(register: CommandRegistrar) {
     });
   };
 }
+
+/**
+ * Grok's container launcher record: the shared one (`acp-provider-launch.ts`)
+ * with the image's `grok` on PATH.
+ */
+const GROK_CONTAINER_PROVIDER_CONFIG = JSON.stringify(acpProviderLaunchRecord("grok", "grok"));
 
 /** The Cursor and Grok bridge commands, registered by one loop. */
 const ACP_SERVER_COMMANDS = {
@@ -598,7 +609,7 @@ export function registerServerCommands(
           export ACP_PROVIDER=grok
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/grok
           export ACP_AGENT_PATH="$(command -v grok 2>/dev/null || echo grok)"
-          export ACP_PROVIDER_CONFIG='{"id":"grok","name":"Grok","executable":"grok","argv":["--always-approve","agent","{{model}}","{{effort}}","stdio"],"env":{},"requiresAuthenticate":true,"authMethodEnv":"GROK_AUTH_METHOD_ID","modeMap":{"agent":"build","build":"build","plan":"plan","ask":"plan"},"extensionPrefixes":["x.ai/","_x.ai/"],"acknowledgedExtensionMethods":[],"modelUpdateMethods":["x.ai/models/update","_x.ai/models/update"],"sessionUpdateMethods":["x.ai/session/update","_x.ai/session/update"]}'`
+          export ACP_PROVIDER_CONFIG=${quoteShell(GROK_CONTAINER_PROVIDER_CONFIG)}`
           }
           ${
             provider === "cursor"
@@ -649,6 +660,24 @@ export function registerServerCommands(
   }
 
   registerPiServerCommands(register);
+  registerAntigravityContainerServerCommands(register);
+}
+
+/**
+ * Antigravity's container bridge commands, defined so every bridge kind has
+ * the same command surface, and refusing until a container sign-in route is
+ * qualified (`acpContainerUnavailableReason`). Stop is a no-op that succeeds,
+ * so teardown never waits on a bridge that cannot exist; status reports it
+ * not running; the log is empty.
+ */
+function registerAntigravityContainerServerCommands(register: CommandRegistrar): void {
+  const reason = acpContainerUnavailableReason("antigravity")!;
+  register(startAntigravityServerCommand, () => {
+    throw new Error(reason);
+  });
+  register(stopAntigravityServerCommand, () => undefined);
+  register(getAntigravityServerStatusCommand, () => ({ running: false, hostPort: null }));
+  register(getAntigravityServerLogCommand, () => "");
 }
 
 /**

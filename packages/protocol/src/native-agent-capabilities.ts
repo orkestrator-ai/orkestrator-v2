@@ -291,6 +291,11 @@ export const NATIVE_AGENT_USER_MCP_SELECTION: Readonly<
     readOnly: false,
     gap: "Grok loads every MCP server in its own configuration and cannot be given a subset per session, so this node gets all of them on Grok.",
   }),
+  antigravity: Object.freeze({
+    ordinary: false,
+    readOnly: false,
+    gap: "Antigravity loads the MCP servers in its own configuration; giving it a subset per session has not been qualified.",
+  }),
 });
 
 /** Whether `platform` delivers a grant on a turn of this kind. */
@@ -333,6 +338,8 @@ export const NATIVE_AGENT_BRIDGE_EXTENDED_TRANSLATIONS: Readonly<
   grok: Object.freeze([] as const),
   // Pi's own MCP client skips a denied server (item 404); nothing else.
   pi: Object.freeze(["mcp"] as const),
+  // Nothing is translated for Antigravity: agy has no qualified tool-removal lever.
+  antigravity: Object.freeze([] as const),
 });
 
 function extendedTranslationOf(capability: NativeAgentCapability): NativeAgentExtendedTranslation {
@@ -488,6 +495,8 @@ export const NATIVE_AGENT_GITHUB_CREDENTIAL_WITHHOLDING: Readonly<
   claude: Object.freeze({ withheld: true }),
   // One ACP child per session, spawned with the withheld environment.
   grok: Object.freeze({ withheld: true }),
+  // The same ACP bridge: one agy child per session, spawned with the withheld environment.
+  antigravity: Object.freeze({ withheld: true }),
   // Per thread: `shell_environment_policy` on the shared app-server.
   codex: Object.freeze({
     withheld: true,

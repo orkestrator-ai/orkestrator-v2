@@ -180,6 +180,7 @@ export function normalizeProviderContextUsage(value: unknown): NativeAgentContex
     raw.source === "cursor" ||
     raw.source === "grok" ||
     raw.source === "pi" ||
+    raw.source === "antigravity" ||
     raw.source === "heuristic" ||
     raw.source === "provider"
   )

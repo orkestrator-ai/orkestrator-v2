@@ -110,7 +110,7 @@ export interface MachineAgentAccounts {
  * Platforms with one login per machine and no accounts. The accounts overview
  * shows their sign-in state read-only, with a terminal sign-in on the machine.
  */
-export const HOST_SIGN_IN_PLATFORMS = ["grok", "pi"] as const;
+export const HOST_SIGN_IN_PLATFORMS = ["grok", "pi", "antigravity"] as const;
 export type HostSignInPlatform = (typeof HOST_SIGN_IN_PLATFORMS)[number];
 
 export function isHostSignInPlatform(value: unknown): value is HostSignInPlatform {

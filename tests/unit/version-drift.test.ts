@@ -299,6 +299,12 @@ const AGENT_PINS: Record<string, AgentPins> = {
       },
     ],
   },
+  // Antigravity runs on the same ACP bridge as Grok, whose SDK pin is checked
+  // above; agy itself has no SDK.
+  antigravity: {
+    dockerArg: "ANTIGRAVITY_CLI_VERSION",
+    containerInstall: "pinned-archive",
+  },
   pi: {
     dockerArg: "PI_CLI_VERSION",
     containerInstall: "pinned-archive",

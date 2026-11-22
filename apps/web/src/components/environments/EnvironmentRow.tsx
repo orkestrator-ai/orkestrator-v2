@@ -49,6 +49,7 @@ import { HoverTooltipContent, type useHoverTooltip } from "@/components/ui/hover
 import { ChangeCountBadge } from "@/components/changes/ChangeCountBadge";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
 import { MachineDot } from "@/components/federation/MachineDot";
+import { RepositoryMemberContext } from "@/contexts/RepositoryMemberContext";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   changeLabel,
@@ -517,6 +518,7 @@ export function EnvironmentRow({
   deleteNotice,
 }: EnvironmentRowProps) {
   const onOpened = useContext(EnvironmentRowActivationContext);
+  const repositoryMember = useContext(RepositoryMemberContext);
   const pending = useSidebarActionStore((state) =>
     state.pending.has(multiSelect?.id ?? facts.environmentId),
   );
@@ -594,6 +596,22 @@ export function EnvironmentRow({
       disarmDeleteShortcutRef.current = armRowDeleteShortcut(() => setDeleteOpen(true));
     }
   };
+
+  const showRetry = Boolean(model.deleteFailureText) && !model.menu.deleteDisabled;
+  const countsAfterRetry = repositoryMember && showRetry;
+  const changeBadge = changes && (
+    // Last known while the machine is away. Preserve row activation when
+    // Retry puts the badge outside the main button.
+    <span
+      id={changesDescriptionId}
+      className={cn("contents", !facts.live && "[&>*]:opacity-60")}
+      onClick={countsAfterRetry ? activate : undefined}
+      onMouseEnter={countsAfterRetry ? tooltip.show : undefined}
+      onMouseLeave={countsAfterRetry ? tooltip.hide : undefined}
+    >
+      <RowChangeBadge changes={changes} />
+    </span>
+  );
 
   return (
     <>
@@ -730,17 +748,9 @@ export function EnvironmentRow({
                   <SlowDeleteNotice since={facts.deletingSince} step={facts.deletingStep} />
                 )}
               </span>
-              {changes && (
-                // Last known while the machine is away.
-                <span
-                  id={changesDescriptionId}
-                  className={cn("contents", !facts.live && "[&>*]:opacity-60")}
-                >
-                  <RowChangeBadge changes={changes} />
-                </span>
-              )}
+              {!countsAfterRetry && changeBadge}
             </div>
-            {model.deleteFailureText && !model.menu.deleteDisabled && (
+            {showRetry && (
               <button
                 type="button"
                 onClick={() => setDeleteOpen(true)}
@@ -750,6 +760,7 @@ export function EnvironmentRow({
                 Retry
               </button>
             )}
+            {countsAfterRetry && changeBadge}
             {stateDescription && (
               <span id={stateDescriptionId} className="sr-only">
                 {stateDescription}

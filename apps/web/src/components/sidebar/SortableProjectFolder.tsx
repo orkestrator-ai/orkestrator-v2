@@ -212,7 +212,7 @@ export function SortableProjectFolder({
   const hasMenu = Boolean(onRename || onSort || onUngroup || repositoryMenu);
   // A repository heading collapses a project's environments; a folder its projects.
   const kind = repository ? "project" : "folder";
-  const repositoryActionSize = "max-sm:size-10 pointer-coarse:size-10";
+  const repositoryActionSize = "[@media(max-width:767px)]:size-10 pointer-coarse:size-10";
 
   // The whole heading is the drag handle. A repository heading also opens on
   // click, so its keyboard drag starts on Space only and Enter keeps the
@@ -251,8 +251,10 @@ export function SortableProjectFolder({
             : `Collapse folder ${label}`
       }
       className={cn(
-        "flex min-w-0 flex-1 cursor-grab items-center rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing",
-        repository ? "gap-2.5" : "gap-2",
+        "flex min-w-0 flex-1 cursor-grab items-center rounded-lg py-1.5 text-left text-sm text-foreground active:cursor-grabbing",
+        // A repository's row spans its environment rows' frame, so the
+        // heading takes the grip column (16px) before its icon instead.
+        repository ? "gap-2.5 pr-2 pl-4" : "gap-2 px-2",
       )}
       onClick={(event) => {
         event.stopPropagation();
@@ -295,10 +297,13 @@ export function SortableProjectFolder({
       ref={setNodeRef}
       style={style}
       data-project-folder={name}
-      className={cn("px-2 py-0.5", isDragging && "z-50 opacity-50")}
+      // A repository heading is inset like its environment rows (`mx-1`), so
+      // its chevron ends where their changed-line counts do; a folder keeps
+      // the project groups' `px-2`.
+      className={cn(repository ? "py-0.5" : "px-2 py-0.5", isDragging && "z-50 opacity-50")}
     >
       {repository && repositorySeparator ? (
-        <div className="px-1 py-1">
+        <div className="px-3 py-1">
           <Separator data-testid="repository-separator" />
         </div>
       ) : null}
@@ -379,41 +384,52 @@ export function SortableProjectFolder({
             <Plus aria-hidden="true" className="h-4 w-4" />
           </button>
         ) : null}
-        {/* The chevron sits last, at the row's right edge, and collapses
-            independently of navigation, dragging and the + button. */}
+        {/* Reserve 36px for the phone row's actions (32px + 8px gap - 4px
+            margin). Share it between the outer margin and the inner padding
+            to keep the 40px hit area closer to the sidebar edge. */}
         <button
           type="button"
           aria-expanded={!isCollapsed}
           aria-label={`${isCollapsed ? "Expand" : "Collapse"} ${kind} ${label}`}
           data-testid={repository ? "repository-collapse-toggle" : undefined}
           className={cn(
-            "grid shrink-0 place-items-center rounded-md p-1 transition-colors hover:bg-white/[0.07]",
-            repository && repositoryActionSize,
+            "grid shrink-0 items-center rounded-md transition-colors hover:bg-white/[0.07]",
+            repository
+              ? cn(
+                  "justify-items-end py-1 pr-2 [@media(max-width:767px)]:mr-6 [@media(max-width:767px)]:pr-5",
+                  repositoryActionSize,
+                )
+              : "justify-items-center p-1",
           )}
           onClick={(event) => {
             event.stopPropagation();
             onToggleCollapse();
           }}
         >
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "h-4 w-4 text-muted-foreground transition-transform duration-200",
-              !isCollapsed && "rotate-90",
-            )}
-          />
+          {/* Match the count's 8px inset. The open 16px glyph has 4px of
+              right-side bearing, so the icon extends 4px past this edge. */}
+          <span aria-hidden="true">
+            <ChevronRight
+              className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform duration-200",
+                repository && "translate-x-1",
+                !isCollapsed && "rotate-90",
+              )}
+            />
+          </span>
         </button>
       </div>
 
       {/*
         Members are unmounted while collapsed rather than hidden with CSS: they
         are sortable nodes, and a registered node the user cannot see would
-        still resolve drops. Both variants cancel the folder's right padding so
-        member chevrons line up with top-level ones; members bring their own.
+        still resolve drops. A folder cancels its right padding so member
+        chevrons line up with top-level ones; members bring their own. A
+        repository has no padding to cancel: its rows share the heading's edges.
       */}
       {!isCollapsed && (
         <div
-          className={repository ? "-mx-2" : "-mr-2 ml-3 border-l border-zinc-800/80 pl-1"}
+          className={repository ? undefined : "-mr-2 ml-3 border-l border-zinc-800/80 pl-1"}
           data-project-folder-content={name}
         >
           <RepositoryMemberContext.Provider value={repository}>

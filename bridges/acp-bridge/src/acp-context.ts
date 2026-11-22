@@ -714,6 +714,7 @@ export const agentRuntime: {
   mcpLoaded?: GrokMcpConfigFingerprint & { observedAt: string };
   authMethods?: Array<{ id: string; name: string }>;
   authenticated?: boolean;
+  authConfirmedAt?: number;
   promptCapabilities?: InitializeResponse["agentCapabilities"] extends infer _Capabilities
     ? { audio?: boolean; embeddedContext?: boolean; image?: boolean }
     : never;
@@ -1031,6 +1032,7 @@ export class AcpProcess {
    * session before the child is terminated.
    */
   sessionCloseSupported = false;
+  httpMcpSupported = false;
   /**
    * Whether this child's `initialize` advertised
    * `sessionCapabilities.systemPrompt` (stable since ACP schema 1.30, SDK
@@ -1166,6 +1168,11 @@ export class AcpProcess {
         `${provider} negotiated unsupported ACP protocol version ${String(initialized.protocolVersion)}; Orkestrator supports version ${PROTOCOL_VERSION}`,
       );
     }
+    const capabilities = isObject(initialized.agentCapabilities)
+      ? initialized.agentCapabilities
+      : {};
+    const mcp = isObject(capabilities.mcpCapabilities) ? capabilities.mcpCapabilities : {};
+    this.httpMcpSupported = mcp.http === true;
     rememberAgentRuntime(initialized);
     this.sessionCloseSupported = supportsSessionCapability(initialized, "close");
     this.systemPromptSupported = supportsSessionCapability(initialized, "systemPrompt");
@@ -1173,6 +1180,14 @@ export class AcpProcess {
       provider === ANTIGRAVITY_PROVIDER_ID && antigravityAppendsSystemPrompt(initialized);
     await this.authenticateIfRequired(initialized, signal);
     return initialized;
+  }
+
+  configuredMcpServers(connection?: AgentMcpConnection): McpServer[] {
+    const servers = configuredAcpMcpServers(connection);
+    if (provider === ANTIGRAVITY_PROVIDER_ID && servers.length > 0 && !this.httpMcpSupported) {
+      throw new HttpError(424, "Antigravity did not advertise HTTP MCP transport.");
+    }
+    return servers;
   }
 
   private async authenticateIfRequired(
@@ -1355,6 +1370,7 @@ export class AcpProcess {
       // as sign-in required, and the child goes, taking the sign-in with it.
       noteAcpSignInRefused(provider);
       agentRuntime.authenticated = false;
+      agentRuntime.authConfirmedAt = undefined;
       this.#close(new CredentialError(acpSignInRequiredMessage(provider)));
       void this.#terminateChild("rejected");
       return;
@@ -1382,11 +1398,15 @@ export class AcpProcess {
       pending.cleanupAbort?.();
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonObject;
-        if (provider === ANTIGRAVITY_PROVIDER_ID && isAntigravitySignInFailure(error)) {
+        if (
+          provider === ANTIGRAVITY_PROVIDER_ID &&
+          isAntigravitySignInFailure(error, pending.method)
+        ) {
           // Recorded for `/status` readiness; the message is fixed text, never
           // the agent's own (which may name an account).
           noteAcpSignInRefused(provider);
           agentRuntime.authenticated = false;
+          agentRuntime.authConfirmedAt = undefined;
           pending.reject(new CredentialError(acpSignInRequiredMessage(provider)));
           return;
         }
@@ -1398,9 +1418,19 @@ export class AcpProcess {
           ),
         );
       } else {
-        if (provider === ANTIGRAVITY_PROVIDER_ID && pending.method.startsWith("session/")) {
+        if (
+          provider === ANTIGRAVITY_PROVIDER_ID &&
+          [
+            "session/new",
+            "session/load",
+            "session/resume",
+            "session/prompt",
+            "authenticate",
+          ].includes(pending.method)
+        ) {
           noteAcpSignedIn(provider);
-          if (agentRuntime.authenticated === false) agentRuntime.authenticated = undefined;
+          agentRuntime.authenticated = true;
+          agentRuntime.authConfirmedAt = Date.now();
         }
         pending.resolve(message.result);
       }

@@ -48,8 +48,9 @@ test("implicit workspace config uses the window store without an independent rea
 for (const machine of ["other"]) {
   test(`explicit ${machine ?? "command-node"} config stays isolated and refreshes effective workspace after save`, async () => {
     appCommandStore(configStore).setState({ config: config("leaf") });
+    let saved = false;
     const read = spyOn(backend, "getConfig").mockImplementation(async (target) =>
-      config(target === undefined ? "leaf-refreshed" : "selected"),
+      config(target === undefined ? "leaf-refreshed" : saved ? "selected-saved" : "selected"),
     );
     renderInAppCommandScope(
       <MachineConfigProvider machine={machine}>
@@ -59,11 +60,14 @@ for (const machine of ["other"]) {
     await screen.findByText("selected");
     expect(read).toHaveBeenCalledWith(machine);
     expect(appCommandStore(configStore).getState().config.version).toBe("leaf");
+    saved = true;
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(appCommandStore(configStore).getState().config.version).toBe("leaf-refreshed"),
     );
-    expect(read).toHaveBeenLastCalledWith();
+    // The remote relay can resync after the workspace refresh. Assert the
+    // unscoped refresh happened and the two authoritative values stay separate.
+    expect(read).toHaveBeenCalledWith();
     expect(screen.getByRole("status").textContent).toBe("selected-saved");
     expect(appCommandStore(configStore).getState().config.repositories).toEqual({
       "leaf-refreshed": { defaultBranch: "main", prBaseBranch: "main" },

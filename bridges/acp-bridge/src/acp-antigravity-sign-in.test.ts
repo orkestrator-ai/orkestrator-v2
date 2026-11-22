@@ -31,3 +31,16 @@ describe("Antigravity without a login", () => {
     expect(auth.state).toBe("needs-auth");
   });
 });
+
+describe("Antigravity account catalogue", () => {
+  const discovery = sharedBridge({ ACP_PROVIDER: "antigravity" });
+  test("model discovery does not reuse a catalogue after the current login fails", async () => {
+    const { base, headers } = discovery;
+    const models = await nativeFetch(`${base}/global/models`, { headers });
+    expect(models.ok).toBe(true);
+    expect(((await models.json()) as { models: unknown[] }).models.length).toBeGreaterThan(0);
+    await discovery.agentEnv({ FAKE_ACP_NEW_AUTH_REQUIRED: "1" });
+    const refused = await nativeFetch(`${base}/global/models`, { headers });
+    expect(refused.status).toBe(401);
+  });
+});

@@ -15,6 +15,7 @@ function retriableProviderErrorMessage(): string {
 
 /** The open `ANTIGRAVITY_QUESTION` prompt, answered once the bridge answers the question. */
 let antigravityQuestionPrompt: number | undefined;
+let antigravityBackgroundQuestion = false;
 const ANTIGRAVITY_QUESTION_REQUEST_ID = 990;
 
 export function handlePromptStart(message: JsonObject): boolean {
@@ -41,7 +42,22 @@ export function handlePromptStart(message: JsonObject): boolean {
         },
       },
     });
-    write({ jsonrpc: "2.0", id: antigravityQuestionPrompt, result: { stopReason: "end_turn" } });
+    if (antigravityBackgroundQuestion) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "background",
+            status: "completed",
+          },
+        },
+      });
+    } else {
+      write({ jsonrpc: "2.0", id: antigravityQuestionPrompt, result: { stopReason: "end_turn" } });
+    }
     antigravityQuestionPrompt = undefined;
     return true;
   }
@@ -59,7 +75,24 @@ export function handlePromptStart(message: JsonObject): boolean {
     }
     // Antigravity asks a fixed-choice question through the permission method,
     // with an `interaction_` tool-call id.
-    if (prompt === "ANTIGRAVITY_QUESTION") {
+    if (prompt === "ANTIGRAVITY_QUESTION" || prompt === "ANTIGRAVITY_BACKGROUND_QUESTION") {
+      antigravityBackgroundQuestion = prompt === "ANTIGRAVITY_BACKGROUND_QUESTION";
+      if (antigravityBackgroundQuestion) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "background",
+              title: "Background work",
+              status: "in_progress",
+            },
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      }
       antigravityQuestionPrompt = message.id;
       write({
         jsonrpc: "2.0",

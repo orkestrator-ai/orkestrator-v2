@@ -5,9 +5,7 @@ import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
 import {
-  antigravityOAuthTokenFile,
   openAgentSignInTerminal,
-  readAntigravitySignIn,
   readGrokSignIn,
   readHostAgentSignIns,
   readPiSignIn,
@@ -24,19 +22,17 @@ afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
 });
 
-describe("readAntigravitySignIn", () => {
-  test("only the keyring-less token file proves a login; its absence is unknown", async () => {
-    // agy keeps a Google login in the OS keyring, so no file is not "signed out".
-    expect(await readAntigravitySignIn({ HOME: home })).toBeUndefined();
+test("host sign-ins treat Antigravity token files as unconfirmed", async () => {
+  const tokenFile = path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+  await fs.mkdir(path.dirname(tokenFile), { recursive: true });
+  for (const contents of [
+    "",
+    "invalid JSON",
+    '{"token":{"access_token":"expired","expiry_date":1}}',
+  ]) {
+    await fs.writeFile(tokenFile, contents);
     expect((await readHostAgentSignIns({ HOME: home })).antigravity).toBeUndefined();
-    // An API key in the environment is not the login the bridge uses.
-    expect(await readAntigravitySignIn({ HOME: home, GEMINI_API_KEY: "key" })).toBeUndefined();
-    await fs.mkdir(path.dirname(antigravityOAuthTokenFile(home)), { recursive: true });
-    await fs.writeFile(antigravityOAuthTokenFile(home), '{"token":{"access_token":"secret"}}');
-    const signIn = await readAntigravitySignIn({ HOME: home });
-    expect(signIn).toEqual({ state: "signed-in", source: "Stored login" });
-    expect(JSON.stringify(signIn)).not.toContain("secret");
-  });
+  }
 });
 
 describe("readGrokSignIn", () => {

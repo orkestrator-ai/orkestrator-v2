@@ -110,7 +110,10 @@ import {
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
+  type FeatureBuildStepSelection,
+  resolveFeatureBuildStep,
 } from "@/lib/feature-build-launch";
+import { isPipelineQualifiedAgent } from "@orkestrator/protocol/build-pipeline";
 import { buildPipelineLauncherDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
@@ -739,7 +742,41 @@ export function CreateEnvironmentDialog({
   // Held as null until the panel is first shown so that reopening the dialog,
   // or a catalogue arriving late, re-resolves the defaults instead of pinning
   // whatever was known on first render.
-  const effectiveFeatureModels = featureModels ?? defaultFeatureModels;
+  const featurePlatforms = useMemo(
+    () => enabledAgentPlatforms.filter(isPipelineQualifiedAgent),
+    [enabledAgentPlatforms],
+  );
+  const constrainFeatureModels = useCallback(
+    (selections: FeatureBuildModelState) => {
+      const fallback = featurePlatforms[0];
+      if (!fallback) return selections;
+      const eligible = (selection: FeatureBuildStepSelection) =>
+        isPipelineQualifiedAgent(selection.agent) && featurePlatforms.includes(selection.agent)
+          ? selection
+          : resolveFeatureBuildStep({ agent: fallback }, modelCatalog);
+      return {
+        build: eligible(selections.build),
+        reviewers: selections.reviewers.map((reviewer) => ({
+          ...reviewer,
+          ...eligible(reviewer),
+        })),
+        reviewPreparation: eligible(selections.reviewPreparation),
+        address: eligible(selections.address),
+        verify: eligible(selections.verify),
+        pr: eligible(selections.pr),
+        resolve: eligible(selections.resolve),
+      };
+    },
+    [featurePlatforms, modelCatalog],
+  );
+  const effectiveFeatureModels = constrainFeatureModels(featureModels ?? defaultFeatureModels);
+  const startupPlatforms = enabledAgentPlatforms.filter((platform) =>
+    buildIntent === "feature"
+      ? isPipelineQualifiedAgent(platform)
+      : environmentType !== "containerized" || platform !== "antigravity",
+  );
+  const startupAgentBlocked =
+    buildIntent !== "feature" && launchAgent && !startupPlatforms.includes(agentType);
   /**
    * The task text, shared by both intents: it is the prompt's "Initial prompt"
    * and the feature's "Description". Switching intent keeps what was typed, so
@@ -1734,7 +1771,12 @@ export function CreateEnvironmentDialog({
     async (e: React.FormEvent) => {
       e.preventDefault();
 
-      if (activeAttachmentOperationIdsRef.current.size > 0 || grokTerminalConflict) return;
+      if (
+        activeAttachmentOperationIdsRef.current.size > 0 ||
+        grokTerminalConflict ||
+        startupAgentBlocked
+      )
+        return;
 
       if (environmentType === "containerized" && !dockerAvailable) return;
       if (environmentType === "local" && !localEnvironmentAvailable) return;
@@ -1750,11 +1792,14 @@ export function CreateEnvironmentDialog({
           if (
             !projectId ||
             !onCreateFeatureBuild ||
+            featurePlatforms.length === 0 ||
             (!featureName.trim() && !initialPrompt.trim())
           ) {
             return;
           }
-          const requestModels = featureAttemptModelsRef.current ?? effectiveFeatureModels;
+          const requestModels = featureAttemptModelsRef.current
+            ? constrainFeatureModels(featureAttemptModelsRef.current)
+            : effectiveFeatureModels;
           const buildRequest = (requestId: string) =>
             featureBuildRequest({
               projectId,
@@ -1846,6 +1891,9 @@ export function CreateEnvironmentDialog({
       }
     },
     [
+      constrainFeatureModels,
+      featurePlatforms.length,
+      startupAgentBlocked,
       dockerAvailable,
       grokTerminalConflict,
       environmentType,
@@ -1888,6 +1936,7 @@ export function CreateEnvironmentDialog({
 
   const submitDisabled =
     grokTerminalConflict ||
+    startupAgentBlocked ||
     isLoading ||
     pendingAttachmentOperations > 0 ||
     (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
@@ -1895,7 +1944,9 @@ export function CreateEnvironmentDialog({
     // A blank name is generated from the description by the backend.
     // At least one must be present so the ticket is identifiable.
     (buildIntent === "feature" &&
-      (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())));
+      (!onCreateFeatureBuild ||
+        featurePlatforms.length === 0 ||
+        (!featureName.trim() && !initialPrompt.trim())));
 
   // Plain Enter never submits: multi-line fields take it as a newline, and a
   // single-line field (the name, ports) would otherwise submit the form
@@ -2290,10 +2341,14 @@ export function CreateEnvironmentDialog({
                   <AgentModelPicker
                     id="agent-model"
                     ariaLabel="Agent, model and reasoning"
-                    models={pickerModels}
-                    enabledPlatforms={enabledAgentPlatforms}
+                    models={pickerModels.filter((option) =>
+                      startupPlatforms.includes(option.platform),
+                    )}
+                    enabledPlatforms={startupPlatforms}
                     selectedPlatform={agentType}
-                    favorites={favoriteModels}
+                    favorites={favoriteModels.filter((favorite) =>
+                      startupPlatforms.includes(favorite.platform),
+                    )}
                     onPlatformChange={selectAgent}
                     onToggleFavorite={toggleFavoriteModel}
                     onReorderFavorites={reorderFavorites}
@@ -2332,6 +2387,18 @@ export function CreateEnvironmentDialog({
                   </div>
                 </div>
               </div>
+              {startupAgentBlocked && (
+                <p className="px-4 py-2 text-sm text-muted-foreground sm:px-6" role="status">
+                  {agentType === "antigravity" && environmentType === "containerized"
+                    ? "Antigravity is available in local environments only. Choose another agent to launch in this container."
+                    : "Choose an enabled agent to launch in this environment."}
+                </p>
+              )}
+              {buildIntent === "feature" && featurePlatforms.length === 0 && (
+                <p className="px-4 py-2 text-sm text-muted-foreground sm:px-6" role="status">
+                  Enable a pipeline-compatible agent in Settings to start a feature build.
+                </p>
+              )}
               {deferredTerminalPrompt && !launchAgent && (
                 <p
                   className="border-b border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
@@ -2522,8 +2589,8 @@ export function CreateEnvironmentDialog({
                 deliveryPolicy={featureDeliveryPolicy}
                 onDeliveryPolicyChange={setFeatureDeliveryPolicy}
                 catalog={modelCatalog}
-                enabledPlatforms={enabledAgentPlatforms}
-                disabled={isLoading}
+                enabledPlatforms={featurePlatforms}
+                disabled={isLoading || featurePlatforms.length === 0}
                 featureAttachments={
                   <div className="space-y-1.5">
                     <Label className="text-sm">Reference images</Label>

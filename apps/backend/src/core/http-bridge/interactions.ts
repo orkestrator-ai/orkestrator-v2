@@ -745,13 +745,13 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
           options: options.map((rawOption, optionIndex) => {
             const option = asRecord(rawOption);
             const providerValue = nonEmptyString(option?.id);
-            const label = nonEmptyString(option?.label);
-            if (!providerValue || !label) {
+            const optionLabel = nonEmptyString(option?.label);
+            if (!providerValue || !optionLabel) {
               throw new ProviderUnavailableError(`${label} returned a malformed question option`);
             }
             return {
               id: opaqueOptionId(questionIndex, optionIndex),
-              label: boundedText(label, label),
+              label: boundedText(optionLabel, optionLabel),
               providerValue: boundedText(
                 providerValue,
                 providerValue,

@@ -69,8 +69,8 @@ approval-policy modes (`auto`, `accept-edits`) are filtered by name in
 `--process-per-session`; whether Orkestrator's tools then reach the model,
 under the right tab's grant, is unproved.
 
-**Context.** The bridge passes `configuredAcpMcpServers(state.agentMcp)` on
-`session/new` and `session/resume`, as for Grok.
+**Context.** The bridge passes the tab’s HTTP MCP connections on
+`session/new` and `session/resume` only when agy advertises HTTP transport.
 
 **Investigation.** Not started.
 

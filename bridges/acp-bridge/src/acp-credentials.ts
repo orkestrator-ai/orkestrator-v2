@@ -68,7 +68,7 @@ export function noteAcpSignedIn(provider: string): void {
   if (provider === ANTIGRAVITY_PROVIDER_ID) antigravitySignInRefusedAt = undefined;
 }
 
-function antigravitySignInRecentlyRefused(now = Date.now()): boolean {
+export function antigravitySignInRecentlyRefused(now = Date.now()): boolean {
   return (
     antigravitySignInRefusedAt !== undefined &&
     now - antigravitySignInRefusedAt < ANTIGRAVITY_SIGN_IN_RECHECK_MS

@@ -883,3 +883,42 @@ describe("persisted session config", () => {
     );
   });
 });
+
+test("Antigravity maps config-only modes, masks approval modes and scopes effort to the active model", () => {
+  const select = (id: string, category: string, currentValue: string, values: string[]) => ({
+    id,
+    category,
+    currentValue,
+    type: "select",
+    options: values.map((value) => ({ value, name: value })),
+  });
+  const result = {
+    configOptions: [
+      select("vendor-mode", "mode", "default", ["default", "plan", "auto", "accept-edits"]),
+      select("model", "model", "model-a", ["model-a", "model-b"]),
+      select("a-effort", "thought_level", "medium", ["medium", "high"]),
+    ],
+  };
+  const current = normalizeAcpSessionConfig("antigravity", result);
+  expect(current.composer.modes.map(({ id }) => id)).toEqual(["build", "plan"]);
+  expect(current.composer.selectedModeId).toBe("build");
+  expect(current.composer.models[0]?.reasoning?.map(({ id }) => id)).toEqual(["medium", "high"]);
+  expect(current.composer.models[1]?.reasoning).toBeUndefined();
+  expect(planComposerApply("session", current, { mode: "plan" }, "antigravity")).toEqual([
+    {
+      method: "session/set_config_option",
+      params: { sessionId: "session", configId: "vendor-mode", value: "plan" },
+    },
+  ]);
+  expect(planComposerApply("session", current, { mode: "auto" as never }, "antigravity")).toEqual(
+    [],
+  );
+  const approvalMode = applyCurrentModeUpdate(current, "auto", "antigravity");
+  expect(approvalMode.composer.selectedModeId).toBeUndefined();
+  expect(
+    applyConfigOptionUpdate("antigravity", approvalMode, {}).composer.selectedModeId,
+  ).toBeUndefined();
+  expect(() =>
+    planComposerApply("session", current, { modelId: "removed" }, "antigravity"),
+  ).toThrow("selected Antigravity model is unavailable");
+});

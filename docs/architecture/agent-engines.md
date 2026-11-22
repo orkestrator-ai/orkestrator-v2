@@ -1804,7 +1804,9 @@ file check produces. The user signs in from Settings → Antigravity, which
 opens a host terminal running `agy acp --login` (`agent-sign-ins.ts`); the
 next attach or prompt asks agy again. `authenticate` is sent only when the
 backend names a method in `ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD` (an API key or
-Agent Platform login), bounded at 20 seconds.
+Agent Platform login), bounded at 20 seconds. Settings reports a confirmed
+sign-in when an active bridge has a recent successful ACP session or
+authentication response. A token file alone leaves the status unknown.
 
 ### Sessions
 

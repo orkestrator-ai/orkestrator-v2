@@ -11,6 +11,7 @@ describe("development CLI arguments", () => {
       "grok",
       "opencode",
       "pi",
+      "antigravity",
     ]);
   });
 
@@ -42,7 +43,7 @@ describe("development CLI arguments", () => {
   });
 
   test("provisions every agent platform for agent testing by default", () => {
-    // Cursor and Grok resolve only through the managed toolchain, so an empty
+    // Cursor, Grok and Antigravity resolve only through the managed toolchain, so an empty
     // default is what made them untestable in an isolated profile.
     expect(parseAgentTestArguments(["--fixture"]).agentPlatforms).toEqual([
       "claude",
@@ -51,6 +52,7 @@ describe("development CLI arguments", () => {
       "grok",
       "opencode",
       "pi",
+      "antigravity",
     ]);
   });
 
@@ -74,6 +76,7 @@ describe("development CLI arguments", () => {
       "grok",
       "opencode",
       "pi",
+      "antigravity",
     ]);
   });
 

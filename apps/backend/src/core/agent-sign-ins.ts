@@ -133,42 +133,11 @@ export async function readPiSignIn(
   return { state: "signed-out" };
 }
 
-/**
- * Where agy 1.5 keeps a Google sign-in when the machine has no OS keyring
- * (`<gemini dir>/<app data dir>/antigravity-oauth-token`, defaults `~/.gemini`
- * and `antigravity-cli`; T3 Code's `antigravityUsageLimits.ts`). With a
- * keyring the sign-in is in the keyring and no file exists.
- */
-export function antigravityOAuthTokenFile(home: string): string {
-  return path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
-}
-
-/**
- * Antigravity's sign-in, as far as files can tell: the token file above means
- * signed in. Its absence proves nothing, because agy normally keeps the login
- * in the OS keyring, so the platform is then left out of the answer (unknown)
- * rather than reported signed out. The bridge's own answer, from a real
- * session request, is the authoritative one (`acp-credentials.ts`).
- */
-export async function readAntigravitySignIn(
-  env: ProcessEnvironment = process.env,
-  home = env.HOME?.trim() || homedir(),
-): Promise<HostAgentSignIn | undefined> {
-  if ((await readSmallFile(antigravityOAuthTokenFile(home))) !== undefined) {
-    return { state: "signed-in", source: "Stored login" };
-  }
-  return undefined;
-}
-
 export async function readHostAgentSignIns(
   env: ProcessEnvironment = process.env,
 ): Promise<HostAgentSignIns> {
-  const [grok, pi, antigravity] = await Promise.all([
-    readGrokSignIn(env),
-    readPiSignIn(env),
-    readAntigravitySignIn(env),
-  ]);
-  return { grok, pi, ...(antigravity ? { antigravity } : {}) };
+  const [grok, pi] = await Promise.all([readGrokSignIn(env), readPiSignIn(env)]);
+  return { grok, pi };
 }
 
 /**

@@ -70,6 +70,7 @@ export const SETTINGS_SIGN_IN_ROUTES: Readonly<Record<AgentPlatform, NativeAgent
 export interface AgentSignInStatusDependencies {
   listAccounts: () => Promise<AgentAccountsSnapshot>;
   cursorStatus: () => Promise<CursorSdkAuthStatus>;
+  antigravityStatus?: () => Promise<NativeAgentAuthStatus["state"]>;
   env?: NodeJS.ProcessEnv;
   home?: string;
   readText?: (filePath: string) => Promise<string | undefined>;
@@ -209,16 +210,8 @@ export async function readAgentSignInStatus(
         signOut: false,
       };
     case "antigravity":
-      // agy keeps its Google login in the OS keyring, which cannot be read
-      // from here; only the keyring-less token file proves a login. Anything
-      // else is unknown, never signed out: a session request is what tells.
       return {
-        state:
-          (await readText(
-            path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"),
-          )) !== undefined
-            ? "signed-in"
-            : "unknown",
+        state: (await deps.antigravityStatus?.()) ?? "unknown",
         signIn: SETTINGS_SIGN_IN_ROUTES.antigravity,
         signOut: false,
       };

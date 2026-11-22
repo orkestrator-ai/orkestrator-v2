@@ -41,10 +41,10 @@ export const ANTIGRAVITY_SIGN_IN_HINT = "Open a terminal and run agy acp --login
  * request without a login and `-32800 Sign-in was cancelled` to an abandoned
  * interactive sign-in (both observed on 1.5.12).
  */
-export function isAntigravitySignInFailure(error: unknown): boolean {
+export function isAntigravitySignInFailure(error: unknown, method?: string): boolean {
   const code = isObject(error) && typeof error.code === "number" ? error.code : undefined;
   const message = error instanceof Error ? error.message : isObject(error) ? error.message : "";
-  if (code === -32800) return true;
+  if (code === -32800 && method === "authenticate") return true;
   // `-32603 No browser is available here ... Run \`agy acp --login\`` is the
   // answer to `authenticate` on a machine without a display (1.5.12).
   return (

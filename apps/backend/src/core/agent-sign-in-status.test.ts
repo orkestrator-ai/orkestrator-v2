@@ -85,6 +85,22 @@ const STORE = JSON.stringify({
 });
 
 describe("settings sign-in status, read without a session", () => {
+  test("only Antigravity provider evidence confirms sign-in in Settings", async () => {
+    const file = path.join(HOME, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+    expect(
+      await readAgentSignInStatus("antigravity", deps({ files: { [file]: "{}" } })),
+    ).toMatchObject({
+      state: "unknown",
+      signIn: { kind: "terminal" },
+    });
+    expect(
+      await readAgentSignInStatus(
+        "antigravity",
+        deps({ antigravityStatus: async () => "signed-in" }),
+      ),
+    ).toMatchObject({ state: "signed-in" });
+  });
+
   test.each([
     [true, "signed-in"],
     [false, "signed-out"],

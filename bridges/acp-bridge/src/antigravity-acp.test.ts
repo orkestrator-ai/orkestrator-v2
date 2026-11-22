@@ -1,3 +1,10 @@
+import {
+  acpSignInMissing,
+  ANTIGRAVITY_SIGN_IN_RECHECK_MS,
+  noteAcpSignInRefused,
+  noteAcpSignedIn,
+  resetAcpSignInStateForTests,
+} from "./acp-credentials.js";
 import { describe, expect, test } from "bun:test";
 import {
   ANTIGRAVITY_AUTH_STDOUT_PREFIX,
@@ -53,7 +60,23 @@ describe("Antigravity authentication", () => {
       }),
     ).toBe(true);
     expect(isAntigravitySignInFailure({ code: -32603, message: "Internal error" })).toBe(false);
+    const cancelled = { code: -32800, message: "Request cancelled" };
+    expect(isAntigravitySignInFailure(cancelled, "session/prompt")).toBe(false);
+    expect(isAntigravitySignInFailure(cancelled, "authenticate")).toBe(true);
     expect(isAntigravitySignInFailure(new Error("model unavailable"))).toBe(false);
+  });
+
+  test("rechecks after the refusal expires and clears a refusal on successful sign-in", async () => {
+    try {
+      noteAcpSignInRefused("antigravity", Date.now() - ANTIGRAVITY_SIGN_IN_RECHECK_MS - 1);
+      expect(await acpSignInMissing("antigravity", undefined, {})).toBe(false);
+      noteAcpSignInRefused("antigravity");
+      expect(await acpSignInMissing("antigravity", undefined, {})).toBe(true);
+      noteAcpSignedIn("antigravity");
+      expect(await acpSignInMissing("antigravity", undefined, {})).toBe(false);
+    } finally {
+      resetAcpSignInStateForTests();
+    }
   });
 
   test("recognises the login banner agy prints outside JSON-RPC", () => {

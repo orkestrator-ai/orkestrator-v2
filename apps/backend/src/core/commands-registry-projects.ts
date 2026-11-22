@@ -856,7 +856,11 @@ export function registerProjectCommands(
       if (ensureAgent === "opencode") {
         openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
       }
-    } else if (!hostSeeded && ensureAgent && !cache[ensureAgent]?.models.length) {
+    } else if (
+      !hostSeeded &&
+      ensureAgent &&
+      (ensureAgent === "antigravity" || !cache[ensureAgent]?.models.length)
+    ) {
       // The empty-tab picker is the first consumer on a fresh installation, so
       // there may be neither a live bridge nor a durable last-known-good list.
       // Start only the platform the user is trying to select; eagerly starting
@@ -1023,9 +1027,8 @@ export function registerProjectCommands(
       ...(cursorModels.length > 0 ? cursorModels : (cache.cursor?.models ?? [])),
       ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
       ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
-      // The live list is the signed-in account's; a cached one may only
-      // label the picker until a bridge answers again.
-      ...(antigravityModels.length > 0 ? antigravityModels : (cache.antigravity?.models ?? [])),
+      // Only a live probe can qualify these account-scoped model IDs.
+      ...antigravityModels,
     ];
     if (!ensureAgent) return result;
     const ensuredStatus = hostSeeded

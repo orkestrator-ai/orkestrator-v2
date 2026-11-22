@@ -29,12 +29,12 @@ async function openSession(): Promise<string> {
   return id;
 }
 
-async function ask(id: string): Promise<Interaction> {
+async function ask(id: string, text = "ANTIGRAVITY_QUESTION"): Promise<Interaction> {
   const { base, headers } = shared;
   const prompt = await nativeFetch(`${base}/session/${id}/prompt`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ prompt: "ANTIGRAVITY_QUESTION", policy: autoApprove }),
+    body: JSON.stringify({ prompt: text, policy: autoApprove }),
   });
   expect(prompt.status).toBe(202);
   const parked = await waitFor(
@@ -95,4 +95,34 @@ describe("Antigravity questions over the ACP bridge", () => {
       (text) => text.includes("answered:cancelled"),
     );
   });
+  test.each(["answer", "stop"])(
+    "preserves a live tool and late question after the prompt response, then %s",
+    async (action) => {
+      const id = await openSession();
+      await ask(id, "ANTIGRAVITY_BACKGROUND_QUESTION");
+      const { base, headers } = shared;
+      const readActivity = () =>
+        nativeFetch(`${base}/session/${id}/activity`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ activity: string }>;
+      expect(await readActivity()).toMatchObject({ activity: "waiting" });
+      const next = await nativeFetch(`${base}/session/${id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ prompt: "second prompt" }),
+      });
+      expect(next.status).toBe(409);
+      const response = await nativeFetch(
+        `${base}/session/${id}/${action === "stop" ? "cancel" : "interactions/interaction_db"}`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ action: "accept", answers: { answer: ["opt-pg"] } }),
+        },
+      );
+      expect(response.ok).toBe(true);
+      await waitFor(readActivity, (value) => value.activity === "idle");
+      expect(await transcriptText(id)).not.toContain("Tool call ended without a result");
+    },
+  );
 });

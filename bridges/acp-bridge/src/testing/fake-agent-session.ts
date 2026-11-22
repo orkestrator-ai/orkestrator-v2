@@ -66,6 +66,17 @@ function answerSetConfigOption(message: JsonObject): void {
   const configId = typeof params.configId === "string" ? params.configId : "";
   const option = genericConfig.configOptions.find((entry) => entry.id === configId);
   if (option) option.currentValue = params.value as never;
+  if (provider === "antigravity" && configId === "model" && params.value === "gpt-5.5") {
+    const thought = genericConfig.configOptions.find(
+      (entry) => entry.category === "thought_level",
+    )!;
+    thought.id = "effort-for-gpt";
+    thought.currentValue = "low";
+    thought.options = [
+      { value: "low", name: "Low" },
+      { value: "max", name: "Max" },
+    ];
+  }
   write({
     jsonrpc: "2.0",
     id: message.id,
@@ -127,7 +138,11 @@ export function handleSessionMessage(message: JsonObject): boolean {
         // silently reattached to a session they have never heard of.
         agentCapabilities: {
           loadSession: process.env.FAKE_ACP_NO_LOAD_SESSION !== "1",
+          ...(provider === "antigravity" && process.env.FAKE_ACP_NO_HTTP_MCP !== "1"
+            ? { mcpCapabilities: { http: true } }
+            : {}),
           sessionCapabilities: {
+            ...(provider === "antigravity" ? { resume: {} } : {}),
             ...(process.env.FAKE_ACP_NO_LIST_SESSION === "1" ? {} : { list: {} }),
             ...(process.env.FAKE_ACP_SYSTEM_PROMPT_CAPABILITY === "1" ? { systemPrompt: {} } : {}),
           },
@@ -187,6 +202,12 @@ export function handleSessionMessage(message: JsonObject): boolean {
     recordSessionRequest(message);
     if (rejectInvalidMcpServers(message)) return true;
     // agy 1.5.12's answer to a session request with no login.
+    if (process.env.FAKE_ACP_NEW_LOGIN_BANNER === "1") {
+      process.stdout.write(
+        "Open the following link to authenticate the ACP server: https://example.invalid/private-login-link\n",
+      );
+      return true;
+    }
     if (process.env.FAKE_ACP_NEW_AUTH_REQUIRED === "1") {
       write({
         jsonrpc: "2.0",
@@ -320,6 +341,15 @@ export function handleSessionMessage(message: JsonObject): boolean {
   }
   if (message.method === "session/set_model" && typeof message.id === "number") {
     answerConfigRpc(message, () => answerSetModel(message));
+    return true;
+  }
+  if (message.method === "session/resume" && typeof message.id === "number") {
+    recordSessionRequest(message);
+    if (process.env.FAKE_ACP_FAIL_RESUME === "1") {
+      write({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: "Resume failed" } });
+    } else {
+      write({ jsonrpc: "2.0", id: message.id, result: sessionPayload() });
+    }
     return true;
   }
   if (message.method === "session/load" && typeof message.id === "number") {

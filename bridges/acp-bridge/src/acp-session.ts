@@ -62,7 +62,6 @@ import {
   acpToolSourceStates,
   adjustAnonymousSessionCreations,
   clientSessionKeys,
-  configuredAcpMcpServers,
   mcpConnectionKey,
   externalSessionToken,
   isObject,
@@ -394,7 +393,7 @@ export async function resumeSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(state.agentMcp),
+        mcpServers: child.configuredMcpServers(state.agentMcp),
         sessionId: acpSessionId,
         ...(await sessionInstructionFields(child, "load", effectiveTurnExecutionPolicy(state))),
       },
@@ -535,7 +534,7 @@ export async function createSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(spawnOptions.agentMcp),
+        mcpServers: child.configuredMcpServers(spawnOptions.agentMcp),
         ...(await sessionInstructionFields(
           child,
           "new",
@@ -661,7 +660,13 @@ async function createDeferredSession(
   // an unset one lets the agent pick its default once it starts.
   const empty = normalizeAcpSessionConfig(provider, {});
   const sessionConfig = withRequestedSelection(
-    { ...empty, composer: { ...empty.composer, models: catalogCache?.models ?? [] } },
+    {
+      ...empty,
+      composer: {
+        ...empty.composer,
+        models: provider === "antigravity" ? [] : (catalogCache?.models ?? []),
+      },
+    },
     composerPatchFromSpawn(spawnOptions),
   );
   const state = newSessionState(id, clientSessionKey, "", null, sessionConfig, spawnOptions);
@@ -721,7 +726,7 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(state.agentMcp),
+        mcpServers: child.configuredMcpServers(state.agentMcp),
         ...(await sessionInstructionFields(child, "new", effectiveTurnExecutionPolicy(state))),
       },
       RPC_TIMEOUT_MS,
@@ -1297,7 +1302,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(state.agentMcp),
+        mcpServers: child.configuredMcpServers(state.agentMcp),
         sessionId: state.acpSessionId,
         ...(await sessionInstructionFields(child, "load", effectiveTurnExecutionPolicy(state))),
       },
@@ -1355,7 +1360,7 @@ async function resumeAttachedSession(state: SessionState, child: AcpProcess): Pr
     {
       cwd: workingDirectory,
       additionalDirectories: [],
-      mcpServers: configuredAcpMcpServers(state.agentMcp),
+      mcpServers: child.configuredMcpServers(state.agentMcp),
       sessionId: state.acpSessionId,
       ...(await sessionInstructionFields(child, "resume", effectiveTurnExecutionPolicy(state))),
     },
@@ -2151,7 +2156,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
           ? update.modeId
           : "";
     if (modeId) {
-      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId);
+      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId, provider);
       markSessionChanged(state);
       schedulePersist();
     }
@@ -2432,7 +2437,40 @@ async function applyComposerCalls(
   patch: AcpComposerPatch,
   signal?: AbortSignal,
 ): Promise<void> {
-  const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch);
+  if (provider === "antigravity") {
+    const { modelId, reasoningId, ...remaining } = patch;
+    if (modelId && modelId !== "default") {
+      await dispatchComposerCalls(state, child, { modelId }, signal);
+      if (state.sessionConfig.composer.selectedModelId !== modelId) {
+        throw new HttpError(422, "Antigravity did not confirm the selected model.");
+      }
+    }
+    await dispatchComposerCalls(
+      state,
+      child,
+      { ...remaining, ...(reasoningId && reasoningId !== "default" ? { reasoningId } : {}) },
+      signal,
+    );
+    if (
+      reasoningId &&
+      reasoningId !== "default" &&
+      state.sessionConfig.composer.selectedReasoningId !== reasoningId
+    ) {
+      throw new HttpError(422, "Antigravity did not confirm the selected thinking level.");
+    }
+  } else {
+    await dispatchComposerCalls(state, child, patch, signal);
+  }
+}
+
+async function dispatchComposerCalls(
+  state: SessionState,
+  child: AcpProcess,
+  patch: AcpComposerPatch,
+  signal?: AbortSignal,
+): Promise<void> {
+  const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch, provider);
+  if (calls.length === 0) return;
   for (const call of calls) {
     const result = await child.request(call.method, call.params, RPC_TIMEOUT_MS, signal);
     if (call.method === "session/set_config_option") {
@@ -2442,7 +2480,11 @@ async function applyComposerCalls(
         isObject(result) ? result : {},
       );
     } else if (call.method === "session/set_mode") {
-      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, call.params.modeId);
+      state.sessionConfig = applyCurrentModeUpdate(
+        state.sessionConfig,
+        call.params.modeId,
+        provider,
+      );
     } else if (call.method === "session/set_model") {
       const meta = isObject(result) && isObject(result._meta) ? result._meta : {};
       const model = isObject(meta.model) ? meta.model : {};

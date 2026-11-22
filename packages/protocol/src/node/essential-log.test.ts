@@ -726,6 +726,25 @@ test("flush and stop cover an enqueue at the final drain handoff", async () => {
   expect((await entries(directory)).at(-1)?.event).toBe("essential.stopped");
 });
 
+test("stop appends its marker even when the event queue is full", async () => {
+  const directory = await dataDir();
+  configureLogger({ sink: () => {} });
+  const essential = install({
+    dataDir: directory,
+    owner: "desktop",
+    bounds: { maxPendingBytes: 200, eventBurst: 100 },
+  });
+  await essential.flush();
+  for (let code = 0; code < 10; code++) createLogger("backend").info("shutdown.finished", { code });
+  const stopped = essential.stop();
+  expect(essential.stop()).toBe(stopped);
+  expect(await stopped).toBe(true);
+  const records = await entries(directory);
+  expect(records.some((record) => record.fields?.reason === "queue-full")).toBe(true);
+  expect(events(records).at(-1)).toBe("essential.stopped");
+  expect(events(records).filter((event) => event === "essential.stopped")).toHaveLength(1);
+});
+
 test("a committed drop marker is not restored when the following entry fails", async () => {
   const directory = await dataDir();
   configureLogger({ sink: () => {} });

@@ -291,7 +291,24 @@ window. The uncaught exception itself is
 still logged first. `apps/desktop/tests/native-dialogs.test.ts` and the final
 close of `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` pin it.
 
-## 8. The 2026-11-15 incidents (omarchy-hp)
+## 8. `logging:writer-died:desktop` with no crash
+
+Self-improvement raises `logging:writer-died:desktop` when the essential log
+holds a desktop `essential.started` with no `essential.stopped` since the
+previous one. The essential log has no messages or stacks, so the signal says
+only that the marker is missing. Found on 2026-11-22 (one occurrence on
+omarchy-hp, 2026-11-15T21:13:03Z; that machine's files could not be read), the
+known ways to get it without a crash:
+
+| Cause | What the log shows | Status |
+| --- | --- | --- |
+| An AppImage update used to start the new version as soon as the old one released the single-instance lock, while the old one was still quitting | `started`, `started`, then the old process's `stopped` after the second start | Fixed: the updater applies the image, then schedules a restart after orderly exit only when the stop marker has been confirmed. An unconfirmed stop leaves the installed image for manual launch |
+| "Close application" on the missing-CLI dialog, which called `app.exit(0)` and skipped `will-quit` (and with it the backend's drain) | The backend's last lines, no `quit.stopping-backend`, no `stopped` | Fixed: exit code 0 is an ordinary `app.quit()` (`exitApplication`) |
+| Logout, reboot or shutdown on Omarchy. Omarchy sets `DefaultTimeoutStopSec=5s`, so `user@1000.service` gets 5 s (`systemctl show user@1000.service -p TimeoutStopUSec`, seen on beelink2), while a quit may wait up to 20 s for the backend's drain before it writes `stopped` | `quit.stopping-backend` and some of the backend's drain, then nothing | Open, not reproduced ([to-do 8315](../todo/cross-cutting/8315-desktop-killed-during-system-shutdown.md)): the system would SIGKILL the app; the previous boot's journal (`journalctl -b -1`) shows a stop timeout |
+
+A real native crash leaves a core (`coredumpctl list`); a kill leaves none.
+
+## 9. The 2026-11-15 incidents (omarchy-hp)
 
 Found from the self-improvement digest's `backend:crashed` signal (two runs
 without a clean-exit marker) on app 2.38.2-beta.
@@ -299,7 +316,7 @@ without a clean-exit marker) on app 2.38.2-beta.
 | Time (UTC) | What happened | Cause | Status |
 | --- | --- | --- | --- |
 | About 16:23 | The app log stops at 16:16:50 after a 38.5-hour backend run; nothing more until 21:13 | The machine stopped: `journalctl --list-boots` shows the boot ending at 16:23:05 with no shutdown, and `last -x` no `shutdown` record. A power loss, freeze or forced restart, not the app | Backends now record the host's boot time on their `started` health row, so the next start says `previous-run outcome=host-restarted` and self-improvement counts `backend:host-restarted` rather than a crash ([logging.md](../architecture/logging.md#health-summary-and-the-clean-exit-marker)) |
-| 21:26:31 | The production backend got `SIGKILL`; the desktop survived and showed its dialog | Unknown sender. A pipeline's validation plan (`test:full`, `test:browser`, `test:agent:electron`, `test:package:security`, `test:agent:browser:isolated`) was running under the backend. No OOM kill. A Playwright Chromium in the app's cgroup aborted one second earlier | Open: [8315](../todo/cross-cutting/8315-production-backend-killed-during-validation.md) |
+| 21:26:31 | The production backend got `SIGKILL`; the desktop survived and showed its dialog | Unknown sender. A pipeline's validation plan (`test:full`, `test:browser`, `test:agent:electron`, `test:package:security`, `test:agent:browser:isolated`) was running under the backend. No OOM kill. A Playwright Chromium in the app's cgroup aborted one second earlier | Open: [8316](../todo/cross-cutting/8316-production-backend-killed-during-validation.md) |
 | 21:26:46 to 21:27:24 | Three packaged `orkestrator-v2` processes from the pipeline's `release/linux-unpacked` dumped core with SIGTRAP | Their launcher (the validation run) died with the backend; see section 5 | A consequence of the kill |
 
 A run whose boot ended this way is easy to tell from the system's own

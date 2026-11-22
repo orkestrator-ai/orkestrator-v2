@@ -1764,7 +1764,7 @@ Electron, in the same scope and process group, survived. Linux does not record
 who sends a signal, so the culprit was not identified from the logs alone. It
 happened again on omarchy-hp on 2026-11-15, during a pipeline's validation plan
 (`test:full` with the Electron and packaged-security suites);
-[to-do 8315](../todo/cross-cutting/8315-production-backend-killed-during-validation.md)
+[to-do 8316](../todo/cross-cutting/8316-production-backend-killed-during-validation.md)
 tracks naming the sender.
 
 Test code, fixtures, and scripts must follow these rules, and so must commands

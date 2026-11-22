@@ -62,6 +62,13 @@ describe("test tier selection", () => {
     }
   });
 
+  test("the relocated tmux runtime test runs only in the slow tier", () => {
+    const pkg = "apps/backend";
+    const file = "src/core/tmux/runtime.test.ts";
+    expect(ignoredByDefault(repositoryRoot, pkg, file)).toBe(true);
+    expect(tierArguments("slow", repositoryRoot, pkg, ["./src", "./tests"])).toContain(`./${file}`);
+  });
+
   test("live and integration names are slow in the root group and the protocol package", () => {
     const { root } = fixture({
       "tests/unit/a.integration.test.ts": "",

@@ -1,8 +1,62 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import * as backendModule from "../src/core/tmux/backend";
 import * as sessionModule from "../src/core/tmux/session-manager";
 import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";
-import { SCENARIOS, measureTmuxExecs } from "../scripts/tmux-exec-count";
+import { SCENARIOS, measureTmuxExecs, type ExecCounts } from "../scripts/tmux-exec-count";
+
+describe("tmux exec-count CLI source layouts", () => {
+  const script = path.resolve(import.meta.dir, "../scripts/tmux-exec-count.ts");
+  const defaultSrc = path.resolve(import.meta.dir, "../src");
+
+  function expectMeasurement(src: string, args: string[] = []) {
+    const seconds = 5;
+    const result = spawnSync(
+      process.execPath,
+      ["--no-env-file", script, "--seconds", String(seconds), "--json", ...args],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    if (result.error) throw result.error;
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      src: string;
+      seconds: number;
+      rows: Array<{ scenario: string; counts: ExecCounts | null }>;
+    };
+    expect(report.src).toBe(src);
+    expect(report.seconds).toBe(seconds);
+    expect(report.rows.map(({ scenario }) => scenario)).toEqual(SCENARIOS.map(({ name }) => name));
+    for (const { counts } of report.rows) expect(counts?.total).toBeGreaterThan(0);
+  }
+
+  test("loads the relocated modules without --src", () => {
+    expectMeasurement(defaultSrc);
+  });
+
+  test("loads flat tmux module entry points from --src", () => {
+    const src = mkdtempSync(path.join(tmpdir(), "tmux-exec-count-"));
+    try {
+      const core = path.join(src, "core");
+      mkdirSync(core);
+      // Reuse the real implementations behind the pre-move entry points.
+      for (const name of ["session-manager", "backend"]) {
+        const target = pathToFileURL(path.join(defaultSrc, "core/tmux", `${name}.ts`)).href;
+        writeFileSync(
+          path.join(core, `tmux-${name}.ts`),
+          `export * from ${JSON.stringify(target)};\n`,
+        );
+      }
+      expectMeasurement(src, ["--src", src]);
+    } finally {
+      rmSync(src, { recursive: true, force: true });
+    }
+  });
+});
 
 /**
  * The exec budget of one tab's poll loop (#1667), measured by the

@@ -238,7 +238,7 @@ export function isEssentialLabel(
   if (field === "source" || (area === "local-server" && field === "key")) return SOURCE.test(value);
   if (area === "backend" && event === "starting" && field === "version") return VERSION.test(value);
   if (area === "backend" && event === "previous-run" && field === "outcome")
-    return value === "clean" || value === "crashed";
+    return value === "clean" || value === "crashed" || value === "host-restarted";
   if (area === "local-server" && event === "bridge.orphans-reaped" && field === "result")
     return value === "stopped" || value === "survived";
   if (area === "docker" && field === "reason") {

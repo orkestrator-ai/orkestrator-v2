@@ -7,6 +7,7 @@ import {
   HEALTH_SAMPLE_MAX_JOB_KINDS,
   HEALTH_SUMMARY_MAX_ROWS,
   HealthSummary,
+  hostBootAt,
   previousRunOf,
   readHealthRows,
   topJobKinds,
@@ -40,6 +41,9 @@ function summary(db: StorageDatabase, options: Partial<HealthSummaryOptions> = {
     bridgeRestarts: () => ({}),
     isAlive: () => false,
     intervalMs: 3_600_000,
+    bootAt: () => null,
+    bootId: () => null,
+    processStart: () => null,
     ...options,
   });
 }
@@ -243,6 +247,73 @@ describe("the clean shutdown marker", () => {
     });
   });
 
+  test("a run the host restarted under logs previous-run host-restarted", async () => {
+    const db = await database();
+    let now = 1_000_000;
+    const lost = summary(db, { now: () => now, pid: 301, bootAt: () => 500_000 });
+    lost.start();
+    now += 300_000;
+    lost.sample();
+    // Power loss: the machine stops here, then boots again.
+    lost.stop();
+    now += 3_600_000;
+
+    const next = summary(db, { now: () => now, pid: 302, bootAt: () => now - 60_000 });
+    expect(next.start()).toEqual({
+      outcome: "host-restarted",
+      ranForMs: 300_000,
+      lastSeenAgoMs: 3_600_000,
+    });
+    next.stop();
+
+    const [line] = previousRunLines();
+    expect(line).toMatchObject({ level: "warn", fields: { outcome: "host-restarted" } });
+    const started = readHealthRows(db).filter((row) => row.kind === "started");
+    expect(started.map((row) => (row.kind === "started" ? row.bootAt : null))).toEqual([
+      500_000,
+      now - 60_000,
+    ]);
+  });
+
+  test("logs a confirmed fast reboot even when the old PID is live again", async () => {
+    const db = await database();
+    const firstBoot = "a".repeat(64);
+    const secondBoot = "b".repeat(64);
+    const lost = summary(db, {
+      now: () => 121_000,
+      pid: 303,
+      bootAt: () => 1_000,
+      bootId: () => firstBoot,
+    });
+    lost.start();
+    lost.stop();
+
+    const next = summary(db, {
+      now: () => 250_000,
+      pid: 303,
+      bootAt: () => 241_000,
+      bootId: () => secondBoot,
+      isAlive: () => true,
+    });
+    expect(next.start()?.outcome).toBe("host-restarted");
+    next.stop();
+
+    expect(previousRunLines()).toMatchObject([
+      { level: "warn", fields: { outcome: "host-restarted" } },
+    ]);
+    expect(readHealthRows(db)).toMatchObject([{ bootId: firstBoot }, { bootId: secondBoot }]);
+  });
+
+  test("an unknown boot time leaves bootAt off the started row", async () => {
+    const db = await database();
+    const health = summary(db, { now: () => 5_000 });
+    health.start();
+    health.stop();
+    expect(readHealthRows(db)).toEqual([
+      { kind: "started", at: 5_000, pid: process.pid, startedAt: 5_000 },
+    ]);
+  });
+
   test("a stopped summary writes no marker of its own", async () => {
     const db = await database();
     const health = summary(db);
@@ -274,6 +345,44 @@ describe("previousRunOf", () => {
     expect(previousRunOf(rows, self, 100_000_000, () => true).outcome).toBe("crashed");
   });
 
+  test("a different process start proves a recent PID was reused on the same boot", () => {
+    const rows: HealthRow[] = [
+      { kind: "started", at: 1_000, pid: 3, startedAt: 1_000, processStart: "a".repeat(64) },
+    ];
+    expect(
+      previousRunOf(
+        rows,
+        self,
+        9_000,
+        () => true,
+        () => "b".repeat(64),
+      ).outcome,
+    ).toBe("crashed");
+    expect(
+      previousRunOf(
+        rows,
+        self,
+        9_000,
+        () => true,
+        () => "a".repeat(64),
+      ).outcome,
+    ).toBe("none");
+  });
+
+  test("a later reboot cannot reclassify the run that ended before a same-boot start", () => {
+    const rows: HealthRow[] = [
+      { kind: "started", at: 1_000, pid: 2, startedAt: 1_000, bootAt: 500 },
+      { kind: "started", at: 2_000, pid: 3, startedAt: 2_000, bootAt: 500 },
+      { kind: "sample", at: 405_000, pid: 3, startedAt: 2_000 } as HealthRow,
+      { kind: "started", at: 401_000, pid: 4, startedAt: 401_000, bootAt: 400_000 },
+    ];
+    const now = 410_000;
+    const isAlive = (pid: number) => pid !== 2;
+    expect(
+      previousRunOf(rows, { pid: 1, startedAt: now, bootAt: 400_000 }, now, isAlive).outcome,
+    ).toBe("crashed");
+  });
+
   test("this backend's own rows do not count, and a first start has no previous run", () => {
     expect(previousRunOf([row("started", 9_000, 1, 9_000)], self, 9_000, () => false)).toEqual({
       outcome: "none",
@@ -289,6 +398,47 @@ describe("previousRunOf", () => {
     });
   });
 
+  test("an unclean run whose host booted after its last row was host-restarted", () => {
+    const rows = [row("started", 1_000, 2, 1_000), row("sample", 4_000, 2, 1_000)];
+    expect(previousRunOf(rows, { ...self, bootAt: 6_000 }, 9_000, () => false)).toEqual({
+      outcome: "host-restarted",
+      ranForMs: 3_000,
+      lastSeenAgoMs: 5_000,
+    });
+  });
+
+  test("a boot before the run's last row leaves it crashed", () => {
+    const rows = [row("started", 1_000, 2, 1_000), row("sample", 4_000, 2, 1_000)];
+    expect(previousRunOf(rows, { ...self, bootAt: 500 }, 9_000, () => false).outcome).toBe(
+      "crashed",
+    );
+    expect(previousRunOf(rows, { ...self, bootAt: 4_000 }, 9_000, () => false).outcome).toBe(
+      "crashed",
+    );
+    expect(previousRunOf(rows, { ...self, bootAt: null }, 9_000, () => false).outcome).toBe(
+      "crashed",
+    );
+  });
+
+  test("a later run's recorded boot also counts, and never turns a clean run unclean", () => {
+    const lost = [row("started", 1_000, 2, 1_000), row("sample", 4_000, 2, 1_000)];
+    // Run 3 started after a boot and is still running, so run 2 is the one reported.
+    const liveLater = { ...row("started", 7_000, 3, 7_000), bootAt: 6_000 } as HealthRow;
+    const isAlive = (pid: number) => pid === 3;
+    expect(previousRunOf([...lost, liveLater], self, 9_000, isAlive).outcome).toBe(
+      "host-restarted",
+    );
+    expect(
+      previousRunOf([...lost, row("clean-exit", 4_500, 2, 1_000), liveLater], self, 9_000, isAlive)
+        .outcome,
+    ).toBe("clean");
+    // A boot that a run recorded before the lost run's last row says nothing about it.
+    const earlierBoot = { ...row("started", 1_000, 2, 1_000), bootAt: 500 } as HealthRow;
+    expect(previousRunOf([earlierBoot, lost[1]!], self, 9_000, () => false).outcome).toBe(
+      "crashed",
+    );
+  });
+
   test("an unreadable row is skipped", async () => {
     const db = await database();
     db.transaction(() => {
@@ -296,5 +446,21 @@ describe("previousRunOf", () => {
       db.rows(HEALTH_SUMMARY_STORE).put("worse", JSON.stringify({ kind: "sample" }));
     });
     expect(readHealthRows(db)).toEqual([]);
+  });
+});
+
+describe("hostBootAt", () => {
+  test("is now less the host's uptime, to the second", () => {
+    expect(hostBootAt(10_000_400, () => 1_000.2)).toBe(9_000_000);
+  });
+
+  test("is null when the uptime cannot be read", () => {
+    expect(
+      hostBootAt(10_000, () => {
+        throw new Error("no uptime");
+      }),
+    ).toBeNull();
+    expect(hostBootAt(10_000, () => Number.NaN)).toBeNull();
+    expect(hostBootAt(10_000, () => -1)).toBeNull();
   });
 });

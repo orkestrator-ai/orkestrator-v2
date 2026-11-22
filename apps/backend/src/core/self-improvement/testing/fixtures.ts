@@ -107,6 +107,8 @@ export function healthRun(options: {
   startedAt: number;
   hours: number;
   clean: boolean;
+  /** When the host booted, recorded on the start marker as a current backend does. */
+  bootAt?: number;
   rssStartMiB?: number;
   rssMiBPerHour?: number;
   cpuPercent?: number;
@@ -115,7 +117,13 @@ export function healthRun(options: {
   jobs?: Record<string, { started: number; failed: number; totalMs: number }>;
 }): unknown[] {
   const rows: unknown[] = [
-    { kind: "started", at: options.startedAt, pid: options.pid, startedAt: options.startedAt },
+    {
+      kind: "started",
+      at: options.startedAt,
+      pid: options.pid,
+      startedAt: options.startedAt,
+      ...(options.bootAt !== undefined ? { bootAt: options.bootAt } : {}),
+    },
   ];
   const end = options.startedAt + options.hours * HOUR;
   for (let at = options.startedAt + 5 * 60 * 1000; at <= end; at += 5 * 60 * 1000) {

@@ -91,6 +91,8 @@ A process cannot see who SIGKILLed it. The kernel audit system can. It records
 the sender (`comm`, `exe`, `pid`, `ppid`) and the target (`opid`, `ocomm`) of
 every matching `kill`.
 
+Check `sudo auditctl -l` first. If an identical rule already exists,
+leave it in place and omit that rule from both the setup and cleanup below.
 Save this as a file and run it with `sudo bash`. Pasting the loop into some
 terminals leaves `$sig` empty, and auditctl then gets `-F a1=` and refuses
 the rule.
@@ -100,7 +102,6 @@ the rule.
 # ork-audit-on.sh: record every SIGKILL and SIGTERM sent by UID 1000
 set -euo pipefail
 systemctl start auditd
-auditctl -b 8192
 for sig in 9 15; do
   # kill / tkill / pidfd_send_signal carry the signal in argument 1; tgkill in argument 2
   auditctl -a always,exit -F arch=b64 -S kill -S tkill -S pidfd_send_signal -F a1=$sig -F uid=1000 -k ork-kill
@@ -146,11 +147,21 @@ the sender has already exited, use the `proctitle` and the transcripts from
 section 2. A negative `a0` (for example `0xffe673bb`) means the call targeted a
 whole process group, `-a0`.
 
-Turn it off (the rules also disappear on reboot):
+Save the corresponding cleanup as `ork-audit-off.sh` and run it with
+`sudo bash ork-audit-off.sh`. It removes the four rules added above. Leave the
+audit service and any existing audit policy in place. Use `sudo auditctl -l`
+before setup and after cleanup to verify that the original rules remain.
 
 ```bash
-sudo auditctl -D        # deletes every audit rule; use -d with the same arguments to remove only these
-sudo systemctl stop auditd
+#!/usr/bin/env bash
+# ork-audit-off.sh
+set -uo pipefail
+status=0
+for sig in 9 15; do
+  auditctl -d always,exit -F arch=b64 -S kill -S tkill -S pidfd_send_signal -F a1=$sig -F uid=1000 -k ork-kill || status=1
+  auditctl -d always,exit -F arch=b64 -S tgkill -F a2=$sig -F uid=1000 -k ork-kill || status=1
+done
+exit "$status"
 ```
 
 `killsnoop` from `bpfcc-tools` shows the same information live, and also needs
@@ -296,3 +307,23 @@ known ways to get it without a crash:
 | Logout, reboot or shutdown on Omarchy. Omarchy sets `DefaultTimeoutStopSec=5s`, so `user@1000.service` gets 5 s (`systemctl show user@1000.service -p TimeoutStopUSec`, seen on beelink2), while a quit may wait up to 20 s for the backend's drain before it writes `stopped` | `quit.stopping-backend` and some of the backend's drain, then nothing | Open, not reproduced ([to-do 8315](../todo/cross-cutting/8315-desktop-killed-during-system-shutdown.md)): the system would SIGKILL the app; the previous boot's journal (`journalctl -b -1`) shows a stop timeout |
 
 A real native crash leaves a core (`coredumpctl list`); a kill leaves none.
+
+## 9. The 2026-11-15 incidents (omarchy-hp)
+
+Found from the self-improvement digest's `backend:crashed` signal (two runs
+without a clean-exit marker) on app 2.38.2-beta.
+
+| Time (UTC) | What happened | Cause | Status |
+| --- | --- | --- | --- |
+| About 16:23 | The app log stops at 16:16:50 after a 38.5-hour backend run; nothing more until 21:13 | The machine stopped: `journalctl --list-boots` shows the boot ending at 16:23:05 with no shutdown, and `last -x` no `shutdown` record. A power loss, freeze or forced restart, not the app | Backends now record the host's boot time on their `started` health row, so the next start says `previous-run outcome=host-restarted` and self-improvement counts `backend:host-restarted` rather than a crash ([logging.md](../architecture/logging.md#health-summary-and-the-clean-exit-marker)) |
+| 21:26:31 | The production backend got `SIGKILL`; the desktop survived and showed its dialog | Unknown sender. A pipeline's validation plan (`test:full`, `test:browser`, `test:agent:electron`, `test:package:security`, `test:agent:browser:isolated`) was running under the backend. No OOM kill. A Playwright Chromium in the app's cgroup aborted one second earlier | Open: [8316](../todo/cross-cutting/8316-production-backend-killed-during-validation.md) |
+| 21:26:46 to 21:27:24 | Three packaged `orkestrator-v2` processes from the pipeline's `release/linux-unpacked` dumped core with SIGTRAP | Their launcher (the validation run) died with the backend; see section 5 | A consequence of the kill |
+
+A run whose boot ended this way is easy to tell from the system's own
+records:
+
+```bash
+journalctl --list-boots --no-pager | tail -3   # LAST ENTRY of the previous boot
+last -x reboot shutdown | head -4               # no "shutdown" line before the reboot
+journalctl -b -1 -k --no-pager | tail           # the previous boot's last kernel lines
+```

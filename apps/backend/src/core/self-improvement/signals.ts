@@ -8,6 +8,7 @@
  * Pure: no I/O. Thresholds are starting points, exported so tests and the guide
  * name them; change them here when the loop proves one too noisy or too quiet.
  */
+import { hostRestartedAfter, nextBackendStart } from "../host-boot.js";
 import type { BundleData, EssentialEntry, FieldValue, HealthRow } from "./bundle.js";
 
 export type SignalCategory =
@@ -61,7 +62,10 @@ export interface DigestWindow {
  * backend starts; the health rows count backend uptime; database counters cover
  * only the exporting backend's run.
  */
-export type ObservedHours = Record<SignalSource, Record<string, number>>;
+export type ObservedHours = Record<SignalSource, Record<string, number>> & {
+  /** The hours in which the selected run-ending source could detect host restarts. */
+  "host-restart-detection"?: Record<string, number>;
+};
 
 export interface ExtractedSignals {
   window: DigestWindow;
@@ -447,11 +451,36 @@ function collectEssential(
   }
 }
 
+/**
+ * A backend run with no clean exit whose host booted after its last row: a
+ * power loss, a freeze or a forced restart stopped the machine under it. Kept
+ * apart from `backend:crashed`, which then counts only what the backend or
+ * something on the host did to it, and ranked as a warning: no change to the
+ * app can make it write a marker through a power cut.
+ */
+export const HOST_RESTARTED_SIGNATURE = "backend:host-restarted";
+
+function hostRestartedSignal(
+  source: SignalSource,
+): () => ConstructorParameters<typeof SignalBuilder> {
+  return () => [
+    HOST_RESTARTED_SIGNATURE,
+    "warning",
+    source,
+    "The machine stopped or restarted under a running backend (power loss, freeze or forced restart)",
+    "rate",
+    "per day",
+  ];
+}
+
 interface Run {
   pid: number;
   startedAt: number;
   lastAt: number;
   clean: boolean;
+  /** The host's boot time its `started` row recorded, if any. */
+  bootAt: number | null;
+  bootId: string | null;
   samples: HealthRow[];
 }
 
@@ -464,10 +493,16 @@ function runsOf(rows: readonly HealthRow[]): Run[] {
       startedAt: row.startedAt,
       lastAt: row.at,
       clean: false,
+      bootAt: null,
+      bootId: null,
       samples: [],
     };
     run.lastAt = Math.max(run.lastAt, row.at);
     run.clean ||= row.kind === "clean-exit";
+    if (row.kind === "started") {
+      run.bootAt = row.bootAt ?? null;
+      run.bootId = row.bootId ?? null;
+    }
     if (row.kind === "sample") run.samples.push(row);
     runs.set(key, run);
   }
@@ -495,6 +530,7 @@ interface HealthResult {
   liveRun: Run | null;
   liveVersion: string;
   uptimeByVersion: Record<string, number>;
+  hostRestartHours: Record<string, number>;
 }
 
 function collectHealth(
@@ -523,6 +559,7 @@ function collectHealth(
   const jobTotals = new Map<string, { started: number; failed: number; totalMs: number }>();
   let uptimeHours = 0;
   const uptimeByVersion: Record<string, number> = {};
+  const hostRestartHours: Record<string, number> = {};
 
   for (const run of runs) {
     const version = versionOf(run);
@@ -530,8 +567,16 @@ function collectHealth(
     uptimeHours += hours;
     uptimeByVersion[version] = (uptimeByVersion[version] ?? 0) + hours;
     const last = run.samples.at(-1);
+    const successor = nextBackendStart(runs, run);
+    if (run.bootAt !== null || successor?.bootAt != null) {
+      hostRestartHours[version] = (hostRestartHours[version] ?? 0) + hours;
+    }
 
-    if (run !== liveRun && !run.clean) {
+    if (run !== liveRun && !run.clean && hostRestartedAfter(run.lastAt, run, successor)) {
+      const stopped = signals.get(HOST_RESTARTED_SIGNATURE, hostRestartedSignal("health-summary"));
+      stopped.occur(run.lastAt, version);
+      stopped.max("longestRunHours", round(hours));
+    } else if (run !== liveRun && !run.clean) {
       const crash = signals.get("backend:crashed", () => [
         "backend:crashed",
         "crash",
@@ -678,6 +723,7 @@ function collectHealth(
     liveRun,
     liveVersion: liveRun ? versionOf(liveRun) : data.manifest.appVersion || UNKNOWN_VERSION,
     uptimeByVersion,
+    hostRestartHours,
   };
 }
 
@@ -776,6 +822,60 @@ function collectDatabase(
   return hours === null ? {} : { [version]: hours };
 }
 
+/** The essential log supplies run endings when the bundle contains no health rows. */
+function collectRunEndingLogs(
+  entries: readonly EssentialEntry[],
+  to: number | null,
+  timeline: VersionTimeline,
+  signals: Signals,
+): Record<string, number> {
+  const hours: Record<string, number> = {};
+  let previousStart: EssentialEntry | undefined;
+  let currentStart: EssentialEntry | undefined;
+  let previousHoursCounted = false;
+  const versionOf = (start: EssentialEntry | undefined) =>
+    label(start?.fields.version) ?? UNKNOWN_VERSION;
+  const observe = (start: EssentialEntry, endAt: number) => {
+    const version = versionOf(start);
+    hours[version] = (hours[version] ?? 0) + Math.max(0, endAt - start.at) / HOUR_MS;
+  };
+
+  for (const entry of entries) {
+    if (entry.area !== "backend") continue;
+    if (entry.event === "starting") {
+      previousStart = currentStart;
+      currentStart = entry;
+      previousHoursCounted = previousStart?.fields.hostRestartDetection === true;
+      if (previousStart && previousHoursCounted) observe(previousStart, entry.at);
+      continue;
+    }
+    if (entry.event !== "previous-run") continue;
+    if (entry.fields.outcome === "host-restarted") {
+      signals
+        .get(HOST_RESTARTED_SIGNATURE, hostRestartedSignal("essential-log"))
+        .occur(entry.at, versionOf(previousStart));
+      // Early builds could report a restart before they advertised the capability.
+      if (previousStart && currentStart && !previousHoursCounted) {
+        observe(previousStart, currentStart.at);
+        previousHoursCounted = true;
+      }
+    } else if (entry.fields.outcome === "crashed") {
+      signals
+        .get("backend:crashed", () => [
+          "backend:crashed",
+          "crash",
+          "essential-log",
+          "The backend ended without its clean-exit marker (crash, kill or power loss)",
+          "rate",
+          "per day",
+        ])
+        .occur(entry.at, timeline.versionAt(entry.at - 1));
+    }
+  }
+  if (currentStart?.fields.hostRestartDetection === true && to !== null) observe(currentStart, to);
+  return hours;
+}
+
 /** Every signal in one bundle, highest score first. */
 export function extractSignals(data: BundleData): ExtractedSignals {
   for (const { at, startedAt } of data.health) {
@@ -805,27 +905,13 @@ export function extractSignals(data: BundleData): ExtractedSignals {
   const live = collectHealth(data, timeline, signals);
   const databaseHours = collectDatabase(data, live, signals);
 
-  // `backend:previous-run` stands in for the health rows when a bundle has none.
-  if (data.health.length === 0) {
-    for (const entry of data.essential) {
-      if (
-        entry.area !== "backend" ||
-        entry.event !== "previous-run" ||
-        entry.fields.outcome !== "crashed"
-      )
-        continue;
-      signals
-        .get("backend:crashed", () => [
-          "backend:crashed",
-          "crash",
-          "essential-log",
-          "The backend ended without its clean-exit marker (crash, kill or power loss)",
-          "rate",
-          "per day",
-        ])
-        .occur(entry.at, timeline.versionAt(entry.at - 1));
-    }
-  }
+  const hostRestartHours =
+    data.health.length > 0
+      ? live.hostRestartHours
+      : collectRunEndingLogs(data.essential, to, timeline, signals);
+  const restart = signals.peek(HOST_RESTARTED_SIGNATURE);
+  const watchedHours = Object.values(hostRestartHours).reduce((sum, hours) => sum + hours, 0);
+  if (restart && watchedHours > 0) restart.rateDays = watchedHours / 24;
 
   const built = signals
     .values()
@@ -845,6 +931,7 @@ export function extractSignals(data: BundleData): ExtractedSignals {
       "essential-log": roundValues(versionHours),
       "health-summary": roundValues(live.uptimeByVersion),
       database: roundValues(databaseHours),
+      "host-restart-detection": roundValues(hostRestartHours),
       // Filled by the insight stage: conversations read per version, not hours.
       insights: {},
     },

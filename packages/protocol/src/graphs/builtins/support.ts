@@ -9,8 +9,8 @@ import type {
   GraphPortTarget,
 } from "../template-model.js";
 
-/** The revision every built-in template ships at; bump it when a built-in changes. */
-export const GRAPH_BUILT_IN_TEMPLATE_REVISION = 2;
+/** The initial revision of built-in templates. Revised templates set their own revision. */
+export const GRAPH_BUILT_IN_TEMPLATE_REVISION = 1;
 
 export function edge(id: string, from: GraphEdgeSource, to: GraphPortTarget): GraphEdgeSpec {
   return { id, from, to };

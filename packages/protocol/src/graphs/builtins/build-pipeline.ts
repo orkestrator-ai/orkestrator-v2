@@ -16,13 +16,7 @@ import { MAX_BUILD_PIPELINE_REVIEWERS } from "../../build-pipeline.js";
 import { ACCEPTANCE_CRITERION_STATUSES } from "../../ticket-sections.js";
 import type { ArtifactTypeDef } from "../artifact-type-def.js";
 import type { GraphTemplateV1 } from "../template-model.js";
-import {
-  edge,
-  GRAPH_BUILT_IN_TEMPLATE_REVISION,
-  port,
-  reviewReportHasFindings,
-  target,
-} from "./support.js";
+import { edge, port, reviewReportHasFindings, target } from "./support.js";
 
 /** Today's default `maxIterations`; the engine accepts 1 to 10 per launch. */
 export const BUILD_PIPELINE_TEMPLATE_ROUNDS = 3;
@@ -119,7 +113,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
     format: "orkestrator.graph",
     formatVersion: 1,
     id: "build-pipeline",
-    revision: GRAPH_BUILT_IN_TEMPLATE_REVISION,
+    revision: 2,
     name: "Build pipeline",
     description:
       "Build a ticket, then prepare, seal, review with a read-only panel, address and verify in rounds until Verify passes; then open the pull request and resolve merge conflicts. Runs on the build pipeline engine.",

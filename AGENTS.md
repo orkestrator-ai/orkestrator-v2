@@ -107,6 +107,33 @@ Before pushing, verify both the current branch and its configured upstream. If
 either operation would update `main` directly, stop and correct the branch or
 upstream configuration instead of pushing.
 
+### Merging `main` into a branch
+
+- Compare and merge with `origin/main` after `git fetch origin`, never a local
+  `main`: it is usually stale, so `main..HEAD` lists commits that are already
+  merged.
+- Register the repository's merge drivers once per clone before you merge or
+  rebase: run `mise run git:merge-drivers` from a trusted checkout
+  (`mise run setup` also registers them when missing). The clone keeps the
+  bundled drivers in its common Git directory. To replace the bundle, run
+  `mise run git:merge-drivers -- --refresh` from a trusted checkout. Through
+  `.gitattributes` they merge the folder indexes under `docs/todo/` and
+  `docs/tests/flaky-tests/` row by row (rows both sides added are kept and
+  ranks renumbered) and the contract manifest entry by entry (totals
+  recomputed). With them registered, two branches that both add to-dos,
+  flake cases or commands merge without hand edits; never recount an index or
+  hand-merge the manifest. After a merge that touched
+  `packages/protocol/contracts/`, run `mise run contract:check`, and
+  `mise run contract:manifest` if it reports drift.
+- GitHub does not run merge drivers, so a pull request can still show a
+  conflict on those files. Merge `origin/main` locally with the drivers
+  registered, commit and push.
+- Before opening a pull request, fetch again: if `origin/main` moved and
+  a merge simulation with custom drivers disabled reports conflicts, merge
+  and resolve them first. A temporary bare Git directory that shares only
+  the checkout’s object database keeps local drivers out of the simulation.
+  Never open a pull request that conflicts with `origin/main`.
+
 ## Releases
 
 An agent cutting a release runs both desktop builds itself and does not hand
@@ -1824,11 +1851,14 @@ observing branch's base commit and run `mise run flaky:recurrence` before
 counting a recurrence, and prove a fix by reproducing the failure first
 ([Reproduce before fixing](docs/development/testing-guide.md#reproduce-before-fixing)).
 
-A new flake case or to-do file takes the next number after the highest in use
-(files and [claims](docs/number-claims/README.md)) and adds its claim,
-`docs/number-claims/{flaky-tests,todo}/NNNN`, in the same change. If that claim
-conflicts on rebase or merge, another branch took the number first: renumber
-yours and update its links. `tests/unit/number-claims.test.ts` enforces this.
+A new flake case or to-do file takes the number
+`mise run number:next -- flaky-tests` (or `-- todo`) prints: above every number
+in use here (files and [claims](docs/number-claims/README.md)) and in origin’s
+branch claims. It reserves the number across linked worktrees and adds random
+spacing to reduce collisions between independent clones. Add its claim, `docs/number-claims/{flaky-tests,todo}/NNNN`, in
+the same change. If that claim conflicts on rebase or merge, another branch
+took the number first: renumber yours and update its links.
+`tests/unit/number-claims.test.ts` enforces this.
 
 Do not call a test flaky merely because it failed once: run the owning file alone
 first and preserve both results. Do not hide a flake by deleting, skipping, or

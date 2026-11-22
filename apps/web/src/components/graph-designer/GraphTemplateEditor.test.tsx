@@ -116,7 +116,7 @@ describe("GraphEdgeEditor and GraphLoopEditor", () => {
     expect(harness.current().loops![0]!.nodes).not.toContain("rework");
     expect(harness.current().loops![0]!.carry).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: /Delete loop/ }));
-    expect(harness.current().loops).toEqual([]);
+    expect(harness.current().loops).toEqual(template.loops!.filter((loop) => loop.id !== "rounds"));
     expect(harness.current().nodes).toHaveLength(template.nodes.length);
   });
 });

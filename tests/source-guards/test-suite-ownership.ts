@@ -95,6 +95,9 @@ export const CROSS_PACKAGE_CONTRACTS: ReadonlySet<string> = new Set([
   "tests/unit/firewall-refresh.test.ts",
   // Exercises backend normalization through the renderer's pipeline adapter.
   "tests/unit/lib/opencode-pipeline-transcript.test.ts",
+  // The same Git history must conflict in the backend publication check and
+  // merge with the repository's installed drivers.
+  "tests/unit/merge-drivers/merge-drivers.integration.test.ts",
   "tests/unit/migrate-copy.test.ts",
   // The backend's copy pipe and drain window against the real copy helper script.
   "tests/unit/migrate-copy-drain-window.test.ts",

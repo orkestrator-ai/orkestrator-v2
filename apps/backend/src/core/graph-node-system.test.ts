@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { graphBuiltInTemplate } from "@orkestrator/protocol/graphs/builtins";
 import type { GraphRewind } from "@orkestrator/protocol/graphs/run";
 import type { GraphActivationReport } from "./graph-run-executors.js";
 import { graphNotifyRequestId } from "./graph-system-notify.js";
@@ -239,6 +240,87 @@ describe("open-pull-request", () => {
       });
     },
   );
+
+  test("checks a retargeted pull request's fresh base before pushing or editing", async () => {
+    const w = await world();
+    w.shell.addPull("OPEN", { base: "release/2" });
+    const fresh = "c".repeat(40);
+    w.shell.remote.set("release/2", fresh);
+    w.shell.tracking.set("release/2", "d".repeat(40));
+    w.shell.conflictingBases.add(fresh);
+    expect(await w.executor().start(w.context(w.activation("pr")))).toMatchObject({
+      state: "failed",
+      error: expect.stringContaining("origin/release/2"),
+    });
+    expect(w.shell.calls).toContainEqual([
+      "git",
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--refmap=",
+      "origin",
+      fresh,
+    ]);
+    expect(w.shell.pushes).toHaveLength(0);
+    expect(w.shell.edits).toHaveLength(0);
+  });
+
+  test("unavailable base objects block publication even when tracking refs exist", async () => {
+    const w = await world();
+    w.shell.tracking.set("main", "b".repeat(40));
+    w.shell.failFetch = true;
+    expect(await w.executor().start(w.context(w.activation("pr")))).toMatchObject({
+      state: "failed",
+      cause: "provider-error",
+    });
+    expect(w.shell.pushes).toHaveLength(0);
+    expect(w.shell.creates).toHaveLength(0);
+  });
+
+  test("a conflict appearing during push routes to resolution before creation", async () => {
+    const template = systemTemplate();
+    const pr = template.nodes.find((node) => node.id === "pr");
+    if (pr?.kind !== "system") throw new Error("Missing PR action");
+    pr.params = { prePublicationResolution: true };
+    pr.outputs!.push({ name: "code", type: "workspace@1" }, { name: "base", type: "text@1" });
+    template.types = graphBuiltInTemplate("build-pipeline")!.template.types!.filter(
+      ({ name }) => name === "pull-request-state",
+    );
+    const w = await world({ template });
+    const advanced = "e".repeat(40);
+    w.shell.afterPush = () => {
+      w.shell.remote.set("main", advanced);
+      w.shell.conflictingBases.add(advanced);
+    };
+    const executor = w.executor();
+    const outputs = outputsOf(await executor.start(w.context(w.activation("pr"))));
+    expect(w.shell.pushes).toHaveLength(1);
+    expect(w.shell.creates).toHaveLength(0);
+    expect(await valueOf(w, outputs.state!)).toEqual({
+      url: "",
+      state: "unpublished",
+      hasMergeConflicts: true,
+    });
+    expect(await valueOf(w, outputs.base!)).toEqual({ text: "main" });
+
+    const resolved = "f".repeat(40);
+    w.shell.commits.add(resolved);
+    w.shell.resolvedHeads.add(resolved);
+    const artifact = await w.artifacts.putValue({
+      runId: w.run.id,
+      type: "workspace@1",
+      producer: { nodeId: "resolve", activation: "resolve#iter=1#attempt=1", port: "code" },
+      value: { branch: SYSTEM_BRANCH, headRef: resolved, baseRef: w.head },
+      workspace: { headRef: resolved, baseRef: w.head },
+    });
+    const next = w.activation("pr", { iteration: 2 });
+    const published = outputsOf(
+      await executor.start(w.context({ ...next, inputs: { ...next.inputs, code: artifact.id } })),
+    );
+    expect(w.shell.creates).toHaveLength(1);
+    expect(w.shell.pushes.at(-1)?.at(-1)).toBe(`${resolved}:refs/heads/${SYSTEM_BRANCH}`);
+    expect(await valueOf(w, published.pr!)).toMatchObject({ status: "created" });
+  });
 
   test("pushes, opens the pull request and reports its merge state", async () => {
     const w = await world();

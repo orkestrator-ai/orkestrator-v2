@@ -67,10 +67,10 @@ describe("Build Pipeline built-in ↔ the protocol's pipeline contract", () => {
   test("worst case: Build, three full rounds of a 32-reviewer panel, Ship and conflicts", () => {
     const perRound = 1 + 1 + MAX_BUILD_PIPELINE_REVIEWERS + 1 + 1 + 1;
     expect(compile(template).cost!.agentSessions.worst).toBe(
-      1 + perRound * BUILD_PIPELINE_TEMPLATE_ROUNDS + 2,
+      1 + perRound * BUILD_PIPELINE_TEMPLATE_ROUNDS + 4,
     );
     expect(template.limits.maxAgentSessions).toBe(
-      1 + perRound * BUILD_PIPELINE_TEMPLATE_ROUNDS + 2,
+      1 + perRound * BUILD_PIPELINE_TEMPLATE_ROUNDS + 4,
     );
   });
 });

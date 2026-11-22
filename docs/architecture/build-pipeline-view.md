@@ -970,7 +970,20 @@ in [tickets.md](tickets.md#delivery). The decision is saved before creating a
 Ship session, so a failed session creation and retry keep the same policy.
 Resuming a paused push-only Ship explicitly forbids opening or editing a PR.
 
-- **`open-pr`** starts the PR stage as always.
+- **`open-pr`** starts the PR stage. Ship reads an existing PR’s actual
+  base or uses the configured target for a new PR. It fetches the exact
+  remote base before pushing and checks mergeability in a temporary Git
+  directory without the local merge drivers. On conflict, it merges the
+  fetched commit using the repository’s merge tooling, resolves and verifies
+  the result, and retries within three catch-up passes. Verified commits
+  stay in history. Ship repeats the check against the pushed commit and
+  current base immediately before creating, reopening or editing the PR.
+  The graph publisher enforces the same checks in its system action. The
+  Build Pipeline graph routes an unpublished conflict to its resolver and
+  repeats publication with the resolved workspace, up to three publication
+  attempts. The mergeability check and GitHub write are separate operations. Either ref
+  can still move after the last check, and the existing post-publication
+  conflict stage remains available.
 - **`push-no-pr`** starts the same Ship stage (`pr` session, `creating-pr` phase,
   the Pull request step's model and instructions) under
   `BRANCH_PUSH_SESSION_LABEL`, with `pushBranchPrompt`: commit what remains, push,

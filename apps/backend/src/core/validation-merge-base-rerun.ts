@@ -54,9 +54,7 @@ const TEST_SCRIPT = `
   cd "$1" || exit 1
   file="$2"; shift 2
   test -f "./$file" && test ! -L "./$file" || exit 2
-  # GITHUB_ACTIONS makes Bun wrap results in ::group::/::error annotations,
-  # which the strict result parser below rightly refuses as incomplete output.
-  unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CODEX_SESSION_ID CODEX_THREAD_ID BUN_TEST_QUIET GITHUB_ACTIONS
+  unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CODEX_SESSION_ID CODEX_THREAD_ID BUN_TEST_QUIET
   export NO_COLOR=1 FORCE_COLOR=0
   config=/dev/null
   if [ -f bunfig.toml ] && [ ! -L bunfig.toml ]; then config=./bunfig.toml; fi
@@ -118,20 +116,34 @@ function parseBunResults(
 
   const observations = new Map<string, BunObservation>();
   let fileHeader = false;
+  let grouped = false;
+  let groupClosed = false;
   let summary = false;
   const counts = { pass: 0, fail: 0, skip: 0, todo: 0 };
   const totals = new Map<string, number>();
   let diagnostic: string[] = [];
   for (const line of lines) {
-    if (/^\S.*\.[cm]?[jt]sx?:$/.test(line)) {
-      if (fileHeader || line.replace(/^\.\//, "") !== `${file}:`) return null;
+    const header = /^(::group::)?((?!::)\S.*\.[cm]?[jt]sx?:)$/.exec(line);
+    if (header) {
+      if (fileHeader || summary || header[2]!.replace(/^\.\//, "") !== `${file}:`) return null;
       fileHeader = true;
+      grouped = Boolean(header[1]);
+      diagnostic = [];
+      continue;
+    }
+    if (
+      grouped &&
+      line === "::endgroup::" &&
+      !diagnostic.some((entry) => /^error: \S/.test(entry))
+    ) {
+      if (groupClosed || summary) return null;
+      groupClosed = true;
       continue;
     }
     const count = /^\s*(\d+) (pass|fail|skip|todo)$/.exec(line);
     if (count) {
       const kind = count[2]!;
-      if (totals.has(kind)) return null;
+      if (!fileHeader || (grouped && !groupClosed) || totals.has(kind)) return null;
       totals.set(kind, Number(count[1]));
       summary = true;
       continue;
@@ -141,7 +153,7 @@ function parseBunResults(
       diagnostic.push(line);
       continue;
     }
-    if (!fileHeader || summary) return null;
+    if (!fileHeader || groupClosed || summary) return null;
     const kind = result[1] as keyof typeof counts;
     const title = normalizeValidationTestName(result[2]!);
     if (observations.has(title)) return null;
@@ -149,7 +161,7 @@ function parseBunResults(
     observations.set(
       title,
       kind === "fail"
-        ? { kind, fingerprint: bunFailureFingerprint(diagnostic, hashDiagnostic) }
+        ? { kind, fingerprint: bunFailureFingerprint(diagnostic, hashDiagnostic, grouped) }
         : { kind },
     );
     diagnostic = [];

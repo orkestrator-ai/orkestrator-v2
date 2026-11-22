@@ -18,7 +18,7 @@ import {
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
 import {
-  dockerDaemonRecordedContainerExit,
+  dockerContainerExitEvidence,
   dockerDaemonUnreachableNow,
   isDockerCopyRemountRefused,
   isDockerDaemonUnreachable,
@@ -571,12 +571,12 @@ export async function runCopyStep(
     const result = parseCopyOutput(stdout);
     if (result.ok) return result;
     if (isDockerDaemonUnreachable(stdout)) return DAEMON_UNAVAILABLE_COPY;
-    // Stopped by a signal before it reported: an outage when the daemon
-    // answering now never saw it exit (it restarted underneath the helper).
+    // A signal-only exit can hide a shutdown. Preserve a connection error
+    // from the event lookup even if the next availability probe would pass.
     if (
       result.reason === "helper-failed" &&
       isDockerRunStoppedFromOutside(failure) &&
-      (await dockerDaemonRecordedContainerExit(volumeHelper, startedAt)) === false
+      (await dockerContainerExitEvidence(volumeHelper, startedAt)) === "daemon-unavailable"
     ) {
       return DAEMON_UNAVAILABLE_COPY;
     }

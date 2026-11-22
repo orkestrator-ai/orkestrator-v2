@@ -113,22 +113,16 @@ export function isDockerRunStoppedFromOutside(error: unknown): boolean {
 }
 
 /**
- * Whether the daemon answering now recorded the named container's exit since
- * `sinceMs`; null when that cannot be told.
- *
- * A daemon that shuts down gracefully (`systemctl restart docker`, live-restore
- * off; Engine 28.0.4 on GitHub's runners) keeps open requests alive while it
- * stops containers, so an attached `docker run` exits with its container's
- * signal status and no connection wording at all. On a socket-activated host
- * the next request then reaches the restarted daemon, so asking whether Docker
- * is up says yes. Its event history starts empty: a container it never ran
- * has no `die` there, while the daemon that ran it still lists one.
+ * Read the helper's exit history after a signal-only copy failure. A daemon
+ * shutting down can keep the attached run alive until the helper exits, so
+ * the history request may be the first call to see the connection fail.
+ * Empty history is indeterminate: the daemon retains a bounded event buffer.
  */
-export async function dockerDaemonRecordedContainerExit(
+export async function dockerContainerExitEvidence(
   name: string,
   sinceMs: number,
   timeoutMs = 10_000,
-): Promise<boolean | null> {
+): Promise<"recorded" | "unknown" | "daemon-unavailable"> {
   try {
     const { stdout } = await runCommand(
       "docker",
@@ -147,8 +141,12 @@ export async function dockerDaemonRecordedContainerExit(
       ],
       { timeoutMs },
     );
-    return stdout.split("\n").some((line) => line.trim() === "die");
-  } catch {
-    return null;
+    return stdout.split("\n").some((line) => line.trim() === "die") ? "recorded" : "unknown";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/permission denied|access denied/i.test(message) && isDockerDaemonUnreachable(message)) {
+      return "daemon-unavailable";
+    }
+    return "unknown";
   }
 }

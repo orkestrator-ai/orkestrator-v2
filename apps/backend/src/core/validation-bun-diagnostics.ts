@@ -3,13 +3,22 @@
  * stack locations and timings vary between checkouts. The same function is
  * embedded in the environment-side failure classifier.
  */
-export function bunFailureFingerprint(lines: string[], hash: (text: string) => string) {
-  // Under GITHUB_ACTIONS Bun also prints workflow commands (`::error ...::`,
-  // `::group::`), which a run outside Actions lacks for the same failure.
-  const relevant = lines.filter((line) => !/^::[a-z][\w-]*(?: [^\n]*)?::/.test(line));
-  const start = relevant.findIndex((line) => /^error: \S/.test(line));
+export function bunFailureFingerprint(
+  lines: string[],
+  hash: (text: string) => string,
+  grouped = false,
+) {
+  const start = lines.findIndex((line) => /^error: \S/.test(line));
   if (start < 0) return undefined;
-  const block = relevant.slice(start);
+  let end = lines.length;
+  // Bun appends a blank line and an annotation for this error immediately
+  // before its result in grouped output. Command-shaped text elsewhere is
+  // part of the diagnostic.
+  if (grouped && lines.at(-2) === "") {
+    const annotation = lines.at(-1)?.replace(/^::error (?:file=.+?,line=\d+,col=\d+,)?title=/, "");
+    if (annotation !== lines.at(-1) && annotation?.startsWith(`${lines[start]}::`)) end -= 2;
+  }
+  const block = lines.slice(start, end);
   if (
     block.length > 128 ||
     block.some((line) => line.length > 8_192) ||

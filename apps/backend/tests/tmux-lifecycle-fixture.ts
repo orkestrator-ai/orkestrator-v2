@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { execWithOutput, type ExecOutput } from "../src/core/tmux-shared.js";
+import { execWithOutput, type ExecOutput } from "../src/core/tmux/shared.js";
 
 // Capture before fake-runtime suites prepend their shims to PATH.
 export const realTmux = Bun.which("tmux");

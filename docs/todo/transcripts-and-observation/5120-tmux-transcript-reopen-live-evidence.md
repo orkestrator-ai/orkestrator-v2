@@ -13,9 +13,9 @@ Analysed 2026-11-13 against `main` at `17d28238c` (first analysed 2026-11-04 aga
 
 **Problem.** The bounded read was proven through a fake `docker` on PATH and live in a browser on a local environment, but not against a real container.
 
-**Context.** Report 0690, task 1, is about the read through `docker exec`. `transcriptWindowCommand` (`tmux-shared.ts`) is what runs in the container. It relies on `wc -c` taking a regular file's size from `fstat` and `tail -c +N` seeking, on the image's coreutils.
+**Context.** Report 0690, task 1, is about the read through `docker exec`. `transcriptWindowCommand` (`tmux/shared.ts`) is what runs in the container. It relies on `wc -c` taking a regular file's size from `fstat` and `tail -c +N` seeking, on the image's coreutils.
 
-**Investigation.** `tmux-transcript-reader.test.ts` runs the script under a real `/bin/sh` and compares its bytes with the local read. `apps/backend/scripts/tmux-reopen-read-size.ts` counts the bytes crossing a fake `docker`: 36,853,890 in 2 execs before, 524,306 in 1 exec after, on the 37 MB workload. Browser QA on a local `dev:test` profile with an 8.9 MB transcript read 523,626 bytes on reopen, paged back to the first message in 16 further reads, and kept the task row's state.
+**Investigation.** `tmux/transcript-reader.test.ts` runs the script under a real `/bin/sh` and compares its bytes with the local read. `apps/backend/scripts/tmux-reopen-read-size.ts` counts the bytes crossing a fake `docker`: 36,853,890 in 2 execs before, 524,306 in 1 exec after, on the 37 MB workload. Browser QA on a local `dev:test` profile with an 8.9 MB transcript read 523,626 bytes on reopen, paged back to the first message in 16 further reads, and kept the task row's state.
 
 2026-11-13, in a real container: `apps/backend/tests/tmux-transcript-reopen-docker.test.ts` (opt-in, `RUN_LIVE_DOCKER_TESTS=1` and `ORKESTRATOR_QUALIFICATION_IMAGE`) runs the real `TmuxSession` and `TmuxBackend` against a container of the environment image built from `17d28238c`, on a disposable rootless Docker Engine 29.9.2 (`mise run docker:disposable`), with the 37 MB workload's transcript (9,000 records of 4 KiB, 36,853,890 bytes) copied into the container's Claude home. It counts every `docker exec` and the stdout bytes it returned. Three runs passed:
 

@@ -242,8 +242,8 @@ list cannot be loaded, when restoring the workspace hooks fails, or when
 refuses with `claude-tmux cleanup incomplete`, and each branch logs a `tmux
 cleanup.*` warning naming it. When tmux cannot reach its socket, a server may
 still be alive with the socket file deleted, so `confirmTmuxSessionGone`
-(`tmux-shared.ts`) takes a process census and treats a tmux process as a
-possible owner unless it is ruled out. On Linux, `tmux-socket-owner.ts` rules
+(`tmux/shared.ts`) takes a process census and treats a tmux process as a
+possible owner unless it is ruled out. On Linux, `tmux/socket-owner.ts` rules
 out a process that shares the backend's network namespace while
 `/proc/net/unix` does not list the socket path, one that sees a different
 directory where the socket lives (a container's own `/tmp`), and one that has

@@ -279,7 +279,7 @@ new.
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
-    `native-agent/`, `recurring/`) are reached only through their
+    `native-agent/`, `recurring/`, `tmux/`) are reached only through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
@@ -323,6 +323,13 @@ new.
       `native-agent/job-tab-reuse.ts` would also close a cycle through the
       public API's session goal actions, which import `goal-service.ts` through
       `native-agent/index.ts`.
+
+    The `tmux/` boundary has no exception in either override.
+    `tmux/index.ts` re-exports every module its production importers use,
+    `tmux/runtime.ts` for `backend-runtime.ts` and `tmux/commands.ts` for the
+    command registry included, and no cycle results. The tests and scripts
+    that use other tmux internals are outside both overrides, and no
+    `tests/unit` test imports the domain.
 
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import

@@ -35,7 +35,7 @@
 
 - **Cause:** when the fake tmux runtime (`apps/backend/tests/tmux-test-harness.ts`)
   has no sessions, its `list-sessions` prints `no server running`, and
-  `confirmTmuxSessionGone` (`apps/backend/src/core/tmux-shared.ts`) then runs a
+  `confirmTmuxSessionGone` (`apps/backend/src/core/tmux/shared.ts`) then runs a
   real `ps -A -o pid=,comm=` census. Any tmux server on the host made that
   census report a live tmux, so `cleanupEnvironmentTmux` treated teardown as
   incomplete and rejected, leaving the installed hook in place. The case

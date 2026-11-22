@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { transcriptToolDiffs } from "./tmux-transcript-tool-diffs.js";
+import { transcriptToolDiffs } from "./transcript-tool-diffs.js";
 
 function toolLine(...blocks: Array<{ id: string; name: string; input: Record<string, unknown> }>) {
   return {

@@ -103,7 +103,7 @@ import {
 } from "./git/index.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
 import { networkOwnerContainer } from "./container-network-owner.js";
-import { shutdownClaudeStatePolling } from "./tmux.js";
+import { shutdownClaudeStatePolling } from "./tmux/index.js";
 import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
 import {

@@ -420,7 +420,7 @@ one live check (an Electron spec with a hung `close()`).
      within 5 s instead of hanging. The `delay(25)` before each "nothing
      happened" assertion stays: it waits for the notification's promise chain,
      not a tick. 18.5 s to 8–12 s (sum of cases 17.8 s to 10.4 s); 8 runs
-     passed; 9 mutations of `tmux-session-manager.ts` each failed a case.
+     passed; 9 mutations of `tmux/session-manager.ts` each failed a case.
 5. **Done (2026-10-22): skipped settings test.** It runs again, stepping the
    controlled debounce per attempt.
 6. **Done (2026-10-25): desktop test gaps.**

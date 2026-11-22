@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parsePollSnapshotOutput, pollSnapshotScript } from "./tmux-shared.js";
+import { parsePollSnapshotOutput, pollSnapshotScript } from "./shared.js";
 
 /**
  * The combined poll script run by a real `sh`, with a fake `tmux` on PATH, so

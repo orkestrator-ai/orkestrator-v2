@@ -16,7 +16,7 @@ import {
   type ProcessIdentity,
 } from "./local-server-reaper.js";
 import { CommandFailedError } from "./shell.js";
-import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux.js";
+import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "./tmux/shared.js";
 import type { Environment } from "./models.js";
 
 /** A command line that satisfies every marker for the given kind. */

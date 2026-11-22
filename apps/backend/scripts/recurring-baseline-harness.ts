@@ -14,7 +14,7 @@ import {
   formatContainerFetchResponse,
 } from "../src/core/container-git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/git/pr-monitor.js";
-import { ClaudeStatePollManager } from "../src/core/tmux-poll.js";
+import { ClaudeStatePollManager } from "../src/core/tmux/poll.js";
 import type { WorktreeSignalReason } from "../src/core/agent-tools.js";
 import { ContainerWorktreeSignals } from "../src/core/container-worktree-signal.js";
 import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics.js";

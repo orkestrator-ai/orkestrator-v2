@@ -1,4 +1,4 @@
-import * as shared from "./tmux-shared.js";
+import * as shared from "./shared.js";
 import {
   MAX_PREVIOUS_SESSIONS,
   TRANSCRIPT_WINDOW_MISSING_STATUS,
@@ -23,7 +23,7 @@ import {
   tailFromOffsetCommand,
   transcriptHeadCommand,
   transcriptWindowCommand,
-} from "./tmux-shared.js";
+} from "./shared.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;

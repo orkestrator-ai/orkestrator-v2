@@ -1,12 +1,12 @@
-import type { CommandContext } from "./commands-context.js";
-import { recurringDiagnosticsRegistry } from "./recurring/index.js";
+import type { CommandContext } from "../commands-context.js";
+import { recurringDiagnosticsRegistry } from "../recurring/index.js";
 import {
   InteractiveTmuxTerminalManager,
   type InteractiveTmuxTerminalManagerOptions,
-} from "./tmux-interactive.js";
-import { ClaudeStatePollManager, type ClaudeStatePollManagerOptions } from "./tmux-poll.js";
-import { TmuxSessionManager } from "./tmux-session-manager.js";
-import { TmuxHookSignalManager, type TmuxHookSignalInstaller } from "./tmux-hook-signal.js";
+} from "./interactive.js";
+import { ClaudeStatePollManager, type ClaudeStatePollManagerOptions } from "./poll.js";
+import { TmuxSessionManager } from "./session-manager.js";
+import { TmuxHookSignalManager, type TmuxHookSignalInstaller } from "./hook-signal.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("tmux");
@@ -58,7 +58,7 @@ export class TmuxRuntime {
   readonly sessions = new TmuxSessionManager();
   readonly interactiveTerminals: InteractiveTmuxTerminalManager;
   readonly claudeStatePolls: ClaudeStatePollManager;
-  /** Per-container claude-tmux hook doorbells (`tmux-hook-signal.ts`). */
+  /** Per-container claude-tmux hook doorbells (`hook-signal.ts`). */
   readonly hookSignals: TmuxHookSignalManager;
   private readonly activityWrites = new Map<string, Promise<void>>();
   /** Environments with a Stop hook whose activity write has not landed yet. */

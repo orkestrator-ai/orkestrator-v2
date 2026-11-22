@@ -162,7 +162,7 @@ At application startup:
 6. `apps/backend/src/core/commands.ts` prefers those executables for local
    OpenCode servers, Claude/Codex bridges, extension discovery, and helper
    commands. It passes `CLAUDE_CLI_PATH` to the Claude bridge and `CODEX_PATH` to
-   the Codex bridge. `apps/backend/src/core/tmux.ts` also uses the managed Claude
+   the Codex bridge. `apps/backend/src/core/tmux/` also uses the managed Claude
    binary for local tmux sessions.
 
 The managed toolchain is downloaded on first startup; agent executables are not

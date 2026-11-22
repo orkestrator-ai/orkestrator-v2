@@ -544,6 +544,10 @@
                   "!**/recurring/work-metrics.js"
                 ],
                 "message": "Import the recurring domain through recurring/index.js."
+              },
+              {
+                "group": ["**/tmux/*", "!**/tmux/index.js"],
+                "message": "Import the tmux domain through tmux/index.js."
               }
             ]
           }
@@ -745,6 +749,10 @@
                   "!**/backend/src/core/recurring/index.js"
                 ],
                 "message": "Import the recurring domain through recurring/index.js."
+              },
+              {
+                "group": ["**/backend/src/core/tmux/*", "!**/backend/src/core/tmux/index.js"],
+                "message": "Import the tmux domain through tmux/index.js."
               }
             ]
           }

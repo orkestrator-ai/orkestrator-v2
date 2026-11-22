@@ -50,7 +50,7 @@ export const TmuxAgentObservationSchema = Schema.Struct({
   ),
 }).annotate({ identifier: "TmuxAgentObservation" });
 
-/** A tmux tab's session as the backend holds it (`TmuxStatus`, `tmux-hooks.ts`). */
+/** A tmux tab's session as the backend holds it (`TmuxStatus`, `tmux/hooks.ts`). */
 export const TmuxStatusSchema = Schema.Struct({
   tab_id: Schema.String,
   environment_id: Schema.String,

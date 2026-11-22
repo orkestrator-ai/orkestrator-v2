@@ -1122,7 +1122,7 @@ names at all. Three invariants keep it honest:
 | File                                   | Purpose                                                  |
 | -------------------------------------- | -------------------------------------------------------- |
 | `apps/backend/src/core/commands.ts`    | Backend command registry and Docker/local env management |
-| `apps/backend/src/core/tmux.ts`        | Claude tmux mode backend                                 |
+| `apps/backend/src/core/tmux/`          | Claude tmux mode backend                                 |
 | `apps/backend/src/core/storage.ts`     | `StorageService` (SQLite-backed; see `docs/architecture/storage.md`) |
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
 | `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |

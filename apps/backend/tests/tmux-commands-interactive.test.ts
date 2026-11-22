@@ -1,7 +1,7 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { tmuxSessionName } from "../src/core/tmux";
+import { tmuxSessionName } from "../src/core/tmux/shared";
 import { existsSync, promises as fs } from "node:fs";
 
 import {

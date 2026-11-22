@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { groupHasLiveMember } from "@orkestrator/protocol/node/shell-process-state";
-import { execWithOutput, execWithRawOutput } from "./tmux-shared.js";
+import { execWithOutput, execWithRawOutput } from "./shared.js";
 
 const directories: string[] = [];
 

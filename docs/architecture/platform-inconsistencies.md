@@ -54,7 +54,7 @@ The six surfaces compared:
 | Surface | Label in UI | Integration |
 | --- | --- | --- |
 | Claude Native | Claude Code (native) | `bridges/claude-bridge/` wrapping the Claude Agent SDK |
-| Claude Tmux | Claude Code (tmux) | Claude Code CLI under tmux; `apps/backend/src/core/tmux-*.ts` |
+| Claude Tmux | Claude Code (tmux) | Claude Code CLI under tmux; `apps/backend/src/core/tmux/` |
 | Codex Native | Codex | `bridges/codex-bridge/` speaking JSON-RPC to `codex app-server` |
 | Cursor Agent Native | Cursor Agent | `bridges/cursor-bridge/` via `@cursor/sdk` (ACP path removed) |
 | Grok Build Native | Grok Build | Same ACP bridge (`ACP_PROVIDER=grok`) |
@@ -76,7 +76,7 @@ Primary sources:
 - `apps/web/src/components/native-agent/`
 - `apps/web/src/components/claude/ClaudeTmuxChatTab.tsx`
 - `apps/backend/src/core/native-agent/service-*.ts`
-- `apps/backend/src/core/tmux-*.ts`
+- `apps/backend/src/core/tmux/`
 - `docs/architecture/agent-engines.md`
 
 ---
@@ -222,7 +222,7 @@ human.
 
 **Tmux intercepts PreToolUse / PermissionRequest / Elicitation via hooks** and
 fail-closes on timeout, overflow, or missing reply
-(`failClosedHookResponse` in `tmux-hooks.ts`). It also has plan cards, permission
+(`failClosedHookResponse` in `tmux/hooks.ts`). It also has plan cards, permission
 cards, elicitation cards, and TUI selection prompts.
 
 A user who switches the Claude backend from Tmux to Native silently loses

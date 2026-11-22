@@ -3,19 +3,19 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskSnapshotHistory } from "./claude-transcript-tasks.js";
-import { TmuxBackend } from "./tmux-backend.js";
+import { TaskSnapshotHistory } from "../claude-transcript-tasks.js";
+import { TmuxBackend } from "./backend.js";
 import {
   TRANSCRIPT_WINDOW_MISSING_STATUS,
   parseTranscriptWindowOutput,
   transcriptWindowCommand,
-} from "./tmux-shared.js";
+} from "./shared.js";
 import {
   TmuxTranscriptReader,
   cutTranscriptWindow,
   type TailLineSink,
   type TmuxTranscriptPage,
-} from "./tmux-transcript-reader.js";
+} from "./transcript-reader.js";
 
 const SESSION = "session-1";
 const jsonl = (value: unknown) => `${JSON.stringify(value)}\n`;

@@ -7,7 +7,7 @@ import {
   INTERACTIVE_SNAPSHOT_MAX_MS,
   INTERACTIVE_SNAPSHOT_MIN_MS,
   InteractiveTmuxTerminalManager,
-} from "../src/core/tmux";
+} from "../src/core/tmux/interactive";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics";

@@ -1,9 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { CommandContext } from "./commands.js";
-import { registrarFrom } from "./commands-registry-contracts.js";
-import { TmuxBackend } from "./tmux-backend.js";
-import { registerTmuxBackendCommands } from "./tmux-commands.js";
-import { TmuxSession } from "./tmux-session-manager.js";
+import type { CommandContext } from "../commands.js";
+import { registrarFrom } from "../commands-registry-contracts.js";
+import { TmuxBackend } from "./backend.js";
+import { registerTmuxBackendCommands } from "./commands.js";
+import { TmuxSession } from "./session-manager.js";
 
 /**
  * Mail presence reuses the tab poll loop's recent `has-session` answer instead

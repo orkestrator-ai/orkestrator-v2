@@ -8,7 +8,7 @@ import { claudeStateSignalInstaller } from "../src/core/claude-state-signal.js";
 import {
   ClaudeStatePollManager,
   CLAUDE_STATE_SAFETY_READ_INTERVAL_MS,
-} from "../src/core/tmux-poll.js";
+} from "../src/core/tmux/poll.js";
 import { ManualTime } from "../src/core/recurring/test-support.js";
 import { runCommand } from "../src/core/shell.js";
 import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";

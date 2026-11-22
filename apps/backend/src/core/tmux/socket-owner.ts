@@ -1,4 +1,4 @@
-import type { ExecOutput } from "./tmux-shared.js";
+import type { ExecOutput } from "./shared.js";
 
 /**
  * Narrows the tmux process census behind `confirmTmuxSessionGone`.

@@ -30,13 +30,13 @@ import {
   reconcileClaudeStatePollingCommand,
 } from "@orkestrator/protocol/contract/domains/claude-tmux";
 import type { ResultOf } from "@orkestrator/protocol/contract/command";
-import { wrapRegistrar } from "./commands-registry-contracts.js";
-import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
-import type { CommandRegistrar } from "./commands-registry-types.js";
-import * as shared from "./tmux-shared.js";
-import * as hooks from "./tmux-hooks.js";
-import * as interactive from "./tmux-interactive.js";
-import * as poll from "./tmux-poll.js";
+import { wrapRegistrar } from "../commands-registry-contracts.js";
+import { ASYNC_HANDLER } from "../commands-registry-async-decode.js";
+import type { CommandRegistrar } from "../commands-registry-types.js";
+import * as shared from "./shared.js";
+import * as hooks from "./hooks.js";
+import * as interactive from "./interactive.js";
+import * as poll from "./poll.js";
 import {
   TranscriptTaskTracker,
   asNonNegativeInt,
@@ -50,8 +50,8 @@ import {
   runtimeRootPrefixForContext,
   selectReapableTmuxSessions,
   tmuxSessionName,
-} from "./tmux-shared.js";
-import { TmuxBackend } from "./tmux-backend.js";
+} from "./shared.js";
+import { TmuxBackend } from "./backend.js";
 import {
   TranscriptTail,
   encodeCwd,
@@ -60,7 +60,7 @@ import {
   restoreWorkspaceHooks,
   uninstallWorkspaceHooks,
   workspaceHookPaths,
-} from "./tmux-hooks.js";
+} from "./hooks.js";
 import {
   AsyncMutex,
   TmuxSession,
@@ -71,10 +71,10 @@ import {
   killOrphanSession,
   resolveBackend,
   workspaceAndClaudeHome,
-} from "./tmux-session-manager.js";
-import { TmuxTranscriptReader } from "./tmux-transcript-reader.js";
-import { InteractiveTmuxTerminalManager } from "./tmux-interactive.js";
-import { ClaudeStatePollManager, environmentContainerId } from "./tmux-poll.js";
+} from "./session-manager.js";
+import { TmuxTranscriptReader } from "./transcript-reader.js";
+import { InteractiveTmuxTerminalManager } from "./interactive.js";
+import { ClaudeStatePollManager, environmentContainerId } from "./poll.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 

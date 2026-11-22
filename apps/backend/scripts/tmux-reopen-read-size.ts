@@ -2,8 +2,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { TmuxBackend } from "../src/core/tmux-backend.js";
-import { TmuxSession } from "../src/core/tmux-session-manager.js";
+import { TmuxBackend } from "../src/core/tmux/backend.js";
+import { TmuxSession } from "../src/core/tmux/session-manager.js";
 
 /**
  * Measures the bytes one claude-tmux tab reopen pulls through `docker exec`

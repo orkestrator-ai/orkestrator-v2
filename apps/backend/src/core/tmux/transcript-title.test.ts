@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderAgentMailCarrier, type AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { buildPromptWithTranscriptAnnotations } from "@orkestrator/protocol/transcript-annotations";
-import { titleFromTranscriptHead } from "./tmux-hooks.js";
+import { titleFromTranscriptHead } from "./hooks.js";
 
 function userLine(content: string): string {
   return JSON.stringify({ type: "user", message: { role: "user", content } });

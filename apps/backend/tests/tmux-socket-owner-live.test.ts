@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { confirmTmuxSessionGone, type ExecOutput } from "../src/core/tmux-shared";
+import { confirmTmuxSessionGone, type ExecOutput } from "../src/core/tmux/shared";
 
 // A case can run several subprocesses, each bounded to 10 seconds.
 setDefaultTimeout(60_000);

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { RecurringWorkMetrics } from "../src/core/recurring/work-metrics.js";
@@ -273,14 +274,23 @@ function argument(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+/**
+ * A tmux module in `src`: `core/tmux/<name>.ts`, or `core/tmux-<name>.ts` in
+ * sources from before the files moved into `core/tmux/` (2026-11-22).
+ */
+function tmuxModulePath(src: string, name: string): string {
+  const folder = path.join(src, "core/tmux", `${name}.ts`);
+  return existsSync(folder) ? folder : path.join(src, `core/tmux-${name}.ts`);
+}
+
 async function main(): Promise<void> {
   const src = path.resolve(argument("--src") ?? path.join(import.meta.dir, "../src"));
   const seconds = Number(argument("--seconds") ?? 60);
   const sessionModule = (await import(
-    pathToFileURL(path.join(src, "core/tmux-session-manager.ts")).href
+    pathToFileURL(tmuxModulePath(src, "session-manager")).href
   )) as SessionModule;
   const backendModule = (await import(
-    pathToFileURL(path.join(src, "core/tmux-backend.ts")).href
+    pathToFileURL(tmuxModulePath(src, "backend")).href
   )) as BackendModule;
   const rows: Array<{ scenario: string; counts: ExecCounts | null }> = [];
   for (const scenario of SCENARIOS) {

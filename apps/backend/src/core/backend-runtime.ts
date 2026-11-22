@@ -27,7 +27,7 @@ import { LinearMergedLabels, type LinearMergedLabelsOptions } from "./linear-mer
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { PublicApiReconciliations } from "./public-api/index.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
-import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux-runtime.js";
+import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux/index.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
 import type { BackendEmit } from "./commands-context.js";
 import type { ContainerWorktreeSignalInstaller } from "./container-worktree-signal.js";

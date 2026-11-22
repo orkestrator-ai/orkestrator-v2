@@ -1,6 +1,6 @@
 /**
  * Meters how much terminal output the backend's headless xterm parsers
- * (`terminal-history.ts`) take on in one event-loop turn.
+ * (`history.ts`) take on in one event-loop turn.
  *
  * Every terminal keeps a headless xterm so a reconnecting client can be given
  * its exact screen. xterm parses each `write` synchronously once its own

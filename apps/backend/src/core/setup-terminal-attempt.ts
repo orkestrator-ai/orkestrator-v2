@@ -14,7 +14,7 @@ import {
 } from "./container-scripts.js";
 import { SETUP_TERMINAL_STILL_RUNNING_MESSAGE } from "./commands-error-text.js";
 import type { PtyProcess } from "./pty.js";
-import type { TerminalRuntime } from "./terminal-runtime.js";
+import type { TerminalRuntime } from "./terminals/index.js";
 
 const REASON_MARKERS = SETUP_FAILURE_REASONS.map((reason) => ({
   reason,

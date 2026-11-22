@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { summarizeBridgeMessage } from "@orkestrator/protocol/node/bridge-transcript-summary";
-import type { ProviderTranscriptSnapshot } from "./agent-provider-contract.js";
-import { MultiReviewProgressTracker, progressFingerprint } from "./review/progress.js";
-import { commitProgressObservation } from "./review/fanout.js";
+import type { ProviderTranscriptSnapshot } from "../agent-provider-contract.js";
+import { MultiReviewProgressTracker, progressFingerprint } from "../review/progress.js";
+import { commitProgressObservation } from "../review/fanout.js";
 import {
   compareProgressDigests,
   PROGRESS_SNAPSHOT_TARGET_BYTES,

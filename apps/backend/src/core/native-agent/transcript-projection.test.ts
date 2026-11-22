@@ -21,7 +21,7 @@ import {
   type NativeAgentTranscriptProjectionHost,
 } from "./transcript-projection.js";
 
-import { transcriptMediaPins } from "../transcript-media-pins.js";
+import { transcriptMediaPins } from "./transcript-media-pins.js";
 
 const identity = {
   environmentId: "env-1",

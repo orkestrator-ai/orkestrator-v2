@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { TerminalHistory } from "./terminal-history.js";
+import { TerminalHistory } from "./history.js";
 
 // Queue-boundary tests inject deferred work without relying on disk timing.
 type PendingHistory = {

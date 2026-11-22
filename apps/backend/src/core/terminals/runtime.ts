@@ -2,9 +2,9 @@ import {
   environmentActivityRecordedEvent,
   terminalOutputEvents,
 } from "@orkestrator/protocol/contract/domains/events";
-import type { BackendEmit, CommandContext } from "./commands-context.js";
-import type { PtyProcess } from "./pty.js";
-import { containerIdMatches } from "./commands-review.js";
+import type { BackendEmit, CommandContext } from "../commands-context.js";
+import type { PtyProcess } from "../pty.js";
+import { containerIdMatches } from "../commands-review.js";
 import {
   compactTerminalOutputBuffer,
   createTerminalOutputBuffer,
@@ -17,13 +17,10 @@ import {
   setupTerminalSessionId,
   terminalOutputPayload,
   trimOrphanedLowSurrogate,
-} from "./commands-terminal.js";
-import { TerminalHistory, type TerminalHistoryOptions } from "./terminal-history.js";
-import {
-  TerminalSizeOwnership,
-  type TerminalSizeOwnershipOptions,
-} from "./terminal-size-ownership.js";
-import type { ContainerTerminalShell } from "./container-terminal-shell.js";
+} from "../commands-terminal.js";
+import { TerminalHistory, type TerminalHistoryOptions } from "./history.js";
+import { TerminalSizeOwnership, type TerminalSizeOwnershipOptions } from "./size-ownership.js";
+import type { ContainerTerminalShell } from "../container-terminal-shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");
@@ -117,9 +114,9 @@ type PendingTerminalBootstrap = {
  * `BackendRuntime` and reached through `context.runtime.terminals` at call time.
  */
 export class TerminalRuntime {
-  /** Durable terminal history and restorable state (`terminal-history.ts`). */
+  /** Durable terminal history and restorable state (`history.ts`). */
   readonly history: TerminalHistory;
-  /** Which client sets each shared session's size (`terminal-size-ownership.ts`). */
+  /** Which client sets each shared session's size (`size-ownership.ts`). */
   readonly sizeOwnership: TerminalSizeOwnership;
   private readonly processes = new Map<string, PtyProcess>();
   private readonly sessionConfigs = new Map<string, TerminalSessionConfig>();

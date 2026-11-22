@@ -370,7 +370,7 @@ function callCounters(calls: Record<string, number>): Record<string, number> {
 
 export async function probeWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const progress = await context.loadOptional<ProgressModule>(
-    "apps/backend/src/core/transcript-progress.ts",
+    "apps/backend/src/core/native-agent/transcript-progress.ts",
   );
   const reviewer = await context.loadOptional<ReviewerModule>(
     "apps/backend/src/core/review/reviewer-transcript.ts",
@@ -568,7 +568,7 @@ export async function pipelineCheckpointWorkload(
   }>("apps/backend/src/core/build-pipeline/transcript-checkpoints.ts");
   const progress = await context.loadOptional<
     ProgressModule & { hasProgressSnapshot?: (provider: object) => boolean }
-  >("apps/backend/src/core/transcript-progress.ts");
+  >("apps/backend/src/core/native-agent/transcript-progress.ts");
   const summary = await context.loadOptional<Summary>(
     "packages/protocol/src/node/bridge-transcript-summary.ts",
   );

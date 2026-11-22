@@ -224,7 +224,7 @@ temporary directory. No assertion, timeout or skip changed.
 
 ## Resolution (2026-11-15)
 
-- **Owner moved:** `terminal-history.test.ts` was split into `apps/backend/src/core/terminal-history-part-1.test.ts` … `-part-4.test.ts` by `dc90609bf` (2026-11-14). This case's test is now in `terminal-history-part-2.test.ts`.
+- **Owner moved:** `terminal-history.test.ts` was split into `apps/backend/src/core/terminals/history-part-1.test.ts` … `-part-4.test.ts` by `dc90609bf` (2026-11-14). This case's test is now in `terminal-history-part-2.test.ts`.
 - **Root cause:** the five-second default test budget, exhausted under aggregate load; every recorded failure is a 5,00x ms timeout, and the late `previousCursor` errors are fallout from work still running after the timed-out test's fixture was removed. Neither part file sets a smaller budget, hook timeout or inner deadline for this case.
 - **Fix:** `tests/default-test-timeout.ts` (preloaded by `tests/setup-node.ts`) raises the default per-test and hook budget to a 60 s hang watchdog. No test change.
 - **Reproduced:** no — not reproduced on this host; classified from the recorded durations.

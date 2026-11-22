@@ -5,7 +5,7 @@
  * browser, a phone. Each fits the terminal to its own pane and reports the
  * result, so without a rule every client's layout change resizes the PTY that
  * all of them share. The backend therefore keeps one *size owner* per session
- * (`apps/backend/src/core/terminal-size-ownership.ts`):
+ * (`apps/backend/src/core/terminals/size-ownership.ts`):
  *
  * - A **claim** (`claim_terminal_size`) comes from deliberate interaction
  *   with the terminal: clicking, tapping, typing or pasting. It

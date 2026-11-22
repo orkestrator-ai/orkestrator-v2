@@ -3,9 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
-import { TerminalHistory, type TerminalHistoryOptions } from "./terminal-history.js";
+import { TerminalHistory, type TerminalHistoryOptions } from "./history.js";
 
-// Harness shared by the terminal-history-part-*.test.ts files. Each part keeps its own current
+// Harness shared by the history-part-*.test.ts files. Each part keeps its own current
 // `history` (the tests reassign it), so the harness takes a callback that replaces it after
 // every test instead of owning it.
 

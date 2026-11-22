@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setupTerminalSessionId } from "./commands-terminal.js";
 import { spawnPty } from "./pty.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
+import { TerminalRuntime } from "./terminals/runtime.js";
 
 const tempDirectories: string[] = [];
 let terminals = new TerminalRuntime();

@@ -22,7 +22,7 @@ import { RecordingEfficiencyObserver } from "./efficiency.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./service.js";
 import { parseReviewPackageReference } from "./package.js";
 import { StorageService } from "../storage.js";
-import { PROGRESS_TRANSCRIPT_WINDOW_MESSAGES } from "../transcript-progress.js";
+import { PROGRESS_TRANSCRIPT_WINDOW_MESSAGES } from "../native-agent/transcript-progress.js";
 import { ManualTime, settleKeyedWork } from "../recurring/test-support.js";
 
 jest.setTimeout(30_000);

@@ -34,7 +34,7 @@ import {
   SetupTerminalStillRunningError,
 } from "./setup-terminal-attempt.js";
 import type { ContainerTerminalShell } from "./container-terminal-shell.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
+import { TerminalRuntime } from "./terminals/runtime.js";
 
 const ROOT_REASON = setupFailureReasonOscSequence("root-steps-need-full-network");
 

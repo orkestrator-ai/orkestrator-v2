@@ -14,7 +14,7 @@ import {
 import { isRemoteDetailRef, recoveryLiveWindow } from "./remote-detail-recovery.js";
 import { NATIVE_AGENT_PROGRESSIVE_VIEW_VERSION } from "@orkestrator/protocol/native-agent";
 import { readReadableHostFile } from "../path-safety.js";
-import { transcriptMediaPins } from "../transcript-media-pins.js";
+import { transcriptMediaPins } from "./transcript-media-pins.js";
 import { imageMimeType } from "./projection-helpers.js";
 import {
   type ToolDetailCacheEntry,

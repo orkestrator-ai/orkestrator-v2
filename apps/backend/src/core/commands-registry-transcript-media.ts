@@ -18,7 +18,7 @@ import type { TranscriptMediaPinResponse } from "@orkestrator/protocol/transcrip
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { containerRelativePath, type CommandLookup } from "./transcript-artifacts/index.js";
-import { transcriptMediaPins, type TranscriptMediaFileRead } from "./transcript-media-pins.js";
+import { transcriptMediaPins, type TranscriptMediaFileRead } from "./native-agent/index.js";
 
 const MAX_IDENTIFIER_LENGTH = 512;
 const MAX_PATH_LENGTH = 4_096;

@@ -10,7 +10,7 @@ import {
 import { CommandFailedError } from "../shell.js";
 import { resolvePreviewTargetIntent } from "./intent.js";
 import { spawnPty, type PtyProcess } from "../pty.js";
-import { TerminalRuntime } from "../terminal-runtime.js";
+import { TerminalRuntime } from "../terminals/runtime.js";
 import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 
 /**

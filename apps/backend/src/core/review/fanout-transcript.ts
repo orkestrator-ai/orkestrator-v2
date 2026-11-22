@@ -4,7 +4,7 @@
  * Several consumers look at a running reviewer's transcript: the progress probe
  * (one-message tail, throttled to once a minute — and only for providers
  * without the bounded conditional snapshot surface that
- * `transcript-progress.ts` prefers), usage metering for providers
+ * `native-agent/transcript-progress.ts` prefers), usage metering for providers
  * that derive usage from messages, and an owner that mirrors the transcript
  * into its own read model. Before this reader existed the runner started one
  * eager `provider.messages()` request per pass and handed the promise to the

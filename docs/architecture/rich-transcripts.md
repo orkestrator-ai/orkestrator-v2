@@ -469,7 +469,7 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   `read_container_file_base64`. The backend invokes those same registered
   readers on first use, so confinement and error states are unchanged. It
   then saves the bytes as a pin keyed by environment, conversation, source
-  message and reference (`transcript-media-pins.ts`), and returns the saved
+  message and reference (`native-agent/transcript-media-pins.ts`), and returns the saved
   copy from then on without touching the file. A provider-reported image
   behind a detail reference (a Read or view tool, an image part with a
   provider path) is pinned the same way inside `getProjectionToolDetails`,

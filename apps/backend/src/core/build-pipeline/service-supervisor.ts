@@ -118,7 +118,7 @@ import {
   hasProgressSnapshot,
   readTranscriptProgressSample,
   type ProgressSample,
-} from "../transcript-progress.js";
+} from "../native-agent/index.js";
 import type { BuildPipelineContext } from "./context.js";
 import type { BuildPipelineAgents } from "./service-agents.js";
 import type { BuildPipelineRecovery } from "./service-recovery.js";

@@ -1,6 +1,6 @@
 /**
  * Terminal size ownership through the real resize commands
- * (`terminal-size-ownership.ts`): one PTY shown by a wide desktop and a narrow
+ * (`terminals/size-ownership.ts`): one PTY shown by a wide desktop and a narrow
  * phone, where only the client that last interacted sets the PTY's size.
  */
 import { describe, expect, test } from "bun:test";

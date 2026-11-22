@@ -548,6 +548,14 @@
               {
                 "group": ["**/tmux/*", "!**/tmux/index.js"],
                 "message": "Import the tmux domain through tmux/index.js."
+              },
+              {
+                "group": [
+                  "**/terminals/*",
+                  "!**/terminals/index.js",
+                  "!@orkestrator/protocol/contract/domains/terminals/*"
+                ],
+                "message": "Import the terminals domain through terminals/index.js."
               }
             ]
           }
@@ -753,6 +761,13 @@
               {
                 "group": ["**/backend/src/core/tmux/*", "!**/backend/src/core/tmux/index.js"],
                 "message": "Import the tmux domain through tmux/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/terminals/*",
+                  "!**/backend/src/core/terminals/index.js"
+                ],
+                "message": "Import the terminals domain through terminals/index.js."
               }
             ]
           }

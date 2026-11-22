@@ -117,14 +117,14 @@ Renderer-side measurement is follow-up work (8312 task 2).
 
 ## What changed
 
-1. **Code-unit scanners** (`apps/backend/src/core/terminal-history-scanners.ts`).
+1. **Code-unit scanners** (`apps/backend/src/core/terminals/history-scanners.ts`).
    Both scanners now read UTF-16 code units, jump over plain text with one
    regular-expression search and copy unchanged runs with one `slice`. They
    take state decisions on whole code points as before;
-   `terminal-history-scanners.test.ts` keeps the per-character originals
+   `terminals/history-scanners.test.ts` keeps the per-character originals
    verbatim and checks the new ones against them on 800 generated inputs cut
    at random points.
-2. **Metered headless parsing** (`apps/backend/src/core/terminal-parse-scheduler.ts`).
+2. **Metered headless parsing** (`apps/backend/src/core/terminals/parse-scheduler.ts`).
    Every write to a history's headless terminals goes through one scheduler:
    slices of at most 8,192 UTF-16 code units, one slice in flight per terminal
    and at most 32,768 code units across all of them, taken in turn, with the next slices issued from

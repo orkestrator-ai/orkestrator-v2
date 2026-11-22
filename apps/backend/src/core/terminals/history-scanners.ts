@@ -1,6 +1,6 @@
 /**
  * The two control-sequence scanners every byte of terminal output passes
- * through on its way into durable history (`terminal-history.ts`):
+ * through on its way into durable history (`history.ts`):
  *
  * - {@link trackParserCarry} keeps the unfinished escape sequence at the end
  *   of the output, which a checkpoint stores as `pendingOutput` so a restored
@@ -18,7 +18,7 @@
  *
  * State transitions are decided on a whole code point, as the `for…of`
  * originals did: a surrogate pair is one step, and it compares by its high
- * surrogate. `terminal-history-scanners.test.ts` checks both against those
+ * surrogate. `history-scanners.test.ts` checks both against those
  * originals on generated input.
  */
 

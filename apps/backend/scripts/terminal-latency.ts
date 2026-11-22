@@ -45,7 +45,7 @@ import { configureLogger } from "@orkestrator/protocol/logger";
 import { NATIVE_AGENT_ACTIVITY_EVENT } from "@orkestrator/protocol/native-agent-observation";
 import { createBackendEmit } from "../src/core/backend-emit.js";
 import { spawnPty, type PtyProcess } from "../src/core/pty.js";
-import { TerminalRuntime } from "../src/core/terminal-runtime.js";
+import { TerminalRuntime } from "../src/core/terminals/runtime.js";
 import { startGateway, type StartedGateway } from "./gateway-frame-costs.js";
 import {
   startResourceSampler,

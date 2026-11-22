@@ -13,7 +13,7 @@ import { installControlledTimeout } from "../../../tests/helpers/controlled-time
 import {
   TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS,
   TERMINAL_ACTIVITY_SETTLE_MS,
-} from "../src/core/terminal-runtime";
+} from "../src/core/terminals/runtime";
 import { createBackendChangeTracking } from "../src/core/change-tracking";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { eventSink } from "../src/core/backend-emit.js";

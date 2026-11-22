@@ -7,7 +7,7 @@ import type {
 } from "./transcript-store.js";
 import { structuredRequestIdFromMessages } from "./transcripts.js";
 import { normalizeTranscriptFingerprint, transcriptFingerprint } from "./service-helpers.js";
-import type { KnownProgressSource, ProgressSample } from "../transcript-progress.js";
+import type { KnownProgressSource, ProgressSample } from "../native-agent/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("build-pipeline");

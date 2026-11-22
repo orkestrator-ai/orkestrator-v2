@@ -30,7 +30,10 @@ import { BackendRuntime } from "./backend-runtime.js";
 import { deleteEnvironmentTask } from "./environment-delete.js";
 
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
-import { transcriptMediaPins, TRANSCRIPT_MEDIA_PINS_DIRECTORY } from "./transcript-media-pins.js";
+import {
+  transcriptMediaPins,
+  TRANSCRIPT_MEDIA_PINS_DIRECTORY,
+} from "./native-agent/transcript-media-pins.js";
 
 afterEach(() => closeEnvironmentCleanupStorage());
 

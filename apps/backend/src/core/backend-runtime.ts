@@ -26,7 +26,7 @@ import { IntegrationLocks } from "./integration-locks.js";
 import { LinearMergedLabels, type LinearMergedLabelsOptions } from "./linear-merged-label.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { PublicApiReconciliations } from "./public-api/index.js";
-import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminal-runtime.js";
+import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminals/index.js";
 import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux/index.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
 import type { BackendEmit } from "./commands-context.js";

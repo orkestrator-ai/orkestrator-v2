@@ -132,7 +132,7 @@ import {
 } from "./project-home-environment.js";
 import type { Environment, EnvironmentStatus } from "./models.js";
 import type { PtyExitEvent, PtyProcess } from "./pty.js";
-import type { TerminalRuntime } from "./terminal-runtime.js";
+import type { TerminalRuntime } from "./terminals/index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import {
   CONTAINER_ROOT_USER_ARGS,

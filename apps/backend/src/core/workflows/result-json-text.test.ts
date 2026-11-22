@@ -8,6 +8,7 @@ import { callToolInProcess } from "../mcp-in-process.js";
 import {
   CONSOLIDATED_REVIEW_EXAMPLE,
   CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS,
+  CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE,
 } from "../review/consolidation-example.js";
 import {
   acceptsOnlyDeclaredFields,
@@ -15,6 +16,7 @@ import {
   findJsonTextFault,
 } from "./result-json-text.js";
 import { CONSOLIDATED_REVIEW_ANY_SLOT_JSON_SCHEMA } from "../review/consolidation-scope.js";
+import { validateWorkflowResult } from "./result-contracts.js";
 import { workflowResultAnySlotSchema, workflowResultProviderSchema } from "./result-registry.js";
 import { WorkflowResultService } from "./result-service.js";
 import { registerWorkflowResultBrokerTools, registerWorkflowResultTools } from "./result-tools.js";
@@ -298,6 +300,12 @@ describe("result tools take a result sent as JSON text", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
+  const brokerTools = () => {
+    const server = new McpServer({ name: "broker-json-text-test", version: "1.0.0" });
+    registerWorkflowResultBrokerTools(server, service, scope);
+    return server;
+  };
+
   const factory = () => {
     const server = new McpServer({ name: "json-text-test", version: "1.0.0" });
     registerWorkflowResultTools(server, service, {
@@ -388,28 +396,31 @@ describe("result tools take a result sent as JSON text", () => {
     expect(await service.structured<unknown>(resultKey)).toMatchObject({ ok: true, value: report });
   });
 
-  test("a repair that would move fields to another level is refused with the original fault", async () => {
-    // The extra `}` closes `reviewScope` before `blockedReason`. Removing the
-    // bracket the scanner names would make `blockedReason` a top-level field,
-    // which the contract refuses, so the JSON fault is reported as it is.
-    const valid = JSON.stringify(report);
-    const text = insertAt(valid, valid.indexOf(',"blockedReason":'), "}");
-    const decoded = decodeJsonTextResult(text);
-    if (decoded.ok) throw new Error("expected a refusal");
-    expect(decoded.repaired?.value).toHaveProperty("blockedReason", null);
-    const refused = await callToolInProcess(factory, "submit_review_report", {
-      resultKey,
-      result: text,
-    });
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain("`result` is a string, and it is not valid JSON");
-    expect(refused.text).toContain("already closed the top-level value");
-    // What the check found without the bracket is named too.
-    expect(refused.text).toContain("the object without it still does not match the contract");
-    expect(refused.text).toContain("$.reviewScope.blockedReason: Required field is missing");
-    expect(service.refusals(resultKey)).toMatchObject({ count: 1, processed: 0 });
-    expect(await service.projection(resultKey)).toBe("preparing");
-  });
+  test.each(["submit_review_report", "validate_workflow_result"])(
+    "%s refuses a repair that would move fields to another level with the original fault",
+    async (tool) => {
+      // The extra `}` closes `reviewScope` before `blockedReason`. Removing the
+      // bracket the scanner names would make `blockedReason` a top-level field,
+      // which the contract refuses, so the JSON fault is reported as it is.
+      const valid = JSON.stringify(report);
+      const text = insertAt(valid, valid.indexOf(',"blockedReason":'), "}");
+      const decoded = decodeJsonTextResult(text);
+      if (decoded.ok) throw new Error("expected a refusal");
+      expect(decoded.repaired?.value).toHaveProperty("blockedReason", null);
+      const refused = await callToolInProcess(factory, tool, {
+        resultKey,
+        result: text,
+      });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toContain("`result` is a string, and it is not valid JSON");
+      expect(refused.text).toContain("already closed the top-level value");
+      // What the check found without the bracket is named too.
+      expect(refused.text).toContain("the object without it still does not match the contract");
+      expect(refused.text).toContain("$.reviewScope.blockedReason: Required field is missing");
+      expect(service.refusals(resultKey)).toMatchObject({ count: 1, processed: 0 });
+      expect(await service.projection(resultKey)).toBe("preparing");
+    },
+  );
 
   test("an object the input check refuses is counted for the key it names, and only that key", async () => {
     const { testResults: _omitted, ...rest } = report;
@@ -522,6 +533,136 @@ describe("result tools take a result sent as JSON text", () => {
     },
   );
 
+  test.each(["scoped", "broker direct", "broker digest"] as const)(
+    "%s repairs the merged-scope report and stores the backend scope lists",
+    async (mode) => {
+      const key = crypto.randomUUID();
+      const provider = mode === "scoped" ? "claude" : "opencode";
+      const mergedScope = {
+        filesReviewed: ["src/a.ts", "src/b.ts"],
+        filesSkipped: [{ file: "bun.lock", reason: "Generated." }],
+        filesLeftUncommitted: [{ file: "notes.md", reason: "Pre-existing edits." }],
+        commandsRun: [{ command: "bun test", result: "passed" as const, summary: "12 passed." }],
+        commandsNotRun: [{ command: "mise run test:browser", reason: "No display." }],
+      };
+      await service.initializeCapabilityIdentity();
+      await service.prepare({
+        ...scope,
+        resultKey: key,
+        kind: "consolidated-review",
+        provider,
+        context: {
+          type: "consolidated-review",
+          scope: mergedScope,
+          sources: {
+            [CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS.issue]: "issue",
+            [CONSOLIDATED_REVIEW_EXAMPLE_SOURCE_IDS.coverageGap]: "coverage-gap",
+          },
+        },
+      });
+      const binding = await service.binding(scope, key);
+      expect(binding?.slot?.context).toMatchObject({ scope: mergedScope });
+      const scopedTools = () => {
+        const server = new McpServer({ name: "merged-scope-json-text", version: "1.0.0" });
+        registerWorkflowResultTools(server, service, {
+          ...scope,
+          workflowResultKey: key,
+          kind: "consolidated-review",
+          slot: binding?.slot,
+        });
+        return server;
+      };
+
+      const valid = JSON.stringify(CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE);
+      const result = insertAt(valid, valid.indexOf(',"verdict":'), "}");
+      const auth =
+        provider === "opencode" ? { capability: service.capabilityToken(scope, key) } : {};
+      const input = { resultKey: key, ...auth, result };
+      const tools = mode === "scoped" ? scopedTools : brokerTools;
+      let submission: Record<string, unknown> = input;
+      if (mode !== "scoped") {
+        const checked = await callToolInProcess(tools, "validate_workflow_result", input);
+        expect(checked.isError).toBe(false);
+        const validatedDigest = checked.structuredContent?.validatedDigest;
+        expect(validatedDigest).toMatch(/^[a-f0-9]{64}$/);
+        expect((await service.status(scope, key))?.lifecycle).toBe("open");
+        if (mode === "broker digest") submission = { resultKey: key, ...auth, validatedDigest };
+      }
+      const accepted = await callToolInProcess(tools, "submit_consolidated_review", submission);
+      expect(accepted.isError).toBe(false);
+      expect(await service.structured(key)).toMatchObject({
+        ok: true,
+        value: {
+          ...CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE,
+          reviewScope: { ...CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE.reviewScope, ...mergedScope },
+        },
+      });
+    },
+  );
+
+  test("an ambiguous bracket in a closed graph port leaves the result slot open", async () => {
+    const key = crypto.randomUUID();
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["groups"],
+      properties: {
+        groups: {
+          type: "array",
+          items: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
+        },
+      },
+    };
+    const context = {
+      type: "graph-output",
+      port: "groups",
+      artifactType: "groups@1",
+      storage: "value",
+      budgets: { maxBytes: 65_536 },
+    } as const;
+    const result = '{"groups":[["A"],"B"]]}';
+    const removeAt = (offset: number) =>
+      JSON.parse(result.slice(0, offset) + result.slice(offset + 1));
+    const removeFinalBracket = removeAt(result.lastIndexOf("]"));
+    const removeInnerBracket = removeAt(result.indexOf("]"));
+    expect(removeFinalBracket).not.toEqual(removeInnerBracket);
+    expect(acceptsOnlyDeclaredFields(schema)).toBe(true);
+    expect(validateWorkflowResult("graph-output", removeFinalBracket, schema, context)).toEqual([]);
+    expect(validateWorkflowResult("graph-output", removeInnerBracket, schema, context)).toEqual([]);
+
+    await service.prepare({
+      ...scope,
+      resultKey: key,
+      kind: "graph-output",
+      provider: "claude",
+      schema,
+      context,
+      toolName: "submit_groups",
+    });
+    const binding = await service.binding(scope, key);
+    expect(binding?.slot?.schema).toEqual(schema);
+    const graphTools = () => {
+      const server = new McpServer({ name: "graph-json-text", version: "1.0.0" });
+      registerWorkflowResultTools(server, service, {
+        ...scope,
+        workflowResultKey: key,
+        kind: "graph-output",
+        slot: binding?.slot,
+      });
+      return server;
+    };
+    for (const tool of ["validate_groups", "submit_groups"]) {
+      const refused = await callToolInProcess(graphTools, tool, { resultKey: key, result });
+      expect(refused.isError).toBe(true);
+      expect(refused.structuredContent).toMatchObject({
+        ok: false,
+        error: { code: "invalid_result", issues: [{ code: "invalid_json_text" }] },
+      });
+    }
+    expect(await service.structured(key)).toBeNull();
+    expect((await service.status(scope, key))?.lifecycle).toBe("open");
+  });
+
   test("the authenticated broker's per-kind submit tool accepts JSON text", async () => {
     const key = crypto.randomUUID();
     await service.initializeCapabilityIdentity();
@@ -532,15 +673,11 @@ describe("result tools take a result sent as JSON text", () => {
       provider: "opencode",
     });
     const capability = service.capabilityToken(scope, key);
-    const accepted = await callToolInProcess(
-      () => {
-        const server = new McpServer({ name: "broker-json-text-submit", version: "1.0.0" });
-        registerWorkflowResultBrokerTools(server, service, scope);
-        return server;
-      },
-      "submit_review_report",
-      { resultKey: key, capability, result: JSON.stringify(report) },
-    );
+    const accepted = await callToolInProcess(brokerTools, "submit_review_report", {
+      resultKey: key,
+      capability,
+      result: JSON.stringify(report),
+    });
     expect(accepted.isError).toBe(false);
     expect(await service.structured(key)).toMatchObject({ ok: true, value: report });
   });

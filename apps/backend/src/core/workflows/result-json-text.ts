@@ -23,11 +23,9 @@
  * `verdict`; it was the most common reason a first submission failed).
  * When the scanner pins the fault on one extra closing bracket, the text
  * without it is offered as a repair candidate. The caller decides whether to
- * use it: it only does so when the result schema accepts no field it does not
- * declare, at every level ({@link acceptsOnlyDeclaredFields}), and the
- * repaired object passes that schema. A wrong repair moves fields to another
- * level, which such a schema always refuses, and then the original refusal
- * is reported instead.
+ * use it. Result tools require an eligible built-in kind, a schema that
+ * refuses undeclared fields at every level ({@link acceptsOnlyDeclaredFields}),
+ * and a repaired object that passes that schema.
  */
 
 /** Characters of excerpt shown before and after the fault. */
@@ -198,10 +196,10 @@ function repairExtraBracket(text: string, fault: JsonTextFault): JsonTextRepair 
 
 /**
  * Whether `schema` refuses every object field it does not declare, at every
- * level a value can reach. Only then is a bracket repair safe to accept: a
- * wrong one moves fields into another object, which such a schema refuses.
- * Anything this does not recognise (a `$ref`, `patternProperties`, a node
- * that does not constrain its type) counts as open.
+ * level a value can reach. This guards against repairs that introduce
+ * undeclared fields, while different repairs can still satisfy a closed
+ * schema. Anything this does not recognise (a `$ref`, `patternProperties`, a
+ * node that does not constrain its type) counts as open.
  */
 export function acceptsOnlyDeclaredFields(schema: unknown, depth = 0): boolean {
   if (depth > 64 || typeof schema !== "object" || schema === null || Array.isArray(schema)) {

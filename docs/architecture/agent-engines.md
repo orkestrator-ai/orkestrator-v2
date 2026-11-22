@@ -2026,19 +2026,19 @@ broker's `validate_workflow_result`) lets a string through its input check
   at its own position. `JSON.parse` gives no position under Bun, so a
   small scanner of its own finds the fault, and runs only on text
   `JSON.parse` already refused.
-- Text whose only fault is one closing bracket too many is accepted without
-  that bracket: a `}` that closes the root before more fields, an extra `}` or
-  `]` at the end, or a closer that does not match the open container. It was
-  the most common reason a consolidation's first submission failed (the root
-  closed right after `testCoverageGaps`, then `verdict` followed). Only the
-  one bracket the scanner names is removed, and the repair is used only when
-  the slot's acceptance schema refuses undeclared fields at every level
-  (`acceptsOnlyDeclaredFields`) and the repaired object passes it. A wrong
-  repair moves fields into another object, which such a schema refuses, so
-  the original JSON-text refusal is sent instead, followed by what the check
-  found in the repaired object (two replayed consolidations had a missing
-  `reviewScope` field as well as the stray brace). Graph outputs and the
-  broker's any-object validation tool have open schemas and never repair.
+- Eligible built-in result kinds can recover from one extra closing bracket,
+  including a premature root close, a trailing bracket, or a closer that
+  does not match the open container. The common consolidation failure closed
+  the root after `testCoverageGaps`, before `verdict`. The tool removes the
+  bracket named by the scanner and checks the result against an acceptance
+  schema that refuses undeclared fields at every level
+  (`acceptsOnlyDeclaredFields`). If the candidate fails that check, the tool
+  returns the positioned JSON refusal with the candidate's field errors.
+  Graph outputs always retain the positioned refusal because closed custom
+  schemas can admit multiple repairs with different values.
+- OpenCode broker validation advertises a generic object schema. After
+  authenticating the capability and checking the key, it applies the same
+  kind-specific repair rules as the corresponding submission tool.
 
 **Refused calls are counted.** A call refused before validation (by the input
 check, or as unparseable text) never reaches `validate`/`submit`, so the slot

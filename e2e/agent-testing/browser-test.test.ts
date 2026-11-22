@@ -17,6 +17,7 @@ import {
   DIRECT_LOAD_WAIT_MS,
   runDirectLoads,
   LOOPBACK_URL,
+  MODULE_ROUTE_URL,
   ModuleCache,
   NETWORK_CHANGED,
   decodedBodyHeaders,
@@ -242,6 +243,22 @@ describe("the browser suite's shared test", () => {
       expect(LOOPBACK_URL.test(url), url).toBe(false);
   });
 
+  test("leaves the gateway's API to Chromium", () => {
+    for (const url of [
+      "http://127.0.0.1:43123/src/main.tsx",
+      "http://127.0.0.1:43123/__vite/client",
+      "http://127.0.0.1:43123/assets/__orkestrator/index.js",
+    ])
+      expect(MODULE_ROUTE_URL.test(url), url).toBe(true);
+    for (const url of [
+      "http://127.0.0.1:43123/__orkestrator/invoke",
+      "http://127.0.0.1:43123/__orkestrator/events?stream=main",
+      "http://localhost:5173/__orkestrator/nodes/bk_leaf/__orkestrator/events",
+      "https://example.com/src/main.tsx",
+    ])
+      expect(MODULE_ROUTE_URL.test(url), url).toBe(false);
+  });
+
   test("fetches GET scripts and stylesheets, and leaves everything else to Chromium", () => {
     const request = (method: string, resourceType: string) => ({
       method: () => method,
@@ -290,7 +307,7 @@ async function moduleHandler() {
   const context = {
     on: mock((_event: string, _listener: unknown) => context),
     route: mock(async (pattern: RegExp, callback: (route: Route) => Promise<void>) => {
-      expect(pattern).toBe(LOOPBACK_URL);
+      expect(pattern).toBe(MODULE_ROUTE_URL);
       handler = callback;
     }),
   };

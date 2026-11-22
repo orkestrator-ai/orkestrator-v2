@@ -11,6 +11,7 @@
 import { createDefaultGlobalConfig } from "@orkestrator/protocol/app-config-defaults";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  isNativeOnlyPlatform,
   resolveMultiReviewSettings,
   SHIPPED_PLATFORM_MODES,
   normalizeAgentSettings,
@@ -167,7 +168,7 @@ const platformPane = (platform: AgentPlatform): SettingDescriptor[] => {
   const label = AGENT_PLATFORM_LABELS[platform];
   const model = { id: `agent-model-${platform}`, heading: "Default model" };
   return [
-    ...(platform === "cursor"
+    ...(isNativeOnlyPlatform(platform)
       ? []
       : [
           platformField(

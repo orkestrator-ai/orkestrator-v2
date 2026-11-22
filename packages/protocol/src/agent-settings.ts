@@ -179,6 +179,14 @@ function tierPlatform(
   return tier?.platforms?.[platform];
 }
 
+/**
+ * Platforms with no terminal mode: Cursor (SDK only) and Antigravity (ACP
+ * only). They always run native, whatever a tier stores.
+ */
+export function isNativeOnlyPlatform(platform: AgentPlatform): boolean {
+  return platform === "cursor" || platform === "antigravity";
+}
+
 /** The agent used when nothing narrower named one. */
 export function resolveDefaultAgent(tiers: AgentSettingsTiers): AgentPlatform {
   return (
@@ -205,10 +213,9 @@ export function resolveAgentPlatformSettings(
   const repository = tierPlatform(tiers.repository, platform);
   const global = tierPlatform(tiers.global, platform);
 
-  const mode =
-    platform === "cursor"
-      ? "native"
-      : (environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform]);
+  const mode = isNativeOnlyPlatform(platform)
+    ? "native"
+    : (environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform]);
 
   // A model id belongs to one platform's catalogue, so it only ever travels
   // down its own column. This is the rule the old repository `defaultModel`
@@ -355,7 +362,7 @@ function normalizePlatformSettings(
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const mode =
-    platform !== "cursor" && (record.mode === "terminal" || record.mode === "native")
+    !isNativeOnlyPlatform(platform) && (record.mode === "terminal" || record.mode === "native")
       ? record.mode
       : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : "";

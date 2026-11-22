@@ -101,6 +101,7 @@ import {
   useEnvironmentTabLaunches,
 } from "@/components/pane-layout/TabLaunchShimmer";
 import { cancelTabLaunchFocus } from "@/lib/tab-launch";
+import { LazyLaunchPromptPending } from "@/components/native-agent/LazyLaunchPromptPending";
 import { LazyTerminalPortalHost } from "./LazyTerminalPortalHost";
 import { TerminalContainerOverlays } from "./TerminalContainerOverlays";
 import {
@@ -195,6 +196,8 @@ export function TerminalContainer({
     isLocalEnvironment,
     lifecycleError,
     lifecycleRemedy,
+    launchAgent,
+    launchPrompt,
     pendingAgentLaunch,
     setupPhase,
     setupReady,
@@ -224,6 +227,9 @@ export function TerminalContainer({
         setupReady: isEnvironmentSetupSettled(env),
         setupScriptsComplete: env?.setupScriptsComplete === true,
         startupAgent: startup?.agent,
+        // The opening prompt a launch still owes, shown before its agent tab exists.
+        launchPrompt: env?.pendingAgentLaunch === true ? env.initialPrompt?.trim() || "" : "",
+        launchAgent: startup?.agent ?? env?.initialAgentPlatform,
         startupError: startup?.error,
         startupProviderSessionId: startup?.providerSessionId,
         startupStatus: startup?.status,
@@ -1015,7 +1021,12 @@ export function TerminalContainer({
                 error: formatLogError(error),
               });
             });
-          } else {
+          } else if (
+            // The reconciler can publish a startup pane before Docker assigns
+            // an ID. Keep that provisional layout until the backend rebases it
+            // onto the newly allocated container.
+            !(latestEnvironment.pendingAgentLaunch && !persisted.containerId && latestContainerId)
+          ) {
             // A stale-generation or malformed current-version snapshot
             // cannot safely be rewritten as renderer state. Remove only
             // the exact revision we inspected; a concurrent newer layout
@@ -1178,10 +1189,11 @@ export function TerminalContainer({
     }
   }, [isContainerRunning, environmentId, containerId, reset]);
 
-  // The backend publishes the startup agent while setup still runs, and this
-  // renderer keeps the setup terminal selected so the user can watch it. When
-  // setup becomes ready, move focus onto that agent — including when the
-  // durable-launch effect is still blocked on a `starting` session.
+  // A prompt-less launch's startup agent arrives while the setup terminal is
+  // selected, so the user can watch setup. When setup becomes ready, move focus
+  // onto that agent — including when the durable-launch effect is still blocked
+  // on a `starting` session. (A launch with an opening prompt publishes its
+  // agent tab first and selected, and it shows setup progress itself.)
   //
   // Gated on an owed handoff, not on `setupReady` alone. Setup readiness and
   // the setup tab's `isSetupTab` flag both outlive the launch by the life of the
@@ -2227,8 +2239,8 @@ export function TerminalContainer({
 
   // Determine what overlay to show (if any)
   // For local environments, we don't have a containerId but can still show terminal
-  const showNoEnvironmentOverlay = !containerId && !isLocalEnvironment;
-  const showCreatingOverlay = Boolean(isContainerCreating && (containerId || isLocalEnvironment));
+  const showCreatingOverlay = isContainerCreating && environmentExists;
+  const showNoEnvironmentOverlay = !showCreatingOverlay && !containerId && !isLocalEnvironment;
   const showNotRunningOverlay = Boolean(
     !isEnvironmentRunning && !isContainerCreating && (containerId || isLocalEnvironment),
   );
@@ -2287,9 +2299,22 @@ export function TerminalContainer({
         </DndContext>
       )}
 
-      {showTabsShimmer && <EnvironmentTabsShimmer />}
+      {showTabsShimmer &&
+        (launchPrompt ? (
+          <LazyLaunchPromptPending
+            key={environmentId}
+            environmentId={environmentId}
+            platform={launchAgent}
+            prompt={launchPrompt}
+            stage="preparing"
+            fallback={<EnvironmentTabsShimmer />}
+          />
+        ) : (
+          <EnvironmentTabsShimmer />
+        ))}
 
       <TerminalContainerOverlays
+        key={`${environmentId}:${showCreatingOverlay ? "creating" : "settled"}`}
         environmentId={environmentId}
         containerId={containerId}
         isLocalEnvironment={isLocalEnvironment}
@@ -2305,6 +2330,8 @@ export function TerminalContainer({
         onStartContainer={onStartContainer}
         onCreateScript={onCreateScript}
         onStartOverlayClick={handleStartOverlayClick}
+        launchAgent={launchAgent}
+        launchPrompt={launchPrompt}
       />
     </div>
   );

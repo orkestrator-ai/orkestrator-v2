@@ -1,4 +1,6 @@
-import { lazy, type MouseEvent } from "react";
+import { lazy, useState, type MouseEvent } from "react";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { LazyLaunchPromptPending } from "@/components/native-agent/LazyLaunchPromptPending";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -36,6 +38,9 @@ interface TerminalContainerOverlaysProps {
   onStartContainer?: () => void;
   onCreateScript?: (initialPrompt: string) => void;
   onStartOverlayClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  /** A launch's opening prompt, drawn while the environment is created; "" when none. */
+  launchPrompt?: string;
+  launchAgent?: AgentPlatform;
 }
 
 export function TerminalContainerOverlays({
@@ -54,7 +59,17 @@ export function TerminalContainerOverlays({
   onStartContainer,
   onCreateScript,
   onStartOverlayClick,
+  launchPrompt = "",
+  launchAgent,
 }: TerminalContainerOverlaysProps) {
+  const [logsForContainer, setLogsForContainer] = useState<string | null>(null);
+  const creatingWithPrompt = showCreatingOverlay && launchPrompt !== "";
+  const showLogs = Boolean(containerId && !isLocalEnvironment && logsForContainer === containerId);
+  const creationFallback = containerId ? (
+    <InitializationLogs containerId={containerId} className="h-full" />
+  ) : (
+    <CreationProgress isLocal={isLocalEnvironment} />
+  );
   return (
     <>
       {showNoEnvironmentOverlay && (
@@ -66,18 +81,49 @@ export function TerminalContainerOverlays({
         </div>
       )}
 
-      {showCreatingOverlay && containerId && (
-        <div className="absolute inset-0 bg-background">
-          <InitializationLogs containerId={containerId} className="h-full" />
+      {showCreatingOverlay && (!creatingWithPrompt || showLogs) && (
+        <div className="absolute inset-0 flex flex-col bg-background">
+          {creatingWithPrompt && showLogs && (
+            <div className="border-b px-4 py-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setLogsForContainer(null)}
+              >
+                Back to opening prompt
+              </Button>
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1">{creationFallback}</div>
         </div>
       )}
 
-      {showCreatingOverlay && isLocalEnvironment && !containerId && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background">
-          <div className="text-center text-muted-foreground">
-            <TerminalIcon className="mx-auto mb-4 h-12 w-12 opacity-50 animate-pulse" />
-            <p>Creating worktree...</p>
-          </div>
+      {/*
+        A launch with an opening prompt keeps it on screen while the workspace is
+        created, laid out as the agent tab that will replace it. Container logs
+        stay one click away.
+      */}
+      {creatingWithPrompt && !showLogs && (
+        <div className="absolute inset-0 bg-background">
+          <LazyLaunchPromptPending
+            environmentId={environmentId}
+            platform={launchAgent}
+            prompt={launchPrompt}
+            stage={isLocalEnvironment ? "creating-worktree" : "starting-container"}
+            detail={
+              containerId && !isLocalEnvironment ? (
+                <button
+                  type="button"
+                  className="rounded-sm text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset"
+                  onClick={() => setLogsForContainer(containerId)}
+                >
+                  View container logs
+                </button>
+              ) : undefined
+            }
+            fallback={creationFallback}
+          />
         </div>
       )}
 
@@ -138,5 +184,16 @@ export function TerminalContainerOverlays({
         </div>
       )}
     </>
+  );
+}
+
+function CreationProgress({ isLocal }: { isLocal: boolean }) {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-background">
+      <div className="text-center text-muted-foreground">
+        <TerminalIcon className="mx-auto mb-4 h-12 w-12 opacity-50 animate-pulse" />
+        <p role="status">{isLocal ? "Creating worktree..." : "Starting container..."}</p>
+      </div>
+    </div>
   );
 }

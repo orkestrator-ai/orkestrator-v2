@@ -276,6 +276,7 @@ import {
   findLatestBackendUserTurnStartedAt,
 } from "@/lib/session-timer";
 import { SetupPendingOverlay } from "@/components/setup/SetupPendingOverlay";
+import { LaunchSetupStatus } from "@/components/setup/LaunchSetupStatus";
 import { isSetupBlocked } from "@/lib/setup-commands";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { agentSettingsCanSignIn, agentTerminalSignInCommand } from "@/lib/agent-sign-in";
@@ -1653,11 +1654,25 @@ export function SharedNativeAgentController({
   const compacting = turnActivity?.compacting;
   const thinkingTokens = turnActivity?.thinkingTokens;
   const startingTurn = !isTurnActive && Boolean(startupPromptPreview);
+  // The opening prompt is drawn while its environment is still being prepared:
+  // setup progress takes the status row until the agent can start.
+  const setupInTranscript =
+    setupPending && envSetupPhase !== "failed" && startupPromptPreview !== null;
+  // While the opening preview is still on screen nothing has come back from the
+  // provider yet, so a `recovering` phase is the brand-new session not being
+  // registered with its bridge yet, not a lost connection.
+  const launchingSession = Boolean(startupPromptPreview);
   const phaseStatusLabel = useMemo(
     () =>
-      phase === "cancelling" ? (
+      setupInTranscript ? (
+        <LaunchSetupStatus environmentId={data.environmentId} setupPhase={envSetupPhase} />
+      ) : phase === "cancelling" ? (
         <span role="status" className="text-xs">
           Stopping…
+        </span>
+      ) : (startingTurn || phase === "recovering") && launchingSession ? (
+        <span role="status" className="agent-thinking-shimmer text-xs">
+          Launching {label}…
         </span>
       ) : phase === "recovering" ? (
         <span role="status" className="text-xs">
@@ -1669,12 +1684,18 @@ export function SharedNativeAgentController({
         </span>
       ) : thinkingTokens ? (
         <AgentThinkingIndicator agentName={label} thinkingTokens={thinkingTokens} />
-      ) : startingTurn ? (
-        <span role="status" className="agent-thinking-shimmer text-xs">
-          Starting {label}…
-        </span>
       ) : undefined,
-    [compacting, label, phase, startingTurn, thinkingTokens],
+    [
+      compacting,
+      data.environmentId,
+      envSetupPhase,
+      label,
+      launchingSession,
+      phase,
+      setupInTranscript,
+      startingTurn,
+      thinkingTokens,
+    ],
   );
   const turnStartedAt =
     projection?.turn.startedAt ??
@@ -3761,7 +3782,11 @@ export function SharedNativeAgentController({
     setAwaitingResumeChoice,
   });
 
-  if (setupPending) {
+  // With the opening prompt on screen the transcript itself carries setup
+  // progress, so the view the first response arrives in is already mounted.
+  // A failed or held setup, or a tab with nothing to show yet, keeps the
+  // dedicated setup surface and its recovery controls.
+  if (setupPending && !setupInTranscript) {
     return (
       <SetupPendingOverlay
         environmentId={data.environmentId}
@@ -4472,7 +4497,12 @@ export function SharedNativeAgentController({
           keyboardMenuOpen={fileMentionMenuOpen || commandComposer.menuOpen}
           placeholder={sendingHeldReason ?? composerPlaceholder ?? `Message ${label}`}
           disabled={
-            queueEditPending || isSubmitting || preparingSend || draft.submissionPending === true
+            queueEditPending ||
+            isSubmitting ||
+            preparingSend ||
+            draft.submissionPending === true ||
+            // The opening prompt goes first; nothing can be sent until setup ends.
+            setupInTranscript
           }
           isSending={isDispatching || isSubmitting || preparingSend}
           isLoading={isTurnActive}

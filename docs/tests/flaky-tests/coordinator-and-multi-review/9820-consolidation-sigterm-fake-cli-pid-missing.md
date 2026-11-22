@@ -70,3 +70,18 @@ alone. It passed all 22 tests in 3.25 s using
 `bun test ./src/core/review/evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
 from `apps/backend`. The workspace and isolated rerun logs are in
 `orkestrator-test-run.x1Z7Da` under the host temporary directory.
+
+## Launch-flicker worktree validation (2026-11-22)
+
+`mise run test:logged -- --name full-suite -- mise run test` ran on macOS
+against a working tree based on `62c894364` (merge base with `origin/main`,
+`62c894364`); the change under test touched the startup-launch renderer and
+`launch-activity-reconciler.ts`, not the review drivers. The recurrence check
+(`mise run flaky:recurrence -- 9820 --base 62c894364`) confirmed this case was
+open. Both cases failed again with the missing fake-CLI `pid` (`ENOENT` at
+`evaluation-drivers.test.ts:306`) at 405.81 ms (Claude) and 405.23 ms (Codex),
+in a backend group of 20,332 tests across 1,428 files (304.14 s).
+
+The runner's isolated rerun of `apps/backend/src/core/review/evaluation-drivers.test.ts`
+passed all 22 tests in 3.15 s. Logs are in `orkestrator-test-run.Xmufl2` under
+the host temporary directory.

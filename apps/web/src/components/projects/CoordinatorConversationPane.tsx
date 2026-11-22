@@ -250,6 +250,15 @@ export function CoordinatorConversationPane({
           >
             <LazyAgentNativeTab
               tabId={conversation.tabId}
+              loadingFallback={
+                <div role="status" className="grid h-full place-items-center">
+                  <Loader2
+                    className="size-6 animate-spin text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <span className="sr-only">Loading conversation</span>
+                </div>
+              }
               data={data}
               isActive
               ownsGlobalShortcuts={paneFocused}

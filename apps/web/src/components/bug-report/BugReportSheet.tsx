@@ -604,6 +604,14 @@ export function BugReportSheet({ scope }: { scope?: NodeScope | null } = {}) {
             >
               <AgentSessionScope scope={sheetNode === null ? null : nodeScope}>
                 <LazyAgentNativeTab
+                  loadingFallback={
+                    <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                      <Loader2
+                        className="size-5 animate-spin"
+                        aria-label="Starting the bug report"
+                      />
+                    </div>
+                  }
                   key={`${report.id}:${report.agent ?? "unassigned"}`}
                   tabId={report.tabId}
                   data={{

@@ -9,9 +9,12 @@ Status: Living — when a tab appears and when it takes focus.
    or the CLI opening a tab leaves the user where they are.
 3. **The setup terminal is the first tab**, and exists only when setup has
    something to show. With no setup script there is no terminal to lose.
-4. **When setup finishes, the job tab launches and takes focus**, unless the user
-   has opened another tab since setup started.
-5. **⌘T always opens a tab**, wherever focus is, except while setup runs.
+4. **A launch with an opening prompt shows its agent tab at once**, in front of
+   the setup terminal, with the prompt on screen and setup progress in its status
+   row. The provider starts, and the prompt is sent, when setup finishes.
+5. **Otherwise, when setup finishes, the job tab launches and takes focus**,
+   unless the user has opened another tab since setup started.
+6. **⌘T always opens a tab**, wherever focus is, except while setup runs.
 
 ## Who owns what
 
@@ -63,14 +66,38 @@ picking a different one is a new launch.
 
 `ensureSetupTab` runs when repository preparation streams output (a container's
 clone) or just before setup commands run, so an environment with neither never
-has the tab. It takes focus unless the user already has a tab of their own open.
+has the tab. It takes focus unless the user already has a tab of their own open,
+or the startup agent tab of a launch with an opening prompt is selected.
 Until a tab exists the renderer shows outlines (`EnvironmentTabsShimmer`) and adds
-nothing itself.
+nothing itself, except for a launch with an opening prompt: then it draws the
+prompt (`LaunchPromptPending`) laid out as the agent tab will show it, through
+worktree creation and container allocation. Once Docker assigns a container ID,
+the user can switch between the prompt and the container logs. If the preview
+chunk fails, the creation progress or logs stay usable.
 
-The job tab is published when setup has settled, not when the launch was
-requested, which keeps the terminal first and alone while it works. Its agent is
-addressable before that: the mailbox directory lists `startup-agent` for an
-environment with a pending launch, so mail sent during setup waits for it.
+A native launch with opening prompt text publishes its job tab, locked to its
+agent and selected, as soon as the reconciler sees the launch, before setup has
+settled. The early pane and its native execution reservation commit together.
+Platform and execution mode edits apply to future launches. Closing this pane during setup leaves
+it closed while the opening dispatch still runs in the background once setup
+is ready. Selecting the setup terminal after the early pane appears also keeps
+that selection when the provider session is bound.
+The tab draws the prompt and shows setup progress in its status row
+(`LaunchSetupStatus`: "Running environment setup script…", a link to the setup
+terminal, and Skip setup wait), and the same transcript then shows "Launching
+<agent>…", the agent's thinking and its response, so nothing is swapped out when
+setup finishes. Its composer is disabled until then, so nothing is sent ahead of
+the opening prompt. A failed or held setup falls back to the setup surface with
+its recovery controls. A setup failure that cancels the launch retires the
+prompt preview. Retrying or skipping setup in that case leaves the original
+text available through the environment's **Copy initial prompt** action.
+
+A native launch without prompt text, including one with only attachments,
+publishes its job tab after setup settles, which keeps the setup terminal in
+front while it works.
+Either way its agent is addressable before that: the mailbox directory lists
+`startup-agent` for an environment with a pending launch, so mail sent during
+setup waits for it.
 
 The handoff is decided twice, once per kind of client, and both read the same
 rule: focus moves only from the setup terminal. The backend applies it to the

@@ -198,3 +198,26 @@ function reconcileNetworkAccess(
   }
   return policy;
 }
+
+/** The detached runner has the container's boundary and no provider
+ * sandbox, capability gate or interactive approval path. */
+export function detachedLongCheckPolicyAllows(policy: NativeAgentExecutionPolicy): boolean {
+  return (
+    policy.sandbox === "container" &&
+    policy.approvals === "auto-approve" &&
+    policy.toolPolicy === undefined &&
+    policy.capabilityPolicy === undefined
+  );
+}
+
+export function assertDetachedLongCheckPolicy(
+  environment: Pick<Environment, "environmentType" | "networkAccessMode" | "agentSettings">,
+): void {
+  if (
+    !detachedLongCheckPolicyAllows(resolveEnvironmentExecutionPolicy(environment, "build-pipeline"))
+  ) {
+    throw new Error(
+      "Detached long checks require a container whose execution policy allows shell commands without provider sandboxing or approval. Record the criterion as not checked if you cannot establish it within your session.",
+    );
+  }
+}

@@ -30,7 +30,10 @@ creates no worktrees. It judges each failing test rather than each command: a
 never blocks unless an acceptance criterion names it, and an `undetermined` one
 blocks only when its diagnostics tie it to the change. A blocking failure sends
 the round to Rework. Verify runs one narrow check only when an acceptance criterion
-cannot be judged by reading the code.
+cannot be judged by reading the code. A criterion that needs a slow run (a corpus
+or parity comparison, a full suite) is handed to the pipeline as a
+[long check](pipeline-long-checks.md) instead, which holds Verify until the
+run's result reaches it.
 
 ## The Address Findings → Verify handoff
 

@@ -1,5 +1,6 @@
 import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
+import { isPipelineLongCheckList, type PipelineLongCheck } from "./build-pipeline-long-checks.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
 import {
@@ -916,6 +917,8 @@ export interface PipelineSession {
   sdkSessionId: string;
   /** Original prompt tab retained as the first Build attempt after promotion. */
   adoptedFromTabId?: string;
+  /** The session was created with a policy the container worker can enforce. */
+  detachedLongChecksAllowed?: boolean;
   /** Immutable original Build handoff, retained across later brief updates. */
   adoptedBuildNotes?: import("./build-pipeline-key-information.js").KeyInformationPatch;
   /** Immutable admission identity, retained when the transcript leaves the snapshot. */
@@ -1484,6 +1487,12 @@ export interface BuildPipeline {
   structuredReview?: StructuredReviewReport;
   /** Backend projection of this iteration's environment-owned validation. */
   validationRun?: ReviewValidationRun;
+  /**
+   * Slow checks stage agents handed to the pipeline (`start_long_check`), run
+   * on the environment's validation worker and held against their stage until
+   * their result reaches it (`build-pipeline-long-checks.ts`).
+   */
+  longChecks?: PipelineLongCheck[];
   /** Immutable Git evidence shared by this iteration's reviewers. */
   reviewPackage?: PersistedReviewPackage;
   structuredReviewRequestId?: string;
@@ -1926,6 +1935,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.adoptedAttemptDigest === undefined ||
       (typeof value.adoptedAttemptDigest === "string" &&
         /^[a-f0-9]{64}$/.test(value.adoptedAttemptDigest))) &&
+    (value.detachedLongChecksAllowed === undefined ||
+      typeof value.detachedLongChecksAllowed === "boolean") &&
     (value.adoptedFromTabId === undefined ||
       (isNonBlankString(value.adoptedFromTabId) &&
         value.adoptedFromTabId.trim().length > 0 &&
@@ -2456,6 +2467,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
     !isOptionalString(value.verificationFeedback) ||
     (value.structuredReview !== undefined && !isStructuredReviewReport(value.structuredReview)) ||
     (value.validationRun !== undefined && !isReviewValidationRun(value.validationRun)) ||
+    (value.longChecks !== undefined && !isPipelineLongCheckList(value.longChecks)) ||
     (value.reviewPackage !== undefined && !isPersistedReviewPackage(value.reviewPackage)) ||
     !isOptionalNonBlankString(value.structuredReviewRequestId) ||
     (value.pausedFromPhase !== undefined &&

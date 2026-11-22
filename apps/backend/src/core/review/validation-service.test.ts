@@ -23,6 +23,13 @@ import {
   parseReviewPreparationValidation,
   verifyEnvironmentReviewPackage,
 } from "../commands-review.js";
+import {
+  command,
+  control,
+  fixture,
+  cleanupReviewValidationFixtures,
+} from "./validation-worker-test-support.js";
+import { longCheckStatusFromRun } from "@orkestrator/protocol/build-pipeline-long-checks";
 import type { CommandContext } from "../commands-context.js";
 
 test("cancelled validation preparation preserves partial evidence and its diagnostic", () => {
@@ -469,3 +476,52 @@ test("stop-command uses Docker exec and accepts the matching container snapshot"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("environment stop drains a long check and publishes its incomplete outcome", async () => {
+  const { root, run } = await fixture([command("check", "sleep 15")]);
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const check = newReviewValidationRun(`long-check-${crypto.randomUUID()}`, run.plan);
+  const published: unknown[] = [];
+  const context = {
+    storage: {
+      getEnvironment: async () => ({
+        id: "env",
+        environmentType: "local",
+        status: "running",
+        worktreePath: root,
+        networkAccessMode: "restricted",
+        agentSettings: {
+          executionPolicy: { sandbox: "provider", networkAccess: "restricted", approvals: "deny" },
+        },
+      }),
+      listMultiReviewWorkflows: async () => [],
+      listAllBuildPipelines: async () => [
+        { id: "pipeline", environmentId: "env", snapshot: { longChecks: [{ run: check }] } },
+      ],
+    },
+    appRoot: root,
+    resourceRoot: root,
+    toolchainBinDir: path.dirname(process.execPath),
+    runtime,
+    buildPipelines: {
+      recordStoppedLongChecks: async (...args: unknown[]) => {
+        published.push(args);
+      },
+    },
+  } as unknown as CommandContext;
+  try {
+    await expect(controlReviewValidation("env", check, "start", context)).rejects.toThrow(
+      "require a container",
+    );
+    // Simulate an already admitted worker, without granting local tool execution.
+    await control(root, check, "start", {}, undefined, undefined, undefined, true);
+    await stopEnvironmentReviewValidation("env", context);
+    const terminal = await controlReviewValidation("env", check, "status", context);
+    expect(longCheckStatusFromRun(terminal)).toBe("incomplete");
+    expect(published).toEqual([["pipeline", "env", [terminal]]]);
+  } finally {
+    await control(root, check, "cancel").catch(() => {});
+    runtime.shutdown();
+    await cleanupReviewValidationFixtures();
+  }
+}, 20_000);

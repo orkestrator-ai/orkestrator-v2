@@ -11,6 +11,7 @@ import {
   type ReviewValidationOutputStream,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
+import { assertDetachedLongCheckPolicy } from "../native-agent/index.js";
 import type { CommandContext } from "../commands-context.js";
 import {
   createEnvironmentCommandRunner,
@@ -298,6 +299,8 @@ async function controlReviewValidationOnce(
   }
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error("Review validation environment is unavailable");
+  const longCheck = value.id.startsWith("long-check-");
+  if (action === "start" && longCheck) assertDetachedLongCheckPolicy(environment);
   if (action === "start" && (environment.status !== "running" || environment.deletionRequestedAt))
     throw new Error("Review validation requires a running environment");
   const runner = createEnvironmentCommandRunner(
@@ -338,6 +341,7 @@ async function controlReviewValidationOnce(
       action,
       ...(resultId === undefined ? {} : { resultId }),
       ...(targetRef === undefined ? {} : { targetRef }),
+      ...(longCheck ? { longCheck } : {}),
     }),
   ).toString("base64");
   const args = ["-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER];
@@ -358,6 +362,7 @@ async function controlReviewValidationOnce(
           "docker",
           [
             "exec",
+            ...(longCheck ? ["--user", "node"] : []),
             "--workdir",
             "/",
             environment.containerId!,
@@ -476,9 +481,22 @@ export async function stopEnvironmentReviewValidation(
       typeof record.snapshot !== "object"
     )
       continue;
-    const snapshot = record.snapshot as { validationRun?: unknown };
-    if (!isReviewValidationRun(snapshot.validationRun)) continue;
-    if (!["planned", "running"].includes(snapshot.validationRun.status)) continue;
-    await controlReviewValidation(environmentId, snapshot.validationRun, "cancel", context);
+    const snapshot = record.snapshot as { validationRun?: unknown; longChecks?: unknown };
+    // A build pipeline's long checks run on the same worker
+    // (`build-pipeline/long-checks.ts`).
+    const cancel = async (run: unknown) => {
+      if (!isReviewValidationRun(run) || !["planned", "running"].includes(run.status)) return;
+      return controlReviewValidation(environmentId, run, "cancel", context);
+    };
+    await cancel(snapshot.validationRun);
+    if (!Array.isArray(snapshot.longChecks)) continue;
+    const settled: ReviewValidationRun[] = [];
+    for (const check of snapshot.longChecks as Array<{ run?: unknown } | null>) {
+      const run = await cancel(check?.run);
+      if (run) settled.push(run);
+    }
+    if (settled.length) {
+      await context.buildPipelines?.recordStoppedLongChecks(record.id, environmentId, settled);
+    }
   }
 }

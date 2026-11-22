@@ -158,6 +158,8 @@ export type BuildPipelineServiceOptions = {
   environmentFence?: EnvironmentMutationFence;
   /** Checks native/background writers while new work is excluded by the fence. */
   assertEnvironmentQuiescent?: (environmentId: string) => Promise<void>;
+  /** How often running long checks are read from the worker (`long-checks.ts`); tests shorten it. */
+  longCheckPollMs?: number;
   /**
    * D3 across engines (`workspace-writers.ts`): a stage start claims the
    * checkout against graph runs, and every record read or saved is noted so

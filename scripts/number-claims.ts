@@ -3,19 +3,9 @@
  * Picks the number for a new to-do or flake case
  * (`mise run number:next -- todo` or `mise run number:next -- flaky-tests`).
  *
- * "The next number after the highest in use" collided whenever two branches
- * cut from the same `main` each took it: both claimed the same number, and the
- * later pull request had to renumber its file, its index row and every link
- * (docs/number-claims/README.md). This picks a number that:
- *
- * - is above every number in use in this checkout, files and claims alike;
- * - is above every claim on every branch origin has (after a best-effort
- *   `git fetch`), so a branch pushed by a parallel worker is never reused;
- * - adds a small random step, so two workers that have not pushed yet rarely
- *   pick the same one.
- *
- * The claim check (`tests/unit/number-claims.test.ts`) still turns the rare
- * remaining clash into a conflict; this only makes it rare.
+ * Scans local files and origin's branch claims, then reserves a number
+ * through an atomic Git ref update shared by all worktrees in this clone.
+ * Random spacing reduces collisions across independent clones.
  *
  *   bun scripts/number-claims.ts next <todo|flaky-tests> [--no-fetch] [--spread N]
  */
@@ -33,8 +23,6 @@ export const NUMBER_REGISTERS = {
 } as const;
 export type NumberRegister = keyof typeof NUMBER_REGISTERS;
 
-/** How many of origin's branches, newest first, are read for claims. */
-export const MAX_REMOTE_BRANCHES = 300;
 export const DEFAULT_SPREAD = 10;
 
 const NUMBERED = /^(\d{4,})(?:-.+\.md)?$/;
@@ -66,8 +54,18 @@ export function nextNumber(
   return String(next).padStart(4, "0");
 }
 
-function git(cwd: string, args: string[]): string | null {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: 60_000 });
+function gitResult(root: string, args: string[], input?: string) {
+  return spawnSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    input,
+    timeout: 60_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+function git(root: string, args: string[], input?: string): string | null {
+  const result = gitResult(root, args, input);
   return result.status === 0 ? result.stdout : null;
 }
 
@@ -85,48 +83,107 @@ function localNames(root: string, register: NumberRegister): string[] {
   return names;
 }
 
-function remoteClaimNames(root: string, register: NumberRegister): string[] {
+const REMOTE_CLAIMS = "refs/orkestrator/number-origin";
+
+async function fetchRemoteClaims(root: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const result = gitResult(root, [
+      "fetch",
+      "--quiet",
+      "--atomic",
+      "--prune",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--refmap=",
+      "origin",
+      `+refs/heads/*:${REMOTE_CLAIMS}/*`,
+    ]);
+    if (result.status === 0) return;
+    // Two worktrees can fetch the same newly published refs concurrently.
+    if (!result.stderr?.includes("cannot lock ref") || attempt === 4) break;
+    await Bun.sleep(50 * (attempt + 1));
+  }
+  throw new Error(
+    "Could not fetch every branch from origin. Use --no-fetch to allocate with cached claims only.",
+  );
+}
+
+function remoteClaimNames(root: string, register: NumberRegister, offline: boolean): string[] {
   const refs = git(root, [
     "for-each-ref",
-    "--sort=-committerdate",
-    `--count=${MAX_REMOTE_BRANCHES}`,
-    "--format=%(refname)",
-    "refs/remotes/origin",
+    "--format=%(objectname)",
+    REMOTE_CLAIMS,
+    ...(offline ? ["refs/remotes/origin"] : []),
   ]);
-  const names: string[] = [];
-  for (const ref of refs?.split("\n").filter(Boolean) ?? []) {
+  if (refs === null) throw new Error("Could not enumerate origin's branch tips");
+  const trees = new Set(refs.trim().split("\n").filter(Boolean));
+  const names = [];
+  for (const tree of trees) {
     const listed = git(root, [
       "ls-tree",
+      "-z",
       "--name-only",
-      ref,
+      tree,
       `${NUMBER_REGISTERS[register].claims}/`,
     ]);
-    if (listed) names.push(...listed.split("\n").filter(Boolean));
+    if (listed === null) throw new Error("Could not read a claim tree from origin");
+    names.push(...listed.split("\0").filter(Boolean));
   }
   return names;
 }
 
-function main(args: readonly string[]): number {
-  const [command, register] = args;
-  if (command !== "next" || !register || !(register in NUMBER_REGISTERS)) {
+function reserve(root: string, name: NumberRegister, highest: number, spread: number): string {
+  const ref = `refs/orkestrator/number-reservations/${name}`;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const old = git(root, ["rev-parse", "--verify", "--quiet", ref])?.trim();
+    const reserved = old ? git(root, ["cat-file", "blob", old])?.trim() : "0";
+    if (!reserved || !/^\d+$/.test(reserved)) throw new Error("Invalid local number reservation");
+    const next = nextNumber(Math.max(highest, Number(reserved)), {
+      spread,
+      maxDigits: NUMBER_REGISTERS[name].maxDigits,
+    });
+    const object = git(root, ["hash-object", "-w", "--stdin"], next)?.trim();
+    if (!object) throw new Error("Could not store a local number reservation");
+    if (git(root, ["update-ref", ref, object, old ?? ""]) !== null) return next;
+  }
+  throw new Error("Could not reserve a number after concurrent updates");
+}
+
+async function main(args: readonly string[]): Promise<number> {
+  const [command, register, ...options] = args;
+  const spreadAt = options.indexOf("--spread");
+  const spread = spreadAt === -1 ? DEFAULT_SPREAD : Number(options[spreadAt + 1]);
+  const offline = options.includes("--no-fetch");
+  const expectedOptions = (offline ? 1 : 0) + (spreadAt === -1 ? 0 : 2);
+  if (
+    command !== "next" ||
+    !register ||
+    !Object.hasOwn(NUMBER_REGISTERS, register) ||
+    options.length !== expectedOptions ||
+    !Number.isSafeInteger(spread) ||
+    spread < 1
+  ) {
     console.error("usage: number-claims.ts next <todo|flaky-tests> [--no-fetch] [--spread N]");
     return 2;
   }
-  const spreadAt = args.indexOf("--spread");
-  const spread = spreadAt === -1 ? DEFAULT_SPREAD : Number(args[spreadAt + 1]);
-  if (!Number.isInteger(spread) || spread < 1) {
-    console.error("--spread takes a whole number of at least 1");
-    return 2;
+
+  const root = git(process.cwd(), ["rev-parse", "--show-toplevel"])?.trimEnd();
+  if (!root) {
+    console.error("Run number:next in the checkout where you will add the claim.");
+    return 1;
   }
-  const root = path.resolve(import.meta.dir, "..");
-  const name = register as NumberRegister;
-  if (!args.includes("--no-fetch") && git(root, ["fetch", "--quiet", "origin"]) === null) {
-    console.error("git fetch origin failed; using the branches already fetched");
+  try {
+    const name = register as NumberRegister;
+    if (offline) console.error("Using cached origin claims only.");
+    else await fetchRemoteClaims(root);
+    const used = numbersIn([...localNames(root, name), ...remoteClaimNames(root, name, offline)]);
+    const highest = used.reduce((max, number) => Math.max(max, number), 0);
+    console.log(reserve(root, name, highest, spread));
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
   }
-  const used = numbersIn([...localNames(root, name), ...remoteClaimNames(root, name)]);
-  const highest = used.reduce((max, n) => Math.max(max, n), 0);
-  console.log(nextNumber(highest, { spread, maxDigits: NUMBER_REGISTERS[name].maxDigits }));
-  return 0;
 }
 
-if (import.meta.main) process.exit(main(process.argv.slice(2)));
+if (import.meta.main) process.exit(await main(process.argv.slice(2)));

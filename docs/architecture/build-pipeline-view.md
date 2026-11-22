@@ -970,18 +970,20 @@ in [tickets.md](tickets.md#delivery). The decision is saved before creating a
 Ship session, so a failed session creation and retry keep the same policy.
 Resuming a paused push-only Ship explicitly forbids opening or editing a PR.
 
-- **`open-pr`** starts the PR stage. Before it pushes, Ship (`prPrompt`) fetches
-  the base and checks the branch with `git merge-tree` against
-  `origin/<base>`, never a possibly stale local base branch. A branch that
-  merges cleanly is pushed as Verify judged it; one that would conflict is
-  merged with `origin/<base>` (never rebased, so the judged commits stay in the
-  history) and resolved under the conflict-resolution rules first, and Ship
-  never opens or updates a pull request that still conflicts. If the base
-  moves after that and GitHub reports a conflict, the conflict stage runs as
-  before; it now fetches again before it finishes and merges again, up to
-  three passes, when the base moved on meanwhile. Both turns are told to run
-  the repository's own merge setup and generators rather than hand-edit
-  generated files (`MERGE_REPOSITORY_TOOLING_INSTRUCTION`).
+- **`open-pr`** starts the PR stage. Ship reads an existing PR’s actual
+  base or uses the configured target for a new PR. It fetches the exact
+  remote base before pushing and checks mergeability in a temporary Git
+  directory without the local merge drivers. On conflict, it merges the
+  fetched commit using the repository’s merge tooling, resolves and verifies
+  the result, and retries within three catch-up passes. Verified commits
+  stay in history. Ship repeats the check against the pushed commit and
+  current base immediately before creating, reopening or editing the PR.
+  The graph publisher enforces the same checks in its system action. The
+  Build Pipeline graph routes an unpublished conflict to its resolver and
+  repeats publication with the resolved workspace, up to three publication
+  attempts. The mergeability check and GitHub write are separate operations. Either ref
+  can still move after the last check, and the existing post-publication
+  conflict stage remains available.
 - **`push-no-pr`** starts the same Ship stage (`pr` session, `creating-pr` phase,
   the Pull request step's model and instructions) under
   `BRANCH_PUSH_SESSION_LABEL`, with `pushBranchPrompt`: commit what remains, push,

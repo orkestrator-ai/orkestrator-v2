@@ -7,14 +7,13 @@
  * insert after the same last row. The rows are records, not lines of prose,
  * so this merge treats them as records:
  *
- * - each row is keyed by the first Markdown link in it (the file it indexes),
- *   or by its first cell when it has none;
+ * - each row is keyed by the Case or File column, or its first cell in
+ *   other tables;
  * - a row changed on one side only takes that side's version, a row added on
  *   either side is kept, and a row removed on one side is removed unless the
  *   other side changed it;
  * - a `Rank` column is renumbered 1..n after the merge (ranks are positions,
- *   and both sides appending "rank 25" is not a conflict), and an `ID` table
- *   stays in ID order.
+ *   and both sides appending "rank 25" is not a conflict); existing row order is preserved unless one side explicitly changes it.
  *
  * The text around the tables goes through an ordinary three-way text merge.
  * Anything this cannot decide (the same row changed differently on both
@@ -27,8 +26,7 @@
 export type TextMerge = (base: string, ours: string, theirs: string) => string | null;
 
 interface Table {
-  /** Header and separator lines, kept with the surrounding text. */
-  readonly head: readonly string[];
+  readonly columns: readonly string[];
   readonly rows: readonly string[];
 }
 
@@ -38,9 +36,10 @@ interface Parsed {
   readonly tables: readonly Table[];
 }
 
-const PLACEHOLDER = (index: number) => `\u0000orkestrator-index-table-${index}\u0000`;
+const MARKER_PREFIX = "<!-- orkestrator-index-table-";
+const placeholder = (index: number) => `${MARKER_PREFIX}${index} -->`;
 const SEPARATOR = /^\|(?:\s*:?-{3,}:?\s*\|)+\s*$/;
-const RANK_CELL = /^\|\s*\d+\s*\|/;
+const RANK_CELL = /^(\s*)\|\s*\d+\s*\|/;
 const LINK = /\]\(([^)\s]+)\)/;
 
 function isTableLine(line: string): boolean {
@@ -57,12 +56,17 @@ function parse(text: string): Parsed {
     if (isTableLine(line) && next !== undefined && SEPARATOR.test(next)) {
       const rows: string[] = [];
       let cursor = index + 2;
-      while (cursor < lines.length && isTableLine(lines[cursor]!)) {
-        rows.push(lines[cursor]!);
-        cursor += 1;
+      while (cursor < lines.length) {
+        let nextRow = cursor;
+        while (nextRow < lines.length && lines[nextRow]!.trim() === "") nextRow += 1;
+        if (nextRow === lines.length || !isTableLine(lines[nextRow]!)) break;
+        if (SEPARATOR.test(lines[nextRow + 1] ?? "")) break;
+        // Some existing indexes separate batches of rows with blank lines.
+        rows.push(lines.slice(cursor, nextRow + 1).join("\n"));
+        cursor = nextRow + 1;
       }
-      out.push(line, next, PLACEHOLDER(tables.length));
-      tables.push({ head: [line, next], rows });
+      out.push(line, next, placeholder(tables.length));
+      tables.push({ columns: cells(line), rows });
       index = cursor - 1;
       continue;
     }
@@ -71,20 +75,25 @@ function parse(text: string): Parsed {
   return { skeleton: out.join("\n"), tables };
 }
 
-function firstCell(row: string): string {
-  return row.split("|")[1]?.trim() ?? "";
+function cells(line: string): string[] {
+  return line
+    .trimEnd()
+    .split(/(?<!\\)\|/)
+    .slice(1, -1)
+    .map((cell) => cell.trim());
 }
 
-function rowKey(row: string): string {
-  return row.match(LINK)?.[1] ?? firstCell(row);
-}
-
-/** Keyed rows in order, or null when a key repeats. */
-function keyed(rows: readonly string[]): Map<string, string> | null {
+/** Keyed rows in order, or null when a key repeats or the table shape is invalid. */
+function keyed(table: Table): Map<string, string> | null {
+  const caseColumn = table.columns.indexOf("Case");
+  const identity = caseColumn >= 0 ? caseColumn : table.columns.indexOf("File");
   const map = new Map<string, string>();
-  for (const row of rows) {
-    const key = rowKey(row);
-    if (map.has(key)) return null;
+  for (const row of table.rows) {
+    const fields = cells(row);
+    if (fields.length !== table.columns.length) return null;
+    const field = fields[Math.max(identity, 0)];
+    const key = field?.match(LINK)?.[1] ?? field;
+    if (!key || map.has(key)) return null;
     map.set(key, row);
   }
   return map;
@@ -95,15 +104,14 @@ function sameOrder(left: readonly string[], right: readonly string[]): boolean {
 }
 
 function mergeRows(
-  head: readonly string[],
-  base: readonly string[],
-  ours: readonly string[],
-  theirs: readonly string[],
+  columns: readonly string[],
+  base: Table,
+  ours: Table,
+  theirs: Table,
 ): string[] | null {
-  const ranked = firstCell(head[0]!) === "Rank";
-  const ordered = firstCell(head[0]!) === "ID";
+  const ranked = columns[0] === "Rank";
   const comparable = (row: string | undefined) =>
-    row === undefined || !ranked ? row : row.replace(RANK_CELL, "| # |");
+    row === undefined || !ranked ? row : row.replace(RANK_CELL, "$1| # |");
 
   const b = keyed(base);
   const o = keyed(ours);
@@ -148,17 +156,13 @@ function mergeRows(
   }
 
   let rows = order.map((key) => merged.get(key)!);
-  if (ordered) {
-    rows = rows
-      .map((row, index) => ({ row, index, id: Number(firstCell(row)) }))
-      .sort((left, right) =>
-        Number.isFinite(left.id) && Number.isFinite(right.id) && left.id !== right.id
-          ? left.id - right.id
-          : left.index - right.index,
-      )
-      .map(({ row }) => row);
-  }
-  if (ranked) rows = rows.map((row, index) => row.replace(RANK_CELL, `| ${index + 1} |`));
+  // A row remains valid only if one input supplied it under the same columns.
+  // A changed header could otherwise reinterpret cells without changing their count.
+  const sameLayout = [base, ours, theirs]
+    .filter((table) => sameOrder(table.columns, columns))
+    .map((table) => new Set(table.rows));
+  if (rows.some((row) => !sameLayout.some((layout) => layout.has(row)))) return null;
+  if (ranked) rows = rows.map((row, index) => row.replace(RANK_CELL, `$1| ${index + 1} |`));
   return rows;
 }
 
@@ -172,6 +176,7 @@ export function mergeMarkdownIndex(
   theirs: string,
   mergeText: TextMerge,
 ): string | null {
+  if ([base, ours, theirs].some((text) => text.includes(MARKER_PREFIX))) return null;
   const [b, o, t] = [parse(base), parse(ours), parse(theirs)];
   if (b.tables.length !== o.tables.length || b.tables.length !== t.tables.length) return null;
 
@@ -188,19 +193,16 @@ export function mergeMarkdownIndex(
   const parts: string[] = [];
   let rest = skeleton;
   for (let index = 0; index < b.tables.length; index += 1) {
-    const marker = PLACEHOLDER(index);
+    const marker = placeholder(index);
     const at = rest.indexOf(marker);
     if (at === -1 || rest.indexOf(marker, at + 1) !== -1) return null;
     // The table's header is the two lines before its placeholder in the merged text.
     const before = rest.slice(0, at);
     const head = before.split("\n").slice(-3, -1);
     if (head.length !== 2) return null;
-    const rows = mergeRows(
-      head,
-      b.tables[index]!.rows,
-      o.tables[index]!.rows,
-      t.tables[index]!.rows,
-    );
+    const columns = cells(head[0]!);
+    if (!SEPARATOR.test(head[1]!) || cells(head[1]!).length !== columns.length) return null;
+    const rows = mergeRows(columns, b.tables[index]!, o.tables[index]!, t.tables[index]!);
     if (!rows) return null;
     parts.push(before, rows.join("\n"));
     rest = rest.slice(at + marker.length);
@@ -211,5 +213,5 @@ export function mergeMarkdownIndex(
   }
   parts.push(rest);
   const text = parts.join("");
-  return text.includes("\u0000") ? null : text;
+  return text.includes(MARKER_PREFIX) ? null : text;
 }

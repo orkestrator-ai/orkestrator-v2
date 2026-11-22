@@ -73,7 +73,7 @@ files.
   `- **Status:** <status>` lines that match its index row.
 - A new case takes the number `mise run number:next -- flaky-tests` prints
   (above every number in use in any group and on origin's branches, plus a
-  small random step; or one from a range reserved for the branch), and a
+  clone-wide reservation and a small random step), and a
   number is never reused. `tests/unit/flaky-tests-index.test.ts` fails on a number used by
   more than one case file, in one group or across groups.
 - A case numbered 9800 or above also adds its claim,
@@ -84,7 +84,7 @@ files.
 - Status is one of `open`, `resolved` or `environmental`. Change it in place
   in both the case file and the group table; never move or delete a row.
 - Group tables have the columns `ID | Status | Test | File | Symptom | Case`,
-  with rows in ID order. Keep **Symptom** to one or two sentences; detail
+  with new rows appended in the order they were added. Keep **Symptom** to one or two sentences; detail
   belongs in the case file.
 - Never add case rows to this file. Add a group only by creating its folder
   and index and linking it here.

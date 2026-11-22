@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { gitTextMerge } from "../../../scripts/merge-drivers/driver";
 import { describe, expect, test } from "bun:test";
 import {
   mergeMarkdownIndex,
@@ -127,21 +129,57 @@ describe("mergeMarkdownIndex", () => {
     expect(mergeMarkdownIndex(base, ours, theirs, noTextMerge)).toBeNull();
   });
 
-  test("keeps an ID table in ID order", () => {
-    const head =
-      "| ID | Status | Test | File | Symptom | Case |\n| --- | --- | --- | --- | --- | --- |";
-    const flake = (id: string) =>
-      `| ${id} | open | \`t\` | f.test.ts | timeout | [${id}-x.md](${id}-x.md) |`;
-    const table = (ids: string[]) => `# Flakes\n\n${head}\n${ids.map(flake).join("\n")}\n`;
+  test("merges concurrent non-overlapping prose and table edits with Git", () => {
+    const ours = base
+      .replace("Intro prose.", "Ours intro.")
+      .replace("\n\nClosing", `\n${row(3, "0003-ours.md")}\n\nClosing`);
+    const theirs = base.replace(
+      "\n\nClosing prose.",
+      `\n${row(3, "0004-theirs.md")}\n\nTheir closing.`,
+    );
+    expect(mergeMarkdownIndex(base, ours, theirs, gitTextMerge)).toBe(
+      index(
+        [
+          row(1, "0001-a.md"),
+          row(2, "0002-b.md"),
+          row(3, "0003-ours.md"),
+          row(4, "0004-theirs.md"),
+        ],
+        "\nTheir closing.\n",
+      ).replace("Intro prose.", "Ours intro."),
+    );
+  });
 
-    expect(
-      mergeMarkdownIndex(
-        table(["0001"]),
-        table(["0001", "10012"]),
-        table(["0001", "10005"]),
-        noTextMerge,
-      ),
-    ).toBe(table(["0001", "10005", "10012"]));
+  test.each(["agent-bridges", "backend-services-and-tooling"])(
+    "preserves existing row order and case identity in the %s index",
+    (group) => {
+      const tracked =
+        readFileSync(
+          new URL(`../../../docs/tests/flaky-tests/${group}/0000-index.md`, import.meta.url),
+          "utf8",
+        ).trimEnd() + "\n";
+      const flake = (id: string) =>
+        `| ${id} | open | test | same.test.ts | [Related](0725-related.md) | [${id}-x.md](${id}-x.md) |\n`;
+      expect(
+        mergeMarkdownIndex(
+          tracked,
+          tracked + flake("100291"),
+          tracked + flake("100290"),
+          gitTextMerge,
+        ),
+      ).toBe(tracked + flake("100291") + flake("100290"));
+    },
+  );
+
+  test("refuses a row added against an incompatible header", () => {
+    const ours = base
+      .split("\n")
+      .map((line) =>
+        line.startsWith("|") ? line + (line.startsWith("| ---") ? " --- |" : " Extra |") : line,
+      )
+      .join("\n");
+    const theirs = index([row(1, "0001-a.md"), row(2, "0002-b.md"), row(3, "0003-new.md")]);
+    expect(mergeMarkdownIndex(base, ours, theirs, gitTextMerge)).toBeNull();
   });
 
   test("handles a top-level index keyed by folder links", () => {

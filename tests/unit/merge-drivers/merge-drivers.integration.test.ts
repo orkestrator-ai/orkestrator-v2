@@ -1,6 +1,15 @@
+import { prMergeCheckArgs } from "../../../apps/backend/src/core/pull-request-merge-preflight";
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { serializeContractManifest } from "../../../scripts/generate-contract-manifest";
@@ -57,6 +66,20 @@ function manifest(names: string[]): string {
 const INDEX = "docs/todo/area/0000-index.md";
 const MANIFEST = "packages/protocol/contracts/manifest.json";
 
+function copyInstaller(repo: string): string {
+  const trusted = path.join(repo, "trusted source");
+  const scripts = path.join(trusted, "scripts");
+  mkdirSync(scripts, { recursive: true });
+  cpSync(path.join(root, "scripts/merge-drivers"), path.join(scripts, "merge-drivers"), {
+    recursive: true,
+  });
+  cpSync(
+    path.join(root, "scripts/contract-manifest-format.ts"),
+    path.join(scripts, "contract-manifest-format.ts"),
+  );
+  return path.join(scripts, "merge-drivers/install.ts");
+}
+
 function write(repo: string, file: string, text: string) {
   mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
   writeFileSync(path.join(repo, file), text);
@@ -67,8 +90,6 @@ function divergedRepository(): string {
   const repo = mkdtempSync(path.join(os.tmpdir(), "merge-drivers-"));
   dirs.push(repo);
   expect(git(repo, "init", "-q", "-b", "main").status).toBe(0);
-  // The drivers resolve from the worktree being merged; point it at this checkout's.
-  symlinkSync(path.join(root, "scripts"), path.join(repo, "scripts"));
   writeFileSync(path.join(repo, ".gitattributes"), readFileSync(path.join(root, ".gitattributes")));
   write(repo, INDEX, index([indexRow(1, "0001-a.md")]));
   write(repo, MANIFEST, manifest(["alpha"]));
@@ -109,22 +130,75 @@ describe("merge drivers", () => {
       run(repo, "bun", [path.join(root, "scripts/merge-drivers/install.ts"), "--check"]).status,
     ).toBe(0);
 
-    const merge = git(repo, "merge", "--no-edit", "theirs");
+    const head = git(repo, "rev-parse", "HEAD").out.trim();
+    const base = git(repo, "rev-parse", "theirs").out.trim();
+    expect(git(repo, ...prMergeCheckArgs(base, head))).toMatchObject({
+      status: 0,
+      out: "conflict\n",
+    });
+    const linked = path.join(repo, "linked worktree");
+    expect(git(repo, "worktree", "add", "-qb", "linked", linked, head).status).toBe(0);
+    // Only Git metadata contains the registered bundle. The new worktree has
+    // neither the registration sources nor any workspace dependencies.
+    const merge = git(linked, "merge", "--no-edit", "theirs");
     expect(merge.status, merge.out).toBe(0);
-    expect(readFileSync(path.join(repo, INDEX), "utf8")).toBe(
+    const merged = git(linked, "rev-parse", "HEAD").out.trim();
+    expect(git(linked, ...prMergeCheckArgs(base, merged))).toMatchObject({
+      status: 0,
+      out: "clean\n",
+    });
+    expect(readFileSync(path.join(linked, INDEX), "utf8")).toBe(
       index([indexRow(1, "0001-a.md"), indexRow(2, "0002-ours.md"), indexRow(3, "0003-theirs.md")]),
     );
-    expect(readFileSync(path.join(repo, MANIFEST), "utf8")).toBe(
+    expect(readFileSync(path.join(linked, MANIFEST), "utf8")).toBe(
       manifest(["alpha", "beta", "gamma"]),
     );
+  });
+
+  test("concurrent standalone setup is idempotent without workspace dependencies", async () => {
+    const repo = divergedRepository();
+    const installer = copyInstaller(repo);
+    const users = Array.from({ length: 6 }, () =>
+      Bun.spawn([process.execPath, installer], { cwd: repo, stdout: "ignore", stderr: "pipe" }),
+    );
+    for (const program of users) {
+      const [status, error] = await Promise.all([
+        program.exited,
+        new Response(program.stderr).text(),
+      ]);
+      expect(status, error).toBe(0);
+    }
+    const config = path.join(repo, ".git/config");
+    const inode = statSync(config).ino;
+    expect(run(repo, "bun", [installer]).status).toBe(0);
+    expect(statSync(config).ino).toBe(inode);
+    rmSync(path.dirname(path.dirname(path.dirname(installer))), { recursive: true });
+    expect(git(repo, "merge", "--no-edit", "theirs").status).toBe(0);
   });
 
   test("a registered driver whose script is missing falls back to Git's line merge", () => {
     const repo = divergedRepository();
     expect(run(repo, "bun", [path.join(root, "scripts/merge-drivers/install.ts")]).status).toBe(0);
-    rmSync(path.join(repo, "scripts"));
+    rmSync(path.join(repo, ".git", "orkestrator-merge-drivers"), { recursive: true });
     const merge = git(repo, "merge", "--no-edit", "theirs");
     expect(merge.status).not.toBe(0);
+    expect(readFileSync(path.join(repo, INDEX), "utf8")).toContain("<<<<<<<");
+  });
+
+  test("the registered structured driver writes Git conflict markers when it cannot merge a row", () => {
+    const repo = divergedRepository();
+    expect(run(repo, "bun", [path.join(root, "scripts/merge-drivers/install.ts")]).status).toBe(0);
+    const ours = index([indexRow(1, "0001-a.md")]).replace("Covers.", "Our edit.");
+    const theirs = index([indexRow(1, "0001-a.md")]).replace("Covers.", "Their edit.");
+    write(repo, INDEX, ours);
+    expect(git(repo, "commit", "-qam", "change ours").status).toBe(0);
+    expect(git(repo, "checkout", "-q", "theirs").status).toBe(0);
+    write(repo, INDEX, theirs);
+    expect(git(repo, "commit", "-qam", "change theirs").status).toBe(0);
+    expect(git(repo, "checkout", "-q", "main").status).toBe(0);
+    const merge = git(repo, "merge", "--no-edit", "theirs");
+    expect(merge).toMatchObject({ status: 1 });
+    expect(merge.out).toContain("structured merge cannot decide");
     expect(readFileSync(path.join(repo, INDEX), "utf8")).toContain("<<<<<<<");
   });
 });

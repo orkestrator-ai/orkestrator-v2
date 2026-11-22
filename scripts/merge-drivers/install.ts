@@ -1,85 +1,103 @@
 #!/usr/bin/env bun
 /**
- * Registers the repository's merge drivers in this clone's Git configuration
- * (`mise run git:merge-drivers`; `mise run setup` runs it too).
- *
- *   bun scripts/merge-drivers/install.ts           # register (idempotent)
- *   bun scripts/merge-drivers/install.ts --check   # exit 1 unless registered
- *
- * `.gitattributes` names a driver per path, but Git never runs a command a
- * repository names by itself: each clone has to register it. Without the
- * registration Git silently uses its ordinary line merge, so the folder
- * indexes and the contract manifest conflict again. Worktrees share their
- * repository's configuration, so one registration covers all of them; the
- * command resolves the driver from the worktree being merged, so each
- * worktree runs its own copy. When that copy or Bun is missing, the command
- * falls back to `git merge-file`, Git's own line merge.
+ * Registers a snapshot of this trusted checkout's driver in the common Git
+ * directory. Linked worktrees share both the snapshot and its registration.
+ * Run with --refresh from a trusted checkout when updating the snapshot.
  */
 import { spawnSync } from "node:child_process";
-import { MERGE_DRIVER_KINDS, type MergeDriverKind } from "./driver.ts";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-export const MERGE_DRIVER_NAMES: Readonly<Record<MergeDriverKind, string>> = {
+const DRIVERS = {
   "markdown-index": "orkestrator-index",
   "contract-manifest": "orkestrator-contract-manifest",
-};
+} as const;
+type DriverKind = keyof typeof DRIVERS;
 
-const DESCRIPTIONS: Readonly<Record<MergeDriverKind, string>> = {
-  "markdown-index": "Orkestrator index tables: merge rows by the file they index",
-  "contract-manifest": "Orkestrator contract manifest: merge entries and recompute totals",
-};
+const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+const fallback = "git merge-file -L ours -L base -L theirs %A %O %B";
 
-/** The shell command Git runs for a driver (`%O %A %B %P` are Git's placeholders). */
-export function mergeDriverCommand(kind: MergeDriverKind): string {
-  const script = '"$(git rev-parse --show-toplevel)/scripts/merge-drivers/driver.ts"';
+function driverCommand(kind: DriverKind, directory: string, bundle: string): string {
   return (
-    `test -f ${script} && command -v bun >/dev/null 2>&1 && ` +
-    `exec bun ${script} ${kind} %O %A %B %P; ` +
-    "git merge-file -L ours -L base -L theirs %A %O %B"
+    `test -f ${quote(bundle)} && test -x ${quote(process.execPath)} && ` +
+    `exec sh -c ${quote(`cd "$1" && shift && exec ${quote(process.execPath)} --no-env-file ./${quote(bundle.split("/").at(-1)!)} ${kind} "$@"`)} sh ` +
+    `${quote(directory)} "$PWD/%O" "$PWD/%A" "$PWD/%B"; ${fallback}`
   );
 }
 
-function git(args: string[]): { status: number; stdout: string } {
-  const result = spawnSync("git", args, { encoding: "utf8" });
-  return { status: result.status ?? 1, stdout: result.stdout ?? "" };
+function git(...args: string[]) {
+  return spawnSync("git", args, { encoding: "utf8" });
 }
 
-/** The drivers whose registration is missing or out of date. */
-export function staleMergeDrivers(): MergeDriverKind[] {
-  return MERGE_DRIVER_KINDS.filter((kind) => {
-    const current = git(["config", "--get", `merge.${MERGE_DRIVER_NAMES[kind]}.driver`]);
-    return current.status !== 0 || current.stdout.trim() !== mergeDriverCommand(kind);
+function driverKeys() {
+  return Object.entries(DRIVERS).map(([kind, name]) => ({
+    kind: kind as DriverKind,
+    key: `merge.${name}.driver`,
+  }));
+}
+
+function installed(directory: string): boolean {
+  return driverKeys().every(({ kind, key }) => {
+    const command = git("config", "--local", "--get", key).stdout.trim();
+    const bundle = command.match(/driver-[0-9a-f]{64}\.js/)?.[0];
+    return (
+      bundle !== undefined &&
+      existsSync(join(directory, bundle)) &&
+      command === driverCommand(kind, directory, join(directory, bundle))
+    );
   });
 }
 
-function main(args: readonly string[]): number {
+async function main(args: readonly string[]): Promise<number> {
+  const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
+  if (common.status !== 0) return 1;
+  const directory = join(common.stdout.trimEnd(), "orkestrator-merge-drivers");
+  const current = installed(directory);
   if (args.includes("--check")) {
-    const stale = staleMergeDrivers();
-    if (stale.length === 0) {
-      console.log("Merge drivers are registered.");
-      return 0;
-    }
-    console.error(
-      `Merge drivers not registered: ${stale.map((kind) => MERGE_DRIVER_NAMES[kind]).join(", ")}. Run mise run git:merge-drivers.`,
-    );
+    if (!current) console.error("Run mise run git:merge-drivers from a trusted checkout.");
+    return current ? 0 : 1;
+  }
+  if (current && !args.includes("--refresh")) return 0;
+
+  const build = await Bun.build({
+    entrypoints: [join(import.meta.dir, "driver.ts")],
+    target: "bun",
+    throw: false,
+  });
+  const output = build.outputs[0];
+  if (!build.success || !output) {
+    console.error("Could not bundle the merge drivers.", ...build.logs);
     return 1;
   }
-  for (const kind of MERGE_DRIVER_KINDS) {
-    const name = MERGE_DRIVER_NAMES[kind];
-    for (const [key, value] of [
-      ["name", DESCRIPTIONS[kind]],
-      ["driver", mergeDriverCommand(kind)],
-    ] as const) {
-      const result = git(["config", `merge.${name}.${key}`, value]);
-      if (result.status !== 0) {
-        console.error(`Could not set merge.${name}.${key}.`);
+
+  const bytes = new Uint8Array(await output.arrayBuffer());
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const bundle = join(directory, `driver-${digest}.js`);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const temp = join(directory, crypto.randomUUID());
+  try {
+    writeFileSync(temp, bytes, { flag: "wx", mode: 0o600 });
+    renameSync(temp, bundle);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+
+  for (const { kind, key } of driverKeys()) {
+    const command = driverCommand(kind, directory, bundle);
+    for (let attempt = 0; ; attempt++) {
+      if (git("config", "--local", "--get", key).stdout.trim() === command) break;
+      const result = git("config", "--local", "--replace-all", key, command);
+      if (result.status === 0) break;
+      if (attempt === 9 || !result.stderr.includes("could not lock config file")) {
+        console.error(`Could not set ${key}: ${result.stderr.trim()}`);
         return 1;
       }
+      await Bun.sleep(50 * (attempt + 1));
     }
   }
-  console.log(
-    `Registered merge drivers: ${MERGE_DRIVER_KINDS.map((kind) => MERGE_DRIVER_NAMES[kind]).join(", ")}.`,
-  );
+  console.log("Registered Orkestrator merge drivers.");
   return 0;
 }
 
-if (import.meta.main) process.exit(main(process.argv.slice(2)));
+if (import.meta.main) process.exit(await main(process.argv.slice(2)));

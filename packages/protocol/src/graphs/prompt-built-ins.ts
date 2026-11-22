@@ -329,7 +329,16 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     label: "Resolve conflicts",
     description:
       "Merges the target branch and resolves every conflict, validating the resolution as the repository asks, then commits locally. A system step pushes (D12).",
-    inputs: [workspaceInput(true)],
+    inputs: [
+      workspaceInput(true),
+      {
+        name: "base",
+        types: ["text"],
+        render: "json-frame",
+        required: false,
+        description: "The base branch checked by the publishing action.",
+      },
+    ],
     outputs: [workspaceOutput(true)],
     profiles: ["builder"],
     backend:

@@ -3,12 +3,13 @@
  * and Ship's update-or-reopen rule as backend code. An agent wrote the
  * `pr-description@1`; this node acts on it:
  *
- * 1. pushes the `workspace@1` commit (`pushGraphCommit`: once per commit,
- *    force-with-lease only after a code rewind);
+ * 1. checks the workspace against the pull request’s fresh base, then pushes
+ *    the commit (once per commit, force-with-lease only after a code rewind);
  * 2. finds the run's pull request for the branch, or adopts an open one the
  *    branch already has, or opens one (`gh pr create`) — once per run and
  *    branch (effect `pr:<branch>`; after a crash, GitHub is asked first);
- * 3. reopens it when it was closed; opens a new one when it was merged
+ * 3. rechecks the published head and fresh base before each GitHub write;
+ *    reopens a closed pull request, or opens a new one when it was merged
  *    (a merged pull request cannot take new commits);
  * 4. sets the title and body when they differ (`gh pr edit`);
  * 5. records it on the environment as the pipeline's Ship does, and has the
@@ -23,10 +24,12 @@
 import {
   buildPrDetectionCandidate,
   isValidPrUrl,
+  parseGitHubPullRequestUrl,
   parseKnownPrDetectionOutput,
   type GhPrListEntry,
   type PrDetectionResult,
 } from "./commands-review.js";
+import { prMergeCheckArgs } from "./pull-request-merge-preflight.js";
 import { resolveGitHubRepository } from "./git/index.js";
 import {
   GraphSystemActionError,
@@ -34,7 +37,11 @@ import {
   type GraphSystemActionContext,
   type GraphSystemActionHandler,
 } from "./graph-system-action.js";
-import { pushGraphCommit, type GraphWorkspaceValue } from "./graph-system-push.js";
+import {
+  checkGraphWorkspace,
+  pushGraphCommit,
+  type GraphWorkspaceValue,
+} from "./graph-system-push.js";
 import type { Environment } from "./models.js";
 
 /** The payload of `pr-description@1`. */
@@ -47,7 +54,8 @@ interface GraphPrDescription {
 export const GRAPH_PR_MERGEABILITY_READS = 6;
 export const GRAPH_PR_MERGEABILITY_DELAY_MS = 5_000;
 
-const VIEW_FIELDS = "url,state,mergeable,mergeStateStatus,isDraft,baseRefName";
+const VIEW_FIELDS =
+  "url,state,mergeable,mergeStateStatus,isDraft,baseRefName,headRefName,isCrossRepository";
 const LIST_FIELDS = "url,state,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName";
 const PR_URL = /https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/;
 
@@ -87,7 +95,18 @@ async function viewPullRequest(
     VIEW_FIELDS,
   ]);
   try {
-    return parseKnownPrDetectionOutput(output, url);
+    const identity = JSON.parse(output) as { headRefName?: unknown; isCrossRepository?: unknown };
+    const view = parseKnownPrDetectionOutput(output, url);
+    const { owner, repo } = parseGitHubPullRequestUrl(url);
+    if (
+      `${owner}/${repo}`.toLowerCase() !== target.repo.toLowerCase() ||
+      identity.headRefName !== target.branch ||
+      identity.isCrossRepository !== false ||
+      !view.baseBranch
+    ) {
+      throw new Error("The pull request does not identify this repository and branch");
+    }
+    return view;
   } catch (error) {
     throw graphProviderError("GitHub returned unreadable pull request metadata", error);
   }
@@ -121,12 +140,91 @@ async function openPullRequestFor(
       "provider-error",
     );
   }
-  if (!Array.isArray(entries)) return undefined;
-  const open = entries
-    .map((entry) => buildPrDetectionCandidate(entry as GhPrListEntry))
-    .filter((entry): entry is NonNullable<typeof entry> => entry?.result.state === "open")
-    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  if (!Array.isArray(entries)) {
+    throw new GraphSystemActionError(
+      "GitHub returned an unreadable pull request list",
+      "provider-error",
+    );
+  }
+  const open = entries.map((entry) => entry && buildPrDetectionCandidate(entry as GhPrListEntry));
+  if (open.some((entry) => entry?.result?.state !== "open") || open.length > 1) {
+    throw new GraphSystemActionError(
+      "GitHub did not identify a unique open pull request",
+      "provider-error",
+    );
+  }
   return open[0]?.result.url;
+}
+
+const FULL_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+class PublicationConflict extends Error {
+  constructor(readonly base: string) {
+    super(`Merge origin/${base} and resolve its conflicts before publishing the pull request.`);
+  }
+}
+
+async function readRemoteCommit(
+  ctx: GraphSystemActionContext,
+  target: PullRequestTarget,
+  branch: string,
+) {
+  const ref = `refs/heads/${branch}`;
+  const output = await ctx.deps.shell.remoteGit(
+    target.environment,
+    "ls-remote",
+    ["--exit-code", "origin", ref],
+    { signal: ctx.signal },
+  );
+  const [sha, name, extra] = output.trim().split(/\s+/);
+  if (!sha || !FULL_COMMIT.test(sha) || name !== ref || extra) {
+    throw new Error("The remote did not return an exact branch commit");
+  }
+  return sha;
+}
+
+async function checkPublication(
+  ctx: GraphSystemActionContext,
+  target: PullRequestTarget,
+  head: string,
+  pushed: boolean,
+): Promise<void> {
+  const { shell } = ctx.deps;
+  const { environment, base, branch } = target;
+  const options = { signal: ctx.signal };
+  let result: string;
+  try {
+    if (base === branch || !/^[A-Za-z0-9._/-]{1,200}$/.test(base)) {
+      throw new Error("The pull request needs a valid base distinct from the workspace branch");
+    }
+    await shell.git(environment, ["check-ref-format", `refs/heads/${base}`], options);
+    if (pushed && (await readRemoteCommit(ctx, target, branch)) !== head) {
+      throw new Error("The published head no longer matches the workspace commit");
+    }
+    const sha = await readRemoteCommit(ctx, target, base);
+    // An explicit, exact fetch paired with the advertised SHA avoids a stale
+    // tracking ref and detects a move during the fetch. Refuse if the server
+    // will no longer serve that commit.
+    await shell.remoteGit(
+      environment,
+      "fetch",
+      ["--no-tags", "--no-write-fetch-head", "--refmap=", "origin", sha],
+      options,
+    );
+    result = (await shell.git(environment, prMergeCheckArgs(sha, head), options)).trim();
+    if (result !== "clean" && result !== "conflict") {
+      throw new Error("Unexpected merge check result");
+    }
+    if ((await readRemoteCommit(ctx, target, base)) !== sha) {
+      throw new Error("The base branch moved during the pull request check");
+    }
+    if (pushed && (await readRemoteCommit(ctx, target, branch)) !== head) {
+      throw new Error("The published head moved during the pull request check");
+    }
+  } catch (error) {
+    throw graphProviderError("Could not check pull request mergeability", error);
+  }
+  if (result === "conflict") throw new PublicationConflict(base);
 }
 
 async function createPullRequest(
@@ -174,6 +272,7 @@ async function openOnce(
   target: PullRequestTarget,
   description: GraphPrDescription,
   key: string,
+  head: string,
 ): Promise<{ url: string; createdNow: boolean }> {
   let createdNow = false;
   const opened = await ctx.effect<{ url: string; created?: boolean; adopted?: boolean }>(
@@ -181,6 +280,7 @@ async function openOnce(
     async () => {
       const existing = await openPullRequestFor(ctx, target);
       if (existing) return { url: existing, adopted: true };
+      await checkPublication(ctx, target, head, true);
       const url = await createPullRequest(ctx, target, description);
       createdNow = true;
       return { url, created: true };
@@ -203,6 +303,7 @@ async function syncDescription(
   target: PullRequestTarget,
   url: string,
   description: GraphPrDescription,
+  head: string,
 ): Promise<boolean> {
   const redact = [description.title, description.body];
   const output = await gh(
@@ -222,6 +323,8 @@ async function syncDescription(
     );
   }
   if (current.title === description.title && current.body === description.body) return false;
+  const view = await viewPullRequest(ctx, target, url);
+  await checkPublication(ctx, { ...target, base: view.baseBranch! }, head, true);
   await gh(
     ctx,
     target,
@@ -247,8 +350,7 @@ export const openPullRequestAction: GraphSystemActionHandler = {
   async run(ctx) {
     const workspace = await ctx.requireInput<GraphWorkspaceValue>("workspace@1");
     const description = await ctx.requireInput<GraphPrDescription>("pr-description@1");
-    await pushGraphCommit(ctx, workspace);
-    const environment = await ctx.environment();
+    const environment = await checkGraphWorkspace(ctx, workspace);
     const project = await ctx.deps.storage.getProject(ctx.run.projectId);
     if (!project) throw new GraphSystemActionError("The run's project no longer exists");
     let repository;
@@ -266,27 +368,90 @@ export const openPullRequestAction: GraphSystemActionHandler = {
       base: await ctx.prTargetBranch(),
     };
 
-    let opened = await openOnce(ctx, target, description, `pr:${target.branch}`);
-    let view = await viewPullRequest(ctx, target, opened.url);
+    try {
+      for (const args of [
+        ["remote", "get-url", "--all", "origin"],
+        ["remote", "get-url", "--all", "--push", "origin"],
+      ]) {
+        const url = await ctx.deps.shell.git(environment, args, { signal: ctx.signal });
+        const address = url.trim();
+        if (address.includes("\n")) throw new Error("Origin has more than one URL");
+        const remote = resolveGitHubRepository(address);
+        if (`${remote.owner}/${remote.name}`.toLowerCase() !== target.repo.toLowerCase()) {
+          throw new Error("Origin does not match the pull request repository");
+        }
+      }
+    } catch {
+      throw new GraphSystemActionError(
+        "Could not confirm that origin fetches and pushes to the pull request repository",
+        "provider-error",
+      );
+    }
+
+    const key = `pr:${target.branch}`;
+    const head = workspace.headRef;
+    const workspaceMetadata = { headRef: head, baseRef: workspace.baseRef ?? undefined };
+    let opened: { url: string; createdNow: boolean };
+    let view: PrDetectionResult;
     let reopened = false;
-    if (view.state === "merged") {
-      opened = await openOnce(ctx, target, description, `pr:${target.branch}:after:${opened.url}`);
+    let edited = false;
+    const routeConflicts = ctx.params.prePublicationResolution === true;
+    try {
+      const recorded = (await ctx.effectRecord(key))?.data?.url;
+      const discovery =
+        typeof recorded === "string" ? recorded : await openPullRequestFor(ctx, target);
+      const existing = discovery ? await viewPullRequest(ctx, target, discovery) : undefined;
+      const replacementKey = existing?.state === "merged" ? `${key}:after:${existing.url}` : key;
+      const replacement =
+        replacementKey === key ? undefined : (await ctx.effectRecord(replacementKey))?.data?.url;
+      const candidate =
+        typeof replacement === "string"
+          ? await viewPullRequest(ctx, target, replacement)
+          : existing?.state === "merged"
+            ? undefined
+            : existing;
+      await checkPublication(
+        ctx,
+        { ...target, base: candidate?.baseBranch ?? target.base },
+        head,
+        false,
+      );
+      await pushGraphCommit(ctx, workspace);
+
+      opened = await openOnce(ctx, target, description, replacementKey, head);
       view = await viewPullRequest(ctx, target, opened.url);
+      if (view.state === "closed") {
+        await checkPublication(ctx, { ...target, base: view.baseBranch! }, head, true);
+        await gh(ctx, target, "Could not reopen the pull request", [
+          "pr",
+          "reopen",
+          opened.url,
+          "--repo",
+          target.repo,
+        ]);
+        reopened = true;
+        view = await viewPullRequest(ctx, target, opened.url);
+      }
+      edited =
+        !opened.createdNow && (await syncDescription(ctx, target, opened.url, description, head));
+    } catch (error) {
+      if (!(error instanceof PublicationConflict)) throw error;
+      if (!routeConflicts) throw new GraphSystemActionError(error.message);
+      const loop = ctx.run.plan.loops.find(({ members }) => members.includes(ctx.node.id));
+      if (loop && ctx.activation.iteration >= loop.maxIterations) {
+        throw new GraphSystemActionError(
+          "The base still conflicts after the allowed publication attempts.",
+        );
+      }
+      await ctx.output("workspace@1", workspace, { workspace: workspaceMetadata });
+      await ctx.output("text@1", { text: error.base });
+      await ctx.output("pull-request-state@1", {
+        url: "",
+        state: "unpublished",
+        hasMergeConflicts: true,
+      });
+      return;
     }
-    if (view.state === "closed") {
-      await gh(ctx, target, "Could not reopen the pull request", [
-        "pr",
-        "reopen",
-        opened.url,
-        "--repo",
-        target.repo,
-      ]);
-      reopened = true;
-      view = await viewPullRequest(ctx, target, opened.url);
-    }
-    const edited = opened.createdNow
-      ? false
-      : await syncDescription(ctx, target, opened.url, description);
 
     for (
       let read = 0;
@@ -318,6 +483,10 @@ export const openPullRequestAction: GraphSystemActionHandler = {
           .join(", ")
           .concat(".");
     await ctx.output("pr-result@1", { status: "created", url: opened.url, summary });
+    if (routeConflicts) {
+      await ctx.output("workspace@1", workspace, { workspace: workspaceMetadata });
+      await ctx.output("text@1", { text: view.baseBranch });
+    }
     await ctx.output("pull-request-state@1", {
       url: opened.url,
       state: view.state,

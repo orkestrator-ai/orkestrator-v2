@@ -227,6 +227,12 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
           description:
             "The base branch. Defaults to the project's pull request base, its default branch, then main.",
         },
+        prePublicationResolution: {
+          type: "boolean",
+          default: false,
+          description:
+            "Emit the workspace and an unpublished conflict state for a resolution loop.",
+        },
         draft: {
           type: "boolean",
           default: false,
@@ -239,6 +245,16 @@ export const GRAPH_SYSTEM_ACTION_SPECS: Readonly<Record<GraphSystemAction, Graph
       ],
       outputs: [
         port("pr-result@1", false, "The pull request's URL."),
+        port(
+          "text@1",
+          false,
+          "The verified base branch when pre-publication resolution is enabled.",
+        ),
+        port(
+          "workspace@1",
+          false,
+          "The checked workspace when pre-publication resolution is enabled.",
+        ),
         port(
           GRAPH_PULL_REQUEST_STATE_TYPE,
           false,

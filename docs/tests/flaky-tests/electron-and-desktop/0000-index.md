@@ -4,7 +4,7 @@ The desktop backend process and lifecycle, Electron command-registry and tmux-ba
 
 Part of the [flake registry](../0000-index.md); read its rules before adding a
 case. These cases are tracked only in this table, never in the top-level
-index. Rows are in ID order: append a new case at the end, and change a
+index. Append a new case at the end, and change a
 row's **Status** in place rather than moving it. Search the table by test name
 or owning file and read the **Status** column before opening a case file.
 

@@ -287,11 +287,20 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       // no agent node may do (D12); this builder only writes the text.
       inputs.required("code");
       return pullRequestDescriptionPrompt(target);
-    case "resolve-conflicts":
+    case "resolve-conflicts": {
       // resolveConflictsPrompt ends with "push it" (D12); this variant
       // commits locally and leaves the push to a system step.
       inputs.required("code");
-      return resolveConflictsLocallyPrompt(target);
+      const baseInput = inputs.optional("base");
+      const checkedBase = baseInput
+        ? inputs.builtInValue<{ text: string }>(baseInput).text
+        : undefined;
+      const base =
+        typeof checkedBase === "string" && /^[A-Za-z0-9._/-]+$/.test(checkedBase)
+          ? checkedBase
+          : target;
+      return resolveConflictsLocallyPrompt(base);
+    }
   }
 }
 

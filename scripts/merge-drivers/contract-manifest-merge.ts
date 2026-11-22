@@ -19,8 +19,7 @@
 import {
   CONTRACT_MANIFEST_SCHEMA_VERSION,
   serializeContractManifest,
-  type ContractManifest,
-} from "../generate-contract-manifest.ts";
+} from "../contract-manifest-format.ts";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Record_ = { [key: string]: Json };
@@ -114,5 +113,5 @@ export function mergeContractManifest(base: string, ours: string, theirs: string
     commands: sorted(maps.commands),
     events: sorted(maps.events),
   };
-  return serializeContractManifest(manifest as unknown as ContractManifest);
+  return serializeContractManifest(manifest);
 }

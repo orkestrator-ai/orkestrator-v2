@@ -112,7 +112,10 @@ upstream configuration instead of pushing.
   `main`: it is usually stale, so `main..HEAD` lists commits that are already
   merged.
 - Register the repository's merge drivers once per clone before you merge or
-  rebase: `mise run git:merge-drivers` (`mise run setup` runs it). Through
+  rebase: run `mise run git:merge-drivers` from a trusted checkout
+  (`mise run setup` also registers them when missing). The clone keeps the
+  bundled drivers in its common Git directory. To replace the bundle, run
+  `mise run git:merge-drivers -- --refresh` from a trusted checkout. Through
   `.gitattributes` they merge the folder indexes under `docs/todo/` and
   `docs/tests/flaky-tests/` row by row (rows both sides added are kept and
   ranks renumbered) and the contract manifest entry by entry (totals
@@ -125,9 +128,10 @@ upstream configuration instead of pushing.
   conflict on those files. Merge `origin/main` locally with the drivers
   registered, commit and push.
 - Before opening a pull request, fetch again: if `origin/main` moved and
-  `git merge-tree --write-tree --name-only HEAD origin/main` reports
-  conflicts, merge and resolve them first. Never open a pull request that
-  conflicts with `origin/main`.
+  a merge simulation with custom drivers disabled reports conflicts, merge
+  and resolve them first. A temporary bare Git directory that shares only
+  the checkout’s object database keeps local drivers out of the simulation.
+  Never open a pull request that conflicts with `origin/main`.
 
 ## Releases
 
@@ -1848,9 +1852,9 @@ counting a recurrence, and prove a fix by reproducing the failure first
 
 A new flake case or to-do file takes the number
 `mise run number:next -- flaky-tests` (or `-- todo`) prints: above every number
-in use here (files and [claims](docs/number-claims/README.md)) and on every
-branch origin has, plus a small random step so parallel branches rarely pick
-the same one. Add its claim, `docs/number-claims/{flaky-tests,todo}/NNNN`, in
+in use here (files and [claims](docs/number-claims/README.md)) and in origin’s
+branch claims. It reserves the number across linked worktrees and adds random
+spacing to reduce collisions between independent clones. Add its claim, `docs/number-claims/{flaky-tests,todo}/NNNN`, in
 the same change. If that claim conflicts on rebase or merge, another branch
 took the number first: renumber yours and update its links.
 `tests/unit/number-claims.test.ts` enforces this.

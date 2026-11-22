@@ -46,6 +46,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { isNodeReadCommand } from "@orkestrator/protocol/command-nodes";
+import {
+  CONTRACT_MANIFEST_SCHEMA_VERSION,
+  serializeContractManifest as serializeManifest,
+} from "./contract-manifest-format.ts";
 import { argumentSchemaProblems } from "./contract-argument-rules.ts";
 import { canonicalJsonSchema } from "@orkestrator/protocol/contract/json-schema";
 import type { AnyCommandDef, CommandAccess } from "@orkestrator/protocol/contract/command";
@@ -66,13 +70,12 @@ const scriptPath = join(import.meta.dir, "generate-contract-manifest.ts");
 /** The committed manifest, relative to the repository root. */
 export const CONTRACT_MANIFEST_PATH = "packages/protocol/contracts/manifest.json";
 /** The manifest file format; a reader refuses a version it does not know. */
-export const CONTRACT_MANIFEST_SCHEMA_VERSION = 1;
+export { CONTRACT_MANIFEST_SCHEMA_VERSION };
 const DOMAIN_MAP_PATH = "apps/backend/src/core/contract-domain-map.ts";
 const CHILD_FLAG = "--child";
 const CHILD_TIMEOUT_MS = 60_000;
 const MAX_CHILD_OUTPUT_BYTES = 1024 * 1024;
 /** `bun fmt`'s print width (`bunfig.toml`), so the output is already formatted. */
-const PRINT_WIDTH = 100;
 
 export interface DefinedCommandEntry {
   readonly domain: DomainName;
@@ -156,8 +159,6 @@ export class ContractManifestError extends Error {
     this.name = "ContractManifestError";
   }
 }
-
-type Json = null | boolean | number | string | readonly Json[] | { readonly [key: string]: Json };
 
 /** A schema the manifest digests: a command's `args` or `result`, an event's payload. */
 export type DigestedSchema = Parameters<typeof canonicalJsonSchema>[0];
@@ -340,44 +341,8 @@ export function untypedCommandCounts(manifest: string | ContractManifest): {
   return { total: parsed.counts.untyped, byDomain: parsed.untypedByDomain };
 }
 
-/**
- * JSON with two-space indentation in the shape `bun fmt` keeps: objects
- * expanded (an empty one as `{}`), and an array of scalars on one line when
- * it fits the print width, one element per line otherwise.
- */
 export function serializeContractManifest(manifest: ContractManifest): string {
-  return `${formatJson(manifest as unknown as Json, "", "", 0)}\n`;
-}
-
-/**
- * `prefix` is what precedes the value on its line (`"key": `), and `suffix`
- * the length of what follows it (1 for a separating comma), so an inline array
- * is measured on the whole line.
- */
-function formatJson(value: Json, indent: string, prefix: string, suffix: number): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  const inner = `${indent}  `;
-  if (Array.isArray(value)) {
-    if (value.length === 0) return "[]";
-    const scalars = value.every((item) => item === null || typeof item !== "object");
-    if (scalars) {
-      const inline = `[${value.map((item) => JSON.stringify(item)).join(", ")}]`;
-      if (indent.length + prefix.length + inline.length + suffix <= PRINT_WIDTH) return inline;
-    }
-    const items = value.map(
-      (item, index) => `${inner}${formatJson(item, inner, "", index < value.length - 1 ? 1 : 0)}`,
-    );
-    return `[\n${items.join(",\n")}\n${indent}]`;
-  }
-  const record = value as { readonly [key: string]: Json };
-  const keys = Object.keys(record);
-  if (keys.length === 0) return "{}";
-  const lines = keys.map((key, index) => {
-    const keyText = `${JSON.stringify(key)}: `;
-    const comma = index < keys.length - 1 ? 1 : 0;
-    return `${inner}${keyText}${formatJson(record[key] as Json, inner, keyText, comma)}`;
-  });
-  return `{\n${lines.join(",\n")}\n${indent}}`;
+  return serializeManifest(manifest);
 }
 
 /** What changed between the committed manifest text and the generated one. */

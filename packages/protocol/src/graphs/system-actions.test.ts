@@ -105,6 +105,7 @@ describe("system action table", () => {
     });
     expect(graphSystemActionParams("open-pull-request")).toEqual({
       targetBranch: undefined,
+      prePublicationResolution: false,
       draft: false,
     });
     expect(graphSystemActionParams("prepare-environment")).toEqual({ setup: true });

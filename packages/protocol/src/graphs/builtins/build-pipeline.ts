@@ -57,7 +57,7 @@ export const BUILD_PIPELINE_TEMPLATE_STAGES = Object.freeze({
  * (`PullRequestDetection` in `build-pipeline/service-recovery.ts`). The
  * `open-pull-request` node reports it so a gate can route merge conflicts.
  */
-export function pullRequestStateType(): ArtifactTypeDef {
+export function pullRequestStateType(prePublicationResolution = false): ArtifactTypeDef {
   return {
     name: "pull-request-state",
     version: 1,
@@ -67,7 +67,10 @@ export function pullRequestStateType(): ArtifactTypeDef {
       type: "object",
       properties: {
         url: { type: "string" },
-        state: { type: "string", enum: ["open", "merged", "closed"] },
+        state: {
+          type: "string",
+          enum: ["open", "merged", "closed", ...(prePublicationResolution ? ["unpublished"] : [])],
+        },
         hasMergeConflicts: {
           anyOf: [{ type: "boolean" }, { type: "null" }],
           description: "Null while GitHub is still computing mergeability.",
@@ -165,7 +168,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         defaultsFrom: ["resolve"],
       },
     ],
-    types: [pullRequestStateType(), criterionResultType()],
+    types: [pullRequestStateType(true), criterionResultType()],
     inputs: [
       {
         name: "ticket",
@@ -425,15 +428,22 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         kind: "system",
         label: "Open pull request",
         description:
-          "Pushes, then opens the pull request, or updates the one an earlier Ship opened, and reports its merge state.",
+          "Checks the fresh base before pushing and again before publishing. Routes conflicts to local resolution.",
         action: "open-pull-request",
+        params: { prePublicationResolution: true },
         inputs: [
-          { name: "code", type: "workspace@1" },
+          {
+            name: "code",
+            type: "workspace@1",
+            firstIterationFrom: port("verified", "code", "passed"),
+          },
           { name: "description", type: "pr-description@1" },
         ],
         outputs: [
           { name: "pr", type: "pr-result@1" },
           { name: "state", type: "pull-request-state@1" },
+          { name: "code", type: "workspace@1" },
+          { name: "base", type: "text@1" },
         ],
       },
       {
@@ -443,6 +453,7 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         inputs: [
           { name: "state", type: "pull-request-state@1" },
           { name: "code", type: "workspace@1" },
+          { name: "base", type: "text@1" },
         ],
         branches: [
           {
@@ -462,7 +473,10 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
         capabilities: { profile: "builder" },
         workspaceAccess: "write",
         prompt: { builtIn: "resolve-conflicts" },
-        inputs: [{ name: "code", type: "workspace@1" }],
+        inputs: [
+          { name: "code", type: "workspace@1" },
+          { name: "base", type: "text@1" },
+        ],
         outputs: [{ name: "code", type: "workspace@1" }],
       },
       {
@@ -533,10 +547,12 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
       edge("passed-pr", port("verified", "code", "passed"), target("pr", "code")),
       edge("describe-pr-pr", port("describe-pr", "description"), target("pr", "description")),
       edge("pr-conflicts-state", port("pr", "state"), target("has-conflicts", "state")),
+      edge("pr-conflicts-code", port("pr", "code"), target("has-conflicts", "code")),
+      edge("pr-conflicts-base", port("pr", "base"), target("has-conflicts", "base")),
       edge(
-        "passed-conflicts-code",
-        port("verified", "code", "passed"),
-        target("has-conflicts", "code"),
+        "conflicts-resolve-base",
+        port("has-conflicts", "base", "conflicts"),
+        target("resolve", "base"),
       ),
       edge(
         "conflicts-resolve",
@@ -567,9 +583,17 @@ export function buildPipelineBuiltInTemplate(): GraphTemplateV1 {
           { from: port("verify", "code"), to: target("rework", "code") },
         ],
       },
+      {
+        id: "publication",
+        label: "Check and publish",
+        nodes: ["pr", "has-conflicts", "resolve"],
+        until: { path: "pr.state.state", op: "neq", value: "unpublished" },
+        maxIterations: 3,
+        carry: [{ from: port("resolve", "code"), to: target("pr", "code") }],
+      },
     ],
     // build 1 + (rework, prepare, 32 reviewers, consolidate, address-findings, verify) × 3
-    // + describe-pr 1 + resolve 1.
-    limits: { maxAgentSessions: 114, maxConcurrentAgents: MAX_BUILD_PIPELINE_REVIEWERS },
+    // + describe-pr 1 + up to 3 conflict-resolution turns.
+    limits: { maxAgentSessions: 116, maxConcurrentAgents: MAX_BUILD_PIPELINE_REVIEWERS },
   };
 }

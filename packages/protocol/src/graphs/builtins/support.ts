@@ -10,7 +10,7 @@ import type {
 } from "../template-model.js";
 
 /** The revision every built-in template ships at; bump it when a built-in changes. */
-export const GRAPH_BUILT_IN_TEMPLATE_REVISION = 1;
+export const GRAPH_BUILT_IN_TEMPLATE_REVISION = 2;
 
 export function edge(id: string, from: GraphEdgeSource, to: GraphPortTarget): GraphEdgeSpec {
   return { id, from, to };

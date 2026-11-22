@@ -16,6 +16,16 @@
  *
  * `JSON.parse` reports no position under Bun, so the fault is found by a small
  * scanner of its own, run only on text `JSON.parse` already refused.
+ *
+ * One fault is common enough to repair rather than refuse: a single bracket
+ * too many where a large report's last array closes (consolidation agents
+ * closed the root right after `testCoverageGaps` and carried on with
+ * `verdict`; it was the most common reason a first submission failed).
+ * When the scanner pins the fault on one extra closing bracket, the text
+ * without it is offered as a repair candidate. The caller decides whether to
+ * use it. Result tools require an eligible built-in kind, a schema that
+ * refuses undeclared fields at every level ({@link acceptsOnlyDeclaredFields}),
+ * and a repaired object that passes that schema.
  */
 
 /** Characters of excerpt shown before and after the fault. */
@@ -33,7 +43,22 @@ export type JsonTextResultDecode =
        * expected. Kept for the result reminder, which is a durable prompt.
        */
       summary: string;
+      /**
+       * The object the text encodes once the one extra closing bracket the
+       * scanner found is removed, when that is the fault and the text without
+       * it parses. Only a candidate: the caller checks it against the schema.
+       */
+      repaired?: JsonTextRepair;
     };
+
+/** A JSON text made valid by deleting one extra closing bracket. */
+export interface JsonTextRepair {
+  value: Record<string, unknown>;
+  /** The character offset of the bracket that was removed. */
+  offset: number;
+  /** The bracket that was removed. */
+  bracket: "}" | "]";
+}
 
 /** Where a JSON text stops being valid, and why. */
 interface JsonTextFault {
@@ -42,6 +67,11 @@ interface JsonTextFault {
   problem: string;
   /** Advice that only applies to this fault, as one sentence. */
   advice?: string;
+  /**
+   * The offset of a closing bracket that is one too many, when the fault is
+   * exactly that: removing it is the one-character fix the advice names.
+   */
+  extraBracket?: number;
 }
 
 type Frame =
@@ -114,10 +144,14 @@ export function describeJsonTextFault(
   advice?: string;
   excerpt: string;
 } {
-  const fault = findJsonTextFault(text, expected) ?? {
-    offset: text.length,
-    problem: "the text is not valid JSON",
-  };
+  return describeFault(text, findJsonTextFault(text, expected));
+}
+
+function describeFault(
+  text: string,
+  found: JsonTextFault | null,
+): { location: string; advice?: string; excerpt: string } {
+  const fault = found ?? { offset: text.length, problem: "the text is not valid JSON" };
   const { line, column } = lineAndColumn(text, fault.offset);
   return {
     location: `at character ${fault.offset} (line ${line}, column ${column}) ${fault.problem}.`,
@@ -127,7 +161,8 @@ export function describeJsonTextFault(
 }
 
 function refusal(text: string, decoding: string): JsonTextResultDecode {
-  const fault = describeJsonTextFault(text);
+  const found = findJsonTextFault(text);
+  const fault = describeFault(text, found);
   const summary = [
     `\`result\` is a string, and it is not valid JSON${decoding}: ${fault.location}`,
     fault.advice,
@@ -135,11 +170,71 @@ function refusal(text: string, decoding: string): JsonTextResultDecode {
   ]
     .filter(Boolean)
     .join(" ");
+  const repaired = found ? repairExtraBracket(text, found) : undefined;
   return {
     ok: false,
     summary,
     message: `${summary} Near the fault: ${fault.excerpt}`,
+    ...(repaired ? { repaired } : {}),
   };
+}
+
+/**
+ * The text without the one extra closing bracket the scanner found, when it
+ * then parses to an object. Only that one deletion is tried: a text with a
+ * second fault is refused, not guessed at.
+ */
+function repairExtraBracket(text: string, fault: JsonTextFault): JsonTextRepair | undefined {
+  const offset = fault.extraBracket;
+  if (offset === undefined) return undefined;
+  const bracket = text[offset];
+  if (bracket !== "}" && bracket !== "]") return undefined;
+  const parsed = tryParse(text.slice(0, offset) + text.slice(offset + 1));
+  if (!parsed.ok || !isRecord(parsed.value)) return undefined;
+  return { value: parsed.value, offset, bracket };
+}
+
+/**
+ * Whether `schema` refuses every object field it does not declare, at every
+ * level a value can reach. This guards against repairs that introduce
+ * undeclared fields, while different repairs can still satisfy a closed
+ * schema. Anything this does not recognise (a `$ref`, `patternProperties`, a
+ * node that does not constrain its type) counts as open.
+ */
+export function acceptsOnlyDeclaredFields(schema: unknown, depth = 0): boolean {
+  if (depth > 64 || typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    return false;
+  }
+  const node = schema as Record<string, unknown>;
+  if ("$ref" in node || "patternProperties" in node || "allOf" in node) return false;
+  if ("const" in node || Array.isArray(node.enum)) return true;
+  const alternatives = node.anyOf ?? node.oneOf;
+  if (alternatives !== undefined) {
+    return (
+      Array.isArray(alternatives) &&
+      alternatives.length > 0 &&
+      alternatives.every((alternative) => acceptsOnlyDeclaredFields(alternative, depth + 1))
+    );
+  }
+  const types = typeof node.type === "string" ? [node.type] : node.type;
+  if (!Array.isArray(types) || types.length === 0) return false;
+  for (const type of types) {
+    if (type === "object") {
+      if (node.additionalProperties !== false) return false;
+      const properties = node.properties ?? {};
+      if (typeof properties !== "object" || properties === null) return false;
+      for (const property of Object.values(properties)) {
+        if (!acceptsOnlyDeclaredFields(property, depth + 1)) return false;
+      }
+    } else if (type === "array") {
+      if ("prefixItems" in node || !acceptsOnlyDeclaredFields(node.items, depth + 1)) {
+        return false;
+      }
+    } else if (typeof type !== "string") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function lineAndColumn(text: string, offset: number): { line: number; column: number } {
@@ -314,6 +409,7 @@ export function findJsonTextFault(
         offset: pos,
         problem: `an extra ${quote(char)} follows a complete JSON value`,
         advice: `Remove the extra ${quote(char)} at character ${pos}.`,
+        extraBracket: pos,
       };
     }
     if (closer) {
@@ -326,6 +422,7 @@ export function findJsonTextFault(
           offset: pos,
           problem: `more text follows, but the \`${closer.char}\` at character ${closer.offset} already closed the top-level value${after}`,
           advice: `There may be one closing \`${closer.char}\` too many at or before character ${closer.offset}: remove the extra one so the ${closer.char === "}" ? "fields" : "items"} that follow stay inside the top-level value.`,
+          extraBracket: closer.offset,
         };
       }
     }
@@ -428,6 +525,7 @@ export function findJsonTextFault(
               ? {
                   advice:
                     "That `]` closes an array that is not open here: an object's `}` is probably missing before it, or the `]` is extra.",
+                  extraBracket: pos,
                 }
               : {}),
           };
@@ -472,6 +570,7 @@ export function findJsonTextFault(
               ? {
                   advice:
                     "That `}` closes an object that is not open here: an array's `]` is probably missing before it, or the `}` is extra.",
+                  extraBracket: pos,
                 }
               : {}),
           };

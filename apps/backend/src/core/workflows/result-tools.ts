@@ -28,7 +28,7 @@ import {
 // Registers the built-in kinds the registry functions below look up.
 import "./result-contracts.js";
 import { graphOutputContext } from "./result-graph-output.js";
-import { decodeJsonTextResult } from "./result-json-text.js";
+import { acceptsOnlyDeclaredFields, decodeJsonTextResult } from "./result-json-text.js";
 import {
   workflowResultAnySlotSchema,
   workflowResultKindDefinition,
@@ -174,6 +174,22 @@ function countInputRefusal(
 type DecodedResultArgument =
   { ok: true; result: unknown } | { ok: false; refusal: WorkflowResultSubmission; reason: string };
 
+/** The checks for parsed JSON text and for a candidate repaired from invalid text. */
+interface ResultAcceptance {
+  check: (value: unknown) => true | string;
+  checkRepair: ((value: unknown) => true | string) | undefined;
+}
+
+function resultAcceptance(schema: JsonSchema, kind: WorkflowResultKind): ResultAcceptance {
+  const check = jsonSchemaFieldCheck(schema);
+  // A custom graph port can accept distinct single-bracket repairs even with
+  // a closed schema, for example by allowing both strings and nested arrays.
+  return {
+    check,
+    checkRepair: kind !== "graph-output" && acceptsOnlyDeclaredFields(schema) ? check : undefined,
+  };
+}
+
 /**
  * `result` as the tool's handler should use it. An object (already checked by
  * the input schema) or a missing value passes through. A string is JSON text:
@@ -181,14 +197,30 @@ type DecodedResultArgument =
  * gives an object. Text that does not parse is refused with where it breaks,
  * so the model can repair that one point (issue #2470). Like an input-schema
  * refusal, this uses no correction attempt.
+ *
+ * Text whose only fault is one closing bracket too many is used without that
+ * bracket for eligible built-in result kinds, when the closed acceptance
+ * schema accepts the candidate. A stray closing bracket was the most common
+ * reason a consolidation agent's first submission failed, forcing it to resend
+ * the report. A repaired object that fails the check gets the original
+ * JSON-text refusal, because the repair itself may be what broke it, followed
+ * by what the check found in the repaired object, so a report with a second
+ * fault can be fixed in one resend.
  */
 function decodeResultArgument(
   result: unknown,
-  check: (value: unknown) => true | string,
+  acceptance: ResultAcceptance,
 ): DecodedResultArgument {
   if (typeof result !== "string") return { ok: true, result };
   const decoded = decodeJsonTextResult(result);
   if (!decoded.ok) {
+    let afterRepair = "";
+    if (decoded.repaired && acceptance.checkRepair) {
+      const repairedCheck = acceptance.checkRepair(decoded.repaired.value);
+      if (repairedCheck === true) return { ok: true, result: decoded.repaired.value };
+      // Named too, so one resend can fix both faults.
+      afterRepair = ` If the extra bracket is the \`${decoded.repaired.bracket}\` at character ${decoded.repaired.offset}, the object without it still does not match the contract: ${repairedCheck}.`;
+    }
     return {
       ok: false,
       reason: decoded.summary,
@@ -197,13 +229,13 @@ function decodeResultArgument(
         error: {
           code: "invalid_result",
           nextAction: "correct",
-          message: decoded.message,
+          message: `${decoded.message}${afterRepair}`,
           issues: [{ path: "$", code: "invalid_json_text", message: decoded.summary }],
         },
       },
     };
   }
-  const checked = check(decoded.value);
+  const checked = acceptance.check(decoded.value);
   if (checked === true) return { ok: true, result: decoded.value };
   const reason = `\`result\` was sent as a string of JSON text. It parses, but the object does not match the contract: ${checked}`;
   return {
@@ -401,7 +433,7 @@ export function registerWorkflowResultSlotTools(
         : publishedSchema;
     // A string is decoded by the handler, which reports where JSON text breaks.
     const resultSchema = jsonSchemaField(publishedSchema, acceptanceSchema, { jsonText: true });
-    const acceptResult = jsonSchemaFieldCheck(acceptanceSchema);
+    const acceptResult = resultAcceptance(acceptanceSchema, scope.kind);
     const onRefused = countInputRefusal(workflowResults, scope, [scope.workflowResultKey]);
     const graphPort = graphOutputContext(view);
     const port = portDescription(scope);
@@ -592,7 +624,7 @@ async function brokerAttempt(
   capability: string,
   kind?: WorkflowResultKind,
   resultKey?: string,
-): Promise<string | null> {
+): Promise<{ key: string; kind: WorkflowResultKind } | null> {
   const authorized = await workflowResults.authenticateCapability(capability);
   let key: string | undefined;
   if (authorized) {
@@ -626,12 +658,12 @@ async function brokerAttempt(
   if (binding?.provider !== "opencode" || (kind !== undefined && binding.kind !== kind)) {
     return null;
   }
-  return key;
+  return { key, kind: binding.kind };
 }
 
 /** Any object: the broker's validation tool serves every kind, and the service checks the slot. */
 const BROKER_VALIDATION_RESULT_SCHEMA = { type: "object" } as const;
-const acceptBrokerValidationResult = jsonSchemaFieldCheck(BROKER_VALIDATION_RESULT_SCHEMA);
+const checkBrokerValidationResult = jsonSchemaFieldCheck(BROKER_VALIDATION_RESULT_SCHEMA);
 
 /**
  * Registers the stable OpenCode broker surface.
@@ -665,15 +697,10 @@ export function registerWorkflowResultBrokerTools(
       },
       async ({ resultKey, capability, finding }) => {
         try {
-          const expectedKey = await brokerAttempt(
-            workflowResults,
-            scope,
-            capability,
-            "review-report",
-          );
-          if (!expectedKey) return findingResponse(findingDenied());
-          if (resultKey !== expectedKey) {
-            return findingResponse(findingResultKeyMismatch(expectedKey));
+          const attempt = await brokerAttempt(workflowResults, scope, capability, "review-report");
+          if (!attempt) return findingResponse(findingDenied());
+          if (resultKey !== attempt.key) {
+            return findingResponse(findingResultKeyMismatch(attempt.key));
           }
           return findingResponse(await findings.report(scope, resultKey, finding));
         } catch {
@@ -683,9 +710,11 @@ export function registerWorkflowResultBrokerTools(
     );
   }
 
+  const acceptances = new Map<WorkflowResultKind, ResultAcceptance>();
   for (const kind of WORKFLOW_RESULT_KINDS) {
     const anySlotSchema = workflowResultAnySlotSchema(kind);
-    const acceptResult = jsonSchemaFieldCheck(anySlotSchema);
+    const acceptResult = resultAcceptance(anySlotSchema, kind);
+    acceptances.set(kind, acceptResult);
     server.registerTool(
       workflowResultToolName(kind),
       {
@@ -713,15 +742,9 @@ export function registerWorkflowResultBrokerTools(
       },
       async ({ resultKey, capability, result, validatedDigest }) => {
         try {
-          const expectedKey = await brokerAttempt(
-            workflowResults,
-            scope,
-            capability,
-            kind,
-            resultKey,
-          );
-          if (!expectedKey) return resultResponse(capabilityDenied());
-          if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
+          const attempt = await brokerAttempt(workflowResults, scope, capability, kind, resultKey);
+          if (!attempt) return resultResponse(capabilityDenied());
+          if (resultKey !== attempt.key) return resultResponse(resultKeyMismatch(attempt.key));
           const decoded = decodeResultArgument(result, acceptResult);
           if (!decoded.ok) {
             recordRefusal(workflowResults, scope, resultKey, decoded.reason);
@@ -775,16 +798,21 @@ export function registerWorkflowResultBrokerTools(
     },
     async ({ resultKey, capability, result }) => {
       try {
-        const expectedKey = await brokerAttempt(
+        const attempt = await brokerAttempt(
           workflowResults,
           scope,
           capability,
           undefined,
           resultKey,
         );
-        if (!expectedKey) return resultResponse(capabilityDenied());
-        if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
-        const decoded = decodeResultArgument(result, acceptBrokerValidationResult);
+        if (!attempt) return resultResponse(capabilityDenied());
+        if (resultKey !== attempt.key) return resultResponse(resultKeyMismatch(attempt.key));
+        // Keep the generic object check for valid JSON text. A repair needs
+        // the same kind-specific check as submit, after authenticating the slot.
+        const decoded = decodeResultArgument(result, {
+          check: checkBrokerValidationResult,
+          checkRepair: acceptances.get(attempt.kind)?.checkRepair,
+        });
         if (!decoded.ok) {
           recordRefusal(workflowResults, scope, resultKey, decoded.reason);
           return resultResponse(decoded.refusal);
@@ -817,15 +845,15 @@ export function registerWorkflowResultBrokerTools(
     },
     async ({ resultKey, capability }) => {
       try {
-        const expectedKey = await brokerAttempt(
+        const attempt = await brokerAttempt(
           workflowResults,
           scope,
           capability,
           undefined,
           resultKey,
         );
-        if (!expectedKey) return resultResponse(capabilityDenied());
-        if (resultKey !== expectedKey) return resultResponse(resultKeyMismatch(expectedKey));
+        if (!attempt) return resultResponse(capabilityDenied());
+        if (resultKey !== attempt.key) return resultResponse(resultKeyMismatch(attempt.key));
         const status = await workflowResults.status(scope, resultKey);
         if (status) {
           return {

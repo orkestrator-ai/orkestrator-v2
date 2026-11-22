@@ -3,6 +3,7 @@ import {
   type DiagnosticsContainerLogOption,
   type DiagnosticsManifestAbsent,
 } from "@orkestrator/protocol/backend-diagnostics";
+import { acpContainerUnavailableReason, isAcpLocalServerKind } from "./acp-provider-launch.js";
 import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
 import { containerServerLogFile } from "./commands-containers.js";
 import {
@@ -64,7 +65,10 @@ interface ServerLogFile {
 
 /** Every file a container server writes, current run and the one before it. */
 export function containerServerLogFiles(): ServerLogFile[] {
-  return LOCAL_SERVER_KINDS.flatMap((kind) => {
+  // A kind with no container bridge (Antigravity) has no log to read.
+  return LOCAL_SERVER_KINDS.filter(
+    (kind) => !isAcpLocalServerKind(kind) || !acpContainerUnavailableReason(kind),
+  ).flatMap((kind) => {
     const file = containerServerLogFile(kind);
     return [
       { kind, file, previous: false },

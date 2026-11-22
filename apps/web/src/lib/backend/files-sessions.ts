@@ -751,7 +751,8 @@ export function createFilesSessionsApi(client: BackendClient) {
       environmentId,
       refresh: options.refresh === true,
     });
-    return catalogs.filter(
+    // Defensive: an older or mocked backend may answer with no list at all.
+    return (catalogs ?? []).filter(
       (catalog): catalog is AgentExtensionCatalog => catalog.agent !== "antigravity",
     );
   }

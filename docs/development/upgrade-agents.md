@@ -2754,6 +2754,55 @@ The `stable` pointer, not the binary, decides the channel. `grok --version` for
 without being rebuilt, so the label is not evidence that the pin is wrong. Compare
 against the pointer (and `…/cli/alpha`, which may already be ahead) instead.
 
+## Antigravity (ACP)
+
+Antigravity runs on the ACP bridge (`bridges/acp-bridge/`) with the
+launcher record in `apps/backend/src/core/acp-provider-launch.ts` and its
+quirks in `bridges/acp-bridge/src/antigravity-acp.ts`
+([agent-engines.md](../architecture/agent-engines.md#antigravity)).
+
+### What 1.5.12 was observed to do
+
+Read with the release binary and a throwaway `HOME`, with no login:
+
+- `initialize` answers protocol 1, `loadSession`, `sessionCapabilities`
+  `resume`, `close`, `load`, `list`, `promptCapabilities` `image` and
+  `embeddedContext`, `_meta.antigravity.systemPrompt.append: true`, and auth
+  methods `oauth-personal`, `oauth-business`, `gemini-api-key` and
+  `agent-platform`. `mcpCapabilities.http` appears only with
+  `--process-per-session`.
+- `session/new` without a login answers `-32000 Authentication required` at
+  once. `authenticate` with `oauth-personal` and no login waits on an
+  interactive sign-in; it answered "No browser is available … Run agy acp --login"
+  (`-32603`) with no display and `-32800 Sign-in was cancelled`
+  when stdin closed.
+
+Not observed (no login was available): a signed-in session's
+`configOptions`, model and thinking IDs, mode IDs, the question wire form,
+tool-call metadata, usage fields, steering, HTTP MCP tool delivery, and
+whether a stored login serves session requests without `authenticate` (the
+bridge assumes it does). Record each when it is first checked live.
+
+### How to upgrade Antigravity
+
+1. Pick the release on `google-antigravity/antigravity-cli` and read its
+   asset digests: `gh api repos/google-antigravity/antigravity-cli/releases/tags/<version>`.
+2. Set `PINNED_TOOLCHAIN_VERSIONS.antigravity` in
+   `packages/toolchain/src/manifest.ts` and each `antigravityArtifact` row:
+   the archive size and SHA-256 (the release's own digest), and the size and
+   SHA-256 of the `antigravity` executable inside it (extract each of the four
+   macOS/Linux archives into its own empty directory and hash the file).
+3. Mirror the version into `ANTIGRAVITY_CLI_VERSION` and the linux digests
+   into the `ANTIGRAVITY_SHA` literals in `docker/Dockerfile`, and the
+   version into `PROVIDER_STATE_TRACED_VERSIONS` in
+   `apps/backend/src/core/container-state-layout.ts`.
+4. Re-run the `initialize` probe above (`agy acp --process-per-session` with
+   a throwaway `HOME`), compare it with the list, and check that
+   `AGY_CLI_DISABLE_AUTO_UPDATE` is still honoured.
+5. With a signed-in host, smoke-test an interactive tab: a prompt, a native
+   edit, a question, Stop, reload and resume, and the inactive-environment
+   path.
+
 ## Repository-wide validation
 
 A pin change can add a native goal command or tool, or move a turn edge the goal

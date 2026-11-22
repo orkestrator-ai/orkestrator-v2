@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
-import { openAgentSignInTerminal, readGrokSignIn, readPiSignIn } from "./agent-sign-ins.js";
+import {
+  antigravityOAuthTokenFile,
+  openAgentSignInTerminal,
+  readAntigravitySignIn,
+  readGrokSignIn,
+  readHostAgentSignIns,
+  readPiSignIn,
+} from "./agent-sign-ins.js";
 import type { Environment } from "./models.js";
 
 let home: string;
@@ -15,6 +22,21 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
+});
+
+describe("readAntigravitySignIn", () => {
+  test("only the keyring-less token file proves a login; its absence is unknown", async () => {
+    // agy keeps a Google login in the OS keyring, so no file is not "signed out".
+    expect(await readAntigravitySignIn({ HOME: home })).toBeUndefined();
+    expect((await readHostAgentSignIns({ HOME: home })).antigravity).toBeUndefined();
+    // An API key in the environment is not the login the bridge uses.
+    expect(await readAntigravitySignIn({ HOME: home, GEMINI_API_KEY: "key" })).toBeUndefined();
+    await fs.mkdir(path.dirname(antigravityOAuthTokenFile(home)), { recursive: true });
+    await fs.writeFile(antigravityOAuthTokenFile(home), '{"token":{"access_token":"secret"}}');
+    const signIn = await readAntigravitySignIn({ HOME: home });
+    expect(signIn).toEqual({ state: "signed-in", source: "Stored login" });
+    expect(JSON.stringify(signIn)).not.toContain("secret");
+  });
 });
 
 describe("readGrokSignIn", () => {
@@ -116,6 +138,13 @@ describe("openAgentSignInTerminal", () => {
 
     await openAgentSignInTerminal(context, "pi", { environmentId: "older", launchTerminalJob });
     expect(launched[1]).toMatchObject({ environmentId: "older", data: "pi\n" });
+    await openAgentSignInTerminal(context, "antigravity", { launchTerminalJob });
+    expect(launched.at(-1)).toMatchObject({
+      tabType: "plain",
+      title: "Antigravity sign-in",
+      data: "AGY_CLI_DISABLE_AUTO_UPDATE=1 agy acp --login\n",
+    });
+    launched.pop();
     // A container is not this machine's login.
     await openAgentSignInTerminal(context, "pi", { environmentId: "container", launchTerminalJob });
     expect(launched[2]).toMatchObject({ environmentId: "newer" });

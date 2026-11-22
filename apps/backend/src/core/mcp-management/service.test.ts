@@ -46,6 +46,7 @@ describe("McpManagementService — catalog", () => {
   test("lists backend targets for every provider and environment targets on request", async () => {
     const backend = await fixture.service.listTargets({});
     expect(backend.targets.map((target) => target.provider).sort()).toEqual([
+      "antigravity",
       "claude",
       "codex",
       "cursor",

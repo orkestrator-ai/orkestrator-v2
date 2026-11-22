@@ -61,7 +61,10 @@ describe("provider state layout re-trace", () => {
 
   test("every provider has preserved state and a preservation claim", () => {
     for (const provider of AGENT_PLATFORMS) {
-      expect(PROVIDER_STATE_LAYOUT.some((entry) => entry.provider === provider)).toBe(true);
+      // Antigravity does not run in containers yet, so nothing of it is preserved.
+      expect(PROVIDER_STATE_LAYOUT.some((entry) => entry.provider === provider)).toBe(
+        provider !== "antigravity",
+      );
       const claim = PROVIDER_PRESERVATION[provider];
       // A partial claim must say what is lost; a full one must not hedge.
       expect(claim.limitations === null).toBe(claim.level === "full");

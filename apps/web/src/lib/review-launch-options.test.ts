@@ -71,6 +71,7 @@ describe("buildReviewModelCatalog", () => {
       // Concrete OpenCode models come from the durable project cache, which
       // project-aware launchers overlay on this placeholder.
       opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
+      antigravity: [{ id: "default", name: "Antigravity default", reasoningEfforts: [] }],
     });
   });
 

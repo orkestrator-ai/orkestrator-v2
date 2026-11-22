@@ -155,8 +155,9 @@ describe("the tool", () => {
     ]);
   });
 
-  test("every native platform advertises the command's capability", () => {
-    for (const agent of AGENT_PLATFORMS) {
+  test("every qualified native platform advertises the command's capability", () => {
+    expect(nativeAgentCapabilities("antigravity").actions?.subork).toBeUndefined();
+    for (const agent of AGENT_PLATFORMS.filter((platform) => platform !== "antigravity")) {
       expect(nativeAgentCapabilities(agent).actions?.subork).toBe(true);
     }
     expect(AGENT_SUBORK_TOOL_NAMES).toEqual([SUBORK_TOOL_NAME]);

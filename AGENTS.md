@@ -3,7 +3,7 @@
 This file provides specific guidance for AI agents working on this codebase.
 The living documentation catalog is [`docs/README.md`](docs/README.md).
 
-Orkestrator AI is an Electron desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, OpenCode, Cursor Agent, Grok Build, and Pi.
+Orkestrator AI is an Electron desktop application for managing isolated Docker-based and local-worktree development environments for Claude Code, Codex, OpenCode, Cursor Agent, Grok Build, Pi, and Antigravity.
 
 ## Read before changing these areas
 
@@ -1611,12 +1611,12 @@ seeding each one from the host installation when it has the same pinned version
 so the default normally costs a local copy rather than a download, and enabling
 that same selection in the profile so the platforms it provisions are the ones
 the app offers. Narrow it with `--agent-platforms cursor,grok` when a run does
-not need all six; the flag is rejected by `mise run dev`, which keeps the
+not need all seven; the flag is rejected by `mise run dev`, which keeps the
 durable per-installation selection. An agent-test profile runs only agents
 present in its own managed toolchain. Claude, Codex, OpenCode and Pi fall back
 to a PATH lookup only outside agent-test profiles; inside one, a missing agent
 fails with `<Agent> is not installed in this agent-test profile's toolchain`.
-Cursor and Grok resolve only through the managed toolchain everywhere.
+Cursor, Grok and Antigravity resolve only through the managed toolchain everywhere.
 Anything the host cannot seed is downloaded at
 startup by the launcher, before Electron, with Bun's `fetch`. Chromium's
 download aborts whenever Docker changes an interface. This needs network access; an agent-test profile that cannot prepare

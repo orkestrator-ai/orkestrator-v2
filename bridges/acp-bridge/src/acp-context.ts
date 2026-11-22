@@ -1072,9 +1072,12 @@ export class AcpProcess {
       });
       // Read before the child starts, so an edit racing the spawn is reported
       // as a change rather than missed.
-      this.mcpConfigAtSpawn = grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(
-        () => undefined,
-      );
+      // Grok's MCP files. Antigravity's configuration is not read under
+      // Grok's paths (its own is not qualified).
+      this.mcpConfigAtSpawn =
+        providerConfig.id !== ANTIGRAVITY_PROVIDER_ID
+          ? grokMcpConfigFingerprint(currentGrokMcpConfigFiles()).catch(() => undefined)
+          : Promise.resolve(undefined);
       const env = providerEnv(providerConfig, {
         trustProject,
         ...(nativeAgentWithholdsGitHubCredential(policy)
@@ -1745,6 +1748,11 @@ const grokMcpConfigWatcher = new GrokMcpConfigWatcher(currentGrokMcpConfigFiles)
  * they differ. Content-free; never a path.
  */
 export async function publicMcpConfigStatus(): Promise<GrokMcpConfigStatus> {
+  // Grok's saved files say nothing about Antigravity's configuration, so
+  // nothing is claimed for it beyond what the child reported.
+  if (providerConfig.id === ANTIGRAVITY_PROVIDER_ID) {
+    return grokMcpConfigStatus(undefined, undefined);
+  }
   const current = await grokMcpConfigWatcher.current().catch(() => undefined);
   return grokMcpConfigStatus(agentRuntime.mcpLoaded, current);
 }

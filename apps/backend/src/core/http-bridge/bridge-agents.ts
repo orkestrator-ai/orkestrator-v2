@@ -22,3 +22,8 @@ export function servesSharedBridgeSurface(
 ): agent is "cursor" | "grok" | "pi" | "antigravity" {
   return agent === "cursor" || agent === "pi" || isAcpBridgeAgent(agent);
 }
+
+/** The short name an ACP interaction card uses ("Grok", "Antigravity"). */
+export function acpBridgeLabel(agent: string): string {
+  return agent === "antigravity" ? "Antigravity" : "Grok";
+}

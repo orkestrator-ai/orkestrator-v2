@@ -111,8 +111,20 @@ describe("coordinator provider qualification", () => {
     expect(pi.reason).toBeUndefined();
   });
 
+  test("Antigravity is registered but never qualified to run a coordinator", () => {
+    for (const tierSetting of ["enforced", "provider-configured", "advisory"] as const) {
+      expect(
+        coordinatorProviderQualification("antigravity", {
+          tierSetting,
+          host: sandboxed,
+          enabledPlatforms: everyPlatform,
+        }),
+      ).toMatchObject({ tier: "unavailable", available: false, delegation: false });
+    }
+  });
+
   test("delegation follows the round trip, not just the outbound MCP call", () => {
-    for (const platform of AGENT_PLATFORMS) {
+    for (const platform of AGENT_PLATFORMS.filter((candidate) => candidate !== "antigravity")) {
       expect(
         coordinatorProviderQualification(platform, {
           tierSetting: "advisory",
@@ -227,7 +239,8 @@ describe("coordinator provider qualification", () => {
       unsandboxed,
       { claudeSandbox: false, claudeSandboxReason: "x." },
     ]) {
-      for (const platform of everyPlatform) {
+      // Antigravity is withheld before the matrix is asked (tested above).
+      for (const platform of everyPlatform.filter((candidate) => candidate !== "antigravity")) {
         const qualification = coordinatorProviderQualification(platform, {
           host,
           tierSetting: "advisory",

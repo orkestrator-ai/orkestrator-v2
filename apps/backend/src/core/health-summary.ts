@@ -1,10 +1,17 @@
+import { createHash } from "node:crypto";
 import { uptime as hostUptimeSeconds } from "node:os";
 import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
 import { bridgeRestarts, type BridgeRestartSnapshot } from "./bridge-restarts.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
-import { hostRestartedAfter } from "./host-boot.js";
+import { type BootEvidence, hostRestartedAfter, nextBackendStart } from "./host-boot.js";
+import {
+  hostBootSessionId,
+  isProcessAlive,
+  isRecordedProcessAlive,
+  processStartIdentity,
+} from "./process-identity.js";
 import { recurringWorkMetrics } from "./recurring/index.js";
 import type { DatabaseSummaryCache } from "./database-summary.js";
 import type { StorageDatabase } from "./storage-database.js";
@@ -19,11 +26,9 @@ const log = createLogger("backend");
  *
  * One row per sample every {@link HEALTH_SAMPLE_INTERVAL_MS}, plus a `started`
  * marker at start and a `clean-exit` marker as the last shutdown step. Rows hold
- * numbers, recurring-work job kinds and bridge provider names (fixed
- * vocabularies) only. The backend's
- * identity is its pid and start time, so a row needs no string to say whose it
- * is. Backends sharing a directory each write their own rows, under one bound:
- * a second backend's health can be the thing someone is investigating.
+ * numbers, fixed vocabularies and opaque start identities. The backend's
+ * rows are grouped by its pid and start time. Backends sharing a directory
+ * each write their own rows under one bound so either run can be investigated.
  *
  * A marker-less run reads as crashed, which is right for a kill, and also what
  * a shutdown failing late looks like. The `started` row also holds the host's
@@ -91,6 +96,9 @@ export type HealthRow =
        * backend wrote, and when the host's uptime could not be read.
        */
       bootAt?: number;
+      /** Opaque boot session and process-start hashes, when available. */
+      bootId?: string;
+      processStart?: string;
     }
   | { kind: "clean-exit"; at: number; pid: number; startedAt: number }
   | ({ kind: "sample"; at: number; pid: number; startedAt: number } & HealthSample);
@@ -141,24 +149,28 @@ export function readHealthRows(database: StorageDatabase): HealthRow[] {
 }
 
 /**
- * How the most recent earlier run ended. A run with no `clean-exit` crashed,
- * unless it looks alive: another backend sharing the directory, whose pid
- * answers and whose last row is recent. That one is skipped rather than reported
- * as a crash, and the pid and the row's age together cover a reused pid. A run
- * with no `clean-exit` whose host booted after its last row (this backend's
- * boot, or one a later run recorded) is `host-restarted` (`host-boot.ts`).
+ * How the most recent earlier run ended. Check the immediate successor's boot
+ * before probing the PID, which may already have been reused on the new boot.
  */
 export function previousRunOf(
   rows: readonly HealthRow[],
-  self: { pid: number; startedAt: number; bootAt?: number | null },
+  self: BootEvidence & { pid: number; startedAt: number },
   now: number,
   isAlive: (pid: number) => boolean,
+  identity: (pid: number) => string | null = opaqueProcessStart,
 ): PreviousRun {
   const runs = new Map<
     string,
-    { pid: number; startedAt: number; lastAt: number; clean: boolean; bootAt: number | null }
+    {
+      pid: number;
+      startedAt: number;
+      lastAt: number;
+      clean: boolean;
+      bootAt: number | null;
+      bootId: string | null;
+      processStart: string | null;
+    }
   >();
-  const bootTimes: (number | null)[] = [self.bootAt ?? null];
   for (const row of rows) {
     if (row.pid === self.pid && row.startedAt === self.startedAt) continue;
     const key = `${row.pid}:${row.startedAt}`;
@@ -168,25 +180,32 @@ export function previousRunOf(
       lastAt: row.at,
       clean: false,
       bootAt: null,
+      bootId: null,
+      processStart: null,
     };
     run.lastAt = Math.max(run.lastAt, row.at);
     run.clean ||= row.kind === "clean-exit";
-    if (row.kind === "started" && typeof row.bootAt === "number") {
-      run.bootAt = row.bootAt;
-      bootTimes.push(row.bootAt);
+    if (row.kind === "started") {
+      run.bootAt = row.bootAt ?? null;
+      run.bootId = row.bootId ?? null;
+      run.processStart = row.processStart ?? null;
     }
     runs.set(key, run);
   }
   const newestFirst = [...runs.values()].sort((left, right) => right.startedAt - left.startedAt);
+  const starts = [...runs.values(), self].sort((left, right) => left.startedAt - right.startedAt);
   for (const run of newestFirst) {
-    if (!run.clean && now - run.lastAt < LIVE_BACKEND_WINDOW_MS && isAlive(run.pid)) continue;
-    const outcome: PreviousRunOutcome = run.clean
-      ? "clean"
-      : hostRestartedAfter(run.lastAt, run.bootAt, bootTimes)
-        ? "host-restarted"
-        : "crashed";
+    const restarted =
+      !run.clean && hostRestartedAfter(run.lastAt, run, nextBackendStart(starts, run));
+    if (
+      !run.clean &&
+      !restarted &&
+      now - run.lastAt < LIVE_BACKEND_WINDOW_MS &&
+      isRecordedProcessAlive(run.pid, run.processStart, isAlive, identity)
+    )
+      continue;
     return {
-      outcome,
+      outcome: run.clean ? "clean" : restarted ? "host-restarted" : "crashed",
       ranForMs: Math.max(0, run.lastAt - run.startedAt),
       lastSeenAgoMs: Math.max(0, now - run.lastAt),
     };
@@ -233,14 +252,12 @@ export function hostBootAt(
   }
 }
 
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM: it exists but belongs to someone else.
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
+function hashIdentity(identity: string | null): string | null {
+  return identity === null ? null : createHash("sha256").update(identity).digest("hex");
+}
+
+function opaqueProcessStart(pid: number): string | null {
+  return hashIdentity(processStartIdentity(pid));
 }
 
 export interface HealthSummaryOptions {
@@ -258,6 +275,8 @@ export interface HealthSummaryOptions {
   bridgeRestarts?: () => BridgeRestartSnapshot;
   /** When the host booted; {@link hostBootAt} by default. Null when unknown. */
   bootAt?: () => number | null;
+  bootId?: () => string | null;
+  processStart?: (pid: number) => string | null;
 }
 
 export class HealthSummary {
@@ -287,13 +306,17 @@ export class HealthSummary {
     } catch {
       // Unknown: the next start then judges this run without it.
     }
+    const bootId = (this.options.bootId ?? (() => hashIdentity(hostBootSessionId())))();
+    const processStart = this.options.processStart ?? opaqueProcessStart;
+    const startIdentity = processStart(this.pid);
     try {
       const now = this.now();
       previous = previousRunOf(
         readHealthRows(this.options.database()),
-        { pid: this.pid, startedAt: this.startedAt, bootAt },
+        { pid: this.pid, startedAt: this.startedAt, bootAt, bootId },
         now,
-        this.options.isAlive ?? processIsAlive,
+        this.options.isAlive ?? isProcessAlive,
+        processStart,
       );
       if (previous.outcome === "crashed" || previous.outcome === "host-restarted") {
         log.warn("previous-run", previous);
@@ -305,6 +328,8 @@ export class HealthSummary {
       kind: "started",
       ...this.identity(),
       ...(bootAt !== null ? { bootAt } : {}),
+      ...(bootId !== null ? { bootId } : {}),
+      ...(startIdentity !== null ? { processStart: startIdentity } : {}),
     });
     this.timer = setInterval(
       () => this.sample(),

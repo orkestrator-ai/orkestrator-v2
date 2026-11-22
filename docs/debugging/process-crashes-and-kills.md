@@ -91,6 +91,8 @@ A process cannot see who SIGKILLed it. The kernel audit system can. It records
 the sender (`comm`, `exe`, `pid`, `ppid`) and the target (`opid`, `ocomm`) of
 every matching `kill`.
 
+Check `sudo auditctl -l` first. If an identical rule already exists,
+leave it in place and omit that rule from both the setup and cleanup below.
 Save this as a file and run it with `sudo bash`. Pasting the loop into some
 terminals leaves `$sig` empty, and auditctl then gets `-F a1=` and refuses
 the rule.
@@ -100,7 +102,6 @@ the rule.
 # ork-audit-on.sh: record every SIGKILL and SIGTERM sent by UID 1000
 set -euo pipefail
 systemctl start auditd
-auditctl -b 8192
 for sig in 9 15; do
   # kill / tkill / pidfd_send_signal carry the signal in argument 1; tgkill in argument 2
   auditctl -a always,exit -F arch=b64 -S kill -S tkill -S pidfd_send_signal -F a1=$sig -F uid=1000 -k ork-kill
@@ -146,11 +147,21 @@ the sender has already exited, use the `proctitle` and the transcripts from
 section 2. A negative `a0` (for example `0xffe673bb`) means the call targeted a
 whole process group, `-a0`.
 
-Turn it off (the rules also disappear on reboot):
+Save the corresponding cleanup as `ork-audit-off.sh` and run it with
+`sudo bash ork-audit-off.sh`. It removes the four rules added above. Leave the
+audit service and any existing audit policy in place. Use `sudo auditctl -l`
+before setup and after cleanup to verify that the original rules remain.
 
 ```bash
-sudo auditctl -D        # deletes every audit rule; use -d with the same arguments to remove only these
-sudo systemctl stop auditd
+#!/usr/bin/env bash
+# ork-audit-off.sh
+set -uo pipefail
+status=0
+for sig in 9 15; do
+  auditctl -d always,exit -F arch=b64 -S kill -S tkill -S pidfd_send_signal -F a1=$sig -F uid=1000 -k ork-kill || status=1
+  auditctl -d always,exit -F arch=b64 -S tgkill -F a2=$sig -F uid=1000 -k ork-kill || status=1
+done
+exit "$status"
 ```
 
 `killsnoop` from `bpfcc-tools` shows the same information live, and also needs

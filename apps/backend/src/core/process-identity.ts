@@ -9,14 +9,36 @@ import { readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { runCommand } from "./shell.js";
 
+/** Linux's kernel-generated ID for this boot, when readable. */
+function linuxBootId(): string | null {
+  if (process.platform !== "linux") return null;
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The kernel's boot-session UUID. It remains stable through wall-clock changes. */
+export function hostBootSessionId(): string | null {
+  if (process.platform === "linux") return linuxBootId();
+  if (process.platform !== "darwin") return null;
+  const result = spawnSync("/usr/sbin/sysctl", ["-n", "kern.bootsessionuuid"], {
+    encoding: "utf8",
+    timeout: 1_000,
+    maxBuffer: 4096,
+  });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
 /** A process's start time, so a later process reusing its PID is not mistaken for it. */
 export function processStartIdentity(pid: number): string | null {
   try {
     if (process.platform === "linux") {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       const startTicks = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-      const boot = readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
-      return startTicks ? `${boot}:${startTicks}` : null;
+      const boot = linuxBootId();
+      return startTicks && boot ? `${boot}:${startTicks}` : null;
     }
     const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",

@@ -12,6 +12,7 @@ import path from "node:path";
 import type { BundleData } from "./bundle.js";
 import { diagnosticSource, type MachineSignals, observedSourceHours } from "./fleet.js";
 import {
+  HOST_RESTARTED_SIGNATURE,
   compareVersions,
   type ExtractedSignals,
   type MeasureKind,
@@ -305,7 +306,9 @@ export function fixCarrier(
 
 /** The signal's measure over the versions that carry the fix, and how long they were watched. */
 export function postFixMeasure(
-  entry: Pick<LedgerEntry, "fixedIn" | "fixedAfter" | "source">,
+  entry: Pick<LedgerEntry, "fixedIn" | "fixedAfter"> & {
+    source: keyof ExtractedSignals["observedHours"];
+  },
   signal: Signal | undefined,
   kind: MeasureKind,
   observedHours: ExtractedSignals["observedHours"],
@@ -354,7 +357,10 @@ function diagnosticBaselines(machines: readonly MachineSignals[]): Map<string, D
       };
       group.contributors.push([machine.nodeId, signal.source]);
       if (rate) {
-        const hours = observedSourceHours(machine.extracted, signal.source);
+        const hours = observedSourceHours(
+          machine.extracted,
+          diagnosticSource(signal.signature, signal.source, machine),
+        );
         if (hours > 0) group.value += (signal.count / hours) * 24;
         else group.uncovered = true;
       } else {
@@ -435,7 +441,16 @@ export function judge(
     (evidence.fleet || entry.baseline?.diagnostics !== undefined);
   const post = useCohort
     ? diagnosticPostFix(entry, kind, evidence)
-    : postFixMeasure(entry, signal, kind, observedHours);
+    : postFixMeasure(
+        {
+          ...entry,
+          source:
+            entry.signature === HOST_RESTARTED_SIGNATURE ? "host-restart-detection" : entry.source,
+        },
+        signal,
+        kind,
+        observedHours,
+      );
   if (useCohort && (!post || post.hours < MIN_VERIFY_HOURS)) {
     return { verdict: "awaiting-evidence", post };
   }

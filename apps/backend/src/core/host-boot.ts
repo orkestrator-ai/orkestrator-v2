@@ -1,39 +1,40 @@
-/**
- * Whether a backend run ended because its host stopped (a power loss, a freeze
- * or a forced restart) rather than on its own. Shared by the backend's own
- * `previous-run` line (`health-summary.ts`) and self-improvement's reading of a
- * bundle's health rows (`self-improvement/signals.ts`), so both draw the line in
- * the same place. Pure: no I/O.
- *
- * A boot time is the wall clock less the host's uptime, so it moves when the
- * clock is stepped. Two boot times this close together are read as one boot
- * seen through a stepped clock (NTP correcting a drifted clock after a boot
- * moves it by seconds to minutes), not as a restart.
- */
+/** Boot evidence belongs to a backend's start marker and may be absent in older history. */
+export interface BootEvidence {
+  bootAt?: number | null;
+  bootId?: string | null;
+}
+
+export function isBootId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+/** Clock corrections can move the estimated boot time when there is no stable boot ID. */
 export const SAME_BOOT_TOLERANCE_MS = 5 * 60 * 1000;
 
-/**
- * True when one of `laterBootTimes` is after the run's last row (`lastAt`), and
- * is not the run's own boot (`runBootAt`, when it recorded one) seen through a
- * stepped clock.
- *
- * Most errors leave a host restart counted as a crash: a clock stepped back
- * after the boot, or a run lost within the tolerance of its own boot. The
- * reverse needs the clock stepped forward on the same boot, after the run's
- * last row, by more than the tolerance (or, for a run that recorded no boot
- * time, by more than the time from the boot to that row).
- */
+interface BackendStart extends BootEvidence {
+  startedAt: number;
+}
+
+/** Use the first non-overlapping successor, even if its own start marker is missing. */
+export function nextBackendStart(
+  starts: readonly BackendStart[],
+  run: BackendStart & { lastAt: number },
+): BackendStart | undefined {
+  return starts.find((start) => start.startedAt > run.startedAt && start.startedAt >= run.lastAt);
+}
+
+/** True when the immediate successor's boot is newer than the run's last row. */
 export function hostRestartedAfter(
   lastAt: number,
-  runBootAt: number | null | undefined,
-  laterBootTimes: Iterable<number | null | undefined>,
+  run: BootEvidence,
+  next: BootEvidence | undefined,
 ): boolean {
-  for (const bootAt of laterBootTimes) {
-    if (typeof bootAt !== "number" || !Number.isFinite(bootAt) || bootAt <= lastAt) continue;
-    if (typeof runBootAt === "number" && Math.abs(bootAt - runBootAt) < SAME_BOOT_TOLERANCE_MS) {
-      continue;
-    }
-    return true;
-  }
-  return false;
+  const bootAt = next?.bootAt;
+  if (typeof bootAt !== "number" || !Number.isFinite(bootAt) || bootAt <= lastAt) return false;
+  if (isBootId(run.bootId) && isBootId(next?.bootId)) return run.bootId !== next.bootId;
+  return (
+    typeof run.bootAt !== "number" ||
+    !Number.isFinite(run.bootAt) ||
+    Math.abs(bootAt - run.bootAt) >= SAME_BOOT_TOLERANCE_MS
+  );
 }

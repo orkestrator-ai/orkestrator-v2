@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { parseBundleFiles, type BundleData } from "./bundle.js";
 import { compareVersions, extractSignals, scoreSignal, type Signal } from "./signals.js";
-import { bundleFiles, DAY, type FixtureBundle, healthRun, HOUR } from "./testing/fixtures.js";
+import {
+  bundleFiles,
+  DAY,
+  type EssentialLine,
+  type FixtureBundle,
+  healthRun,
+  HOUR,
+} from "./testing/fixtures.js";
 
 const NOW = Date.parse("2026-11-09T12:00:00.000Z");
 
@@ -291,6 +298,56 @@ describe("health signals", () => {
     expect(crashed.lastAt).toBe(new Date(NOW - 18 * HOUR).toISOString());
   });
 
+  test("a later reboot leaves crashes before a same-boot successor in the crash count", () => {
+    const bootAt = NOW - 72 * HOUR;
+    const health = [
+      ...healthRun({ pid: 1, startedAt: NOW - 64 * HOUR, hours: 4, clean: false, bootAt }),
+      ...healthRun({ pid: 2, startedAt: NOW - 60 * HOUR + 1, hours: 2, clean: true, bootAt }),
+    ];
+    const laterBoot = healthRun({
+      pid: 3,
+      startedAt: NOW - HOUR,
+      hours: 1,
+      clean: false,
+      bootAt: NOW - 2 * HOUR,
+    });
+    for (const rows of [health, [...health, ...laterBoot]]) {
+      const { signals } = extractSignals(load({ createdAt: NOW, health: rows }));
+      expect(signal(signals, "backend:crashed").count).toBe(1);
+      expect(signals.some((candidate) => candidate.signature === "backend:host-restarted")).toBe(
+        false,
+      );
+    }
+  });
+
+  test("uses the boot IDs from a bundle to distinguish two fast boots", () => {
+    const bootAt = NOW - 4 * 60_000;
+    const { signals } = extractSignals(
+      load({
+        createdAt: NOW,
+        health: [
+          {
+            kind: "started",
+            at: bootAt + 1_000,
+            pid: 1,
+            startedAt: bootAt + 1_000,
+            bootAt,
+            bootId: "a".repeat(64),
+          },
+          {
+            kind: "started",
+            at: NOW,
+            pid: 2,
+            startedAt: NOW,
+            bootAt: NOW - 1_000,
+            bootId: "b".repeat(64),
+          },
+        ],
+      }),
+    );
+    expect(signal(signals, "backend:host-restarted").count).toBe(1);
+  });
+
   test("without health rows, previous-run host-restarted is a host restart, not a crash", () => {
     const { signals } = extractSignals(
       load({
@@ -311,6 +368,33 @@ describe("health signals", () => {
       count: 1,
     });
     expect(signals.some((candidate) => candidate.signature === "backend:crashed")).toBe(false);
+  });
+
+  test("an essential-log host restart credits the ended version, or unknown if its start expired", () => {
+    const older = {
+      at: NOW - 3 * HOUR,
+      area: "backend",
+      event: "starting",
+      fields: { version: "2.39.0" },
+    };
+    const essential: EssentialLine[] = [
+      { at: NOW - HOUR, area: "backend", event: "starting", fields: { version: "2.40.0" } },
+      {
+        at: NOW - HOUR + 100,
+        area: "backend",
+        event: "previous-run",
+        fields: { outcome: "host-restarted" },
+      },
+    ];
+    for (const [version, entries] of [
+      ["2.39.0", [older, ...essential]],
+      ["unknown", essential],
+    ] as const) {
+      const { signals } = extractSignals(load({ createdAt: NOW, essential: [...entries] }));
+      expect(signal(signals, "backend:host-restarted").versions).toEqual({
+        [version]: { count: 1 },
+      });
+    }
   });
 
   test("reports steady RSS growth through a long run, not a flat one", () => {

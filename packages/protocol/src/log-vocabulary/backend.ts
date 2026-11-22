@@ -23,9 +23,10 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
     description: "The backend process: startup, background notices and shutdown.",
     events: {
       starting: {
-        description: "The backend process is starting.",
+        description:
+          "The backend process is starting. `hostRestartDetection` marks support for classifying a previous run as stopped by a host reboot.",
         essential: true,
-        fields: { version: "label" },
+        fields: { version: "label", hostRestartDetection: "boolean" },
       },
       "ssh-socket.resolved": "An SSH agent socket was found.",
       "ssh-socket.missing": "No usable SSH agent socket was found.",

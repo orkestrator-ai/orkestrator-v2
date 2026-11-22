@@ -12,6 +12,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extract } from "tar-stream";
+import { isBootId } from "../host-boot.js";
 
 /** A diagnostics bundle is a few MiB; these leave room without trusting a stray file. */
 export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
@@ -45,6 +46,7 @@ export interface HealthRow {
   startedAt: number;
   /** On a `started` row: when the host booted. Absent from older backends' rows. */
   bootAt?: number;
+  bootId?: string;
   uptimeMs?: number;
   rssBytes?: number;
   cpuUserMs?: number;
@@ -287,6 +289,7 @@ function parseHealth(value: unknown): HealthRow[] {
       pid,
       startedAt,
       ...(kind === "started" && num(row.bootAt) !== null ? { bootAt: num(row.bootAt)! } : {}),
+      ...(kind === "started" && isBootId(row.bootId) ? { bootId: row.bootId } : {}),
       uptimeMs: num(row.uptimeMs) ?? undefined,
       rssBytes: num(row.rssBytes) ?? undefined,
       cpuUserMs: num(row.cpuUserMs) ?? undefined,

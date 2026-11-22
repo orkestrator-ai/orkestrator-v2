@@ -27,11 +27,12 @@ import {
 } from "./signals.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SOURCES: readonly SignalSource[] = [
+const SOURCES: readonly (keyof ObservedHours)[] = [
   "essential-log",
   "health-summary",
   "database",
   "insights",
+  "host-restart-detection",
 ];
 
 export interface MachineSignals {
@@ -44,7 +45,10 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-export function observedSourceHours(extracted: ExtractedSignals, source: SignalSource): number {
+export function observedSourceHours(
+  extracted: ExtractedSignals,
+  source: keyof ObservedHours,
+): number {
   return Object.values(extracted.observedHours[source] ?? {}).reduce(
     (sum, value) => sum + value,
     0,
@@ -52,20 +56,24 @@ export function observedSourceHours(extracted: ExtractedSignals, source: SignalS
 }
 
 /** Run endings come from the health rows, or the essential log when a bundle has none. */
-export function diagnosticSource(signature: string, source: SignalSource, machine: MachineSignals) {
-  return signature === "backend:crashed" || signature === HOST_RESTARTED_SIGNATURE
-    ? (machine.extracted.crashSource ?? source)
-    : source;
+export function diagnosticSource(
+  signature: string,
+  source: SignalSource,
+  machine: MachineSignals,
+): keyof ObservedHours {
+  if (signature === HOST_RESTARTED_SIGNATURE) return "host-restart-detection";
+  return signature === "backend:crashed" ? (machine.extracted.crashSource ?? source) : source;
 }
 
 function mergeObservedHours(machines: readonly MachineSignals[]): ObservedHours {
   const merged = Object.fromEntries(SOURCES.map((source) => [source, {}])) as ObservedHours;
   for (const machine of machines) {
     for (const source of SOURCES) {
+      const combined = (merged[source] ??= {});
       for (const [version, hours] of Object.entries(
         machine.extracted.observedHours[source] ?? {},
       )) {
-        merged[source][version] = round((merged[source][version] ?? 0) + hours);
+        combined[version] = round((combined[version] ?? 0) + hours);
       }
     }
   }

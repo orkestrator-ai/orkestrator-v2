@@ -775,11 +775,11 @@ store, one row each:
 | Row | When | Holds |
 | --- | --- | --- |
 | `sample` | Every 5 minutes, from one plain timer | Memory, CPU, event-loop stalls, database and backup sizes, the 8 recurring job kinds with the most run time, and bridge starts per provider (`bridges`) |
-| `started` | When the backend's background work starts | Pid, start time and the host's boot time (`bootAt`, to the second; left out when the host's uptime cannot be read) |
+| `started` | When the backend's background work starts | Pid, start time, host boot time (`bootAt`, to the second), and opaque boot and process-start hashes when available |
 | `clean-exit` | The last shutdown step, before the database closes, and only if the drain succeeded | Pid and start time |
 
-Rows hold numbers, job kinds and bridge provider names only. A backend's identity is its pid and start time, so
-a row needs no string to say whose it is. The store keeps the newest 2,016 rows (seven
+Rows hold numbers, job kinds, bridge provider names, and opaque start identities.
+The backend’s PID and start time group its rows. The store keeps the newest 2,016 rows (seven
 days at one backend), pruned in the write's own transaction. Backends sharing a directory
 each write their own rows under that one bound, so two halve the history. The sample is
 not a recurring job, so it does not appear in the figures it reports, and health rows do
@@ -804,17 +804,20 @@ The next start reads the rows and writes one `backend` `previous-run` line, whic
 [essential log](#the-essential-event-log) keeps: `outcome` is `clean` (`info`), `crashed`
 or `host-restarted` (`warn`), with `ranForMs` and `lastSeenAgoMs`. No earlier run means no
 line. A run with no `clean-exit` reads as crashed, which is right for a kill and is also
-what a shutdown failing late looks like. It reads as `host-restarted` instead when the host
-booted after the run's last row: this backend's own boot time, or the `bootAt` a later
-run recorded, is newer than that row. That is a power loss, a freeze or a forced restart,
-which no exit marker survives. The boot time is the wall clock less `os.uptime()`, which
-counts time asleep on macOS and Linux, so a sleep does not move it. A stepped clock does,
-so a boot time within five minutes of the run's own recorded one is read as the same boot
-(`host-boot.ts`). A clock stepped back can only leave a restart counted as a crash; a
-crash reads as a restart only if the clock was stepped forward by more than that on the
-same boot. Another backend still running in the
-directory is skipped rather than reported: its pid answers and its last row is under ten
-minutes old, and the two together cover a reused pid.
+what a shutdown failing late looks like. It reads as `host-restarted` when the
+first backend started after that run's last row records a boot newer than the row.
+A later backend start cannot revise that comparison. The boot time is wall time
+less `os.uptime()`, which includes sleep on macOS and Linux. A hash of the
+kernel boot-session UUID on those platforms distinguishes closely spaced boots and keeps clock corrections
+within one boot from looking like a reboot. When either ID is missing, boot times
+less than five minutes apart are treated as the same boot. A backward clock
+correction can leave an actual restart counted as a crash.
+
+Startup evaluates reboot evidence before checking for a live process at the
+old PID. For other unclean runs, a recent row and live PID indicate another
+running backend when its process-start hash matches or either hash is unavailable.
+`backend:starting` includes `hostRestartDetection` in the essential log so log-only
+bundles can measure coverage even when they contain zero restart events.
 
 **What `process.memoryUsage` says under Bun 1.4.4.** Measured with 2 million objects, a
 200 MiB `Buffer` and 100 MiB in an in-memory SQLite database:

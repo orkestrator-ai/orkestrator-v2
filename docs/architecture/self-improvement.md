@@ -145,9 +145,11 @@ project.
   saved before leaves were read keep matching. A signal's evidence names the
   machines it was seen on (`machines=Desk, VPS`).
   - Fleet rates use occurrences per machine-day of observed source exposure.
-    Uncovered machines contribute no hours. For crashes and host restarts, each
-    machine uses the health summary or the essential-log fallback that supplied
-    its counts.
+    Uncovered machines contribute no hours. Crashes use each machine's health
+    summary or essential-log fallback. Host restarts use detection hours from
+    that source: health runs with boot metadata on their own or their first
+    successor's start, or log intervals whose startup declares support for
+    detection or whose end was reported as a host restart.
   - Fix verdicts compare the machines that saw the baseline fault. If an
     affected leaf is unavailable when a ticket moves to Done, its last known
     version also contributes to the inferred fix boundary. Each machine must
@@ -294,12 +296,18 @@ runs. Ids of environments, sessions and processes are left out on purpose:
 | Database | `storage:slow:<db>:<op>:<table>`, `storage:lease-timeout:<family>`, `storage:lease-wait:<family>`, `storage:busy`, `storage:wal-large` | `storage:slow:main:select:sessions` |
 | Conversation themes | `insight:<theme>` | `insight:use-mise-not-npm` |
 
-`backend:crashed` counts backend runs with no clean exit. A run whose host
-booted after its last health row (a power loss, a freeze or a forced restart:
-the next run's `started` row records the boot time, `bootAt`) is
-`backend:host-restarted` instead, a `warning`, because no change to the app can
-write an exit marker through a power cut. Rows from backends that predate
-`bootAt` cannot tell the two apart and still count as crashes.
+`backend:crashed` counts ended backend runs with no clean exit and no applicable
+reboot evidence. The first backend start at or after the old run's last row
+can establish a host restart if it records a newer boot. With two boot IDs,
+the IDs must differ. With only boot times for both runs, their boot estimates
+must be at least five minutes apart. An older run with no boot metadata can
+still be classified from its immediate successor's newer boot time. If that
+successor has no boot evidence, the run stays in the crash count.
+
+`backend:host-restarted` is a `warning`. A power loss, freeze or forced restart
+can stop the backend before it can write an exit marker. In essential-log-only
+bundles, the `previous-run` event credits the version from the preceding
+startup, or `unknown` when that startup has expired.
 
 Each signal's category has a weight:
 

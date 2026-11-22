@@ -1,6 +1,10 @@
 import { useMemo, useState } from "react";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
+import {
+  environmentChangeResourceKey,
+  type ChangeProjection,
+} from "@orkestrator/protocol/change-resources";
 import type { NodeView } from "@orkestrator/protocol/command-nodes";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import {
@@ -48,6 +52,8 @@ interface FakeEnvironment {
   agentActivityState?: "working" | "waiting" | "idle";
   hasUnreadWork?: boolean;
   prState?: "open" | "merged";
+  /** Changed lines its row's badge shows, read through `changes_get_view`. */
+  changes?: { additions: number; deletions: number };
 }
 
 interface FakeProject {
@@ -79,7 +85,12 @@ export const REPOSITORY_LIST_MACHINES: readonly FakeMachine[] = [
         name: "orkestrator-v2",
         repository: "acme/orkestrator-v2",
         environments: [
-          { name: "sidebar-redesign", status: "running", agentActivityState: "working" },
+          {
+            name: "sidebar-redesign",
+            status: "running",
+            agentActivityState: "working",
+            changes: { additions: 174, deletions: 0 },
+          },
           { name: "fix-merge-queue", status: "running", agentActivityState: "idle" },
         ],
       },
@@ -102,7 +113,14 @@ export const REPOSITORY_LIST_MACHINES: readonly FakeMachine[] = [
         id: "ork",
         name: "orkestrator-v2",
         repository: "acme/orkestrator-v2",
-        environments: [{ name: "release-notes", status: "running", prState: "open" }],
+        environments: [
+          {
+            name: "release-notes",
+            status: "running",
+            prState: "open",
+            changes: { additions: 2029, deletions: 12 },
+          },
+        ],
       },
     ],
   },
@@ -229,7 +247,7 @@ function summary(machine: FakeMachine, connected: boolean): NodeSummary {
       )!,
     ),
     environments: machine.projects.flatMap((project) =>
-      project.environments.map((environment, index) => {
+      project.environments.map(({ changes: _changes, ...environment }, index) => {
         order += 1;
         return toNodeEnvironmentSummary(
           nodeId,
@@ -246,6 +264,47 @@ function summary(machine: FakeMachine, connected: boolean): NodeSummary {
         )!;
       }),
     ),
+  };
+}
+
+/** A ready `environment-net` projection whose badge shows `changes`. */
+function changeProjection(
+  resourceKey: string,
+  changes: { additions: number; deletions: number },
+): ChangeProjection {
+  return {
+    schemaVersion: 1,
+    resourceKey,
+    ownerGeneration: "gen-1",
+    revision: 1,
+    measurementId: `measurement-${resourceKey}`,
+    state: "ready",
+    availability: "ready",
+    observationState: "fresh",
+    coverageState: "complete",
+    labelKey: "changes.scope.environment-net",
+    labelArgs: {},
+    hasFileChanges: true,
+    hasTextChanges: true,
+    badge: { visible: true, mode: "counts" },
+    counters: {
+      changedFiles: 3,
+      additions: { value: changes.additions, quality: "complete", bound: "exact" },
+      deletions: { value: changes.deletions, quality: "complete", bound: "exact" },
+    },
+    reasonKeys: [],
+    provenanceLabelKey: "changes.provenance.observed",
+    freshness: {
+      lastAttemptAt: null,
+      lastSuccessfulCheckAt: null,
+      lastContentChangeObservedAt: null,
+      observedAt: null,
+      requiredObservationEpoch: null,
+      checkedObservationEpoch: null,
+    },
+    detail: null,
+    filePage: null,
+    actions: [],
   };
 }
 
@@ -278,6 +337,22 @@ function install() {
     return machineUpdates ? { ...node, version: "2.38.0" } : node;
   });
   const cpuByNode = new Map(machines.map((machine) => [machine.nodeId, machine.cpu]));
+  const changesByResource = new Map(
+    machines.flatMap((machine) =>
+      machine.projects.flatMap((project) =>
+        project.environments.flatMap((environment) =>
+          environment.changes
+            ? [
+                [
+                  `${machine.nodeId}\0${environmentChangeResourceKey(environment.name)}`,
+                  environment.changes,
+                ] as const,
+              ]
+            : [],
+        ),
+      ),
+    ),
+  );
   const liveLayout = params.has("command-node");
   let layout: PortalLayout = {
     ...emptyPortalLayout(),
@@ -360,8 +435,16 @@ function install() {
           if (routed === "get_system_usage")
             return { outcome: "ok", result: usageSample(cpuByNode.get(nodeId) ?? 0) } as T;
           // Reads from mounted rows and hover cards are not writes.
-          if (routed === "changes_get_view")
-            return { outcome: "ok", result: { kind: "deleted" } } as T;
+          if (routed === "changes_get_view") {
+            const resourceKey = String((args?.args as { resourceKey?: unknown })?.resourceKey);
+            const changes = changesByResource.get(`${nodeId}\0${resourceKey}`);
+            return {
+              outcome: "ok",
+              result: changes
+                ? { kind: "projection", projection: changeProjection(resourceKey, changes) }
+                : { kind: "deleted" },
+            } as T;
+          }
           if (routed === "get_environment") return { outcome: "ok", result: null } as T;
           if (routed === "get_agent_registry")
             return {

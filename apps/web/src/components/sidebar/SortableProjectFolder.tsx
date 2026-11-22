@@ -251,8 +251,10 @@ export function SortableProjectFolder({
             : `Collapse folder ${label}`
       }
       className={cn(
-        "flex min-w-0 flex-1 cursor-grab items-center rounded-lg px-2 py-1.5 text-left text-sm text-foreground active:cursor-grabbing",
-        repository ? "gap-2.5" : "gap-2",
+        "flex min-w-0 flex-1 cursor-grab items-center rounded-lg py-1.5 text-left text-sm text-foreground active:cursor-grabbing",
+        // A repository's row spans its environment rows' frame, so the
+        // heading takes the grip column (16px) before its icon instead.
+        repository ? "gap-2.5 pr-2 pl-4" : "gap-2 px-2",
       )}
       onClick={(event) => {
         event.stopPropagation();
@@ -295,10 +297,13 @@ export function SortableProjectFolder({
       ref={setNodeRef}
       style={style}
       data-project-folder={name}
-      className={cn("px-2 py-0.5", isDragging && "z-50 opacity-50")}
+      // A repository heading is inset like its environment rows (`mx-1`), so
+      // its chevron ends where their changed-line counts do; a folder keeps
+      // the project groups' `px-2`.
+      className={cn(repository ? "py-0.5" : "px-2 py-0.5", isDragging && "z-50 opacity-50")}
     >
       {repository && repositorySeparator ? (
-        <div className="px-1 py-1">
+        <div className="px-3 py-1">
           <Separator data-testid="repository-separator" />
         </div>
       ) : null}
@@ -408,12 +413,13 @@ export function SortableProjectFolder({
       {/*
         Members are unmounted while collapsed rather than hidden with CSS: they
         are sortable nodes, and a registered node the user cannot see would
-        still resolve drops. Both variants cancel the folder's right padding so
-        member chevrons line up with top-level ones; members bring their own.
+        still resolve drops. A folder cancels its right padding so member
+        chevrons line up with top-level ones; members bring their own. A
+        repository has no padding to cancel: its rows share the heading's edges.
       */}
       {!isCollapsed && (
         <div
-          className={repository ? "-mx-2" : "-mr-2 ml-3 border-l border-zinc-800/80 pl-1"}
+          className={repository ? undefined : "-mr-2 ml-3 border-l border-zinc-800/80 pl-1"}
           data-project-folder-content={name}
         >
           <RepositoryMemberContext.Provider value={repository}>

@@ -597,6 +597,36 @@ test("the chevron right of the + collapses and expands a repository", async ({
   await expect(rows.first()).toBeVisible();
 });
 
+test("the repository chevron is flush right with its rows' changed-line counts", async ({
+  page,
+  hasTouch,
+}) => {
+  await page.goto("/repository-environment-list");
+  const repository = folder(page, ORK);
+  const chevron = repository.getByTestId("repository-collapse-toggle");
+  const counts = repository.getByTestId("environment-change-counts");
+  await expect(counts).toHaveCount(2);
+  const edges = (locator: Locator) =>
+    locator.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, right: box.right };
+    });
+  // The heading's highlight spans its environment rows' frame on both sides.
+  const headingFrame = await edges(chevron.locator(".."));
+  const rowFrame = await edges(
+    repository.getByTestId("federated-environment-row").first().locator("> div"),
+  );
+  expect(Math.abs(headingFrame.left - rowFrame.left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(headingFrame.right - rowFrame.right)).toBeLessThanOrEqual(1);
+  // A phone row ends in its actions button rather than its counts.
+  if (hasTouch) return;
+  // The chevron glyph (its path, rotated open) ends where the counts do.
+  const glyph = await edges(chevron.locator("svg path"));
+  for (const count of await counts.all()) {
+    expect(Math.abs((await edges(count)).right - glyph.right)).toBeLessThanOrEqual(1);
+  }
+});
+
 test("the repository chevron receives tab focus and toggles with Enter and Space", async ({
   page,
 }) => {

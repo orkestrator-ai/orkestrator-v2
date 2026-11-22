@@ -22,7 +22,7 @@ import {
 } from "../src/core/claude-terminal-settle.js";
 import type { PtyProcess } from "../src/core/pty.js";
 import { StorageService } from "../src/core/storage.js";
-import { TerminalRuntime } from "../src/core/terminal-runtime.js";
+import { TerminalRuntime } from "../src/core/terminals/runtime.js";
 import {
   CLAUDE_STATE_ABSENT_MARKER,
   CLAUDE_STATE_POLL_INTERVAL_MS,

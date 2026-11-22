@@ -6,8 +6,8 @@
 import { expect, test } from "bun:test";
 import { bridgeTranscriptSummaryUpdate } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
-import { codexConnection, httpProvider } from "./agent-provider-test-support.js";
-import { MultiReviewProgressTracker } from "./review/progress.js";
+import { codexConnection, httpProvider } from "../agent-provider-test-support.js";
+import { MultiReviewProgressTracker } from "../review/progress.js";
 import {
   PROGRESS_SNAPSHOT_TARGET_BYTES,
   PROGRESS_TRANSCRIPT_WINDOW_MESSAGES,

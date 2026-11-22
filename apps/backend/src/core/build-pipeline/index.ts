@@ -40,7 +40,7 @@
 //   `transcript-layout.ts`.
 // - `control-workflow-summary.ts` (the coordinator's MCP tools and the public
 //   review actions) and the six above reach `review/prompts.ts`,
-//   `review/multi-review-prompts.ts` and `transcript-progress.ts`, which
+//   `review/multi-review-prompts.ts` and `native-agent/transcript-progress.ts`, which
 //   import `prompts.ts` and `service-helpers.ts`.
 export { BuildPipelineActivity } from "./activity.js";
 export { readEnvironmentBranchPushState } from "./branch-push.js";

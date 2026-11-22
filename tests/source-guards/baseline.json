@@ -161,7 +161,7 @@
     "apps/backend/src/core/storage-atomic.test.ts": 1,
     "apps/backend/src/core/storage-backups-reap.integration.test.ts": 1,
     "apps/backend/src/core/storage-slow-operations.test.ts": 1,
-    "apps/backend/src/core/terminal-history-part-2.test.ts": 1,
+    "apps/backend/src/core/terminals/history-part-2.test.ts": 1,
     "apps/backend/src/core/transcript-artifacts/content-server.engines-lane-1-test-support.ts": 1,
     "apps/backend/src/core/transcript-artifacts/content-server.engines-lane-2-test-support.ts": 1,
     "apps/backend/src/core/watch-host.test.ts": 9,

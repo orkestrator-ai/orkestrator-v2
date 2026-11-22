@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import type { CommandContext } from "./commands-context.js";
-import type { PtyProcess } from "./pty.js";
-import { TerminalRuntime } from "./terminal-runtime.js";
+import type { CommandContext } from "../commands-context.js";
+import type { PtyProcess } from "../pty.js";
+import { TerminalRuntime } from "./runtime.js";
 
 const runtimes: TerminalRuntime[] = [];
 afterEach(() => {

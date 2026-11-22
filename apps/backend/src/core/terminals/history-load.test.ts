@@ -1,8 +1,8 @@
 // The shared harness owns temporary history directories and drains every parser.
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { HeadlessParseScheduler } from "./terminal-parse-scheduler.js";
-import { useTerminalHistoryHarness } from "./terminal-history-test-support.js";
+import { HeadlessParseScheduler } from "./parse-scheduler.js";
+import { useTerminalHistoryHarness } from "./history-test-support.js";
 
 const { createHistory, temporaryDirectory } = useTerminalHistoryHarness(() => {});
 

@@ -17,7 +17,7 @@ cause, not a confirmed diagnosis. No test, timeout, assertion or skip changed.
 
 ## Resolution (2026-11-15)
 
-- **Owner moved:** the test is now in `apps/backend/src/core/terminal-history-part-1.test.ts` (file split by `dc90609bf`, 2026-11-14).
+- **Owner moved:** the test is now in `apps/backend/src/core/terminals/history-part-1.test.ts` (file split by `dc90609bf`, 2026-11-14).
 - **Root cause:** the five-second default test budget under host load (5001.73 ms); the case itself has no deadline or sleep, and the part file sets no smaller budget.
 - **Fix:** `tests/default-test-timeout.ts` (preloaded by `tests/setup-node.ts`) raises the default budget to a 60 s hang watchdog. No test change. Same cause as [0213](0213-terminal-history-aggregate-timeout.md).
 - **Reproduced:** no — not reproduced; classified from the recorded duration.

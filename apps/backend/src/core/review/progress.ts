@@ -15,7 +15,7 @@
  * off a legitimately long review.
  *
  * The caller supplies a sample: normally a bounded, conditional one-message
- * snapshot (`transcript-progress.ts`), which an unchanged session answers
+ * snapshot (`native-agent/transcript-progress.ts`), which an unchanged session answers
  * without any transcript body; a provider without that surface falls back to
  * its newest message. Either way the probe is throttled per session rather
  * than run on every supervisor tick, and only a fixed-size digest of the tail
@@ -41,9 +41,9 @@ import {
   legacyProgressDigest,
   type KnownProgressSource,
   type ProgressSample,
-} from "../transcript-progress.js";
+} from "../native-agent/index.js";
 
-export { PROGRESS_TRANSCRIPT_TAIL_MESSAGES } from "../transcript-progress.js";
+export { PROGRESS_TRANSCRIPT_TAIL_MESSAGES } from "../native-agent/index.js";
 
 /** How often one running session's transcript is re-read for progress. */
 export const DEFAULT_PROGRESS_PROBE_INTERVAL_MS = 60_000;

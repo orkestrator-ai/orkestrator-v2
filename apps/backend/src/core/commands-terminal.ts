@@ -10,7 +10,7 @@ import type {
   EnvironmentSetupStartResult,
   ClientEnvironmentSetupStartResult,
 } from "./environment-operations.js";
-import type { TerminalOutputBuffer, TerminalSessionConfig } from "./terminal-runtime.js";
+import type { TerminalOutputBuffer, TerminalSessionConfig } from "./terminals/index.js";
 import { createLogger, type LogEventOf, type LogFields } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");

@@ -5,7 +5,7 @@ import {
   HeadlessParseScheduler,
   nextParseSlice,
   type HeadlessParseTarget,
-} from "./terminal-parse-scheduler.js";
+} from "./parse-scheduler.js";
 
 /** A parser that records what it is handed and parses only when the test says so. */
 function fakeTarget(name: string, log: string[]) {

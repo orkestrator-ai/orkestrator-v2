@@ -1,5 +1,5 @@
 /**
- * The terminal WebSocket's part in size ownership (`terminal-size-ownership.ts`):
+ * The terminal WebSocket's part in size ownership (`terminals/size-ownership.ts`):
  * it forwards the window's client id with each size update, and a socket that
  * closes gives up what its client owned after the backend's grace period.
  */
@@ -8,7 +8,7 @@ import { TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-w
 import {
   TerminalSizeOwnership,
   TERMINAL_SIZE_DISCONNECT_GRACE_MS,
-} from "../src/core/terminal-size-ownership.js";
+} from "../src/core/terminals/size-ownership.js";
 import type { WebSocket } from "ws";
 import {
   nextTerminalControl,

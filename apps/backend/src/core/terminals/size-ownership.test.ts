@@ -3,7 +3,7 @@ import {
   TERMINAL_SIZE_DISCONNECT_GRACE_MS,
   TERMINAL_SIZE_OWNER_LEASE_MS,
   TerminalSizeOwnership,
-} from "./terminal-size-ownership.js";
+} from "./size-ownership.js";
 
 const WIDE = { cols: 200, rows: 50 };
 const NARROW = { cols: 40, rows: 30 };

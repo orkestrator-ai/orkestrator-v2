@@ -396,6 +396,43 @@ describe("supervision workloads", () => {
       saves: 20,
     });
   });
+
+  test("both supervision workloads report counters from a pre-move transcript progress path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "efficiency-legacy-progress-"));
+    try {
+      // Re-export the real implementations in a fixture with only the old progress path.
+      for (const [destination, source = destination] of [
+        [
+          "apps/backend/src/core/transcript-progress.ts",
+          "apps/backend/src/core/native-agent/transcript-progress.ts",
+        ],
+        ["apps/backend/src/core/storage.ts"],
+        ["apps/backend/src/core/build-pipeline/transcript-checkpoints.ts"],
+        ["packages/protocol/src/node/bridge-transcript-summary.ts"],
+      ] as const) {
+        const file = path.join(root, destination);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, `export * from ${JSON.stringify(path.join(context.root, source))};`);
+      }
+
+      const legacyContext = createContext(root);
+      for (const factory of [probeWorkload, pipelineCheckpointWorkload]) {
+        const workload = await factory(legacyContext);
+        const cases = workload.cases.filter((entry) => !entry.id.startsWith("reviewer-"));
+        expect(cases).toHaveLength(3);
+        for (const definition of cases) {
+          const report = await runCase(definition, 1, { sampleResources: false });
+          expect(report).toMatchObject({
+            supported: true,
+            countersStable: true,
+            counters: factory === probeWorkload ? { probes: 11 } : { passes: 20 },
+          });
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("display-tail checkpoint age", () => {

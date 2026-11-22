@@ -279,7 +279,8 @@ new.
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
-    `native-agent/`, `recurring/`, `tmux/`) are reached only through their
+    `native-agent/`, `recurring/`, `tmux/`, `terminals/`) are reached only
+    through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
@@ -330,6 +331,19 @@ new.
     command registry included, and no cycle results. The tests and scripts
     that use other tmux internals are outside both overrides, and no
     `tests/unit` test imports the domain.
+
+    The `terminals/` boundary has no exception in either override either.
+    `terminals/index.ts` re-exports every module its production importers
+    use, `terminals/runtime.ts` for `backend-runtime.ts` and
+    `terminals/history.ts` for the terminal command registry included, and no
+    cycle results. The tests, `apps/backend/tests` files and scripts that use
+    other terminal internals are outside both overrides, and no `tests/unit`
+    test imports the domain. Its `apps/backend/src/**` pattern also skips
+    `@orkestrator/protocol/contract/domains/terminals/*`, the protocol's
+    terminals contract folder, which is not the backend domain. The
+    progress-sampling and transcript media-pin modules that shared its old
+    `transcript-*` prefix moved into `native-agent/` instead and are
+    re-exported from `native-agent/index.ts`, with no new exception.
 
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import

@@ -156,7 +156,7 @@ import {
   noProgressElapsedMs,
   stalledMinutes,
 } from "./progress.js";
-import { readTranscriptProgressSample } from "../transcript-progress.js";
+import { readTranscriptProgressSample } from "../native-agent/index.js";
 import { multiReviewTranscriptPushTarget, SharedReviewTranscripts } from "./transcript-push.js";
 import type { ReviewTranscriptTarget } from "../push/review-transcript-push-topic.js";
 import type { ReviewTranscriptPushKey } from "@orkestrator/protocol/push-events";

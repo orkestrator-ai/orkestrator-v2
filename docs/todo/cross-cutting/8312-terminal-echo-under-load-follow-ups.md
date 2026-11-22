@@ -26,9 +26,9 @@ checkpoint corrections.
 xterm's headless parser is now about half of the backend's CPU under that
 load, and each full `SerializeAddon.serialize` call holds the loop 9 to 12 ms.
 
-**Context.** `TerminalHistory` (`apps/backend/src/core/terminal-history.ts`)
+**Context.** `TerminalHistory` (`apps/backend/src/core/terminals/history.ts`)
 owns a headless xterm and a `SerializeAddon` per terminal. Writes go through
-`HeadlessParseScheduler` (`terminal-parse-scheduler.ts`); serialization is
+`HeadlessParseScheduler` (`terminals/parse-scheduler.ts`); serialization is
 synchronous in `serializedState`. The backend ships as a Bun bundle
 (`apps/backend/scripts/build.ts`) inside Electron and the CLI package, and
 the only backend worker today (`packages/protocol/src/node/essential-log-worker.ts`)
@@ -38,7 +38,7 @@ packaged.
 **Investigation.** Turning durable history off entirely gave heavy-level echo
 p95 8.6 ms and loop-lag p99 6.6 ms in one loopback run, which bounds what a
 worker could recover. The headless terminal and its serializer are touched
-from about 20 places, nearly all inside `terminal-history.ts`, including the
+from about 20 places, nearly all inside `terminals/history.ts`, including the
 synchronous `serializedState` used by checkpoints, snapshots and the
 graceful-shutdown checkpoint.
 

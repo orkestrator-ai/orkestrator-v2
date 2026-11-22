@@ -33,7 +33,7 @@ cadences in [recurring-work.md](../architecture/recurring-work.md).
   `body`). Detaching it is allowed only where recovery is exact, and the
   terminal state snapshot keeps the current screen exactly but halves
   scrollback to fit its byte target (`serializedState` in
-  `apps/backend/src/core/terminal-history.ts`), so a detached tab would come
+  `apps/backend/src/core/terminals/history.ts`), so a detached tab would come
   back with less history. Other environments' terminals are already
   unmounted: only the selected environment's `TerminalContainer` mounts.
 - **Data saving is a client-local preference, off by default** (Settings >

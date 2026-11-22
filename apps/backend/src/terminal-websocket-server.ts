@@ -120,7 +120,7 @@ type SocketState = {
   pendingInputResults: Map<number, number>;
   invalidChannelFrames: number;
   pendingOperations: number;
-  /** Client ids this socket's resizes named (`terminal-size-ownership.ts`). */
+  /** Client ids this socket's resizes named (`terminals/size-ownership.ts`). */
   sizeClientIds: Set<string>;
 };
 

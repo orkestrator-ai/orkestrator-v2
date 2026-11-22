@@ -59,7 +59,7 @@ import {
 import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring/index.js";
 import { TmuxBackend } from "./backend.js";
 import { TmuxTranscriptReader, type TmuxTranscriptPage } from "./transcript-reader.js";
-import type { TerminalRuntime } from "../terminal-runtime.js";
+import type { TerminalRuntime } from "../terminals/index.js";
 import {
   TMUX_INFO_EVENT_LIMIT,
   TranscriptTail,

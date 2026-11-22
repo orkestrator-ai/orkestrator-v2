@@ -1,7 +1,7 @@
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { TerminalHistory } from "../apps/backend/src/core/terminal-history";
+import { TerminalHistory } from "../apps/backend/src/core/terminals/history";
 
 type Measurement = {
   terminals: number;

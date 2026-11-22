@@ -29,7 +29,7 @@ import {
   hasProgressSnapshot,
   readTranscriptProgressSample,
   type ProgressReadKind,
-} from "./transcript-progress.js";
+} from "./native-agent/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-branch");
@@ -204,7 +204,7 @@ export class AgentBranchObserver<B extends AgentBranchRecord> {
    *
    * The transcript is read only when the tracker says a probe is due: a
    * throttled pass starts no provider request at all. A due probe asks for a
-   * bounded, conditional one-message snapshot (`transcript-progress.ts`); an
+   * bounded, conditional one-message snapshot (`native-agent/transcript-progress.ts`); an
    * unchanged branch answers without any transcript body. A provider without
    * that surface falls back to its newest message, and one that meters usage
    * from messages shares that one due read.

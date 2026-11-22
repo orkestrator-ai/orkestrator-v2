@@ -1,6 +1,6 @@
 // Part 3 of 4 of the terminal history suite, split from the former terminal-history.test.ts so
 // `bun test --parallel` can spread its large on-disk fixtures across workers. The shared
-// harness lives in terminal-history-test-support.ts.
+// harness lives in history-test-support.ts.
 import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import { mkdir, readFile, rm, stat } from "node:fs/promises";
@@ -10,12 +10,12 @@ import {
   TERMINAL_HISTORY_SEGMENT_BYTES,
   type TerminalHistory,
   type TerminalHistoryOptions,
-} from "./terminal-history.js";
+} from "./history.js";
 import {
   readArchivedRows,
   readyArchiveDirectory,
   useTerminalHistoryHarness,
-} from "./terminal-history-test-support.js";
+} from "./history-test-support.js";
 
 let history: TerminalHistory;
 const { createHistory, temporaryDirectory } = useTerminalHistoryHarness(() => {

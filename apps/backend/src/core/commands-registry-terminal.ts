@@ -220,7 +220,7 @@ import {
   reviewWorktreeProbeArgs,
 } from "./review/index.js";
 import { KeyedTrailingFlight } from "./keyed-trailing-flight.js";
-import type { TerminalHistory } from "./terminal-history.js";
+import type { TerminalHistory } from "./terminals/index.js";
 import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountsForContainerTerminal,
@@ -349,7 +349,7 @@ function refreshRequested(value: unknown): boolean {
 
 /**
  * One size update or claim of a container or local PTY, through the session's
- * size owner (`terminal-size-ownership.ts`). A client that does not own the
+ * size owner (`terminals/size-ownership.ts`). A client that does not own the
  * size has its update refused in band (`applied: false`) rather than as an
  * error, because the PTY is there and a failure would read as a dead
  * terminal. The owner resending the size it last set (a claim repeated while

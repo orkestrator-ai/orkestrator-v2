@@ -1,22 +1,22 @@
-import { eventSink } from "./backend-emit.js";
+import { eventSink } from "../backend-emit.js";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import {
   installControlledTimeout,
   type ControlledTimeout,
-} from "../../../../tests/helpers/controlled-timeout.js";
-import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import { createEnvironment, type StorageService } from "./storage.js";
-import type { ContainerTerminalShell } from "./container-terminal-shell.js";
-import type { PtyProcess } from "./pty.js";
+} from "../../../../../tests/helpers/controlled-timeout.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import type { CommandContext } from "../commands-context.js";
+import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
+import { createEnvironment, type StorageService } from "../storage.js";
+import type { ContainerTerminalShell } from "../container-terminal-shell.js";
+import type { PtyProcess } from "../pty.js";
 import {
   TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS,
   TERMINAL_ACTIVITY_SETTLE_MS,
   TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS,
   TERMINAL_OUTPUT_RETENTION_MS,
   type TerminalRuntime,
-} from "./terminal-runtime.js";
+} from "./runtime.js";
 
 const runtimes: BackendRuntime[] = [];
 const clocks: ControlledTimeout[] = [];

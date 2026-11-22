@@ -4,13 +4,13 @@ Checked against `main` at `2459b05c` (2026-10-15).
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice, and 2026-11-20 against `main` at `9a5a84f63` for the `native-agent` slice; task 3 re-checked 2026-11-22 against `main` at `dd1391427` for the `recurring` slice and the codemod's permalink fix, and 2026-11-22 against `main` at `81a501415` for the `tmux` slice; task 7 re-checked 2026-11-20 against `main` at `9a5a84f63` for `pi-model-catalog-seeding.ts`.
+Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-11-11 against `main` at `14df96544`, and task 1 again against `963ffa6ab` for the `control-mcp` slice; tasks 1, 2 and 7 re-checked 2026-11-13 against `main` at `17d28238c` for the `keyed-record-format.ts` placement and the `plan-usage` slice; task 2 re-checked 2026-11-14 against `main` at `dc90609bf` for the `features` slice, and 2026-11-16 against `main` at `c1fcc573b` for the `previews` slice; task 1 re-checked 2026-11-16 against `main` at `a0920f1a7` for the `opencode` slice; task 2 re-checked 2026-11-17 against `main` at `0265e7882` for the `worktrees` slice, 2026-11-18 against `main` at `b2c91abb9` for the `git` slice, 2026-11-20 against `main` at `0b778d995` for the `coordinator` slice, 2026-11-20 against `main` at `e102a0dd5` for the `agent-accounts` slice, 2026-11-20 against `main` at `7fd328b8c` for the `workflows` slice, 2026-11-20 against `main` at `05f3db2d8` for the `review` slice, 2026-11-20 against `main` at `11fca66ca` for the `build-pipeline` slice, and 2026-11-20 against `main` at `9a5a84f63` for the `native-agent` slice; task 3 re-checked 2026-11-22 against `main` at `dd1391427` for the `recurring` slice and the codemod's permalink fix, 2026-11-22 against `main` at `81a501415` for the `tmux` slice, and 2026-11-22 against `main` at `3030e84a2` for the `terminals` slice; task 7 re-checked 2026-11-20 against `main` at `9a5a84f63` for `pi-model-catalog-seeding.ts`.
 
 ### Tasks
 
 1. **Wave 1 (leaves)**: move `opencode`, `web-annotations`, `http-bridge`, `control-mcp`; give `mcp-management/` and `public-api/` an `index.ts` and lint patterns; place `keyed-record-format.ts`. Status: done: the `index.ts` step for `mcp-management/` and `public-api/` is done (2026-11-03), the `http-bridge` move is done (2026-11-06, the procedure proof), and the `web-annotations` and `control-mcp` moves are done (2026-11-11, one change each; see "Assumptions and decisions"); `keyed-record-format.ts` is placed in the shared kernel at the `core/` root (2026-11-13, see task 7); and the `opencode` move is done (2026-11-16: the root `opencode-*` and `opencode2-*` files moved into `opencode2/`).
 2. **Wave 2 (mid-tier)**: eleven domains from `plan-usage` to `native-agent`. Status: done: the `plan-usage` move is done (2026-11-13), the `features` move is done (2026-11-14), the `previews` move is done (2026-11-16), the `worktrees` move is done (2026-11-17), the `git` move is done (2026-11-18), the `coordinator` move is done (2026-11-20), the `agent-accounts` move is done (2026-11-20), the `workflows` move is done (2026-11-20), the `review` move is done (2026-11-20), the `build-pipeline` move is done (2026-11-20) and the `native-agent` move is done (2026-11-20), one change each (see "Assumptions and decisions"). Wave 2 is done; wave 3 is in progress (task 3).
-3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: in progress: the `recurring` and `tmux` moves are done (2026-11-22, one change each; see "Assumptions and decisions"); `terminals`, `containers`, `environments` and `storage` are open, one change each.
+3. **Wave 3 (hubs)**: `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`. Status: in progress: the `recurring`, `tmux` and `terminals` moves are done (2026-11-22, one change each; see "Assumptions and decisions"); `containers`, `environments` and `storage` are open, one change each.
 4. **Last: `commands`**. Status: open (its prerequisite, 0011, is done).
 5. **Record the type-level import cycle**: re-measure and record it here. Status: done for the baseline (2026-10-28, see "Current state"); re-measure when the waves finish.
 6. **Folders created since the plan**: `nodes/`, `change-tracking/`, `transcript-artifacts/` and `scheduled-jobs/` exist without an `index.ts` or lint pattern. Status: done (2026-10-28): each has an `index.ts` and both lint patterns, production importers go through it, and `linting.md` asks new domain folders to start with one. Three more folders without one (`permission-rules/`, `opencode2/`, `self-improvement/`) were found on 2026-11-11; to-do 7800 (retired 2026-11-11) gave each an `index.ts` and both lint patterns (see "Current state").
@@ -68,7 +68,7 @@ Analysed 2026-10-27 against `main` at `863b5782`; tasks 1 and 6 re-checked 2026-
 
 **Context.** `terminals`, `tmux`, `recurring`, `containers`, `environments`, `storage`.
 
-**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)). Re-measured 2026-11-22 on `dd1391427` for the first slice: `recurring-*` was 4 source (`recurring-test-support.ts` included) / 3 tests (the table's 4 / 2 was stale on tests), with 50 production importers outside the domain in `apps/backend/src` (49 in `core/`, 17 of them in `build-pipeline/`, `change-tracking/`, `features/`, `git/`, `http-bridge/`, `native-agent/`, `public-api/`, `workflows/` and `worktrees/`, and `main.ts`) using 20 symbols from three modules, plus 68 tests and test-support files in `apps/backend/src`, 15 `apps/backend/tests` files, four `apps/backend/scripts` files and two repository scripts; no `tests/unit` file imports it. The domain's own runtime dependencies are the protocol's `recurring-work` module and `native-session-invalidation-metrics.ts`, which `recurring-diagnostics.ts` reads. Re-measured 2026-11-22 on `81a501415` for the second slice: `tmux*` was 14 source (the seven-module `export *` barrel `tmux.ts` included) / 14 tests (the table's 14 / 14 held; the 11 / 3 above was stale), with 11 production importers outside the domain in `apps/backend/src` (all at the `core/` root, none in a domain folder) using 17 symbols from six modules, plus eight tests and test-support files in `apps/backend/src`, 27 `apps/backend/tests` files and four `apps/backend/scripts` files; no repository script, `tests/unit` file or renderer file imports it (the renderer's and the protocol's `tmux-*` modules are different files). The tmux module state is in the runtime (`runtime.tmux`, todo 0133, retired), so nothing held this slice back.
+**Investigation.** Counts today: `terminal-*` 2/2 and `transcript-*` 1/2, `tmux*` 11/3, `recurring-*` 4/2, `container-*` 23/11 and `docker-*` 7/2, `environment-*` 12/9, `storage*` 36/38. The storage repositories now exist (0009 and 0163 merged) and the over-limit storage files are split (todo 0214, retired on 2026-10-29; see [`storage.md`](../../architecture/storage.md#code-layout)), so the `storage` slice can be done once, and the tmux module state has since moved into the runtime (`runtime.tmux`, see [`backend-runtime.md`](../../architecture/backend-runtime.md)). Re-measured 2026-11-22 on `dd1391427` for the first slice: `recurring-*` was 4 source (`recurring-test-support.ts` included) / 3 tests (the table's 4 / 2 was stale on tests), with 50 production importers outside the domain in `apps/backend/src` (49 in `core/`, 17 of them in `build-pipeline/`, `change-tracking/`, `features/`, `git/`, `http-bridge/`, `native-agent/`, `public-api/`, `workflows/` and `worktrees/`, and `main.ts`) using 20 symbols from three modules, plus 68 tests and test-support files in `apps/backend/src`, 15 `apps/backend/tests` files, four `apps/backend/scripts` files and two repository scripts; no `tests/unit` file imports it. The domain's own runtime dependencies are the protocol's `recurring-work` module and `native-session-invalidation-metrics.ts`, which `recurring-diagnostics.ts` reads. Re-measured 2026-11-22 on `81a501415` for the second slice: `tmux*` was 14 source (the seven-module `export *` barrel `tmux.ts` included) / 14 tests (the table's 14 / 14 held; the 11 / 3 above was stale), with 11 production importers outside the domain in `apps/backend/src` (all at the `core/` root, none in a domain folder) using 17 symbols from six modules, plus eight tests and test-support files in `apps/backend/src`, 27 `apps/backend/tests` files and four `apps/backend/scripts` files; no repository script, `tests/unit` file or renderer file imports it (the renderer's and the protocol's `tmux-*` modules are different files). The tmux module state is in the runtime (`runtime.tmux`, todo 0133, retired), so nothing held this slice back. Re-measured 2026-11-22 on `3030e84a2` for the third slice: `terminal-*` and `transcript-*` were 8 source (`terminal-history-test-support.ts` included) / 14 tests (the table's 8 / 14 held; the 2/2 and 1/2 above were stale): six `terminal-*` source files with 11 tests, and two `transcript-*` source files (`transcript-progress.ts`, `transcript-media-pins.ts`) with three tests. The `terminal-*` files had six production importers outside the domain in `apps/backend/src` (five at the `core/` root and `tmux/session-manager.ts`) using five symbols from two modules (`terminal-runtime.ts`, `terminal-history.ts`), plus seven tests in `apps/backend/src`, four `apps/backend/tests` files, one `apps/backend/scripts` file and one repository script; no `tests/unit` file imports them. Their own dependencies are the root's `commands-context.ts`, `commands-review.ts`, `commands-terminal.ts`, `container-terminal-shell.ts` and `pty.ts` (from `terminal-runtime.ts`), the protocol's `terminal-history`, events and logger modules, and xterm. The two `transcript-*` files had eight production importers outside `native-agent/` (`agent-branch-observation.ts`, `environment-delete.ts`, `commands-registry-transcript-media.ts`, two in `review/` and three in `build-pipeline/`) and one inside it (`native-agent/tool-detail-reads.ts`), using ten symbols, plus three tests and one repository script (`scripts/efficiency/workloads-supervision.ts`); neither is terminal code (see "Assumptions and decisions"). No pull request was open.
 
 **Decisions.**
 
@@ -510,6 +510,26 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   at the root.
   Wave 3 is in progress: `terminals`, `containers`, `environments` and
   `storage` are left, one change each. See "Assumptions and decisions".
+- Done (task 3's `terminals` slice, 2026-11-22, against `main` at
+  `3030e84a2`): the six `terminal-*` source files and their 11 tests are in
+  `core/terminals/` without the prefix (`terminals/runtime.ts`,
+  `terminals/history.ts`, `terminals/history-scanners.ts`,
+  `terminals/parse-scheduler.ts`, `terminals/size-ownership.ts`,
+  `terminals/history-test-support.ts`, `terminals/history-part-1.test.ts`,
+  …), with an `index.ts` and both lint patterns. `index.ts` re-exports five
+  symbols from two modules (`runtime.ts`, `history.ts`), and all six
+  production importers outside the folder import it. Neither lint pattern has
+  an exception. The two `transcript-*` files the table also listed are not
+  terminal code: `transcript-progress.ts` (the supervisors' bounded
+  transcript progress samples) and `transcript-media-pins.ts` (saved copies
+  of the images transcript messages showed) moved, keeping their names, into
+  `core/native-agent/` with their three tests, and `native-agent/index.ts`
+  re-exports the ten symbols their eight outside importers use, with no new
+  exception. The terminal command files (`commands-terminal*.ts`,
+  `commands-registry-terminal.ts`), `pty.ts`, `container-terminal-shell.ts`
+  and `setup-terminal-attempt.ts` stay at the root. Wave 3 is in progress:
+  `containers`, `environments` and `storage` are left, one change each. See
+  "Assumptions and decisions".
 - Type-level import cycle (task 5, measured 2026-10-28 on `79f3bc97`): the
   largest strongly connected component of `core/` holds **292 files** (244 at
   the root, 32 in `public-api/`, 6 in `nodes/`, 4 in `change-tracking/`, 3 in
@@ -553,7 +573,9 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   once rebased onto `a01039913`, which added two root files; and after the
   `recurring` slice on 2026-11-22 it holds 541 and 530, down from 545 and
   533 just before it; and after the `tmux` slice on 2026-11-22 it holds 528
-  and 516, down from 542 and 530 just before it).
+  and 516, down from 542 and 530 just before it; and after the `terminals`
+  slice on 2026-11-22 it holds 520 and 502, down from 528 and 516 just
+  before it).
 - Prefix counts at the root:
 
   | Domain | Prefixes | Source | Tests |
@@ -574,7 +596,7 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   | review | `multi-review-*`, `review-*`, `retired-looped-review-cleanup.ts`, `workflow-tab-actions.ts` | done (50 / 56 moved, 2026-11-20) | |
   | build-pipeline | `build-pipeline-*`, `control-workflow-summary.ts`, `pipeline-worker-*` | done (60 / 68 moved, 2026-11-20) | |
   | native-agent | `native-agent-*`, `native-terminal-messages.ts`, `workflow-account-handoff.test.ts` | done (80 / 124 moved, 2026-11-20) | |
-  | terminals | `terminal-*`, `transcript-*` | 8 | 14 |
+  | terminals | `terminal-*`, `transcript-*` | done (6 / 11 moved into `terminals/`, 2 / 3 into `native-agent/`, 2026-11-22) | |
   | tmux | `tmux*` | done (14 / 14 moved, 2026-11-22) | |
   | recurring | `recurring-*` | done (4 / 3 moved, 2026-11-22) | |
   | containers | `container-*`, `docker-*` | 47 | 27 |
@@ -589,7 +611,8 @@ file and a deep import is a lint error. The shared kernel stays at the root.
   from the plan; the `storage` and `commands` rows were re-counted on
   2026-11-22 at `dd1391427`, before the `recurring` slice; and every open
   row was re-counted on 2026-11-22 at `81a501415`, before the `tmux` slice
-  (only `commands` changed, from 86 to 87 source files). These are file
+  (only `commands` changed, from 86 to 87 source files), and again at
+  `3030e84a2`, before the `terminals` slice (none changed). These are file
   counts only. Importer and dependency counts go stale within a
   day, so each slice re-measures them (step 1 below).
 - `keyed-record-*` is now one file, `keyed-record-format.ts`: the keyed-record
@@ -640,15 +663,15 @@ before the busy ones move.
 2. **Wave 2 (mid-tier):** done. (`plan-usage`, `features`, `previews`,
    `worktrees`, `git`, `coordinator`, `agent-accounts`, `workflows`,
    `review`, `build-pipeline` and `native-agent`.)
-3. **Wave 3 (hubs), in progress:** `recurring` and `tmux` are done
-   (2026-11-22); `terminals`, `containers`, `environments` and `storage` are
-   left, one PR each. Many files import these, and `containers` is
+3. **Wave 3 (hubs), in progress:** `recurring`, `tmux` and `terminals` are
+   done (2026-11-22); `containers`, `environments` and `storage` are left,
+   one PR each. Many files import these, and `containers` is
    also imported from outside `core/` (as `previews` was), so these slices
    touch the most files.
 4. **Last: `commands`.** It depends on most other domains. Its former
    `commands-runtime-state.ts` was deleted by todo 0011;
    the state now lives in `BackendRuntime` (`backend-runtime.ts`,
-   `terminal-runtime.ts`, `local-server-runtime.ts`,
+   `terminals/runtime.ts`, `local-server-runtime.ts`,
    `environment-operations.ts`).
 5. **Record the type-level import cycle.** Re-measure the type-level cycle
    across `core/` (112 files on 2026-10-14) and record it here. Baseline
@@ -730,9 +753,155 @@ task 2's `worktrees` slice (2026-11-17), task 2's `git` slice
 (2026-11-20), task 2's `review` slice (2026-11-20), task 2's
 `build-pipeline` slice (2026-11-20), task 2's `native-agent` slice
 (2026-11-20), task 3's `recurring` slice with the codemod's permalink
-fix (2026-11-22), and task 3's `tmux` slice (2026-11-22).
+fix (2026-11-22), task 3's `tmux` slice (2026-11-22), and task 3's
+`terminals` slice (2026-11-22).
 The other moves in waves 3 and 4 (tasks 3 and 4) were left open on purpose:
 they move many files that other work in flight touches.
+
+### Task 3: `terminals` as the third wave 3 slice
+
+- Chosen: one domain, `terminals`, moved with
+  `bun scripts/move-backend-modules.ts --prefix terminal- --into terminals`
+  against `main` at `3030e84a2` (run under the pinned Bun, `mise exec --
+  bun …`, as in the `tmux` slice). Every file dropped the prefix
+  (`terminal-runtime.ts` → `terminals/runtime.ts`,
+  `terminal-history-part-1.test.ts` → `terminals/history-part-1.test.ts`);
+  no two moved files map to the same name. The two `transcript-*` files
+  moved in a second codemod run with `--map`, into `native-agent/` under
+  their own names (see membership below); `native-agent/` had no
+  `transcript-progress*` or `transcript-media-pins*` file, so nothing
+  collided. The folder is `terminals/`, plural, as the domain row names it,
+  so its pattern does not catch the renderer's `components/terminal/`.
+- Membership. The `terminal-*` files are the backend's terminal sessions:
+  the runtime slice (`runtime.terminals`, every live PTY session, its
+  bounded output buffer and activity settling), durable terminal history
+  and its two helpers (the headless parse budget and the control-sequence
+  scanners), size ownership, and the history tests' harness. Edge cases,
+  each decided here:
+  - `transcript-*` went into `native-agent/`, not `terminals/`. Options:
+    (a) `native-agent/` (chosen): `transcript-progress.ts` samples a native
+    agent provider's bounded transcript snapshot (`ProviderTranscriptSnapshot`
+    on `NativeAgentRuntimeProvider`) for the review and pipeline
+    supervisors, and `transcript-media-pins.ts` keeps the saved copies of the
+    images a native transcript message showed, which
+    `native-agent/tool-detail-reads.ts` already read; neither touches a
+    terminal. (b) `terminals/`, as the table's row said: one folder for the
+    whole row, but it would make the review and pipeline supervisors, the
+    environment deletion and the media command depend on the terminals
+    domain for transcript code. (c) Leave both at the root as unplaced:
+    no domain grows, but the root keeps two files with no owner and a later
+    slice has to decide again. (d) `transcript-progress.ts` into
+    `build-pipeline/` (it imports `legacyTranscriptFingerprint` from
+    there): three of its six importers are pipeline files, but the other
+    three are review and branch observation, and the media pins would still
+    need a home. With (a), `native-agent/index.ts` re-exports the ten symbols
+    their eight production importers outside the folder use, and
+    `bunx oxlint apps/backend/src` reports no `import(no-cycle)` (a probe,
+    reverted, that made `native-agent/transcript-media-pins.ts` import
+    `backend-runtime.ts` reported 652, so the check sees cycles through that
+    `index.ts`). (e) `transcript-artifacts/` for the media pins: it holds
+    the transcript artifacts and their media streams, but the pins' one
+    production reader inside a domain folder is
+    `native-agent/tool-detail-reads.ts`, and their store is keyed by
+    conversation and message, so `native-agent/` keeps that read inside one
+    folder.
+  - Terminal files without the prefix stay at the root:
+    `commands-terminal*.ts` and `commands-registry-terminal.ts` (the
+    `commands` slice), `container-terminal-shell.ts` (the `containers`
+    slice), `pty.ts` (the PTY wrapper the runtime, the environment commands
+    and the setup terminal share) and `setup-terminal-attempt.ts`. Options:
+    (a) leave them (chosen): the ticket keeps commands and containers files
+    at the root, and moving the other two would widen a prefix move into a
+    regrouping, as the `recurring` slice also decided; (b) move `pty.ts` and
+    `setup-terminal-attempt.ts` in: closer to a complete terminals domain,
+    but not `terminal-*` files, and `pty.ts` is also a commands dependency.
+  - No `terminal-*` file is really tmux code: the claude-tmux pane terminal
+    is already `tmux/interactive.ts`, and `tmux/session-manager.ts` only
+    takes the runtime's type, now through `terminals/index.ts`.
+  - The protocol's `terminal-history.ts`, `terminal-size-ownership.ts`,
+    `terminal-websocket.ts` and `transcript-media-pins.ts`, the renderer's
+    `components/terminal/` and `apps/backend/tests/terminal-*` keep their
+    names: they are outside `core/`.
+- Measured before the move: see task 3's investigation. The codemod moved
+  17 files and rewrote 42 for `terminal-`, and moved 5 and rewrote 17 for
+  the map. No worker or bundle entry point names a moved file, no
+  `<revision>:<path>` string did, and no GitHub permalink did. One
+  slow-tier glob named moved tests (`src/core/terminal-history-part-*.test.ts`);
+  it is now `src/core/terminals/history-part-*.test.ts`, which matches the
+  same four files. The codemod rewrote one `tests/source-guards/baseline.json`
+  entry (`terminals/history-part-2.test.ts`), which stays in order. It
+  rewrote the "Owner moved" lines of flake records 0213 and 0954, which name
+  where the test is now, not a recorded command, so the rewrites stay, as in
+  the earlier slices.
+- `index.ts` holds five symbols from two modules (`TerminalRuntime`,
+  `TerminalRuntimeOptions`, `TerminalOutputBuffer`, `TerminalSessionConfig`
+  from `runtime.ts`, and the `TerminalHistory` type from `history.ts`). All
+  six production importers in `apps/backend/src` import it
+  (`backend-runtime.ts`, `commands-environment.ts`,
+  `commands-registry-terminal.ts`, `commands-terminal.ts`,
+  `setup-terminal-attempt.ts`, `tmux/session-manager.ts`). Tests, the
+  `apps/backend/tests` files, `apps/backend/scripts/terminal-latency.ts` and
+  `scripts/benchmark-terminal-history.ts` keep deep imports (procedure step
+  3).
+- Named exceptions: none, in either override. With every production
+  importer routed through `index.ts`, `bunx oxlint apps/backend/src` reports
+  no `import(no-cycle)` and no restricted import; a probe file
+  deep-importing `terminals/history.js` was reported by the new pattern.
+  Options: (a) no exception (chosen): the smallest set is empty;
+  (b) keep `backend-runtime.ts` and the command files deep as before: nothing
+  requires it. The `apps/backend/src/**` pattern also carries
+  `!@orkestrator/protocol/contract/domains/terminals/*`: the protocol has a
+  `contract/domains/terminals/` folder, and the backend imports its barrel
+  (`@orkestrator/protocol/contract/domains/terminals`), so a future import of
+  one of its files would otherwise be reported as a deep import of this
+  domain (as the `change-tracking` pattern skips the protocol's
+  `node/change-tracking/*`). It is a collision guard, not a deep-import
+  exception. The reasons are written in `index.ts`'s header and in
+  `docs/development/linting.md`.
+- Paths built from a moved file's own location: no moved file uses
+  `import.meta.dir`, `import.meta.url` or `__dirname`.
+  `terminals/runtime.test.ts`'s import of `tests/helpers/controlled-timeout.js`
+  gained one `../`, which the codemod re-relativised.
+  `scripts/efficiency/workloads-supervision.ts` loads
+  `transcript-progress.ts` by repository path through `loadOptional`; the
+  codemod rewrote both strings to `native-agent/transcript-progress.ts`.
+  The efficiency harness falls back to `core/transcript-progress.ts` within
+  the measured root when it predates the move.
+  `apps/backend/scripts/terminal-latency/producer.ts` prints
+  `apps/backend/src/core/terminal-history.ts` as fake build output; the
+  codemod's rewrite of that string was reverted, because it is benchmark
+  load text, not a reference, and changing it would change the producer's
+  bytes.
+- Hand fixes after the codemod: bare file names in source comments (the
+  moved files' own headers, which now name their siblings without a folder;
+  `commands-registry-terminal.ts`, `terminal-websocket-server.ts`,
+  `apps/backend/tests/commands-terminal-size-ownership.test.ts`,
+  `apps/backend/tests/terminal-websocket-size-ownership.test.ts` and
+  `e2e/agent-testing/terminal-size-ownership.spec.ts` for size ownership;
+  `agent-branch-observation.ts`, `build-pipeline/index.ts`,
+  `review/fanout-transcript.ts` and `review/progress.ts` for progress
+  samples), living docs (`backend-runtime.md`, `native-transcripts.md`,
+  `rich-transcripts.md`, `terminal-latency.md`) and to-do 8312's
+  `terminal-parse-scheduler.ts` and `terminal-history.ts` now read
+  `terminals/<name>.ts` or `native-agent/<name>.ts`. Left alone: bare names
+  in the protocol that mean the protocol's own `terminal-size-ownership.ts`
+  and `transcript-media-pins.ts`, the history tests' note that they were
+  split from `terminal-history.test.ts`, the data-directory names
+  `terminal-history` and `transcript-media-pins`, `test-wait-review.md`'s
+  dated table, flake records' prose, and the earlier slices' entries in this
+  section. `native-agent/index.ts`'s header names the two new modules.
+  `docs/development/linting.md`'s folder list names the new folder and says
+  why it has no exception. The area index's 0012 row records `terminals` as
+  done.
+- Lint patterns: `**/terminals/*` with `!**/terminals/index.js` and
+  `!@orkestrator/protocol/contract/domains/terminals/*` under
+  `apps/backend/src/**`, and `**/backend/src/core/terminals/*` with
+  `!…/index.js` under `tests/unit/**`. The `native-agent` patterns are
+  unchanged.
+- No manual checking is left: the move changes no behaviour, and what
+  remains (`mise run test`, the slow tier, `verify:packaged-backend`) is
+  agent work for the validation stage, so nothing was added to the
+  manual-test checklist (7568).
 
 ### Task 3: `tmux` as the second wave 3 slice
 

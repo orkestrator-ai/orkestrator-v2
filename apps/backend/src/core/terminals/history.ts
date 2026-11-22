@@ -8,8 +8,8 @@ import {
   TERMINAL_PARSER_CARRY_MAX_BYTES,
   trackParserCarry,
   type ParserState,
-} from "./terminal-history-scanners.js";
-import { HeadlessParseScheduler } from "./terminal-parse-scheduler.js";
+} from "./history-scanners.js";
+import { HeadlessParseScheduler } from "./parse-scheduler.js";
 import {
   DEFAULT_TERMINAL_HISTORY_GLOBAL_RETENTION_MB,
   DEFAULT_TERMINAL_HISTORY_RETENTION_DAYS,
@@ -409,7 +409,7 @@ export class TerminalHistory {
   private readonly maxGlobalPendingChunks: number;
   private readonly pageReadHook: (() => Promise<void>) | null;
   private readonly serializeHook: TerminalHistoryOptions["serializeHook"];
-  /** Meters headless parsing so no burst holds the event loop (`terminal-parse-scheduler.ts`). */
+  /** Meters headless parsing so no burst holds the event loop (`parse-scheduler.ts`). */
   private readonly parser: HeadlessParseScheduler;
 
   constructor(options: TerminalHistoryOptions = {}) {

@@ -28,7 +28,7 @@ native transcript windows keep the contract below instead.
 | `apps/backend/src/core/native-agent/direct-history.ts` | v2 history cursors and `DirectHistoryPageCache` |
 | `packages/protocol/src/native-agent-transcript-patch.ts` | Part-level patches inside a delta |
 | `apps/backend/src/core/native-agent/display-tail-scheduler.ts` | Restart-preview checkpoints |
-| `apps/backend/src/core/transcript-progress.ts` | Progress samples and versioned digests |
+| `apps/backend/src/core/native-agent/transcript-progress.ts` | Progress samples and versioned digests |
 | `apps/backend/src/core/build-pipeline/transcript-store.ts`, `build-pipeline/transcript-checkpoints.ts` | Durable pipeline transcripts and when they are written |
 
 ## Bridge reads
@@ -572,7 +572,7 @@ but approvals, dispatch and workflow advancement use authoritative state.
 
 ## Workflow reads
 
-**Progress probes** (`transcript-progress.ts`) sample the newest
+**Progress probes** (`native-agent/transcript-progress.ts`) sample the newest
 `PROGRESS_TRANSCRIPT_WINDOW_MESSAGES` (8) rows within
 `PROGRESS_SNAPSHOT_TARGET_BYTES` (64 KiB), in the summary representation where
 the bridge serves it, conditionally on the last source token (kept only up to

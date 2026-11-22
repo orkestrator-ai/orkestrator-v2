@@ -12,7 +12,10 @@
 // `subork-host.ts`), handoffs, catalogues, session titles, and the transcript
 // projection with its read models (`transcript-projection.ts`, `projection-*.ts`,
 // `progressive-*.ts`, `display-tail*.ts`, `full-projection.ts`, …) and the
-// terminal rows it adds (`terminal-messages.ts`). The
+// terminal rows it adds (`terminal-messages.ts`), the bounded transcript
+// samples that review and pipeline supervisors compare for progress
+// (`transcript-progress.ts`), and the saved copies of the local images
+// transcript messages showed (`transcript-media-pins.ts`). The
 // session stores (`storage-native*.ts`), the native commands
 // (`commands-registry-native*.ts`) and the session invalidation metrics
 // (`native-session-invalidation-metrics.ts`, which the storage layer and the
@@ -81,3 +84,14 @@ export {
 } from "./service-projection-artifacts.js";
 export { nativeAgentSessionWithControls } from "./session-controls.js";
 export { nativeAgentSessionStorageKey } from "./session-key.js";
+export { transcriptMediaPins, type TranscriptMediaFileRead } from "./transcript-media-pins.js";
+export {
+  compareProgressDigests,
+  hasProgressSnapshot,
+  legacyProgressDigest,
+  PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
+  readTranscriptProgressSample,
+  type KnownProgressSource,
+  type ProgressReadKind,
+  type ProgressSample,
+} from "./transcript-progress.js";

@@ -5,7 +5,7 @@ import {
   trackParserCarry,
   type ArchiveScanState,
   type ParserCarryState,
-} from "./terminal-history-scanners.js";
+} from "./history-scanners.js";
 
 // The per-character scanners these replaced, kept verbatim as the reference
 // the code-unit scanners must agree with on every input.

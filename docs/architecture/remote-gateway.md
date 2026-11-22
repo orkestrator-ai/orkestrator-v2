@@ -369,7 +369,7 @@ HTTP/1.1 and HTTP/2 test proxies, and in real browsers.
 One terminal can be open on several clients at once (a desktop window, a
 browser, a phone), and each fits it to its own pane. The PTY has one size, so
 the backend keeps one size owner per session
-(`apps/backend/src/core/terminal-size-ownership.ts`; the rule is described in
+(`apps/backend/src/core/terminals/size-ownership.ts`; the rule is described in
 `packages/protocol/src/terminal-size-ownership.ts`):
 
 - **Claim.** A click, tap, or keyboard or paste input sends `claim_terminal_size`, which

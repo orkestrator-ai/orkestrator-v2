@@ -403,6 +403,48 @@ export const copyExternalFileCommand = defineCommand({
   critical: [],
 });
 
+/** One confined step of a browser folder import, bound to its selected destination. */
+export const importExternalEntryCommand = defineCommand({
+  domain: filesDomain,
+  name: "import_external_entry",
+  since: 1,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    environmentId: Schema.String,
+    target: Schema.Struct({
+      kind: Schema.Literals(["local", "container"]),
+      identity: Schema.String,
+    }),
+    action: Schema.Union([
+      Schema.Struct({
+        kind: Schema.Literal("stage"),
+        directory: Schema.String,
+        name: Schema.String,
+      }),
+      Schema.Struct({
+        kind: Schema.Literal("mkdir"),
+        directory: Schema.String,
+        name: Schema.String,
+      }),
+      Schema.Struct({
+        kind: Schema.Literal("copy"),
+        directory: Schema.String,
+        name: Schema.String,
+        base64Data: Schema.String,
+      }),
+      Schema.Struct({
+        kind: Schema.Literal("publish"),
+        stagingPath: Schema.String,
+        name: Schema.String,
+      }),
+      Schema.Struct({ kind: Schema.Literal("discard"), stagingPath: Schema.String }),
+    ]),
+  }),
+  result: Schema.String,
+  critical: ["target"],
+});
+
 // --- Mutations by environment: each answers the affected workspace path ---
 
 const pathMutation = { environmentId: Schema.String, filePath: Schema.String };
@@ -622,6 +664,7 @@ export const FILES_COMMANDS = [
   writeContainerFileCommand,
   writeInitialPromptAttachmentsCommand,
   copyExternalFileCommand,
+  importExternalEntryCommand,
   revertLocalFileCommand,
   revertContainerFileCommand,
   deleteLocalFileCommand,

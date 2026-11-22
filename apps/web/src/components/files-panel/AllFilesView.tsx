@@ -1,5 +1,6 @@
 import { useMemo, useState, type DragEvent, type MouseEvent, type ReactNode } from "react";
 import { useFilesPanelStore } from "@/stores";
+import type { ExternalFileDrop } from "@/lib/external-file-drop";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useTerminalContext, type CreateFileTabOptions } from "@/contexts";
 import { isDesignFilePath } from "@/components/design/design-open-file";
@@ -9,7 +10,6 @@ import {
   FileTreeNode,
   isExternalFileDrag,
   isWorkspaceFileDrag,
-  reportUnsupportedDroppedDirectories,
   workspaceParentDirectory,
 } from "./FileTreeNode";
 import { CreateFileDialog } from "./CreateFileDialog";
@@ -53,7 +53,8 @@ interface AllFilesViewProps {
   onDelete?: (paths: string[]) => void;
   onDeleteFolder?: (path: string) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
-  onCopyFiles?: (files: File[], destinationDirectory: string) => void;
+  /** Copies files and whole folders dropped from the operating system. */
+  onCopyFiles?: (drop: ExternalFileDrop, destinationDirectory: string) => void;
   onCreateFolder?: (parentDirectory: string, folderName: string) => Promise<string>;
   /** Creates an empty file and resolves to its workspace path; refuses an existing name. */
   onCreateFile?: (parentDirectory: string, fileName: string) => Promise<string>;
@@ -301,12 +302,10 @@ export function AllFilesView({
       return;
     }
     if (onCopyFiles && isExternalFileDrag(event)) {
-      const { files, directoryCount } = externalFilesFromDataTransfer(event.dataTransfer);
-      if (files.length === 0 && directoryCount === 0) return;
+      const drop = externalFilesFromDataTransfer(event.dataTransfer);
+      if (drop.files.length === 0 && drop.folders.length === 0) return;
       event.preventDefault();
-      reportUnsupportedDroppedDirectories(directoryCount);
-      if (files.length === 0) return;
-      onCopyFiles(files, ".");
+      onCopyFiles(drop, ".");
     }
   };
 

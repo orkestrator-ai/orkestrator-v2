@@ -38,6 +38,7 @@ import { parseTerminalSizeClientId } from "@orkestrator/protocol/terminal-size-o
 import {
   checkContainerWorkspacePathsCommand,
   copyExternalFileCommand,
+  importExternalEntryCommand,
   createContainerFileCommand,
   createContainerFolderCommand,
   createLocalFileCommand,
@@ -185,7 +186,6 @@ import {
   moveLocalFile,
   renameLocalFile,
   copyExternalFileToLocalWorkspace,
-  containerAttachmentWriteFailure,
   createLocalFolder,
   requireLocalMutationEnvironment,
   requireContainerMutationEnvironment,
@@ -204,6 +204,10 @@ import {
   MAX_FILE_TREE_NODES,
   parseContainerFileSubtree,
 } from "./commands-helpers.js";
+import {
+  importExternalEntry,
+  copyExternalFileToContainerWorkspace,
+} from "./commands-external-import.js";
 import { conditionalSnapshot } from "./commands-terminal.js";
 import { createContainerFile, createLocalFile } from "./commands-file-create.js";
 import type { GitFileChange } from "./commands-helpers.js";
@@ -1723,6 +1727,29 @@ export function registerTerminalCommands(
   );
 
   register(
+    importExternalEntryCommand,
+    async ({ environmentId, target, action }, context) => {
+      const apply = async (environment: Environment) => {
+        const lookup =
+          environment.environmentType === "local"
+            ? { worktreePath: environment.worktreePath! }
+            : { containerId: environment.containerId! };
+        const result = await importExternalEntry(lookup, target, action, dependencies);
+        if (action.kind === "publish" || action.kind === "copy" || action.kind === "discard") {
+          context.runtime.diffStats.service.invalidateChanges(lookup);
+          context.runtime.diffStats.service.refresh(environmentId);
+        }
+        return result;
+      };
+      if (target.kind === "local") {
+        return withLocalFileMutation(context, environmentId, apply);
+      }
+      return apply(await requireContainerMutationEnvironment(context.storage, environmentId));
+    },
+    ASYNC_HANDLER,
+  );
+
+  register(
     copyExternalFileCommand,
     async (
       {
@@ -1750,41 +1777,12 @@ export function registerTerminalCommands(
           context.storage,
           environmentIdString,
         );
-        try {
-          await dependencies.runContainerFileCopyCommand(
-            "docker",
-            [
-              "exec",
-              "-i",
-              container.containerId!,
-              "node",
-              "-e",
-              CONTAINER_PINNED_ATTACHMENT_WRITE,
-              "/workspace",
-              copy.directory,
-              copy.fileName,
-              String(base64DecodedByteLength(data)),
-              "",
-              "exclusive",
-              String(0o644),
-              "existing",
-            ],
-            { stdin: data, timeoutMs: dependencies.containerFileCopyTimeoutMs },
-          );
-        } catch (error) {
-          const failure = containerAttachmentWriteFailure(error);
-          if (failure === "exists") {
-            throw new Error(`A file already exists at ${copy.destination}`);
-          }
-          if (failure === "missing-parent") {
-            throw new Error(
-              copy.directory === "."
-                ? "Workspace root is not available"
-                : `Destination directory no longer exists: ${copy.directory}`,
-            );
-          }
-          throw new Error("The file could not be copied into the container workspace");
-        }
+        await copyExternalFileToContainerWorkspace(
+          container.containerId!,
+          copy,
+          data,
+          dependencies,
+        );
         context.runtime.diffStats.service.invalidateChanges({
           containerId: container.containerId!,
         });

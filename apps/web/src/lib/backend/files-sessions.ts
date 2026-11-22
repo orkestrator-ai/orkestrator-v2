@@ -1,5 +1,5 @@
 import { asWebModel, nativeSessions } from "@/lib/node-scope/domains/native-sessions";
-import { files } from "@/lib/node-scope/domains/files";
+import { files, type FilesApi } from "@/lib/node-scope/domains/files";
 import { git } from "@/lib/node-scope/domains/git";
 import { pullRequests } from "@/lib/node-scope/domains/pull-requests";
 import type { FileContentSchema } from "@orkestrator/protocol/contract/domains/files";
@@ -389,6 +389,12 @@ export function createFilesSessionsApi(client: BackendClient) {
       fileName,
       base64Data,
     });
+  }
+
+  function importExternalEntry(
+    args: Parameters<FilesApi["import_external_entry"]>[0],
+  ): Promise<string> {
+    return filesDomain().import_external_entry(args);
   }
 
   async function getLocalGitStatusSnapshot(
@@ -912,6 +918,7 @@ export function createFilesSessionsApi(client: BackendClient) {
     createContainerFolder,
     createContainerFile,
     copyExternalFile,
+    importExternalEntry,
     getLocalGitStatusSnapshot,
     getEnvironmentDiffStats,
     getEnvironmentHead,
@@ -979,6 +986,7 @@ export const {
   createContainerFolder,
   createContainerFile,
   copyExternalFile,
+  importExternalEntry,
   getLocalGitStatusSnapshot,
   getEnvironmentDiffStats,
   getEnvironmentHead,

@@ -1,5 +1,4 @@
 import { memo, useState, type DragEvent, type MouseEvent } from "react";
-import { toast } from "sonner";
 import {
   ChevronRight,
   Copy,
@@ -25,6 +24,11 @@ import {
 } from "@/components/ui/context-menu";
 import { copyFilePath } from "./copy-file-path";
 import {
+  isDroppedDirectoryEntry,
+  type DroppedDirectoryEntry,
+  type ExternalFileDrop,
+} from "@/lib/external-file-drop";
+import {
   decodeWorkspaceFileDrag,
   encodeWorkspaceFileDrag,
   pathsForFileAction,
@@ -43,43 +47,36 @@ export function isExternalFileDrag(event: DragEvent<HTMLElement>): boolean {
   return Array.from(event.dataTransfer.types).includes(EXTERNAL_FILE_DRAG_TYPE);
 }
 
-type FileSystemEntryLike = { isDirectory?: boolean };
-
-export function externalFilesFromDataTransfer(dataTransfer: DataTransfer): {
-  files: File[];
-  directoryCount: number;
-} {
+/**
+ * Split an operating-system drop into loose files and whole folders. Must run
+ * inside the drop event: the browser empties the `DataTransfer` afterwards.
+ * Folder entries stay readable later, when the copy walks them.
+ */
+export function externalFilesFromDataTransfer(dataTransfer: DataTransfer): ExternalFileDrop {
   const items = Array.from(dataTransfer.items);
   if (items.length === 0) {
-    return { files: Array.from(dataTransfer.files), directoryCount: 0 };
+    return { files: Array.from(dataTransfer.files), folders: [] };
   }
 
   const files: File[] = [];
-  let directoryCount = 0;
+  const folders: DroppedDirectoryEntry[] = [];
   for (const item of items) {
     if (item.kind !== "file") continue;
     const entry = (
-      item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }
+      item as DataTransferItem & { webkitGetAsEntry?: () => unknown }
     ).webkitGetAsEntry?.();
-    if (entry?.isDirectory) {
-      directoryCount += 1;
+    if (isDroppedDirectoryEntry(entry)) {
+      folders.push(entry);
       continue;
     }
     const file = item.getAsFile();
     if (file) files.push(file);
   }
 
-  if (directoryCount === 0 && files.length === 0) {
-    return { files: Array.from(dataTransfer.files), directoryCount: 0 };
+  if (folders.length === 0 && files.length === 0) {
+    return { files: Array.from(dataTransfer.files), folders: [] };
   }
-  return { files, directoryCount };
-}
-
-export function reportUnsupportedDroppedDirectories(directoryCount: number): void {
-  if (directoryCount === 0) return;
-  toast.error(directoryCount === 1 ? "Folder cannot be copied" : "Folders cannot be copied", {
-    description: "Drop individual files into the workspace instead.",
-  });
+  return { files, folders };
 }
 
 export function workspaceParentDirectory(filePath: string): string {
@@ -104,7 +101,8 @@ interface FileTreeNodeProps {
   /** Deletes a folder and everything in it. Folders are deleted one at a time. */
   onDeleteFolder?: (path: string) => void;
   onMove?: (sourcePaths: string[], destinationDirectory: string) => void;
-  onCopyFiles?: (files: File[], destinationDirectory: string) => void;
+  /** Copies files and whole folders dropped from the operating system. */
+  onCopyFiles?: (drop: ExternalFileDrop, destinationDirectory: string) => void;
   onRequestMove?: (sourcePaths: string[]) => void;
   /** Asks to rename a file or folder in place; `isFolder` picks the dialog's wording. */
   onRequestRename?: (path: string, isFolder: boolean) => void;
@@ -193,13 +191,11 @@ export const FileTreeNode = memo(function FileTreeNode({
               return;
             }
             if (onCopyFiles && isExternalFileDrag(event)) {
-              const { files, directoryCount } = externalFilesFromDataTransfer(event.dataTransfer);
-              if (files.length === 0 && directoryCount === 0) return;
+              const drop = externalFilesFromDataTransfer(event.dataTransfer);
+              if (drop.files.length === 0 && drop.folders.length === 0) return;
               event.preventDefault();
-              reportUnsupportedDroppedDirectories(directoryCount);
-              if (files.length === 0) return;
               setFolderExpanded(item.path, true);
-              onCopyFiles(files, item.path);
+              onCopyFiles(drop, item.path);
             }
           }}
           className={cn(

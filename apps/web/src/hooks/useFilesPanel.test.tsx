@@ -5,7 +5,13 @@ import { renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import { environmentStore, filesPanelStore, projectStore, uiStore } from "@/stores";
 import type { Environment, Project } from "@/types";
 import * as realBackend from "@/lib/backend";
-import { mockToastError, mockToastSuccess } from "../../../../tests/mocks/sonner";
+import {
+  mockToastDismiss,
+  mockToastError,
+  mockToastLoading,
+  mockToastSuccess,
+} from "../../../../tests/mocks/sonner";
+import type { DroppedDirectoryEntry, DroppedEntry } from "@/lib/external-file-drop";
 import type { ChangesRefreshResult } from "@orkestrator/protocol/change-resources";
 import { changeProjectionStore } from "@/stores/changeProjectionStore";
 import { worktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
@@ -20,6 +26,10 @@ const realBackendSnapshot = { ...realBackend };
 const copyExternalFileMock = mock(
   async (_environmentId: string, directory: string, fileName: string, _base64Data: string) =>
     directory === "." ? fileName : `${directory}/${fileName}`,
+);
+const createLocalFolderMock = mock(
+  async (_environmentId: string, parentDirectory: string, folderName: string) =>
+    parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`,
 );
 const getLocalFileTreeSnapshotMock = mock(async (_worktreePath: string) => ({
   unchanged: false,
@@ -65,6 +75,7 @@ mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   ensureProjectHomeEnvironment: ensureProjectHomeEnvironmentMock,
   copyExternalFile: copyExternalFileMock,
+  createLocalFolder: createLocalFolderMock,
   getLocalFileTreeSnapshot: getLocalFileTreeSnapshotMock,
   getLocalFileSubtreeSnapshot: async (worktreePath: string, directory: string) => ({
     unchanged: false,
@@ -89,15 +100,51 @@ function droppedFile(name: string, bytes: number[]): File {
   } as File;
 }
 
+type FakeFolder = { [name: string]: FakeFolder | File };
+
+/** A dropped folder as `webkitGetAsEntry` hands it over. */
+function droppedFolder(name: string, tree: FakeFolder): DroppedDirectoryEntry {
+  const children: DroppedEntry[] = Object.entries(tree).map(([childName, child]) =>
+    "arrayBuffer" in child
+      ? {
+          name: childName,
+          isFile: true,
+          isDirectory: false,
+          file: (success: (file: File) => void) => success(child as File),
+        }
+      : droppedFolder(childName, child as FakeFolder),
+  );
+  return {
+    name,
+    isFile: false,
+    isDirectory: true,
+    createReader: () => {
+      let done = false;
+      return {
+        readEntries: (success) => {
+          success(done ? [] : children);
+          done = true;
+        },
+      };
+    },
+  };
+}
+
 beforeEach(() => {
   copyExternalFileMock.mockReset();
   copyExternalFileMock.mockImplementation(async (_environmentId, directory, fileName) =>
     directory === "." ? fileName : `${directory}/${fileName}`,
   );
+  createLocalFolderMock.mockReset();
+  createLocalFolderMock.mockImplementation(async (_environmentId, parentDirectory, folderName) =>
+    parentDirectory === "." ? folderName : `${parentDirectory}/${folderName}`,
+  );
   getLocalFileTreeSnapshotMock.mockClear();
   getLocalGitStatusSnapshotMock.mockClear();
   mockToastError.mockClear();
   mockToastSuccess.mockClear();
+  mockToastLoading.mockClear();
+  mockToastDismiss.mockClear();
   ensureProjectHomeEnvironmentMock.mockClear();
   refreshChangesMock.mockClear();
   resetChangeProjectionStore();
@@ -268,6 +315,109 @@ describe("useFilesPanel external file copies", () => {
       description: "The selected environment is not available",
     });
     expect(copyExternalFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFilesPanel external folder copies", () => {
+  test("recreates a dropped folder tree and copies every file into it", async () => {
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+    const folder = droppedFolder("temp", {
+      "DESIGN.md": droppedFile("DESIGN.md", [1]),
+      empty: {},
+      sub: { "deep.bin": droppedFile("deep.bin", [0, 255]) },
+      ".git": { HEAD: droppedFile("HEAD", [1]) },
+    });
+
+    await act(async () => {
+      await result.current.copyExternalFiles([droppedFile("loose.txt", [2])], "archive", [folder]);
+    });
+
+    expect(createLocalFolderMock.mock.calls).toEqual([
+      ["environment-1", "archive", "temp"],
+      ["environment-1", "archive/temp", "empty"],
+      ["environment-1", "archive/temp", "sub"],
+    ]);
+    expect(copyExternalFileMock.mock.calls).toEqual([
+      ["environment-1", "archive", "loose.txt", "Ag=="],
+      ["environment-1", "archive/temp", "DESIGN.md", "AQ=="],
+      ["environment-1", "archive/temp/sub", "deep.bin", "AP8="],
+    ]);
+    expect(getLocalFileTreeSnapshotMock).toHaveBeenCalled();
+    expect(mockToastLoading).toHaveBeenCalledWith("Copying folder…", {
+      description: "0 of 3 files",
+    });
+    expect(mockToastSuccess).toHaveBeenCalledWith("Files and folders copied", {
+      description: "1 folder, 3 files (skipped 1 Git or .DS_Store entry)",
+      id: "toast-id",
+    });
+    expect(result.current.fileActionPending).toBeNull();
+  });
+
+  test("names the folder it copied on its own", async () => {
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+
+    await act(async () => {
+      await result.current.copyExternalFiles([], ".", [
+        droppedFolder("temp", { "a.txt": droppedFile("a.txt", [1]) }),
+      ]);
+    });
+
+    expect(mockToastSuccess).toHaveBeenCalledWith("Folder copied", {
+      description: "temp: 1 file",
+      id: "toast-id",
+    });
+  });
+
+  test("skips the contents of a folder that cannot be created and reports the rest", async () => {
+    createLocalFolderMock.mockImplementation(async (_environmentId, parentDirectory, name) => {
+      if (name === "temp") throw new Error("A file or folder already exists at temp");
+      return parentDirectory === "." ? name : `${parentDirectory}/${name}`;
+    });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+
+    let failure: unknown;
+    await act(async () => {
+      try {
+        await result.current.copyExternalFiles([], ".", [
+          droppedFolder("temp", { "a.txt": droppedFile("a.txt", [1]), sub: {} }),
+          droppedFolder("other", { "b.txt": droppedFile("b.txt", [2]) }),
+        ]);
+      } catch (error) {
+        failure = error;
+      }
+    });
+
+    expect(createLocalFolderMock.mock.calls).toEqual([
+      ["environment-1", ".", "temp"],
+      ["environment-1", ".", "other"],
+    ]);
+    expect(copyExternalFileMock.mock.calls).toEqual([["environment-1", "other", "b.txt", "Ag=="]]);
+    expect(failure).toMatchObject({
+      name: "FileBatchActionError",
+      completedPaths: ["other", "other/b.txt"],
+      remainingPaths: ["temp", "temp/a.txt"],
+    });
+    expect(mockToastError).toHaveBeenCalledWith("Failed to copy folders", {
+      description:
+        "2 of 5 files were changed before the failure: A file or folder already exists at temp",
+      id: "toast-id",
+    });
+    expect(getLocalFileTreeSnapshotMock).toHaveBeenCalled();
+  });
+
+  test("refuses an oversized file inside a folder before writing anything", async () => {
+    const large = droppedFile("large.bin", []);
+    Object.defineProperty(large, "size", { value: MAX_EXTERNAL_FILE_DROP_BYTES + 1 });
+    const { result } = renderHookInAppCommandScope(() => useFilesPanel());
+
+    await expect(
+      result.current.copyExternalFiles([], ".", [droppedFolder("temp", { "large.bin": large })]),
+    ).rejects.toThrow("temp/large.bin exceeds the 8 MB file limit");
+    expect(createLocalFolderMock).not.toHaveBeenCalled();
+    expect(copyExternalFileMock).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith("File too large", {
+      description: "temp/large.bin exceeds the 8 MB file limit",
+    });
   });
 });
 

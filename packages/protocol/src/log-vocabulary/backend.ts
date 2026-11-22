@@ -52,7 +52,7 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "artifacts.live-unavailable": "Live interactive artifacts are unavailable.",
       "previous-run": {
         description:
-          "This start read how the previous run ended: `outcome` is `clean` when it reached the end of shutdown and `crashed` when it did not, `ranForMs` its length and `lastSeenAgoMs` the time since its last health row.",
+          "This start read how the previous run ended: `outcome` is `clean` when it reached the end of shutdown, `host-restarted` when it did not and the host booted after its last health row (a power loss, freeze or forced restart), and `crashed` otherwise; `ranForMs` is its length and `lastSeenAgoMs` the time since its last health row.",
         essential: true,
         fields: { outcome: "label", ranForMs: "number", lastSeenAgoMs: "number" },
       },

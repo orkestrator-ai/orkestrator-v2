@@ -43,6 +43,8 @@ export interface HealthRow {
   at: number;
   pid: number;
   startedAt: number;
+  /** On a `started` row: when the host booted. Absent from older backends' rows. */
+  bootAt?: number;
   uptimeMs?: number;
   rssBytes?: number;
   cpuUserMs?: number;
@@ -284,6 +286,7 @@ function parseHealth(value: unknown): HealthRow[] {
       at,
       pid,
       startedAt,
+      ...(kind === "started" && num(row.bootAt) !== null ? { bootAt: num(row.bootAt)! } : {}),
       uptimeMs: num(row.uptimeMs) ?? undefined,
       rssBytes: num(row.rssBytes) ?? undefined,
       cpuUserMs: num(row.cpuUserMs) ?? undefined,

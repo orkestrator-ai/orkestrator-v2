@@ -277,6 +277,9 @@ describe("backend previous-run", () => {
       ranForMs: 5,
       lastSeenAgoMs: 6,
     });
+    expect(projectEssentialRecord(entry("host-restarted"), TS)?.fields?.outcome).toBe(
+      "host-restarted",
+    );
     expect(projectEssentialRecord(entry("/home/someone"), TS)?.fields?.outcome).toBeUndefined();
   });
 });

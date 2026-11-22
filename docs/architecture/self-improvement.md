@@ -145,8 +145,9 @@ project.
   saved before leaves were read keep matching. A signal's evidence names the
   machines it was seen on (`machines=Desk, VPS`).
   - Fleet rates use occurrences per machine-day of observed source exposure.
-    Uncovered machines contribute no hours. For crashes, each machine uses the
-    health summary or the essential-log fallback that supplied its counts.
+    Uncovered machines contribute no hours. For crashes and host restarts, each
+    machine uses the health summary or the essential-log fallback that supplied
+    its counts.
   - Fix verdicts compare the machines that saw the baseline fault. If an
     affected leaf is unavailable when a ticket moves to Done, its last known
     version also contributes to the inferred fix boundary. Each machine must
@@ -289,9 +290,16 @@ runs. Ids of environments, sessions and processes are left out on purpose:
 | Throttled faults | the site's signature, counting `throttle.suppressed` | `tmux:poll.snapshot-failed:EACCES` |
 | Renderer failures | `renderer-errors:<class>:<boundary>:<fingerprint>` | `renderer-errors:TypeError:message-row:0badf00d` |
 | A process that died | `logging:writer-died:<owner>` | `logging:writer-died:desktop` |
-| Health rows | `backend:crashed`, `backend:rss-growth`, `backend:rss-peak`, `backend:cpu`, `backend:event-loop-stalls`, `recurring:<kind>:failed`, `recurring:<kind>:busy` | `recurring:git-scan:failed` |
+| Health rows | `backend:crashed`, `backend:host-restarted`, `backend:rss-growth`, `backend:rss-peak`, `backend:cpu`, `backend:event-loop-stalls`, `recurring:<kind>:failed`, `recurring:<kind>:busy` | `recurring:git-scan:failed` |
 | Database | `storage:slow:<db>:<op>:<table>`, `storage:lease-timeout:<family>`, `storage:lease-wait:<family>`, `storage:busy`, `storage:wal-large` | `storage:slow:main:select:sessions` |
 | Conversation themes | `insight:<theme>` | `insight:use-mise-not-npm` |
+
+`backend:crashed` counts backend runs with no clean exit. A run whose host
+booted after its last health row (a power loss, a freeze or a forced restart:
+the next run's `started` row records the boot time, `bootAt`) is
+`backend:host-restarted` instead, a `warning`, because no change to the app can
+write an exit marker through a power cut. Rows from backends that predate
+`bootAt` cannot tell the two apart and still count as crashes.
 
 Each signal's category has a weight:
 
@@ -304,7 +312,7 @@ Each signal's category has a weight:
 | `insight` | 30 | Conversation themes, ranked also by their severity |
 | `performance` | 20 | Stalls, slow SQLite operations, long lease waits |
 | `resource` | 15 | Memory growth or peak, CPU, busy recurring jobs, a large WAL |
-| `warning` | 8 | Other `warn` lines |
+| `warning` | 8 | Other `warn` lines; `backend:host-restarted`, a run the machine stopped under |
 
 The score is `weight × (1 + log10(1 + per day)) × (1 + min(active days, 7) / 7)`.
 

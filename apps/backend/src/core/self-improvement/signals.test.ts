@@ -256,6 +256,63 @@ describe("health signals", () => {
     expect(crashed.evidence.lastRssMiBBeforeCrash).toBe(900);
   });
 
+  test("a run the host booted after is a host restart, not a crash", () => {
+    const { signals } = extractSignals(
+      load({
+        createdAt: NOW,
+        appVersion: "2.40.0",
+        health: [
+          // Lost with the machine: the next run's host booted after its last row.
+          ...healthRun({ pid: 1, startedAt: NOW - 40 * HOUR, hours: 15, clean: false }),
+          // Killed on its own: its host had booted before it started.
+          ...healthRun({
+            pid: 2,
+            startedAt: NOW - 20 * HOUR,
+            hours: 2,
+            clean: false,
+            bootAt: NOW - 21 * HOUR,
+          }),
+          ...healthRun({
+            pid: 3,
+            startedAt: NOW - 10 * HOUR,
+            hours: 10,
+            clean: false,
+            bootAt: NOW - 21 * HOUR,
+          }),
+        ],
+      }),
+    );
+    const restarted = signal(signals, "backend:host-restarted");
+    expect(restarted).toMatchObject({ category: "warning", source: "health-summary", count: 1 });
+    expect(restarted.lastAt).toBe(new Date(NOW - 25 * HOUR).toISOString());
+    expect(restarted.evidence.longestRunHours).toBe(15);
+    const crashed = signal(signals, "backend:crashed");
+    expect(crashed.count).toBe(1);
+    expect(crashed.lastAt).toBe(new Date(NOW - 18 * HOUR).toISOString());
+  });
+
+  test("without health rows, previous-run host-restarted is a host restart, not a crash", () => {
+    const { signals } = extractSignals(
+      load({
+        createdAt: NOW,
+        essential: [
+          {
+            at: NOW - 2 * HOUR,
+            area: "backend",
+            event: "previous-run",
+            fields: { outcome: "host-restarted" },
+          },
+          { at: NOW - HOUR, area: "backend", event: "previous-run", fields: { outcome: "clean" } },
+        ],
+      }),
+    );
+    expect(signal(signals, "backend:host-restarted")).toMatchObject({
+      source: "essential-log",
+      count: 1,
+    });
+    expect(signals.some((candidate) => candidate.signature === "backend:crashed")).toBe(false);
+  });
+
   test("reports steady RSS growth through a long run, not a flat one", () => {
     const growing = extractSignals(
       load({

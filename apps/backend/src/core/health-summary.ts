@@ -1,8 +1,10 @@
+import { uptime as hostUptimeSeconds } from "node:os";
 import { eventLoopDiagnostics } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
 import { bridgeRestarts, type BridgeRestartSnapshot } from "./bridge-restarts.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
+import { hostRestartedAfter } from "./host-boot.js";
 import { recurringWorkMetrics } from "./recurring/index.js";
 import type { DatabaseSummaryCache } from "./database-summary.js";
 import type { StorageDatabase } from "./storage-database.js";
@@ -23,8 +25,11 @@ const log = createLogger("backend");
  * is. Backends sharing a directory each write their own rows, under one bound:
  * a second backend's health can be the thing someone is investigating.
  *
- * A marker-less run reads as crashed, which is right for a kill or a power
- * loss, and also what a shutdown failing late looks like.
+ * A marker-less run reads as crashed, which is right for a kill, and also what
+ * a shutdown failing late looks like. The `started` row also holds the host's
+ * boot time (`bootAt`), so a run the machine itself stopped under (a power
+ * loss, a freeze or a forced restart) reads as `host-restarted` instead: the
+ * host booted after that run's last row, and no exit marker survives that.
  *
  * The sample is one plain timer and not a recurring job, so it does not appear
  * in the figures it reports.
@@ -76,12 +81,29 @@ export interface HealthSample {
 }
 
 export type HealthRow =
-  | { kind: "started"; at: number; pid: number; startedAt: number }
+  | {
+      kind: "started";
+      at: number;
+      pid: number;
+      startedAt: number;
+      /**
+       * When the host last booted, to the second. Absent from a row an older
+       * backend wrote, and when the host's uptime could not be read.
+       */
+      bootAt?: number;
+    }
   | { kind: "clean-exit"; at: number; pid: number; startedAt: number }
   | ({ kind: "sample"; at: number; pid: number; startedAt: number } & HealthSample);
 
+/**
+ * How a run ended. `host-restarted`: no clean exit, and the host booted after
+ * the run's last row, so the machine stopped under it rather than the backend
+ * failing on its own.
+ */
+export type PreviousRunOutcome = "clean" | "crashed" | "host-restarted";
+
 export type PreviousRun =
-  { outcome: "none" } | { outcome: "clean" | "crashed"; ranForMs: number; lastSeenAgoMs: number };
+  { outcome: "none" } | { outcome: PreviousRunOutcome; ranForMs: number; lastSeenAgoMs: number };
 
 /** The instance's rows oldest first by time; zero-padded so the key order is that order. */
 function rowKey(row: HealthRow, sequence: number): string {
@@ -122,18 +144,21 @@ export function readHealthRows(database: StorageDatabase): HealthRow[] {
  * How the most recent earlier run ended. A run with no `clean-exit` crashed,
  * unless it looks alive: another backend sharing the directory, whose pid
  * answers and whose last row is recent. That one is skipped rather than reported
- * as a crash, and the pid and the row's age together cover a reused pid.
+ * as a crash, and the pid and the row's age together cover a reused pid. A run
+ * with no `clean-exit` whose host booted after its last row (this backend's
+ * boot, or one a later run recorded) is `host-restarted` (`host-boot.ts`).
  */
 export function previousRunOf(
   rows: readonly HealthRow[],
-  self: { pid: number; startedAt: number },
+  self: { pid: number; startedAt: number; bootAt?: number | null },
   now: number,
   isAlive: (pid: number) => boolean,
 ): PreviousRun {
   const runs = new Map<
     string,
-    { pid: number; startedAt: number; lastAt: number; clean: boolean }
+    { pid: number; startedAt: number; lastAt: number; clean: boolean; bootAt: number | null }
   >();
+  const bootTimes: (number | null)[] = [self.bootAt ?? null];
   for (const row of rows) {
     if (row.pid === self.pid && row.startedAt === self.startedAt) continue;
     const key = `${row.pid}:${row.startedAt}`;
@@ -142,16 +167,26 @@ export function previousRunOf(
       startedAt: row.startedAt,
       lastAt: row.at,
       clean: false,
+      bootAt: null,
     };
     run.lastAt = Math.max(run.lastAt, row.at);
     run.clean ||= row.kind === "clean-exit";
+    if (row.kind === "started" && typeof row.bootAt === "number") {
+      run.bootAt = row.bootAt;
+      bootTimes.push(row.bootAt);
+    }
     runs.set(key, run);
   }
   const newestFirst = [...runs.values()].sort((left, right) => right.startedAt - left.startedAt);
   for (const run of newestFirst) {
     if (!run.clean && now - run.lastAt < LIVE_BACKEND_WINDOW_MS && isAlive(run.pid)) continue;
+    const outcome: PreviousRunOutcome = run.clean
+      ? "clean"
+      : hostRestartedAfter(run.lastAt, run.bootAt, bootTimes)
+        ? "host-restarted"
+        : "crashed";
     return {
-      outcome: run.clean ? "clean" : "crashed",
+      outcome,
       ranForMs: Math.max(0, run.lastAt - run.startedAt),
       lastSeenAgoMs: Math.max(0, now - run.lastAt),
     };
@@ -180,6 +215,24 @@ export function topJobKinds(snapshot: RecurringWorkSnapshot): Record<string, Hea
   return Object.fromEntries(jobs);
 }
 
+/**
+ * When the host booted, to the second, or null when its uptime cannot be read.
+ * Bun's `os.uptime()` counts time asleep on both macOS and Linux, so the
+ * figure stays put across a sleep and moves only with a boot.
+ */
+export function hostBootAt(
+  now: number = Date.now(),
+  uptimeSeconds: () => number = hostUptimeSeconds,
+): number | null {
+  try {
+    const seconds = uptimeSeconds();
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    return Math.round((now - seconds * 1000) / 1000) * 1000;
+  } catch {
+    return null;
+  }
+}
+
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -203,6 +256,8 @@ export interface HealthSummaryOptions {
   cpu?: () => { user: number; system: number };
   recurringWork?: () => RecurringWorkSnapshot;
   bridgeRestarts?: () => BridgeRestartSnapshot;
+  /** When the host booted; {@link hostBootAt} by default. Null when unknown. */
+  bootAt?: () => number | null;
 }
 
 export class HealthSummary {
@@ -226,20 +281,31 @@ export class HealthSummary {
     if (this.started) return null;
     this.started = true;
     let previous: PreviousRun | null = null;
+    let bootAt: number | null = null;
+    try {
+      bootAt = (this.options.bootAt ?? (() => hostBootAt(this.now())))();
+    } catch {
+      // Unknown: the next start then judges this run without it.
+    }
     try {
       const now = this.now();
       previous = previousRunOf(
         readHealthRows(this.options.database()),
-        { pid: this.pid, startedAt: this.startedAt },
+        { pid: this.pid, startedAt: this.startedAt, bootAt },
         now,
         this.options.isAlive ?? processIsAlive,
       );
-      if (previous.outcome === "crashed") log.warn("previous-run", previous);
-      else if (previous.outcome === "clean") log.info("previous-run", previous);
+      if (previous.outcome === "crashed" || previous.outcome === "host-restarted") {
+        log.warn("previous-run", previous);
+      } else if (previous.outcome === "clean") log.info("previous-run", previous);
     } catch (error) {
       log.warn("health.write-failed", { error: formatLogError(error, { message: false }) });
     }
-    this.write({ kind: "started", ...this.identity() });
+    this.write({
+      kind: "started",
+      ...this.identity(),
+      ...(bootAt !== null ? { bootAt } : {}),
+    });
     this.timer = setInterval(
       () => this.sample(),
       this.options.intervalMs ?? HEALTH_SAMPLE_INTERVAL_MS,

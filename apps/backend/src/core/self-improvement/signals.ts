@@ -8,6 +8,7 @@
  * Pure: no I/O. Thresholds are starting points, exported so tests and the guide
  * name them; change them here when the loop proves one too noisy or too quiet.
  */
+import { hostRestartedAfter } from "../host-boot.js";
 import type { BundleData, EssentialEntry, FieldValue, HealthRow } from "./bundle.js";
 
 export type SignalCategory =
@@ -447,11 +448,35 @@ function collectEssential(
   }
 }
 
+/**
+ * A backend run with no clean exit whose host booted after its last row: a
+ * power loss, a freeze or a forced restart stopped the machine under it. Kept
+ * apart from `backend:crashed`, which then counts only what the backend or
+ * something on the host did to it, and ranked as a warning: no change to the
+ * app can make it write a marker through a power cut.
+ */
+export const HOST_RESTARTED_SIGNATURE = "backend:host-restarted";
+
+function hostRestartedSignal(
+  source: SignalSource,
+): () => ConstructorParameters<typeof SignalBuilder> {
+  return () => [
+    HOST_RESTARTED_SIGNATURE,
+    "warning",
+    source,
+    "The machine stopped or restarted under a running backend (power loss, freeze or forced restart)",
+    "rate",
+    "per day",
+  ];
+}
+
 interface Run {
   pid: number;
   startedAt: number;
   lastAt: number;
   clean: boolean;
+  /** The host's boot time its `started` row recorded, if any. */
+  bootAt: number | null;
   samples: HealthRow[];
 }
 
@@ -464,10 +489,12 @@ function runsOf(rows: readonly HealthRow[]): Run[] {
       startedAt: row.startedAt,
       lastAt: row.at,
       clean: false,
+      bootAt: null,
       samples: [],
     };
     run.lastAt = Math.max(run.lastAt, row.at);
     run.clean ||= row.kind === "clean-exit";
+    if (row.kind === "started" && typeof row.bootAt === "number") run.bootAt = row.bootAt;
     if (row.kind === "sample") run.samples.push(row);
     runs.set(key, run);
   }
@@ -520,6 +547,13 @@ function collectHealth(
       ? data.manifest.appVersion || timeline.versionAt(run.startedAt)
       : timeline.versionAt(run.startedAt);
 
+  // Boot times the runs recorded. A run with no clean exit whose host booted
+  // after its last row was stopped by the machine, not by a backend fault.
+  const bootTimes = data.health
+    .filter((row) => row.kind === "started" && typeof row.bootAt === "number")
+    .map((row) => row.bootAt!);
+  const lostWithHost = (run: Run) => hostRestartedAfter(run.lastAt, run.bootAt, bootTimes);
+
   const jobTotals = new Map<string, { started: number; failed: number; totalMs: number }>();
   let uptimeHours = 0;
   const uptimeByVersion: Record<string, number> = {};
@@ -531,7 +565,11 @@ function collectHealth(
     uptimeByVersion[version] = (uptimeByVersion[version] ?? 0) + hours;
     const last = run.samples.at(-1);
 
-    if (run !== liveRun && !run.clean) {
+    if (run !== liveRun && !run.clean && lostWithHost(run)) {
+      const stopped = signals.get(HOST_RESTARTED_SIGNATURE, hostRestartedSignal("health-summary"));
+      stopped.occur(run.lastAt, version);
+      stopped.max("longestRunHours", round(hours));
+    } else if (run !== liveRun && !run.clean) {
       const crash = signals.get("backend:crashed", () => [
         "backend:crashed",
         "crash",
@@ -808,12 +846,14 @@ export function extractSignals(data: BundleData): ExtractedSignals {
   // `backend:previous-run` stands in for the health rows when a bundle has none.
   if (data.health.length === 0) {
     for (const entry of data.essential) {
-      if (
-        entry.area !== "backend" ||
-        entry.event !== "previous-run" ||
-        entry.fields.outcome !== "crashed"
-      )
+      if (entry.area !== "backend" || entry.event !== "previous-run") continue;
+      if (entry.fields.outcome === "host-restarted") {
+        signals
+          .get(HOST_RESTARTED_SIGNATURE, hostRestartedSignal("essential-log"))
+          .occur(entry.at, timeline.versionAt(entry.at - 1));
         continue;
+      }
+      if (entry.fields.outcome !== "crashed") continue;
       signals
         .get("backend:crashed", () => [
           "backend:crashed",

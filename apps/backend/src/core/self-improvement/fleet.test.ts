@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { mergeMachineSignals, newestVersion } from "./fleet.js";
+import { diagnosticSource, mergeMachineSignals, newestVersion } from "./fleet.js";
 import { insightsDir, loadNotes, loadThemes, runInsights, saveThemes } from "./insights/analyze.js";
 import { type ModelCall, type ModelRunner, NOTES_MODEL } from "./insights/model.js";
 import {
@@ -146,6 +146,19 @@ describe("signals from several machines", () => {
     expect(
       merged.signals.find((signal) => signal.signature === "recurring:poll:failed")?.measure.value,
     ).toBe(4);
+  });
+
+  test("crashes and host restarts are judged on the source that detected run endings", () => {
+    const fallback = {
+      nodeId: "log",
+      name: "Log",
+      extracted: extractSignals(bundleData(machine("2.31.0"))),
+    };
+    expect(fallback.extracted.crashSource).toBe("essential-log");
+    for (const signature of ["backend:crashed", "backend:host-restarted"]) {
+      expect(diagnosticSource(signature, "health-summary", fallback)).toBe("essential-log");
+    }
+    expect(diagnosticSource("backend:rss-peak", "health-summary", fallback)).toBe("health-summary");
   });
 
   test("health and fallback crash counts use each machine's own source hours", () => {

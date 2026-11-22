@@ -279,3 +279,23 @@ caller, goes through the same cancellation instead of counting as an open
 window. The uncaught exception itself is
 still logged first. `apps/desktop/tests/native-dialogs.test.ts` and the final
 close of `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` pin it.
+
+## 8. The 2026-11-15 incidents (omarchy-hp)
+
+Found from the self-improvement digest's `backend:crashed` signal (two runs
+without a clean-exit marker) on app 2.38.2-beta.
+
+| Time (UTC) | What happened | Cause | Status |
+| --- | --- | --- | --- |
+| About 16:23 | The app log stops at 16:16:50 after a 38.5-hour backend run; nothing more until 21:13 | The machine stopped: `journalctl --list-boots` shows the boot ending at 16:23:05 with no shutdown, and `last -x` no `shutdown` record. A power loss, freeze or forced restart, not the app | Backends now record the host's boot time on their `started` health row, so the next start says `previous-run outcome=host-restarted` and self-improvement counts `backend:host-restarted` rather than a crash ([logging.md](../architecture/logging.md#health-summary-and-the-clean-exit-marker)) |
+| 21:26:31 | The production backend got `SIGKILL`; the desktop survived and showed its dialog | Unknown sender. A pipeline's validation plan (`test:full`, `test:browser`, `test:agent:electron`, `test:package:security`, `test:agent:browser:isolated`) was running under the backend. No OOM kill. A Playwright Chromium in the app's cgroup aborted one second earlier | Open: [8315](../todo/cross-cutting/8315-production-backend-killed-during-validation.md) |
+| 21:26:46 to 21:27:24 | Three packaged `orkestrator-v2` processes from the pipeline's `release/linux-unpacked` dumped core with SIGTRAP | Their launcher (the validation run) died with the backend; see section 5 | A consequence of the kill |
+
+A run whose boot ended this way is easy to tell from the system's own
+records:
+
+```bash
+journalctl --list-boots --no-pager | tail -3   # LAST ENTRY of the previous boot
+last -x reboot shutdown | head -4               # no "shutdown" line before the reboot
+journalctl -b -1 -k --no-pager | tail           # the previous boot's last kernel lines
+```

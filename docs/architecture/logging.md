@@ -775,7 +775,7 @@ store, one row each:
 | Row | When | Holds |
 | --- | --- | --- |
 | `sample` | Every 5 minutes, from one plain timer | Memory, CPU, event-loop stalls, database and backup sizes, the 8 recurring job kinds with the most run time, and bridge starts per provider (`bridges`) |
-| `started` | When the backend's background work starts | Pid and start time |
+| `started` | When the backend's background work starts | Pid, start time and the host's boot time (`bootAt`, to the second; left out when the host's uptime cannot be read) |
 | `clean-exit` | The last shutdown step, before the database closes, and only if the drain succeeded | Pid and start time |
 
 Rows hold numbers, job kinds and bridge provider names only. A backend's identity is its pid and start time, so
@@ -801,10 +801,18 @@ restart is a start beyond the first, which two samples tell apart, and the essen
 log still holds each event with its environment.
 
 The next start reads the rows and writes one `backend` `previous-run` line, which the
-[essential log](#the-essential-event-log) keeps: `outcome` is `clean` or `crashed`, at
-`info` and `warn`, with `ranForMs` and `lastSeenAgoMs`. No earlier run means no line.
-A run with no `clean-exit` reads as crashed, which is right for a kill or a power loss and
-is also what a shutdown failing late looks like. Another backend still running in the
+[essential log](#the-essential-event-log) keeps: `outcome` is `clean` (`info`), `crashed`
+or `host-restarted` (`warn`), with `ranForMs` and `lastSeenAgoMs`. No earlier run means no
+line. A run with no `clean-exit` reads as crashed, which is right for a kill and is also
+what a shutdown failing late looks like. It reads as `host-restarted` instead when the host
+booted after the run's last row: this backend's own boot time, or the `bootAt` a later
+run recorded, is newer than that row. That is a power loss, a freeze or a forced restart,
+which no exit marker survives. The boot time is the wall clock less `os.uptime()`, which
+counts time asleep on macOS and Linux, so a sleep does not move it. A stepped clock does,
+so a boot time within five minutes of the run's own recorded one is read as the same boot
+(`host-boot.ts`). A clock stepped back can only leave a restart counted as a crash; a
+crash reads as a restart only if the clock was stepped forward by more than that on the
+same boot. Another backend still running in the
 directory is skipped rather than reported: its pid answers and its last row is under ten
 minutes old, and the two together cover a reused pid.
 

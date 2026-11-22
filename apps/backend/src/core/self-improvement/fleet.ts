@@ -18,6 +18,7 @@
 import {
   compareVersions,
   type ExtractedSignals,
+  HOST_RESTARTED_SIGNATURE,
   type ObservedHours,
   scoreSignal,
   type Signal,
@@ -50,8 +51,11 @@ export function observedSourceHours(extracted: ExtractedSignals, source: SignalS
   );
 }
 
+/** Run endings come from the health rows, or the essential log when a bundle has none. */
 export function diagnosticSource(signature: string, source: SignalSource, machine: MachineSignals) {
-  return signature === "backend:crashed" ? (machine.extracted.crashSource ?? source) : source;
+  return signature === "backend:crashed" || signature === HOST_RESTARTED_SIGNATURE
+    ? (machine.extracted.crashSource ?? source)
+    : source;
 }
 
 function mergeObservedHours(machines: readonly MachineSignals[]): ObservedHours {

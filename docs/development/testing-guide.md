@@ -1761,7 +1761,11 @@ the one running the tests. On 2026-10-26 the production backend received
 `SIGKILL` three times while agents were running a full `mise run test`, each
 time within a minute of the suite starting. It was not an out-of-memory kill:
 Electron, in the same scope and process group, survived. Linux does not record
-who sends a signal, so the culprit was not identified from the logs alone.
+who sends a signal, so the culprit was not identified from the logs alone. It
+happened again on omarchy-hp on 2026-11-15, during a pipeline's validation plan
+(`test:full` with the Electron and packaged-security suites);
+[to-do 8315](../todo/cross-cutting/8315-production-backend-killed-during-validation.md)
+tracks naming the sender.
 
 Test code, fixtures, and scripts must follow these rules, and so must commands
 run by hand:

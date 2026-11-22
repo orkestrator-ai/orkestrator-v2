@@ -445,7 +445,7 @@ describe("files panel views", () => {
     expect(folderTransfer.dropEffect).toBe("copy");
     expect(destination.className).toContain("ring-primary/60");
     fireDrag(destination, "drop", folderTransfer);
-    expect(onCopyFiles).toHaveBeenCalledWith([first, second], "archive");
+    expect(onCopyFiles).toHaveBeenCalledWith({ files: [first, second], folders: [] }, "archive");
     expect(appCommandStore(filesPanelStore).getState().expandedFolders).toContain("archive");
 
     const rootTransfer = createDataTransfer([first]);
@@ -453,7 +453,7 @@ describe("files panel views", () => {
     fireDrag(rootTarget, "dragover", rootTransfer);
     expect(rootTransfer.dropEffect).toBe("copy");
     fireDrag(rootTarget, "drop", rootTransfer);
-    expect(onCopyFiles).toHaveBeenLastCalledWith([first], ".");
+    expect(onCopyFiles).toHaveBeenLastCalledWith({ files: [first], folders: [] }, ".");
   });
 
   test("copies files into the empty workspace drop target", () => {
@@ -470,25 +470,31 @@ describe("files panel views", () => {
     expect(target.className).toContain("ring-primary/60");
     fireDrag(target, "drop", dataTransfer);
 
-    expect(onCopyFiles).toHaveBeenCalledWith([file], ".");
+    expect(onCopyFiles).toHaveBeenCalledWith({ files: [file], folders: [] }, ".");
     expect(target.className).not.toContain("ring-primary/60");
   });
 
-  test("rejects directory entries while copying regular files from the same drop", () => {
+  test("passes dropped folders on as directory entries beside the regular files", () => {
     const onCopyFiles = mock(() => undefined);
     const file = new File(["hello"], "notes.txt");
     const folder = new File([], "photos");
+    const folderEntry = {
+      name: "photos",
+      isFile: false,
+      isDirectory: true,
+      createReader: () => ({ readEntries: (success: (entries: unknown[]) => void) => success([]) }),
+    };
     const fileItem = {
       kind: "file",
       type: "text/plain",
       getAsFile: () => file,
-      webkitGetAsEntry: () => ({ isDirectory: false }),
+      webkitGetAsEntry: () => ({ name: "notes.txt", isFile: true, isDirectory: false }),
     } as unknown as DataTransferItem;
     const folderItem = {
       kind: "file",
       type: "",
       getAsFile: () => folder,
-      webkitGetAsEntry: () => ({ isDirectory: true }),
+      webkitGetAsEntry: () => folderEntry,
     } as unknown as DataTransferItem;
     appCommandStore(filesPanelStore).setState({ fileTree, expandedFolders: ["src"] });
     renderWithTerminal(<AllFilesView onCopyFiles={onCopyFiles} />);
@@ -500,10 +506,17 @@ describe("files panel views", () => {
     );
 
     expect(event.defaultPrevented).toBe(true);
-    expect(onCopyFiles).toHaveBeenCalledWith([file], "archive");
-    expect(mockToastError).toHaveBeenCalledWith("Folder cannot be copied", {
-      description: "Drop individual files into the workspace instead.",
-    });
+    expect(onCopyFiles).toHaveBeenCalledWith({ files: [file], folders: [folderEntry] }, "archive");
+    expect(mockToastError).not.toHaveBeenCalled();
+
+    // A drop of nothing but a folder reaches the workspace root too.
+    const rootEvent = fireDrag(
+      screen.getByLabelText("Workspace root drop target"),
+      "drop",
+      createDataTransfer([folder], [folderItem]),
+    );
+    expect(rootEvent.defaultPrevented).toBe(true);
+    expect(onCopyFiles).toHaveBeenLastCalledWith({ files: [], folders: [folderEntry] }, ".");
   });
 
   test("prioritizes workspace drags and leaves empty external drags to the browser", () => {

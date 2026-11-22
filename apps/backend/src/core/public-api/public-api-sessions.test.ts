@@ -11,7 +11,7 @@ import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { providerCapabilities } from "./providers.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 import type { PublicApiHarness } from "./test-support.js";
 
 /**

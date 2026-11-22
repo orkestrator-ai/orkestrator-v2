@@ -1,0 +1,227 @@
+[
+  {
+    "label": "after-result",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+        "textLength": 197,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "success",
+            "outputLength": 0
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+                "textLength": 197
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id",
+      "taskStatuses": ["running"]
+    }
+  },
+  {
+    "label": "after-task-update",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+        "textLength": 197,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "success",
+            "outputLength": 0
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+                "textLength": 197
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id",
+      "taskStatuses": ["completed"]
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+        "textLength": 197,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "success",
+            "outputLength": 0
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The background command finished.",
+        "textLength": 32,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The background command finished."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+                "textLength": 197
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id",
+      "taskStatuses": ["completed"]
+    }
+  }
+]

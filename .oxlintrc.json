@@ -535,6 +535,15 @@
                   "!**/native-agent/suborks.js"
                 ],
                 "message": "Import the native-agent domain through native-agent/index.js."
+              },
+              {
+                "group": [
+                  "**/recurring/*",
+                  "!**/recurring/index.js",
+                  "!**/recurring/test-support.js",
+                  "!**/recurring/work-metrics.js"
+                ],
+                "message": "Import the recurring domain through recurring/index.js."
               }
             ]
           }
@@ -729,6 +738,13 @@
                   "!**/backend/src/core/native-agent/service-projection-test-support.js"
                 ],
                 "message": "Import the native-agent domain through native-agent/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/recurring/*",
+                  "!**/backend/src/core/recurring/index.js"
+                ],
+                "message": "Import the recurring domain through recurring/index.js."
               }
             ]
           }

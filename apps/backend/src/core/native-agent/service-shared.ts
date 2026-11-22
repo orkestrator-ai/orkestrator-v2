@@ -644,7 +644,7 @@ export interface NativeAgentServiceOptions {
   /** Test seam: the keyed launch/queue driver's monotonic clock and timers. */
   queueSchedulerClock?: {
     now: () => number;
-    timers: import("../recurring-scheduler.js").RecurringTimerFactory;
+    timers: import("../recurring/index.js").RecurringTimerFactory;
   };
 }
 

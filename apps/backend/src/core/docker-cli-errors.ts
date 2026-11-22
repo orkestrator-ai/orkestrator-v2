@@ -95,3 +95,58 @@ export async function dockerDaemonUnreachableNow(timeoutMs = 10_000): Promise<bo
     return isDockerDaemonUnreachable(error instanceof Error ? error.message : String(error));
   }
 }
+
+/**
+ * Exit statuses of a container stopped from outside: SIGTERM (143), then
+ * SIGKILL (137) once its stop timeout passes.
+ */
+const STOPPED_FROM_OUTSIDE = new Set([137, 143]);
+
+/** An attached `docker run` whose container was stopped by a signal it did not send itself. */
+export function isDockerRunStoppedFromOutside(error: unknown): boolean {
+  return (
+    error instanceof CommandFailedError &&
+    !error.timedOut &&
+    error.exitCode !== null &&
+    STOPPED_FROM_OUTSIDE.has(error.exitCode)
+  );
+}
+
+/**
+ * Read the helper's exit history after a signal-only copy failure. A daemon
+ * shutting down can keep the attached run alive until the helper exits, so
+ * the history request may be the first call to see the connection fail.
+ * Empty history is indeterminate: the daemon retains a bounded event buffer.
+ */
+export async function dockerContainerExitEvidence(
+  name: string,
+  sinceMs: number,
+  timeoutMs = 10_000,
+): Promise<"recorded" | "unknown" | "daemon-unavailable"> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "events",
+        "--since",
+        String(Math.floor(sinceMs / 1000) - 5),
+        "--until",
+        String(Math.ceil(Date.now() / 1000)),
+        "--filter",
+        `container=${name}`,
+        "--filter",
+        "event=die",
+        "--format",
+        "{{.Action}}",
+      ],
+      { timeoutMs },
+    );
+    return stdout.split("\n").some((line) => line.trim() === "die") ? "recorded" : "unknown";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/permission denied|access denied/i.test(message) && isDockerDaemonUnreachable(message)) {
+      return "daemon-unavailable";
+    }
+    return "unknown";
+  }
+}

@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { quoteShell } from "../commands-agent-support.js";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
-import { recurringWorkMetrics, RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics, RecurringWorkMetrics } from "../recurring/work-metrics.js";
 import { CommandFailedError, runCommand } from "../shell.js";
 import { backgroundFetchArgs } from "./background-fetch.js";
 import { GitFetchScheduler } from "./fetch-scheduler.js";

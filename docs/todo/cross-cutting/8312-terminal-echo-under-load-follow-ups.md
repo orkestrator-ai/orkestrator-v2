@@ -2,19 +2,20 @@
 
 ## Task analysis
 
-Analysed 2026-11-20 against main at `0b778d995` (first analysed 2026-11-19
-at `0007f0e66`). From the terminal key-to-echo latency work
+Analysed 2026-11-22 against main at `dd1391427` (first analysed 2026-11-19
+at `0007f0e66`, then 2026-11-20 at `0b778d995`). From the terminal key-to-echo latency work
 ([terminal-latency.md](../../development/terminal-latency.md)), which measured
 the backend's share, cut it, and left these follow-ups. The real-browser
-measurement (task 3) and the hidden-tab change (task 2) are done; their
-figures are in [terminal-latency.md](../../development/terminal-latency.md#in-a-real-browser).
+measurement (task 3), the hidden-tab change (task 2) and the transcript-growth
+investigation (task 4) are done; their figures are in
+[terminal-latency.md](../../development/terminal-latency.md#in-a-real-browser).
 
 ### Tasks
 
 1. **Move headless parsing and serialization off the backend's event loop**: Status: open.
 2. **Measure and reduce the renderer's parsing of hidden terminal tabs**: Status: done.
 3. **Check typing latency in a real browser on a loaded `dev:test` profile**: Status: done.
-4. **Find why echo slows as agents' transcripts grow**: Status: open.
+4. **Find why echo slows as agents' transcripts grow**: Status: done.
 
 ### 1. Move headless parsing and serialization off the backend's event loop
 
@@ -50,6 +51,12 @@ tool terminals. Those were historical runs. The original harness could
 confuse unavailable event-loop counters with zero stalls and did not verify
 that the requested load covered each measurement. The worker remains open
 pending a comparison with the corrected harness.
+
+On 2026-11-22 the corrected harness, with keys spread over the frame (task
+4), compared the busy shape over three rounds: backend-only means 26.5 to
+27.3 ms against idle 27.1 to 27.3 ms, p95 34 to 35 ms in both, no late
+backend ticks. At the busy level the backend's load is not felt. The heavy
+level (six build and three tool terminals) has not been repeated with it.
 
 **Decisions.**
 
@@ -148,18 +155,55 @@ per-turn transcript work (projections, activity sweeps, persistence) and the
 page's work for agents it does not show (sidebar activity, stores). Nothing
 has been profiled yet.
 
-**Investigation.** Not started. The spec reproduces it: run several rounds of
-`idle,backend-only` and compare round 1 with round 3.
+**Investigation.** Done on 2026-11-22; figures and method in
+[terminal-latency.md](../../development/terminal-latency.md#why-the-echo-seemed-to-slow-as-transcripts-grew-8312-task-4).
+Reproduced: idle p50 24.2, 32.4, 32.5 ms and backend-only 21.2, 32.8,
+28.5 ms over three rounds. Nothing in the product grew. The backend's CPU
+profile sampled at the same rate in every round, and the keystroke's server
+time stayed at 0.6 ms. The page's CPU profiles and traces showed it idle
+about 93% of each idle cell, with no long tasks. The work that grew was
+Playwright's own step bookkeeping in the test worker: `_findLastPredefinedStep`
+walks the case's whole step tree on every API call, and with `_addStep` and
+`onApiCallBegin` it went from 22% to 34% of the worker's CPU between the
+first and third idle cells. Every `route.fallback()` and `route.fulfill()` of
+the spec's module route is such a call, and loaded rounds reload the app in
+four driver pages.
+
+The slower worker reached the echo two ways. Chromium held every command
+request, keystrokes included, until the module route's handler answered:
+4.4 to 7.1 ms in idle and 5.9 to 9.0 ms in backend-only from rounds 1 to 3.
+The worker also shifted the keys' frame phase because the spec typed at a
+fixed cadence that included its own round trips. Chromium defers ordinary tasks after a discrete input until the
+next frame. So the browser client's 8 ms typing timer fired at 8 ms when a
+frame fell inside those 8 ms and at about 15 ms otherwise, and the echo
+painted one or two frames after its key. Traces showed the phase move: 155
+of 200 keys in the one-frame case in round 1, only 40 in round 2, and the
+median moved with it.
+
+The fix is in the harness: the module route no longer matches the gateway's
+API, and key gaps are spread over a frame. Afterwards both variants stayed
+flat across rounds: idle means 27.2, 27.1 and 27.3 ms, backend-only 27.1,
+27.3 and 26.5 ms.
 
 **Decisions.**
 
 - **How to find it.**
-  - **Profile the backend and the page across rounds with the browser spec (recommended).**
+  - **Profile the backend and the page across rounds with the browser spec (recommended; done).**
     - Pros: the spec already reproduces it on a fake model; a CPU profile of each side names the growing work.
     - Cons: needs a profile run per side.
   - **Measure with the loopback benchmark.**
     - Pros: quicker to run.
     - Cons: its agents are simulated and do not grow real transcripts, so it may not show the effect.
+- **What to fix.**
+  - **The harness: keep the gateway's API out of the module route, and spread key gaps over a frame (recommended; done).**
+    - Pros: removes both paths by which the worker reached the measurement; keys sample every frame phase, as a person's do; no product change for an effect the product does not have.
+    - Cons: the spec's p50s are no longer comparable with the fixed-cadence runs recorded before; the worker's per-call cost still grows within a case, just off the measured path.
+  - **Send the browser's keystrokes at once (typing timer 0), as the Electron relay does.**
+    - Pros: a keystroke leaves 10 ms sooner (0.5 against 10.3 ms after its keydown); keys typed during a send still coalesce.
+    - Cons: measured no echo gain once keys were not phase-locked (means 27.4 to 27.7 against 26.5 to 27.3 ms), because the echo waits behind the same deferred frame; changes a shared protocol default for every browser client.
+  - **Shorten the spec's case so fewer steps accumulate (fewer rounds, no driver page reloads).**
+    - Pros: smaller worker cost.
+    - Cons: hides the drift rather than taking the worker off the measured path; the multi-round comparison is the point of the spec.
 
 ## Assumptions and decisions
 
@@ -202,6 +246,37 @@ PTY delivery and producer revisions, and starts the fake-model streams
 together after every driver reaches the hold. It verifies the idle and direct
 renderer modes independently. These checks preserve the historical tables
 while making clear which evidence a future backend-worker decision can use.
+
+### Task 4: the cause was the harness, so the fix is in the harness
+
+Profiles of the backend and the page showed no work growing with the
+transcripts, while the Playwright worker's step bookkeeping did. The harness
+changes take the worker off the measured path. `MODULE_ROUTE_URL` in
+`e2e/agent-testing/browser-test.ts` excludes `/__orkestrator/…` from the module
+route, and the spec spreads key gaps with `keyPhaseOffsetMs`. The route uses
+a regular expression rather than a function, because Playwright can match a
+regular expression in its own server and continue other requests without a
+handler call or a recorded step; a function sends every request to the case.
+This changes the route for every browser-suite case: the gateway's API was
+always answered with `route.fallback()`, so only who answers it changes.
+
+### Task 4: the browser typing timer stays at 8 ms
+
+An A/B with the corrected harness showed that sending at once (timer 0) gets
+a keystroke to the backend 10 ms sooner but paints its echo no sooner in
+headless Chromium at 60 Hz. With no measured gain, the shared protocol default
+was left alone. A higher refresh rate, another browser or a remote client may
+behave differently. Nobody has measured those.
+
+### Task 4: what the spec now records
+
+Each cell records key-to-echo latency, keydown phase relative to the preceding
+animation frame, its `startedAt` and the runner's `monotonicStartUs`. Matched
+typing writes contribute to `keyRequestMs` (`sent`, `start`, `queued`, `server`,
+`duration`, `echoAfterStart`). `keyRequestCounts` exposes missing or ambiguous
+correlations and missing resource timings. Profiling records export time
+separately from the typing window, which ends at the final echo. See the
+[trace selection and capture limits](../../development/terminal-latency.md#in-a-real-browser).
 
 ### Task 1: not built
 

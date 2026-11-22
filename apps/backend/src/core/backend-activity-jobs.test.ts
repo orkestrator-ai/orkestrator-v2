@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
-import { ManualTime, deferred, type Deferred } from "./recurring-test-support.js";
+import { ManualTime, deferred, type Deferred } from "./recurring/test-support.js";
 
 function job(
   time: ManualTime,

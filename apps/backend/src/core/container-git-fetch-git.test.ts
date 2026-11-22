@@ -16,8 +16,8 @@ import {
 } from "./container-git-fetch.js";
 import { runCommand } from "./shell.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { ManualTime } from "./recurring-test-support.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { ManualTime } from "./recurring/test-support.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 
 /**
  * The production status and fetch scripts against real Git, with no Docker:

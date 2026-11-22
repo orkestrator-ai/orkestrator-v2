@@ -3,7 +3,7 @@ import os from "node:os";
 import type { CpuInfo } from "node:os";
 import { createLogger } from "@orkestrator/protocol/logger";
 import { runCommand } from "./shell.js";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
 
 const log = createLogger("host");
 

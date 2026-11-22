@@ -5,7 +5,7 @@ import * as shared from "./tmux-shared.js";
 import { TranscriptTaskTracker, bytesPayload, randomUUID } from "./tmux-shared.js";
 import { AsyncMutex, TmuxSession, TmuxSessionManager } from "./tmux-session-manager.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
 
 const log = createLogger("tmux");
 type CommandContext = shared.CommandContext;

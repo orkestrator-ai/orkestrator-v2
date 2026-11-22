@@ -124,7 +124,7 @@ day, and 7080 and 0020 were retired.
 
 ### Tasks
 
-1. **Manual tests and live checks** (365 items): run each check under
+1. **Manual tests and live checks** (367 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -427,6 +427,8 @@ agent can apply it.
 - [ ] **7040 (retired) task 2: real Pi provider in the container** (spec: [Real-provider variants](../../development/agent-testing.md#real-provider-variants-opt-in-billed)). These are billed turns on one of your Pi provider logins. Start `mise run dev:test --profile pi-container-qa --fixture --fixture-environments local,container --credential-source pi --agent-platforms pi --headless`; if the provider's host is not on the default allowlist, add it to the fixture container environment's allowed domains first. Then run `ORKESTRATOR_AGENT_TEST_PROFILE=pi-container-qa ORKESTRATOR_AGENT_TEST_RUN_ID=pi-container-qa ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_PI_MODEL=<provider/modelId of a cheap model> mise run test:logged -- --name pi-container-live -- mise run test:agent:docker -- container-real-engines-live.spec.ts --workers=1`. Stop and reset the profile afterwards. Record: pass or fail; the provider and model; the `bash` result under `auto-approve` (the `pi-shell-blocked` and `pi-shell-allowed` annotations) and under `ask` (card shown and answered, the `pi-ask` annotation); and any blocked provider host, under Results in that section of agent-testing.md. File a new to-do for any failure.
 - [ ] **7280 (retired) task 1: stop a real Pi compaction.** On an isolated profile with a Pi provider credential (`mise run dev:test --profile pi-compact-qa --fixture --credential-source pi --agent-platforms pi`), build a conversation long enough that a summary takes a few seconds, run `/compact`, and press Stop while it compacts. Record: whether the compacting state and Stop showed, whether the composer said "Compaction was stopped before it finished; the conversation was not compacted.", and whether the conversation was unchanged. Reply to the coordinator. How it works: [native-agent-commands.md](../../architecture/native-agent-commands.md).
 - [ ] **7280 (retired) task 2: Auto-compact toggle in a real Pi tab.** On the same profile, check that the composer shows "Auto-compact". Copy the profile's Pi `settings.json` (the profile's Pi directory, never your own), turn the toggle off, reload, switch model, send one turn, and compare. Record: the toggle state after the reload and after the model switch, and whether `settings.json` was unchanged. Reply to the coordinator.
+- [ ] **[8313](../agent-engines/8313-provider-replay-recorded-corpus.md) task 3: Grok replay captures.** Sign in to Grok on this host (`grok login`; the 2026-11-22 run found it signed out). Then let an agent record one capture each of `basic-turn`, `approval-denial` and `interruption` (real billed turns) in an isolated `dev:test` profile with `ORKESTRATOR_PROVIDER_RECORD_DIR` and `ORKESTRATOR_PROVIDER_RECORD_CONFIRM=1`, following the README's "Recording real traffic". Record: that Grok was signed in, and the date, in 8313's task 3.
+- [ ] **[8313](../agent-engines/8313-provider-replay-recorded-corpus.md) task 4: billed captures for the remaining scenarios.** Approve a few more billed Claude, Cursor and Pi turns (about ten) for an agent to record Claude `resume` and `outside-tail-update` on Claude, Cursor and Pi, as 8313 task 4 describes. Record: the approval and its date in 8313's task 4.
 
 ##### Permission-rule card runs (0723 tasks 1 to 5)
 

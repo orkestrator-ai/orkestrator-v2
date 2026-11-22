@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { RecurringWorkMetrics } from "../src/core/recurring-work-metrics.js";
+import type { RecurringWorkMetrics } from "../src/core/recurring/work-metrics.js";
 
 /**
  * Counts the `docker exec`s one claude-tmux tab's poll loop costs, by kind,

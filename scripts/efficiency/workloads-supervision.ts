@@ -199,7 +199,7 @@ export async function fileTreeCacheWorkload(context: WorkloadContext): Promise<W
     RecurringWorkMetrics: new () => {
       snapshot(): { kinds: Record<string, Record<string, number>> };
     };
-  }>("apps/backend/src/core/recurring-work-metrics.ts");
+  }>("apps/backend/src/core/recurring/work-metrics.ts");
   const nodes = 2_000;
   const treeFor = (generation: number) =>
     Array.from({ length: nodes }, (_, index) => ({

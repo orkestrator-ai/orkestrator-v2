@@ -1,0 +1,109 @@
+[
+  {
+    "label": "parked",
+    "activity": "waiting",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [
+      {
+        "kind": "tool-approval",
+        "toolName": "bash"
+      }
+    ],
+    "drift": {
+      "unknownEvents": 2,
+      "unknownKinds": ["unrendered:agent_start", "unrendered:turn_start"]
+    },
+    "rows": [
+      {
+        "role": "user",
+        "text": "Use your bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first.",
+        "textLength": 115,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use your bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "drift": {
+      "unknownEvents": 4,
+      "unknownKinds": ["unrendered:agent_end", "unrendered:agent_start", "unrendered:turn_start"]
+    },
+    "rows": [
+      {
+        "role": "user",
+        "text": "Use your bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first.",
+        "textLength": 115,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use your bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "bash",
+            "toolState": "failure",
+            "error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "The command was not run because the tool call was denied.",
+        "textLength": 57,
+        "parts": [
+          {
+            "type": "text",
+            "text": "The command was not run because the tool call was denied."
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "decisions": [
+        {
+          "toolName": "bash",
+          "blocked": true
+        }
+      ]
+    }
+  }
+]

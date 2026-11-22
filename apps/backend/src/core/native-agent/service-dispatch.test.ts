@@ -36,7 +36,7 @@ import {
   type NativeAgentServiceOptions,
 } from "./service.js";
 
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 import { PendingNativeAgentDispatchError } from "../storage-shared-extra.js";
 import { StorageService } from "../storage.js";
 import { collaborators, queueInternals } from "./service-test-collaborators.js";

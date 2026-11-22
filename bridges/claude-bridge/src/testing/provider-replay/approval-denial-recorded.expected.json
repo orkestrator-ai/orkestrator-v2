@@ -1,0 +1,125 @@
+[
+  {
+    "label": "parked",
+    "activity": "waiting",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [
+      {
+        "kind": "command-approval",
+        "toolName": "Bash"
+      }
+    ],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Use your Bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first.",
+        "textLength": 115,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use your Bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Use your Bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first.",
+        "textLength": 115,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use your Bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "failure"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "thinking",
+            "text": ""
+          },
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Use your Bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first.",
+            "textLength": 115,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Use your Bash tool to run exactly this command: rm -rf build. Do not run anything else and do not read files first."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id",
+      "decisions": [
+        {
+          "toolName": "Bash",
+          "behavior": "deny"
+        }
+      ]
+    }
+  }
+]

@@ -1,5 +1,5 @@
 import type { CommandContext } from "./commands-context.js";
-import { recurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry } from "./recurring/index.js";
 import {
   InteractiveTmuxTerminalManager,
   type InteractiveTmuxTerminalManagerOptions,

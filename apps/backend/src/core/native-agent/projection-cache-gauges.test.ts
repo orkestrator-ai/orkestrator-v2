@@ -4,7 +4,7 @@
  * counts carry no session key or content, and shutdown unregisters them.
  */
 import { expect, test } from "bun:test";
-import { recurringWorkDiagnostics } from "../recurring-diagnostics.js";
+import { recurringWorkDiagnostics } from "../recurring/diagnostics.js";
 import {
   createProviderStub,
   waitForCondition,

@@ -32,7 +32,7 @@ import {
   validatePrDetectionBranch,
 } from "./commands-review.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import { readCheckoutBranch, reconcileProjectHomeEnvironment } from "./project-home-environment.js";
 import type { PrCheckSummary } from "@orkestrator/protocol/pr-monitor";

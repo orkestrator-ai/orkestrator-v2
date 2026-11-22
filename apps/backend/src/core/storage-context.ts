@@ -9,7 +9,7 @@ import {
   randomUUID,
 } from "./storage-shared.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import {
   BACKUP_CHECK_INTERVAL_MS,
   BACKUP_FIRST_CHECK_DELAY_MS,

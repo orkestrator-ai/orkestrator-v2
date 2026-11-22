@@ -24,7 +24,7 @@ import {
   TURN_STOPPED_BY_USER_MESSAGE,
 } from "../agent-provider-contract.js";
 import { collaborators } from "./service-test-collaborators.js";
-import { deferred } from "../recurring-test-support.js";
+import { deferred } from "../recurring/test-support.js";
 import type { BridgeConnection, NativeAgentRuntimeProvider } from "./provider.js";
 import { ACTIVITY_RETRY_CEILING_MS, nativeAgentSessionStorageKey } from "./service-shared.js";
 import {

@@ -22,7 +22,7 @@ import {
   canTransitionGraphRun,
   transitionGraphRun,
 } from "./graph-run-transitions.js";
-import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { ManualTime, deferred, flushMicrotasks } from "./recurring/test-support.js";
 
 const worlds: GraphRunWorld[] = [];
 

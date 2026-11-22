@@ -30,7 +30,7 @@
  * `--prune origin` into the same shared refs and can cause these collisions.
  */
 
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring/index.js";
 import { backgroundFetchArgs } from "./background-fetch.js";
 import { isRefLockContentionFailure } from "./noninteractive-env.js";
 

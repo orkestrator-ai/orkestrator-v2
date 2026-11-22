@@ -10,6 +10,11 @@ import {
 } from "./commands-files.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { BackendRuntime } from "./backend-runtime.js";
+import type { ArgsOf } from "@orkestrator/protocol/contract/command";
+import type { importExternalEntryCommand } from "@orkestrator/protocol/contract/domains/files";
+import { runCommand } from "./shell.js";
+
+type ImportAction = ArgsOf<typeof importExternalEntryCommand>["action"];
 
 describe("external workspace file copies", () => {
   let worktreePath = "";
@@ -77,6 +82,116 @@ describe("external workspace file copies", () => {
     await expect(
       fs.readFile(path.join(worktreePath, "assets", "from-finder.txt"), "utf8"),
     ).resolves.toBe("copied through the command");
+  });
+
+  test("stages a literal folder tree and publishes it exclusively, with a clean retry after discard", async () => {
+    await runCommand("git", ["init", "-q"], { cwd: worktreePath });
+    const command = createCommandRegistry().get("import_external_entry")!;
+    const context = {
+      storage: {
+        getEnvironment: async () => ({
+          id: "environment-1",
+          environmentType: "local",
+          worktreePath,
+        }),
+      },
+      runtime,
+    } as unknown as CommandContext;
+    const target = { kind: "local", identity: worktreePath };
+    const mutate = (action: ImportAction) =>
+      command({ environmentId: "environment-1", target, action }, context);
+    const name = " photos ";
+    const stage = () => mutate({ kind: "stage", directory: "assets", name }) as Promise<string>;
+    const publish = (stagingPath: string) => mutate({ kind: "publish", stagingPath, name });
+    const existing = path.join(worktreePath, "assets", name);
+    const trimmed = path.join(worktreePath, "assets", "photos");
+    await fs.mkdir(existing);
+    await fs.mkdir(trimmed);
+    await fs.writeFile(path.join(existing, "existing.txt"), "original");
+    const conflict = await stage();
+    await mutate({ kind: "copy", directory: conflict, name: "new.txt", base64Data: "QQ==" });
+    await expect(publish(conflict)).rejects.toThrow("already exists");
+    await expect(fs.readdir(existing)).resolves.toEqual(["existing.txt"]);
+    await expect(fs.readdir(trimmed)).resolves.toEqual([]);
+    await mutate({ kind: "discard", stagingPath: conflict });
+    await expect(fs.stat(path.join(worktreePath, conflict))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    // An interrupted upload leaves only its private stage, and the same root can be retried.
+    await fs.rm(existing, { recursive: true });
+    const interrupted = await stage();
+    await mutate({ kind: "mkdir", directory: interrupted, name: " empty " });
+    await expect(
+      mutate({
+        kind: "copy",
+        directory: interrupted,
+        name: "new.txt",
+        base64Data: "bad!",
+      }),
+    ).rejects.toThrow();
+    await mutate({ kind: "discard", stagingPath: interrupted });
+    await expect(fs.stat(existing)).rejects.toMatchObject({ code: "ENOENT" });
+    const retry = await stage();
+    await expect(mutate({ kind: "mkdir", directory: retry, name: " empty " })).resolves.toBe(
+      `${retry}/ empty `,
+    );
+    await mutate({ kind: "copy", directory: retry, name: " new.txt ", base64Data: "QQ==" });
+    await expect(publish(retry)).resolves.toBe("assets/ photos ");
+    await expect(fs.readdir(path.join(existing, " empty "))).resolves.toEqual([]);
+    await expect(fs.readFile(path.join(existing, " new.txt "), "utf8")).resolves.toBe("A");
+    await expect(fs.readdir(trimmed)).resolves.toEqual([]);
+  });
+
+  test("checks the original checkout after project-home reconciliation on each command", async () => {
+    const other = path.join(worktreePath, "other-checkout");
+    await fs.mkdir(other);
+    for (const checkout of [worktreePath, other]) {
+      await runCommand("git", ["init", "-q", "-b", "main"], { cwd: checkout });
+    }
+    let localPath = worktreePath;
+    const environment = {
+      id: "environment-1",
+      projectId: "project-1",
+      projectHome: true,
+      environmentType: "local",
+      worktreePath,
+      branch: "main",
+    };
+    const context = {
+      storage: {
+        getEnvironment: async () => environment,
+        getProject: async () => ({ localPath }),
+        updateEnvironment: async (_id: string, update: object) =>
+          Object.assign(environment, update),
+      },
+      runtime,
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("import_external_entry")!;
+    const mutate = (action: ImportAction) =>
+      command(
+        {
+          environmentId: environment.id,
+          target: { kind: "local", identity: worktreePath },
+          action,
+        },
+        context,
+      );
+    const stage = (await mutate({ kind: "stage", directory: ".", name: "photos" })) as string;
+    // The same relative staging path in B must stay untouched.
+    await fs.mkdir(path.join(other, stage));
+    localPath = other;
+    await expect(
+      mutate({ kind: "copy", directory: stage, name: "wrong.txt", base64Data: "QQ==" }),
+    ).rejects.toThrow("The project checkout changed");
+    await expect(mutate({ kind: "publish", stagingPath: stage, name: "photos" })).rejects.toThrow(
+      "The project checkout changed",
+    );
+    await expect(mutate({ kind: "discard", stagingPath: stage })).rejects.toThrow(
+      "The project checkout changed",
+    );
+    await expect(fs.readdir(path.join(other, stage))).resolves.toEqual([]);
+    await expect(fs.stat(path.join(other, "photos"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("does not overwrite a destination or recreate a folder removed after the tree was shown", async () => {

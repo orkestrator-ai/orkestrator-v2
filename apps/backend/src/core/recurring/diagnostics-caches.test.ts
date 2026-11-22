@@ -3,8 +3,8 @@ import {
   MAX_CACHE_GAUGE_FIELDS,
   MAX_DIAGNOSTIC_SOURCES,
   RecurringDiagnosticsRegistry,
-} from "./recurring-diagnostics.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+} from "./diagnostics.js";
+import { RecurringWorkMetrics } from "./work-metrics.js";
 
 const snapshot = (registry: RecurringDiagnosticsRegistry) =>
   registry.snapshot(new RecurringWorkMetrics({ enabled: false }));

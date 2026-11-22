@@ -3,7 +3,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
 import { bridgeRestarts, type BridgeRestartSnapshot } from "./bridge-restarts.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import type { DatabaseSummaryCache } from "./database-summary.js";
 import type { StorageDatabase } from "./storage-database.js";
 

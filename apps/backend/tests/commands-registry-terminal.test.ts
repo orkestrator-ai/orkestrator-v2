@@ -2186,6 +2186,53 @@ exit 0
     ).rejects.toThrow("Git metadata cannot be modified");
   });
 
+  test("stages and publishes literal folder imports in the selected container", async () => {
+    const environment = createEnvironment({
+      id: "env-container-import",
+      environmentType: "containerized",
+      containerId: "container-import-1",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const command = createCommandRegistry().get("import_external_entry")!;
+    const target = { kind: "container", identity: environment.containerId };
+    const mutate = (action: Record<string, unknown>) =>
+      command({ environmentId: environment.id, target, action }, context);
+
+    await withFakeDocker(
+      `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+exit 0
+`,
+      async (logs) => {
+        const literal = " photos ";
+        const stagingPath = await mutate({ kind: "stage", directory: "assets", name: literal });
+        expect(stagingPath).toMatch(/^assets\/\.orkestrator-import-/u);
+        await expect(
+          mutate({ kind: "mkdir", directory: stagingPath, name: " empty " }),
+        ).resolves.toBe(`${stagingPath}/ empty `);
+        await expect(
+          mutate({ kind: "copy", directory: stagingPath, name: " image.txt ", base64Data: "QQ==" }),
+        ).resolves.toBe(`${stagingPath}/ image.txt `);
+        await expect(mutate({ kind: "publish", stagingPath, name: literal })).resolves.toBe(
+          "assets/ photos ",
+        );
+        const script = await fs.readFile(logs.exec, "utf8");
+        expect(script).toContain("exec container-import-1 bash -lc");
+        expect(script).toContain(`folderPath='${stagingPath}/ empty '`);
+        expect(script).toContain(" image.txt ");
+        expect(script).toContain("destination='assets/ photos '");
+        expect(script).toContain("rename-folder-in-place");
+
+        target.identity = "other-container";
+        await expect(mutate({ kind: "mkdir", directory: "assets", name: "wrong" })).rejects.toThrow(
+          "The workspace container changed",
+        );
+        expect(await fs.readFile(logs.exec, "utf8")).toBe(script);
+      },
+    );
+  });
+
   test("copies external files through the bounded container helper command", async () => {
     const environment = createEnvironment({
       id: "env-container-copy",

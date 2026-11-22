@@ -21,8 +21,8 @@ import {
   discoverGraphRuns,
   graphRunObligation,
 } from "./graph-run-supervisor.js";
-import { ManualTime, advanceKeyedWork, settleKeyedWork } from "./recurring-test-support.js";
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { ManualTime, advanceKeyedWork, settleKeyedWork } from "./recurring/test-support.js";
+import { recurringWorkMetrics } from "./recurring/work-metrics.js";
 import {
   KEYED_SCHEDULING_DOMAINS,
   KEYED_SCHEDULING_ROLLBACK_ENV,

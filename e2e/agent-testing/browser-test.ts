@@ -68,6 +68,22 @@ export function directLoadOutcome(
 /** A loopback origin: the profile's gateway, its renderer, or a fixture server. */
 export const LOOPBACK_URL = /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?\//;
 
+/**
+ * The URLs the module route intercepts: loopback origins, minus the gateway's
+ * own API (`/__orkestrator/…`: commands, event streams, terminal channels,
+ * metrics), which answers JSON and streams and never a module. A regular
+ * expression, not a function, so Playwright matches it in its own server and
+ * lets every other request continue without calling this process's handler.
+ * A handled request waits for this process to answer it, and each answer
+ * (`route.fallback()` included) is a Playwright API call whose cost grows
+ * with the steps a case has recorded, because Playwright walks the whole step
+ * tree on each call. Routed, a terminal keystroke's command request waited
+ * 4 ms in round one and 9 ms by round three of the terminal echo spec
+ * (to-do 8312 task 4).
+ */
+export const MODULE_ROUTE_URL =
+  /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?\/(?!__orkestrator\/)/;
+
 const MODULE_RESOURCE_TYPES = new Set(["script", "stylesheet"]);
 
 /** Whether a request is a module or stylesheet load this suite fetches itself. */
@@ -209,7 +225,7 @@ export async function fetchModulesOutsideChromium(context: BrowserContext): Prom
   await observeCommandInvokes(context);
   context.on("page", (page) => retryNavigationsOnNetworkChange(page));
   const cache = new ModuleCache();
-  await context.route(LOOPBACK_URL, async (route) => {
+  await context.route(MODULE_ROUTE_URL, async (route) => {
     const request = route.request();
     if (!isModuleLoad(request)) return route.fallback();
     try {

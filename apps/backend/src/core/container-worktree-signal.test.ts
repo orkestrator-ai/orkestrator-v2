@@ -9,7 +9,7 @@ import {
   type ContainerWorktreeSignalSupport,
   type ContainerWorktreeWatcher,
 } from "./container-worktree-signal.js";
-import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { ManualTime, deferred, flushMicrotasks } from "./recurring/test-support.js";
 import type { WorktreeChangeHint } from "./worktrees/index.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { CommandFailedError } from "./shell.js";

@@ -21,7 +21,7 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import { snapshotBeforeMigration } from "../storage-backups.js";
 import { backgroundCheckpointsByDefault } from "../storage-checkpointer.js";
-import { recurringDiagnosticsRegistry } from "../recurring-diagnostics.js";
+import { recurringDiagnosticsRegistry } from "../recurring/index.js";
 import {
   CHANGE_LEDGER_DATABASE_FILE,
   StorageDatabase,

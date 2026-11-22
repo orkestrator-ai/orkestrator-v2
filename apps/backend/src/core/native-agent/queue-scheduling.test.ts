@@ -5,7 +5,7 @@ import {
   discoverNativeQueues,
   nativeQueueObligation,
 } from "./queue-scheduling.js";
-import { ManualTime, deferred, type Deferred } from "../recurring-test-support.js";
+import { ManualTime, deferred, type Deferred } from "../recurring/test-support.js";
 
 function queue(queueKey: string, fields: Partial<PersistedPromptQueue> = {}): PersistedPromptQueue {
   return { queueKey, environmentId: "env-1", messages: [], ...fields } as PersistedPromptQueue;

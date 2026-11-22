@@ -9,8 +9,8 @@ import {
   type DiffStatsServiceOptions,
   type DiffStatsTarget,
 } from "../diff-stats-service.js";
-import { ManualTime, deferred, flushMicrotasks, type Deferred } from "../recurring-test-support.js";
-import { RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { ManualTime, deferred, flushMicrotasks, type Deferred } from "../recurring/test-support.js";
+import { RecurringWorkMetrics } from "../recurring/work-metrics.js";
 import { measuredResponseDigest, responseDigest, treeMembershipDigest } from "./snapshot-digest.js";
 import type { TreeWalkRequest } from "./adhoc-reads.js";
 

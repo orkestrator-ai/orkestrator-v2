@@ -8,9 +8,12 @@ import {
   type MachineOsFamily,
 } from "@orkestrator/protocol/machine-load";
 import { BackendActivityJobs } from "./backend-activity-jobs.js";
-import type { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
-import type { RecurringTimerFactory } from "./recurring-scheduler.js";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import {
+  type RecurringDiagnosticsRegistry,
+  type RecurringTimerFactory,
+  recurringWorkMetrics,
+  type RecurringWorkMetrics,
+} from "./recurring/index.js";
 import { runCommand } from "./shell.js";
 import {
   measuredCpuPercent,

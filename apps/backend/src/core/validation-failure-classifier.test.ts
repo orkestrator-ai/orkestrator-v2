@@ -150,6 +150,81 @@ describe("bun output", () => {
     expect(pool).toMatchObject({ verdict: "related", reasons: ["test-file-changed"] });
   });
 
+  test("GitHub Actions annotations change neither the file nor the baseline fingerprint", () => {
+    const root = fixture(MODULES);
+    const run = (lines: string[]) => {
+      writeFileSync(path.join(root, "out.txt"), lines.join("\n"));
+      const input: ValidationFailureClassifierInput = {
+        root,
+        commands: [
+          {
+            command: "bun test",
+            cwd: "apps/backend",
+            status: "failed",
+            stdoutPath: "out.txt",
+            stderrPath: null,
+          },
+        ],
+        changedFiles: [],
+        mergeBase: null,
+        ci: null,
+        budgetMs: 20_000,
+        includeBaselineFingerprints: true,
+      };
+      const encoded = Buffer.from(JSON.stringify(input)).toString("base64");
+      const result = Bun.spawnSync(
+        [process.execPath, "-e", VALIDATION_FAILURE_CLASSIFIER_SCRIPT, encoded],
+        { cwd: "/" },
+      );
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      return JSON.parse(result.stdout.toString()) as {
+        triage: ValidationFailureTriage;
+        fingerprints: Array<Array<string | null>>;
+      };
+    };
+    const resultLines = [
+      "(fail) idle connections expire [0.10ms]",
+      " 0 pass",
+      " 1 fail",
+      "Ran 1 test across 1 file. [4.00ms]",
+    ];
+    const plainRun = (diagnostic: string[]) =>
+      run(["src/pool.test.ts:", ...diagnostic, ...resultLines]);
+    const failure = [
+      "error: expect(received).toBe(expected)",
+      "",
+      "Expected: 2",
+      "Received: 1",
+      ...Array.from({ length: 123 }, (_, index) => `detail ${index}`),
+      "",
+    ];
+    expect(failure).toHaveLength(128);
+    const plain = plainRun(failure);
+    // Bun's output when GITHUB_ACTIONS is set: no stack frame names the file.
+    const annotated = run([
+      "::group::src/pool.test.ts:",
+      ...failure,
+      "",
+      `::error title=${failure[0]}::${failure.slice(2).join("%0A")}`,
+      "(fail) idle connections expire [0.11ms]",
+      "",
+      "::endgroup::",
+      " 0 pass",
+      " 1 fail",
+      "Ran 1 test across 1 file. [4.00ms]",
+    ]);
+    expect(failures(annotated.triage)[0]?.file).toBe("apps/backend/src/pool.test.ts");
+    expect(plain.fingerprints[0]?.[0]).toMatch(/^[a-f0-9]{64}$/);
+    expect(annotated.fingerprints[0]?.[0]).toBe(plain.fingerprints[0]![0]!);
+    expect(plainRun([...failure, "extra line"]).fingerprints[0]?.[0]).toBeNull();
+
+    const head = plainRun(["error: failed", "::notice::head"]).fingerprints[0]?.[0];
+    const base = plainRun(["error: failed", "::notice::base"]).fingerprints[0]?.[0];
+    expect(head).toMatch(/^[a-f0-9]{64}$/);
+    expect(base).toMatch(/^[a-f0-9]{64}$/);
+    expect(head).not.toBe(base);
+  });
+
   test("a count the listed tests do not match leaves the command unattributed", () => {
     const root = fixture(MODULES);
     const triage = classify(root, { output: bunAggregate(root, 3) });

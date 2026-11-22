@@ -23,8 +23,8 @@ import {
   deferred,
   settleKeyedWork,
   type Deferred,
-} from "../recurring-test-support.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+} from "../recurring/test-support.js";
+import { recurringWorkMetrics } from "../recurring/work-metrics.js";
 import { StorageService } from "../storage.js";
 import type { WorkflowResultService } from "../workflows/result-service.js";
 

@@ -18,7 +18,7 @@ import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { claudeStateSignalInstaller } from "./claude-state-signal.js";
 import { localClaudeAccountPrefix } from "./tmux-session-manager.js";
 import { tmuxLocalClaudeConfigDirectory } from "./commands-servers.js";
-import { deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { deferred, flushMicrotasks } from "./recurring/test-support.js";
 
 test("the production backend wires tmux account configuration, signal installation and live login refreshers", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ork-backend-wiring-"));

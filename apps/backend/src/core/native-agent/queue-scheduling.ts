@@ -4,7 +4,7 @@ import {
 } from "@orkestrator/protocol/build-pipeline";
 import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import type { PersistedPromptQueue } from "../models.js";
-import { RecurringScheduler, type RecurringTimerFactory } from "../recurring-scheduler.js";
+import { RecurringScheduler, type RecurringTimerFactory } from "../recurring/index.js";
 import {
   KeyedWorkflowSupervisor,
   type WorkflowDiscoveryResult,

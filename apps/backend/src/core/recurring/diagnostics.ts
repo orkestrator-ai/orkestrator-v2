@@ -1,13 +1,13 @@
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
 import type { NativeSessionInvalidationSnapshot } from "@orkestrator/protocol/native-agent-observation";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./work-metrics.js";
 import {
   nativeSessionInvalidationMetrics,
   type NativeSessionInvalidationMetrics,
-} from "./native-session-invalidation-metrics.js";
-import type { RecurringSchedulerStatus } from "./recurring-scheduler.js";
-import type { AdmissionPoolStatus } from "./work-admission.js";
-import type { ContainerGitFetchStatus } from "./container-git-fetch.js";
+} from "../native-session-invalidation-metrics.js";
+import type { RecurringSchedulerStatus } from "./scheduler.js";
+import type { AdmissionPoolStatus } from "../work-admission.js";
+import type { ContainerGitFetchStatus } from "../container-git-fetch.js";
 
 /**
  * The one read-only surface for recurring-work diagnostics, shared by the

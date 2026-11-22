@@ -56,7 +56,7 @@ import {
   tmuxSelectionPromptFingerprint,
   tmuxSessionName,
 } from "./tmux-shared.js";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "./recurring/index.js";
 import { TmuxBackend } from "./tmux-backend.js";
 import { TmuxTranscriptReader, type TmuxTranscriptPage } from "./tmux-transcript-reader.js";
 import type { TerminalRuntime } from "./terminal-runtime.js";

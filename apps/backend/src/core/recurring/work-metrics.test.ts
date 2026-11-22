@@ -11,10 +11,10 @@ import {
   recurringErrorCategory,
   recurringMetricsEnabled,
   spawnWorkUnit,
-} from "./recurring-work-metrics.js";
-import { DiffStatsService } from "./diff-stats-service.js";
-import { GitFetchScheduler } from "./git/index.js";
-import { deferred, flushMicrotasks } from "./recurring-test-support.js";
+} from "./work-metrics.js";
+import { DiffStatsService } from "../diff-stats-service.js";
+import { GitFetchScheduler } from "../git/index.js";
+import { deferred, flushMicrotasks } from "./test-support.js";
 
 const SECRET = "ghp_SUPERSECRETTOKEN1234567890abcdef";
 const SECRET_PATH = "/Users/alice/private-repo/feature/secret-branch";

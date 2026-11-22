@@ -48,7 +48,7 @@ import {
   type SqliteConnectionTiming,
 } from "./storage-slow-operations.js";
 import type { StorageActivityMetrics } from "./storage-activity-metrics.js";
-import type { CacheGaugeName, CacheGaugeSource } from "./recurring-diagnostics.js";
+import type { CacheGaugeName, CacheGaugeSource } from "./recurring/index.js";
 
 const log = createLogger("storage");
 

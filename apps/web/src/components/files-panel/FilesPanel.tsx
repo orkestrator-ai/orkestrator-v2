@@ -19,6 +19,7 @@ import { backendForScope } from "@/lib/backend/scope-backend";
 import { useWorktreeSnapshotStore } from "@/stores/worktreeSnapshotStore";
 import { hydrationFreshnessNotice, remoteFreshnessNotice } from "@/lib/view-freshness";
 import { FreshnessIndicator } from "@/components/freshness/FreshnessIndicator";
+import type { ExternalFileDrop } from "@/lib/external-file-drop";
 
 function resolveLocalFilePath(worktreePath: string, filePath: string): string {
   const separator = worktreePath.includes("\\") && !worktreePath.includes("/") ? "\\" : "/";
@@ -102,8 +103,8 @@ export function FilesPanel() {
   );
 
   const copyFilesIntoTree = useCallback(
-    (files: File[], destinationDirectory: string) => {
-      void copyExternalFiles(files, destinationDirectory).catch(() => undefined);
+    (drop: ExternalFileDrop, destinationDirectory: string) => {
+      void copyExternalFiles(drop.files, destinationDirectory, drop.folders).catch(() => undefined);
     },
     [copyExternalFiles],
   );

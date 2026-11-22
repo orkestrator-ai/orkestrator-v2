@@ -44,7 +44,7 @@ import {
 } from "@orkestrator/protocol/event-loop-stall-monitor";
 import { readHostCpuTimes } from "@orkestrator/protocol/node/host-cpu-times";
 import { commandTimings } from "./core/command-timing.js";
-import { recurringWorkMetrics } from "./core/recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./core/recurring/index.js";
 import { slowStorageOperations } from "./core/storage-slow-operations.js";
 import {
   DESKTOP_SUPERVISED_ENV,

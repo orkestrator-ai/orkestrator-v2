@@ -2,11 +2,11 @@ import { afterEach, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { RecurringDiagnosticsRegistry } from "./recurring/diagnostics.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 import { StorageDatabase, type StoreLayout } from "./storage-database.js";
 import { openBackendDatabase } from "./storage-stores.js";
-import { recurringWorkDiagnostics } from "./recurring-diagnostics.js";
+import { recurringWorkDiagnostics } from "./recurring/diagnostics.js";
 
 const directories: string[] = [];
 const open: StorageDatabase[] = [];

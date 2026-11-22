@@ -1,5 +1,5 @@
 import type { RecurringPriorityClass } from "@orkestrator/protocol/recurring-work";
-import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics, type RecurringWorkMetrics } from "../recurring/index.js";
 import { measuredResponseDigest } from "./snapshot-digest.js";
 import type { WorkAdmissionPool } from "../work-admission.js";
 

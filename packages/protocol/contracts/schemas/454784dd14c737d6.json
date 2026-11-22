@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:454784dd14c737d670b891d62a5201a0215a3d4adb5e18af046f4b080dd410ad",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "directory": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["stage"],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": ["directory", "kind", "name"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "directory": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["mkdir"],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": ["directory", "kind", "name"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "base64Data": {
+                  "type": "string"
+                },
+                "directory": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["copy"],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": ["base64Data", "directory", "kind", "name"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "kind": {
+                  "enum": ["publish"],
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "stagingPath": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "name", "stagingPath"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": true,
+              "properties": {
+                "kind": {
+                  "enum": ["discard"],
+                  "type": "string"
+                },
+                "stagingPath": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "stagingPath"],
+              "type": "object"
+            }
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "target": {
+          "additionalProperties": true,
+          "properties": {
+            "identity": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": ["local", "container"],
+              "type": "string"
+            }
+          },
+          "required": ["identity", "kind"],
+          "type": "object"
+        }
+      },
+      "required": ["action", "environmentId", "target"],
+      "type": "object"
+    }
+  }
+}

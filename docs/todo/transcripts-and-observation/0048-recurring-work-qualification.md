@@ -391,7 +391,7 @@ task.
 
 **Context.** Owed: at least 50 cycles over an hour or more, with agent sessions open. The 2026-10-25 run's final `dev:stop` exited non-zero and left a container.
 
-**Investigation.** The footprint (`soakFootprint`, `scripts/recurring-live-ab-summary.ts:244`) covers schedulers, pools, fetch and signal records, jobs, streams and terminals, not caches. `apps/backend/src/core/recurring-work-metrics.ts` counts `cacheHits`/`cacheMisses` (`:85`) but no cache size. The `dev:stop` failure is already handled: since #1271 the cleanup re-reads status and still resets a profile that reports `stopped` with no live launcher (`scripts/recurring-live-ab.ts:736`). The "needs its own todo against `dev:stop`" note can close unless the failure recurs.
+**Investigation.** The footprint (`soakFootprint`, `scripts/recurring-live-ab-summary.ts:244`) covers schedulers, pools, fetch and signal records, jobs, streams and terminals, not caches. `apps/backend/src/core/recurring/work-metrics.ts` counts `cacheHits`/`cacheMisses` (`:85`) but no cache size. The `dev:stop` failure is already handled: since #1271 the cleanup re-reads status and still resets a profile that reports `stopped` with no live launcher (`scripts/recurring-live-ab.ts:736`). The "needs its own todo against `dev:stop`" note can close unless the failure recurs.
 
 **Decisions.**
 
@@ -677,7 +677,7 @@ which wait for task 5's live GitHub run (7568: 0048 task 5, decision W7).
 
 **Context.** Decision 2: keep `ORKESTRATOR_RECURRING_METRICS` as a diagnostic kill switch.
 
-**Investigation.** The switch is read at `apps/backend/src/core/recurring-work-metrics.ts:209`. The class comment at `:47` called it "the rollback switch", which contradicted decision 2.
+**Investigation.** The switch is read at `apps/backend/src/core/recurring/work-metrics.ts:209`. The class comment at `:47` called it "the rollback switch", which contradicted decision 2.
 
 **Decisions.**
 
@@ -897,7 +897,7 @@ and the decisions below were recorded.
 
 ## Current state
 
-- Recorder: `recurringWorkMetrics` (`apps/backend/src/core/recurring-work-metrics.ts`)
+- Recorder: `recurringWorkMetrics` (`apps/backend/src/core/recurring/work-metrics.ts`)
   labels work only by the kinds in `RECURRING_JOB_CATALOGUE`
   (`packages/protocol/src/recurring-work.ts`), whose `inventory` field carries
   the B, C and L IDs of the inventory in
@@ -965,7 +965,7 @@ and the decisions below were recorded.
   step, a leaked gauge or a guard line (`soakFootprint`, `soakLeaks` in
   `recurring-live-ab-summary.ts`).
 - Cache gauges (2026-11-06): the `caches` block of recurring diagnostics
-  (`addCacheSource`, `recurring-diagnostics.ts`; table in
+  (`addCacheSource`, `recurring/diagnostics.ts`; table in
   [recurring-work.md](../../architecture/recurring-work.md)) counts the
   caches the footprint cannot see: each open connection's row cache, the
   diff-stats tracker's tree lineages, bodies, ad hoc reads and
@@ -2477,7 +2477,7 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     counts for the worktree snapshot and row caches only, as task 10
     proposed; every cache an owner keeps per environment or per session,
     reported through one registry; or heap snapshots during the soak.
-    Chosen: the registry (`addCacheSource` in `recurring-diagnostics.ts`),
+    Chosen: the registry (`addCacheSource` in `recurring/diagnostics.ts`),
     with five sources: `storage-row-cache`, `worktree-snapshots`,
     `local-git-scan`, `native-projection` and `change-tracking`. Why: the
     soak is meant to find a map that grows with every session or
@@ -2488,7 +2488,7 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     fields); owners register and unregister with their own lifetime, so a
     leaked owner shows as an extra source. Cons: a cache nobody registers
     stays invisible; the row cache's `bytes` is serialized length, not heap.
-    Tests: `recurring-diagnostics-caches.test.ts`,
+    Tests: `recurring/diagnostics-caches.test.ts`,
     `storage-database-cache-gauges.test.ts`,
     `native-agent/projection-cache-gauges.test.ts`,
     `change-tracking/service-cache-gauges.test.ts`, and the worktree case

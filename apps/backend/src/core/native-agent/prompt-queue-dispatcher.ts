@@ -28,7 +28,7 @@ import {
   nativeAsyncQuestionItemId,
   type NativeAgentContextUsage,
 } from "@orkestrator/protocol/native-agent";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 import { NativeQueueScheduling } from "./queue-scheduling.js";
 import { PromptRejectedError } from "../agent-provider-contract.js";
 import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";

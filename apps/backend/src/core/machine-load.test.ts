@@ -18,8 +18,8 @@ import {
   parseOsRelease,
 } from "./machine-load.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { flushMicrotasks, ManualTime } from "./recurring-test-support.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { flushMicrotasks, ManualTime } from "./recurring/test-support.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

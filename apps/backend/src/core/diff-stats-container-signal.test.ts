@@ -15,9 +15,9 @@ import {
   type DiffStatsTarget,
 } from "./diff-stats-service.js";
 import { DIFF_CACHE_MAX_AGE_MS } from "./diff-stats-tracking.js";
-import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { ManualTime, deferred, flushMicrotasks } from "./recurring/test-support.js";
 import { WorkAdmissionPool } from "./work-admission.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 
 /**
  * The container worktree signal end to end inside the scan owner: real

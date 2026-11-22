@@ -184,8 +184,13 @@ main-thread work counts, to the mutation of xterm.js's rows that shows the
 echo (xterm.js's DOM renderer updates rows in an animation frame, so this is
 the frame that paints it). The typing terminal runs `cat` in raw mode, as the
 loopback benchmark's does. After 10 warm-up keys it types 200 (150 in the A/B
-run), each 30 ms after the previous echo. The page also records long tasks and
-animation-frame gaps. The backend's own event-loop monitor is read from
+run), each 30 ms after the previous echo plus a spread of up to one 60 Hz
+frame (a golden-ratio sequence), so keys land at every phase of the page's
+frame clock as a person's do (8312 task 4, below). The page also records long
+tasks and animation-frame gaps, and splits each key with resource timing: its
+own command request's send time after the keydown (`sent`), the wait before
+Chromium sends it (`queued`), the server's share (`server`) and the request's
+duration. The backend's own event-loop monitor is read from
 `/__orkestrator/metrics` around each run. It counts ticks at least 100 ms late.
 The benchmark reports unavailable counters separately from a measured zero.
 
@@ -205,8 +210,28 @@ mise run dev:reset --profile echo8312
 `_AGENTS` and `_STREAM` select the variants, rounds, keys, load terminals,
 agents and streamed answer length. Evidence (numbers only) is written as
 `evidence-terminal-echo.json` in the test's Playwright artifact directory.
+`ORKESTRATOR_AGENT_TEST_ECHO_CPU_PROFILE=1` adds a Chromium CPU profile of
+the measured page per cell (`page-<variant>-r<round>.cpuprofile`), and
+`ORKESTRATOR_AGENT_TEST_ECHO_TRACE=1` a performance trace
+(`trace-<variant>-r<round>.json`, about 60 MB per 200-key cell).
+Trace mode defaults to one idle round. Explicit variant and round selections
+can cover up to three cells, with at most 200 measured keys per cell. Each
+traced cell has a 64 MiB budget shared with its optional CPU profile. The
+remaining artifact space covers the report and other evidence. If a capture
+exceeds its per-cell budget, lower `ORKESTRATOR_AGENT_TEST_ECHO_KEYS`.
+
+Profiling and tracing slow the page. Compare their latencies with other runs
+using the same capture settings. Each cell records the runner's monotonic clock
+(`monotonicStartUs`) so a `NODE_OPTIONS=--cpu-prof` profile of the Playwright
+worker can be cut per cell. `keyPhaseMs` summarizes keydown offsets from the
+preceding animation frame. `keyRequestMs` measures terminal writes for the
+typing session. `keyRequestCounts` reports matched writes, missing writes,
+ambiguous writes and missing resource timings. The probe allows up to two
+seconds after measurement and profile export for pending timing entries.
+
 A cell requires all measured keystrokes, output from each requested producer,
-and fake-model streams covering the typing window. The reveal case checks all
+and fake-model streams covering the typing window through the final echo.
+`profileExportMs` reports export time separately. The reveal case checks all
 600 numbered lines in xterm's retained buffer and checks the visible screen
 on reveal, WebSocket reconnect, and reload.
 
@@ -295,10 +320,97 @@ What the original runs suggested:
   A/B's agent-visible row being higher than both shows the run-to-run spread
   (about 20 ms at p95 and p99 under load): read the A/B as the difference
   between its two hidden-tabs rows.
-- **Echo slows as agents' transcripts grow.** In every loaded run the same
-  variant's p50 rose round by round (idle 25, 37, 45 ms in the first run) while
-  the idle-only run, with no agent turns, stayed flat. Each round adds four
-  long agent turns; what grows with them is not yet known (8312 task 4).
+- **Echo seemed to slow as agents' transcripts grew.** In every loaded run
+  the same variant's p50 rose round by round (idle 25, 37, 45 ms in the first
+  run) while the idle-only run, with no agent turns, stayed flat. The cause
+  was the harness, not the transcripts: see below (8312 task 4). These runs
+  typed at a fixed cadence, so their p50s, including the comparisons between
+  variants above, carry the same frame-phase bias; their p95 and p99 are less
+  affected.
+
+### Why the echo seemed to slow as transcripts grew (8312 task 4)
+
+Investigated on 2026-11-22 on `beelink` (Linux x64, 16 threads), against
+`main` at `dd1391427`, with `idle,backend-only` over three rounds at the busy
+load shape and a credential-free profile. Figures are per-round p50s in ms;
+no key timed out in any cell.
+
+**What grows.** Neither the backend nor the page:
+
+- *Backend.* A Bun CPU profile of the backend across the run, cut per cell,
+  sampled at the same rate in every round (about 15, 10 and 10 samples a
+  second in the idle cells, 91, 88 and 87 in the backend-only cells, at a
+  3 ms interval). Native-agent and activity code stayed a few percent of
+  that. The keystroke request's server time stayed at 0.6 ms (resource
+  timing) and the event-loop monitor recorded no late ticks.
+- *Page.* Chromium CPU profiles of the measured page per cell: idle 92 to 94%
+  of every idle cell and 87 to 89% of every backend-only cell, no long tasks.
+  A performance trace showed the main thread busy for about 5 ms of each
+  key's wait, in every round.
+- *The Playwright worker.* Its CPU (from `/proc`) rose from 27% in the first
+  idle cell to about 40% in the later ones. A `NODE_OPTIONS=--cpu-prof`
+  profile of it put the growth in Playwright's own step bookkeeping:
+  `_addStep` and `_findLastPredefinedStep` (which walks the case's whole step
+  tree on every API call) and `onApiCallBegin` took 22% of the worker in the
+  first idle cell and 34% in the third. Every Playwright API call records a
+  step, including each `route.fallback()` and `route.fulfill()` of the
+  spec's module route. Each loaded round reloads the app in four driver
+  pages, and every module of each load is a fulfilled route, so loaded
+  rounds add steps by the thousand while idle rounds add a few hundred. That
+  would explain why the idle-only run stayed flat; the steps were not
+  counted.
+
+**How the worker reached the echo.** Two ways:
+
+1. *The keystroke's request waited for it.* The module route
+   (`fetchModulesOutsideChromium` in `browser-test.ts`) matched every loopback
+   URL, so Chromium held each command request until the worker's handler
+   answered `route.fallback()`. Across three rounds, that wait
+   (`queued`) grew from 4.4 to 7.1 ms in idle and from 5.9 to 9.0 ms in
+   backend-only.
+2. *It moved the keys' frame phase.* The spec typed each key 30 ms after the
+   previous echo, plus its own Playwright round trips, so every key landed at
+   about the same point in the page's 16.7 ms frame. Chromium defers ordinary
+   tasks after a discrete input event until the next frame, so the browser
+   client's 8 ms typing timer (`TERMINAL_HTTP_INPUT_BATCH_DELAY_MS`) fired on
+   time only when a frame fell inside those 8 ms. Traces of the backend-only
+   cells showed it: in round 1, 155 of 200 keys landed 12 to 16 ms after a
+   frame and their timers fired at 8.1 ms (median); in round 2, 96 landed 0
+   to 4 ms after a frame and their timers fired at 15.4 ms, just behind the
+   next frame, while the main thread was busy for about 5 ms of the wait. As
+   the worker slowed, the phase drifted and the median flipped from the
+   one-frame cluster to the two-frame one.
+
+**What changed (harness only).**
+
+- The module route's pattern is `MODULE_ROUTE_URL`, which leaves the gateway's
+  API (`/__orkestrator/…`, never a module) out. It is a regular expression,
+  so Playwright matches it in its own server and continues those requests
+  without calling the case's handler or recording a step.
+- Each key's gap adds a golden-ratio spread of up to one 60 Hz frame
+  (`keyPhaseOffsetMs`), so keys land at every phase of the frame, as a
+  person's do. Cells now also report the mean.
+
+| Run | Variant | Round 1 | Round 2 | Round 3 | Request `queued` p50, r1 → r3 |
+| --- | --- | --- | --- | --- | --- |
+| Before (fixed cadence) | idle | 24.2 | 32.4 | 32.5 | |
+| Before (fixed cadence) | backend-only | 21.2 | 32.8 | 28.5 | |
+| Before, repeat with request timing | idle | 24.4 | 32.6 | 33.3 | 4.4 → 7.1 |
+| Before, repeat with request timing | backend-only | 21.5 | 32.8 | 28.4 | 5.9 → 9.0 |
+| After | idle | 27.4 (mean 27.2) | 27.5 (27.1) | 27.5 (27.3) | 1.6 → 1.7 |
+| After | backend-only | 26.7 (27.1) | 26.8 (27.3) | 26.3 (26.5) | 1.5 → 1.5 |
+
+p95 stayed between 32 and 36 ms in every cell of both. A third run of the
+final code with the backend and page profilers attached was flat as well
+(means 26.7 to 27.4 ms).
+
+**Typing timer A/B.** The same harness with the browser's typing timer at 0
+(a key sent at once, later keys coalescing while it is in flight, as the
+Electron relay already does) sent each keystroke 0.5 ms after its keydown
+instead of 10.3 ms, and echoed no sooner: per-round means 27.4 to 27.7 ms
+against 26.5 to 27.3 ms. The echo itself waits behind the same deferred
+frame, so in headless Chromium at 60 Hz the timer costs no echo time once
+keys are not phase-locked. The timer was left at 8 ms.
 
 ## Limitations
 
@@ -315,3 +427,10 @@ What the original runs suggested:
   not reconstruct a renderer or reapply the returned screen.
 - Variation between runs is a few milliseconds at p95 and up to about 15 ms
   at p99 under heavy load; compare medians of several runs.
+- Echo latency is frame-quantised: an echo paints one or two frames after its
+  key, depending on the key's phase in the frame. A median of such a
+  distribution moves by a whole cluster when the phase shifts, which is why
+  keys are spread over the frame and cells report the mean.
+- The Playwright worker's cost per API call grows with the steps a case has
+  recorded. Keep it out of the measured path: anything the page waits on
+  during a measured key should not need the worker.

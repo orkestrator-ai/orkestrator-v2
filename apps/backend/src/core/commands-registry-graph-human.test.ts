@@ -21,7 +21,7 @@ import {
   type GraphRunWorld,
 } from "./graph-run-executor-test-support.js";
 import type { GraphRunService } from "./graph-run-service.js";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 
 const commands = createCommandRegistry();
 const worlds: GraphRunWorld[] = [];

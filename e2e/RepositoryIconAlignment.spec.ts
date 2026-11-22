@@ -31,11 +31,13 @@ test("every heading's icon leads it in one column", async ({ page }) => {
   await expect(
     heading(page, "acme/target").getByTestId("command-node-home-icon").getByTestId("project-icon"),
   ).toHaveCount(0);
+  // The sidebar edge stays fixed when padding moves between heading elements.
+  const sidebar = await box(page.locator("main"));
   const lefts: number[] = [];
   for (const label of ["acme/source", "acme/target", "solo"]) {
     const button = heading(page, label);
     const icon = await box(button.getByTestId("command-node-home-icon"));
-    expect(icon.x - (await box(button)).x, label).toBe(8);
+    expect(icon.x - sidebar.x, label).toBe(21);
     lefts.push(icon.x);
     // The icon spans the heading's two lines, centred on them.
     const lines = await box(button.locator("span.flex-col"));

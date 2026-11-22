@@ -30,7 +30,7 @@ import { ProviderUnreachableError } from "../agent-provider-contract.js";
 import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./service.js";
 import { parseReviewPackageReference } from "./package.js";
-import { ManualTime, settleKeyedWork } from "../recurring-test-support.js";
+import { ManualTime, settleKeyedWork } from "../recurring/test-support.js";
 import { StorageService } from "../storage.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 

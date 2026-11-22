@@ -60,7 +60,7 @@ import {
 import type { PlanUsageState } from "../plan-usage/index.js";
 import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
 import { createAgentModelCatalogReader, resolveFastMode } from "../build-pipeline/index.js";
-import { recurringWorkMetrics } from "../recurring-work-metrics.js";
+import { recurringWorkMetrics } from "../recurring/index.js";
 import {
   discoverFeaturePlanning,
   featurePlanningObligation,

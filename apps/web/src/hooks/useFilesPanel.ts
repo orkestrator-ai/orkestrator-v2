@@ -33,6 +33,18 @@ import {
   FILES_PANEL_DATA_SAVING_UNWATCHED_BACKOFF_MS,
 } from "@/lib/data-saving-policy";
 import { filesPanelPollIntervalMs } from "@/lib/agent-test-timing";
+import {
+  dropParentPath,
+  duplicateDropPaths,
+  ExternalDropLimitError,
+  planExternalFolderCopy,
+  skipLooseDropFile,
+  workspacePathInDropTarget,
+  type DroppedDirectoryEntry,
+  type ExternalFolderCopyPlan,
+} from "@/lib/external-file-drop";
+
+import { executeExternalFolderDrop } from "@/lib/execute-external-folder-drop";
 
 const log = createLogger("web.files");
 
@@ -168,6 +180,41 @@ export {
 function formatBatchFailure(completed: number, total: number, message: string): string {
   if (completed <= 0) return message;
   return `${completed} of ${total} files were changed before the failure: ${message}`;
+}
+
+function externalCopyFailureTitle(fileCount: number, folderCount: number): string {
+  if (folderCount === 0) return fileCount === 1 ? "Failed to copy file" : "Failed to copy files";
+  if (fileCount === 0)
+    return folderCount === 1 ? "Failed to copy folder" : "Failed to copy folders";
+  return "Failed to copy files and folders";
+}
+
+function externalCopySuccessTitle(fileCount: number, folderCount: number): string {
+  if (fileCount === 0) return folderCount === 1 ? "Folder copied" : "Folders copied";
+  return "Files and folders copied";
+}
+
+function countLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/** e.g. "temp: 12 files", or "3 folders, 40 files", plus what the walk left out. */
+function externalFolderCopySummary(
+  destinationDirectory: string,
+  plan: ExternalFolderCopyPlan,
+  looseFileCount: number,
+  copiedFileCount: number,
+): string {
+  const topLevel = plan.folders.filter((folder) => dropParentPath(folder) === "");
+  const files = countLabel(copiedFileCount, "file", "files");
+  const summary =
+    topLevel.length === 1 && looseFileCount === 0
+      ? `${workspacePathInDropTarget(destinationDirectory, topLevel[0]!)}: ${files}`
+      : topLevel.length > 0
+        ? `${countLabel(topLevel.length, "folder", "folders")}, ${files}`
+        : files;
+  if (plan.skipped.length === 0) return summary;
+  return `${summary} (skipped ${countLabel(plan.skipped.length, "Git or .DS_Store entry", "Git and .DS_Store entries")})`;
 }
 
 /**
@@ -1207,15 +1254,18 @@ export function useFilesPanel() {
   );
 
   const copyExternalFiles = useCallback(
-    async (files: File[], destinationDirectory: string) => {
+    async (
+      files: File[],
+      destinationDirectory: string,
+      folders: readonly DroppedDirectoryEntry[] = [],
+    ) => {
+      const failureTitle = externalCopyFailureTitle(files.length, folders.length);
       if (!isAvailable || !targetId) {
         const error = new Error("The selected environment is not available");
-        toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
-          description: error.message,
-        });
+        toast.error(failureTitle, { description: error.message });
         throw error;
       }
-      if (files.length === 0) return;
+      if (files.length === 0 && folders.length === 0) return;
       if (files.length > MAX_EXTERNAL_FILE_DROP_COUNT) {
         const error = new Error(`Drop up to ${MAX_EXTERNAL_FILE_DROP_COUNT} files at a time`);
         toast.error("Too many files", { description: error.message });
@@ -1229,62 +1279,179 @@ export function useFilesPanel() {
       }
 
       setFileActionPending(`copy\0${destinationDirectory}`);
-      const completedPaths: string[] = [];
-      const failures: Array<{ name: string; message: string }> = [];
+      let progressToastId: string | number | undefined;
+      let failureReported = false;
+      const encodeFile = async (file: File) =>
+        encodeBytesAsBase64(new Uint8Array(await file.arrayBuffer()));
+      const withProgressToast = <T extends object>(options: T) =>
+        progressToastId === undefined ? options : { ...options, id: progressToastId };
       try {
-        // In project scope this lands in the root checkout via its home.
-        const environmentId = await resolveMutationEnvironmentId().catch((error: unknown) => {
-          const message = error instanceof Error ? error.message : String(error);
-          toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
-            description: message,
-          });
-          throw error;
-        });
-        for (const file of files) {
-          try {
-            const contents = new Uint8Array(await file.arrayBuffer());
-            const destination = await backendForScope(scope).copyExternalFile(
-              environmentId,
-              destinationDirectory,
-              file.name,
-              encodeBytesAsBase64(contents),
-            );
-            completedPaths.push(destination);
-          } catch (error) {
-            failures.push({
-              name: file.name,
-              message: error instanceof Error ? error.message : String(error),
-            });
+        const api = backendForScope(scope);
+        if (folders.length === 0) {
+          const environmentId = await resolveMutationEnvironmentId();
+          const completedPaths: string[] = [];
+          const remainingPaths: string[] = [];
+          let firstFailure = "";
+          for (const file of files) {
+            try {
+              completedPaths.push(
+                await api.copyExternalFile(
+                  environmentId,
+                  destinationDirectory,
+                  file.name,
+                  await encodeFile(file),
+                ),
+              );
+            } catch (error) {
+              remainingPaths.push(file.name);
+              firstFailure ||= error instanceof Error ? error.message : String(error);
+            }
           }
-        }
-
-        if (completedPaths.length > 0) {
-          await refreshAllFilesData();
-        }
-        if (failures.length === 0) {
+          if (completedPaths.length > 0) await refreshAllFilesData();
+          if (remainingPaths.length > 0) {
+            throw new FileBatchActionError(
+              formatBatchFailure(completedPaths.length, files.length, firstFailure),
+              { remainingPaths, completedPaths },
+            );
+          }
           toast.success(files.length === 1 ? "File copied" : "Files copied", {
             description: files.length === 1 ? completedPaths[0] : `${completedPaths.length} files`,
           });
           return;
         }
 
-        const message = formatBatchFailure(
-          completedPaths.length,
-          files.length,
-          failures[0]!.message,
+        const looseFiles = files.filter((file) => !skipLooseDropFile(file));
+        const plan = await planExternalFolderCopy(folders, {
+          initialEntries: files.length,
+          initialBytes: looseFiles.reduce((bytes, file) => bytes + file.size, 0),
+        });
+        for (const file of files) {
+          if (skipLooseDropFile(file)) plan.skipped.push(file.name);
+        }
+        const oversizedInFolder = plan.files.find(
+          ({ file }) => file.size > MAX_EXTERNAL_FILE_DROP_BYTES,
         );
-        toast.error(files.length === 1 ? "Failed to copy file" : "Failed to copy files", {
-          description: message,
-        });
-        throw new FileBatchActionError(message, {
-          remainingPaths: failures.map((failure) => failure.name),
-          completedPaths,
-        });
+        if (oversizedInFolder) {
+          const error = new Error(`${oversizedInFolder.path} exceeds the 8 MB file limit`);
+          toast.error("File too large", { description: error.message });
+          failureReported = true;
+          throw error;
+        }
+        const duplicates = duplicateDropPaths([
+          ...looseFiles.map((file) => file.name),
+          ...plan.folders,
+          ...plan.files.map(({ path }) => path),
+        ]);
+        if (duplicates.length > 0) {
+          throw new Error(
+            `Multiple dropped items have the same destination: ${duplicates.join(", ")}`,
+          );
+        }
+        if (plan.folders.length === 0 && looseFiles.length === 0) {
+          toast.info("No items copied", {
+            description: `Skipped ${countLabel(plan.skipped.length, "Git or .DS_Store entry", "Git and .DS_Store entries")}`,
+          });
+          return;
+        }
+        const totalFiles = looseFiles.length + plan.files.length;
+        const totalFolders = plan.folders.length;
+        const topLevel = plan.folders.filter((folder) => dropParentPath(folder) === "");
+        // An entirely unreadable drop is still a failure without provisioning a workspace.
+        if (
+          looseFiles.length === 0 &&
+          topLevel.every((root) =>
+            plan.failures.some(({ name }) => name === root || name.startsWith(`${root}/`)),
+          )
+        ) {
+          const message = plan.failures.map(({ message }) => message).join("\n");
+          throw new FileBatchActionError(message, {
+            completedPaths: [],
+            remainingPaths: [
+              ...new Set([
+                ...plan.folders,
+                ...plan.files.map(({ path }) => path),
+                ...plan.failures.map(({ name }) => name),
+              ]),
+            ],
+          });
+        }
+
+        const environmentId = await resolveMutationEnvironmentId();
+        const target = isLocalEnvironment
+          ? { kind: "local" as const, identity: worktreePath! }
+          : { kind: "container" as const, identity: containerId! };
+        let preparedFiles = 0;
+        const reportProgress = () => {
+          progressToastId = toast.loading(
+            folders.length === 1 ? "Copying folder…" : "Copying folders…",
+            withProgressToast({ description: `${preparedFiles} of ${totalFiles} files prepared` }),
+          );
+        };
+        reportProgress();
+        const outcome = await executeExternalFolderDrop(
+          plan,
+          looseFiles,
+          destinationDirectory,
+          (action) => api.importExternalEntry({ environmentId, target, action }),
+          encodeFile,
+          () => {
+            preparedFiles += 1;
+            reportProgress();
+          },
+        );
+        if (outcome.completedPaths.length > 0) await refreshAllFilesData();
+        if (outcome.failures.length > 0) {
+          const [first] = outcome.failures;
+          const description = [
+            `${outcome.copiedFiles} of ${totalFiles} files copied. ${outcome.copiedFolders} of ${totalFolders} folders copied.`,
+            first,
+            ...outcome.cleanupFailures,
+            "Drop the remaining items again to retry.",
+          ].join(" ");
+          throw new FileBatchActionError(description, outcome);
+        }
+        const title = topLevel.length
+          ? externalCopySuccessTitle(looseFiles.length, topLevel.length)
+          : looseFiles.length === 1
+            ? "File copied"
+            : "Files copied";
+        toast.success(
+          title,
+          withProgressToast({
+            description: externalFolderCopySummary(
+              destinationDirectory,
+              plan,
+              looseFiles.length,
+              outcome.copiedFiles,
+            ),
+          }),
+        );
+      } catch (error) {
+        if (!failureReported) {
+          const message = error instanceof Error ? error.message : String(error);
+          const title = error instanceof ExternalDropLimitError ? "Folder too large" : failureTitle;
+          if (error instanceof FileBatchActionError) {
+            toast.error(title, withProgressToast({ description: message }));
+          } else {
+            if (progressToastId !== undefined) toast.dismiss(progressToastId);
+            toast.error(title, { description: message });
+          }
+        }
+        throw error;
       } finally {
         setFileActionPending(null);
       }
     },
-    [scope, isAvailable, targetId, resolveMutationEnvironmentId, refreshAllFilesData],
+    [
+      scope,
+      isAvailable,
+      targetId,
+      resolveMutationEnvironmentId,
+      isLocalEnvironment,
+      worktreePath,
+      containerId,
+      refreshAllFilesData,
+    ],
   );
 
   // Announced revisions: subscribe (and hydrate) only while the panel is open.

@@ -16,7 +16,7 @@ import {
   CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS,
 } from "./container-worktree-signal.js";
 import { CommandFailedError, runCommand } from "./shell.js";
-import { ManualTime, deferred, flushMicrotasks } from "./recurring-test-support.js";
+import { ManualTime, deferred, flushMicrotasks } from "./recurring/test-support.js";
 
 const SCRIPT = join(import.meta.dir, "../../../../docker/orkestrator-worktree-signal.sh");
 const credential = {

@@ -9,9 +9,9 @@ import {
   type RecurringRunContext,
   type RecurringRunResult,
   type RecurringSchedulerLimits,
-} from "./recurring-scheduler.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./recurring-test-support.js";
+} from "./scheduler.js";
+import { RecurringWorkMetrics } from "./work-metrics.js";
+import { ManualTime, deferred, flushMicrotasks, type Deferred } from "./test-support.js";
 
 const SECRET_KEY = "env-5f1c/Users/alice/ghp_SECRETTOKEN0123456789";
 

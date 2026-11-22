@@ -82,6 +82,9 @@ test("real Git and Bun compare outcomes with the managed executable and separate
 import { expect, test } from "bun:test";
 import { current } from "./behavior";
 test("shared assertion", () => expect(1).toBe(2));
+test("Actions-only failure", () => {
+  if (process.env.GITHUB_ACTIONS === "true") throw new Error("Actions-specific diagnostic");
+});
 test("diagnostics differ", () => { throw new Error(current ? "new regression" : "old failure"); });
 (current ? test : test.skip)("runs only on head", () => { throw new Error("head only"); });
 test("needs package build and preload", async () => {
@@ -154,6 +157,8 @@ test("missing after preload failure", () => { throw new Error("head only"); });
                 env: {
                   ...process.env,
                   CLAUDECODE: "",
+                  // Validation inside GitHub Actions records Bun's annotated output.
+                  GITHUB_ACTIONS: "true",
                   ORKESTRATOR_PORT_BASE: String(normalPort),
                   COMPOSE_PROJECT_NAME: "validated-fixture",
                 },
@@ -181,6 +186,9 @@ test("missing after preload failure", () => { throw new Error("head only"); });
         await recorded("packages/preloaded", "./src/preload.test.ts"),
       );
       const seenEnv: NodeJS.ProcessEnv[] = [];
+      // The rerun inherits the backend's environment, as it does under CI.
+      const ambientActions = process.env.GITHUB_ACTIONS;
+      process.env.GITHUB_ACTIONS = "true";
       const result = await triageValidationFailures({
         environment,
         context: {
@@ -217,6 +225,9 @@ test("missing after preload failure", () => { throw new Error("head only"); });
             stderrPath: ".orkestrator/preload-stderr.txt",
           },
         ],
+      }).finally(() => {
+        if (ambientActions === undefined) delete process.env.GITHUB_ACTIONS;
+        else process.env.GITHUB_ACTIONS = ambientActions;
       });
       expect(result.limitation).toBeUndefined();
       const failures = new Map(
@@ -226,6 +237,8 @@ test("missing after preload failure", () => { throw new Error("head only"); });
       );
       expect(result.triage?.mergeBase).toBe(base);
       expect(failures.get("shared assertion")?.reasons).toContain("failed-on-merge-base");
+      expect(failures.get("Actions-only failure")?.reasons).toContain("failed-on-merge-base");
+      expect(failures.get("Actions-only failure")?.reasons).not.toContain("passed-on-merge-base");
       expect(failures.get("diagnostics differ")?.verdict).toBe("related");
       expect(failures.get("diagnostics differ")?.reasons).not.toContain("failed-on-merge-base");
       expect(failures.get("runs only on head")?.reasons).not.toContain("passed-on-merge-base");

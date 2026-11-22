@@ -48,7 +48,7 @@ import {
 import { GraphNodeExecutorRegistry, type GraphNodeExecutor } from "./graph-run-executors.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { multiReviewGraphEngineTemplate } from "./review/graph-template.js";
-import { ManualTime } from "./recurring-test-support.js";
+import { ManualTime } from "./recurring/test-support.js";
 import { runCommand } from "./shell.js";
 import { storageDatabase } from "./storage-test-support.js";
 

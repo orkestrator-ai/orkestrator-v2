@@ -6,7 +6,7 @@ import {
   type SignalDemotionReason,
   type SignalHealthState,
   type SignalHealthStatus,
-} from "./recurring-diagnostics.js";
+} from "./recurring/index.js";
 import type { ClaudeStateSignalSupport } from "./tmux-poll.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

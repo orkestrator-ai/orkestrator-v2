@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
-import { RecurringDiagnosticsRegistry } from "./recurring-diagnostics.js";
-import { RecurringScheduler } from "./recurring-scheduler.js";
-import { RecurringWorkMetrics } from "./recurring-work-metrics.js";
-import { flushMicrotasks, ManualTime } from "./recurring-test-support.js";
+import { RecurringDiagnosticsRegistry } from "./recurring/diagnostics.js";
+import { RecurringScheduler } from "./recurring/scheduler.js";
+import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
+import { flushMicrotasks, ManualTime } from "./recurring/test-support.js";
 import { TmuxRuntime } from "./tmux-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 
@@ -265,7 +265,7 @@ describe("RecurringDiagnosticsRegistry signals", () => {
 
   for (const firstToStop of [0, 1]) {
     test(`aggregates live tmux runtimes when runtime ${firstToStop + 1} stops first`, async () => {
-      const { recurringWorkDiagnostics } = await import("./recurring-diagnostics.js");
+      const { recurringWorkDiagnostics } = await import("./recurring/diagnostics.js");
       const options = { schedule: () => 1, cancel: () => undefined };
       const runtimes = [
         new TmuxRuntime({ claudeStatePolls: options }),
@@ -351,7 +351,7 @@ describe("RecurringDiagnosticsRegistry signals", () => {
   });
 
   test("a backend runtime registers both production signal sources until it shuts down", async () => {
-    const { recurringWorkDiagnostics } = await import("./recurring-diagnostics.js");
+    const { recurringWorkDiagnostics } = await import("./recurring/diagnostics.js");
     const { BackendRuntime } = await import("./backend-runtime.js");
     const signalNames = () =>
       recurringWorkDiagnostics(new RecurringWorkMetrics({ enabled: false })).signals.map(

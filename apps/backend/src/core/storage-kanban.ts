@@ -61,7 +61,7 @@ type LinearAuth = shared.LinearAuth;
 type LinearCompletionComment = shared.LinearCompletionComment;
 type GitHubCompletionComment = shared.GitHubCompletionComment;
 
-import { recurringWorkMetrics } from "./recurring-work-metrics.js";
+import { recurringWorkMetrics } from "./recurring/index.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageFiles } from "./storage-files.js";
 import {

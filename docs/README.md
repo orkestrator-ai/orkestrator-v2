@@ -363,7 +363,8 @@ a count is needed, compute it from the rows instead, for example
   never covers this) and renumber the remaining ranks to `1..n` in row order.
   Checklist items whose source is retired cite it as
   `NNNN (retired)`. Its todo number is not reused.
-- To add work, create a new file with the next number and the same headings
+- To add work, create a new file with the number `mise run number:next -- todo`
+  prints ([number claims](number-claims/README.md)) and the same headings
   in the folder that fits, and add a rated row with its Status and Needs you to
   that folder's index. A new folder also needs its own
   `0000-index.md` and a row in [`todo/0000-index.md`](todo/0000-index.md).
@@ -409,8 +410,11 @@ a count is needed, compute it from the rows instead, for example
   files; the third was retired on 2026-11-10) stays allowlisted and may not
   gain another file, and 0723 left the allowlist when its agent-engines file
   was retired on 2026-11-14, leaving one file.
-- Two open pull requests can each pick the same next number and each pass CI.
-  The claim file each adds under `number-claims/todo/` then conflicts, so the
+- Two open pull requests can each pick the same next number and each pass CI
+  (`mise run number:next -- todo` makes that rare). Their index rows do not
+  conflict once the merge drivers are registered (`mise run git:merge-drivers`;
+  root `AGENTS.md`, "Merging `main` into a branch"), but the claim file each
+  adds under `number-claims/todo/` does, so the
   second cannot merge until it renumbers (`tests/unit/number-claims.test.ts`
   requires a claim for every number from 7500). If a clash still reaches
   `main`, fix forward: the file that merged first keeps the number, the newer

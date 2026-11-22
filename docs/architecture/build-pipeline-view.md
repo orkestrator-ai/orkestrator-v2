@@ -970,7 +970,18 @@ in [tickets.md](tickets.md#delivery). The decision is saved before creating a
 Ship session, so a failed session creation and retry keep the same policy.
 Resuming a paused push-only Ship explicitly forbids opening or editing a PR.
 
-- **`open-pr`** starts the PR stage as always.
+- **`open-pr`** starts the PR stage. Before it pushes, Ship (`prPrompt`) fetches
+  the base and checks the branch with `git merge-tree` against
+  `origin/<base>`, never a possibly stale local base branch. A branch that
+  merges cleanly is pushed as Verify judged it; one that would conflict is
+  merged with `origin/<base>` (never rebased, so the judged commits stay in the
+  history) and resolved under the conflict-resolution rules first, and Ship
+  never opens or updates a pull request that still conflicts. If the base
+  moves after that and GitHub reports a conflict, the conflict stage runs as
+  before; it now fetches again before it finishes and merges again, up to
+  three passes, when the base moved on meanwhile. Both turns are told to run
+  the repository's own merge setup and generators rather than hand-edit
+  generated files (`MERGE_REPOSITORY_TOOLING_INSTRUCTION`).
 - **`push-no-pr`** starts the same Ship stage (`pr` session, `creating-pr` phase,
   the Pull request step's model and instructions) under
   `BRANCH_PUSH_SESSION_LABEL`, with `pushBranchPrompt`: commit what remains, push,

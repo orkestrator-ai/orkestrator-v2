@@ -6,6 +6,7 @@ import {
   COORDINATOR_CONTEXT_OPEN_TAG,
   COORDINATOR_ENVIRONMENT_CHOICE_RULE,
   COORDINATOR_MESSAGING_OFF_NOTE,
+  COORDINATOR_PARALLEL_WORK_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_REQUEST_ID_RULE,
   COORDINATOR_ROUTING_RULE,
@@ -84,6 +85,7 @@ describe("buildCoordinatorContext", () => {
     for (const rule of [
       COORDINATOR_ROUTING_RULE,
       COORDINATOR_ENVIRONMENT_CHOICE_RULE,
+      COORDINATOR_PARALLEL_WORK_RULE,
       COORDINATOR_PR_RULE,
       COORDINATOR_AGENTS_MD_RULE,
       COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
@@ -255,7 +257,9 @@ describe("buildCoordinatorContext", () => {
     });
     // Pattern recognition adds 273 characters; reserve 300 more for that guidance.
     // Actions marking adds 99 characters of per-turn guidance.
-    expect(buildCoordinatorContext(longest).length).toBeLessThan(9_400);
+    // The parallel-work rule adds 189: workers launched side by side edited the
+    // same files, and every merge of their branches conflicted.
+    expect(buildCoordinatorContext(longest).length).toBeLessThan(9_600);
     const side = input({ delegation: { kind: "side", title: "Side 1", messagingEnabled: true } });
     expect(buildCoordinatorContext(side).length).toBeLessThan(2_000);
   });

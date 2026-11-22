@@ -826,6 +826,17 @@ export const COORDINATOR_ENVIRONMENT_CHOICE_RULE =
   "Environments: a pipeline environment is the default. Start one with start_build_pipeline whenever the whole spec is known (a ticket, or what is being built has been settled with the user); it builds, reviews, fixes, verifies, opens the PR and resolves conflicts on its own. Use a prompt environment (launch_environment) for investigation, or for interactive work that may stop, raise many questions or need back-and-forth with the user. With a prompt environment the rest of the lifecycle is yours: when you judge the work ready, launch Multi Review, then see it through Address Findings, the pull request and conflict resolution. Investigation with no code change ends with the worker's report.";
 
 /**
+ * How parallel workers share the checkout, told to every main coordinator
+ * verbatim.
+ *
+ * Workers launched side by side edited the same files (folder indexes, a
+ * generated manifest, the same to-dos), so their branches conflicted with
+ * each other and merges had to be repeated and fixed by hand.
+ */
+export const COORDINATOR_PARALLEL_WORK_RULE =
+  "Parallel work: give workers that run at the same time disjoint sets of files, and name them in each prompt. Work that must edit the same file goes to one worker, or runs one after another.";
+
+/**
  * Who raises a pull request, told to every main coordinator verbatim.
  *
  * Coordinators otherwise ended build instructions with "prepare commit + PR",

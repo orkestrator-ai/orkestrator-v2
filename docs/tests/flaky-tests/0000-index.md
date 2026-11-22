@@ -71,9 +71,10 @@ files.
 - Name the file `<id>-short-slug.md`. Use at least four digits, for example
   `0147` or `10000`. Its body carries `- **ID:** <id>` and
   `- **Status:** <status>` lines that match its index row.
-- A new case takes the next number after the highest one in use in any group
-  (or one from a range reserved for the branch), and a number is never
-  reused. `tests/unit/flaky-tests-index.test.ts` fails on a number used by
+- A new case takes the number `mise run number:next -- flaky-tests` prints
+  (above every number in use in any group and on origin's branches, plus a
+  small random step; or one from a range reserved for the branch), and a
+  number is never reused. `tests/unit/flaky-tests-index.test.ts` fails on a number used by
   more than one case file, in one group or across groups.
 - A case numbered 9800 or above also adds its claim,
   `docs/number-claims/flaky-tests/NNNN`, holding `<group>/NNNN-slug.md`. Two

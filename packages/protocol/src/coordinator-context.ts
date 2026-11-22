@@ -21,6 +21,7 @@ import {
   COORDINATOR_LAUNCH_DEFAULTS_RULE,
   COORDINATOR_MAIL_ADDRESS,
   COORDINATOR_MESSAGING_OFF_NOTE,
+  COORDINATOR_PARALLEL_WORK_RULE,
   COORDINATOR_PR_RULE,
   COORDINATOR_ROUTING_RULE,
   COORDINATOR_TIMERS_AND_ACCOUNTS_RULE,
@@ -169,6 +170,7 @@ function delegationLines(delegation: CoordinatorContextDelegation): string {
     `${COORDINATOR_ACTION_GUIDANCE}\n` +
     `${COORDINATOR_ROUTING_RULE}\n` +
     `${COORDINATOR_ENVIRONMENT_CHOICE_RULE}\n` +
+    `${COORDINATOR_PARALLEL_WORK_RULE}\n` +
     `Actions: launch_multi_review runs the Multi Review button action; open_multi_review and open_multi_review_address_findings show saved work. ${COORDINATOR_REQUEST_ID_RULE} Inspect outcome, ui and recovery before reporting completion.\n` +
     `Workers: check a worker's work with get_worker_changes (commits, changed and uncommitted files, diff; local or container), not only its report. To try an alternative from where a worker got to, fork_worker starts a new worker from its last commit.\n` +
     // Workers start where a normal environment would: the latest commit of the

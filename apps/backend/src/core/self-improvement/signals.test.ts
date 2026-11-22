@@ -74,7 +74,7 @@ describe("essential log signals", () => {
   });
 
   test("keeps one signature for backend exits and counts their causes and signals as evidence", () => {
-    const exited = (at: number, fields: Record<string, string | number | null>) => ({
+    const exited = (at: number, fields: Record<string, string | number | boolean | null>) => ({
       at,
       level: "error" as const,
       area: "desktop",
@@ -91,12 +91,15 @@ describe("essential log signals", () => {
             exitCause: "killed",
             ranForMs: 5_000,
             oomKills: 0,
+            crashReport: false,
           }),
+          exited(NOW - 2 * HOUR, { exitCause: "killed", oomKills: 2 }),
           exited(NOW - HOUR, {
             "error.exitCode": 133,
             exitCause: "crashed",
             ranForMs: 9_000,
             oomKills: null,
+            crashReport: true,
           }),
         ],
       }),
@@ -108,15 +111,38 @@ describe("essential log signals", () => {
         .map((s) => s.signature),
     ).toEqual(["desktop:backend.exited:Error"]);
     const exits = signal(signals, "desktop:backend.exited:Error");
-    expect(exits.count).toBe(3);
+    expect(exits.count).toBe(4);
     expect(exits.category).toBe("crash");
     expect(exits.evidence).toMatchObject({
-      "exitCause.killed": 1,
+      "exitCause.killed": 2,
+      "crashReport.false": 1,
+      "crashReport.true": 1,
+      oomKills: 2,
       "exitCause.crashed": 1,
       "error.signal.SIGKILL": 1,
       "error.exitCode": 133,
       ranForMs: 9_000,
     });
+  });
+
+  test.each([null, 0])("reports OOM samples of %p accurately", (oomKills) => {
+    const { signals } = extractSignals(
+      load({
+        createdAt: NOW,
+        essential: [
+          {
+            at: NOW - HOUR,
+            level: "error",
+            area: "desktop",
+            event: "backend.exited",
+            fields: { "error.name": "Error", oomKills },
+          },
+        ],
+      }),
+    );
+    expect(signal(signals, "desktop:backend.exited:Error").evidence.oomKills).toBe(
+      oomKills ?? undefined,
+    );
   });
 
   test("merges a throttled site's first line with its suppressed repeats and recoveries", () => {

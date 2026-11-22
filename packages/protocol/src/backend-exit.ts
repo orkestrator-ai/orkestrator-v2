@@ -14,14 +14,10 @@ export const BACKEND_EXIT_CAUSES = [
   "exit-code",
   /** A fault signal (SIGSEGV, SIGABRT, …), or Bun printed its crash report. */
   "crashed",
-  /** SIGKILL while the kernel counted an OOM kill in the backend's cgroup. */
-  "oom-killed",
-  /** SIGKILL with no OOM kill counted: another process, or an OOM we could not see. */
+  /** The process received SIGKILL. The sender is unknown. */
   "killed",
   /** Any other signal (SIGTERM, SIGHUP, SIGINT, …) the desktop did not send. */
   "terminated",
-  /** The child process failed (`error` event) rather than exiting. */
-  "spawn-error",
 ] as const;
 
 export type BackendExitCause = (typeof BACKEND_EXIT_CAUSES)[number];
@@ -44,20 +40,12 @@ export function isBackendExitCause(value: string): value is BackendExitCause {
 export interface BackendExitFacts {
   exitCode: number | null;
   signal: string | null;
-  /** The child emitted `error` instead of exiting. */
-  spawnError?: boolean;
-  /** OOM kills the kernel counted in the backend's cgroup while it ran; null when unknown. */
-  oomKills?: number | null;
   /** Bun's crash report appeared on the backend's stderr. */
   crashReport?: boolean;
 }
 
 export function classifyBackendExit(facts: BackendExitFacts): BackendExitCause {
-  if (facts.spawnError) return "spawn-error";
-  if (facts.signal === "SIGKILL") {
-    if ((facts.oomKills ?? 0) > 0) return "oom-killed";
-    return facts.crashReport ? "crashed" : "killed";
-  }
+  if (facts.signal === "SIGKILL") return "killed";
   if (facts.crashReport) return "crashed";
   if (facts.signal) return FAULT_SIGNALS.has(facts.signal) ? "crashed" : "terminated";
   return "exit-code";
@@ -68,9 +56,11 @@ export function classifyBackendExit(facts: BackendExitFacts): BackendExitCause {
  * `panic: …` line and the "Bun has crashed" banner. Matching a line only sets
  * a boolean; the line itself is never kept.
  */
-const BUN_CRASH_LINE =
-  /^(?:panic(?:\([^)]{0,64}\))?: |oh no: Bun has crashed\b)|\bBun has crashed\b/;
+const BUN_PANIC_LINE = /^panic(?:\([^)]{0,64}\))?: /;
+const BUN_CRASH_BANNER =
+  /^(?:oh no: )?Bun has crashed(?:\. This indicates a bug in Bun, not your code)?\.?$/;
 
 export function isBunCrashReportLine(line: string): boolean {
-  return BUN_CRASH_LINE.test(line.trimStart());
+  const text = line.trim();
+  return BUN_PANIC_LINE.test(text) || BUN_CRASH_BANNER.test(text);
 }

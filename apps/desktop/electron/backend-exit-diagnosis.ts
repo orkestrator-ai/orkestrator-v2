@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   type BackendExitCause,
   classifyBackendExit,
@@ -17,6 +18,20 @@ export interface BackendExitDiagnosis {
   /** OOM kills the kernel counted in the backend's cgroup while it ran; null off Linux or when unreadable. */
   oomKills: number | null;
   crashReport: boolean;
+}
+
+const desktopLog = createLogger("desktop");
+
+/** The same diagnosis is recorded whether the desktop recovers or shows the error. */
+export function logBackendExit(
+  error: Error,
+  exit: BackendExitDiagnosis,
+  recovering: boolean,
+): void {
+  desktopLog.error(recovering ? "backend.exited-recovering" : "backend.exited", {
+    error: formatLogError(error, { stack: false }),
+    ...exit,
+  });
 }
 
 export interface BackendExitWatchOptions {
@@ -56,11 +71,13 @@ export class BackendExitWatch {
   private memoryEventsFile: string | null = null;
   private oomKillsAtReady: number | null = null;
   private crashReport = false;
+  private ranForMs = 0;
+  private oomKills: number | null = null;
 
   constructor(options: BackendExitWatchOptions = {}) {
     this.platform = options.platform ?? process.platform;
     this.read = options.readText ?? readText;
-    this.now = options.now ?? Date.now;
+    this.now = options.now ?? (() => performance.now());
   }
 
   /** Call once the backend is ready. Never throws. */
@@ -81,21 +98,20 @@ export class BackendExitWatch {
     if (!this.crashReport && isBunCrashReportLine(line)) this.crashReport = true;
   }
 
-  /** Never throws. */
-  diagnose(exit: {
-    exitCode: number | null;
-    signal: string | null;
-    spawnError?: boolean;
-  }): BackendExitDiagnosis {
-    let oomKills: number | null = null;
+  /** Sample at the exit event. Stderr can still arrive during the drain. */
+  captureExit(): void {
+    this.ranForMs = this.readyAt === null ? 0 : Math.max(0, Math.floor(this.now() - this.readyAt));
     if (this.memoryEventsFile && this.oomKillsAtReady !== null) {
       const count = this.tryRead(this.memoryEventsFile, oomKillCount);
-      if (count !== null) oomKills = Math.max(0, count - this.oomKillsAtReady);
+      if (count !== null) this.oomKills = Math.max(0, count - this.oomKillsAtReady);
     }
+  }
+
+  diagnose(exit: { exitCode: number | null; signal: string | null }): BackendExitDiagnosis {
     return {
-      exitCause: classifyBackendExit({ ...exit, oomKills, crashReport: this.crashReport }),
-      ranForMs: this.readyAt === null ? 0 : Math.max(0, this.now() - this.readyAt),
-      oomKills,
+      exitCause: classifyBackendExit({ ...exit, crashReport: this.crashReport }),
+      ranForMs: this.ranForMs,
+      oomKills: this.oomKills,
       crashReport: this.crashReport,
     };
   }

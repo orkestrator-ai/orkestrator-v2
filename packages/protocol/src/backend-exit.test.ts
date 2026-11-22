@@ -19,24 +19,14 @@ describe("classifyBackendExit", () => {
       expect(classifyBackendExit({ exitCode: null, signal })).toBe("terminated");
   });
 
-  test("SIGKILL is an OOM kill only when the cgroup counted one", () => {
-    expect(classifyBackendExit({ exitCode: null, signal: "SIGKILL", oomKills: 1 })).toBe(
-      "oom-killed",
-    );
-    expect(classifyBackendExit({ exitCode: null, signal: "SIGKILL", oomKills: 0 })).toBe("killed");
-    expect(classifyBackendExit({ exitCode: null, signal: "SIGKILL", oomKills: null })).toBe(
+  test("SIGKILL stays a kill even when stderr carries a crash report", () => {
+    expect(classifyBackendExit({ exitCode: null, signal: "SIGKILL", crashReport: true })).toBe(
       "killed",
     );
   });
 
-  test("Bun's crash report makes any exit a crash, and a failed child a spawn error", () => {
+  test("Bun's crash report identifies a crash when it exits with a code", () => {
     expect(classifyBackendExit({ exitCode: 133, signal: null, crashReport: true })).toBe("crashed");
-    expect(classifyBackendExit({ exitCode: null, signal: "SIGTERM", crashReport: true })).toBe(
-      "crashed",
-    );
-    expect(classifyBackendExit({ exitCode: null, signal: null, spawnError: true })).toBe(
-      "spawn-error",
-    );
   });
 
   test("every result is a listed cause", () => {
@@ -55,7 +45,12 @@ describe("isBunCrashReportLine", () => {
     expect(
       isBunCrashReportLine("oh no: Bun has crashed. This indicates a bug in Bun, not your code."),
     ).toBe(true);
+    expect(
+      isBunCrashReportLine("Bun has crashed. This indicates a bug in Bun, not your code."),
+    ).toBe(true);
     expect(isBunCrashReportLine("[backend] shutdown.finished code=0")).toBe(false);
-    expect(isBunCrashReportLine("the agent said: don't panic")).toBe(false);
+    expect(isBunCrashReportLine("the agent said: Bun has crashed")).toBe(false);
+    expect(isBunCrashReportLine('{"orklog":1,"message":"oh no: Bun has crashed."}')).toBe(false);
+    expect(isBunCrashReportLine("oh no: Bun has crashed previously")).toBe(false);
   });
 });

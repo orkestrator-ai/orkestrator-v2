@@ -523,9 +523,9 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `backend` | `shutdown.finished` | `code` | Shutdown finished; the process exits with `code`. |
 | `process` | `uncaught-exception` | `origin`, error | An exception reached the top of the backend. |
 | `process` | `rejection.unhandled` | `kind`, error | A rejection reached the guard, in the backend or a local bridge. |
-| `desktop` | `backend.exited` | error (`exitCode`, `signal`), `exitCause`, `ranForMs`, `oomKills`, `crashReport` | The Local backend exited unexpectedly. `exitCause` is `exit-code`, `crashed` (a fault signal or Bun's crash report on stderr), `oom-killed` (SIGKILL while the backend's cgroup counted an OOM kill; Linux), `killed` (any other SIGKILL), `terminated` (another signal) or `spawn-error` (`packages/protocol/src/backend-exit.ts`). |
+| `desktop` | `backend.exited` | error (`exitCode`, `signal`), `exitCause`, `ranForMs`, `oomKills`, `crashReport` | The Local backend exited unexpectedly. `exitCause` is `exit-code`, `crashed` (a fault signal or Bun's crash report on stderr), `killed` (SIGKILL) or `terminated` (another signal). On Linux, `oomKills` records the shared cgroup counter increase from readiness to exit. The counter does not identify the victim. |
 | `desktop` | `backend.exited-recovering` | the same | The same, just after a remote update. |
-| `desktop` | `backend.start-failed` | error | The Local backend did not start. |
+| `desktop` | `backend.start-failed` | error (including `code` and `syscall` when available) | Local failed during startup, including when the backend executable could not be spawned. |
 | `desktop` | `uncaught-exception` | error | The main process hit an uncaught exception. |
 | `local-server` | `bridge.started` | `key`, `pid` | A local bridge was spawned. `key` is `kind:environmentId`. |
 | `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |

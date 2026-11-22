@@ -152,13 +152,14 @@ const QUALIFIER_FIELDS = [
  * say why without splitting the signature (a format change orphans ledger
  * entries): a backend exit's `exitCause` and the signal that ended it.
  */
-const EVIDENCE_COUNT_FIELDS = ["exitCause", "error.signal"];
+export const EVIDENCE_COUNT_FIELDS = ["exitCause", "error.signal"] as const;
 /** Numeric fields worth keeping as the worst value seen. */
 const EVIDENCE_MAX_FIELDS = [
   "lagMs",
   "durationMs",
   "faultSeconds",
   "ranForMs",
+  "oomKills",
   "staleForMs",
   "exitCode",
   "error.exitCode",
@@ -453,6 +454,9 @@ function collectEssential(
     for (const field of EVIDENCE_COUNT_FIELDS) {
       const value = label(entry.fields[field]);
       if (value) builder.add(`${field}.${value}`, weight);
+    }
+    if (typeof entry.fields.crashReport === "boolean") {
+      builder.add(`crashReport.${entry.fields.crashReport}`, weight);
     }
   }
 }

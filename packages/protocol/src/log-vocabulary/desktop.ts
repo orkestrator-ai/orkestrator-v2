@@ -30,7 +30,8 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "backend.keychain-link-remove-failed":
         "An agent-test profile kept a legacy link to the host keychain.",
       "backend.start-failed": {
-        description: "The Local backend did not start; continuing with remote machines.",
+        description:
+          "The Local backend did not start. Saved remote machines can still be used when available.",
         essential: true,
         fields: ESSENTIAL_ERROR_FIELDS,
       },

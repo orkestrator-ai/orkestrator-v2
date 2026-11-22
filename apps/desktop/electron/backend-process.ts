@@ -1361,7 +1361,6 @@ export class BackendProcess {
     }
 
     let startupComplete = false;
-    let unexpectedExitReported = false;
     let rejectStartup: ((error: Error) => void) | null = null;
     const clearState = () => {
       if (this.child !== child) return;
@@ -1372,30 +1371,31 @@ export class BackendProcess {
     };
     const childFailure = (
       error: Error,
-      exit: { exitCode: number | null; signal: string | null; spawnError?: boolean },
+      exit: { exitCode: number | null; signal: string | null },
     ) => {
       rejectStartup?.(error);
       if (this.child !== child) return;
+      const onUnexpectedExit = startupComplete ? options.onUnexpectedExit : undefined;
+      if (onUnexpectedExit) exitWatch.captureExit();
       clearState();
-      if (startupComplete && !unexpectedExitReported) {
-        unexpectedExitReported = true;
-        const onUnexpectedExit = options.onUnexpectedExit;
-        if (!onUnexpectedExit) return;
-        let reported = false;
-        const report = () => {
-          if (reported) return;
-          reported = true;
-          clearTimeout(drain);
-          onUnexpectedExit(error, exitWatch.diagnose(exit));
-        };
-        const drain = setTimeout(report, UNEXPECTED_EXIT_DRAIN_MS);
-        if (child.stdout?.closed !== false && child.stderr?.closed !== false) report();
-        else child.once("close", report);
+      if (!onUnexpectedExit) return;
+
+      const report = () => onUnexpectedExit(error, exitWatch.diagnose(exit));
+      if (child.stdout?.closed !== false && child.stderr?.closed !== false) {
+        report();
+        return;
       }
+      const onClose = () => {
+        clearTimeout(drain);
+        report();
+      };
+      const drain = setTimeout(() => {
+        child.off("close", onClose);
+        report();
+      }, UNEXPECTED_EXIT_DRAIN_MS);
+      child.once("close", onClose);
     };
-    child.once("error", (error) =>
-      childFailure(error, { exitCode: null, signal: null, spawnError: true }),
-    );
+    child.once("error", (error) => childFailure(error, { exitCode: null, signal: null }));
     child.once("exit", (code, signal) =>
       childFailure(
         // As fields too: the essential log keeps these and never the message.
@@ -1411,17 +1411,22 @@ export class BackendProcess {
 
     try {
       const ready = await new Promise<ReadyMessage>((resolve, reject) => {
-        rejectStartup = reject;
         const timeout = setTimeout(
           () => reject(new Error("Timed out waiting for the backend service")),
           30_000,
         );
+        rejectStartup = (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        };
         if (!child.stdout) {
           clearTimeout(timeout);
           reject(new Error("Backend service stdout is unavailable"));
           return;
         }
         const finish = (message: ReadyMessage) => {
+          if (!rejectStartup) return;
+          exitWatch.ready(child.pid);
           clearTimeout(timeout);
           rejectStartup = null;
           resolve(message);
@@ -1447,13 +1452,13 @@ export class BackendProcess {
         relayTerminalOutput: options.relayTerminalOutput,
       });
       this.client.listen(options.onEvent);
-      exitWatch.ready(child.pid);
       startupComplete = true;
       return this.client;
     } catch (error) {
       rejectStartup = null;
       clearState();
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null)
+        child.kill("SIGTERM");
       throw error;
     }
   }

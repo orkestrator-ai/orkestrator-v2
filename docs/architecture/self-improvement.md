@@ -420,3 +420,6 @@ fix, the run waits for the next release before judging it.
   `signals.ts`, which keeps a backend exit's `exitCause` and `error.signal` as
   `exitCause.killed=1` and the like), and name the field something that is not
   a qualifier (`kind`, `reason`, …).
+  Fleet digests sum backend exit cause, signal and crash-report counts across
+  machines. They report the largest sampled `oomKills` delta and `ranForMs`
+  across those exits. Cgroup deltas can cover overlapping process lifetimes.

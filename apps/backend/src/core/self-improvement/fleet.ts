@@ -17,6 +17,7 @@
  */
 import {
   compareVersions,
+  EVIDENCE_COUNT_FIELDS,
   type ExtractedSignals,
   type ObservedHours,
   scoreSignal,
@@ -88,6 +89,32 @@ function mergeWindow(machines: readonly MachineSignals[]): ExtractedSignals["win
   };
 }
 
+const EXIT_COUNT_PREFIXES = [...EVIDENCE_COUNT_FIELDS, "crashReport"].map((field) => `${field}.`);
+
+function mergeEvidence(lead: Signal, signals: readonly Signal[]): Signal["evidence"] {
+  const parts = lead.signature.split(":");
+  if (
+    parts[0] !== "desktop" ||
+    (parts[1] !== "backend.exited" && parts[1] !== "backend.exited-recovering")
+  ) {
+    return lead.evidence;
+  }
+  const evidence = { ...lead.evidence };
+  const counts: Record<string, number> = {};
+  for (const signal of signals) {
+    for (const [field, value] of Object.entries(signal.evidence)) {
+      if (typeof value !== "number") continue;
+      if (EXIT_COUNT_PREFIXES.some((prefix) => field.startsWith(prefix))) {
+        counts[field] = (counts[field] ?? 0) + value;
+      } else if (field === "oomKills" || field === "ranForMs") {
+        const previous = evidence[field];
+        evidence[field] = typeof previous === "number" ? Math.max(previous, value) : value;
+      }
+    }
+  }
+  return { ...evidence, ...counts };
+}
+
 function mergeGroup(
   group: ReadonlyArray<{ machine: MachineSignals; signal: Signal }>,
   machines: readonly MachineSignals[],
@@ -148,7 +175,10 @@ function mergeGroup(
     measure: { ...lead.measure, value: round(value) },
     versions,
     evidence: {
-      ...lead.evidence,
+      ...mergeEvidence(
+        lead,
+        group.map(({ signal }) => signal),
+      ),
       machines: ordered.map(({ machine }) => machine.name).join(", "),
     },
     score: 0,

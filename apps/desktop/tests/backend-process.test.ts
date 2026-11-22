@@ -2272,6 +2272,35 @@ while :; do sleep 0.05; done`);
     throw new Error(`Process ${pid} was still running`);
   }
 
+  test("rejects an unavailable executable as a startup failure", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "orkestrator-missing-runtime-"));
+    directories.push(root);
+    const backend = new BackendProcess();
+    processes.push(backend);
+    const onUnexpectedExit = mock(() => undefined);
+    const clock = installControlledTimeout(READY_TIMEOUT_MS, {
+      label: "backend readiness deadline",
+    });
+    try {
+      await expect(
+        backend.start({
+          isDev: false,
+          appRoot: root,
+          resourceRoot: root,
+          dataDir: root,
+          gatewayPort: 0,
+          onEvent: () => undefined,
+          onUnexpectedExit,
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(backend.getPid()).toBeUndefined();
+      expect(onUnexpectedExit).not.toHaveBeenCalled();
+      clock.assertDrained();
+    } finally {
+      clock.restore();
+    }
+  });
+
   test(
     "rejects an auth file without a valid token and stops the child",
     async () => {
@@ -2378,8 +2407,88 @@ exit 133`);
     SPAWN_TIMEOUT_MS,
   );
 
+  test.each(["close", "timeout"] as const)(
+    "reports once when inherited stderr is released by %s",
+    async (reportOn) => {
+      const clock = installControlledTimeout(1_000, { label: "unexpected exit drain" });
+      let releaseOutput: string | undefined;
+      let owner: BackendProcess | undefined;
+      try {
+        const backend = await fakeBackend(`
+printf '%s' '{"token":"${TOKEN}"}' > "$AUTH"
+${READY_LINE}
+while [ ! -f "$AUTH.exit" ]; do sleep 0.01; done
+(while [ ! -f "$AUTH.release" ]; do sleep 0.01; done; printf 'panic: late crash report\n' >&2) &
+exit 133`);
+        owner = backend.backendProcess;
+        releaseOutput = `${backend.auth}.release`;
+        await backend.started;
+        const child = (owner as unknown as { child: ChildProcess }).child;
+        const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+        await writeFile(`${backend.auth}.exit`, "exit");
+        await waitUntil(() => clock.pendingCount() === 1, "the exit drain deadline");
+        expect(backend.onUnexpectedExit).not.toHaveBeenCalled();
+
+        if (reportOn === "timeout") {
+          expect(clock.advance()).toBe(1);
+          expect(backend.onUnexpectedExit.mock.calls[0]?.[1]).toMatchObject({
+            crashReport: false,
+            exitCause: "exit-code",
+          });
+        }
+
+        await writeFile(releaseOutput, "release");
+        await closed;
+        const { exit } = await unexpectedExitOf(backend);
+        if (reportOn === "close") {
+          expect(exit).toMatchObject({ crashReport: true, exitCause: "crashed" });
+        }
+        clock.assertDrained();
+      } finally {
+        if (releaseOutput) await writeFile(releaseOutput, "release");
+        await owner?.stop();
+        clock.restore();
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
   test(
-    "classifies a SIGKILL with no OOM kill counted as killed",
+    "reports on exit when both stdio streams already closed and ignores quoted crash text",
+    async () => {
+      const clock = installControlledTimeout(1_000, { label: "unexpected exit drain" });
+      try {
+        const backend = await fakeBackend(`
+printf '%s' '{"token":"${TOKEN}"}' > "$AUTH"
+${READY_LINE}
+printf '%s\n' '{"orklog":1,"ts":"2026-11-01T00:00:00.000Z","level":"info","area":"backend","event":"starting","fields":{"message":"oh no: Bun has crashed."}}' >&2
+exec 1>&- 2>&-
+while [ ! -f "$AUTH.exit" ]; do sleep 0.01; done
+exit 0`);
+        await backend.started;
+        const child = (backend.backendProcess as unknown as { child: ChildProcess }).child;
+        await waitUntil(
+          () => child.stdout?.closed === true && child.stderr?.closed === true,
+          "stdout and stderr to close",
+        );
+        const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+        await writeFile(`${backend.auth}.exit`, "exit");
+        await exited;
+        expect(backend.onUnexpectedExit).toHaveBeenCalledTimes(1);
+        expect(backend.onUnexpectedExit.mock.calls[0]?.[1]).toMatchObject({
+          crashReport: false,
+          exitCause: "exit-code",
+        });
+        clock.assertDrained();
+      } finally {
+        clock.restore();
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "classifies SIGKILL as killed",
     async () => {
       const backend = await fakeBackend(`
 printf '%s' '{"token":"${TOKEN}"}' > "$AUTH"
@@ -2391,8 +2500,6 @@ while :; do sleep 0.05; done`);
       const { fields, exit } = await unexpectedExitOf(backend);
       expect(fields).toMatchObject({ signal: "SIGKILL" });
       expect(exit).toMatchObject({ exitCause: "killed", crashReport: false });
-      // Read from the backend's cgroup on Linux; unknown elsewhere or when unreadable.
-      expect(exit.oomKills === null || exit.oomKills === 0).toBe(true);
     },
     SPAWN_TIMEOUT_MS,
   );

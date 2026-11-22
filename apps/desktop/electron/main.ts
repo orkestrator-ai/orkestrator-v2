@@ -26,11 +26,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { logBackendExit } from "./backend-exit-diagnosis.js";
-import {
-  BACKEND_EXIT_WAIT_MS,
-  prepareAppImageInstall,
-  registerBackendShutdown,
-} from "./backend-lifecycle.js";
+import { BACKEND_EXIT_WAIT_MS, registerBackendShutdown } from "./backend-lifecycle.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -169,9 +165,13 @@ import {
   installProductionApplicationLogging,
   readApplicationLogPolicy,
   registerApplicationLoggingShutdown,
-  registerWillQuitHold,
 } from "./application-logging.js";
-import { claimDesktopLogging, exitWithEssentialLog } from "./essential-logging.js";
+import {
+  claimDesktopLogging,
+  exitApplication,
+  registerEssentialShutdown,
+} from "./essential-logging.js";
+import { createAppImageUpdater } from "./appimage-update.js";
 import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
@@ -400,10 +400,12 @@ const windowAllClosedQuit = registerWindowAllClosedQuit({
   platform: process.platform,
   alwaysQuit: runtimeFlavor === "agent-test",
 });
-// Every relaunch goes through here: an AppImage restarts from its image file,
-// never from the temporary mount that disappears when this process exits.
+// An installed update owns its restart. Other restart requests still use the
+// AppImage-aware launcher so they never start from the temporary mount.
 const relaunchingApp = {
-  relaunch: () => relaunchApplication(app),
+  relaunch: () => {
+    if (!essentialShutdown?.updatePending()) relaunchApplication(app);
+  },
   quit: () => app.quit(),
 };
 const quitReopen = registerQuitReopenRelaunch({
@@ -868,21 +870,31 @@ async function startAutoUpdate(): Promise<void> {
   if (!autoUpdateSupported()) return;
   try {
     const { default: electronUpdater } = await import("electron-updater");
-    electronUpdater.autoUpdater.logger = createUpdaterLibraryLogger();
+    const currentImage = process.platform === "linux" ? process.env.APPIMAGE : undefined;
+    const appImageUpdater = currentImage
+      ? createAppImageUpdater(electronUpdater.AppImageUpdater)
+      : null;
+    const updater = appImageUpdater ?? electronUpdater.autoUpdater;
+    updater.logger = createUpdaterLibraryLogger();
     const { VersionOrderedGitHubProvider } = await import("./github-update-provider.js");
-    electronUpdater.autoUpdater.setFeedURL({
+    updater.setFeedURL({
       provider: "custom",
       updateProvider: VersionOrderedGitHubProvider,
     });
     autoUpdate = createAutoUpdateController({
-      updater: electronUpdater.autoUpdater,
+      updater,
       productName,
       currentVersion: app.getVersion(),
       getWindow: () => focusedContext()?.window ?? null,
       showMessageBox: (window, options) => nativeDialogs.showMessageBox("updater", options, window),
       onCheckResult: (report) => hostUpdates?.reportCheck(report),
-      ...(process.platform === "linux"
-        ? { prepareForInstall: () => prepareAppImageInstall(app, backendProcess) }
+      ...(appImageUpdater && currentImage
+        ? {
+            installAppImage: () =>
+              essentialShutdown !== null &&
+              !quitReopen.isQuitting() &&
+              appImageUpdater.installForRestart(currentImage, essentialShutdown.quitForUpdate),
+          }
         : {}),
     });
     autoUpdate.start();
@@ -1192,7 +1204,7 @@ function registerIpc(): void {
     createClipboardItem: (items) => new ClipboardItem(items),
     shellApi: shell,
     appApi: {
-      exit: (code) => exitWithEssentialLog(app, essentialLog, code),
+      exit: (code) => exitApplication(app, essentialLog, code),
       quit: () => app.quit(),
       relaunch: () => quitReopen.scheduleRelaunch(),
     },
@@ -1672,13 +1684,12 @@ registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
   settled: backendShutdown.stopped,
   timeoutMs: BACKEND_EXIT_WAIT_MS,
 });
-if (essentialLog) {
-  registerWillQuitHold(
-    app,
-    async () => {
-      await backendShutdown.stopped().catch(() => undefined);
-      await essentialLog.stop();
-    },
-    BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
-  );
-}
+const essentialShutdown = essentialLog
+  ? registerEssentialShutdown({
+      app,
+      backendStopped: backendShutdown.stopped,
+      essentialLog,
+      timeoutMs: BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
+      relaunchImage: (image) => relaunchApplication(app, undefined, image),
+    })
+  : null;

@@ -75,7 +75,7 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "realm-partitions.removed":
         "Retired workspace realm storage was removed at startup; count says how many directories.",
       "relaunch.schedule-failed":
-        "The AppImage relaunch waiter failed; using Electron's relauncher.",
+        "The AppImage relaunch waiter failed or an update restart was skipped because shutdown was unconfirmed.",
       "relaunch.service-register-failed":
         "The AppImage relaunch service was refused; using a detached waiter.",
       "renderer.gone-giving-up": "A renderer kept dying, so the window is no longer reloaded.",

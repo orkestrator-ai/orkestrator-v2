@@ -85,3 +85,20 @@ in a backend group of 20,332 tests across 1,428 files (304.14 s).
 The runner's isolated rerun of `apps/backend/src/core/review/evaluation-drivers.test.ts`
 passed all 22 tests in 3.15 s. Logs are in `orkestrator-test-run.Xmufl2` under
 the host temporary directory.
+
+## Result-tool bracket-repair worktree (2026-11-22, second run)
+
+A focused run of the backend `workflows` and `review` folders,
+`mise run test:logged -- --name workflows-review -- bun test --cwd=apps/backend ./src/core/workflows ./src/core/review --parallel=4 --only-failures`,
+ran on macOS against a working tree based on `af78acfbf` while another
+worktree's full suite was running on the host. The change under test touched
+`workflows/result-json-text.ts`, `workflows/result-tools.ts` and
+`review/consolidation-example.ts`, not the review drivers. The recurrence check
+(`mise run flaky:recurrence -- 9820 --base af78acfbf`) confirmed this case was
+open. Both cases failed again with the missing fake-CLI `pid` at
+`evaluation-drivers.test.ts:306` (404.45 ms Claude, 403.24 ms Codex); the run
+reported 1,606 pass, 1 skip and 2 fail across 71 files (53.90 s).
+
+`bun test ./src/core/review/evaluation-drivers.test.ts` from `apps/backend`
+then passed all 22 tests alone. Logs are in `orkestrator-test-run.RkBCPb`
+under the host temporary directory.

@@ -122,8 +122,8 @@ export type AutoUpdateOptions = {
   log?: Pick<Logger<LogEventOf<"updater">>, "info" | "warn">;
   /** Called after every check, background ones included. */
   onCheckResult?(report: UpdateCheckReport): void;
-  /** Drain the backend and release the AppImage single-instance lock before spawning its replacement. */
-  prepareForInstall?(): Promise<void>;
+  /** Linux installs the image first and restarts it through the desktop quit lifecycle. */
+  installAppImage?(): boolean;
 };
 
 /**
@@ -193,8 +193,11 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
         "running agent sessions are not interrupted until then.",
     });
     if (result.response === 0 && downloadedVersion === version && revision === readinessRevision) {
-      await options.prepareForInstall?.();
-      updater.quitAndInstall();
+      if (options.installAppImage) {
+        if (!options.installAppImage()) throw new Error("Could not install the AppImage update");
+      } else {
+        updater.quitAndInstall();
+      }
     }
   }
 
@@ -338,10 +341,8 @@ export function createAutoUpdateController(options: AutoUpdateOptions): AutoUpda
     },
     async installStaged(version: string): Promise<boolean> {
       if (downloadedVersion !== version || checkInFlight) return false;
-      // Nobody may be at this computer: relaunch after installing. Linux
-      // AppImage otherwise exits without starting the new version; macOS
-      // always relaunches and ignores both arguments.
-      await options.prepareForInstall?.();
+      if (options.installAppImage) return options.installAppImage();
+      // Nobody may be at this computer: relaunch after installing.
       updater.quitAndInstall(true, true);
       return true;
     },

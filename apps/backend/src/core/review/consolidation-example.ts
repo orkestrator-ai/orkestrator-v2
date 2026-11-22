@@ -130,6 +130,23 @@ export const CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE = {
 };
 
 /**
+ * The bracket slip behind most failed first submissions: consolidation agents
+ * closed the whole report right after the last array (`testCoverageGaps`)
+ * and carried on with the keys that follow it, so the text no longer parsed.
+ * Named from the template's own key order, so a reorder keeps it true.
+ */
+function lastArrayNote(example: Record<string, unknown>): string | undefined {
+  const keys = Object.keys(example);
+  const last = keys.findLast((key) => Array.isArray(example[key]));
+  const after = last === undefined ? [] : keys.slice(keys.indexOf(last) + 1);
+  if (last === undefined || after.length === 0) return undefined;
+  const named = after.map((key) => `\`${key}\``);
+  const list =
+    named.length === 1 ? named[0] : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  return `\`${last}\` is not the last key: ${list} follow it inside the same top-level object, so the \`]\` that ends \`${last}\` is followed by \`,"${after[0]}":\` with no \`}\` between them. One \`}\` too many there closes the report early, and the text no longer parses.`;
+}
+
+/**
  * The prompt section carrying the template. It names the common misses
  * explicitly, because those are the ones a second call was spent on.
  *
@@ -142,6 +159,7 @@ export function consolidatedReviewExampleSection(
 ): string {
   const filled = options.scopeFilledByBackend === true;
   const example = filled ? CONSOLIDATED_REVIEW_SUBMISSION_EXAMPLE : CONSOLIDATED_REVIEW_EXAMPLE;
+  const bracketNote = lastArrayNote(example);
   const filledNote = filled
     ? `\n\nThe backend fills in ${CONSOLIDATION_SCOPE_LIST_FIELDS.map((field) => `\`reviewScope.${field}\``).join(", ")} itself, from the reviewer reports, so the submission leaves them out. Every other \`reviewScope\` key is yours to reconcile: record scope disagreements and narrower snapshots under \`limitations\`.`
     : "";
@@ -153,5 +171,5 @@ The JSON below has the exact shape the consolidated report must have: every requ
 ${JSON.stringify(example, null, 2)}
 \`\`\`
 
-Before sending it, check the misses that most often cost a resend: all ${STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.required.length} top-level keys are present (\`testResults\`, \`whatChanged\` and \`riskProfile\` included, even when there is little to say); \`reviewScope\` has exactly the keys shown; \`file\` and \`symbol\` are always strings, never \`null\`; \`line\` is a positive integer or \`null\`; and \`testResults.total\` equals \`passed + failed + notRun\`, with one \`failures\` entry per failed test.`;
+Before sending it, check the misses that most often cost a resend: all ${STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.required.length} top-level keys are present (\`testResults\`, \`whatChanged\` and \`riskProfile\` included, even when there is little to say); \`reviewScope\` has exactly the keys shown; \`file\` and \`symbol\` are always strings, never \`null\`; \`line\` is a positive integer or \`null\`; ${bracketNote ? "" : "and "}\`testResults.total\` equals \`passed + failed + notRun\`, with one \`failures\` entry per failed test${bracketNote ? `; and ${bracketNote}` : "."}`;
 }

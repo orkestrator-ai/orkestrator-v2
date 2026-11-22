@@ -289,3 +289,20 @@ caller, goes through the same cancellation instead of counting as an open
 window. The uncaught exception itself is
 still logged first. `apps/desktop/tests/native-dialogs.test.ts` and the final
 close of `e2e/agent-testing/renderer-log-boundary-electron.spec.ts` pin it.
+
+## 8. `logging:writer-died:desktop` with no crash
+
+Self-improvement raises `logging:writer-died:desktop` when the essential log
+holds a desktop `essential.started` with no `essential.stopped` since the
+previous one. The essential log has no messages or stacks, so the signal says
+only that the marker is missing. Found on 2026-11-22 (one occurrence on
+omarchy-hp, 2026-11-15T21:13:03Z; that machine's files could not be read), the
+known ways to get it without a crash:
+
+| Cause | What the log shows | Status |
+| --- | --- | --- |
+| An AppImage update used to start the new version as soon as the old one released the single-instance lock, while the old one was still quitting | `started`, `started`, then the old process's `stopped` after the second start | Fixed: the updater applies the image, then schedules a restart after orderly exit only when the stop marker has been confirmed. An unconfirmed stop leaves the installed image for manual launch |
+| "Close application" on the missing-CLI dialog, which called `app.exit(0)` and skipped `will-quit` (and with it the backend's drain) | The backend's last lines, no `quit.stopping-backend`, no `stopped` | Fixed: exit code 0 is an ordinary `app.quit()` (`exitApplication`) |
+| Logout, reboot or shutdown on Omarchy. Omarchy sets `DefaultTimeoutStopSec=5s`, so `user@1000.service` gets 5 s (`systemctl show user@1000.service -p TimeoutStopUSec`, seen on beelink2), while a quit may wait up to 20 s for the backend's drain before it writes `stopped` | `quit.stopping-backend` and some of the backend's drain, then nothing | Open, not reproduced ([to-do 8315](../todo/cross-cutting/8315-desktop-killed-during-system-shutdown.md)): the system would SIGKILL the app; the previous boot's journal (`journalctl -b -1`) shows a stop timeout |
+
+A real native crash leaves a core (`coredumpctl list`); a kill leaves none.

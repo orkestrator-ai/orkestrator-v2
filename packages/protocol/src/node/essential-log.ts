@@ -78,8 +78,8 @@ export type InstalledEssentialLog = {
   flush(): Promise<void>;
   /** Bounded synchronous drain for immediate app.exit(), which skips will-quit. */
   flushSync(): void;
-  /** Writes `essential.stopped` and detaches from the logger. */
-  stop(): Promise<void>;
+  /** Detaches from the logger and reports whether `essential.stopped` was appended. */
+  stop(): Promise<boolean>;
 };
 
 type DropReason = "queue-full" | "write-failed" | "rate-limited";
@@ -109,7 +109,7 @@ export function installEssentialLog(options: {
   const allowances = new Map<string, EventAllowance>();
   let pendingBytes = 0;
   let draining: Promise<void> | null = null;
-  let stopped = false;
+  let stopResult: Promise<boolean> | null = null;
 
   const countDrop = (reason: DropReason, entries: number, bytes: number) => {
     const count = drops.get(reason) ?? { entries: 0, bytes: 0 };
@@ -291,7 +291,7 @@ export function installEssentialLog(options: {
   };
 
   const accept = (record: LogRecord) => {
-    if (stopped) return;
+    if (stopResult) return;
     const moment = now();
     const projected = projectEssentialRecord(record, moment.toISOString());
     if (!projected) return;
@@ -305,16 +305,14 @@ export function installEssentialLog(options: {
     enqueue(serialize({ ...projected, ...(fields ? { fields } : {}) }));
   };
 
-  const writeLifecycle = (event: "essential.started" | "essential.stopped") => {
-    accept({
-      orklog: 1,
-      ts: now().toISOString(),
-      level: "info",
-      area: "logging",
-      event,
-      fields: { owner: options.owner },
-    });
-  };
+  const lifecycleRecord = (event: "essential.started" | "essential.stopped"): LogRecord => ({
+    orklog: 1,
+    ts: now().toISOString(),
+    level: "info",
+    area: "logging",
+    event,
+    fields: { owner: options.owner },
+  });
 
   /**
    * What an exit would otherwise lose, the crash that caused it above all. The
@@ -341,7 +339,7 @@ export function installEssentialLog(options: {
 
   configureLogger({ essentialSink: accept });
   process.on("exit", drainOnExit);
-  writeLifecycle("essential.started");
+  accept(lifecycleRecord("essential.started"));
 
   const flush = async () => {
     while (queue.length > 0 || draining) {
@@ -354,19 +352,32 @@ export function installEssentialLog(options: {
     directory,
     flush,
     flushSync: drainOnExit,
-    async stop() {
-      if (stopped) return flush();
-      writeLifecycle("essential.stopped");
-      stopped = true;
+    stop() {
+      if (stopResult) return stopResult;
       configureLogger({ essentialSink: null });
-      await flush();
-      collectUnreportedSuppressions();
-      const markers = takeDropMarkers();
-      if (markers.payload.length > 0) {
-        for (const marker of markers.payload) await writeAsync(marker).catch(() => undefined);
-      }
-      process.off("exit", drainOnExit);
-      worker?.close();
+      stopResult = (async () => {
+        try {
+          await flush();
+          collectUnreportedSuppressions();
+          for (const marker of takeDropMarkers().payload)
+            await writeAsync(marker).catch(() => undefined);
+
+          // Lifecycle handover needs an actual append acknowledgement. The bounded
+          // event queue may drop entries and flush treats those drops as settled.
+          let committed = false;
+          await writeAsync(serialize(lifecycleRecord("essential.stopped")), undefined, () => {
+            committed = true;
+          });
+          return committed;
+        } catch (error) {
+          reportWriteFailure(error);
+          return false;
+        } finally {
+          process.off("exit", drainOnExit);
+          worker?.close();
+        }
+      })();
+      return stopResult;
     },
   };
 }

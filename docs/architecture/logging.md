@@ -479,7 +479,10 @@ choice is for. Three limits follow from it:
   ([process-crashes-and-kills.md](../debugging/process-crashes-and-kills.md#7-a-native-dialog-during-a-quit-macos-sigsegv)).
   A native crash writes nothing, and only its next start can show it: `essential.started` with no
   `essential.stopped` before it means the last writer died. A process ended by a kill
-  rather than a quit reads the same way, as `dev:stop`'s does.
+  rather than a quit reads the same way, as `dev:stop`'s does. So every exit the app
+  chooses itself must write `essential.stopped` first: the in-app "Close application"
+  is an ordinary `app.quit()` (`exitApplication` in `essential-logging.ts`; only a
+  nonzero code still exits at once), and a quit is held until the marker is written.
 - **A container bridge has no hop**, so nothing in it reaches this file: its
   `session.resume-fell-back` stays in `/tmp/<provider>-bridge.log`. The backend's own
   `docker` `bridge.launched` is what records a container bridge's start or relaunch.
@@ -490,6 +493,14 @@ choice is for. Three limits follow from it:
   waits asynchronously for up to two seconds, then reports a counted write loss.
 - **A rejected desktop launch** installs no writer or shutdown marker: ownership
   starts only after winning Electron's single-instance lock.
+- **An explicit AppImage update holds the lock until Electron exits.** The
+  updater applies the image without starting a replacement. A failed install
+  leaves the current backend and writer active. A successful install begins
+  the normal quit, drains the backend, and checks that the final
+  `essential.stopped` append succeeded. Only then does the final quit schedule
+  the updated image to start after process exit. The quit hold is bounded. If
+  backend drain or the append cannot be confirmed, the desktop closes and the
+  user can launch the installed update manually.
 
 ### What it holds
 

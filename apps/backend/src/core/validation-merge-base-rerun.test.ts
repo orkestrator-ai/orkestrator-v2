@@ -419,6 +419,30 @@ describe("rerunFailuresOnMergeBase", () => {
     }
   });
 
+  test("grouped output still needs the expected file, closing marker, and matching totals", async () => {
+    const file = "tests/a.test.ts";
+    const input = triage([failure(file, "a test")]);
+    const complete = results(file, "(pass) a test\n::endgroup::", 1, 0).replace(
+      `${file}:`,
+      `::group::${file}:`,
+    );
+    for (const output of [
+      complete.replace(file, "tests/wrong.test.ts"),
+      complete.replace("::endgroup::", ""),
+      complete.replace("1 pass", "2 pass"),
+    ]) {
+      const { exec } = fakeExec({ files: [...ROOT_CONFIG, file], tests: { [file]: ok(output) } });
+      const triaged = await rerunFailuresOnMergeBase({
+        triage: input,
+        changedFiles: [],
+        exec,
+        checkoutDir: CHECKOUT,
+      });
+      expect(triaged.commands).toEqual(input.commands);
+      expect(triaged.limitations).toEqual([expect.stringContaining("No complete Bun results")]);
+    }
+  });
+
   test("checks eligibility before the cap and preserves Unicode paths", async () => {
     const valid = "tests/été.test.ts";
     const absent = Array.from({ length: 8 }, (_, i) => failure(`tests/absent-${i}.test.ts`, "t"));

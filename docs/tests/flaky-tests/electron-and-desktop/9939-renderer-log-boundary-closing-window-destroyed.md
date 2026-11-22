@@ -1,7 +1,7 @@
 # Renderer log boundary: a closing window read after it was destroyed (`e2e/agent-testing/renderer-log-boundary-electron.spec.ts`)
 
 - **ID:** 9939
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-15; recurred 2026-11-20 after the fix
 - **Test:** `a real window sends its startup markers to the main process and none of its logger lines`
 - **File:** `e2e/agent-testing/renderer-log-boundary-electron.spec.ts:204` at
@@ -61,3 +61,21 @@
   host where no display may be started, so the Electron suite was not run.
   Close the case once "Native menu (ubuntu-latest)" passes all five
   repetitions with the fix.
+
+## Resolution (2026-11-22)
+
+- **Root cause:** the evaluate before the DevTools poll only called
+  `extra.close()`; while that window was closing its `BrowserWindow` could
+  still report it was not destroyed after its `webContents` was, so the poll
+  read a destroyed `webContents`.
+- **Fix:** #2519 (`4cc627bf1`): the evaluate waits for the extra window's
+  `closed` event before returning.
+- **Reproduced:** no. The race needs a display, and the branch was prepared
+  on a headless host where none may be started.
+- **Stress:** "Native menu (ubuntu-latest)" passed the `native-menu-linux`
+  run, which includes `renderer-log-boundary-electron.spec.ts`
+  (`--repeat-each=5 --retries=0`), in both runs after the fix: 44798394844
+  (#2519's head `7a6a2f0b0`, job 136503831102) and 44825739583 (the
+  2.39.11-beta release branch, job 136597746656, 134.2 s), 2026-11-20. Ten
+  passing repetitions against one failure in 25 before; reopen on a
+  recurrence.

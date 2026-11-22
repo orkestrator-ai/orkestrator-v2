@@ -18,10 +18,12 @@ import {
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "./constants.js";
 import {
+  dockerContainerExitEvidence,
   dockerDaemonUnreachableNow,
   isDockerCopyRemountRefused,
   isDockerDaemonUnreachable,
   isDockerPathNotFound,
+  isDockerRunStoppedFromOutside,
 } from "./docker-cli-errors.js";
 import { COPY_REFUSED_REMEDY } from "./docker-copy-refusal.js";
 import { dockerOwnerNamespace } from "./docker-ownership.js";
@@ -543,6 +545,10 @@ export async function runCopyStep(
   ];
   if (step.source.kind === "volume") {
     const sourceVolume = volumeNamed(source.storage, step.source.role);
+    // Named so a helper stopped from outside can be looked up afterwards.
+    const volumeHelper = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;
+    const startedAt = Date.now();
+    let failure: unknown;
     const { stdout } = await runCommand(
       "docker",
       helperArguments(
@@ -555,11 +561,26 @@ export async function runCopyStep(
         ],
         ["copy-volume", "/source", destination],
         false,
+        volumeHelper,
       ),
       { timeoutMs: COPY_TIMEOUT_MS },
-    ).catch((error: unknown) => ({ stdout: error instanceof Error ? error.message : "" }));
+    ).catch((error: unknown) => {
+      failure = error;
+      return { stdout: error instanceof Error ? error.message : "" };
+    });
     const result = parseCopyOutput(stdout);
-    return !result.ok && isDockerDaemonUnreachable(stdout) ? DAEMON_UNAVAILABLE_COPY : result;
+    if (result.ok) return result;
+    if (isDockerDaemonUnreachable(stdout)) return DAEMON_UNAVAILABLE_COPY;
+    // A signal-only exit can hide a shutdown. Preserve a connection error
+    // from the event lookup even if the next availability probe would pass.
+    if (
+      result.reason === "helper-failed" &&
+      isDockerRunStoppedFromOutside(failure) &&
+      (await dockerContainerExitEvidence(volumeHelper, startedAt)) === "daemon-unavailable"
+    ) {
+      return DAEMON_UNAVAILABLE_COPY;
+    }
+    return result;
   }
   // Named so an abandoned step can remove the helper, whose input may never end.
   const helperName = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;

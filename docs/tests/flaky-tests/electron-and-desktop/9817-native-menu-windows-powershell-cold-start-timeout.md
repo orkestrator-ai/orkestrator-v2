@@ -1,7 +1,7 @@
 # Native menu on Windows: the first PowerShell call timed out on a cold start
 
 - **ID:** 9817
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-20
 - **Base commit:** `627bdc500` for the investigation; observed on the 2.39.10-beta release pull request.
 - **Test:** `built application menu resolves native roles and dispatches callbacks`
@@ -14,3 +14,18 @@
 - **Root cause (evidence-backed hypothesis):** `powershell()` gave every call a 10 s `execFileSync` budget. The first call starts PowerShell and loads .NET and the UIAutomation assembly (`Add-Type -AssemblyName UIAutomationClient`), which is much slower than any later call. That only the first repetition failed fits a cold start, not a hung window lookup.
 - **Fix (branch `fix-ci-round-3-8ad0c62eed90`):** the budget is now 45 s, with a comment saying why. A real hang still fails, well inside the 120 s test timeout.
 - **Verification:** none yet. Close this case once "Native menu (windows-latest)" passes with the change.
+
+## Resolution (2026-11-22)
+
+- **Root cause:** `powershell()` in `e2e/agent-testing/native-menu-input.ts`
+  gave every call a 10 s `execFileSync` budget, which the run's first call
+  (PowerShell start plus the UIAutomation assembly load) could exceed.
+- **Fix:** #2519 (`4cc627bf1`) raised the budget to 45 s.
+- **Reproduced:** no. The failure needs a cold Windows runner; no Windows host
+  was available.
+- **Stress:** "Native menu (windows-latest)" passed the `native-menu-windows`
+  run (`--repeat-each=5 --retries=0`) in both runs after the fix: 44798394844
+  (#2519's own head `7a6a2f0b0`, job 136503831160) and 44825739583 (the
+  2.39.11-beta release branch, job 136597746075, 72.2 s), both on
+  2026-11-20. Weaker evidence than a reproduction: two cold starts that did
+  not time out.

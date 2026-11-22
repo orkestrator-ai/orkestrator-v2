@@ -267,6 +267,7 @@ export function classifyValidationFailures(
     // Bun, per output stream (a task runner prefixes each package's lines).
     type BunStream = {
       header: string | null;
+      grouped: boolean;
       stackFile: string | null;
       fails: Array<{
         name: string;
@@ -301,6 +302,7 @@ export function classifyValidationFailures(
       if (!state) {
         state = {
           header: null,
+          grouped: false,
           stackFile: null,
           fails: [],
           diagnostic: [],
@@ -312,11 +314,17 @@ export function classifyValidationFailures(
       }
 
       // --- Bun -------------------------------------------------------------
-      const header = /^(\S[^:]*\.[cm]?[jt]sx?):$/.exec(line);
-      if (header) {
-        state.header = header[1]!;
+      // Under GITHUB_ACTIONS Bun opens each file's group with `::group::`.
+      const header = /^(::group::)?((?!::)\S[^:]*\.[cm]?[jt]sx?):$/.exec(line);
+      if (header && (!header[1] || !state.diagnostic.length)) {
+        state.grouped = Boolean(header[1]);
+        state.header = header[2]!;
         state.diagnostic = [];
         state.stackFile = null;
+        continue;
+      }
+      if (state.grouped && line === "::endgroup::" && !state.diagnostic.length) {
+        state.grouped = false;
         continue;
       }
       const stack =
@@ -330,7 +338,7 @@ export function classifyValidationFailures(
           name: bunFail[1]!,
           stackFile: state.stackFile,
           header: state.header,
-          fingerprint: fingerprint(state.diagnostic, hashDiagnostic),
+          fingerprint: fingerprint(state.diagnostic, hashDiagnostic, state.grouped),
         });
         state.diagnostic = [];
         state.stackFile = null;
@@ -340,7 +348,9 @@ export function classifyValidationFailures(
         state.diagnostic = [];
         state.stackFile = null;
       } else if (
-        state.diagnostic.length <= 128 &&
+        // Allow the grouped reporter's two trailing lines and one overflow
+        // sentinel. The fingerprint enforces 128 lines after removing padding.
+        state.diagnostic.length <= (state.grouped ? 130 : 128) &&
         (state.diagnostic.length || line.startsWith("error: "))
       ) {
         state.diagnostic.push(line.slice(0, 8_193));

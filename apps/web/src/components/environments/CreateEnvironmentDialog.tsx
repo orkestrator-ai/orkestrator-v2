@@ -399,6 +399,7 @@ export function CreateEnvironmentDialog({
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
+  const antigravityModels = useAgentModelCatalogStore((state) => state.antigravityModels);
   const piCatalogSeedAttemptedRef = useRef(false);
   const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
   useEffect(() => {
@@ -491,6 +492,7 @@ export function CreateEnvironmentDialog({
       cursorModels,
       grokModels,
       piModels,
+      antigravityModels,
     });
     const catalog =
       cachedOpenCodeModels.length > 0
@@ -568,6 +570,7 @@ export function CreateEnvironmentDialog({
     favoriteModels,
     grokModels,
     piModels,
+    antigravityModels,
   ]);
 
   const configuredAgentDefaults = useMemo(

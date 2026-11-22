@@ -741,6 +741,7 @@ export function RepositorySettings({
       case "codex":
       case "cursor":
       case "grok":
+      case "antigravity":
       case "opencode":
         return (
           <AgentPlatformPane

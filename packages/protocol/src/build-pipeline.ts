@@ -91,6 +91,28 @@ export const PIPELINE_UNQUALIFIED_AGENTS: readonly BuildPipelineAgent[] = Object
   "antigravity",
 ]);
 
+/**
+ * The first agent a start request names that may not run a pipeline step,
+ * across its build agent, step rows, reviewers and review preparation.
+ */
+export function unqualifiedPipelineAgent(input: {
+  agentType: BuildPipelineAgent;
+  steps?: Partial<Record<string, { agent?: BuildPipelineAgent } | undefined>>;
+  reviewers?: readonly { agent?: BuildPipelineAgent }[];
+  reviewPreparation?: { agent?: BuildPipelineAgent };
+}): BuildPipelineAgent | undefined {
+  const named = [
+    input.agentType,
+    ...Object.values(input.steps ?? {}).map((step) => step?.agent),
+    ...(input.reviewers ?? []).map((reviewer) => reviewer.agent),
+    input.reviewPreparation?.agent,
+  ];
+  return named.find(
+    (agent): agent is BuildPipelineAgent =>
+      agent !== undefined && PIPELINE_UNQUALIFIED_AGENTS.includes(agent),
+  );
+}
+
 /** Whether `value` may run a build pipeline step (see `PIPELINE_UNQUALIFIED_AGENTS`). */
 export function isPipelineQualifiedAgent(
   value: unknown,

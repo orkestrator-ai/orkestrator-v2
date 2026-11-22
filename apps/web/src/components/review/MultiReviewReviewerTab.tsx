@@ -77,6 +77,7 @@ const AGENT_LABELS = {
   grok: "Grok",
   opencode: "OpenCode",
   pi: "Pi",
+  antigravity: "Antigravity",
 } as const;
 
 /**

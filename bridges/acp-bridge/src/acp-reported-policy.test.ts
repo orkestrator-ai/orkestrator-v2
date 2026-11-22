@@ -17,6 +17,16 @@ const sessionPolicy: NativeAgentExecutionPolicy = {
   networkAccess: "full",
 };
 
+describe("Antigravity's read-only policy", () => {
+  test("claims no Grok mechanism and says the boundary is advisory", () => {
+    const policy = coordinatorProcessPolicy("antigravity");
+    expect(policy.approvals).toBe("deny");
+    expect(policy.note).toContain("advisory");
+    expect(policy.note).not.toContain("Grok");
+    expect(coordinatorProcessPolicy("grok").note).toContain("Grok");
+  });
+});
+
 describe("acpSessionReportedPolicy", () => {
   test("a session reports its own policy as applied", () => {
     expect(acpSessionReportedPolicy({ policy: sessionPolicy }, "grok")).toEqual(

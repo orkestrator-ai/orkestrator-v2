@@ -98,6 +98,7 @@ export const RESEARCH_TOOL_NAMING: Readonly<Record<AgentPlatform, ResearchToolNa
       unavailable:
         "Grok coordinators load no research servers: web search stays off because its open_page cannot be removed on its own, and no research MCP server is attached (D8 in coordinator-read-only-decisions.md)",
     },
+    antigravity: { unavailable: "Antigravity is not qualified to run a coordinator" },
   });
 
 /** Whether the scenario applies, or why it does not. */

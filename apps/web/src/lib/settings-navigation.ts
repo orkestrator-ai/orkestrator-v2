@@ -17,6 +17,7 @@ export const GLOBAL_SETTINGS_SECTIONS = [
   "grok",
   "opencode",
   "pi",
+  "antigravity",
   "capabilities",
   // Kept so links to the old "Skills and plugins" page still land: it opens
   // Capabilities on "Installed on this machine".

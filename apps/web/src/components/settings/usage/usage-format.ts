@@ -76,4 +76,5 @@ export const PLATFORM_BAR_CLASS: Record<AgentPlatform, string> = {
   cursor: "bg-violet-400",
   grok: "bg-sky-400",
   pi: "bg-amber-400",
+  antigravity: "bg-blue-500",
 };

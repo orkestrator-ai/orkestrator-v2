@@ -30,7 +30,7 @@ const servers = [{ name: "context7", url: "https://mcp.context7.com/mcp" }];
 
 /** How each platform's transcript shows a call to Context7's resolve tool. */
 const RESOLVE_ROW: Record<
-  Exclude<AgentPlatform, "grok">,
+  Exclude<AgentPlatform, "grok" | "antigravity">,
   { toolName: string; toolTitle?: string }
 > = {
   claude: { toolName: "mcp__context7__resolve-library-id" },

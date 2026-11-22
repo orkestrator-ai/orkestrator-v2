@@ -134,8 +134,13 @@ describe("resolveSuborkTarget", () => {
 });
 
 describe("the /subork command", () => {
-  test("is listed and resolves on every native platform", () => {
-    for (const agent of AGENT_PLATFORMS) {
+  test("is listed and resolves on every native platform but unqualified Antigravity", () => {
+    expect(
+      withSessionActionSlashCommands([], nativeAgentCapabilities("antigravity")).some(
+        (command) => command.name === "/subork",
+      ),
+    ).toBe(false);
+    for (const agent of AGENT_PLATFORMS.filter((platform) => platform !== "antigravity")) {
       const commands = withSessionActionSlashCommands([], nativeAgentCapabilities(agent));
       const row = commands.find((command) => command.name === "/subork");
       expect(row?.id).toBe(SUBORK_COMMAND_ID);

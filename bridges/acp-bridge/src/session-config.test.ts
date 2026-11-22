@@ -96,6 +96,29 @@ function cursorSessionResult() {
 }
 
 describe("normalizeAcpSessionConfig", () => {
+  test("leaves Antigravity's approval-policy modes out of the conversation modes", () => {
+    const normalized = normalizeAcpSessionConfig("antigravity", {
+      modes: {
+        currentModeId: "auto",
+        availableModes: [
+          { id: "default", name: "Default" },
+          { id: "plan", name: "Plan" },
+          { id: "auto", name: "Auto" },
+          { id: "accept-edits", name: "Accept edits" },
+        ],
+      },
+    });
+    const ids = normalized.composer.modes.map((mode) => mode.id);
+    expect(ids).not.toContain("auto");
+    expect(ids).not.toContain("accept-edits");
+    expect(normalized.composer.selectedModeId).not.toBe("auto");
+    // Grok keeps whatever it announces.
+    const grok = normalizeAcpSessionConfig("grok", {
+      modes: { currentModeId: "auto", availableModes: [{ id: "auto", name: "Auto" }] },
+    });
+    expect(grok.composer.modes.map((mode) => mode.id)).toContain("auto");
+  });
+
   test("preserves an unmapped ACP mode instead of silently dropping it", () => {
     const normalized = normalizeAcpSessionConfig("grok", {
       modes: {

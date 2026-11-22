@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SystemPrompt } from "@agentclientprotocol/sdk";
+import { antigravitySystemPromptMeta } from "./antigravity-acp.js";
 import {
   withheldGitHubCredentialEnvironment,
   type AgentConversationMode,
@@ -278,7 +279,7 @@ export function sessionInstructionsParams(
 ): { _meta: Record<string, unknown> } | { systemPrompt: SystemPrompt } | Record<string, never> {
   if (!carrier || !instructions) return {};
   if (carrier === "antigravity-meta") {
-    return { _meta: { antigravity: { systemPrompt: { append: instructions } } } };
+    return { _meta: antigravitySystemPromptMeta(instructions) };
   }
   if (carrier === "rules-meta") {
     const field = SESSION_RULES_META_FIELD[config.id];

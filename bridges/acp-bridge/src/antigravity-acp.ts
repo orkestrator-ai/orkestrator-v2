@@ -17,28 +17,16 @@ function isObject(value: unknown): value is JsonObject {
 export const ANTIGRAVITY_PROVIDER_ID = "antigravity";
 
 /**
- * The method `authenticate` names when nothing selects another.
+ * How long `authenticate` may take when the backend names a method
+ * (`ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD`: an API key or Agent Platform login).
  *
- * agy 1.5.12 advertises `oauth-personal`, `oauth-business`, `gemini-api-key`
- * and `agent-platform`. Orkestrator's host sign-in is a Google login
- * (`agy acp --login`), so the default is `oauth-personal`; the first
- * advertised method is never taken blindly, because a Gemini API key the
- * environment happens to inherit would otherwise move a subscription user onto
- * API billing.
- */
-export const ANTIGRAVITY_DEFAULT_AUTH_METHOD = "oauth-personal";
-
-/** Backend-owned override of the method above (`authMethodEnv` on the launcher record). */
-export const ANTIGRAVITY_AUTH_METHOD_ENV = "ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD";
-
-/**
- * How long `authenticate` may take before the login is treated as missing.
- *
- * With no login, agy 1.5.12 does not fail `authenticate`: it starts an
- * interactive Google sign-in and waits (it answered `-32800 Sign-in was
- * cancelled` only when stdin closed). A signed-in agy answers from its cached
- * credential, so a bounded wait separates the two without starting a browser
- * flow nobody sees (`BROWSER` is a no-op for the child, `POLICY_ENV`).
+ * The bridge never calls `authenticate` for the Google login. With no login,
+ * agy 1.5.12 does not fail it: it starts an interactive browser sign-in and
+ * waits (it answered `-32800 Sign-in was cancelled` only when stdin closed,
+ * and `-32603 No browser is available` on a machine without a display). A
+ * session request without a login fails at once with `-32000 Authentication
+ * required` instead, which is what reports sign-in required. The login itself
+ * is the one `agy acp --login` stores on the machine.
  */
 export const ANTIGRAVITY_AUTHENTICATE_TIMEOUT_MS = 20_000;
 
@@ -46,22 +34,6 @@ export const ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE =
   "Antigravity isn't signed in on this machine. Sign in with agy acp --login in a terminal, then try again.";
 
 export const ANTIGRAVITY_SIGN_IN_HINT = "Open a terminal and run agy acp --login.";
-
-/** The auth method `authenticate` uses: an explicit configuration, else the Google login. */
-export function antigravityAuthMethod(
-  configured: string | undefined,
-  advertised: readonly { id: string }[] | undefined,
-): string {
-  const explicit = configured?.trim();
-  // An explicit choice is honoured even when `initialize` does not list it:
-  // T3 records methods agy accepts without advertising them. The default is
-  // used only when advertised (or when nothing was advertised at all).
-  if (explicit) return explicit;
-  if (!advertised || advertised.length === 0) return ANTIGRAVITY_DEFAULT_AUTH_METHOD;
-  return advertised.some((method) => method.id === ANTIGRAVITY_DEFAULT_AUTH_METHOD)
-    ? ANTIGRAVITY_DEFAULT_AUTH_METHOD
-    : advertised[0]!.id;
-}
 
 /**
  * Whether an `authenticate` failure means "nobody is signed in" rather than a

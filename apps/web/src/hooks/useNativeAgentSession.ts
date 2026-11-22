@@ -2530,7 +2530,9 @@ export function useNativeAgentSession<TMessage = unknown>({
                 ? "Cursor Agent"
                 : platform === "grok"
                   ? "Grok Build"
-                  : "Agent Session",
+                  : platform === "antigravity"
+                    ? "Antigravity"
+                    : "Agent Session",
             model: initialAgentModel ?? defaultAgentModel,
             modelSource: initialAgentModel ? "explicit" : "default",
             reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
@@ -2562,7 +2564,9 @@ export function useNativeAgentSession<TMessage = unknown>({
               ? "Cursor Agent"
               : platform === "grok"
                 ? "Grok Build"
-                : "Agent Session",
+                : platform === "antigravity"
+                  ? "Antigravity"
+                  : "Agent Session",
           model: initialAgentModel ?? defaultAgentModel,
           modelSource: initialAgentModel ? "explicit" : "default",
           reasoningEffort: initialReasoningEffort ?? defaultReasoningEffort,
@@ -2991,7 +2995,9 @@ export function useNativeAgentSession<TMessage = unknown>({
               ? "Cursor Agent"
               : platform === "grok"
                 ? "Grok Build"
-                : "Agent Session",
+                : platform === "antigravity"
+                  ? "Antigravity"
+                  : "Agent Session",
           prompt: text,
           requestId,
           ...(options.failureSessionId ? { failureSessionId: options.failureSessionId } : {}),

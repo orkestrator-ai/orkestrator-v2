@@ -446,6 +446,7 @@ export const clientEnvironmentFields = {
   localCursorPort: optionalPort,
   localGrokPort: optionalPort,
   localPiPort: optionalPort,
+  localAntigravityPort: optionalPort,
   /**
    * This environment's agent overrides — the narrowest of the three tiers.
    *

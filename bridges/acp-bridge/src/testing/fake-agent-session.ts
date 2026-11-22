@@ -186,6 +186,15 @@ export function handleSessionMessage(message: JsonObject): boolean {
   if (message.method === "session/new" && typeof message.id === "number") {
     recordSessionRequest(message);
     if (rejectInvalidMcpServers(message)) return true;
+    // agy 1.5.12's answer to a session request with no login.
+    if (process.env.FAKE_ACP_NEW_AUTH_REQUIRED === "1") {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32000, message: "Authentication required" },
+      });
+      return true;
+    }
     const releaseFile = process.env.FAKE_ACP_NEW_RELEASE_FILE;
     if (releaseFile && !existsSync(releaseFile)) {
       const timer = setInterval(() => {

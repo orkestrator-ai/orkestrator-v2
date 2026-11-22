@@ -37,14 +37,15 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("agent-servers definitions", () => {
-  it("defines the domain's 74 commands once each, since version 1", () => {
+  it("defines the domain's 81 commands once each, Antigravity's since version 2", () => {
     const names = AGENT_SERVERS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(74);
-    expect(new Set(names).size).toBe(74);
+    expect(names).toHaveLength(81);
+    expect(new Set(names).size).toBe(81);
     expect(agentServersDomain).toMatchObject({ name: "agent-servers", version: 2, min: 1 });
     for (const def of AGENT_SERVERS_COMMANDS) {
       expect(def.domain).toBe(agentServersDomain);
-      expect(def.since).toBe(1);
+      // The seven Antigravity bridge commands arrived with version 2.
+      expect(def.since).toBe(def.name.includes("antigravity") ? 2 : 1);
       expect(def.encoded).toBe(false);
     }
     for (const kind of AGENT_SERVER_KINDS) {

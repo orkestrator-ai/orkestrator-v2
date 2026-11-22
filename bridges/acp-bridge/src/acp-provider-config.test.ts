@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   BRIDGE_CONTROL_ENV_VARS,
   loadAcpProviderConfig,
+  prefersSessionResume,
   providerArgv,
   providerEnv,
+  sessionInstructionsCarrier,
+  sessionInstructionsParams,
   undeclaredPromptCapabilities,
 } from "./acp-provider-config.js";
 
@@ -299,4 +302,76 @@ test("refuses a read-only profile when the Grok launcher cannot load it", () => 
   expect(() =>
     providerArgv({ ...config, argv: ["stdio"] }, { readOnlyProfilePath: "/private/profile.md" }),
   ).toThrow("read-only profile requires a local agent launcher");
+});
+
+describe("Antigravity provider configuration", () => {
+  test("is built in: agy acp with a worker per session, no model flags", () => {
+    const config = loadAcpProviderConfig({
+      ACP_PROVIDER: "antigravity",
+      ACP_AGENT_PATH: "/toolchain/bin/agy",
+    });
+    expect(config).toMatchObject({
+      id: "antigravity",
+      executable: "/toolchain/bin/agy",
+      requiresAuthenticate: false,
+      authMethodEnv: "ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD",
+      modeMap: { default: "build", plan: "plan" },
+      extensionPrefixes: [],
+    });
+    // `--process-per-session` is what makes agy advertise HTTP MCP.
+    expect(providerArgv(config, { model: "gemini-pro", effort: "high", approvals: "ask" })).toEqual(
+      ["acp", "--process-per-session"],
+    );
+    // Grok's network and project-trust levers are Grok's alone.
+    expect(providerArgv(config, { denyNetwork: true, trustProject: true })).toEqual([
+      "acp",
+      "--process-per-session",
+    ]);
+  });
+
+  test("every child keeps auto-update off and none of Grok's variables", () => {
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "antigravity" });
+    const env = providerEnv(config, { trustProject: true }, { PATH: "/bin" });
+    expect(env.AGY_CLI_DISABLE_AUTO_UPDATE).toBe("1");
+    expect(env.GROK_FOLDER_TRUST).toBeUndefined();
+    expect(env.GROK_STORAGE_MODE).toBeUndefined();
+  });
+
+  test("an unknown provider still needs a launcher record", () => {
+    expect(() => loadAcpProviderConfig({ ACP_PROVIDER: "gemini" })).toThrow(
+      "ACP_PROVIDER_CONFIG is required",
+    );
+  });
+
+  test("instructions ride Antigravity's own carrier on every lifecycle request", () => {
+    const config = loadAcpProviderConfig({ ACP_PROVIDER: "antigravity" });
+    for (const lifecycle of ["new", "load", "resume"] as const) {
+      expect(
+        sessionInstructionsCarrier(config, {
+          lifecycle,
+          systemPromptSupported: false,
+          antigravitySystemPromptAppend: true,
+        }),
+      ).toBe("antigravity-meta");
+      // The standard carrier wins once agy advertises it, so nothing arrives twice.
+      expect(
+        sessionInstructionsCarrier(config, {
+          lifecycle,
+          systemPromptSupported: true,
+          antigravitySystemPromptAppend: true,
+        }),
+      ).toBe("system-prompt");
+    }
+    expect(
+      sessionInstructionsCarrier(config, { lifecycle: "new", systemPromptSupported: false }),
+    ).toBeUndefined();
+    expect(sessionInstructionsParams(config, "antigravity-meta", "Be careful.")).toEqual({
+      _meta: { antigravity: { systemPrompt: { append: "Be careful." } } },
+    });
+  });
+
+  test("only Antigravity prefers session/resume", () => {
+    expect(prefersSessionResume("antigravity")).toBe(true);
+    expect(prefersSessionResume("grok")).toBe(false);
+  });
 });

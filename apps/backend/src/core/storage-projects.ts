@@ -1364,6 +1364,7 @@ export class ProjectsRepository {
         "cursorBridgePid",
         "grokBridgePid",
         "piBridgePid",
+        "antigravityBridgePid",
       ] as const;
       for (const field of pidFields) {
         if (!(field in updates)) continue;
@@ -1379,6 +1380,7 @@ export class ProjectsRepository {
         "localCursorPort",
         "localGrokPort",
         "localPiPort",
+        "localAntigravityPort",
         "entryPort",
         "hostEntryPort",
       ] as const;

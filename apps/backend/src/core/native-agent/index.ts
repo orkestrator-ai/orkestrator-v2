@@ -65,6 +65,8 @@ export {
 } from "./display-tail-store.js";
 export { isNativeAgentDisplayTail, type NativeAgentDisplayTail } from "./display-tails.js";
 export {
+  assertDetachedLongCheckPolicy,
+  detachedLongCheckPolicyAllows,
   resolveEnvironmentExecutionPolicy,
   resolveNativeAgentExecutionPolicy,
 } from "./execution-policy.js";

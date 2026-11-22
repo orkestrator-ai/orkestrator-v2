@@ -148,9 +148,11 @@ import { WorkspaceBusyError } from "../workspace-writers.js";
 import { stopAfterBuild } from "./build-stop.js";
 import {
   BuildPipelineLongChecks,
+  hasOutstandingLongChecks,
   longCheckResultsPrompt,
   undeliveredLongChecks,
 } from "./long-checks.js";
+import { detachedLongCheckPolicyAllows } from "../native-agent/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("build-pipeline");
@@ -326,6 +328,7 @@ export class BuildPipelineSupervisor {
         if (
           !isBuildPipeline(record.snapshot) ||
           (!isActiveBuildPhase(record.snapshot.phase) &&
+            !hasOutstandingLongChecks(record.snapshot) &&
             !this.recovery.needsTerminalReconciliation(record.snapshot))
         ) {
           return [];
@@ -413,6 +416,11 @@ export class BuildPipelineSupervisor {
       }
       return;
     }
+    // Paused and terminal pipelines still own workers and ticket attachments.
+    if (hasOutstandingLongChecks(pipeline)) {
+      await this.longChecks.poll(pipeline);
+      record.revision = pipeline.backendRevision;
+    }
     if (!isActiveBuildPhase(pipeline.phase)) {
       await this.recovery.reconcileTerminalState(pipeline);
       return;
@@ -472,12 +480,6 @@ export class BuildPipelineSupervisor {
     if (!pipeline.environmentId) {
       throw new Error("Build pipeline has no environment");
     }
-
-    // Long checks run outside every agent turn. Their status is read here, on
-    // every pass of an active pipeline, whatever its stage is doing.
-    // A save there advances the revision the branches below write against.
-    await this.longChecks.poll(pipeline);
-    record.revision = pipeline.backendRevision;
 
     if (pipeline.phase === "starting-environment") {
       await this.recovery.configureEnvironment(pipeline);
@@ -1794,6 +1796,9 @@ export class BuildPipelineSupervisor {
         interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
         iteration: pipeline.iteration,
         sessionKey,
+        ...(detachedLongCheckPolicyAllows(policy) && !readOnlyReview && mode !== "plan"
+          ? { detachedLongChecksAllowed: true }
+          : {}),
         sdkSessionId: sessionId,
         status: "running",
         startedAt: new Date().toISOString(),

@@ -52,6 +52,7 @@ import {
   verificationPassed,
   type PullRequestDetection,
 } from "./service-helpers.js";
+import { applyLongCheckEvidence } from "./long-checks.js";
 import {
   UNATTENDED_AGENT_INTERACTION_POLICY,
   AGENT_INTERACTION_JOURNAL_VERSION,
@@ -265,9 +266,10 @@ export class BuildPipelineRecovery {
     const { rationale } = result.value;
     const criteria = taskSnapshotCriteria(pipeline.taskSnapshot);
     const criterionResults = verificationCriterionResults(criteria, result.value);
+    const blockedByLongChecks = applyLongCheckEvidence(pipeline, session, criterionResults);
     const feedback = feedbackWithUnmetCriteria(rationale, criteria, criterionResults);
     session.structuredResultStatus = "accepted";
-    const passed = verificationPassed(result.value);
+    const passed = !blockedByLongChecks && verificationPassed(result.value);
     pipeline.verificationResult = passed ? "pass" : "fail";
     pipeline.verificationFeedback = feedback;
     // The pipeline keeps only the newest verdict. The session's own copy is

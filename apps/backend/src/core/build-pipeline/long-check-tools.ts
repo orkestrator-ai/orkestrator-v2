@@ -26,12 +26,12 @@ function startInputSchema() {
   return Schema.Struct({
     name: describe(
       str({ trim: true, min: 1, max: limits.nameLength }),
-      "A short name the user will recognise on the ticket, such as `corpus parity` or `browser suite`.",
+      "A short public label without credentials or private URLs the user will recognise on the ticket, such as `corpus parity` or `browser suite`.",
     ),
     criterion: Schema.optionalKey(
       describe(
         str({ trim: true, max: limits.criterionLength }),
-        "The acceptance criterion this check settles, when it settles one.",
+        "The ticket criterion ID from the stage instructions, such as ac-1. Omit only for a general check.",
       ),
     ),
     commands: describe(
@@ -82,7 +82,7 @@ function jsonResult(value: unknown) {
 
 /** What the agent is told after a start: what happens next, and not to poll. */
 export const LONG_CHECK_STARTED_NOTE =
-  "The pipeline now owns this check and runs it in the background, outside your turn: it survives tool and monitor timeouts and backend restarts. Do not poll `get_long_checks`, sleep or wait on it. Carry on with work that does not depend on it, then end your turn; the pipeline holds this stage until the check finishes, posts its result on the ticket, and sends you the result in a new turn. Do not mark a criterion it settles as passed before then.";
+  "The pipeline now owns this check and runs it in the background, outside your turn: it survives tool and monitor timeouts and backend restarts. Do not poll `get_long_checks`, sleep or wait on it. End your turn. Keep HEAD and the checked files unchanged until the result arrives; the pipeline holds this stage until the check finishes, attaches its result to the Kanban ticket when available, and sends you the result in a new turn. Do not mark a criterion it settles as passed before then.";
 
 /**
  * Registers both tools when a build pipeline owns the scope's environment.
@@ -100,7 +100,7 @@ export async function registerLongCheckTools(
     {
       title: "Start a long check",
       description:
-        "Hand a slow check to the build pipeline instead of running it in your turn: a corpus or parity comparison, a byte-identity run, a full test, browser or performance suite, anything that may take more than a few minutes. The pipeline runs it on the environment's validation worker, posts the result on the ticket, and sends it to you in a new turn when it finishes; your stage cannot finish before then. Put every command the check needs in one call (one check runs at a time), with the narrow `changed` command first. Commit what the check should cover first: it runs against the current workspace.",
+        "Hand a slow check to the build pipeline instead of running it in your turn: a corpus or parity comparison, a byte-identity run, a full test, browser or performance suite, anything that may take more than a few minutes. The pipeline runs it on the environment's validation worker, attaches the result to the Kanban ticket when available, and sends it to you in a new turn when it finishes; your stage cannot finish before then. Put every command the check needs in one call (one check runs at a time), with the narrow `changed` command first. Commit what the check should cover first and keep HEAD and the checked files unchanged until settlement. Execution requires a compatible container policy.",
       inputSchema: toolInput(startInputSchema()),
       annotations: {
         readOnlyHint: false,

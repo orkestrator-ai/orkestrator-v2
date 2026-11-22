@@ -5,6 +5,7 @@ import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow"
 import type { PersistedBuildPipeline } from "../models.js";
 import {
   BuildPipelineLongChecks,
+  applyLongCheckEvidence,
   LONG_CHECK_MAX_POLL_FAILURES,
   createBuildPipelineLongCheckHost,
   longCheckPlan,
@@ -18,6 +19,7 @@ const SESSION_KEY = "pipeline-1:verify:0:session";
 function pipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
   const session = {
     phase: "verify",
+    detachedLongChecksAllowed: true,
     label: "Verify",
     sessionKey: SESSION_KEY,
     sdkSessionId: "sdk-verify",
@@ -46,6 +48,7 @@ function pipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
       title: "Parity",
       description: "",
       acceptanceCriteria: "",
+      acceptanceCriteriaItems: [{ id: "ac-1", text: "Parity holds" }],
       comments: [],
       images: [],
     },
@@ -84,6 +87,7 @@ function fakeWorld(initial: BuildPipeline) {
       return current;
     },
     invoke,
+    assertExecutionAllowed: async () => {},
   });
   return {
     host,
@@ -120,8 +124,8 @@ describe("long check plans", () => {
       {
         name: "parity",
         commands: [
-          { command: "bun test tests/parity-changed.test.ts", scope: "changed", timeoutMinutes: 5 },
           { command: "bun run parity", cwd: "tools" },
+          { command: "bun test tests/parity-changed.test.ts", scope: "changed", timeoutMinutes: 5 },
         ],
       },
       HEAD,
@@ -129,13 +133,13 @@ describe("long check plans", () => {
     expect(plan.headRef).toBe(HEAD);
     expect(plan.commands).toEqual([
       expect.objectContaining({
-        id: "c1",
+        id: "c2",
         cwd: ".",
         scope: "changed",
         timeoutMs: 300_000,
         weight: 2,
       }),
-      expect.objectContaining({ id: "c2", cwd: "tools", scope: "general", timeoutMs: 3_600_000 }),
+      expect.objectContaining({ id: "c1", cwd: "tools", scope: "general", timeoutMs: 3_600_000 }),
     ]);
   });
 
@@ -162,7 +166,7 @@ describe("starting a long check", () => {
     };
     const summary = await world.host.start(scope, {
       name: "corpus parity",
-      criterion: "The parity run finishes",
+      criterion: "ac-1",
       commands: [{ command: "bun run parity" }],
     });
     expect(recordedBeforeStart).toBe(true);
@@ -177,7 +181,7 @@ describe("starting a long check", () => {
       phase: "verify",
       iteration: 0,
       sessionKey: SESSION_KEY,
-      criterion: "The parity run finishes",
+      criterion: "ac-1",
       status: "running",
     });
     expect(check!.run.status).toBe("running");
@@ -274,6 +278,73 @@ describe("supervising long checks", () => {
     expect(world.calls.filter((call) => call.command === "add_kanban_comment")).toHaveLength(1);
   });
 
+  test("retries one ticket identity across a lost reply, failed save and terminal transition", async () => {
+    const { world } = await started();
+    let durable = structuredClone(world.pipeline);
+    world.state.answer = (run) => completed(run, "passed");
+    const writes = new Map<unknown, unknown>();
+    let attempts = 0;
+    let failPostingSave = true;
+    const poller = new BuildPipelineLongChecks({
+      pollMs: 0,
+      invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+        if (command !== "add_kanban_comment") return world.invoke<T>(command, args);
+        expect(args.projectId).toBe("project-1");
+        const existing = writes.get(args.requestId);
+        if (existing !== undefined) expect(args.text).toBe(existing);
+        writes.set(args.requestId, args.text);
+        if (++attempts === 1) throw new Error("Lost comment reply");
+        return undefined as T;
+      },
+      save: async (target) => {
+        if (target.longChecks?.[0]?.ticketComment === "posted" && failPostingSave) {
+          failPostingSave = false;
+          throw new Error("Failed to save pipeline snapshot");
+        }
+        durable = structuredClone(target);
+      },
+    });
+    await poller.poll(structuredClone(durable));
+    expect(durable.longChecks?.[0]).toMatchObject({
+      ticketComment: "failed",
+      ticketCommentAttempts: 1,
+    });
+    expect(longCheckResultsPrompt(durable.longChecks!)).toContain("Ticket attachment: pending.");
+    durable.phase = "complete";
+    await expect(poller.poll(structuredClone(durable))).rejects.toThrow("Failed to save");
+    await poller.poll(structuredClone(durable));
+    expect(durable.longChecks?.[0]?.ticketComment).toBe("posted");
+    expect(writes.size).toBe(1);
+    expect(attempts).toBe(3);
+  });
+
+  test("an unavailable ticket reaches a bounded final failure and external tickets are skipped", async () => {
+    const { world } = await started();
+    world.state.answer = (run) => completed(run, "passed");
+    const target = world.pipeline;
+    let count = 0;
+    const poller = new BuildPipelineLongChecks({
+      invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
+        if (command !== "add_kanban_comment") return world.invoke<T>(command, args);
+        count++;
+        throw new Error("Ticket unavailable");
+      },
+      save: async () => {},
+    });
+    const external = structuredClone(target);
+    external.source = { type: "linear" } as BuildPipeline["source"];
+    await poller.poll(external);
+    expect(external.longChecks?.[0]?.ticketComment).toBe("skipped");
+    const github = structuredClone(external);
+    github.source = { type: "github" } as BuildPipeline["source"];
+    delete github.longChecks![0]!.ticketComment;
+    await poller.poll(github);
+    expect(github.longChecks?.[0]).toMatchObject({ ticketComment: "skipped" });
+    for (let pass = 0; pass < 5; pass++) await poller.poll(target);
+    expect(count).toBe(3);
+    expect(longCheckResultsPrompt(target.longChecks!)).toContain("Ticket attachment: failed.");
+  });
+
   test("reads at most once per poll interval and persists progress sparingly", async () => {
     const { world, poller, saves, advance } = await started();
     const target = world.pipeline;
@@ -291,7 +362,7 @@ describe("supervising long checks", () => {
     expect(saves.length).toBe(savesAfterFirst);
   });
 
-  test("a worker that cannot report settles the check as an error after repeated failures", async () => {
+  test("a reporting outage retains the worker until its result arrives", async () => {
     const { world, poller, advance } = await started();
     const target = world.pipeline;
     world.state.fail = "Validation worker stopped reporting progress";
@@ -300,9 +371,11 @@ describe("supervising long checks", () => {
       advance(6_000);
     }
     const [check] = target.longChecks!;
-    expect(check!.status).toBe("error");
-    expect(check!.error).toContain("could not report on this check");
-    expect(check!.ticketComment).toBe("posted");
+    expect(check).toMatchObject({ status: "running", pollFailures: LONG_CHECK_MAX_POLL_FAILURES });
+    world.state.fail = undefined;
+    world.state.answer = (run) => completed(run, "passed");
+    await poller.poll(target);
+    expect(check).toMatchObject({ status: "passed", ticketComment: "posted" });
   });
 
   test("an unusable reply counts as a failed read, not a result", async () => {
@@ -326,6 +399,10 @@ describe("supervising long checks", () => {
         limitation: "Validation was cancelled",
       })),
     });
+    world.state.fail = "The worker could not be reached";
+    await poller.poll(target);
+    expect(target.longChecks![0]).toMatchObject({ status: "running", pollFailures: 1 });
+    world.state.fail = undefined;
     await poller.cancelAll(target);
     expect(world.calls.at(-1)!.command).toBe("cancel_review_validation");
     expect(target.longChecks![0]!.status).toBe("incomplete");
@@ -359,6 +436,7 @@ describe("handing results back", () => {
       entry("long-check-b", { deliveredAt: "2026-11-22T10:10:00.000Z" }),
       entry("long-check-c", { iteration: 1 }),
       entry("long-check-d", { phase: "build" }),
+      entry("long-check-e", { sessionKey: "superseded" }),
     ];
     expect(undeliveredLongChecks(base, base.sessions[0]!)!.map((check) => check.id)).toEqual([
       "long-check-a",
@@ -371,7 +449,7 @@ describe("handing results back", () => {
     const world = fakeWorld(pipeline());
     await world.host.start(scope, {
       name: "corpus parity",
-      criterion: "Parity holds",
+      criterion: "ac-1",
       commands: [{ command: "bun run parity" }],
     });
     const check = world.pipeline.longChecks![0]!;
@@ -380,7 +458,8 @@ describe("handing results back", () => {
     check.settledAt = new Date(Date.parse(check.startedAt) + 1_800_000).toISOString();
     const prompt = longCheckResultsPrompt([check]);
     expect(prompt).toContain("### “corpus parity”: failed after 30m 00s");
-    expect(prompt).toContain("Criterion: Parity holds");
+    expect(prompt).toContain("Criterion: ac-1");
+    expect(prompt).toContain("Ticket attachment: pending.");
     expect(prompt).toContain("`bun run parity` (general), failed, exit 1, 30m 00s");
     expect(prompt).toContain(
       `stdout .orkestrator/review-artifacts/${check.id}/validation-01.stdout.txt (10 bytes)`,
@@ -388,4 +467,25 @@ describe("handing results back", () => {
     expect(prompt).toContain("do not mark a criterion it was meant to settle as passed");
     expect(prompt).toContain("submit it now, even if you submitted one before");
   });
+});
+
+test("a fresh verdict cannot promote incomplete criterion evidence from its own attempt", async () => {
+  const world = fakeWorld(pipeline());
+  await world.host.start(scope, {
+    name: "parity",
+    criterion: "ac-1",
+    commands: [{ command: "true" }],
+  });
+  const target = world.pipeline;
+  const check = target.longChecks![0]!;
+  check.status = "incomplete";
+  check.deliveredAt = new Date().toISOString();
+  const results = [
+    { id: "ac-1", status: "passed" as const, evidence: "The verdict says it passed." },
+  ];
+  expect(applyLongCheckEvidence(target, target.sessions[0]!, results)).toBe(true);
+  expect(results[0]).toMatchObject({ status: "not-checked" });
+  expect(
+    applyLongCheckEvidence(target, { ...target.sessions[0]!, sessionKey: "replacement" }, results),
+  ).toBe(false);
 });

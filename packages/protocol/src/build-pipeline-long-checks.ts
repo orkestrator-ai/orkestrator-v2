@@ -35,6 +35,7 @@ export const PIPELINE_LONG_CHECK_PHASES = Object.freeze([
 export type PipelineLongCheckPhase = (typeof PIPELINE_LONG_CHECK_PHASES)[number];
 
 export const PIPELINE_LONG_CHECK_LIMITS = Object.freeze({
+  commentAttempts: 3,
   /** Checks kept on one pipeline record; the oldest settled ones are dropped first. */
   retained: 8,
   /** Commands in one check. */
@@ -54,7 +55,7 @@ export const PIPELINE_LONG_CHECK_LIMITS = Object.freeze({
  * Where a check stands.
  *
  * - `running`: planned or running on the worker.
- * - `passed`: every command passed (an on-demand suite the repository skipped counts as passed).
+ * - `passed`: every command passed or was covered by a passing command.
  * - `failed`: at least one command exited non-zero.
  * - `incomplete`: at least one command did not finish (timed out, cancelled,
  *   capacity wait expired); nothing it did not finish counts as evidence.
@@ -73,7 +74,7 @@ export interface PipelineLongCheck {
   /** Also the validation run id, so its evidence lives under `.orkestrator/review-artifacts/<id>/`. */
   id: string;
   name: string;
-  /** The acceptance criterion this check settles, when the agent named one. */
+  /** The ticket criterion ID this check settles. Older records may have criterion text. */
   criterion?: string;
   /** The stage that started it, and the pipeline iteration (zero-based round) it belongs to. */
   phase: PipelineLongCheckPhase;
@@ -86,7 +87,7 @@ export interface PipelineLongCheck {
   /** The worker's authoritative projection. */
   run: ReviewValidationRun;
   error?: string;
-  /** Supervisor poll bookkeeping; a run of failed reads settles the check as `error`. */
+  /** Supervisor poll bookkeeping; a failed read does not settle the check. */
   lastPolledAt?: string;
   pollFailures?: number;
   /** When the result was handed to the stage's session as a follow-up turn. */
@@ -156,18 +157,47 @@ export function isLongCheckRunUnsettled(run: ReviewValidationRun): boolean {
 export function longCheckStatusFromRun(run: ReviewValidationRun): PipelineLongCheckStatus {
   if (isLongCheckRunUnsettled(run)) return "running";
   if (run.status === "failed") return "error";
-  const statuses = run.results.map((result) => result.status);
-  if (statuses.includes("failed")) return "failed";
   if (run.status === "cancelled") return "incomplete";
-  if (statuses.some((status) => status !== "passed" && status !== "skipped")) return "incomplete";
-  return "passed";
+  if (run.results.some((result) => result.status === "failed")) return "failed";
+  const passed = new Set(
+    run.results
+      .filter(
+        (result) =>
+          result.status === "passed" &&
+          (result.executedCommand === undefined || result.executedCommand === result.command),
+      )
+      .map((result) => result.id),
+  );
+  const covered = run.results.every((result) => {
+    if (passed.has(result.id)) return true;
+    const coveringId = /^Covered by ([A-Za-z0-9_-]+) \(.*\)$/.exec(result.limitation ?? "")?.[1];
+    return result.status === "skipped" && coveringId !== undefined && passed.has(coveringId);
+  });
+  return passed.size > 0 && covered ? "passed" : "incomplete";
 }
 
-/** A checks list kept within its bound: the oldest settled checks go first, never a running one. */
-export function retainLongChecks(checks: readonly PipelineLongCheck[]): PipelineLongCheck[] {
+export function longCheckCommentPending(check: PipelineLongCheck): boolean {
+  return (
+    check.status !== "running" &&
+    check.ticketComment !== "posted" &&
+    check.ticketComment !== "skipped" &&
+    (check.ticketCommentAttempts ?? 0) < PIPELINE_LONG_CHECK_LIMITS.commentAttempts
+  );
+}
+
+/** Keep outstanding work and evidence that the current attempt still needs. */
+export function retainLongChecks(
+  checks: readonly PipelineLongCheck[],
+  currentSessionKey?: string,
+): PipelineLongCheck[] {
   const kept = [...checks];
   while (kept.length > PIPELINE_LONG_CHECK_LIMITS.retained) {
-    const index = kept.findIndex((check) => check.status !== "running");
+    const index = kept.findIndex(
+      (check) =>
+        check.status !== "running" &&
+        !longCheckCommentPending(check) &&
+        check.sessionKey !== currentSessionKey,
+    );
     if (index < 0) break;
     kept.splice(index, 1);
   }
@@ -242,8 +272,8 @@ export function longCheckCommandLines(
 }
 
 /**
- * The ticket comment for a settled check. It names the check's id so a retry
- * after a lost reply is recognised as the same comment.
+ * The ticket comment uses public display metadata and outcome only. Shell
+ * text and diagnostics stay in the workspace evidence.
  */
 export function longCheckTicketComment(check: PipelineLongCheck): string {
   const verdict =
@@ -254,9 +284,13 @@ export function longCheckTicketComment(check: PipelineLongCheck): string {
         : check.status;
   return [
     `**Long check “${check.name}”** (${longCheckPhaseLabel(check.phase)}, round ${check.iteration + 1}) ${verdict} after ${formatLongCheckDuration(longCheckElapsedMs(check))}.`,
-    ...(check.criterion ? [`Criterion: ${check.criterion}`] : []),
-    ...longCheckCommandLines(check.run),
-    ...(check.error ? [`Error: ${check.error}`] : []),
+    ...(check.criterion && /^ac-\d+$/.test(check.criterion)
+      ? [`Criterion: ${check.criterion}`]
+      : []),
+    ...check.run.results.map(
+      (result, index) =>
+        `- Command ${index + 1} (${commandScope(check.run, result.id)}): ${result.status}`,
+    ),
     `Evidence: \`.orkestrator/review-artifacts/${check.id}/\` in the pipeline environment.`,
   ].join("\n");
 }

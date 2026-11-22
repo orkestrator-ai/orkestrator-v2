@@ -76,10 +76,11 @@ export async function control(
   resultId?: string,
   workerSource = REVIEW_VALIDATION_WORKER,
   targetRef?: string,
+  longCheck = false,
 ) {
-  const payload = Buffer.from(JSON.stringify({ root, run, action, resultId, targetRef })).toString(
-    "base64",
-  );
+  const payload = Buffer.from(
+    JSON.stringify({ root, run, action, resultId, targetRef, longCheck }),
+  ).toString("base64");
   const child = Bun.spawn(
     [process.execPath, "-e", REVIEW_VALIDATION_CONTROL, payload, workerSource],
     {

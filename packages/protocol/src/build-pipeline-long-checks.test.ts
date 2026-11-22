@@ -60,9 +60,17 @@ describe("long check status", () => {
     expect(
       longCheckStatusFromRun({
         ...run("long-check-1", ["passed", "skipped"]),
+        results: run("long-check-1", ["passed", "skipped"]).results.map((result) =>
+          result.status === "skipped"
+            ? { ...result, limitation: "Covered by c1 (identical command)" }
+            : result,
+        ),
         status: "completed",
       }),
     ).toBe("passed");
+    const skipped = run("long-check-1", ["skipped"]);
+    skipped.results[0]!.limitation = "On demand, not run: trigger absent";
+    expect(longCheckStatusFromRun({ ...skipped, status: "completed" })).toBe("incomplete");
     expect(
       longCheckStatusFromRun({ ...run("long-check-1", ["passed", "failed"]), status: "completed" }),
     ).toBe("failed");
@@ -113,6 +121,7 @@ describe("long check records", () => {
         id: `long-check-${index}`,
         run: run(`long-check-${index}`, ["passed"]),
         status: "passed",
+        ticketComment: "posted",
         settledAt: "2026-11-22T10:30:00.000Z",
       });
     const running = check({ id: "long-check-run", run: run("long-check-run", ["running"]) });
@@ -131,21 +140,24 @@ describe("long check ticket comment", () => {
     const settled = check({
       status: "incomplete",
       settledAt: "2026-11-22T10:31:12.000Z",
-      criterion: "A 30-minute corpus parity run finishes",
+      criterion: "ac-1",
       run: {
         ...run("long-check-1", ["passed", "incomplete"]),
         status: "completed",
       },
     });
+    settled.run.results[0]!.command = "test --token sentinel-secret";
+    settled.run.results[0]!.executedCommand = "test --endpoint private-sentinel";
+    settled.run.results[1]!.limitation = "credential sentinel-secret";
+    settled.error = "failed with private-sentinel";
     const comment = longCheckTicketComment(settled);
     expect(comment).toContain(
       "**Long check “corpus parity”** (Verify, round 1) incomplete after 31m 12s.",
     );
-    expect(comment).toContain("Criterion: A 30-minute corpus parity run finishes");
-    expect(comment).toContain("`bun run parity --part 1` (changed), passed, exit 0");
-    expect(comment).toContain(
-      "`bun run parity --part 2` (general), incomplete. Validation command timed out",
-    );
+    expect(comment).toContain("Criterion: ac-1");
+    expect(comment).toContain("Command 1 (changed): passed");
+    expect(comment).toContain("Command 2 (general): incomplete");
+    expect(comment).not.toContain("sentinel");
     expect(comment).toContain("`.orkestrator/review-artifacts/long-check-1/`");
   });
 

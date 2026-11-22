@@ -37,6 +37,7 @@ import {
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,
   resolveConflictsPrompt,
+  VERIFICATION_LONG_CHECK_INSTRUCTION,
   VERIFICATION_OUTPUT_CONTRACT,
   verificationPrompt,
 } from "./build-pipeline/prompts.js";
@@ -403,7 +404,7 @@ describe("equivalence with the bound builders", () => {
     expect(text).toBe(reworkPrompt(pipeline(), NOTES, feedback, "main"));
   });
 
-  test("verify is verificationPrompt without its final-JSON output contract", () => {
+  test("verify omits the pipeline long-check instruction and final-JSON output contract", () => {
     const reviewPackage = example<ReviewPackageReference>("review-package");
     const fixResult = example<ReviewAddressFindingsResult>("address-findings-result");
     const text = graphBuiltInPromptText({
@@ -415,7 +416,10 @@ describe("equivalence with the bound builders", () => {
       },
       notes: NOTES,
     });
-    expect(`${text}\n\n${VERIFICATION_OUTPUT_CONTRACT}`).toBe(
+    expect(text).not.toContain(VERIFICATION_LONG_CHECK_INSTRUCTION);
+    expect(
+      `${text}\n\n${VERIFICATION_LONG_CHECK_INSTRUCTION}\n\n${VERIFICATION_OUTPUT_CONTRACT}`,
+    ).toBe(
       verificationPrompt(pipeline({ reviewPackage }), NOTES, "main", undefined, {
         kind: "address-findings-result",
         result: boundPipelineAddressFindingsResult(fixResult),

@@ -917,6 +917,8 @@ export interface PipelineSession {
   sdkSessionId: string;
   /** Original prompt tab retained as the first Build attempt after promotion. */
   adoptedFromTabId?: string;
+  /** The session was created with a policy the container worker can enforce. */
+  detachedLongChecksAllowed?: boolean;
   /** Immutable original Build handoff, retained across later brief updates. */
   adoptedBuildNotes?: import("./build-pipeline-key-information.js").KeyInformationPatch;
   /** Immutable admission identity, retained when the transcript leaves the snapshot. */
@@ -1933,6 +1935,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.adoptedAttemptDigest === undefined ||
       (typeof value.adoptedAttemptDigest === "string" &&
         /^[a-f0-9]{64}$/.test(value.adoptedAttemptDigest))) &&
+    (value.detachedLongChecksAllowed === undefined ||
+      typeof value.detachedLongChecksAllowed === "boolean") &&
     (value.adoptedFromTabId === undefined ||
       (isNonBlankString(value.adoptedFromTabId) &&
         value.adoptedFromTabId.trim().length > 0 &&

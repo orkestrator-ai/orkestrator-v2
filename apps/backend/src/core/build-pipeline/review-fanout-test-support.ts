@@ -447,7 +447,10 @@ export async function withPipeline(
      * How the fake environment settles a `start_review_validation` re-run of
      * disputed checks: `null` answers nothing, as before re-runs existed.
      */
-    disputeReruns: { outcome: "passed" | "failed" | null; runs: ReviewValidationRun[] };
+    disputeReruns: {
+      outcome: "passed" | "failed" | "incomplete" | null;
+      runs: ReviewValidationRun[];
+    };
   }) => Promise<void>,
   options: {
     environmentGit?: BuildPipelineServiceOptions["environmentGit"];
@@ -513,13 +516,31 @@ export async function withPipeline(
     failUnexpectedly: false,
   };
   const commands: string[] = [];
-  const disputeReruns: { outcome: "passed" | "failed" | null; runs: ReviewValidationRun[] } = {
+  const disputeReruns: {
+    outcome: "passed" | "failed" | "incomplete" | null;
+    runs: ReviewValidationRun[];
+  } = {
     outcome: null,
     runs: [],
   };
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     commands.push(command);
-    if (command === "start_review_validation" && disputeReruns.outcome !== null) {
+    const longCheck = (_args.run as ReviewValidationRun | undefined)?.id.startsWith("long-check-");
+    if (longCheck && command === "cancel_review_validation") {
+      return { ...(_args.run as ReviewValidationRun), status: "cancelled" } as T;
+    }
+    if (
+      longCheck &&
+      ["start_review_validation", "status_review_validation"].includes(command) &&
+      disputeReruns.outcome === null
+    ) {
+      return { ...(_args.run as ReviewValidationRun), status: "running" } as T;
+    }
+    if (
+      (command === "start_review_validation" ||
+        (longCheck && command === "status_review_validation")) &&
+      disputeReruns.outcome !== null
+    ) {
       const run = _args.run as ReviewValidationRun;
       disputeReruns.runs.push(run);
       const outcome = disputeReruns.outcome;
@@ -529,7 +550,8 @@ export async function withPipeline(
         results: run.results.map((result) => ({
           ...result,
           status: outcome,
-          exitCode: outcome === "passed" ? 0 : 1,
+          exitCode: outcome === "incomplete" ? null : outcome === "passed" ? 0 : 1,
+          limitation: outcome === "incomplete" ? "Validation command timed out" : null,
           stdoutPath: `.orkestrator/review-artifacts/${run.id}/validation-01.stdout.txt`,
           stderrPath: `.orkestrator/review-artifacts/${run.id}/validation-01.stderr.txt`,
         })),

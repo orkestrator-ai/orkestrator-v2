@@ -501,7 +501,7 @@ async function main() {
     const onDemandSkipped = new Map();
     const onDemandReplacements = new Map();
     const onDemandRules = run.plan.commands.map(cmd => cmd.cwd === "." ? policy.profiles[cmd.command]?.onDemand : undefined);
-    if (onDemandRules.some(Boolean) && typeof input.targetRef === "string") {
+    if (!input.longCheck && onDemandRules.some(Boolean) && typeof input.targetRef === "string") {
       const diff = spawnSync("git", ["diff", "--name-only", "-z", input.targetRef + "...HEAD"], { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20000 });
       const changed = diff.status === 0 ? diff.stdout.split("\0").filter(Boolean) : null;
       if (!changed && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(input.targetRef)) {
@@ -546,7 +546,7 @@ async function main() {
     };
     const candidates = commands.map((cmd, index) => ({ index, covers: cmd.cwd === "." ? policy.profiles[cmd.command]?.covers ?? [] : [] }))
       .sort((a, b) => b.covers.length - a.covers.length || a.index - b.index);
-    for (const candidate of candidates) {
+    for (const candidate of input.longCheck ? [] : candidates) {
       // A skipped on-demand suite runs nothing, so it covers nothing.
       if (coveredBy.has(candidate.index) || onDemandSkipped.has(candidate.index)) continue;
       for (const [index, cmd] of commands.entries()) {
@@ -558,7 +558,7 @@ async function main() {
     // when the earlier copy is general. Otherwise the first copy covers it, unless the copy
     // waits on setup the first does not, which may make the rerun meaningful.
     const repeats = new Set();
-    for (const [index, cmd] of commands.entries()) {
+    for (const [index, cmd] of input.longCheck ? [] : commands.entries()) {
       if (coveredBy.has(index) || onDemandSkipped.has(index)) continue;
       const first = commands.findIndex((other, otherIndex) => !onDemandSkipped.has(otherIndex) && !(cmd.scope === "changed" && other.scope !== "changed") && other.command === cmd.command && other.cwd === cmd.cwd);
       if (first === index) continue;
@@ -577,6 +577,11 @@ async function main() {
     while ((pending.size || tasks.size) && !stopping) {
       for (const index of Array.from(pending)) {
         const cmd = commands[index];
+        if (input.longCheck) {
+          // Wait for a full settlement, including cooperative commands waiting for host
+          // admission. Continue in plan order even if a previous command did not pass.
+          if (tasks.size) break;
+        }
         if (onDemandSkipped.has(index)) {
           Object.assign(run.results[index], { status: "skipped", limitation: onDemandSkipped.get(index) });
           pending.delete(index);
@@ -749,6 +754,10 @@ async function main() {
     return;
   }
   if (!fs.existsSync(statePath)) {
+    if (input.longCheck && fs.existsSync(path.join(directory, "cancel"))) {
+      process.stdout.write(JSON.stringify({ ...input.run, status: "cancelled", completedAt: new Date().toISOString() }));
+      return;
+    }
     if (input.action !== "start") throw new Error("Validation state is missing; execution will not be automatically repeated");
     // Exactly one control process can claim the job, even across backend restarts.
     let claimed = false;
@@ -757,7 +766,7 @@ async function main() {
       claimed = true;
     } catch (error) { if (error.code !== "EEXIST") throw error; }
     if (claimed) {
-      const payload = Buffer.from(JSON.stringify({ root, directory, run: input.run, ...(typeof input.targetRef === "string" ? { targetRef: input.targetRef } : {}) })).toString("base64");
+      const payload = Buffer.from(JSON.stringify({ root, directory, run: input.run, longCheck: input.longCheck === true, ...(typeof input.targetRef === "string" ? { targetRef: input.targetRef } : {}) })).toString("base64");
       const child = spawn(process.execPath, ["-e", process.argv[2], payload], { cwd: "/", detached: true, stdio: "ignore", env: process.env });
       child.on("error", () => {});
       child.unref();

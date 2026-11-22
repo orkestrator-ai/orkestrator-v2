@@ -27,6 +27,8 @@ import { randomUUID } from "node:crypto";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
   isActiveBuildPhase,
+  taskSnapshotCriteria,
+  type PipelineCriterionResult,
   type BuildPipeline,
   type PipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
@@ -36,6 +38,7 @@ import {
   formatLongCheckDuration,
   isLongCheckRunUnsettled,
   longCheckCommandLines,
+  longCheckCommentPending,
   longCheckElapsedMs,
   longCheckStatusFromRun,
   longCheckTicketComment,
@@ -55,7 +58,7 @@ import {
 import { probeReviewWorktreeOnce } from "../review/index.js";
 import type { PersistedBuildPipeline } from "../models.js";
 import { pipelineRecordForEnvironment, type KeyInformationScope } from "./key-information.js";
-import { errorMessage, sessionForCurrentPhase, type CommandInvoker } from "./service-helpers.js";
+import { sessionForCurrentPhase, type CommandInvoker } from "./service-helpers.js";
 
 const log = createLogger("build-pipeline");
 
@@ -63,10 +66,8 @@ const log = createLogger("build-pipeline");
 export const LONG_CHECK_POLL_MS = 5_000;
 /** How often a running check's progress is written to the pipeline record when nothing settled. */
 export const LONG_CHECK_PROGRESS_PERSIST_MS = 60_000;
-/** Consecutive failed reads (about a minute of them) after which a check settles as `error`. */
+/** Consecutive reads after which we cap the recorded outage count. */
 export const LONG_CHECK_MAX_POLL_FAILURES = 12;
-/** Ticket comment attempts for one settled check. */
-export const LONG_CHECK_MAX_COMMENT_ATTEMPTS = 3;
 
 /** One command of a check, as the agent asks for it. */
 export interface LongCheckCommandInput {
@@ -138,7 +139,9 @@ export function longCheckSummary(check: PipelineLongCheck, now = Date.now()): Lo
     elapsed: formatLongCheckDuration(longCheckElapsedMs(check, now)),
     delivered: check.deliveredAt !== undefined,
     ...(check.error ? { error: check.error } : {}),
-    ...(check.run.queueReason ? { queueReason: check.run.queueReason } : {}),
+    queueReason: check.pollFailures
+      ? "The worker status is temporarily unavailable."
+      : check.run.queueReason,
     commands: check.run.results.map((result) => {
       const planned = check.run.plan.commands.find((command) => command.id === result.id)!;
       return {
@@ -183,6 +186,7 @@ export function longCheckOwnerSession(
   const phase = session?.phase as PipelineLongCheckPhase | undefined;
   if (
     !session ||
+    session.status !== "running" ||
     !phase ||
     !PIPELINE_LONG_CHECK_PHASES.includes(phase) ||
     BUILD_PHASE_BY_STAGE[phase] !== pipeline.phase
@@ -249,13 +253,14 @@ export function longCheckPlan(input: StartLongCheckInput, head: string): ReviewV
       cwd,
       dependsOn: [],
       resources: [],
-      // Long checks are the heavy kind by definition: one at a time unless
-      // the repository's scheduler profile says otherwise.
       weight: 2 as const,
       timeoutMs: Math.round(minutes * 60_000),
       scope: entry.scope ?? "general",
     };
   });
+  commands.sort(
+    (left, right) => Number(right.scope === "changed") - Number(left.scope === "changed"),
+  );
   const plan: ReviewValidationPlan = { headRef: head, commands, limitations: [] };
   if (!isReviewValidationPlan(plan)) {
     throw new Error("The long check's commands do not fit a validation plan; shorten them.");
@@ -274,6 +279,14 @@ export function newLongCheck(
   const name = checkText(input.name, "name", limits.nameLength);
   if (!name) throw new Error("A long check needs a `name`.");
   const criterion = checkText(input.criterion, "criterion", limits.criterionLength);
+  if (
+    criterion &&
+    !taskSnapshotCriteria(pipeline.taskSnapshot).some(({ id }) => id === criterion)
+  ) {
+    throw new Error(
+      "Use the criterion ID from the task snapshot, or omit criterion for a general check.",
+    );
+  }
   const id = `long-check-${randomUUID()}`;
   const run = newReviewValidationRun(id, plan);
   return {
@@ -325,16 +338,66 @@ export function applyLongCheckRun(
   return true;
 }
 
-/** Settles a check the worker cannot report on. */
-export function settleLongCheckAsError(
-  check: PipelineLongCheck,
-  message: string,
-  at = new Date().toISOString(),
-): void {
-  if (check.status !== "running") return;
-  check.status = "error";
-  check.settledAt = at;
-  check.error = boundedError(message);
+/** Work that still belongs to the pipeline even outside an active stage. */
+export function hasOutstandingLongChecks(pipeline: BuildPipeline): boolean {
+  return (pipeline.longChecks ?? []).some(
+    (check) => check.status === "running" || longCheckCommentPending(check),
+  );
+}
+
+function checksForAttempt(pipeline: BuildPipeline, session: PipelineSession): PipelineLongCheck[] {
+  return (pipeline.longChecks ?? []).filter(
+    (check) =>
+      check.sessionKey === session.sessionKey &&
+      check.phase === session.phase &&
+      check.iteration === pipeline.iteration,
+  );
+}
+
+/** A passed verdict cannot use incomplete evidence. A subsequent passing
+ * check bound to the same criterion can supply evidence on the same HEAD. */
+export function applyLongCheckEvidence(
+  pipeline: BuildPipeline,
+  session: PipelineSession,
+  results: PipelineCriterionResult[],
+): boolean {
+  const checks = checksForAttempt(pipeline, session).map((check) => ({
+    ...check,
+    // Re-evaluate old projections that treated skipped or substitute commands
+    // as passing. A check against a different HEAD cannot establish a result.
+    status:
+      check.status === "passed"
+        ? session.validationHeadAtStart && session.validationHeadAtStart !== check.run.plan.headRef
+          ? ("error" as const)
+          : longCheckStatusFromRun(check.run)
+        : check.status,
+  }));
+  const criteria = taskSnapshotCriteria(pipeline.taskSnapshot);
+  let blocked = false;
+  for (const result of results) {
+    const relevant = checks.filter(
+      (check) =>
+        check.criterion === result.id ||
+        // Legacy text and general checks cannot establish a specific criterion.
+        !criteria.some(({ id }) => id === check.criterion),
+    );
+    const unmet = relevant.findLast((check) => check.status !== "passed");
+    if (!unmet || result.status === "failed") continue;
+    const rerun = relevant
+      .slice(relevant.indexOf(unmet) + 1)
+      .some(
+        (check) =>
+          check.status === "passed" &&
+          check.criterion === result.id &&
+          check.run.plan.headRef === unmet.run.plan.headRef,
+      );
+    if (rerun) continue;
+    result.status =
+      unmet.status === "failed" && unmet.criterion === result.id ? "failed" : "not-checked";
+    result.evidence = `Long check ${unmet.id} settled as ${unmet.status}. No passing rerun established this criterion.`;
+    blocked = true;
+  }
+  return blocked || (criteria.length === 0 && checks.some((check) => check.status !== "passed"));
 }
 
 /**
@@ -346,11 +409,8 @@ export function undeliveredLongChecks(
   pipeline: BuildPipeline,
   session: PipelineSession,
 ): PipelineLongCheck[] | null {
-  const checks = (pipeline.longChecks ?? []).filter(
-    (check) =>
-      check.deliveredAt === undefined &&
-      check.phase === session.phase &&
-      check.iteration === pipeline.iteration,
+  const checks = checksForAttempt(pipeline, session).filter(
+    (check) => check.deliveredAt === undefined,
   );
   return checks.length > 0 ? checks : null;
 }
@@ -364,14 +424,21 @@ export function longCheckResultsPrompt(checks: readonly PipelineLongCheck[]): st
     [
       `### “${check.name}”: ${check.status} after ${formatLongCheckDuration(longCheckElapsedMs(check))}`,
       ...(check.criterion ? [`Criterion: ${check.criterion}`] : []),
+      check.ticketComment === "posted"
+        ? "Ticket attachment: posted."
+        : check.ticketComment === "skipped"
+          ? "Ticket attachment: no Kanban ticket."
+          : longCheckCommentPending(check)
+            ? "Ticket attachment: pending."
+            : "Ticket attachment: failed.",
       ...longCheckCommandLines(check.run, { paths: true }),
       ...(check.error ? [`Error: ${check.error}`] : []),
     ].join("\n"),
   );
   return [
-    "**Long check results**: the long checks this stage started have finished. The pipeline ran them in the background, and their results below are already on the ticket.",
+    "**Long check results**: the long checks this stage started have finished.",
     ...sections,
-    "Output paths are relative to the workspace root. Read what you need with bounded reads (for example `tail -n 200 <path>`); do not run these commands again.",
+    "Output paths are relative to the workspace root. Read what you need with bounded reads (for example `tail -n 200 <path>`). If a criterion still needs a completed run, start a new long check for its ID.",
     "A check that is `incomplete` or `error` did not finish and is no evidence either way: do not mark a criterion it was meant to settle as passed. Record it as not checked, say which check did not finish and why, unless what did finish already shows it failed.",
     "Now finish this stage as its instructions say. If the stage has a result to submit, submit it now, even if you submitted one before: a result submitted while a check was still running was set aside so it could take these results into account.",
   ].join("\n\n");
@@ -388,6 +455,7 @@ export function createBuildPipelineLongCheckHost(deps: {
     mutation: (pipeline: BuildPipeline) => void | Promise<void>,
   ): Promise<BuildPipeline>;
   invoke: CommandInvoker;
+  assertExecutionAllowed(environmentId: string): Promise<void>;
 }): BuildPipelineLongCheckHost {
   const owner = async (scope: KeyInformationScope) =>
     pipelineRecordForEnvironment(await deps.listPipelines(scope), scope);
@@ -408,11 +476,25 @@ export function createBuildPipelineLongCheckHost(deps: {
       const found = await owner(scope);
       if (!found) throw new Error("No build pipeline owns this environment.");
       // Refuse early, before reading the worktree, when the caller cannot start one.
-      longCheckOwnerSession(found, scope);
+      const owningSession = longCheckOwnerSession(found, scope);
+      await deps.assertExecutionAllowed(found.environmentId);
+      if (owningSession.detachedLongChecksAllowed !== true) {
+        throw new Error(
+          "This stage session has no compatible detached execution policy. Restart the stage to apply its container policy.",
+        );
+      }
       const snapshot = await probeReviewWorktreeOnce(deps.invoke, found.environmentId);
       if (snapshot.status === "unknown") {
         throw new Error(
           `The workspace HEAD could not be read (${snapshot.reason}), so the check was not started. Try again.`,
+        );
+      }
+      if (
+        owningSession.validationHeadAtStart &&
+        owningSession.validationHeadAtStart !== snapshot.head
+      ) {
+        throw new Error(
+          "HEAD changed since the stage started. Restart the stage before starting a long check.",
         );
       }
       const plan = longCheckPlan(input, snapshot.head);
@@ -421,6 +503,9 @@ export function createBuildPipelineLongCheckHost(deps: {
       // hears of it, so the supervisor owns it whatever happens to this call.
       await deps.mutate(found.id, (pipeline) => {
         const session = longCheckOwnerSession(pipeline, scope);
+        if (session.sessionKey !== owningSession.sessionKey) {
+          throw new Error("This stage attempt changed before the long check started.");
+        }
         const running = (pipeline.longChecks ?? []).find((check) => check.status === "running");
         if (running) {
           throw new Error(
@@ -428,7 +513,14 @@ export function createBuildPipelineLongCheckHost(deps: {
           );
         }
         started = newLongCheck(pipeline, session, input, plan);
-        pipeline.longChecks = retainLongChecks([...(pipeline.longChecks ?? []), started]);
+        const checks = retainLongChecks(
+          [...(pipeline.longChecks ?? []), started],
+          session.sessionKey,
+        );
+        if (checks.length > PIPELINE_LONG_CHECK_LIMITS.retained) {
+          throw new Error("This stage has reached its retained long-check evidence limit.");
+        }
+        pipeline.longChecks = checks;
       });
       const check = started!;
       try {
@@ -450,7 +542,7 @@ export function createBuildPipelineLongCheckHost(deps: {
       } catch (error) {
         // The record stays; the supervisor starts it on its next pass. The
         // worker claims a run id once, so a start that did land is not repeated.
-        log.warn("long-check.start-failed", { error: formatLogError(error) });
+        log.warn("long-check.start-failed", { error: formatLogError(error, { message: false }) });
         return longCheckSummary(check);
       }
     },
@@ -488,19 +580,29 @@ export class BuildPipelineLongChecks {
     let dirty = false;
     const now = this.now();
     for (const check of checks) {
-      if (check.status !== "running") continue;
+      if (check.status !== "running") {
+        this.lastPolled.delete(check.id);
+        this.lastPersisted.delete(check.id);
+        continue;
+      }
       const due =
         (this.lastPolled.get(check.id) ?? -Infinity) + (this.deps.pollMs ?? LONG_CHECK_POLL_MS);
       if (now < due) continue;
       this.lastPolled.set(check.id, now);
       const at = new Date(now).toISOString();
       try {
+        const command =
+          pipeline.phase === "failed" || pipeline.phase === "complete"
+            ? "cancel_review_validation"
+            : check.run.status === "planned" && isActiveBuildPhase(pipeline.phase)
+              ? "start_review_validation"
+              : "status_review_validation";
         const run = workerRun(
           check,
-          await this.deps.invoke<unknown>(
-            check.run.status === "planned" ? "start_review_validation" : "status_review_validation",
-            { environmentId: pipeline.environmentId, run: check.run },
-          ),
+          await this.deps.invoke<unknown>(command, {
+            environmentId: pipeline.environmentId,
+            run: check.run,
+          }),
         );
         const before = check.run.results.map((result) => result.status).join(",");
         const failuresBefore = check.pollFailures;
@@ -513,16 +615,14 @@ export class BuildPipelineLongChecks {
           this.lastPersisted.set(check.id, now);
         }
       } catch (error) {
-        const failures = (check.pollFailures ?? 0) + 1;
-        check.pollFailures = failures;
-        dirty = true;
-        log.warn("long-check.poll-failed", { failures, error: formatLogError(error) });
-        if (failures >= LONG_CHECK_MAX_POLL_FAILURES) {
-          settleLongCheckAsError(
-            check,
-            `The validation worker could not report on this check: ${errorMessage(error)}`,
-            at,
-          );
+        const previous = check.pollFailures ?? 0;
+        if (previous < LONG_CHECK_MAX_POLL_FAILURES) {
+          check.pollFailures = previous + 1;
+          dirty = true;
+          log.warn("long-check.poll-failed", {
+            failures: check.pollFailures,
+            error: formatLogError(error, { message: false }),
+          });
         }
       }
       if (check.status !== "running") {
@@ -530,17 +630,15 @@ export class BuildPipelineLongChecks {
         this.lastPersisted.delete(check.id);
       }
     }
-    if (await this.commentSettled(pipeline)) dirty = true;
     if (dirty) await this.deps.save(pipeline);
+    if (await this.commentSettled(pipeline)) await this.deps.save(pipeline);
   }
 
   /** Writes each settled check's result on the pipeline's Kanban ticket once. */
   private async commentSettled(pipeline: BuildPipeline): Promise<boolean> {
     let changed = false;
     for (const check of pipeline.longChecks ?? []) {
-      if (check.status === "running" || check.ticketComment === "posted") continue;
-      if (check.ticketComment === "skipped") continue;
-      if ((check.ticketCommentAttempts ?? 0) >= LONG_CHECK_MAX_COMMENT_ATTEMPTS) continue;
+      if (!longCheckCommentPending(check)) continue;
       changed = true;
       // A pipeline with no source at all was started on a ticket id by a
       // caller that predates sources; Linear and GitHub sources have no
@@ -559,12 +657,14 @@ export class BuildPipelineLongChecks {
       try {
         await this.deps.invoke("add_kanban_comment", {
           taskId,
+          projectId: pipeline.projectId,
+          requestId: check.id,
           text: longCheckTicketComment(check),
         });
         check.ticketComment = "posted";
       } catch (error) {
         check.ticketComment = "failed";
-        log.warn("long-check.comment-failed", { error: formatLogError(error) });
+        log.warn("long-check.comment-failed", { error: formatLogError(error, { message: false }) });
       }
     }
     return changed;
@@ -584,12 +684,9 @@ export class BuildPipelineLongChecks {
               }),
             )
           : check.run;
-        if (!applyLongCheckRun(check, run)) {
-          settleLongCheckAsError(check, "The pipeline stopped before this check finished.");
-        }
+        applyLongCheckRun(check, run);
       } catch (error) {
-        log.warn("long-check.cancel-failed", { error: formatLogError(error) });
-        settleLongCheckAsError(check, "The pipeline stopped before this check finished.");
+        log.warn("long-check.cancel-failed", { error: formatLogError(error, { message: false }) });
       }
     }
   }

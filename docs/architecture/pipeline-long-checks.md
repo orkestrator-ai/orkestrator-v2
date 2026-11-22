@@ -22,12 +22,16 @@ information tools: to a credential whose environment a build pipeline owns, on
 the general agent server, the OpenCode broker and a stage turn's
 workflow-result server (not on graph-output or subork turns).
 
-- **`start_long_check`** takes a `name`, an optional `criterion` it settles,
+- **`start_long_check`** takes a `name`, an optional `criterion` ID from the ticket snapshot,
   and one to eight `commands` (`command`, optional `cwd` relative to the
   workspace root, `timeoutMinutes` from 1 to 120, default 60, and `scope`).
   Only the running Build, Rework, Address Findings or Verify session may call
   it, identified by its worker tab or current result key (or the signed
   capability on a shared connection). Review runs read-only and starts none.
+  Execution requires a managed container stage whose provider policy permits
+  unattended shell execution at the container boundary. The worker runs as
+  the container's workspace user. Local worktrees and provider-sandboxed
+  sessions are refused before admission.
 - **`get_long_checks`** lists every check on the pipeline with its status,
   elapsed time and per-command progress (state, exit code, duration, output
   byte counts, last output time and artifact paths, never output). A stage
@@ -47,16 +51,16 @@ worker (`review/validation-worker.ts`), the runner review preparation uses
   in `.orkestrator/review-artifacts/<check id>/state.json`, and a restarted
   backend reconnects to it rather than launching it again. The worker claims a
   run id exactly once.
-- Every command is weight 2 (heavy, one at a time unless the repository's
-  scheduler profile says otherwise). `changed`-scope commands are admitted
-  first, so the change's own narrow run finishes even when a full suite later
-  runs out of time.
+- The plan keeps the requested order within each scope and puts changed-scope
+  commands first. The worker runs commands serially, including admission waits,
+  and continues after an individual failure. Explicit requests execute the
+  named commands even if the review scheduler would skip or substitute them.
 - Per-command timeouts, the deadline environment variable
   (`ORKESTRATOR_VALIDATION_DEADLINE_MS`), output bounds and process-group
   cleanup all apply as they do to review validation.
 - The plan's `headRef` is the HEAD read when the check starts. A commit during
-  the run fails the check (`error`), so a stage commits what the check should
-  cover first.
+  the run fails the check (`error`). Commit what the check should cover first,
+  then keep HEAD and the checked files unchanged until settlement.
 
 **Admit before acting.** `start_long_check` records the check on the pipeline
 under the pipeline's lock before asking the worker to start it. If that start
@@ -65,8 +69,8 @@ worker's one-time claim stops it running twice.
 
 ## Supervision, progress and the ticket
 
-`BuildPipelineLongChecks` (`build-pipeline/long-checks.ts`) runs on every
-supervisor pass of an active pipeline, whatever its stage is doing:
+`BuildPipelineLongChecks` (`build-pipeline/long-checks.ts`) runs on supervisor
+passes while the pipeline has detached work or a pending attachment:
 
 - It reads each running check's status from the worker at most every five
   seconds (`LONG_CHECK_POLL_MS`), and writes the projection to the pipeline
@@ -75,17 +79,21 @@ supervisor pass of an active pipeline, whatever its stage is doing:
 - Status comes from the run (`longCheckStatusFromRun`): any failed command is
   `failed`; otherwise any command that did not finish (timed out, cancelled,
   capacity wait expired) is `incomplete`; a worker that stopped is `error`;
-  otherwise `passed`. Twelve consecutive failed reads (about a minute) settle
-  the check as `error`, never as a pass.
+  otherwise `passed` when all requested commands ran successfully or had
+  covering evidence. Failed status reads retain ownership and retry; only an
+  authoritative worker outcome or confirmed cancellation settles the check.
 - Each settled check is written on the Kanban ticket once
   (`longCheckTicketComment`): name, stage, round, outcome and duration, the
-  criterion, one line per command and where the evidence is. Up to three
-  attempts; Linear and GitHub builds have no ticket comment.
+  criterion ID, numbered command outcomes and an evidence location. Raw
+  command lines and diagnostics stay in the execution context. The check ID
+  makes retries idempotent. Up to three attempts continue even after a stage
+  or pipeline finishes. Linear and GitHub builds have no Kanban attachment.
 
-Pausing a pipeline does not stop its checks: they finish in the environment and
-are read on resume. Cancelling the pipeline cancels them, and an explicit
-environment stop or delete drains them with the other validation runs
-(`stopEnvironmentReviewValidation`).
+A paused pipeline keeps the workspace reservation until its running check
+settles. Cancelling a pipeline cancels its checks. An explicit environment
+stop or delete drains them with the other validation runs
+(`stopEnvironmentReviewValidation`) and records their outcomes before going
+offline.
 
 ## Holding the stage
 
@@ -107,10 +115,12 @@ pending user messages and worker mail):
   to finish and submit its result again. Marking the checks delivered is saved
   with that dispatch, so a restart neither drops nor repeats it.
 
-A restarted or retried stage in the same round receives that round's
-undelivered checks the same way. A Build turn's reported outcome (continue or
-stop before review) is kept across the results turn unless that turn reports
-again.
+Follow-up delivery belongs to the originating stage session. A restart or code
+rewind waits for a running check to settle, and the replacement session receives
+no results from its predecessor. Verify applies worker evidence to the verdict:
+an unsuccessful bound check blocks a pass on that criterion until a later
+successful check establishes it on the same commit. A Build turn's reported
+outcome is kept across the results turn unless that turn reports again.
 
 Verify's prompt (`VERIFICATION_LONG_CHECK_INSTRUCTION`) tells it to use the
 tool for anything that may run longer than a few minutes, to list the narrow
@@ -121,13 +131,13 @@ has no long check tools and does not carry the instruction.
 
 | Bound | Value |
 | --- | --- |
-| Checks kept per pipeline | 8; the oldest settled ones are dropped first, never a running one |
+| Checks kept per pipeline | 8; old settled checks are dropped after ticket delivery and when the current attempt no longer needs them |
 | Running checks per pipeline | 1 |
 | Commands per check | 8 |
 | Command timeout | 1 to 120 minutes, default 60 |
 | Name / criterion / command / cwd | 120 / 600 / 4,000 / 512 characters |
 | Poll interval | 5 s; progress written at most once a minute |
-| Failed reads before `error` | 12 |
+| Recorded consecutive failed reads | Capped at 12; polling continues |
 | Ticket comment attempts | 3 |
 
 ## Decisions

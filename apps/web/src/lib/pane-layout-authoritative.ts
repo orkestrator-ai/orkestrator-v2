@@ -272,8 +272,9 @@ function applyStartupAgentSetupHandoff(
     ? getNativeAgentData(authoritativeTab)?.sessionId
     : undefined;
   const setupReady = environmentIsReadyForSetupHandoff(environmentById(scope, environmentId));
-  // The tab lands once setup has finished, so its arrival in this window is the
-  // handoff whichever client started the launch, and it can only happen once.
+  // The tab lands once setup has finished (or, for a launch with an opening
+  // prompt, as soon as the launch is recorded), so its arrival in this window
+  // is the handoff whichever client started the launch, and it happens once.
   const arrived =
     Boolean(authoritativeLeaf) &&
     !findLeaf(current.root, (leaf) => leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID));

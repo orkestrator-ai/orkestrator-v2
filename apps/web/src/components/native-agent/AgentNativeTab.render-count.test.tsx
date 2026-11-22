@@ -564,7 +564,8 @@ test("a startup tab does not connect until setup is ready, whatever else is writ
     ],
   });
   await renderTab(STARTUP_TAB, freshTab);
-  expect(screen.getByTestId("setup-pending-prompt").textContent).toContain(LAUNCH_PROMPT);
+  expect(screen.getByText(LAUNCH_PROMPT)).toBeTruthy();
+  expect(screen.getByText("Running environment setup script…")).toBeTruthy();
 
   await writeUnrelatedFields();
   expect(ensureMock).not.toHaveBeenCalled();

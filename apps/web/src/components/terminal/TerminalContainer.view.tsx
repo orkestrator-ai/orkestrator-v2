@@ -101,6 +101,7 @@ import {
   useEnvironmentTabLaunches,
 } from "@/components/pane-layout/TabLaunchShimmer";
 import { cancelTabLaunchFocus } from "@/lib/tab-launch";
+import { LazyLaunchPromptPending } from "@/components/native-agent/LazyLaunchPromptPending";
 import { LazyTerminalPortalHost } from "./LazyTerminalPortalHost";
 import { TerminalContainerOverlays } from "./TerminalContainerOverlays";
 import {
@@ -195,6 +196,8 @@ export function TerminalContainer({
     isLocalEnvironment,
     lifecycleError,
     lifecycleRemedy,
+    launchAgent,
+    launchPrompt,
     pendingAgentLaunch,
     setupPhase,
     setupReady,
@@ -224,6 +227,9 @@ export function TerminalContainer({
         setupReady: isEnvironmentSetupSettled(env),
         setupScriptsComplete: env?.setupScriptsComplete === true,
         startupAgent: startup?.agent,
+        // The opening prompt a launch still owes, shown before its agent tab exists.
+        launchPrompt: env?.pendingAgentLaunch === true ? env.initialPrompt?.trim() || "" : "",
+        launchAgent: startup?.agent ?? env?.initialAgentPlatform,
         startupError: startup?.error,
         startupProviderSessionId: startup?.providerSessionId,
         startupStatus: startup?.status,
@@ -1178,10 +1184,11 @@ export function TerminalContainer({
     }
   }, [isContainerRunning, environmentId, containerId, reset]);
 
-  // The backend publishes the startup agent while setup still runs, and this
-  // renderer keeps the setup terminal selected so the user can watch it. When
-  // setup becomes ready, move focus onto that agent — including when the
-  // durable-launch effect is still blocked on a `starting` session.
+  // A prompt-less launch's startup agent arrives while the setup terminal is
+  // selected, so the user can watch setup. When setup becomes ready, move focus
+  // onto that agent — including when the durable-launch effect is still blocked
+  // on a `starting` session. (A launch with an opening prompt publishes its
+  // agent tab first and selected, and it shows setup progress itself.)
   //
   // Gated on an owed handoff, not on `setupReady` alone. Setup readiness and
   // the setup tab's `isSetupTab` flag both outlive the launch by the life of the
@@ -2287,7 +2294,18 @@ export function TerminalContainer({
         </DndContext>
       )}
 
-      {showTabsShimmer && <EnvironmentTabsShimmer />}
+      {showTabsShimmer &&
+        (launchPrompt ? (
+          <LazyLaunchPromptPending
+            environmentId={environmentId}
+            platform={launchAgent}
+            prompt={launchPrompt}
+            stage="preparing"
+            fallback={<EnvironmentTabsShimmer />}
+          />
+        ) : (
+          <EnvironmentTabsShimmer />
+        ))}
 
       <TerminalContainerOverlays
         environmentId={environmentId}
@@ -2305,6 +2323,8 @@ export function TerminalContainer({
         onStartContainer={onStartContainer}
         onCreateScript={onCreateScript}
         onStartOverlayClick={handleStartOverlayClick}
+        launchAgent={launchAgent}
+        launchPrompt={launchPrompt}
       />
     </div>
   );

@@ -1,4 +1,6 @@
-import { lazy, type MouseEvent } from "react";
+import { lazy, useState, type MouseEvent } from "react";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { LazyLaunchPromptPending } from "@/components/native-agent/LazyLaunchPromptPending";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -36,6 +38,9 @@ interface TerminalContainerOverlaysProps {
   onStartContainer?: () => void;
   onCreateScript?: (initialPrompt: string) => void;
   onStartOverlayClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  /** A launch's opening prompt, drawn while the environment is created; "" when none. */
+  launchPrompt?: string;
+  launchAgent?: AgentPlatform;
 }
 
 export function TerminalContainerOverlays({
@@ -54,7 +59,11 @@ export function TerminalContainerOverlays({
   onStartContainer,
   onCreateScript,
   onStartOverlayClick,
+  launchPrompt = "",
+  launchAgent,
 }: TerminalContainerOverlaysProps) {
+  const [showContainerLogs, setShowContainerLogs] = useState(false);
+  const creatingWithPrompt = showCreatingOverlay && launchPrompt !== "";
   return (
     <>
       {showNoEnvironmentOverlay && (
@@ -66,18 +75,47 @@ export function TerminalContainerOverlays({
         </div>
       )}
 
-      {showCreatingOverlay && containerId && (
+      {showCreatingOverlay && containerId && (!creatingWithPrompt || showContainerLogs) && (
         <div className="absolute inset-0 bg-background">
           <InitializationLogs containerId={containerId} className="h-full" />
         </div>
       )}
 
-      {showCreatingOverlay && isLocalEnvironment && !containerId && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background">
-          <div className="text-center text-muted-foreground">
-            <TerminalIcon className="mx-auto mb-4 h-12 w-12 opacity-50 animate-pulse" />
-            <p>Creating worktree...</p>
-          </div>
+      {showCreatingOverlay && isLocalEnvironment && !containerId && !creatingWithPrompt && (
+        <CreatingWorktree />
+      )}
+
+      {/*
+        A launch with an opening prompt keeps it on screen while the workspace is
+        created, laid out as the agent tab that will replace it. Container logs
+        stay one click away.
+      */}
+      {creatingWithPrompt && !showContainerLogs && (containerId || isLocalEnvironment) && (
+        <div className="absolute inset-0 bg-background">
+          <LazyLaunchPromptPending
+            environmentId={environmentId}
+            platform={launchAgent}
+            prompt={launchPrompt}
+            stage={containerId ? "starting-container" : "creating-worktree"}
+            detail={
+              containerId ? (
+                <button
+                  type="button"
+                  className="rounded-sm text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset"
+                  onClick={() => setShowContainerLogs(true)}
+                >
+                  View container logs
+                </button>
+              ) : undefined
+            }
+            fallback={
+              containerId ? (
+                <InitializationLogs containerId={containerId} className="h-full" />
+              ) : (
+                <CreatingWorktree />
+              )
+            }
+          />
         </div>
       )}
 
@@ -138,5 +176,16 @@ export function TerminalContainerOverlays({
         </div>
       )}
     </>
+  );
+}
+
+function CreatingWorktree() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-background">
+      <div className="text-center text-muted-foreground">
+        <TerminalIcon className="mx-auto mb-4 h-12 w-12 opacity-50 animate-pulse" />
+        <p>Creating worktree...</p>
+      </div>
+    </div>
   );
 }

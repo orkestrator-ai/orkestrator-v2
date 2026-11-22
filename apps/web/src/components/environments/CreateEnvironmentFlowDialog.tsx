@@ -38,6 +38,7 @@ import type {
   PortMapping,
 } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import { preloadLaunchViews } from "@/components/native-agent/LazyLaunchPromptPending";
 import {
   openCreateEnvironmentOnMachine,
   useCreateEnvironmentMachines,
@@ -282,6 +283,11 @@ export function CreateEnvironmentFlowDialog({
   useEffect(() => {
     if (!open) cancelPendingCredentialFlow();
   }, [cancelPendingCredentialFlow, open]);
+
+  // The views the launch shows next, so the prompt is drawn without a loading step.
+  useEffect(() => {
+    if (open) preloadLaunchViews();
+  }, [open]);
 
   useEffect(() => {
     if (!dockerAvailable) cancelPendingCredentialFlow();

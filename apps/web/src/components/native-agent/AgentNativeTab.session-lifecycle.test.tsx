@@ -3341,7 +3341,7 @@ describe("AgentNativeTab", () => {
     // look as if it arrived seconds late. Reconnect copy would name a session
     // that has never existed.
     assertPromptVisible();
-    expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
+    expect(screen.getByText("Launching Cursor Agent…")).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
     expect(container.querySelector("svg.agent-connecting-logo") === null).toBe(true);
     expect(screen.queryByText("Refreshing Cursor Agent session…") === null).toBe(true);
@@ -3428,7 +3428,7 @@ describe("AgentNativeTab", () => {
     // session cannot accept.
     expect(screen.getByText("Connecting to Cursor Agent...")).toBeTruthy();
     expect(container.querySelector("svg.agent-connecting-logo")).toBeTruthy();
-    expect(screen.queryByText(/^Starting /) === null).toBe(true);
+    expect(screen.queryByText(/^Launching /) === null).toBe(true);
   });
 
   test("shows a backend-owned startup prompt before the backend dispatches it", async () => {
@@ -3473,7 +3473,7 @@ describe("AgentNativeTab", () => {
     );
 
     expect(await screen.findByText("Add a dark mode toggle")).toBeTruthy();
-    expect(screen.getByText("Starting Cursor Agent…")).toBeTruthy();
+    expect(screen.getByText("Launching Cursor Agent…")).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
     // The backend owns this dispatch; the preview never sends anything.
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
@@ -3536,7 +3536,7 @@ describe("AgentNativeTab", () => {
     );
     // The echo replaces the preview exactly once.
     expect(screen.getAllByText("Add a dark mode toggle")).toHaveLength(1);
-    expect(screen.queryByText(/^Starting /) === null).toBe(true);
+    expect(screen.queryByText(/^Launching /) === null).toBe(true);
   });
 
   test.each(["rejected", "transport", "exception"] as const)(
@@ -3567,7 +3567,7 @@ describe("AgentNativeTab", () => {
       await waitFor(() =>
         expect(screen.getByRole("textbox").textContent).toBe("Recover this opening prompt"),
       );
-      expect(screen.queryByText(/^Starting /) === null).toBe(true);
+      expect(screen.queryByText(/^Launching /) === null).toBe(true);
       expect(container.querySelector(".agent-thinking-shimmer") === null).toBe(true);
       expect(
         within(screen.getByTestId("native-agent-transcript-test-list")).queryByText(
@@ -3582,6 +3582,7 @@ describe("AgentNativeTab", () => {
   );
 
   test("shows a backend-owned startup prompt while setup is still running", async () => {
+    fixtureState.renderVirtualizedMessages = true;
     appCommandStore(environmentStore).setState({
       environments: [
         {
@@ -3600,7 +3601,38 @@ describe("AgentNativeTab", () => {
       <AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />,
     );
 
-    expect(await screen.findByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    // The prompt is drawn in the transcript the first response will arrive in,
+    // with setup progress in its status row, so nothing is swapped out when
+    // setup finishes.
+    expect(await screen.findByText("Running environment setup script…")).toBeTruthy();
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.queryByTestId("setup-pending-prompt") === null).toBe(true);
+    expect(screen.queryByText(/^Launching /) === null).toBe(true);
+    // Nothing can be sent ahead of the opening prompt.
+    expect(screen.getByRole("textbox").getAttribute("aria-disabled")).toBe("true");
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
+  test("keeps the setup recovery surface when setup fails under a startup prompt", async () => {
+    appCommandStore(environmentStore).setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "failed",
+          pendingAgentLaunch: true,
+          initialPrompt: "Add a dark mode toggle",
+        } as never,
+      ],
+    });
+
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />,
+    );
+
+    expect(await screen.findByText("Environment setup failed.")).toBeTruthy();
     expect(screen.getByTestId("setup-pending-prompt").textContent).toContain(
       "Add a dark mode toggle",
     );

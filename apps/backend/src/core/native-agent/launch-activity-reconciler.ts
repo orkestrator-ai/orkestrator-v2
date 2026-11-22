@@ -2005,12 +2005,25 @@ export class NativeAgentLaunchActivityReconciler {
         });
       }
 
+      // A launch that carries an opening prompt publishes its agent tab at
+      // once, locked and selected, so the prompt is on screen while the
+      // workspace is still being created and setup runs. The tab shows setup
+      // progress in its own status row (the setup terminal stays one tab
+      // away), and the same transcript carries on into the first response, so
+      // nothing has to be swapped out and redrawn when setup finishes.
+      if (hasInitialWork && !isEnvironmentReadyForAgents(environment)) {
+        await this.storage.ensureStartupNativeAgentTab({
+          environmentId: environment.id,
+          agent,
+          ...preselectOptions,
+        });
+        return;
+      }
       if (!isEnvironmentReadyForAgents(environment)) return;
 
-      // The job tab launches when setup has finished, and only then, so the
-      // setup terminal stays first and alone until it has done its work. A
-      // prompt-less launch stays unassigned so the user can still change the
-      // preselected model before the first send.
+      // A prompt-less launch waits for setup, so the setup terminal stays first
+      // and alone until it has done its work. It stays unassigned so the user
+      // can still change the preselected model before the first send.
       await this.storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
         agent,

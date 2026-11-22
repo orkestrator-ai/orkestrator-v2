@@ -828,13 +828,19 @@ export class SessionsRepository {
 
       const focused = leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? target;
       const selected = focused.tabs.find((candidate) => candidate.id === focused.activeTabId);
+      const selectedAgentData = selected?.nativeAgentData as
+        { sessionId?: string; platform?: string } | undefined;
+      // A startup tab locked to a platform carries the opening prompt, and it
+      // shows setup progress itself, so the setup terminal opens behind it. An
+      // unlocked startup tab (a prompt-less launch) still yields to setup.
       const userChoseTab =
         selected !== undefined &&
         selected !== tab &&
         selected.type !== "claude-build" &&
         (selected.id !== STARTUP_AGENT_TAB_ID ||
           !environment.pendingAgentLaunch ||
-          Boolean((selected.nativeAgentData as { sessionId?: string } | undefined)?.sessionId));
+          Boolean(selectedAgentData?.sessionId) ||
+          Boolean(selectedAgentData?.platform));
       if (!userChoseTab) target.activeTabId = tab.id as string;
 
       const containerId = environment.environmentType === "local" ? null : environment.containerId;

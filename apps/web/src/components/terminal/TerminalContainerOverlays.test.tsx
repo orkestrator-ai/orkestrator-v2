@@ -554,4 +554,58 @@ describe("TerminalContainer", () => {
       (screen.getByRole("button", { name: /create script/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
+  test("keeps a launch's opening prompt on screen while the worktree is created", async () => {
+    appCommandStore(environmentStore).setState((state) => ({
+      ...state,
+      environments: state.environments.map((environment) =>
+        environment.id === "env-hidden"
+          ? {
+              ...environment,
+              containerId: null,
+              environmentType: "local",
+              worktreePath: undefined,
+              pendingAgentLaunch: true,
+              initialPrompt: "Add a dark mode toggle",
+              initialAgentPlatform: "codex",
+            }
+          : environment,
+      ),
+    }));
+    renderInAppCommandScope(
+      <TerminalProvider>
+        <TerminalContainer environmentId="env-hidden" containerId={null} isContainerCreating />
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByTestId("launch-prompt-pending")).toBeTruthy();
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.getByText("Creating worktree…")).toBeTruthy();
+    expect(screen.getByText("Message Codex")).toBeTruthy();
+    expect(screen.queryByText("Creating worktree...") === null).toBe(true);
+  });
+
+  test("keeps a launch's opening prompt in front of a booting container, logs one click away", async () => {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
+      pendingAgentLaunch: true,
+      initialPrompt: "Add a dark mode toggle",
+      initialAgentPlatform: "claude",
+    });
+    renderInAppCommandScope(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning={false}
+          isContainerCreating
+        />
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByText("Starting container…")).toBeTruthy();
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.queryByTestId("initialization-logs") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "View container logs" }));
+    expect(screen.getByTestId("initialization-logs").textContent).toBe("container-hidden");
+  });
 });

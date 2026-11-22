@@ -1689,6 +1689,58 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("shows a prompt-bearing launch's locked agent tab while setup runs, ahead of the setup terminal", async () => {
+      const { provider, createSession } = createProviderStub("cursor");
+      await withService(
+        {
+          prefix: "orkestrator-native-startup-prompt-during-setup-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "cursor",
+            opencodeMode: "native",
+            initialPrompt: "Fix the failing test",
+            setupPhase: "running",
+            setupScriptsComplete: false,
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await launchInternals(service).reconcilePendingLaunches();
+
+          // The tab is on screen at once, locked to the launch's agent, but
+          // nothing is started or sent until setup has finished.
+          expect(createSession).not.toHaveBeenCalled();
+          expect((await storage.getEnvironment("env-1"))?.pendingAgentLaunch).toBe(true);
+          const published = (await storage.getPaneLayout("env-1"))?.root as {
+            activeTabId: string;
+            tabs: Array<{
+              id: string;
+              nativeAgentData?: { platform?: string; sessionId?: string };
+            }>;
+          };
+          expect(published.activeTabId).toBe("startup-agent");
+          expect(published.tabs.find((tab) => tab.id === "startup-agent")?.nativeAgentData).toEqual(
+            expect.objectContaining({ platform: "cursor" }),
+          );
+
+          // Setup's terminal opens one tab away; the prompt stays in front.
+          await storage.ensureSetupTab("env-1");
+          const withSetup = (await storage.getPaneLayout("env-1"))?.root as {
+            activeTabId: string;
+            tabs: Array<{ id: string; isSetupTab?: boolean }>;
+          };
+          expect(withSetup.tabs.some((tab) => tab.isSetupTab === true)).toBe(true);
+          expect(withSetup.activeTabId).toBe("startup-agent");
+
+          // Later sweeps during setup leave the layout alone.
+          const revision = (await storage.getPaneLayout("env-1"))?.revision;
+          await service.reconcileInitialLaunch("env-1");
+          expect((await storage.getPaneLayout("env-1"))?.revision).toBe(revision);
+          expect(createSession).not.toHaveBeenCalled();
+        },
+      );
+    });
+
     test("publishes Cursor's native startup tab before consuming the launch", async () => {
       const { provider, createSession } = createProviderStub("cursor");
       await withService(

@@ -39,13 +39,15 @@ import {
   LazyLoadInlineErrorFallback,
   type LazyLoadErrorDetails,
 } from "@/components/LazyLoadBoundary";
-import { LazyAgentNativeTab } from "@/components/native-agent/LazyAgentNativeTab";
+import {
+  LazyAgentNativeTab,
+  loadAgentNativeTab,
+} from "@/components/native-agent/LazyAgentNativeTab";
 import { DesignCanvasPaneTab, type EmbeddedAgentView } from "./DesignCanvasPaneTab";
 
 const LazyFileViewerTab = lazy(async () => ({
   default: (await import("@/components/terminal/FileViewerTab")).FileViewerTab,
 }));
-const loadAgentNativeTab = () => import("@/components/native-agent");
 const LazyClaudeTmuxChatTab = lazy(async () => ({
   default: (await import("@/components/claude/ClaudeTmuxChatTab")).ClaudeTmuxChatTab,
 }));

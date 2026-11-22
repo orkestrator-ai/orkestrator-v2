@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import { taskSnapshotCriteria } from "@orkestrator/protocol/build-pipeline";
+import { AgentToolsServer } from "../agent-tools.js";
 import { graphWorkspaceAllows } from "../graph-run-scheduling.js";
 import { WorkspaceWriters } from "../workspace-writers.js";
 import { advanceUntil, startInput, withPipeline } from "./review-fanout-test-support.js";
@@ -184,6 +185,53 @@ describe("build pipeline long checks", () => {
       },
       { longCheckPollMs: 0, environmentType: "containerized" },
     );
+  });
+
+  test("an authenticated managed local Codex stage cannot start a detached shell", async () => {
+    await withPipeline(async ({ service, storage, read, commands }) => {
+      await storage.updateEnvironment("env-1", {
+        agentSettings: {
+          executionPolicy: { sandbox: "provider", networkAccess: "restricted", approvals: "deny" },
+        },
+      });
+      const started = await service.start({ ...startInput(), agentType: "codex" });
+      const verifying = await advanceUntil(service, read, started.id, "verifying");
+      const session = verifying.sessions[verifying.currentSessionIndex]!;
+      const server = new AgentToolsServer(storage, "127.0.0.1");
+      server.setLongCheckToolHost(service.longCheckHost());
+      await server.start();
+      try {
+        const { url, token } = server.connection(
+          "env-1",
+          "project-1",
+          "host",
+          pipelineWorkerTabId(session.sessionKey),
+        );
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "start_long_check",
+              arguments: { name: "safe probe", commands: [{ command: "true" }] },
+            },
+          }),
+        });
+        expect(response.status).toBe(200);
+        expect(await response.text()).toContain("Detached long checks require a container");
+        expect((await read(started.id)).longChecks ?? []).toHaveLength(0);
+        expect(commands).not.toContain("start_review_validation");
+      } finally {
+        await server.stop();
+      }
+    });
   });
 
   test("Verify's prompt tells it to hand slow checks to the pipeline", async () => {

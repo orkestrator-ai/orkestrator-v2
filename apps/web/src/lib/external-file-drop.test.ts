@@ -73,16 +73,26 @@ describe("planExternalFolderCopy", () => {
   test("leaves out Git metadata and .DS_Store at any depth", async () => {
     const plan = await planExternalFolderCopy([
       directoryEntry("project", {
-        ".git": { HEAD: file("HEAD") },
+        ".Git": { HEAD: file("HEAD") },
         ".DS_Store": file(".DS_Store"),
-        src: { ".git": file(".git"), "main.ts": file("main.ts") },
+        src: { ".GIT": file(".GIT"), "main.ts": file("main.ts") },
       }),
-      directoryEntry(".git", { config: file("config") }),
+      directoryEntry(".gIt", { config: file("config") }),
+      directoryEntry(".DS_Store", { nested: { "keep.txt": file("keep.txt") }, ".DS_Store": {} }),
     ]);
 
-    expect(plan.folders).toEqual(["project", "project/src"]);
-    expect(plan.files.map((entry) => entry.path)).toEqual(["project/src/main.ts"]);
-    expect(plan.skipped).toEqual(["project/.DS_Store", "project/.git", "project/src/.git", ".git"]);
+    expect(plan.folders).toEqual([
+      "project",
+      "project/src",
+      ".DS_Store",
+      ".DS_Store/.DS_Store",
+      ".DS_Store/nested",
+    ]);
+    expect(plan.files.map((entry) => entry.path)).toEqual([
+      "project/src/main.ts",
+      ".DS_Store/nested/keep.txt",
+    ]);
+    expect(plan.skipped).toEqual(["project/.DS_Store", "project/.Git", "project/src/.GIT", ".gIt"]);
   });
 
   test("refuses a drop over the entry or byte limit before anything is copied", async () => {
@@ -102,6 +112,25 @@ describe("planExternalFolderCopy", () => {
     ).toHaveLength(2);
   });
 
+  test("stops requesting batches as soon as the shared entry budget is exceeded", async () => {
+    let batches = 0;
+    const directory: DroppedDirectoryEntry = {
+      name: "many",
+      isFile: false,
+      isDirectory: true,
+      createReader: () => ({
+        readEntries: (success) => {
+          batches += 1;
+          success([fileEntry(file(`a-${batches}`)), fileEntry(file(`b-${batches}`))]);
+        },
+      }),
+    };
+    await expect(planExternalFolderCopy([directory], { maxEntries: 4 })).rejects.toBeInstanceOf(
+      ExternalDropLimitError,
+    );
+    expect(batches).toBe(2);
+  });
+
   test("reports a directory that cannot be read", async () => {
     const unreadable: DroppedDirectoryEntry = {
       name: "locked",
@@ -112,7 +141,14 @@ describe("planExternalFolderCopy", () => {
       }),
     };
 
-    await expect(planExternalFolderCopy([unreadable])).rejects.toThrow("Permission denied");
+    const plan = await planExternalFolderCopy([
+      unreadable,
+      directoryEntry("readable", { "keep.txt": file("keep.txt") }),
+    ]);
+    expect(plan.failures).toEqual([
+      { name: "locked", message: "Could not read locked: Permission denied" },
+    ]);
+    expect(plan.files.map(({ path }) => path)).toEqual(["readable/keep.txt"]);
   });
 });
 

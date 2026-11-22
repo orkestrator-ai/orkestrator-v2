@@ -6,9 +6,8 @@
  * drop event, but it stays readable afterwards, so the panel captures the
  * entries synchronously and walks them here once the copy starts. The walk
  * turns every dropped folder into a plan: the folders to create, parents
- * first, and the files to copy into each of them. The copy itself reuses the
- * single-file and single-folder workspace commands, so every write goes
- * through the same confinement checks as the panel's other mutations.
+ * first, and the files to copy into each of them. The backend stages and
+ * publishes each root using the workspace's confined file operations.
  */
 
 /** The parts of `FileSystemEntry` the walk reads. */
@@ -41,11 +40,15 @@ export const MAX_EXTERNAL_FOLDER_DROP_ENTRY_COUNT = 2000;
 /** Bytes a folder drop may hold in total. Each file keeps its own per-file limit too. */
 export const MAX_EXTERNAL_FOLDER_DROP_BYTES = 256 * 1024 * 1024;
 
-/**
- * Names never copied out of a dropped folder. The workspace refuses to write
- * Git metadata at all, and Finder's view settings are not project content.
- */
-const SKIPPED_ENTRY_NAMES = new Set([".git", ".DS_Store"]);
+function skipEntry(entry: Pick<DroppedEntry, "name" | "isFile">): boolean {
+  return entry.name.toLowerCase() === ".git" || (entry.isFile && entry.name === ".DS_Store");
+}
+
+export function skipLooseDropFile(file: File): boolean {
+  return skipEntry({ name: file.name, isFile: true });
+}
+
+export type FolderCopyFailure = { name: string; message: string };
 
 /** One file of a folder drop and where it goes, relative to the drop target. */
 export type PlannedFolderFile = {
@@ -62,6 +65,7 @@ export type ExternalFolderCopyPlan = {
   files: PlannedFolderFile[];
   /** Entries left out on purpose (Git metadata, `.DS_Store`), relative to the drop target. */
   skipped: string[];
+  failures: FolderCopyFailure[];
   totalBytes: number;
 };
 
@@ -93,13 +97,19 @@ function readEntryBatch(
 }
 
 /** Every entry of one directory; `readEntries` answers in batches until it answers none. */
-async function readAllEntries(directory: DroppedDirectoryEntry): Promise<DroppedEntry[]> {
+async function readAllEntries(
+  directory: DroppedDirectoryEntry,
+  countEntry: () => void,
+): Promise<DroppedEntry[]> {
   const reader = directory.createReader();
   const entries: DroppedEntry[] = [];
   for (;;) {
     const batch = await readEntryBatch(reader);
     if (batch.length === 0) break;
-    entries.push(...batch);
+    for (const entry of batch) {
+      countEntry();
+      entries.push(entry);
+    }
   }
   return entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
@@ -119,12 +129,23 @@ function childPath(parent: string, name: string): string {
  */
 export async function planExternalFolderCopy(
   folders: readonly DroppedDirectoryEntry[],
-  limits: { maxEntries?: number; maxBytes?: number } = {},
+  limits: {
+    maxEntries?: number;
+    maxBytes?: number;
+    initialEntries?: number;
+    initialBytes?: number;
+  } = {},
 ): Promise<ExternalFolderCopyPlan> {
   const maxEntries = limits.maxEntries ?? MAX_EXTERNAL_FOLDER_DROP_ENTRY_COUNT;
   const maxBytes = limits.maxBytes ?? MAX_EXTERNAL_FOLDER_DROP_BYTES;
-  const plan: ExternalFolderCopyPlan = { folders: [], files: [], skipped: [], totalBytes: 0 };
-  let entryCount = 0;
+  const plan: ExternalFolderCopyPlan = {
+    folders: [],
+    files: [],
+    skipped: [],
+    failures: [],
+    totalBytes: limits.initialBytes ?? 0,
+  };
+  let entryCount = limits.initialEntries ?? 0;
   const countEntry = () => {
     entryCount += 1;
     if (entryCount > maxEntries) {
@@ -134,35 +155,53 @@ export async function planExternalFolderCopy(
     }
   };
 
-  // Depth-first, so a folder is planned before anything inside it.
+  const recordFailure = (name: string, error: unknown) => {
+    if (error instanceof ExternalDropLimitError) throw error;
+    plan.failures.push({
+      name,
+      message: `Could not read ${name}: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  };
+
+  // Reserve each batch's entries before recursing so all live reader buffers
+  // share the same budget, including metadata and unreadable entries.
   const visit = async (directory: DroppedDirectoryEntry, path: string): Promise<void> => {
-    countEntry();
     plan.folders.push(path);
-    for (const entry of await readAllEntries(directory)) {
+    let entries: DroppedEntry[];
+    try {
+      entries = await readAllEntries(directory, countEntry);
+    } catch (error) {
+      recordFailure(path, error);
+      return;
+    }
+    for (const entry of entries) {
       const entryPath = childPath(path, entry.name);
-      if (SKIPPED_ENTRY_NAMES.has(entry.name)) {
+      if (skipEntry(entry)) {
         plan.skipped.push(entryPath);
-        continue;
-      }
-      if (isDroppedDirectoryEntry(entry)) {
+      } else if (isDroppedDirectoryEntry(entry)) {
         await visit(entry, entryPath);
-        continue;
+      } else {
+        try {
+          if (!isDroppedFileEntry(entry)) throw new Error("Unsupported directory entry");
+          const file = await readFile(entry);
+          if (file.name !== entry.name) throw new Error("The file name changed");
+          plan.totalBytes += file.size;
+          if (plan.totalBytes > maxBytes) {
+            throw new ExternalDropLimitError(
+              `Dropped folders exceed the ${Math.round(maxBytes / (1024 * 1024))} MB limit`,
+            );
+          }
+          plan.files.push({ directory: path, path: entryPath, file });
+        } catch (error) {
+          recordFailure(entryPath, error);
+        }
       }
-      if (!isDroppedFileEntry(entry)) continue;
-      countEntry();
-      const file = await readFile(entry);
-      plan.totalBytes += file.size;
-      if (plan.totalBytes > maxBytes) {
-        throw new ExternalDropLimitError(
-          `Dropped folders exceed the ${Math.round(maxBytes / (1024 * 1024))} MB limit`,
-        );
-      }
-      plan.files.push({ directory: path, path: entryPath, file });
     }
   };
 
   for (const folder of folders) {
-    if (SKIPPED_ENTRY_NAMES.has(folder.name)) {
+    countEntry();
+    if (skipEntry(folder)) {
       plan.skipped.push(folder.name);
       continue;
     }
@@ -185,4 +224,15 @@ export function dropParentPath(relative: string): string {
 
 export function dropBaseName(relative: string): string {
   return relative.slice(relative.lastIndexOf("/") + 1);
+}
+
+/** A duplicate file or folder would target the same workspace entry. */
+export function duplicateDropPaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const path of paths) {
+    if (seen.has(path)) duplicates.add(path);
+    seen.add(path);
+  }
+  return [...duplicates];
 }

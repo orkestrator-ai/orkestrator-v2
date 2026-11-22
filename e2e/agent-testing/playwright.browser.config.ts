@@ -30,6 +30,7 @@ export default defineConfig({
     "pull-request-pane.spec.ts",
     "backend-owned-state.spec.ts",
     "file-save-conflicts.spec.ts",
+    "external-folder-drop.spec.ts",
     "agent-accounts.spec.ts",
     "permission-rules.spec.ts",
     "design-canvas.spec.ts",

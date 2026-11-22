@@ -1774,11 +1774,12 @@ export function resolveWorkspaceLeafCreate(
   parentDirectory: string,
   entryName: string,
   kind: "file" | "folder",
+  options: { literalName?: boolean } = {},
 ): { directory: string; name: string; entryPath: string } {
   const label = `${kind}Name`;
   const maxBytes =
     kind === "file" ? MAX_WORKSPACE_FILE_NAME_BYTES : MAX_WORKSPACE_FOLDER_NAME_BYTES;
-  const name = entryName.trim();
+  const name = options.literalName ? entryName : entryName.trim();
   if (name.length === 0) {
     throw new Error(`Invalid ${label}: name is required`);
   }
@@ -1815,11 +1816,13 @@ export function resolveWorkspaceLeafCreate(
 export function resolveWorkspaceFolderCreate(
   parentDirectory: string,
   folderName: string,
+  options?: { literalName?: boolean },
 ): { directory: string; folderPath: string } {
   const { directory, entryPath } = resolveWorkspaceLeafCreate(
     parentDirectory,
     folderName,
     "folder",
+    options,
   );
   return { directory, folderPath: entryPath };
 }

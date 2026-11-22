@@ -865,9 +865,9 @@ they move many files that other work in flight touches.
   `scripts/efficiency/workloads-supervision.ts` loads
   `transcript-progress.ts` by repository path through `loadOptional`; the
   codemod rewrote both strings to `native-agent/transcript-progress.ts`.
-  A root that predates the move loads nothing there, as already happens for
-  the workload's `native-agent/provider.ts` and `review/` paths after the
-  wave 2 slices. `apps/backend/scripts/terminal-latency/producer.ts` prints
+  The efficiency harness falls back to `core/transcript-progress.ts` within
+  the measured root when it predates the move.
+  `apps/backend/scripts/terminal-latency/producer.ts` prints
   `apps/backend/src/core/terminal-history.ts` as fake build output; the
   codemod's rewrite of that string was reverted, because it is benchmark
   load text, not a reference, and changing it would change the producer's

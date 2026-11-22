@@ -51,7 +51,7 @@ export interface WorkloadDefinition {
 export interface WorkloadContext {
   /** Repository root the workload imports from. */
   root: string;
-  /** Import relative to `root`, including legacy protocol paths before the node/ move. */
+  /** Import relative to `root`, resolving known historical paths within that root. */
   load<T = Record<string, unknown>>(relativePath: string): Promise<T>;
   /** Import when present, `undefined` when this root predates the module. */
   loadOptional<T = Record<string, unknown>>(relativePath: string): Promise<T | undefined>;
@@ -112,6 +112,11 @@ export function createContext(root: string): WorkloadContext {
     // The cursor coverage workload also measures roots before the bridge move.
     if (relativePath === "apps/backend/src/core/http-bridge/transcript-v2.ts") {
       const legacy = path.join(resolved, "apps/backend/src/core/http-bridge-transcript-v2.ts");
+      if (existsSync(legacy)) return legacy;
+    }
+    // Both supervision workloads also measure roots before the terminals move.
+    if (relativePath === "apps/backend/src/core/native-agent/transcript-progress.ts") {
+      const legacy = path.join(resolved, "apps/backend/src/core/transcript-progress.ts");
       if (existsSync(legacy)) return legacy;
     }
     // Historical roots predate the protocol node/ boundary. Resolve both

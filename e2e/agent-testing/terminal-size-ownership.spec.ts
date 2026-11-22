@@ -7,7 +7,7 @@ import { terminalVisibleText } from "./terminal-visible-text";
 
 /**
  * One shell shown on a wide desktop and a narrow phone at once, against the
- * real backend (terminal size ownership, `terminal-size-ownership.ts`). Both
+ * real backend (terminal size ownership, `terminals/size-ownership.ts`). Both
  * keep receiving its output, and the PTY has the size of whichever client the
  * user last interacted with: opening the phone view does not shrink the
  * desktop's terminal, tapping and typing on the phone does, and typing on the

@@ -2,20 +2,20 @@
 
 ## Task analysis
 
-Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabilities build ([agent-capabilities-management.md](../../architecture/agent-capabilities-management.md)).
+Analysed 2026-11-19 against `main` at `fb2c01e83`; updated 2026-11-22 against `main` at `dd1391427`. Created by the Agent Capabilities build ([agent-capabilities-management.md](../../architecture/agent-capabilities-management.md)).
 
 ### Tasks
 
-1. **Live provider conformance for capability installs**: done for Claude Code 2.1.326, Codex 0.169.0, OpenCode 2.3.1, Grok Build 1.0.88 (`grok inspect --json`) and the Pi SDK 1.5.2 (2026-11-19); the Cursor SDK remains open (it discovers skills only inside an authenticated run). See [Assumptions and decisions](#assumptions-and-decisions).
-2. **Isolated provider homes for exclusive session selections**: done for Claude through session-private delivery (2026-11-19); Codex, Cursor, Grok, OpenCode and Pi remain open (their pinned bridges have no per-session plugin channel). See [Assumptions and decisions](#assumptions-and-decisions).
+1. **Live provider conformance for capability installs**: done for Claude Code 2.1.326, Codex 0.169.0, OpenCode 2.3.1, Grok Build 1.0.88 (`grok inspect --json`) and the Pi SDK 1.5.2 (2026-11-19), and for the Cursor SDK 1.4.1 in an authenticated `dev:test` run (2026-11-22). See [Assumptions and decisions](#assumptions-and-decisions).
+2. **Isolated provider homes for exclusive session selections**: done for Claude through session-private delivery (2026-11-19); open (depends on a Pi bridge change) for Pi, whose SDK takes a per-session `additionalSkillPaths` that the bridge does not yet expose; Codex, Cursor, Grok and OpenCode remain blocked (re-checked 2026-11-22: no per-session channel in their pins). See [Assumptions and decisions](#assumptions-and-decisions).
 3. **Merge for local changes**: done (2026-11-19; see [Assumptions and decisions](#assumptions-and-decisions)).
 4. **Package registries and signed team manifests**: done (2026-11-19; with lockfile format 2 for mixed revisions; see [Assumptions and decisions](#assumptions-and-decisions)).
 5. **Command-node handover of capability state**: done (2026-11-19; with leaf launch authority; see [Assumptions and decisions](#assumptions-and-decisions)).
-6. **Native plugin lifecycle beyond Claude**: Codex enablement done (2026-11-19), and Claude managed installs restored from immutable artifacts; Grok, OpenCode and Pi remain open by decision (structured unsupported reasons; see [Assumptions and decisions](#assumptions-and-decisions)).
+6. **Native plugin lifecycle beyond Claude**: Codex enablement done (2026-11-19), and Claude managed installs restored from immutable artifacts; Grok, OpenCode and Pi remain blocked by decision (structured unsupported reasons; re-checked 2026-11-22: their pins still have no safe channel; see [Assumptions and decisions](#assumptions-and-decisions)).
 7. **Container delivery through portable inputs**: done (2026-11-19; with project delivery into local worktrees and added-account verification; see [Assumptions and decisions](#assumptions-and-decisions)).
-8. **Runtime proof (`load-confirmed`, `observed-in-use`)**: done for Claude sessions and Grok's machine listing (2026-11-19); other providers open (no per-session report). See [Assumptions and decisions](#assumptions-and-decisions).
+8. **Runtime proof (`load-confirmed`, `observed-in-use`)**: done for Claude sessions and Grok's machine listing (2026-11-19); other providers blocked (re-checked 2026-11-22: no bridge reports which skill bytes a session loaded). See [Assumptions and decisions](#assumptions-and-decisions).
 9. **Running work keeps shared deliveries frozen**: done (2026-11-19). See [Assumptions and decisions](#assumptions-and-decisions).
-10. **Qualification on real separate machines**: open (depends on two enrolled machines; in-memory and loopback proofs exist).
+10. **Qualification on real separate machines**: delivery, offline catch-up and handover done between a Mac and omarchy-hp with isolated backends (2026-11-22, `scripts/qa-capabilities-two-machine.ts`); open: a leaf launch across machines and a third machine moving with the handover (agent work), and the run on your real fleet (in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md)). See [Assumptions and decisions](#assumptions-and-decisions).
 
 ### 1. Live provider conformance for capability installs
 
@@ -527,6 +527,43 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`. Created by the Agent Capabili
 
 - **Chosen.** The persisted `agentActivityState` of local environments, with the providers of their native sessions; terminal-only Claude work holds Claude; a working environment with no identifiable session holds every provider; containers are ignored. Each machine reports its busy providers in its own observation, and the reconciler re-checks every 15 seconds while anything is held.
 - **Why.** That state is authoritative and backend-owned (fed by every activity observer), so a hold never depends on a mounted renderer. Erring towards holding keeps running work unchanged.
+
+### Task 1: qualifying the Cursor SDK in an authenticated run
+
+- **Options.**
+  - **An isolated `dev:test` profile spec that installs through the capability commands, asks a short authenticated Cursor run, then removes (chosen; the task's recommendation).**
+    - Pros: the full path: capability commands, executor, the profile's Cursor bridge and the pinned SDK 1.4.1; the login is the profile's restricted copy of the host's, read-only.
+    - Cons: billed (two short turns); the model's reply is the only listing.
+  - **A bridge-level live test calling the SDK directly with an isolated HOME.**
+    - Pros: no profile to start.
+    - Cons: would need the production data directory's Cursor key outside the profile seeding; skips the executor and the backend.
+- **What the reply proves.** The skill's name carries a fresh random suffix (`ork-cq-<hex>`) and the prompt names only the prefix, with tools forbidden. A reply naming it can only come from the skill list the SDK gave the run; a turn that used any tool fails as inconclusive. After removal, a new session asked the same question must not name it.
+- **Finding, fixed in the same change.** An agent-test backend wrote capabilities into `<dataDir>/capability-test-home`, which no agent in the profile reads, so no profile run could see a delivered capability. `agentTestCapabilityHomes` (`native-ownership.ts`) now uses the profile's own isolated HOME, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `XDG_CONFIG_HOME` when the backend is marked isolated (`ORKESTRATOR_AGENT_TEST_ISOLATED=1`) and every one of them is inside the data directory; anything else (the two-node integration test, the harness backends) keeps `capability-test-home`. The host's homes are never chosen.
+- **Result (2026-11-22, macOS arm64, profile `cap-cursor-live`, `--agent-platforms cursor`).** Pass on the first attempt: the plan placed the skill at `cursor-user-skills` only (`installed-next-session`), the file was in the profile's `~/.cursor/skills` and not in `capability-test-home`, the run named it with no tool or approval, removal completed and deleted the directory, and the second session did not name it.
+- **Matrix.** No level changed: Cursor skill install, update and remove were already `supported` on unit evidence and now have live evidence; runtime inventory stays `unsupported` (the bridge reports none). Cursor commands stay `unqualified`: a command is invoked by a user, not listed to the model, and the bridge has no command catalogue, so a run cannot show one loaded.
+
+### Tasks 2, 6 and 8: per-session channels in the pins (re-checked 2026-11-22)
+
+- **Codex app-server 0.169.0.** `skills/extraRoots/set` takes one list per app-server connection, and the bridge runs one app-server for all sessions of an environment, so it would change every session at once, not one. `plugin/install` and `plugin/uninstall` now exist (the matrix reason that said there was no install method was corrected); they install into the shared `CODEX_HOME`, which is machine-wide delivery, not per session, and are not called or qualified yet. No per-thread skill set.
+- **Cursor SDK 1.4.1.** `local.dirs` adds workspace folders whose project skills load, but only with the `project` setting source, which on the host also loads the repository's rules and MCP servers and is off unless the environment trusts project resources. Not a session-private channel.
+- **Grok Build 1.0.88 (ACP SDK 2.7.0)** and **OpenCode 2.3.1** take no per-session skill or plugin set: Grok reads its homes, OpenCode loads plugins per configuration location, and the mirror strips user plugins.
+- **Pi SDK 1.5.2.** `additionalSkillPaths` on the session's resource loader is per session; the bridge already passes it for a coordinator's project skills. Carrying a staged session set through it is a Pi bridge change (request body, staging, a no-touch route reporting loaded skill paths for runtime proof), with its own conformance test. Not built in this run: the prompt allowed implementing only where a pinned bridge already has the channel, and Pi's bridge does not.
+- **Decision.** Keep tasks 2, 6 and 8 blocked for Codex, Cursor, Grok and OpenCode, and leave task 2 open for Pi pending that bridge change. Options: build the Pi path now (pros: real exclusion for Pi; cons: a bridge and backend change outside this run's scope, with its own review); or record and wait (chosen; pros: no unreviewed bridge surface; cons: Pi selections stay unsupported until then).
+
+### Task 10: two real machines without touching either install
+
+- **Options.**
+  - **Two isolated backends of the same commit, one per machine, linked through an SSH local forward the script owns (chosen).**
+    - Pros: separate OS processes, filesystems and clocks and a link that crosses the network, while neither machine's Orkestrator, data directory or provider homes is touched: the leaf runs from a `git archive` of HEAD in a new `/tmp` directory on the remote, with that directory as HOME, TMPDIR and Bun cache (the user's Bun binary is only executed), the `agent-test` runtime, no toolchain and no credentials, on a free loopback port outside 34121, 34122 and 45507. Taking the forward down is a real network outage for the link.
+    - Cons: the route the command node holds is a loopback origin on the Mac, so a handover that moves a machine's route, or a third enrolled machine, is not exercised; no agent runs, so no leaf launch.
+  - **Two `dev:test` profiles, one per machine, joined over the tailnet.**
+    - Pros: the full desktop stack on both sides.
+    - Cons: a profile's gateway listens on loopback; reaching it from another machine needs a non-loopback bind or the same forward, and the Linux profile needs a full desktop install and build there.
+  - **Enrol real nodes of the user's fleet.**
+    - Pros: real routes and the real handover.
+    - Cons: changes which node is in command on the user's installs; not allowed for this run. It is in the manual-test checklist.
+- **Result (2026-11-22, commit `3f36f102c`, macOS arm64 command node, omarchy-hp Linux x86_64 leaf, both 2.39.11-beta; clock skew 3 ms).** All nine checks passed on the fourth attempt; the first three were setup faults in the new script, each fixed: Bun's `spawnSync` takes no `"buffer"` encoding, the SSH session stalled sending the uncompressed 177 MB archive (now gzip, 50 MB), and a backend-only filtered install missed root dependencies such as `tar-stream` (now a full `--ignore-scripts` install, 7 s). Enrolment over the forward; a skill authored on the command node reached the leaf's capability home (read on the remote over SSH, independent of the link); with the forward down for 54 s and two newer revisions published, the leaf kept revision one and on reconnect received revision three only; each revision had its own artifact; `hand_over_command` moved the state to the leaf with epoch 2; the old command node then refused `author_capability_package` ("This machine follows a command node"), and the leaf refused the old controller's `get_capability_node_observation` ("follows a newer command node"). The remote directory, backend process and the forward were removed afterwards.
+- **Not covered.** A leaf launch resolved across machines (needs an agent session on the leaf: a fake-model Pi or Claude on the remote backend would do it without credentials), a third machine moving with the handover (needs a non-loopback route between test backends), and an unknown write outcome interrupted by the outage (the forward went down between passes, not mid-write).
 
 ## Related
 

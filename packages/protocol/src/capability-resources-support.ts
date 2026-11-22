@@ -471,7 +471,7 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
         discover: S,
         runtimeInventory: S,
       },
-      "Codex plugins are installed and enabled through Codex itself; the pinned app-server has no plugin install method.",
+      "Codex plugins are installed through Codex itself. The pinned app-server (0.169.0) has `plugin/install` and `plugin/uninstall`, but Orkestrator does not call them yet and has not qualified them.",
     ),
     "mcp-server": mcpSupport("codex"),
     command: kindSupport(
@@ -485,6 +485,10 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
     subagent: NO_SUBAGENTS("Codex"),
   },
   cursor: {
+    // Install and removal qualified live in an authenticated Cursor run
+    // (e2e/agent-testing/capability-cursor-live.spec.ts, SDK 1.4.1): the run
+    // lists an executor-delivered ~/.cursor/skills skill, and a session
+    // started after removal does not. The bridge still reports no inventory.
     skill: skillSupport(
       no("Cursor reads Claude, Codex and shared skill directories as well as its own."),
       NO_LIVE_SKILL_INVENTORY,

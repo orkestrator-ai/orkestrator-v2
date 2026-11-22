@@ -235,15 +235,28 @@ describe("the curated events", () => {
         error: formatLogError(Object.assign(new Error("x"), { exitCode: 1, signal: "SIGKILL" }), {
           stack: false,
         }),
+        exitCause: "killed",
+        ranForMs: 5_000,
+        oomKills: 0,
+        crashReport: false,
       },
-      kept: { "error.name": "Error", "error.exitCode": 1, "error.signal": "SIGKILL" },
+      kept: {
+        "error.name": "Error",
+        "error.exitCode": 1,
+        "error.signal": "SIGKILL",
+        exitCause: "killed",
+        ranForMs: 5_000,
+        oomKills: 0,
+        crashReport: false,
+      },
     },
     {
       area: "desktop",
       event: "backend.exited-recovering",
       level: "error",
-      fields: { error: EVENT_ERROR() },
-      kept: { "error.name": "Error" },
+      // An unlisted cause is dropped like any unclassified label.
+      fields: { error: EVENT_ERROR(), exitCause: "something-else", oomKills: null },
+      kept: { "error.name": "Error", oomKills: null, droppedFields: 1 },
     },
     {
       area: "desktop",

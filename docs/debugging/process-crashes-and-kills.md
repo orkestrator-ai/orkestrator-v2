@@ -9,7 +9,7 @@ Arch host running the AppImage build. Most steps apply to any Linux host.
 
 | Symptom | Process that died | Where it is recorded |
 | --- | --- | --- |
-| "Orkestrator AI backend stopped … signal SIGKILL" | Local backend (`resources/bin/bun … backend/main.js`) | App log: `[desktop] backend.exited error.message="Backend service exited (code …, signal …)"` |
+| "Orkestrator AI backend stopped … signal SIGKILL" | Local backend (`resources/bin/bun … backend/main.js`) | App log: `[desktop] backend.exited error.message="Backend service exited (code …, signal …)"`; the essential log keeps `exitCause` (`oom-killed`, `killed`, `crashed`, `terminated`, `exit-code`, `spawn-error`), `ranForMs`, `oomKills` and `crashReport`, which a self-improvement digest shows as evidence |
 | Window white, backend still reachable from another machine | Main window renderer (`orkestrator-v2 --type=renderer`) | App log: `[DesktopStartup] renderer-gone reason=…`, then `Render frame was disposed before WebFrameMain could be accessed` repeated |
 | App gone, core dump `SIGTRAP` at startup | A relaunched main process | `coredumpctl`; core memory contains `Invalid file descriptor to ICU data` |
 | Core dump `SIGBUS`, `--type=utility` network service, on quit | Chromium child outliving the main process | `coredumpctl`; journal shows `tmp-.mount_orkest….mount: Deactivated` the same second |
@@ -40,6 +40,11 @@ How to read the result:
   the process a signal. It did not crash. Electron's `killed` means "sent
   SIGTERM or otherwise killed externally". Go to section 3; only an audit
   trail can name the sender.
+- **`exitCause=oom-killed`** on a `backend.exited` line means the backend's
+  cgroup counted a kernel OOM kill while it ran, so the SIGKILL was almost
+  certainly the OOM killer; check what else was using memory.
+  **`exitCause=crashed` with `crashReport=true`** means Bun printed its crash
+  report: the full report is in the app log just above the exit.
 - **`crashed`, `oom`, or a core dump with SIGSEGV/SIGABRT** is a real crash.
   Use the `diagnose-crash` skill (`coredumpctl`, gdb).
 - **No OOM:** check `journalctl -k | grep -i oom` and the app scope's

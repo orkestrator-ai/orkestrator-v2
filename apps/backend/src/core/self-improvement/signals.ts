@@ -147,6 +147,12 @@ const QUALIFIER_FIELDS = [
   "outcome",
   "origin",
 ];
+/**
+ * Label fields worth counting by value, as `<field>.<value>` evidence. They
+ * say why without splitting the signature (a format change orphans ledger
+ * entries): a backend exit's `exitCause` and the signal that ended it.
+ */
+const EVIDENCE_COUNT_FIELDS = ["exitCause", "error.signal"];
 /** Numeric fields worth keeping as the worst value seen. */
 const EVIDENCE_MAX_FIELDS = [
   "lagMs",
@@ -443,6 +449,10 @@ function collectEssential(
     for (const field of EVIDENCE_MAX_FIELDS) {
       const value = entry.fields[field];
       if (typeof value === "number") builder.max(field, value);
+    }
+    for (const field of EVIDENCE_COUNT_FIELDS) {
+      const value = label(entry.fields[field]);
+      if (value) builder.add(`${field}.${value}`, weight);
     }
   }
 }

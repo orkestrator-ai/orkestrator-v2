@@ -5,6 +5,7 @@ import {
 } from "@orkestrator/protocol/push-events";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
 import { checkBackendRoute } from "./backend-hello.js";
+import { BackendExitWatch, type BackendExitDiagnosis } from "./backend-exit-diagnosis.js";
 import { fromCodedWire } from "@orkestrator/protocol/contract/errors";
 import { spawn, type ChildProcess } from "node:child_process";
 import { cp, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -49,6 +50,13 @@ import {
 
 const clientLog = createLogger("backend.client");
 const desktopLog = createLogger("desktop");
+/**
+ * How long an unexpected exit waits for the backend's stdio to close before it
+ * is reported: Bun writes its crash report to stderr as it dies, and `exit` can
+ * precede those lines. Bounded, because a grandchild holding the pipe open
+ * would otherwise delay the report forever.
+ */
+const UNEXPECTED_EXIT_DRAIN_MS = 1_000;
 
 /**
  * Relays one line of the backend's stdio into this process's log. A logger entry
@@ -1213,7 +1221,7 @@ export class BackendProcess {
     /** False when no window will need terminal output from this client's stream. */
     relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
-    onUnexpectedExit?: (error: Error) => void;
+    onUnexpectedExit?: (error: Error, exit: BackendExitDiagnosis) => void;
     onLogPolicyChanged?: BackendLogPolicyListener;
   }): Promise<BackendHttpClient> {
     if (this.client) return this.client;
@@ -1252,7 +1260,7 @@ export class BackendProcess {
     /** False when no window will need terminal output from this client's stream. */
     relayTerminalOutput?: boolean;
     onEvent: (event: string, payload: unknown) => void;
-    onUnexpectedExit?: (error: Error) => void;
+    onUnexpectedExit?: (error: Error, exit: BackendExitDiagnosis) => void;
     onLogPolicyChanged?: BackendLogPolicyListener;
   }): Promise<BackendHttpClient> {
     const bun = options.isDev ? "bun" : path.join(options.resourceRoot, "bin", "bun");
@@ -1344,8 +1352,10 @@ export class BackendProcess {
     // Line-oriented: production logging tees `console`, so a chunk boundary
     // must not become a log-entry boundary or split a single record. Bounded:
     // a backend line with no newline cannot grow this process's memory.
+    const exitWatch = new BackendExitWatch();
     if (child.stderr) {
       forEachBoundedLine(child.stderr, (line) => {
+        exitWatch.stderrLine(line);
         relayBackendLine("stderr", line, options.onLogPolicyChanged);
       });
     }
@@ -1360,16 +1370,32 @@ export class BackendProcess {
       this.child = null;
       this.info = null;
     };
-    const childFailure = (error: Error) => {
+    const childFailure = (
+      error: Error,
+      exit: { exitCode: number | null; signal: string | null; spawnError?: boolean },
+    ) => {
       rejectStartup?.(error);
       if (this.child !== child) return;
       clearState();
       if (startupComplete && !unexpectedExitReported) {
         unexpectedExitReported = true;
-        options.onUnexpectedExit?.(error);
+        const onUnexpectedExit = options.onUnexpectedExit;
+        if (!onUnexpectedExit) return;
+        let reported = false;
+        const report = () => {
+          if (reported) return;
+          reported = true;
+          clearTimeout(drain);
+          onUnexpectedExit(error, exitWatch.diagnose(exit));
+        };
+        const drain = setTimeout(report, UNEXPECTED_EXIT_DRAIN_MS);
+        if (child.stdout?.closed !== false && child.stderr?.closed !== false) report();
+        else child.once("close", report);
       }
     };
-    child.once("error", (error) => childFailure(error));
+    child.once("error", (error) =>
+      childFailure(error, { exitCode: null, signal: null, spawnError: true }),
+    );
     child.once("exit", (code, signal) =>
       childFailure(
         // As fields too: the essential log keeps these and never the message.
@@ -1379,6 +1405,7 @@ export class BackendProcess {
           ),
           { exitCode: code ?? undefined, signal: signal ?? undefined },
         ),
+        { exitCode: code, signal },
       ),
     );
 
@@ -1420,6 +1447,7 @@ export class BackendProcess {
         relayTerminalOutput: options.relayTerminalOutput,
       });
       this.client.listen(options.onEvent);
+      exitWatch.ready(child.pid);
       startupComplete = true;
       return this.client;
     } catch (error) {

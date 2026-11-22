@@ -6,6 +6,7 @@
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
     "./backend-diagnostics": "./src/backend-diagnostics.ts",
+    "./backend-exit": "./src/backend-exit.ts",
     "./capacity-retry": "./src/capacity-retry.ts",
     "./agent-accounts": "./src/agent-accounts.ts",
     "./agent-credentials": "./src/agent-credentials.ts",

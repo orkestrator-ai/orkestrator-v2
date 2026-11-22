@@ -41,6 +41,7 @@ import {
   removeAgentTestHostKeychainLink,
   seedAgentTestDockerConfig,
 } from "../electron/backend-process";
+import type { BackendExitDiagnosis } from "../electron/backend-exit-diagnosis";
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout";
 
@@ -2068,11 +2069,16 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
       child.kill("SIGTERM");
       await waitUntil(() => backendProcess.getInfo() === null, "the terminated backend's exit");
       expect(backendProcess.getInfo()).toBeNull();
+      // Reported once its stdio has drained, so a crash report on stderr counts.
+      await waitUntil(() => onUnexpectedExit.mock.calls.length > 0, "the unexpected-exit report");
       expect(onUnexpectedExit).toHaveBeenCalledTimes(1);
       // The essential log keeps these fields and drops the message that also says them.
-      const failure = (onUnexpectedExit.mock.calls as unknown as Array<[Error]>)[0]![0];
+      const [failure, exit] = (
+        onUnexpectedExit.mock.calls as unknown as Array<[Error, BackendExitDiagnosis]>
+      )[0]!;
       expect(formatLogError(failure, { message: false })).toMatchObject({ exitCode: 0 });
       expect(failure.message).toContain("code 0");
+      expect(exit).toMatchObject({ exitCause: "exit-code", crashReport: false });
     },
     SPAWN_TIMEOUT_MS,
   );
@@ -2184,7 +2190,7 @@ ${body}
     await chmod(fakeBun, 0o755);
     const backendProcess = new BackendProcess();
     processes.push(backendProcess);
-    const onUnexpectedExit = mock((_error: Error) => undefined);
+    const onUnexpectedExit = mock((_error: Error, _exit: BackendExitDiagnosis) => undefined);
     const started = backendProcess.start({
       isDev: false,
       appVersion: "9.9.9-boundary",
@@ -2337,6 +2343,56 @@ while :; do sleep 0.05; done`);
       } finally {
         clock.restore();
       }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  async function unexpectedExitOf(backend: Awaited<ReturnType<typeof fakeBackend>>) {
+    await waitUntil(
+      () => backend.onUnexpectedExit.mock.calls.length > 0,
+      "the unexpected-exit report",
+    );
+    expect(backend.onUnexpectedExit).toHaveBeenCalledTimes(1);
+    const [error, exit] = backend.onUnexpectedExit.mock.calls[0]!;
+    return { fields: formatLogError(error, { message: false }), exit };
+  }
+
+  test(
+    "classifies a backend that printed Bun's crash report as crashed",
+    async () => {
+      const backend = await fakeBackend(`
+printf '%s' '{"token":"${TOKEN}"}' > "$AUTH"
+${READY_LINE}
+while [ ! -f "$AUTH.crash" ]; do sleep 0.01; done
+printf 'panic(main thread): Segmentation fault at address 0x0\\n' >&2
+printf 'oh no: Bun has crashed. This indicates a bug in Bun, not your code.\\n' >&2
+exit 133`);
+      await backend.started;
+      await writeFile(`${backend.auth}.crash`, "crash");
+
+      const { fields, exit } = await unexpectedExitOf(backend);
+      expect(fields).toMatchObject({ exitCode: 133 });
+      expect(exit).toMatchObject({ exitCause: "crashed", crashReport: true });
+      expect(exit.ranForMs).toBeGreaterThanOrEqual(0);
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "classifies a SIGKILL with no OOM kill counted as killed",
+    async () => {
+      const backend = await fakeBackend(`
+printf '%s' '{"token":"${TOKEN}"}' > "$AUTH"
+${READY_LINE}
+while :; do sleep 0.05; done`);
+      await backend.started;
+      process.kill(await backend.pid(), "SIGKILL");
+
+      const { fields, exit } = await unexpectedExitOf(backend);
+      expect(fields).toMatchObject({ signal: "SIGKILL" });
+      expect(exit).toMatchObject({ exitCause: "killed", crashReport: false });
+      // Read from the backend's cgroup on Linux; unknown elsewhere or when unreadable.
+      expect(exit.oomKills === null || exit.oomKills === 0).toBe(true);
     },
     SPAWN_TIMEOUT_MS,
   );

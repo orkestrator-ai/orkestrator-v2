@@ -73,6 +73,52 @@ describe("essential log signals", () => {
     ).toBe(2);
   });
 
+  test("keeps one signature for backend exits and counts their causes and signals as evidence", () => {
+    const exited = (at: number, fields: Record<string, string | number | null>) => ({
+      at,
+      level: "error" as const,
+      area: "desktop",
+      event: "backend.exited",
+      fields: { "error.name": "Error", ...fields },
+    });
+    const { signals } = extractSignals(
+      load({
+        createdAt: NOW,
+        essential: [
+          exited(NOW - 2 * DAY, {}),
+          exited(NOW - DAY, {
+            "error.signal": "SIGKILL",
+            exitCause: "killed",
+            ranForMs: 5_000,
+            oomKills: 0,
+          }),
+          exited(NOW - HOUR, {
+            "error.exitCode": 133,
+            exitCause: "crashed",
+            ranForMs: 9_000,
+            oomKills: null,
+          }),
+        ],
+      }),
+    );
+    // A new field must not split the signature an open ticket's ledger entry tracks.
+    expect(
+      signals
+        .filter((candidate) => candidate.signature.startsWith("desktop:"))
+        .map((s) => s.signature),
+    ).toEqual(["desktop:backend.exited:Error"]);
+    const exits = signal(signals, "desktop:backend.exited:Error");
+    expect(exits.count).toBe(3);
+    expect(exits.category).toBe("crash");
+    expect(exits.evidence).toMatchObject({
+      "exitCause.killed": 1,
+      "exitCause.crashed": 1,
+      "error.signal.SIGKILL": 1,
+      "error.exitCode": 133,
+      ranForMs: 9_000,
+    });
+  });
+
   test("merges a throttled site's first line with its suppressed repeats and recoveries", () => {
     const { signals } = extractSignals(
       load({

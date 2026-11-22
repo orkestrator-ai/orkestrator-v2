@@ -415,4 +415,8 @@ fix, the run waits for the next release before judging it.
 - When you change a prompt or schema in `insights/analyze.ts`, also run one
   real call: real models can refuse a schema a fake accepts.
 - A signature format change orphans existing ledger entries. Avoid it, or
-  migrate `ledger.json` in the same change.
+  migrate `ledger.json` in the same change. To say more about a signal without
+  splitting it, count a label as evidence instead (`EVIDENCE_COUNT_FIELDS` in
+  `signals.ts`, which keeps a backend exit's `exitCause` and `error.signal` as
+  `exitCause.killed=1` and the like), and name the field something that is not
+  a qualifier (`kind`, `reason`, …).

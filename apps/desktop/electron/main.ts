@@ -1478,19 +1478,19 @@ async function startApplication(): Promise<void> {
         liveLogPolicy.onEvent(event, payload);
         if (connectionManager) connectionManager.handleLocalEvent(event, payload);
       },
-      onUnexpectedExit: (error) => {
+      onUnexpectedExit: (error, exit) => {
         connectionManager?.markLocalBackendUnavailable();
         emitToConnection("local", "local-backend-unavailable", { message: error.message });
         publishConnectionLists();
+        // Content-free, so the essential log can say why (backend-exit.ts).
+        const fields = { error: formatLogError(error, { stack: false }), ...exit };
         // Shortly after a remote-requested update, relaunch instead of a modal
         // nobody may answer, so the remote client gets its backend back.
         if (recoverRemoteBackendFailure(dataDir, relaunchingApp)) {
-          desktopLog.error("backend.exited-recovering", {
-            error: formatLogError(error, { stack: false }),
-          });
+          desktopLog.error("backend.exited-recovering", fields);
           return;
         }
-        desktopLog.error("backend.exited", { error: formatLogError(error, { stack: false }) });
+        desktopLog.error("backend.exited", fields);
         showNonBlockingError(
           `${productName} backend stopped`,
           `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,

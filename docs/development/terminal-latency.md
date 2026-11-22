@@ -213,13 +213,25 @@ agents and streamed answer length. Evidence (numbers only) is written as
 `ORKESTRATOR_AGENT_TEST_ECHO_CPU_PROFILE=1` adds a Chromium CPU profile of
 the measured page per cell (`page-<variant>-r<round>.cpuprofile`), and
 `ORKESTRATOR_AGENT_TEST_ECHO_TRACE=1` a performance trace
-(`trace-<variant>-r<round>.json`, about 60 MB per 200-key cell: the
-artifact bound holds four). Both slow the page, so their latencies are not
-comparable with an unprofiled run's. Each cell records the runner's monotonic
-clock (`monotonicStartUs`), so a `NODE_OPTIONS=--cpu-prof` profile of the
-Playwright worker can be cut per cell.
+(`trace-<variant>-r<round>.json`, about 60 MB per 200-key cell).
+Trace mode defaults to one idle round. Explicit variant and round selections
+can cover up to three cells, with at most 200 measured keys per cell. Each
+traced cell has a 64 MiB budget shared with its optional CPU profile. The
+remaining artifact space covers the report and other evidence. If a capture
+exceeds its per-cell budget, lower `ORKESTRATOR_AGENT_TEST_ECHO_KEYS`.
+
+Profiling and tracing slow the page. Compare their latencies with other runs
+using the same capture settings. Each cell records the runner's monotonic clock
+(`monotonicStartUs`) so a `NODE_OPTIONS=--cpu-prof` profile of the Playwright
+worker can be cut per cell. `keyPhaseMs` summarizes keydown offsets from the
+preceding animation frame. `keyRequestMs` measures terminal writes for the
+typing session. `keyRequestCounts` reports matched writes, missing writes,
+ambiguous writes and missing resource timings. The probe allows up to two
+seconds after measurement and profile export for pending timing entries.
+
 A cell requires all measured keystrokes, output from each requested producer,
-and fake-model streams covering the typing window. The reveal case checks all
+and fake-model streams covering the typing window through the final echo.
+`profileExportMs` reports export time separately. The reveal case checks all
 600 numbered lines in xterm's retained buffer and checks the visible screen
 on reveal, WebSocket reconnect, and reload.
 
@@ -353,8 +365,9 @@ no key timed out in any cell.
 1. *The keystroke's request waited for it.* The module route
    (`fetchModulesOutsideChromium` in `browser-test.ts`) matched every loopback
    URL, so Chromium held each command request until the worker's handler
-   answered `route.fallback()`. That wait (`queued`) grew from 4.4 to
-   9.0 ms over three rounds.
+   answered `route.fallback()`. Across three rounds, that wait
+   (`queued`) grew from 4.4 to 7.1 ms in idle and from 5.9 to 9.0 ms in
+   backend-only.
 2. *It moved the keys' frame phase.* The spec typed each key 30 ms after the
    previous echo, plus its own Playwright round trips, so every key landed at
    about the same point in the page's 16.7 ms frame. Chromium defers ordinary

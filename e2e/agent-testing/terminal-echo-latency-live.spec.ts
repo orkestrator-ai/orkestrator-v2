@@ -48,6 +48,16 @@ import {
 import { TERMINAL_WEBSOCKET_PATH } from "@orkestrator/protocol/terminal-websocket";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type { BrowserContext } from "@playwright/test";
+import { sanitizeAgentTestingArtifacts } from "./artifact-sanitizer";
+import { traceCellArtifacts, traceSelection } from "./terminal-echo-capture";
+import {
+  finishProbeMeasurement,
+  installProbe,
+  KEY_GAP_MS,
+  KEY_PHASE_SPREAD_MS,
+  streamCoveredTypingWindow,
+  waitBetweenKeys,
+} from "./terminal-echo-probe";
 import { expect, fetchModulesOutsideChromium, test, type Page } from "./browser-test";
 import {
   fakeModelClaudeSettings,
@@ -112,27 +122,29 @@ function parseVariants(option: string): Variant[] {
   return variants as Variant[];
 }
 
-const VARIANTS = LIVE
-  ? parseVariants(process.env.ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS ?? ALL_VARIANTS.join(","))
-  : ALL_VARIANTS;
-const ROUNDS = integerOption("ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS", 3, 1);
+const PAGE_TRACE = LIVE && process.env.ORKESTRATOR_AGENT_TEST_ECHO_TRACE === "1";
 const KEYS = integerOption("ORKESTRATOR_AGENT_TEST_ECHO_KEYS", 200, 20);
+const trace = PAGE_TRACE
+  ? traceSelection(
+      process.env.ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS,
+      process.env.ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS,
+      KEYS,
+      (rounds) =>
+        parseIntegerOption(
+          "ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS",
+          rounds,
+          1,
+          Number.MAX_SAFE_INTEGER,
+        ),
+    )
+  : null;
+const VARIANTS = LIVE
+  ? parseVariants(
+      trace?.variants ?? process.env.ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS ?? ALL_VARIANTS.join(","),
+    )
+  : ALL_VARIANTS;
+const ROUNDS = trace?.rounds ?? integerOption("ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS", 3, 1);
 const WARMUP_KEYS = 10;
-/** Pause between an echo and the next key, as the loopback benchmark uses. */
-const KEY_GAP_MS = 30;
-/**
- * Up to one 60 Hz frame added to each gap, so keys land at every phase of the
- * page's frame clock as a person's do. Chromium defers ordinary tasks after a
- * key until the next frame, so an echo paints one or two frames after its key
- * depending on that phase. With a fixed gap the phase was set by Playwright's
- * own round trips, which slow as a case records steps, and the median drifted
- * from one cluster to the other between rounds (to-do 8312 task 4).
- */
-const KEY_PHASE_SPREAD_MS = 1000 / 60;
-/** The `index`th gap's spread: a golden-ratio sequence, even over the frame. */
-function keyPhaseOffsetMs(index: number): number {
-  return ((index * 0.618_033_988_75) % 1) * KEY_PHASE_SPREAD_MS;
-}
 const ECHO_TIMEOUT_MS = 5_000;
 /** The load shape: the loopback benchmark's `busy` level. */
 const LOAD = {
@@ -158,12 +170,6 @@ const KEY_CYCLE = "abcdefghijklmnopqrstuvwxyz0123456789";
  * profiled run's latencies are not comparable with an unprofiled one's.
  */
 const PAGE_CPU_PROFILE = LIVE && process.env.ORKESTRATOR_AGENT_TEST_ECHO_CPU_PROFILE === "1";
-/**
- * Opt-in: record a Chromium performance trace of the measured page over each
- * cell's measured keys, as `trace-<variant>-r<round>.json` (timeline events
- * only, no screenshots).
- */
-const PAGE_TRACE = LIVE && process.env.ORKESTRATOR_AGENT_TEST_ECHO_TRACE === "1";
 const TRACE_CATEGORIES = [
   "devtools.timeline",
   "disabled-by-default-devtools.timeline",
@@ -179,7 +185,6 @@ const AGENT_TAB = "echo-agent";
 
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off", screenshot: "off", video: "off" });
-test.skip(!LIVE, "Set ORKESTRATOR_AGENT_TEST_LIVE_TERMINAL_ECHO=1 against a disposable profile");
 
 function runtime() {
   return resolveRuntimeProfile({ repositoryRoot, requestedId: profile, flavor: "agent-test" });
@@ -423,248 +428,92 @@ async function openEnvironment(page: Page, environment: Environment, withAgent: 
 // ---------------------------------------------------------------------------
 // The in-page probe
 
-/**
- * Installs the timing probe on the typing terminal. `arm(suffix)` waits for
- * the next keydown on the terminal and then for xterm's rows to end with
- * `suffix`; `result()` answers both timestamps. A long-task observer and a
- * frame-gap chain record the page's main-thread stalls over the run.
- */
-async function installProbe(page: Page) {
-  await page.evaluate((tabId) => {
-    type Armed = { suffix: string; keyAt: number | null; echoAt: number | null };
-    const host = document.querySelector(`[data-terminal-tab-id="${tabId}"]`);
-    const rows = host?.querySelector(".xterm-rows");
-    if (!host || !rows) throw new Error("typing terminal not found");
-    const previous = (window as unknown as { __echoProbe?: { stop(): void } }).__echoProbe;
-    previous?.stop();
-    let armed: Armed | null = null;
-    let resolve: (() => void) | null = null;
-    const text = () =>
-      Array.from(rows.children)
-        .map((row) => row.textContent ?? "")
-        .join("")
-        .replace(/\s+$/u, "");
-    const check = () => {
-      if (!armed || armed.echoAt !== null || armed.keyAt === null) return;
-      if (text().endsWith(armed.suffix)) {
-        armed.echoAt = performance.now();
-        resolve?.();
-      }
-    };
-    const onKey = (event: Event) => {
-      if (armed && armed.keyAt === null) armed.keyAt = event.timeStamp;
-    };
-    host.addEventListener("keydown", onKey, { capture: true });
-    const observer = new MutationObserver(check);
-    observer.observe(rows, { childList: true, subtree: true, characterData: true });
-    const longTasks: number[] = [];
-    let longTaskObserver: PerformanceObserver | null = null;
-    try {
-      longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) longTasks.push(entry.duration);
-      });
-      longTaskObserver.observe({ type: "longtask", buffered: false });
-    } catch {
-      longTaskObserver = null;
-    }
-    const frameGaps: number[] = [];
-    let lastFrame = performance.now();
-    let frameRunning = true;
-    const frame = (at: number) => {
-      frameGaps.push(at - lastFrame);
-      lastFrame = at;
-      if (frameRunning) requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
-    // Split each key's latency into the keystroke's own command request and
-    // the echo's way back: the page's own `fetch` call time (`sent`), then
-    // resource timing (URLs and timings only) for the rest.
-    const sentAt: number[] = [];
-    const originalFetch = window.fetch;
-    window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes("/__orkestrator/invoke")) sentAt.push(performance.now());
-      return originalFetch(input, init);
-    }, originalFetch);
-    performance.setResourceTimingBufferSize(100_000);
-    performance.clearResourceTimings();
-    const writes: Record<
-      "sent" | "start" | "queued" | "server" | "duration" | "echoAfterStart",
-      number[]
-    > = { sent: [], start: [], queued: [], server: [], duration: [], echoAfterStart: [] };
-    const recordWrite = () => {
-      if (!armed || armed.keyAt === null || armed.echoAt === null) return;
-      const keyAt = armed.keyAt;
-      const sent = sentAt.find((at) => at >= keyAt);
-      if (sent !== undefined) writes.sent.push(sent - keyAt);
-      sentAt.splice(0);
-      const entry = (performance.getEntriesByType("resource") as PerformanceResourceTiming[]).find(
-        (candidate) =>
-          candidate.name.includes("/__orkestrator/invoke") && candidate.startTime >= keyAt,
-      );
-      if (!entry) return;
-      writes.start.push(entry.startTime - keyAt);
-      writes.queued.push(entry.requestStart - entry.startTime);
-      writes.server.push(entry.responseStart - entry.requestStart);
-      writes.duration.push(entry.duration);
-      writes.echoAfterStart.push(armed.echoAt - entry.startTime);
-    };
-    (window as unknown as { __echoProbe: unknown }).__echoProbe = {
-      arm(suffix: string) {
-        armed = { suffix, keyAt: null, echoAt: null };
-      },
-      wait(timeoutMs: number) {
-        if (armed && armed.echoAt !== null) {
-          recordWrite();
-          return Promise.resolve({ keyAt: armed.keyAt, echoAt: armed.echoAt });
-        }
-        return new Promise<{ keyAt: number | null; echoAt: number | null }>((done) => {
-          const finish = () => {
-            clearTimeout(timer);
-            resolve = null;
-            recordWrite();
-            done({ keyAt: armed?.keyAt ?? null, echoAt: armed?.echoAt ?? null });
-          };
-          const timer = setTimeout(finish, timeoutMs);
-          resolve = finish;
-          check();
-        });
-      },
-      stats() {
-        const gaps = frameGaps.splice(0);
-        const tasks = longTasks.splice(0);
-        const requests = Object.fromEntries(
-          Object.entries(writes).map(([name, values]) => [name, values.splice(0)]),
-        );
-        performance.clearResourceTimings();
-        return {
-          requests,
-          longTasks: tasks.length,
-          longTaskMs: Math.round(tasks.reduce((sum, value) => sum + value, 0)),
-          longestTaskMs: Math.round(Math.max(0, ...tasks)),
-          frameGaps: gaps,
-        };
-      },
-      stop() {
-        window.fetch = originalFetch;
-        observer.disconnect();
-        longTaskObserver?.disconnect();
-        host.removeEventListener("keydown", onKey, { capture: true });
-        frameRunning = false;
-      },
-    };
-  }, TYPING_TAB);
-}
-
 /** Every key typed into each typing session so far, so a suffix stays unique across runs. */
 const typedCount = new Map<string, number>();
 
 async function typeAndTime(page: Page, sessionId: string, profileName?: string) {
-  await installProbe(page);
+  await installProbe(page, TYPING_TAB, sessionId);
+  const browser = PAGE_TRACE && profileName ? page.context().browser()! : null;
   const cdp = profileName && PAGE_CPU_PROFILE ? await page.context().newCDPSession(page) : null;
-  if (cdp) {
-    await cdp.send("Profiler.enable");
-    await cdp.send("Profiler.setSamplingInterval", { interval: 500 });
-  }
-  await page.locator(`[data-terminal-tab-id="${TYPING_TAB}"]`).click();
-  // Discard the probe's setup frames.
-  await page.evaluate(() =>
-    (window as unknown as { __echoProbe: { stats(): unknown } }).__echoProbe.stats(),
-  );
-  const latencies: number[] = [];
-  let timeouts = 0;
-  let stats: {
-    longTasks: number;
-    longTaskMs: number;
-    longestTaskMs: number;
-    frameGaps: number[];
-    requests: Record<string, number[]>;
-  } | null = null;
-  for (let index = 0; index < WARMUP_KEYS + KEYS; index += 1) {
-    if (index === WARMUP_KEYS) {
-      await page.evaluate(() =>
-        (window as unknown as { __echoProbe: { stats(): unknown } }).__echoProbe.stats(),
+  const writeCapture = browser ? traceCellArtifacts() : fs.writeFile;
+  let tracing = false;
+  try {
+    if (cdp) {
+      await cdp.send("Profiler.enable");
+      await cdp.send("Profiler.setSamplingInterval", { interval: 500 });
+    }
+    await page.locator(`[data-terminal-tab-id="${TYPING_TAB}"]`).click();
+    const latencies: number[] = [];
+    const phases: number[] = [];
+    let timeouts = 0;
+    for (let index = 0; index < WARMUP_KEYS + KEYS; index += 1) {
+      if (index === WARMUP_KEYS) {
+        if (cdp) await cdp.send("Profiler.start");
+        if (browser) {
+          await browser.startTracing(page, { categories: TRACE_CATEGORIES });
+          tracing = true;
+        }
+        await page.evaluate(() => window.__echoProbe!.reset());
+      }
+      const count = (typedCount.get(sessionId) ?? 0) + 1;
+      typedCount.set(sessionId, count);
+      let suffix = "";
+      for (let at = Math.max(0, count - 12); at < count; at += 1) {
+        suffix += KEY_CYCLE[at % KEY_CYCLE.length];
+      }
+      const key = KEY_CYCLE[(count - 1) % KEY_CYCLE.length]!;
+      await page.evaluate(({ suffix, key }) => window.__echoProbe!.arm(suffix, key), {
+        suffix,
+        key,
+      });
+      await page.keyboard.press(key);
+      const { keyAt, echoAt, keyPhaseMs } = await page.evaluate(
+        (timeoutMs) => window.__echoProbe!.wait(timeoutMs),
+        ECHO_TIMEOUT_MS,
       );
-      if (cdp) await cdp.send("Profiler.start");
-      if (PAGE_TRACE && profileName) {
-        await page
-          .context()
-          .browser()!
-          .startTracing(page, {
-            path: test.info().outputPath(`trace-${profileName}.json`),
-            categories: TRACE_CATEGORIES,
-          });
+      if (index >= WARMUP_KEYS) {
+        if (keyAt !== null && echoAt !== null) latencies.push(echoAt - keyAt);
+        else timeouts += 1;
+        if (keyPhaseMs !== null) phases.push(keyPhaseMs);
       }
+      if (index + 1 < WARMUP_KEYS + KEYS) await waitBetweenKeys(page, index);
     }
-    const count = (typedCount.get(sessionId) ?? 0) + 1;
-    typedCount.set(sessionId, count);
-    let suffix = "";
-    for (let at = Math.max(0, count - 12); at < count; at += 1) {
-      suffix += KEY_CYCLE[at % KEY_CYCLE.length];
-    }
-    await page.evaluate(
-      (wanted) =>
-        (window as unknown as { __echoProbe: { arm(suffix: string): void } }).__echoProbe.arm(
-          wanted,
-        ),
-      suffix,
-    );
-    await page.keyboard.press(KEY_CYCLE[(count - 1) % KEY_CYCLE.length]!);
-    const result = await page.evaluate(
-      (timeoutMs) =>
-        (
-          window as unknown as {
-            __echoProbe: {
-              wait(ms: number): Promise<{ keyAt: number | null; echoAt: number | null }>;
-            };
-          }
-        ).__echoProbe.wait(timeoutMs),
-      ECHO_TIMEOUT_MS,
-    );
-    if (index >= WARMUP_KEYS) {
-      if (result.keyAt !== null && result.echoAt !== null)
-        latencies.push(result.echoAt - result.keyAt);
-      else timeouts += 1;
-    }
-    await page.waitForTimeout(KEY_GAP_MS + keyPhaseOffsetMs(index));
-  }
-  if (PAGE_TRACE && profileName) await page.context().browser()!.stopTracing();
-  if (cdp && profileName) {
-    const { profile } = await cdp.send("Profiler.stop");
-    const file = test.info().outputPath(`page-${profileName}.cpuprofile`);
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, JSON.stringify(profile));
-    await cdp.detach();
-  }
-  stats = await page.evaluate(() =>
-    (
-      window as unknown as {
-        __echoProbe: {
-          stats(): {
-            longTasks: number;
-            longTaskMs: number;
-            longestTaskMs: number;
-            frameGaps: number[];
-            requests: Record<string, number[]>;
-          };
-          stop(): void;
-        };
+    const exportCapture = async () => {
+      const traceContents = browser ? await browser.stopTracing() : undefined;
+      tracing = false;
+      const cpuContents = cdp ? (await cdp.send("Profiler.stop")).profile : undefined;
+      const directory = test.info().outputDir;
+      await fs.mkdir(directory, { recursive: true });
+      if (traceContents) {
+        await writeCapture(path.join(directory, `trace-${profileName}.json`), traceContents);
       }
-    ).__echoProbe.stats(),
-  );
-  await page.evaluate(() =>
-    (window as unknown as { __echoProbe: { stop(): void } }).__echoProbe.stop(),
-  );
-  const { frameGaps, requests, ...tasks } = stats;
-  return {
-    keyToEchoMs: { ...summarise(latencies), timeouts },
-    frameGapMs: summarise(frameGaps),
-    /** Each key's first command request after its keydown, from resource timing. */
-    keyRequestMs: Object.fromEntries(
-      Object.entries(requests).map(([name, values]) => [name, summarise(values)]),
-    ),
-    ...tasks,
-  };
+      if (cpuContents) {
+        await writeCapture(
+          path.join(directory, `page-${profileName}.cpuprofile`),
+          JSON.stringify(cpuContents),
+        );
+      }
+    };
+    const {
+      frameGaps,
+      requests: { samples, counts },
+      ...windowStats
+    } = await finishProbeMeasurement(page, browser || cdp ? exportCapture : undefined);
+    return {
+      ...windowStats,
+      keyToEchoMs: { ...summarise(latencies), timeouts },
+      keyPhaseMs: summarise(phases),
+      frameGapMs: summarise(frameGaps),
+      keyRequestMs: Object.fromEntries(
+        Object.entries(samples).map(([name, values]) => [name, summarise(values)]),
+      ),
+      keyRequestCounts: counts,
+    };
+  } finally {
+    if (tracing) await browser?.stopTracing().catch(() => undefined);
+    await cdp?.detach().catch(() => undefined);
+    await page.evaluate(() => window.__echoProbe?.stop()).catch(() => undefined);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -802,6 +651,7 @@ async function configureFakeModel(status: Status, invoke: Invoke, model: FakeAnt
 }
 
 test("key-to-echo latency per load variant", async ({ browser }) => {
+  test.skip(!LIVE, "Requires a disposable terminal echo profile");
   test.setTimeout(90 * 60_000);
   const status = readyStatus();
   const gatewayUrl = status.browserUrl;
@@ -815,6 +665,8 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
     keyPhaseSpreadMs: KEY_PHASE_SPREAD_MS,
     load: LOAD,
     streamDeltas: STREAM_DELTAS,
+    trace: PAGE_TRACE,
+    cpuProfile: PAGE_CPU_PROFILE,
     commit: spawnSync("git", ["rev-parse", "--short=9", "HEAD"], {
       cwd: repositoryRoot,
       encoding: "utf8",
@@ -1021,12 +873,11 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
         const slicesBefore = hiddenTabs ? await idleSlices(measured) : null;
         const startedAt = Date.now();
         const monotonicAtStart = process.hrtime.bigint();
-        const result = await typeAndTime(
+        const { endedAt, ...result } = await typeAndTime(
           measured,
           typing.get(environment.id)!,
           PAGE_CPU_PROFILE || PAGE_TRACE ? `${variant}-r${round + 1}` : undefined,
         );
-        const endedAt = Date.now();
         const hiddenIdleSlices =
           slicesBefore === null ? null : (await idleSlices(measured)) - slicesBefore;
         if (hiddenIdleSlices !== null && loadSessions.length > 0) {
@@ -1043,13 +894,7 @@ test("key-to-echo latency per load variant", async ({ browser }) => {
         const agentsStreamedThroughout = words.every((word) =>
           fakeModel
             .callsWith(word)
-            .some(
-              (call) =>
-                call.answeredAt !== undefined &&
-                call.answeredAt <= startedAt &&
-                !call.aborted &&
-                (!call.streamedAt || call.streamedAt >= endedAt),
-            ),
+            .some((call) => streamCoveredTypingWindow(call, startedAt, endedAt)),
         );
         assertCellLoad(loadBefore, loadAfter, agentsStreamedThroughout, result.keyToEchoMs);
         const cell = {
@@ -1176,6 +1021,7 @@ async function inspectTerminal(page: Page, environmentId: string, tabId: string)
 }
 
 test("a hidden tab shows every line once revealed", async ({ browser }) => {
+  test.skip(!LIVE, "Requires a disposable terminal echo profile");
   test.setTimeout(10 * 60_000);
   const status = readyStatus();
   const gatewayUrl = status.browserUrl!;
@@ -1286,21 +1132,13 @@ test("echo probe resolves an echo observed before the wait", async ({ page }) =>
   await page.setContent(
     `<div data-terminal-tab-id="${TYPING_TAB}"><div class="xterm-rows"><div></div></div></div>`,
   );
-  await installProbe(page);
+  await installProbe(page, TYPING_TAB, "fixture");
   const result = await page.evaluate(async (tabId) => {
     const host = document.querySelector(`[data-terminal-tab-id="${tabId}"]`)!;
-    const probe = (
-      window as unknown as {
-        __echoProbe: {
-          arm(suffix: string): void;
-          wait(ms: number): Promise<{ keyAt: number | null; echoAt: number | null }>;
-          stop(): void;
-        };
-      }
-    ).__echoProbe;
+    const probe = window.__echoProbe!;
     try {
-      probe.arm("echo");
-      host.dispatchEvent(new KeyboardEvent("keydown"));
+      probe.arm("echo", "e");
+      host.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
       host.querySelector(".xterm-rows div")!.textContent = "echo";
       await new Promise((resolve) => requestAnimationFrame(resolve));
       return await Promise.race([
@@ -1312,20 +1150,204 @@ test("echo probe resolves an echo observed before the wait", async ({ page }) =>
       probe.stop();
     }
   }, TYPING_TAB);
-  expect(result).toEqual({ keyAt: expect.any(Number), echoAt: expect.any(Number) });
+  expect(result).toMatchObject({ keyAt: expect.any(Number), echoAt: expect.any(Number) });
 });
 
-test("key gaps spread over every phase of a frame", () => {
-  const offsets = Array.from({ length: 200 }, (_, index) => keyPhaseOffsetMs(index));
-  expect(Math.min(...offsets)).toBeGreaterThanOrEqual(0);
-  expect(Math.max(...offsets)).toBeLessThan(KEY_PHASE_SPREAD_MS);
-  // Every quarter of the frame gets a quarter of the keys, within a few.
-  for (let quarter = 0; quarter < 4; quarter += 1) {
-    const inQuarter = offsets.filter(
-      (offset) => Math.floor((offset / KEY_PHASE_SPREAD_MS) * 4) === quarter,
-    ).length;
-    expect(Math.abs(inQuarter - 50)).toBeLessThanOrEqual(3);
+test("echo probe attributes resource timing to the typing write after the echo", async ({
+  page,
+}) => {
+  const origin = "http://echo-probe.test";
+  const writeReceived = Promise.withResolvers<void>();
+  const releaseWrite = Promise.withResolvers<void>();
+  await page.route(`${origin}/**`, async (route) => {
+    if (route.request().isNavigationRequest()) {
+      await route.fulfill({
+        contentType: "text/html",
+        body: `<div data-terminal-tab-id="${TYPING_TAB}" tabindex="0"><div class="xterm-rows"><div></div></div></div>`,
+      });
+      return;
+    }
+    if (new URL(route.request().url()).searchParams.has("echoProbe")) {
+      writeReceived.resolve();
+      await releaseWrite.promise;
+    }
+    await route.fulfill({ json: { result: true } });
+  });
+
+  await page.goto(origin);
+  await installProbe(page, TYPING_TAB, "typing-session");
+  await page.locator("[tabindex]").focus();
+  await page.evaluate(() => {
+    const host = document.querySelector("[tabindex]")!;
+    host.addEventListener(
+      "keydown",
+      async () => {
+        const invoke = (command: string, sessionId: string) =>
+          fetch("/__orkestrator/invoke", {
+            method: "POST",
+            body: JSON.stringify({ command, args: { sessionId, data: "x" } }),
+          });
+        await invoke("get_terminal_output_snapshot", "typing-session");
+        await invoke("local_terminal_write", "other-session");
+        void invoke("local_terminal_write", "typing-session");
+        host.querySelector(".xterm-rows div")!.textContent = "x";
+      },
+      { once: true },
+    );
+    window.__echoProbe!.arm("x", "x");
+  });
+  try {
+    await page.keyboard.press("x");
+    const echo = await page.evaluate(() => window.__echoProbe!.wait(5_000));
+    expect(echo.echoAt).not.toBeNull();
+    await writeReceived.promise;
+    const beforeResponse = await page.evaluate(() => window.__echoProbe!.requests(0));
+    expect(beforeResponse.counts).toEqual({
+      matched: 0,
+      missingWrite: 0,
+      ambiguousWrite: 0,
+      missingTiming: 1,
+    });
+    const [{ counts, samples, expected }] = await Promise.all([
+      page.evaluate(async (echo) => {
+        const pending = window.__echoProbe!.requests(5_000);
+        document.documentElement.dataset.draining = "true";
+        const { counts, samples } = await pending;
+        const timing = performance.getEntriesByName(
+          `${location.origin}/__orkestrator/invoke?echoProbe=1`,
+          "resource",
+        )[0] as PerformanceResourceTiming;
+        return {
+          counts,
+          samples,
+          expected: {
+            start: timing.startTime - echo.keyAt!,
+            server: timing.responseStart - timing.requestStart,
+            duration: timing.duration,
+          },
+        };
+      }, echo),
+      (async () => {
+        await expect(page.locator("html")).toHaveAttribute("data-draining", "true");
+        releaseWrite.resolve();
+      })(),
+    ]);
+    expect(counts).toEqual({ matched: 1, missingWrite: 0, ambiguousWrite: 0, missingTiming: 0 });
+    expect(samples.sent).toEqual(beforeResponse.samples.sent);
+    expect(samples.sent).toHaveLength(1);
+    expect(samples.sent![0]).toBeLessThanOrEqual(expected.start + 0.1);
+    expect(samples).toMatchObject({
+      start: [expected.start],
+      server: [expected.server],
+      duration: [expected.duration],
+    });
+
+    const unmatched = await page.evaluate(async () => {
+      const host = document.querySelector("[tabindex]")!;
+      const probe = window.__echoProbe!;
+      probe.reset();
+      probe.arm("y", "y");
+      host.dispatchEvent(new KeyboardEvent("keydown", { key: "y" }));
+      probe.arm("z", "z");
+      host.dispatchEvent(new KeyboardEvent("keydown", { key: "z" }));
+      await Promise.all(
+        Array.from({ length: 2 }, () =>
+          fetch("/__orkestrator/invoke", {
+            method: "POST",
+            body: JSON.stringify({
+              command: "local_terminal_write",
+              args: { sessionId: "typing-session", data: "z" },
+            }),
+          }),
+        ),
+      );
+      return probe.requests(0);
+    });
+    expect(unmatched.counts).toEqual({
+      matched: 0,
+      missingWrite: 1,
+      ambiguousWrite: 1,
+      missingTiming: 0,
+    });
+    expect(unmatched.samples.sent).toEqual([]);
+  } finally {
+    releaseWrite.resolve();
+    await page.evaluate(() => window.__echoProbe!.stop());
   }
+});
+
+test("real Chromium keydowns reach different animation-frame phases", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "Measures Chromium's frame clock");
+  await page.setContent(
+    `<div data-terminal-tab-id="${TYPING_TAB}" tabindex="0"><div class="xterm-rows"><div></div></div></div>`,
+  );
+  await installProbe(page, TYPING_TAB, "fixture");
+  await page.locator("[tabindex]").focus();
+  await page.evaluate(async () => {
+    const host = document.querySelector("[tabindex]")!;
+    const row = host.querySelector(".xterm-rows div")!;
+    host.addEventListener("keydown", (event) => {
+      row.textContent += (event as KeyboardEvent).key;
+    });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+  const quarters = new Set<number>();
+  for (let index = 0; index < 48; index += 1) {
+    await page.evaluate((suffix) => window.__echoProbe!.arm(suffix, "x"), "x".repeat(index + 1));
+    await page.keyboard.press("x");
+    const { echoAt, keyPhaseMs } = await page.evaluate(() => window.__echoProbe!.wait(5_000));
+    expect(echoAt).not.toBeNull();
+    if (keyPhaseMs !== null && keyPhaseMs < KEY_PHASE_SPREAD_MS) {
+      quarters.add(Math.floor((keyPhaseMs * 4) / KEY_PHASE_SPREAD_MS));
+    }
+    await waitBetweenKeys(page, index);
+  }
+  await page.evaluate(() => window.__echoProbe!.stop());
+  expect(quarters.size).toBeGreaterThanOrEqual(3);
+});
+
+test("stream coverage ends at the final echo even while profile export is pending", async ({
+  page,
+}) => {
+  await page.setContent(
+    `<div data-terminal-tab-id="${TYPING_TAB}"><div class="xterm-rows"><div></div></div></div>`,
+  );
+  await installProbe(page, TYPING_TAB, "fixture");
+  const startedAt = Date.now();
+  const finalEcho = await page.evaluate(async () => {
+    const host = document.querySelector("[data-terminal-tab-id]")!;
+    const probe = window.__echoProbe!;
+    probe.arm("x", "x");
+    host.dispatchEvent(new KeyboardEvent("keydown", { key: "x" }));
+    host.querySelector(".xterm-rows div")!.textContent = "x";
+    const { echoAt } = await probe.wait(5_000);
+    return performance.timeOrigin + echoAt!;
+  });
+  let streamedAt = 0;
+  const { endedAt, profileExportMs } = await finishProbeMeasurement(page, async () => {
+    // Finish the stream during export, after the final echo.
+    streamedAt = await page.evaluate(async (echoAt) => {
+      while (Date.now() <= echoAt) await new Promise((done) => setTimeout(done, 1));
+      return Date.now();
+    }, finalEcho);
+    await page.waitForTimeout(25);
+  });
+  expect(endedAt).toBe(finalEcho);
+  expect(profileExportMs).toBeGreaterThan(0);
+  expect(streamCoveredTypingWindow({ answeredAt: startedAt, streamedAt }, startedAt, endedAt)).toBe(
+    true,
+  );
+  expect(
+    streamCoveredTypingWindow(
+      { answeredAt: startedAt, streamedAt: endedAt - 1 },
+      startedAt,
+      endedAt,
+    ),
+  ).toBe(false);
+  await page.evaluate(() => window.__echoProbe!.stop());
 });
 
 test("harness rejects invalid setup and incomplete measurements", async () => {
@@ -1430,3 +1452,32 @@ async function sendPrompt(page: Page, prompt: string) {
   await box.press("Enter");
   await expect(box).toHaveText("", { timeout: 30_000 });
 }
+
+test("trace preflight bounds the matrix and default capture survives sanitization", async ({
+  page,
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== "chromium", "Chromium performance tracing");
+  const rounds = (value: string | number) => parseIntegerOption("ROUNDS", value, 1, 10);
+  const selection = traceSelection(undefined, undefined, 200, rounds);
+  expect(selection).toEqual({ variants: "idle", rounds: 1 });
+  expect(() => traceSelection(ALL_VARIANTS.join(","), 3, 200, rounds)).toThrow("at most 3 cells");
+  expect(() => traceSelection(undefined, undefined, 201, rounds)).toThrow("200 keys per cell");
+
+  const filename = `trace-${selection.variants}-r${selection.rounds}.json`;
+  const file = testInfo.outputPath("trace-budget", filename);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await browser.startTracing(page, { categories: TRACE_CATEGORIES });
+  const traceContents = await browser.stopTracing();
+  const write = traceCellArtifacts();
+  await write(file, traceContents);
+  await expect(
+    write(
+      testInfo.outputPath("trace-budget", "oversize.cpuprofile"),
+      Buffer.alloc(64 * 1024 * 1024),
+    ),
+  ).rejects.toThrow("per-cell byte budget");
+  await sanitizeAgentTestingArtifacts(path.dirname(file), []);
+  expect((await fs.stat(file)).size).toBe(traceContents.byteLength);
+});

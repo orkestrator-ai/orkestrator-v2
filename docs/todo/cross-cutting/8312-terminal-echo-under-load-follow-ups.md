@@ -171,9 +171,9 @@ four driver pages.
 
 The slower worker reached the echo two ways. Chromium held every command
 request, keystrokes included, until the module route's handler answered:
-4.4 ms in round 1, 9.0 ms by round 3. It also shifted the keys' phase in the
-frame, because the spec typed at a fixed cadence that included its own
-round trips. Chromium defers ordinary tasks after a discrete input until the
+4.4 to 7.1 ms in idle and 5.9 to 9.0 ms in backend-only from rounds 1 to 3.
+The worker also shifted the keys' frame phase because the spec typed at a
+fixed cadence that included its own round trips. Chromium defers ordinary tasks after a discrete input until the
 next frame. So the browser client's 8 ms typing timer fired at 8 ms when a
 frame fell inside those 8 ms and at about 15 ms otherwise, and the echo
 painted one or two frames after its key. Traces showed the phase move: 155
@@ -270,14 +270,13 @@ behave differently. Nobody has measured those.
 
 ### Task 4: what the spec now records
 
-Each cell has the mean key-to-echo latency, the keystroke request's
-resource-timing split (`keyRequestMs`: `sent`, `start`, `queued`, `server`,
-`duration`, `echoAfterStart`), its `startedAt` and the runner's
-`monotonicStartUs`. All of these are numbers, never content. The opt-in
-`ORKESTRATOR_AGENT_TEST_ECHO_CPU_PROFILE` and `ORKESTRATOR_AGENT_TEST_ECHO_TRACE`
-switches write a page CPU profile or performance trace per cell (function
-names, source locations and timeline events only). Four 200-key traces fill
-the agent-test artifact bound, so trace short runs.
+Each cell records key-to-echo latency, keydown phase relative to the preceding
+animation frame, its `startedAt` and the runner's `monotonicStartUs`. Matched
+typing writes contribute to `keyRequestMs` (`sent`, `start`, `queued`, `server`,
+`duration`, `echoAfterStart`). `keyRequestCounts` exposes missing or ambiguous
+correlations and missing resource timings. Profiling records export time
+separately from the typing window, which ends at the final echo. See the
+[trace selection and capture limits](../../development/terminal-latency.md#in-a-real-browser).
 
 ### Task 1: not built
 

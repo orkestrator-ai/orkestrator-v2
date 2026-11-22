@@ -154,6 +154,8 @@ test("missing after preload failure", () => { throw new Error("head only"); });
                 env: {
                   ...process.env,
                   CLAUDECODE: "",
+                  // Validation inside GitHub Actions records Bun's annotated output.
+                  GITHUB_ACTIONS: "true",
                   ORKESTRATOR_PORT_BASE: String(normalPort),
                   COMPOSE_PROJECT_NAME: "validated-fixture",
                 },
@@ -181,6 +183,9 @@ test("missing after preload failure", () => { throw new Error("head only"); });
         await recorded("packages/preloaded", "./src/preload.test.ts"),
       );
       const seenEnv: NodeJS.ProcessEnv[] = [];
+      // The rerun inherits the backend's environment, as it does under CI.
+      const ambientActions = process.env.GITHUB_ACTIONS;
+      process.env.GITHUB_ACTIONS = "true";
       const result = await triageValidationFailures({
         environment,
         context: {
@@ -217,6 +222,9 @@ test("missing after preload failure", () => { throw new Error("head only"); });
             stderrPath: ".orkestrator/preload-stderr.txt",
           },
         ],
+      }).finally(() => {
+        if (ambientActions === undefined) delete process.env.GITHUB_ACTIONS;
+        else process.env.GITHUB_ACTIONS = ambientActions;
       });
       expect(result.limitation).toBeUndefined();
       const failures = new Map(

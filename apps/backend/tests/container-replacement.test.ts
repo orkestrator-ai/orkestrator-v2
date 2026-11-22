@@ -1224,6 +1224,80 @@ exit 125
     });
   }
 
+  // Engine 28.0.4 (GitHub's runners) stopping gracefully under the helper:
+  // `docker run` exits with the helper's SIGTERM status and says nothing, and
+  // the socket-activated restart answers every later request.
+  describe("a volume helper stopped by a signal without reporting", () => {
+    async function stoppedHelper(events: string) {
+      const { context, owner } = await fixture();
+      const source = planStorageSet("env-lifecycle", owner, 1, "source");
+      const candidate = planStorageSet("env-lifecycle", owner, 2, "candidate");
+      const step = replacementCopyPlan("volume-v1")[0]!;
+      let result: Awaited<ReturnType<typeof runCopyStep>> | undefined;
+      let calls = "";
+      await withDockerScript(
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+if [ "$1" = events ]; then ${events}; fi
+exit 143
+`,
+        async (log) => {
+          result = await runCopyStep(
+            context,
+            "sha256:fixture",
+            step,
+            { containerId: "source-container", storage: source },
+            candidate,
+          );
+          calls = await log.read();
+        },
+      );
+      return { result: result!, calls };
+    }
+
+    test("is an outage when the daemon answering now never saw it exit", async () => {
+      const { result, calls } = await stoppedHelper("exit 0");
+      expect(result).toEqual({ ok: false, reason: "daemon-unavailable" });
+      const helper = /--name (orkestrator-copy-\S+)/.exec(calls)?.[1];
+      expect(helper).toBeDefined();
+      expect(calls).toContain(`--filter container=${helper} --filter event=die`);
+    });
+
+    test("is not an outage when the same daemon recorded its exit", async () => {
+      const { result } = await stoppedHelper("echo die; exit 0");
+      expect(result).toEqual({ ok: false, reason: "helper-failed" });
+    });
+
+    test("is not an outage when the daemon's history cannot be read", async () => {
+      const { result } = await stoppedHelper("echo 'permission denied' >&2; exit 1");
+      expect(result).toEqual({ ok: false, reason: "helper-failed" });
+    });
+  });
+
+  test("a volume helper that failed on its own is not looked up as an outage", async () => {
+    const { context, owner } = await fixture();
+    const source = planStorageSet("env-lifecycle", owner, 1, "source");
+    const candidate = planStorageSet("env-lifecycle", owner, 2, "candidate");
+    const step = replacementCopyPlan("volume-v1")[0]!;
+    await withDockerScript(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 1
+`,
+      async (log) => {
+        const result = await runCopyStep(
+          context,
+          "sha256:fixture",
+          step,
+          { containerId: "source-container", storage: source },
+          candidate,
+        );
+        expect(result).toEqual({ ok: false, reason: "helper-failed" });
+        expect(await log.read()).not.toContain("events");
+      },
+    );
+  });
+
   test("a helper whose daemon answered with connection wording is not an outage", async () => {
     const { context, owner } = await fixture();
     const source = planStorageSet("env-lifecycle", owner, 1, "source");

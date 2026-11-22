@@ -1645,6 +1645,24 @@ restart is qualified weekly on both architectures. They run after every other
 step so no other suite shares a restarted daemon. Their first run is this
 change's pull request; they had not run when this was written.
 
+**Found and fixed on GitHub's runners (2026-11-22).** The C15 step failed
+on every run from its introduction to 2026-11-20, on both architectures:
+the rebuild failed `needs-attention` "failed verification (helper-failed)"
+instead of `daemon-unavailable`. The runners' Engine 28.0.4 shuts down
+gracefully under `systemctl restart docker`: dockerd closes its listeners
+but keeps open requests alive while it stops containers (moby
+`cmd/dockerd/daemon.go`, v28.0.4), so the helper's attached `docker run`
+exits with the helper's SIGTERM status and prints no connection wording,
+and socket activation hands the next request to the restarted daemon, which
+answers the outage probe. The volume copy step now names its helper, and
+when the helper was stopped by a signal (137 or 143) without reporting, it
+asks the daemon answering now for that helper's `die` event
+(`dockerDaemonRecordedContainerExit`, `docker-cli-errors.ts`). A restarted
+daemon has none, so the step fails `daemon-unavailable`; a daemon that saw
+the helper exit, or a history that cannot be read, keeps the old
+classification. Unit tests in `tests/container-replacement.test.ts` cover
+the three answers. Not yet observed passing on a runner.
+
 **Also run.** The whole readiness file on the rootful daemon: 9/10, the
 tenth being the C22 host-service reply, which reports itself INCOMPLETE
 because beelink's host firewall closes the agent-tools path from the nested

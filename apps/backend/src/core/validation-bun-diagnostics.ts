@@ -4,9 +4,12 @@
  * embedded in the environment-side failure classifier.
  */
 export function bunFailureFingerprint(lines: string[], hash: (text: string) => string) {
-  const start = lines.findIndex((line) => /^error: \S/.test(line));
+  // Under GITHUB_ACTIONS Bun also prints workflow commands (`::error ...::`,
+  // `::group::`), which a run outside Actions lacks for the same failure.
+  const relevant = lines.filter((line) => !/^::[a-z][\w-]*(?: [^\n]*)?::/.test(line));
+  const start = relevant.findIndex((line) => /^error: \S/.test(line));
   if (start < 0) return undefined;
-  const block = lines.slice(start);
+  const block = relevant.slice(start);
   if (
     block.length > 128 ||
     block.some((line) => line.length > 8_192) ||

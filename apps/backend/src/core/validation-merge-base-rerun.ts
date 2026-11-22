@@ -54,7 +54,9 @@ const TEST_SCRIPT = `
   cd "$1" || exit 1
   file="$2"; shift 2
   test -f "./$file" && test ! -L "./$file" || exit 2
-  unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CODEX_SESSION_ID CODEX_THREAD_ID BUN_TEST_QUIET
+  # GITHUB_ACTIONS makes Bun wrap results in ::group::/::error annotations,
+  # which the strict result parser below rightly refuses as incomplete output.
+  unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CODEX_SESSION_ID CODEX_THREAD_ID BUN_TEST_QUIET GITHUB_ACTIONS
   export NO_COLOR=1 FORCE_COLOR=0
   config=/dev/null
   if [ -f bunfig.toml ] && [ ! -L bunfig.toml ]; then config=./bunfig.toml; fi

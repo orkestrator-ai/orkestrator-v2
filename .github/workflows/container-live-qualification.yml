@@ -35,6 +35,9 @@ on:
       - "apps/backend/tests/claude-config-filter-docker.test.ts"
       - "apps/backend/src/core/claude-container-config.ts"
       - "apps/backend/src/core/container-start.ts"
+      # The rebuild copy and its outage classification, qualified by C14/C15.
+      - "apps/backend/src/core/container-replacement.ts"
+      - "apps/backend/src/core/docker-cli-errors.ts"
       - "apps/backend/src/core/design/export-container.test.ts"
       - "apps/backend/src/core/design/export-writer.ts"
       - "apps/backend/src/core/design/exports.ts"

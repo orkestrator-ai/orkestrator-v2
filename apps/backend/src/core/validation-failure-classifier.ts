@@ -312,7 +312,8 @@ export function classifyValidationFailures(
       }
 
       // --- Bun -------------------------------------------------------------
-      const header = /^(\S[^:]*\.[cm]?[jt]sx?):$/.exec(line);
+      // Under GITHUB_ACTIONS Bun opens each file's group with `::group::`.
+      const header = /^(?:::group::)?(\S[^:]*\.[cm]?[jt]sx?):$/.exec(line);
       if (header) {
         state.header = header[1]!;
         state.diagnostic = [];

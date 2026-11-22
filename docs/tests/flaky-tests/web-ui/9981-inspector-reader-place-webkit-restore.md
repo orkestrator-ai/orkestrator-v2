@@ -107,3 +107,24 @@ No assertion or wait was changed.
 ## Triage note (2026-11-15)
 
 Not changed. The recorded failures are value mismatches in real scroll/layout measurements (scroll offsets, fold gaps, sampled frames), not expired waits, so a larger Playwright budget does not address them; each needs its own live reproduction (WebKit, CPU throttling) first. Stays `open`; nothing verified in this pass.
+
+## Recurrence (2026-11-20, main CI)
+
+- **Run:** CI push run 44836127733 on `main` at `8a199a67e` (#2523, a
+  `apps/web-public` release-summary change that the spec does not load), job
+  "Mobile shell (webkit)" 136632858745, the `inspector-transcript-webkit`
+  logged run (`e2e/InspectorTranscriptHide.spec.ts --workers=1`,
+  `ORKESTRATOR_E2E_BROWSER=webkit`).
+- **Base commit:** `8a199a67e` (the pushed `main` commit itself).
+- **Failure:** `[mobile-chromium] Build Pipeline keeps a reader's place across another node`
+  at line 222, the first visible frame after returning from the Ticket:
+  expected 12050, received 11546, the same ~500 px short restore as before.
+  13 passed, 1 failed (1.4 min).
+- **Next run:** the following `main` push (44969304281, `dd1391427`) passed
+  the same job.
+- **Isolated rerun:** not run; this headless host has no Linux WebKit image
+  set up for the spec.
+- **Recurrence check:** `mise run flaky:recurrence -- 9981 --base 8a199a67e --registry-ref origin/main`
+  answered `open`.
+
+Status stays open; the cause is still unconfirmed and nothing was changed.

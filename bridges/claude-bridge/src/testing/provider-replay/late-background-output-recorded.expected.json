@@ -1,0 +1,154 @@
+[
+  {
+    "label": "after-result",
+    "activity": "working",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+        "textLength": 197,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "success",
+            "outputLength": 0
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+                "textLength": 197
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+        "textLength": 197,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "success",
+            "outputLength": 0
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "text",
+            "text": ""
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+            "textLength": 197,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Start this command with your Bash tool using run_in_background set to true: perl -e 'sleep 8'; echo finished. Then reply…",
+                "textLength": 197
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

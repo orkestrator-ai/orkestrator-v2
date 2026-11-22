@@ -1,0 +1,108 @@
+[
+  {
+    "label": "restarted",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Reply with exactly: first turn ready. Do not use any tools.",
+        "textLength": 59,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Reply with exactly: first turn ready. Do not use any tools."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "first turn ready",
+        "textLength": 16,
+        "parts": [
+          {
+            "type": "thinking",
+            "text": "The user wants me to reply with exactly \"first turn ready\" and not use any tools."
+          },
+          {
+            "type": "text",
+            "text": "first turn ready"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Reply with exactly: first turn ready. Do not use any tools.",
+        "textLength": 59,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Reply with exactly: first turn ready. Do not use any tools."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "first turn ready",
+        "textLength": 16,
+        "parts": [
+          {
+            "type": "thinking",
+            "text": "The user wants me to reply with exactly \"first turn ready\" and not use any tools."
+          },
+          {
+            "type": "text",
+            "text": "first turn ready"
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "text": "Reply with exactly: second turn ready. Do not use any tools.",
+        "textLength": 60,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Reply with exactly: second turn ready. Do not use any tools."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "second turn ready",
+        "textLength": 17,
+        "parts": [
+          {
+            "type": "thinking",
+            "text": "The user wants me to reply with exactly \"second turn ready\" and not use any tools."
+          },
+          {
+            "type": "text",
+            "text": "second turn ready"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 2,
+      "revisedOutsideTail": []
+    }
+  }
+]

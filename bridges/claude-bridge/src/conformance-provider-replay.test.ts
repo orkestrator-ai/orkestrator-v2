@@ -20,12 +20,22 @@
  *
  * The string `"$derived"` anywhere in a live frame stands for the SDK session
  * id the bridge derives from its own session id, which a recording made under
- * a different bridge id cannot carry verbatim.
+ * a different bridge id cannot carry verbatim. `"$prompt"` stands for the
+ * client uuid of the latest prompt the bridge wrote to the SDK input: a real
+ * CLI's `result` names the prompt it answers (`user_message_uuid`, with
+ * `result_index`), and the bridge ignores a success that names other input.
  *
  * Actions: `prompt` (`text`, `options`, `policy`), `answer` (`decision`
  * allow | deny), `interrupt`, `end` (the CLI process exits), `settle` (wait
  * until the turn is over, which a turn released to background work reaches
  * before its prompt settles), `resume`.
+ *
+ * `interrupt` stops the turn the way `/hard-abort` does (`abortSession`), so
+ * nothing the CLI sends afterwards reaches the bridge. With `"graceful": true`
+ * it takes the user's stop instead, `/abort` (`gracefulInterruptClaudeSession`):
+ * the query double answers the SDK's `interrupt()` control, and the frames that
+ * follow in the fixture are what the CLI sent after it (a recorded stop ends
+ * with the CLI's interruption marker and an `error_during_execution` result).
  */
 import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -77,12 +87,14 @@ const {
   respondToInteraction,
   respondToPlanApproval,
   dismissQuestion,
+  queryControlOverrides,
   sendPrompt,
   track,
   waitFor,
 } = await import("./services/session-manager-test-harness.js");
 const { claudeTranscriptSource } = await import("./routes/session-transcript.js");
-const { sdkSessionIdFromBridgeId } = await import("./services/session-manager.js");
+const { gracefulInterruptClaudeSession, sdkSessionIdFromBridgeId } =
+  await import("./services/session-manager.js");
 const { sessionHealth } = await import("./types/index.js");
 
 afterAll(async () => {
@@ -118,11 +130,16 @@ function permissionRequest(frame: unknown): Record<string, unknown> | undefined 
     : undefined;
 }
 
-function withDerivedId(frame: unknown, sessionId: string): unknown {
-  const text = JSON.stringify(frame);
-  if (!text.includes('"$derived"')) return frame;
+function withPlaceholders(frame: unknown, sessionId: string, promptUuid?: string): unknown {
+  let text = JSON.stringify(frame);
+  if (!text.includes('"$derived"') && !text.includes('"$prompt"')) return frame;
   const derived = sdkSessionIdFromBridgeId(sessionId) ?? "";
-  return JSON.parse(text.replaceAll('"$derived"', JSON.stringify(derived)));
+  text = text.replaceAll('"$derived"', JSON.stringify(derived));
+  if (text.includes('"$prompt"')) {
+    if (!promptUuid) throw new Error('"$prompt" used before a prompt with a client uuid');
+    text = text.replaceAll('"$prompt"', JSON.stringify(promptUuid));
+  }
+  return JSON.parse(text);
 }
 
 function pendingCount(sessionId: string): number {
@@ -141,12 +158,20 @@ const adapter: ProviderReplayAdapter = {
     let sessionId: string | undefined;
     let call: QueryCall | undefined;
     let input: AsyncIterator<unknown> | undefined;
+    let promptUuid: string | undefined;
     let queryCount = 0;
     let expectedRekey: string | undefined;
     let prompt: Promise<unknown> | undefined;
     let promptOutcome: string | undefined;
     const parked: ParkedCall[] = [];
     const decisions: Array<{ toolName: string; behavior: string }> = [];
+    let interruptRequests = 0;
+    // The control is read when the query is created, so a fixture that stops
+    // its turn gracefully installs it before its first prompt.
+    const graceful = fixture.steps.some(
+      (step) =>
+        step.kind === "action" && step.action === "interrupt" && step.args.graceful === true,
+    );
 
     const live = (): string => {
       if (!sessionId) throw new Error("no session yet: start with prompt or resume");
@@ -208,7 +233,7 @@ const adapter: ProviderReplayAdapter = {
         ) {
           expectedRekey = step.frame.session_id;
         }
-        call.push(withDerivedId(step.frame, live()));
+        call.push(withPlaceholders(step.frame, live(), promptUuid));
         await call.consumed();
       },
 
@@ -223,6 +248,12 @@ const adapter: ProviderReplayAdapter = {
               typeof step.args.policy === "string" ? POLICIES[step.args.policy] : undefined;
             if (step.args.policy !== undefined && !policy) throw new Error("unknown policy");
             if (policy) getSession(sessionId)!.executionPolicy = policy;
+            if (graceful) {
+              queryControlOverrides.interrupt = async () => {
+                interruptRequests += 1;
+                return { still_queued: [] };
+              };
+            }
             const previousRuntime = getSession(sessionId)?.claudeRuntime;
             let submitted = false;
             watch(
@@ -250,8 +281,12 @@ const adapter: ProviderReplayAdapter = {
             if (step.args.reuseQuery === true && queryCount !== 1) {
               throw new Error("the second prompt launched another SDK query");
             }
-            if (input && (await input.next()).done)
-              throw new Error("SDK input ended before the prompt");
+            if (input) {
+              const written = await input.next();
+              if (written.done) throw new Error("SDK input ended before the prompt");
+              const uuid = isRecord(written.value) ? written.value.uuid : undefined;
+              promptUuid = typeof uuid === "string" ? uuid : undefined;
+            }
             return;
           }
           case "answer": {
@@ -273,6 +308,13 @@ const adapter: ProviderReplayAdapter = {
             return;
           }
           case "interrupt":
+            if (step.args.graceful === true) {
+              const answered = await gracefulInterruptClaudeSession(live());
+              if (!answered.interrupted || interruptRequests === 0) {
+                throw new Error("the graceful interrupt did not reach the SDK control");
+              }
+              return;
+            }
             abortSession(live());
             await prompt;
             return;

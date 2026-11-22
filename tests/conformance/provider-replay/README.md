@@ -141,12 +141,15 @@ To turn a capture into a fixture:
    placeholders for IDs the replay still needs to supply. For ACP, omit
    side-effecting client requests, keep the prompt response and add a
    `settle` step to wait for the terminal dispatch journal record.
-3. Scrub it: `bun scripts/scrub-codex-recording.ts <in> <out>` (the scrubber
-   handles provider envelopes and ACP wire lines. Add `--strip-content` to
+3. Scrub it with `bun scripts/scrub-codex-recording.ts <in> <out>`. The scrubber
+   handles provider envelopes and ACP wire lines, and consistently replaces
+   recognised provider request, response, message, tool, and run IDs within
+   a recording. Add `--strip-content` to
    blank known payload fields, then **read every retained frame and the diff**
    for unexpected payload fields, metadata, machine-specific paths and secrets.
    Use a disposable fixture project and harmless prompts so any prose you need
-   to retain is safe to share. Stripping changes what some scenarios show,
+   to retain is safe to share. Use harmless stand-in text when a scenario needs
+   to assert a specific reply. Stripping changes what some scenarios show,
    so compare the expectation with the synthetic one: Cursor and Pi render
    no row for empty text, Claude offers a command card only with the
    command it is about, and Claude recognises its interruption marker

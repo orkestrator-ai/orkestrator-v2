@@ -93,6 +93,7 @@ const {
   waitFor,
 } = await import("./services/session-manager-test-harness.js");
 const { claudeTranscriptSource } = await import("./routes/session-transcript.js");
+const { backgroundTasksForSnapshot } = await import("./services/background-task-snapshot.js");
 const { gracefulInterruptClaudeSession, sdkSessionIdFromBridgeId } =
   await import("./services/session-manager.js");
 const { sessionHealth } = await import("./types/index.js");
@@ -377,6 +378,15 @@ const adapter: ProviderReplayAdapter = {
           drift: sessionHealth(session).drift(),
           extra: {
             providerSessionId,
+            ...(fixture.header.scenario === "late-background-output"
+              ? {
+                  taskStatuses: Object.values(
+                    backgroundTasksForSnapshot(session.backgroundTasks) ?? {},
+                  )
+                    .map((task) => task.status)
+                    .sort(),
+                }
+              : {}),
             ...(expectedRekey
               ? { adoptedProviderSessionId: providerSessionId === expectedRekey }
               : {}),

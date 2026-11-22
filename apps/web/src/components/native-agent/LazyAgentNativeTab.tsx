@@ -1,5 +1,6 @@
-import { lazy, useState, type ComponentProps } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import type { AgentNativeTab } from "@/components/native-agent";
+import { importNativeAgentTab } from "./launch-view-imports";
 
 type AgentNativeTabComponent = typeof AgentNativeTab;
 
@@ -11,17 +12,14 @@ let loadingAgentNativeTab: Promise<AgentNativeTabComponent> | undefined;
  * every caller shares one request, and a failed one can be tried again.
  */
 export function loadAgentNativeTab(): Promise<AgentNativeTabComponent> {
-  loadingAgentNativeTab ??= import("@/components/native-agent").then(
-    (module) => (loadedAgentNativeTab = module.AgentNativeTab),
-    (error: unknown) => {
+  loadingAgentNativeTab ??= importNativeAgentTab()
+    .then((view) => (loadedAgentNativeTab = view))
+    .catch((error: unknown) => {
       loadingAgentNativeTab = undefined;
       throw error;
-    },
-  );
+    });
   return loadingAgentNativeTab;
 }
-
-const SuspendingAgentNativeTab = lazy(async () => ({ default: await loadAgentNativeTab() }));
 
 /**
  * The native agent tab, loaded the first time one is shown. It carries the chat
@@ -29,15 +27,33 @@ const SuspendingAgentNativeTab = lazy(async () => ({ default: await loadAgentNat
  * must use this rather than a static import: one static importer anywhere in the
  * startup graph pulls all of it back into the startup bundle.
  *
- * Once the code is in hand (a preload, or an earlier tab) the tab renders
- * directly. A `lazy` component that has never rendered suspends on its first
- * render even when its module is already loaded, and React then holds the
- * loading skeleton for its minimum reveal time: a new environment's agent tab
- * blinked to a skeleton and back between two views of the same prompt. The
- * choice is made once per mount, so a mounted tab never changes component type
- * (which would remount it and lose its state).
+ * A preload lets the tab render on the first pass, without a flash of the
+ * loading skeleton between two views of the same prompt. A cold mount
+ * adopts the loaded component once and keeps its identity through updates.
+ * A rejected import reaches the caller's error boundary and a later mount
+ * can try again.
  */
-export function LazyAgentNativeTab(props: ComponentProps<AgentNativeTabComponent>) {
-  const [Loaded] = useState(() => loadedAgentNativeTab);
-  return Loaded ? <Loaded {...props} /> : <SuspendingAgentNativeTab {...props} />;
+export function LazyAgentNativeTab({
+  loadingFallback,
+  ...props
+}: ComponentProps<AgentNativeTabComponent> & { loadingFallback: ReactNode }) {
+  const [Loaded, setLoaded] = useState(() => loadedAgentNativeTab);
+  const [failure, setFailure] = useState<{ error: unknown }>();
+  useEffect(() => {
+    if (Loaded) return;
+    let mounted = true;
+    void loadAgentNativeTab().then(
+      (view) => {
+        if (mounted) setLoaded(() => view);
+      },
+      (error: unknown) => {
+        if (mounted) setFailure({ error });
+      },
+    );
+    return () => {
+      mounted = false;
+    };
+  }, [Loaded]);
+  if (failure) throw failure.error;
+  return Loaded ? <Loaded {...props} /> : loadingFallback;
 }

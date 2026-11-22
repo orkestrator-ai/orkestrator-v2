@@ -151,6 +151,8 @@ export interface Environment extends Omit<
    * changed payload and converge as before.
    */
   controlRequestFingerprint?: string;
+  /** Distinguishes a freshly armed startup launch from a previous pane reservation. */
+  startupLaunchGeneration?: number;
   /**
    * Durable container lifecycle record: runtime/storage identity, the one
    * unresolved operation and recent outcomes. Backend-private; clients receive

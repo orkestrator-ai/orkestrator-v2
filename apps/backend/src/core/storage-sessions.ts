@@ -66,7 +66,10 @@ type OpenCodeModelCatalogSnapshot = shared.OpenCodeModelCatalogSnapshot;
 type PortMapping = shared.PortMapping;
 type PrState = shared.PrState;
 type Project = shared.Project;
-type PersistedPaneLayout = shared.PersistedPaneLayout;
+type PersistedPaneLayout = shared.PersistedPaneLayout & {
+  /** Published with the early pane, and retained if the user closes that pane. */
+  startupNativeReservation?: { generation: number; agent: BuildPipelineAgent };
+};
 type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
@@ -288,6 +291,12 @@ export class SessionsRepository {
     return stored === undefined ? null : (stored as PersistedPaneLayout);
   }
 
+  getStartupNativeReservation(environment: Environment): BuildPipelineAgent | undefined {
+    const layout = this.context.loadStoreRow(this.files.paneLayoutsFile(), environment.id) as
+      PersistedPaneLayout | undefined;
+    return startupNativeReservation(layout, environment)?.agent;
+  }
+
   /**
    * Remove every parent, reviewer, and adopted fix tab owned by one Multi Review,
    * and the step session tabs its "Open session" opened.
@@ -395,6 +404,7 @@ export class SessionsRepository {
         throw paneLayoutRevisionConflict(expectedRevision, currentRevision);
       }
       const saved: PersistedPaneLayout = {
+        ...previous,
         version: layout.version,
         environmentId,
         containerId: layout.containerId,
@@ -544,6 +554,7 @@ export class SessionsRepository {
         };
       assertPaneLayoutRootWithinBounds(next.root);
       const saved: PersistedPaneLayout = {
+        ...previous,
         ...next,
         environmentId,
         updatedAt: nowIso(),
@@ -647,6 +658,7 @@ export class SessionsRepository {
           (!focusedLeaf || focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf)));
       if (takesFocus) target.activeTabId = tabId;
       const saved: PersistedPaneLayout = {
+        ...previous,
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId: environment.containerId,
@@ -840,7 +852,7 @@ export class SessionsRepository {
         (selected.id !== STARTUP_AGENT_TAB_ID ||
           !environment.pendingAgentLaunch ||
           Boolean(selectedAgentData?.sessionId) ||
-          Boolean(selectedAgentData?.platform));
+          Boolean(selectedAgentData?.platform && environment.initialPrompt?.trim()));
       if (!userChoseTab) target.activeTabId = tab.id as string;
 
       const containerId = environment.environmentType === "local" ? null : environment.containerId;
@@ -855,6 +867,7 @@ export class SessionsRepository {
       }
 
       const saved: PersistedPaneLayout = {
+        ...previous,
         version: PANE_LAYOUT_VERSION,
         environmentId,
         containerId,
@@ -958,6 +971,7 @@ export class SessionsRepository {
       if (!target.activeTabId || activateNewTab) target.activeTabId = input.tabId;
 
       const saved: PersistedPaneLayout = {
+        ...previous,
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId: environment.environmentType === "local" ? null : environment.containerId,
@@ -1098,6 +1112,7 @@ export class SessionsRepository {
       }
 
       const saved: PersistedPaneLayout = {
+        ...previous,
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId,
@@ -1191,6 +1206,10 @@ export class SessionsRepository {
     environmentId: string;
     agent: BuildPipelineAgent;
     providerSessionId?: string;
+    /** A pending launch may publish only while it still owns this generation. */
+    launchGeneration?: number;
+    /** Commit the execution style and early presentation together. */
+    reserveEarly?: boolean;
     existingOnly?: boolean;
     upgradeOnly?: boolean;
     /**
@@ -1217,11 +1236,18 @@ export class SessionsRepository {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.repos.projects.getEnvironment(input.environmentId);
       if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      if (
+        input.launchGeneration !== undefined &&
+        (!environment.pendingAgentLaunch ||
+          input.launchGeneration !== (environment.startupLaunchGeneration ?? 0))
+      )
+        return null;
       const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
         this.files.paneLayoutsFile(),
         () => ({}),
       );
       const previous = layouts[input.environmentId];
+      const reservation = startupNativeReservation(previous, environment);
       if (input.existingOnly && !previous) return null;
 
       const root = previous
@@ -1251,6 +1277,11 @@ export class SessionsRepository {
       const existingLeaf = leaves.find((leaf) =>
         leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID),
       );
+      // An explicit close is durable even while the opening dispatch is
+      // waiting for setup. Binding a session must leave that close in place.
+      if (input.launchGeneration !== undefined && reservation && !existingLeaf) {
+        return previous ?? null;
+      }
       if (input.existingOnly && !existingLeaf) return null;
       const target =
         existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
@@ -1340,7 +1371,7 @@ export class SessionsRepository {
         input.providerSessionId !== undefined &&
         previousProviderSessionId !== input.providerSessionId;
       const shouldHandoffAfterSetup =
-        bindsNewProviderSession || input.activateOnSetupHandoff === true;
+        !reservation && (bindsNewProviderSession || input.activateOnSetupHandoff === true);
       // Resolved from the same leaf list as `target` so both reads see one
       // parse of one tree, and a hit can be compared by reference.
       const focusedLeaf = previous
@@ -1370,11 +1401,14 @@ export class SessionsRepository {
 
       const unchanged =
         previous &&
+        previous.containerId === environment.containerId &&
         previous.activePaneId === nextActivePaneId &&
         JSON.stringify(previous.root) === JSON.stringify(root);
-      if (unchanged) return previous;
+      const reserve = input.reserveEarly && !reservation;
+      if (unchanged && !reserve) return previous;
 
       const saved: PersistedPaneLayout = {
+        ...previous,
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId: environment.containerId,
@@ -1382,6 +1416,14 @@ export class SessionsRepository {
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,
+        ...(reserve
+          ? {
+              startupNativeReservation: {
+                generation: environment.startupLaunchGeneration ?? 0,
+                agent: input.agent,
+              },
+            }
+          : {}),
       };
       assertPaneLayoutRootWithinBounds(saved.root);
       layouts[input.environmentId] = saved;
@@ -1390,4 +1432,15 @@ export class SessionsRepository {
       return saved;
     });
   }
+}
+
+function startupNativeReservation(
+  layout: PersistedPaneLayout | undefined,
+  environment: Environment,
+) {
+  const reservation = layout?.startupNativeReservation;
+  return environment.pendingAgentLaunch &&
+    reservation?.generation === (environment.startupLaunchGeneration ?? 0)
+    ? reservation
+    : undefined;
 }

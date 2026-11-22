@@ -71,20 +71,30 @@ or the startup agent tab of a launch with an opening prompt is selected.
 Until a tab exists the renderer shows outlines (`EnvironmentTabsShimmer`) and adds
 nothing itself, except for a launch with an opening prompt: then it draws the
 prompt (`LaunchPromptPending`) laid out as the agent tab will show it, through
-worktree creation and container boot, with container logs one click away.
+worktree creation and container allocation. Once Docker assigns a container ID,
+the user can switch between the prompt and the container logs. If the preview
+chunk fails, the creation progress or logs stay usable.
 
-A launch with an opening prompt publishes its job tab, locked to its agent and
-selected, as soon as the reconciler sees the launch, before setup has settled.
+A native launch with opening prompt text publishes its job tab, locked to its
+agent and selected, as soon as the reconciler sees the launch, before setup has
+settled. The early pane and its native execution reservation commit together.
+Platform and execution mode edits apply to future launches. Closing this pane during setup leaves
+it closed while the opening dispatch still runs in the background once setup
+is ready. Selecting the setup terminal after the early pane appears also keeps
+that selection when the provider session is bound.
 The tab draws the prompt and shows setup progress in its status row
 (`LaunchSetupStatus`: "Running environment setup script…", a link to the setup
 terminal, and Skip setup wait), and the same transcript then shows "Launching
 <agent>…", the agent's thinking and its response, so nothing is swapped out when
 setup finishes. Its composer is disabled until then, so nothing is sent ahead of
 the opening prompt. A failed or held setup falls back to the setup surface with
-its recovery controls. Nothing is started or dispatched before setup settles.
+its recovery controls. A setup failure that cancels the launch retires the
+prompt preview. Retrying or skipping setup in that case leaves the original
+text available through the environment's **Copy initial prompt** action.
 
-A prompt-less launch's job tab is published when setup has settled, not when the
-launch was requested, which keeps the terminal first and alone while it works.
+A native launch without prompt text, including one with only attachments,
+publishes its job tab after setup settles, which keeps the setup terminal in
+front while it works.
 Either way its agent is addressable before that: the mailbox directory lists
 `startup-agent` for an environment with a pending launch, so mail sent during
 setup waits for it.

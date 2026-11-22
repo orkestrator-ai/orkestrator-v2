@@ -1,6 +1,8 @@
-import { lazy, Suspense, useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
+import { LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import type { LaunchPromptPending } from "./LaunchPromptPending";
 import { loadAgentNativeTab } from "./LazyAgentNativeTab";
+import { importLaunchPromptPending } from "./launch-view-imports";
 
 type LaunchPromptPendingComponent = typeof LaunchPromptPending;
 
@@ -8,17 +10,14 @@ let loadedView: LaunchPromptPendingComponent | undefined;
 let loadingView: Promise<LaunchPromptPendingComponent> | undefined;
 
 function loadLaunchPromptPending(): Promise<LaunchPromptPendingComponent> {
-  loadingView ??= import("./LaunchPromptPending").then(
-    (module) => (loadedView = module.LaunchPromptPending),
-    (error: unknown) => {
+  loadingView ??= importLaunchPromptPending()
+    .then((view) => (loadedView = view))
+    .catch((error: unknown) => {
       loadingView = undefined;
       throw error;
-    },
-  );
+    });
   return loadingView;
 }
-
-const SuspendingView = lazy(async () => ({ default: await loadLaunchPromptPending() }));
 
 /**
  * Fetch the views a new environment's launch shows, ahead of the launch.
@@ -44,12 +43,27 @@ export function LazyLaunchPromptPending({
   fallback,
   ...props
 }: ComponentProps<LaunchPromptPendingComponent> & { fallback: ReactNode }) {
-  useEffect(() => preloadLaunchViews(), []);
-  const [Loaded] = useState(() => loadedView);
-  if (Loaded) return <Loaded {...props} />;
+  const [Loaded, setLoaded] = useState(() => loadedView);
+  useEffect(() => {
+    void loadAgentNativeTab().catch(() => undefined);
+    if (Loaded) return;
+    let mounted = true;
+    void loadLaunchPromptPending().then(
+      (view) => {
+        if (mounted) setLoaded(() => view);
+      },
+      // The creation progress or logs remain usable if this optional view
+      // cannot load. A subsequent mount can request the chunk again.
+      () => undefined,
+    );
+    return () => {
+      mounted = false;
+    };
+  }, [Loaded]);
+  if (!Loaded) return fallback;
   return (
-    <Suspense fallback={fallback}>
-      <SuspendingView {...props} />
-    </Suspense>
+    <LazyLoadBoundary loadingFallback={fallback} renderError={() => fallback}>
+      <Loaded {...props} />
+    </LazyLoadBoundary>
   );
 }

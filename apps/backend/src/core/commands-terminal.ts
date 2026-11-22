@@ -33,6 +33,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     initialPromptPresentation: _initialPromptPresentation,
     openingInteraction: _openingInteraction,
     initialConversationMode: _initialConversationMode,
+    startupLaunchGeneration: _startupLaunchGeneration,
     claudeModelCatalog: _modelCatalog,
     opencodePid: _opencodePid,
     claudeBridgePid: _claudeBridgePid,

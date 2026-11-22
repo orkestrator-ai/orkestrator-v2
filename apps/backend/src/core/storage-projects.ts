@@ -1533,6 +1533,24 @@ export class ProjectsRepository {
         }
       }
       if ("pendingAgentLaunch" in updates && typeof updates.pendingAgentLaunch === "boolean") {
+        const startup = environment.startupAgentSession;
+        if (
+          !updates.pendingAgentLaunch &&
+          environment.pendingAgentLaunch &&
+          updates.setupPhase === "failed" &&
+          startup &&
+          !startup.providerSessionId
+        ) {
+          environment.startupAgentSession = {
+            ...startup,
+            status: "error",
+            error: "Setup failed before the opening prompt was sent.",
+          };
+        }
+        if (updates.pendingAgentLaunch && !environment.pendingAgentLaunch) {
+          environment.startupLaunchGeneration = (environment.startupLaunchGeneration ?? 0) + 1;
+          environment.startupAgentSession = undefined;
+        }
         environment.pendingAgentLaunch = updates.pendingAgentLaunch;
       }
       if ("initialAgentPlatform" in updates) {

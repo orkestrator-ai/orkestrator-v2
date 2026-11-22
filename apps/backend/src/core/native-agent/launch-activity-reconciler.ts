@@ -1786,7 +1786,11 @@ export class NativeAgentLaunchActivityReconciler {
       global: config.global.agentSettings,
     };
     const configuredLaunch = resolveStartupLaunchFromSettings(tiers);
-    const agent = environment.initialAgentPlatform ?? configuredLaunch.agent;
+    const prompt = environment.initialPrompt?.trim();
+    const reservedAgent = prompt
+      ? this.storage.getStartupNativeReservation(environment)
+      : undefined;
+    const agent = reservedAgent ?? environment.initialAgentPlatform ?? configuredLaunch.agent;
 
     const logicalSessionKey = `env-${environment.id}:${STARTUP_AGENT_TAB_ID}`;
     // One resolver for the whole chain. This used to read the repository's
@@ -1816,11 +1820,12 @@ export class NativeAgentLaunchActivityReconciler {
     const conversationMode = environment.initialConversationMode;
     const parameterValues = agent === "claude" ? claudeNativeParameterValues(resolved) : undefined;
     const nativeProviderLaunch =
-      resolved.mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux");
+      reservedAgent !== undefined ||
+      (resolved.mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux"));
 
     if (
       agent === "grok" &&
-      resolved.mode === "terminal" &&
+      !nativeProviderLaunch &&
       environment.interactionMode &&
       (environment.initialPrompt?.trim() || environment.initialPromptAttachments?.length)
     ) {
@@ -1972,10 +1977,14 @@ export class NativeAgentLaunchActivityReconciler {
     // otherwise escape before the catch below records the durable error and
     // arms `launchRetryAt`, leaving the two-second sweep retrying forever with
     // no backoff and nothing for the renderer to surface.
+    const launchGeneration = environment.startupLaunchGeneration ?? 0;
+    const stillPending = (current: Environment) =>
+      current.pendingAgentLaunch === true &&
+      (current.startupLaunchGeneration ?? 0) === launchGeneration;
     try {
-      const prompt = environment.initialPrompt?.trim();
       const initialAttachments = environment.initialPromptAttachments ?? [];
       const hasInitialWork = Boolean(prompt || initialAttachments.length > 0);
+      const ready = isEnvironmentReadyForAgents(environment);
       const preselectOptions = hasInitialWork
         ? { lockPlatform: true as const }
         : {
@@ -1993,42 +2002,48 @@ export class NativeAgentLaunchActivityReconciler {
         startupSession.style !== "native" ||
         startupSession.status !== "starting"
       ) {
-        await this.storage.updateEnvironment(environment.id, {
-          startupAgentSession: {
-            tabId: STARTUP_AGENT_TAB_ID,
-            agent,
-            style: "native",
-            model,
-            reasoningEffort,
-            status: "starting",
+        const updated = await this.storage.updateEnvironment(
+          environment.id,
+          {
+            startupAgentSession: {
+              tabId: STARTUP_AGENT_TAB_ID,
+              agent,
+              style: "native",
+              model,
+              reasoningEffort,
+              status: "starting",
+            },
           },
-        });
+          stillPending,
+        );
+        if (!stillPending(updated)) return;
       }
-
-      // A launch that carries an opening prompt publishes its agent tab at
-      // once, locked and selected, so the prompt is on screen while the
-      // workspace is still being created and setup runs. The tab shows setup
-      // progress in its own status row (the setup terminal stays one tab
-      // away), and the same transcript carries on into the first response, so
-      // nothing has to be swapped out and redrawn when setup finishes.
-      if (hasInitialWork && !isEnvironmentReadyForAgents(environment)) {
-        await this.storage.ensureStartupNativeAgentTab({
-          environmentId: environment.id,
-          agent,
-          ...preselectOptions,
-        });
+      if (!ready) {
+        if (prompt) {
+          await this.storage.ensureStartupNativeAgentTab({
+            environmentId: environment.id,
+            agent,
+            lockPlatform: true,
+            launchGeneration,
+            reserveEarly: true,
+          });
+        }
         return;
       }
-      if (!isEnvironmentReadyForAgents(environment)) return;
 
       // A prompt-less launch waits for setup, so the setup terminal stays first
       // and alone until it has done its work. It stays unassigned so the user
       // can still change the preselected model before the first send.
-      await this.storage.ensureStartupNativeAgentTab({
+      const startupLayout = await this.storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
         agent,
+        launchGeneration,
         ...preselectOptions,
       });
+      if (!startupLayout) {
+        const current = await this.storage.getEnvironment(environment.id);
+        if (!current || !stillPending(current)) return;
+      }
 
       if (!hasInitialWork) {
         // No opening prompt was submitted with the environment. Leave the tab
@@ -2037,30 +2052,35 @@ export class NativeAgentLaunchActivityReconciler {
         const publishedLayout = await this.storage.ensureStartupNativeAgentTab({
           environmentId: environment.id,
           agent,
+          launchGeneration,
           activateOnSetupHandoff: true,
           ...preselectOptions,
         });
-        await this.storage.updateEnvironment(environment.id, {
-          pendingAgentLaunch: false,
-          initialAgentPlatform: undefined,
-          initialAgentModel: undefined,
-          initialReasoningEffort: undefined,
-          initialFastMode: undefined,
-          initialConversationMode: undefined,
-          initialPromptAttachments: undefined,
-          initialPromptPresentation: undefined,
-          startupAgentSession: publishedLayout
-            ? undefined
-            : {
-                tabId: STARTUP_AGENT_TAB_ID,
-                agent,
-                style: "native",
-                model,
-                reasoningEffort,
-                status: "running",
-                startedAt: new Date().toISOString(),
-              },
-        });
+        await this.storage.updateEnvironment(
+          environment.id,
+          {
+            pendingAgentLaunch: false,
+            initialAgentPlatform: undefined,
+            initialAgentModel: undefined,
+            initialReasoningEffort: undefined,
+            initialFastMode: undefined,
+            initialConversationMode: undefined,
+            initialPromptAttachments: undefined,
+            initialPromptPresentation: undefined,
+            startupAgentSession: publishedLayout
+              ? undefined
+              : {
+                  tabId: STARTUP_AGENT_TAB_ID,
+                  agent,
+                  style: "native",
+                  model,
+                  reasoningEffort,
+                  status: "running",
+                  startedAt: new Date().toISOString(),
+                },
+          },
+          stillPending,
+        );
         this.launchRetryAt.delete(environment.id);
         return;
       }
@@ -2128,37 +2148,43 @@ export class NativeAgentLaunchActivityReconciler {
       const publishedLayout = await this.storage.ensureStartupNativeAgentTab({
         environmentId: environment.id,
         agent,
+        launchGeneration,
         providerSessionId: session.providerSessionId,
         lockPlatform: true,
       });
 
-      await this.storage.updateEnvironment(environment.id, {
-        pendingAgentLaunch: false,
-        initialAgentPlatform: undefined,
-        initialAgentModel: undefined,
-        initialReasoningEffort: undefined,
-        initialFastMode: undefined,
-        initialConversationMode: undefined,
-        initialPromptAttachments: undefined,
-        initialPromptPresentation: undefined,
-        // Once the durable pane carries the provider session id, the snapshot
-        // has no remaining reader and must reach a terminal state. Leaving it
-        // set is not inert: every renderer keeps polling this environment for
-        // the life of the app, and the launch effect keeps re-projecting a
-        // startup tab the user has since closed.
-        startupAgentSession: publishedLayout
-          ? undefined
-          : {
-              tabId: STARTUP_AGENT_TAB_ID,
-              agent,
-              style: "native",
-              model,
-              reasoningEffort,
-              providerSessionId: session.providerSessionId,
-              status: "running",
-              startedAt: new Date().toISOString(),
-            },
-      });
+      await this.storage.updateEnvironment(
+        environment.id,
+        {
+          pendingAgentLaunch: false,
+          initialAgentPlatform: undefined,
+          initialAgentModel: undefined,
+          initialReasoningEffort: undefined,
+          initialFastMode: undefined,
+          initialConversationMode: undefined,
+          initialPromptAttachments: undefined,
+          initialPromptPresentation: undefined,
+          // Once the durable pane carries the provider session id, the snapshot
+          // has no remaining reader and must reach a terminal state. Leaving it
+          // set is not inert: every renderer keeps polling this environment for
+          // the life of the app, and the launch effect keeps re-projecting a
+          // startup tab the user has since closed.
+          startupAgentSession:
+            publishedLayout || reservedAgent
+              ? undefined
+              : {
+                  tabId: STARTUP_AGENT_TAB_ID,
+                  agent,
+                  style: "native",
+                  model,
+                  reasoningEffort,
+                  providerSessionId: session.providerSessionId,
+                  status: "running",
+                  startedAt: new Date().toISOString(),
+                },
+        },
+        stillPending,
+      );
       this.launchRetryAt.delete(environment.id);
     } catch (error) {
       // A rejection is the provider's verdict on this prompt, not a transient
@@ -2172,31 +2198,35 @@ export class NativeAgentLaunchActivityReconciler {
         error: formatLogError(error, { message: false }),
       });
       if (!terminal) this.launchRetryAt.set(environment.id, Date.now() + LAUNCH_RETRY_MS);
-      await this.storage.updateEnvironment(environment.id, {
-        ...(terminal
-          ? {
-              pendingAgentLaunch: false,
-              initialAgentPlatform: undefined,
-              initialAgentModel: undefined,
-              initialReasoningEffort: undefined,
-              initialFastMode: undefined,
-              initialConversationMode: undefined,
-              initialPromptAttachments: undefined,
-              initialPromptPresentation: undefined,
-            }
-          : {}),
-        startupAgentSession: {
-          tabId: STARTUP_AGENT_TAB_ID,
-          agent,
-          style: "native",
-          model,
-          reasoningEffort,
-          status: "error",
-          error: terminal
-            ? `The agent rejected the initial prompt: ${error.message}`
-            : "Agent launch failed; the backend will retry.",
+      await this.storage.updateEnvironment(
+        environment.id,
+        {
+          ...(terminal
+            ? {
+                pendingAgentLaunch: false,
+                initialAgentPlatform: undefined,
+                initialAgentModel: undefined,
+                initialReasoningEffort: undefined,
+                initialFastMode: undefined,
+                initialConversationMode: undefined,
+                initialPromptAttachments: undefined,
+                initialPromptPresentation: undefined,
+              }
+            : {}),
+          startupAgentSession: {
+            tabId: STARTUP_AGENT_TAB_ID,
+            agent,
+            style: "native",
+            model,
+            reasoningEffort,
+            status: "error",
+            error: terminal
+              ? `The agent rejected the initial prompt: ${error.message}`
+              : "Agent launch failed; the backend will retry.",
+          },
         },
-      });
+        stillPending,
+      );
       throw error;
     }
   }

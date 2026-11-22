@@ -992,10 +992,16 @@ export class StorageService {
     return this.repos.sessions.clearBackendTerminalSessionIds(environmentId);
   }
 
+  getStartupNativeReservation(environment: Environment): BuildPipelineAgent | undefined {
+    return this.repos.sessions.getStartupNativeReservation(environment);
+  }
+
   ensureStartupNativeAgentTab(input: {
     environmentId: string;
     agent: BuildPipelineAgent;
     providerSessionId?: string;
+    launchGeneration?: number;
+    reserveEarly?: boolean;
     existingOnly?: boolean;
     upgradeOnly?: boolean;
     /**

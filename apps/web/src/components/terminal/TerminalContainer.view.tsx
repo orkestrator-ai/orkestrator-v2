@@ -1021,7 +1021,12 @@ export function TerminalContainer({
                 error: formatLogError(error),
               });
             });
-          } else {
+          } else if (
+            // The reconciler can publish a startup pane before Docker assigns
+            // an ID. Keep that provisional layout until the backend rebases it
+            // onto the newly allocated container.
+            !(latestEnvironment.pendingAgentLaunch && !persisted.containerId && latestContainerId)
+          ) {
             // A stale-generation or malformed current-version snapshot
             // cannot safely be rewritten as renderer state. Remove only
             // the exact revision we inspected; a concurrent newer layout
@@ -2234,8 +2239,8 @@ export function TerminalContainer({
 
   // Determine what overlay to show (if any)
   // For local environments, we don't have a containerId but can still show terminal
-  const showNoEnvironmentOverlay = !containerId && !isLocalEnvironment;
-  const showCreatingOverlay = Boolean(isContainerCreating && (containerId || isLocalEnvironment));
+  const showCreatingOverlay = isContainerCreating && environmentExists;
+  const showNoEnvironmentOverlay = !showCreatingOverlay && !containerId && !isLocalEnvironment;
   const showNotRunningOverlay = Boolean(
     !isEnvironmentRunning && !isContainerCreating && (containerId || isLocalEnvironment),
   );
@@ -2297,6 +2302,7 @@ export function TerminalContainer({
       {showTabsShimmer &&
         (launchPrompt ? (
           <LazyLaunchPromptPending
+            key={environmentId}
             environmentId={environmentId}
             platform={launchAgent}
             prompt={launchPrompt}
@@ -2308,6 +2314,7 @@ export function TerminalContainer({
         ))}
 
       <TerminalContainerOverlays
+        key={`${environmentId}:${showCreatingOverlay ? "creating" : "settled"}`}
         environmentId={environmentId}
         containerId={containerId}
         isLocalEnvironment={isLocalEnvironment}

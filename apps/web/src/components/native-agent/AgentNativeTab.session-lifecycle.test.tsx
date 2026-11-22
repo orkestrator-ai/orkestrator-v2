@@ -3440,7 +3440,7 @@ describe("AgentNativeTab", () => {
           projectId: "project-1",
           name: "Native agent test",
           order: 0,
-          setupPhase: "ready",
+          setupPhase: "running",
           pendingAgentLaunch: true,
           initialPrompt: "Add a dark mode toggle",
           startupAgentSession: {
@@ -3468,11 +3468,29 @@ describe("AgentNativeTab", () => {
         }),
     );
 
-    renderInAppCommandScope(
-      <AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />,
+    const { LaunchPromptPending } = await import("./LaunchPromptPending");
+    const opening = renderInAppCommandScope(
+      <LaunchPromptPending
+        environmentId="env-1"
+        platform="cursor"
+        prompt="Add a dark mode toggle"
+        stage="creating-worktree"
+      />,
     );
+    expect(screen.getByText("Creating worktree…")).toBeTruthy();
+    expect(screen.getAllByText("Add a dark mode toggle")).toHaveLength(1);
+
+    opening.rerender(<AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />);
 
     expect(await screen.findByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.getAllByText("Add a dark mode toggle")).toHaveLength(1);
+    expect(screen.getByText("Running environment setup script…")).toBeTruthy();
+    expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+    act(() => {
+      appCommandStore(environmentStore).getState().updateEnvironment("env-1", {
+        setupPhase: "ready",
+      });
+    });
     expect(screen.getByText("Launching Cursor Agent…")).toBeTruthy();
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
     // The backend owns this dispatch; the preview never sends anything.
@@ -3636,6 +3654,80 @@ describe("AgentNativeTab", () => {
     expect(screen.getByTestId("setup-pending-prompt").textContent).toContain(
       "Add a dark mode toggle",
     );
+  });
+
+  test("retires a cancelled launch preview through setup failure and recovery", async () => {
+    fixtureState.renderVirtualizedMessages = true;
+    const environments = appCommandStore(environmentStore);
+    const starting = {
+      tabId: "startup-agent",
+      agent: "cursor",
+      style: "native",
+      status: "starting",
+    } as const;
+    environments.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          setupPhase: "running",
+          pendingAgentLaunch: true,
+          initialPrompt: "Recover the opening prompt",
+          startupAgentSession: starting,
+        } as never,
+      ],
+    });
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="startup-agent" data={freshTab("cursor")} isActive />,
+    );
+    expect(await screen.findByText("Recover the opening prompt")).toBeTruthy();
+
+    act(() => {
+      environments.getState().updateEnvironment("env-1", {
+        setupPhase: "failed",
+        pendingAgentLaunch: false,
+        startupAgentSession: {
+          ...starting,
+          status: "error",
+          error: "Setup failed before the opening prompt was sent.",
+        },
+      });
+    });
+    expect(await screen.findByText("Environment setup failed.")).toBeTruthy();
+    expect(screen.queryByText("Recover the opening prompt") === null).toBe(true);
+
+    act(() => {
+      environments.getState().updateEnvironment("env-1", { setupPhase: "ready" });
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("Environment setup failed.") === null).toBe(true),
+    );
+    expect(screen.queryByText("Recover the opening prompt") === null).toBe(true);
+    expect(screen.queryByText(/^Launching /) === null).toBe(true);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
+  test("an attachments-only launch shows setup waiting in an open agent pane", () => {
+    appCommandStore(environmentStore).setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          setupPhase: "running",
+          pendingAgentLaunch: true,
+          initialPrompt: " ",
+          hasInitialPromptAttachments: true,
+        } as never,
+      ],
+    });
+    renderInAppCommandScope(
+      <AgentNativeTab tabId="startup-agent" data={freshTab("codex")} isActive />,
+    );
+    expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
+    expect(screen.queryByTestId("setup-pending-prompt") === null).toBe(true);
+    expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
   });
 
   test("shows the connecting logo on a created tab that connected once but is still empty", async () => {

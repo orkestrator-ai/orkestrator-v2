@@ -295,6 +295,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
             renderError={renderTabError(view.isActive)}
           >
             <LazyAgentNativeTab
+              loadingFallback={renderTabFallback(view.isActive)}
               tabId={tab.id}
               data={nativeAgentData}
               isActive={view.isActive}

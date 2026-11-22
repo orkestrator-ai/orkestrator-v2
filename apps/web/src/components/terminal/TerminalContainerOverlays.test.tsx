@@ -22,6 +22,7 @@ import { buildPipelineStore } from "@/stores/buildPipelineStore";
 import { terminalSessionStore } from "@/stores/terminalSessionStore";
 
 import { type PersistedPaneLayout } from "@/types/paneLayout";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 
 import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
 
@@ -584,28 +585,114 @@ describe("TerminalContainer", () => {
     expect(screen.queryByText("Creating worktree...") === null).toBe(true);
   });
 
-  test("keeps a launch's opening prompt in front of a booting container, logs one click away", async () => {
+  test("shows a Docker prompt before allocation and scopes log selection to the current launch", async () => {
     appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
       pendingAgentLaunch: true,
       initialPrompt: "Add a dark mode toggle",
       initialAgentPlatform: "claude",
+    });
+    const creating = (environmentId: string, containerId: string | null) => (
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId={environmentId}
+          containerId={containerId}
+          isContainerRunning={false}
+          isContainerCreating
+        />
+      </TerminalProvider>
+    );
+    const view = renderInAppCommandScope(creating("env-hidden", null));
+
+    expect(await screen.findByText("Starting container…")).toBeTruthy();
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.queryByText(/Select an environment/) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "View container logs" }) === null).toBe(true);
+    view.rerender(creating("env-hidden", "container-hidden"));
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.queryByTestId("initialization-logs") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "View container logs" }));
+    expect(screen.getByTestId("initialization-logs").textContent).toBe("container-hidden");
+    fireEvent.click(screen.getByRole("button", { name: "Back to opening prompt" }));
+    expect(await screen.findByText("Add a dark mode toggle")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "View container logs" }));
+
+    appCommandStore(environmentStore).getState().updateEnvironment("env-visible", {
+      pendingAgentLaunch: true,
+      initialPrompt: "Check the deployment",
+    });
+    view.rerender(creating("env-visible", "container-visible"));
+    expect(await screen.findByText("Check the deployment")).toBeTruthy();
+    expect(screen.queryByTestId("initialization-logs") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "View container logs" }));
+
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
+      environmentType: "local",
+      containerId: null,
+      worktreePath: undefined,
+    });
+    view.rerender(creating("env-hidden", null));
+    expect(await screen.findByText("Creating worktree…")).toBeTruthy();
+    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View container logs" }) === null).toBe(true);
+  });
+
+  test("shows the preparing prompt after allocation while the running environment has no tabs", async () => {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
+      status: "running",
+      pendingAgentLaunch: true,
+      initialPrompt: "Check the deployment",
+      initialAgentPlatform: "codex",
+      setupPhase: "pending",
     });
     renderInAppCommandScope(
       <TerminalProvider>
         <TerminalContainer
           environmentId="env-hidden"
           containerId="container-hidden"
-          isContainerRunning={false}
-          isContainerCreating
+          isContainerRunning
         />
       </TerminalProvider>,
     );
+    expect(await screen.findByText("Preparing environment…")).toBeTruthy();
+    expect(screen.getByText("Check the deployment")).toBeTruthy();
+  });
 
-    expect(await screen.findByText("Starting container…")).toBeTruthy();
-    expect(screen.getByText("Add a dark mode toggle")).toBeTruthy();
-    expect(screen.queryByTestId("initialization-logs") === null).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "View container logs" }));
-    expect(screen.getByTestId("initialization-logs").textContent).toBe("container-hidden");
+  test("preserves a provisional startup layout until the backend publishes the allocated container", async () => {
+    appCommandStore(environmentStore).getState().updateEnvironment("env-hidden", {
+      status: "running",
+      containerId: "container-hidden",
+      pendingAgentLaunch: true,
+      initialPrompt: "Check the deployment",
+      setupPhase: "running",
+    });
+    getPaneLayoutMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      version: PANE_LAYOUT_VERSION,
+      revision: 1,
+      updatedAt: "2026-11-01T00:00:00.000Z",
+      activePaneId: "pane",
+      containerId: null,
+      root: {
+        kind: "leaf",
+        id: "pane",
+        activeTabId: "startup-agent",
+        tabs: [{ id: "startup-agent", type: "agent-native" }],
+      },
+    });
+    renderInAppCommandScope(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-hidden"
+          containerId="container-hidden"
+          isContainerRunning
+        />
+      </TerminalProvider>,
+    );
+    await waitFor(() => {
+      expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-hidden")).toBe("done");
+    });
+    expect(deletePaneLayoutMock).not.toHaveBeenCalled();
+    expect(await screen.findByText("Check the deployment")).toBeTruthy();
   });
 });

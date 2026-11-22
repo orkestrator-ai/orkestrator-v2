@@ -41,9 +41,14 @@ import {
 } from "./service.js";
 
 import { StorageService } from "../storage.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import { failEnvironmentSetup } from "../commands-environment.js";
+import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
 import { AgentMailService } from "../agent-mail-service.js";
 import { httpProvider } from "../agent-provider-test-support.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import type { PaneLayoutLeaf } from "@orkestrator/protocol/pane-layout-merge";
 
 import { deferred } from "../recurring/test-support.js";
 
@@ -1741,6 +1746,192 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test.each(["codex", "claude"] as const)(
+      "dispatches once on the reserved native %s path after settings change during setup",
+      async (agent) => {
+        const { provider, send } = createProviderStub(agent);
+        await withService(
+          {
+            prefix: "orkestrator-reserved-startup-",
+            environment: {
+              status: "creating",
+              environmentType: "containerized",
+              initialAgentPlatform: agent,
+              agentSettings: { platforms: { [agent]: { mode: "native" } } },
+              initialPrompt: "Fix the failing test",
+              pendingAgentLaunch: true,
+              setupPhase: "pending",
+              setupScriptsComplete: false,
+            },
+            provider: async () => provider,
+          },
+          async ({ storage, service }) => {
+            await enableTmuxMode(storage);
+            await service.reconcileInitialLaunch("env-1");
+            expect(startupNativeTabFromLayout(await storage.getPaneLayout("env-1"))).toMatchObject({
+              type: "agent-native",
+              nativeAgentData: { platform: agent },
+            });
+            expect(send).not.toHaveBeenCalled();
+
+            await storage.updateEnvironment("env-1", {
+              status: "running",
+              containerId: "container-ready",
+              agentSettings: {
+                platforms:
+                  agent === "claude"
+                    ? { claude: { mode: "native", claudeNativeBackend: "tmux" } }
+                    : { codex: { mode: "terminal" } },
+              },
+              setupPhase: "running",
+            });
+            await service.reconcileInitialLaunch("env-1");
+            const withSetup = await storage.ensureSetupTab("env-1");
+            const root = withSetup.root as { tabs: Array<{ id: string; isSetupTab?: boolean }> };
+            const setupId = root.tabs.find((tab) => tab.isSetupTab)!.id;
+            await storage.savePaneLayout(
+              "env-1",
+              { ...withSetup, root: { ...root, activeTabId: setupId } },
+              withSetup.revision,
+            );
+            expect(send).not.toHaveBeenCalled();
+
+            await storage.updateEnvironment("env-1", {
+              setupPhase: "ready",
+              setupScriptsComplete: true,
+            });
+            await service.reconcileInitialLaunch("env-1");
+            await service.reconcileInitialLaunch("env-1");
+            expect(send).toHaveBeenCalledTimes(1);
+            expect(send).toHaveBeenCalledWith(
+              "provider-session",
+              "Fix the failing test",
+              expect.anything(),
+            );
+            const layout = await storage.getPaneLayout("env-1");
+            expect(layout).toMatchObject({
+              containerId: "container-ready",
+              root: { activeTabId: setupId },
+            });
+            expect(startupNativeTabFromLayout(layout)).toMatchObject({
+              type: "agent-native",
+              nativeAgentData: { platform: agent, sessionId: "provider-session" },
+            });
+            const environment = await storage.getEnvironment("env-1");
+            expect(environment?.pendingAgentLaunch).toBe(false);
+            expect(environment?.startupAgentSession).toBeUndefined();
+          },
+        );
+      },
+    );
+
+    test("honours a persisted close before and after setup while dispatching in the background", async () => {
+      const { provider, send } = createProviderStub("cursor");
+      await withService(
+        {
+          prefix: "orkestrator-dismiss-startup-",
+          environment: {
+            initialAgentPlatform: "cursor",
+            initialPrompt: "Fix the failing test",
+            pendingAgentLaunch: true,
+            setupPhase: "running",
+            setupScriptsComplete: false,
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+          const before = await storage.ensureSetupTab("env-1");
+          const root = before.root as PaneLayoutLeaf;
+          const tabs = root.tabs.filter((tab) => tab.id !== "startup-agent");
+          const after = await storage.applyPaneLayoutIntent(
+            "env-1",
+            { ...before, root },
+            { ...before, root: { ...root, tabs, activeTabId: tabs[0]!.id } },
+          );
+          expect(after.root).toMatchObject({ activeTabId: tabs[0]!.id, tabs });
+
+          await service.reconcileInitialLaunch("env-1");
+          await service.reconcileInitialLaunch("env-1");
+          expect(await storage.getPaneLayout("env-1")).toEqual(after);
+          expect(send).not.toHaveBeenCalled();
+
+          await storage.updateEnvironment("env-1", {
+            setupPhase: "ready",
+            setupScriptsComplete: true,
+          });
+          await service.reconcileInitialLaunch("env-1");
+          await service.reconcileInitialLaunch("env-1");
+          expect(await storage.getPaneLayout("env-1")).toEqual(after);
+          expect(send).toHaveBeenCalledTimes(1);
+          const environment = await storage.getEnvironment("env-1");
+          expect(environment?.pendingAgentLaunch).toBe(false);
+          expect(environment?.startupAgentSession).toBeUndefined();
+        },
+      );
+    });
+
+    test("an actual setup failure cancels the published launch and skipping setup does not send it", async () => {
+      const { provider, send } = createProviderStub("cursor");
+      await withService(
+        {
+          prefix: "orkestrator-cancelled-startup-",
+          environment: {
+            initialAgentPlatform: "cursor",
+            initialPrompt: "Recover the opening prompt",
+            pendingAgentLaunch: true,
+            setupPhase: "running",
+            setupScriptsComplete: false,
+          },
+          provider: async () => provider,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+          expect(startupNativeTabFromLayout(await storage.getPaneLayout("env-1"))).toBeTruthy();
+          const runtime = new BackendRuntime({ emit: () => undefined });
+          const context = {
+            storage,
+            runtime,
+            nativeAgents: service,
+            appRoot: "",
+            resourceRoot: "",
+            environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+            emit: () => undefined,
+          } satisfies CommandContext;
+          try {
+            await failEnvironmentSetup(
+              "env-1",
+              new Error("Setup script exited with code 1"),
+              context,
+            );
+            const environment = await storage.getEnvironment("env-1");
+            expect(environment).toMatchObject({
+              setupPhase: "failed",
+              pendingAgentLaunch: false,
+              initialPrompt: "Recover the opening prompt",
+              startupAgentSession: { status: "error" },
+            });
+            const snapshot = await createCommandRegistry().get("override_environment_setup")!(
+              { environmentId: "env-1" },
+              context,
+            );
+            expect(snapshot).toMatchObject({
+              setupPhase: "ready",
+              pendingAgentLaunch: false,
+              initialPrompt: "Recover the opening prompt",
+              startupAgentSession: { status: "error" },
+            });
+            expect(snapshot).not.toHaveProperty("startupLaunchGeneration");
+            await service.reconcileInitialLaunch("env-1");
+            expect(send).not.toHaveBeenCalled();
+          } finally {
+            runtime.shutdown();
+            await runtime.diffStats.settled();
+          }
+        },
+      );
+    });
+
     test("publishes Cursor's native startup tab before consuming the launch", async () => {
       const { provider, createSession } = createProviderStub("cursor");
       await withService(
@@ -2748,6 +2939,8 @@ describe("NativeAgentService", () => {
               platforms: { codex: { mode: "native", fastMode: false } },
             },
             initialPrompt: "   ",
+            setupScriptsComplete: false,
+            setupPhase: "running",
             initialPromptAttachments: [
               {
                 id: "image-1",
@@ -2760,6 +2953,18 @@ describe("NativeAgentService", () => {
           provider: async () => provider,
         },
         async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+          expect(await storage.getPaneLayout("env-1")).toBeNull();
+          expect(send).not.toHaveBeenCalled();
+          const setup = await storage.ensureSetupTab("env-1");
+          expect(setup.root).toMatchObject({
+            activeTabId: "default",
+            tabs: [{ id: "default", isSetupTab: true }],
+          });
+          await storage.updateEnvironment("env-1", {
+            setupPhase: "ready",
+            setupScriptsComplete: true,
+          });
           await service.reconcileInitialLaunch("env-1");
 
           expect(send).toHaveBeenCalledWith(
@@ -2775,13 +2980,8 @@ describe("NativeAgentService", () => {
           expect(converged).toMatchObject({ pendingAgentLaunch: false });
           expect(converged?.startupAgentSession).toBeUndefined();
           expect(converged?.initialPromptAttachments).toBeUndefined();
-          expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
-            tabs: [
-              {
-                id: "startup-agent",
-                nativeAgentData: { sessionId: "provider-session" },
-              },
-            ],
+          expect(startupNativeTabFromLayout(await storage.getPaneLayout("env-1"))).toMatchObject({
+            nativeAgentData: { sessionId: "provider-session" },
           });
         },
       );

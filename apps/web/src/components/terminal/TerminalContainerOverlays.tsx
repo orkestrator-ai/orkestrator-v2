@@ -62,8 +62,14 @@ export function TerminalContainerOverlays({
   launchPrompt = "",
   launchAgent,
 }: TerminalContainerOverlaysProps) {
-  const [showContainerLogs, setShowContainerLogs] = useState(false);
+  const [logsForContainer, setLogsForContainer] = useState<string | null>(null);
   const creatingWithPrompt = showCreatingOverlay && launchPrompt !== "";
+  const showLogs = Boolean(containerId && !isLocalEnvironment && logsForContainer === containerId);
+  const creationFallback = containerId ? (
+    <InitializationLogs containerId={containerId} className="h-full" />
+  ) : (
+    <CreationProgress isLocal={isLocalEnvironment} />
+  );
   return (
     <>
       {showNoEnvironmentOverlay && (
@@ -75,14 +81,22 @@ export function TerminalContainerOverlays({
         </div>
       )}
 
-      {showCreatingOverlay && containerId && (!creatingWithPrompt || showContainerLogs) && (
-        <div className="absolute inset-0 bg-background">
-          <InitializationLogs containerId={containerId} className="h-full" />
+      {showCreatingOverlay && (!creatingWithPrompt || showLogs) && (
+        <div className="absolute inset-0 flex flex-col bg-background">
+          {creatingWithPrompt && showLogs && (
+            <div className="border-b px-4 py-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setLogsForContainer(null)}
+              >
+                Back to opening prompt
+              </Button>
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1">{creationFallback}</div>
         </div>
-      )}
-
-      {showCreatingOverlay && isLocalEnvironment && !containerId && !creatingWithPrompt && (
-        <CreatingWorktree />
       )}
 
       {/*
@@ -90,31 +104,25 @@ export function TerminalContainerOverlays({
         created, laid out as the agent tab that will replace it. Container logs
         stay one click away.
       */}
-      {creatingWithPrompt && !showContainerLogs && (containerId || isLocalEnvironment) && (
+      {creatingWithPrompt && !showLogs && (
         <div className="absolute inset-0 bg-background">
           <LazyLaunchPromptPending
             environmentId={environmentId}
             platform={launchAgent}
             prompt={launchPrompt}
-            stage={containerId ? "starting-container" : "creating-worktree"}
+            stage={isLocalEnvironment ? "creating-worktree" : "starting-container"}
             detail={
-              containerId ? (
+              containerId && !isLocalEnvironment ? (
                 <button
                   type="button"
                   className="rounded-sm text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-hairline focus-hairline-outset"
-                  onClick={() => setShowContainerLogs(true)}
+                  onClick={() => setLogsForContainer(containerId)}
                 >
                   View container logs
                 </button>
               ) : undefined
             }
-            fallback={
-              containerId ? (
-                <InitializationLogs containerId={containerId} className="h-full" />
-              ) : (
-                <CreatingWorktree />
-              )
-            }
+            fallback={creationFallback}
           />
         </div>
       )}
@@ -179,12 +187,12 @@ export function TerminalContainerOverlays({
   );
 }
 
-function CreatingWorktree() {
+function CreationProgress({ isLocal }: { isLocal: boolean }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-background">
       <div className="text-center text-muted-foreground">
         <TerminalIcon className="mx-auto mb-4 h-12 w-12 opacity-50 animate-pulse" />
-        <p>Creating worktree...</p>
+        <p role="status">{isLocal ? "Creating worktree..." : "Starting container..."}</p>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { CapabilityLibrary } from "@orkestrator/protocol/capability-resources-api";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import {
   openTunnel,
@@ -76,7 +77,7 @@ test("cleanup refuses a run with a different owner before reading its PID file",
   await owner.allocate();
   const pidFile = path.join(owner.root, "backend.pid");
   try {
-    // A linked PID would fail for the owner too. The foreign attempt must stop
+    // A malformed PID would fail for the owner too. The foreign attempt must stop
     // at the earlier ownership check and leave the directory available to its owner.
     await writeFile(pidFile, "leave this file alone");
     await expect(other.cleanup(false)).rejects.toThrow("ownership could not be verified");
@@ -130,6 +131,46 @@ test.each(["SSH lost", "worker still alive"])(
     expect(errors[0]).toContain(message);
   },
 );
+
+test("the cleanup script leaves recovery evidence if an owned session will not stop", async () => {
+  const pid = fakePid(15);
+  let refuseTermination = true;
+  const remote = new RemoteCapabilityRun(
+    "fixture",
+    id(),
+    async (host, command, input, ms, signal) => {
+      let script = String(input);
+      if (refuseTermination) {
+        // Keep the actual cleanup shell, replacing only its Linux process probes and signal.
+        script = script.replace(
+          "session_live() {",
+          `
+worker_is_ours() { return 0; }
+ps() { printf '%s S\\n' "${pid}"; }
+kill() { printf '%s\\n' "$*" >>"$R/signal-attempts"; return 1; }
+session_live() {`,
+        );
+      }
+      return fakeSsh(host, command, script, ms, signal);
+    },
+  );
+  await remote.allocate();
+  const pidFile = path.join(remote.root, "backend.pid");
+  const token = path.join(remote.root, "token");
+  try {
+    await writeFile(pidFile, `${pid} 42\n`);
+    await writeFile(token, "fixture-token");
+    await expect(remote.cleanup(false)).rejects.toThrow(remote.root);
+    expect(
+      (await readFile(path.join(remote.root, "signal-attempts"), "utf8")).trim().split("\n"),
+    ).toEqual(Array(3).fill(`-TERM -- -${pid}`));
+    expect(await readFile(token, "utf8")).toBe("fixture-token");
+  } finally {
+    refuseTermination = false;
+    await rm(pidFile, { force: true });
+    await remote.cleanup(false);
+  }
+});
 
 test("forward spawn errors reach cleanup with a nonzero exit, with multiplexing and backgrounding disabled", async () => {
   let args: string[] = [];

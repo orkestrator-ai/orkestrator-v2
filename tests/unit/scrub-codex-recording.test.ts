@@ -57,6 +57,68 @@ describe("scrub-codex-recording", () => {
     expect(hits["openai-key"]).toBe(1);
   });
 
+  test("aliases Claude and Pi IDs across fields, frames, and embedded strings", () => {
+    const req = `req_${"A1".repeat(12)}`;
+    const message = `msg_${"B2".repeat(12)}`;
+    const secondMessage = `msg_${"b3".repeat(25)}`;
+    const tool = `toolu_${"C4".repeat(12)}`;
+    const response = `resp_${"d5".repeat(25)}`;
+    const call = `call_${"e6".repeat(16)}|fc_${"f7".repeat(25)}`;
+    const input = [
+      { id: message, request_id: req, tool_use_id: tool },
+      { api_message_id: message, request_id: req, id: tool },
+      { responseId: response, textSignature: JSON.stringify({ id: secondMessage }), id: call },
+      { responseId: response, toolCallId: call, phase: "commentary" },
+    ]
+      .map((frame) => JSON.stringify(frame))
+      .join("\n");
+    const redactions = buildRedactions({ home: "/home/user", user: "user" });
+    const { output, hits } = scrub(input, redactions);
+    expect(hits).toEqual({ "provider-id": 13 });
+    expect(output.split("\n").map((line) => JSON.parse(line))).toEqual([
+      { id: "msg-recorded-1", request_id: "req-recorded-2", tool_use_id: "toolu-recorded-3" },
+      { api_message_id: "msg-recorded-1", request_id: "req-recorded-2", id: "toolu-recorded-3" },
+      {
+        responseId: "resp-recorded-4",
+        textSignature: '{"id":"msg-recorded-5"}',
+        id: "call-recorded-6|fc-recorded-7",
+      },
+      {
+        responseId: "resp-recorded-4",
+        toolCallId: "call-recorded-6|fc-recorded-7",
+        phase: "commentary",
+      },
+    ]);
+    expect(scrub(output, redactions)).toEqual({ output, hits: {}, totalHits: 0 });
+  });
+
+  test("aliases Cursor run, request, and model call IDs while keeping session UUIDs", () => {
+    const requestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const id = "run-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const modelCallId = `${requestId}-0-sample`;
+    const input = [
+      { frame: { id, requestId, modelCallId, sessionId: requestId } },
+      { frame: { id, requestId, modelCallId } },
+      { frame: { requestId: "cursor-id-recorded-1", modelCallId: `${requestId}-1-sample` } },
+    ]
+      .map((step) => JSON.stringify(step))
+      .join("\n");
+
+    const { output, hits } = scrub(input);
+    expect(hits).toEqual({ "cursor-run-id": 2, "cursor-request-or-model-call-id": 5 });
+    const frame = {
+      id: "run-recorded-1",
+      requestId: "cursor-id-recorded-2",
+      modelCallId: "cursor-id-recorded-3",
+    };
+    expect(output.split("\n").map((line) => JSON.parse(line))).toEqual([
+      { frame: { ...frame, sessionId: requestId } },
+      { frame },
+      { frame: { requestId: "cursor-id-recorded-1", modelCallId: "cursor-id-recorded-4" } },
+    ]);
+    expect(scrub(output)).toEqual({ output, hits: {}, totalHits: 0 });
+  });
+
   test("redacts bearer tokens and JWTs", () => {
     const { output } = scrub(
       "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456\ntoken eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
@@ -333,6 +395,27 @@ describe("scrub-codex-recording", () => {
       { rawLine: JSON.stringify({ method: "fs/write_text_file", params: { content: "" } }) },
       { rawLine: '""' },
       { rawLine: "{" },
+    ]);
+  });
+
+  test("preserves Claude task status when stripping task update payloads", () => {
+    const header = { replay: 1, bridge: "claude" };
+    const task = { type: "system", subtype: "task_updated" };
+    const input = [
+      header,
+      { frame: { ...task, patch: { status: "completed", description: "private", end_time: 10 } } },
+      { frame: { ...task, patch: { status: "private", description: "private" } } },
+      { frame: { type: "other", patch: { status: "completed" } } },
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n");
+    const { output } = stripContent(input);
+
+    expect(output.split("\n").map((line) => JSON.parse(line))).toEqual([
+      header,
+      { frame: { ...task, patch: { status: "completed", description: "", end_time: 10 } } },
+      { frame: { ...task, patch: { status: "", description: "" } } },
+      { frame: { type: "other", patch: { status: "" } } },
     ]);
   });
 

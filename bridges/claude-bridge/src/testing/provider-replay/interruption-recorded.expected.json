@@ -1,0 +1,113 @@
+[
+  {
+    "label": "mid-turn",
+    "activity": "working",
+    "completion": {
+      "status": "running"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Use your Bash tool to run exactly this command in the foreground, with no other options: perl -e 'sleep 25'. Do not run …",
+        "textLength": 134,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use your Bash tool to run exactly this command in the foreground, with no other options: perl -e 'sleep 25'. Do not run …",
+            "textLength": 134
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "pending"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 0,
+      "revisedOutsideTail": []
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  },
+  {
+    "label": "end",
+    "activity": "idle",
+    "completion": {
+      "status": "idle",
+      "prompt": "resolved"
+    },
+    "pending": [],
+    "rows": [
+      {
+        "role": "user",
+        "text": "Use your Bash tool to run exactly this command in the foreground, with no other options: perl -e 'sleep 25'. Do not run …",
+        "textLength": 134,
+        "parts": [
+          {
+            "type": "text",
+            "text": "Use your Bash tool to run exactly this command in the foreground, with no other options: perl -e 'sleep 25'. Do not run …",
+            "textLength": 134
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "textLength": 0,
+        "parts": [
+          {
+            "type": "tool-invocation",
+            "toolName": "Bash",
+            "toolState": "failure"
+          }
+        ]
+      },
+      {
+        "role": "system",
+        "text": "Interrupted by user",
+        "textLength": 19,
+        "parts": [
+          {
+            "type": "status",
+            "text": "Interrupted by user"
+          }
+        ]
+      }
+    ],
+    "liveTail": {
+      "startIndex": 1,
+      "revisedOutsideTail": [0],
+      "revisedRows": [
+        {
+          "index": 0,
+          "row": {
+            "role": "user",
+            "text": "Use your Bash tool to run exactly this command in the foreground, with no other options: perl -e 'sleep 25'. Do not run …",
+            "textLength": 134,
+            "parts": [
+              {
+                "type": "text",
+                "text": "Use your Bash tool to run exactly this command in the foreground, with no other options: perl -e 'sleep 25'. Do not run …",
+                "textLength": 134
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "extra": {
+      "providerSessionId": "derived from the bridge id"
+    }
+  }
+]

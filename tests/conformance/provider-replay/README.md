@@ -123,7 +123,14 @@ prompt text, which can still appear in returned provider frames. Cursor also
 records `cursor-terminal` actions with the result or rejection of `run.wait()`.
 For a captured Cursor or Pi cancellation, give `interrupt` the argument
 `"awaitProvider": true` so the following captured terminal step settles it.
-ACP prompt markers carry the outgoing RPC ID.
+For a captured Claude stop, give it `"graceful": true`: the user's stop is
+`POST /abort`, an SDK interrupt after which the CLI still sends its
+interruption marker and an `error_during_execution` result, while a plain
+`interrupt` is `/hard-abort` and delivers nothing after it. Replace the
+recorded prompt's client uuid (the `command_uuid` of its `command_lifecycle`
+frames, and `user_message_uuid(s)` on later frames) with `"$prompt"`: a real
+result names the prompt it answers, and the bridge ignores a success that
+names other input. ACP prompt markers carry the outgoing RPC ID.
 
 To turn a capture into a fixture:
 
@@ -134,12 +141,19 @@ To turn a capture into a fixture:
    placeholders for IDs the replay still needs to supply. For ACP, omit
    side-effecting client requests, keep the prompt response and add a
    `settle` step to wait for the terminal dispatch journal record.
-3. Scrub it: `bun scripts/scrub-codex-recording.ts <in> <out>` (the scrubber
-   handles provider envelopes and ACP wire lines. Add `--strip-content` to
+3. Scrub it with `bun scripts/scrub-codex-recording.ts <in> <out>`. The scrubber
+   handles provider envelopes and ACP wire lines, and consistently replaces
+   recognised provider request, response, message, tool, and run IDs within
+   a recording. Add `--strip-content` to
    blank known payload fields, then **read every retained frame and the diff**
    for unexpected payload fields, metadata, machine-specific paths and secrets.
    Use a disposable fixture project and harmless prompts so any prose you need
-   to retain is safe to share.
+   to retain is safe to share. Use harmless stand-in text when a scenario needs
+   to assert a specific reply. Stripping changes what some scenarios show,
+   so compare the expectation with the synthetic one: Cursor and Pi render
+   no row for empty text, Claude offers a command card only with the
+   command it is about, and Claude recognises its interruption marker
+   (`[Request interrupted by user…]`) by its text.
 4. Generate its expectation with `ORKESTRATOR_PROVIDER_REPLAY_UPDATE=1`, read
    it, and commit both files.
 

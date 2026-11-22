@@ -47,7 +47,7 @@ const REDACTED = "«redacted»";
 export interface Redaction {
   name: string;
   pattern: RegExp;
-  replacement: string;
+  replacement: string | ((match: string, ordinal: number) => string);
 }
 
 /** Identity to redact. Defaults to the machine running the scrubber. */
@@ -130,6 +130,25 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
         /("(?:authUrl|authorizationUrl|verificationUrl|verificationUri|userCode|loginId)"\s*:\s*")(?!«redacted»")[^"]+(")/g,
       replacement: `$1${REDACTED}$2`,
     },
+    // These IDs can recur in different fields or inside strings, such as
+    // Pi's textSignature and its compound call ID. Alias each component.
+    {
+      name: "provider-id",
+      pattern: /\b(?:req|msg|toolu|resp|call|fc)_[A-Za-z0-9]{20,}\b/g,
+      replacement: (match, ordinal) => `${match.slice(0, match.indexOf("_"))}-recorded-${ordinal}`,
+    },
+    {
+      name: "cursor-run-id",
+      pattern: /\brun-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi,
+      replacement: (_match, ordinal) => `run-recorded-${ordinal}`,
+    },
+    {
+      name: "cursor-request-or-model-call-id",
+      // Scope bare UUIDs to these fields so fixture-supplied session UUIDs survive.
+      pattern:
+        /(?<="(?:requestId|modelCallId)"\s*:\s*")[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:-\d+-[a-z0-9]+)?(?=")/gi,
+      replacement: (_match, ordinal) => `cursor-id-recorded-${ordinal}`,
+    },
     // Identity. Home first, so the more specific path wins over the bare username.
     { name: "home-path", pattern: new RegExp(escapeRegExp(home), "g"), replacement: "/home/user" },
     // `user` is the placeholder this script writes, so redacting it would report
@@ -188,10 +207,9 @@ export function scrub(input: string, redactions: Redaction[] = buildRedactions()
 
   for (const redaction of redactions) {
     let count = 0;
-    output = output.replace(redaction.pattern, (...args: unknown[]) => {
-      // Re-run the replacement string's $n expansion by hand: we are inside a
-      // function replacer, so `$1` would otherwise be taken literally.
-      const replacement = expandReplacement(redaction.replacement, args);
+    const replacementFor = createReplacement(redaction.replacement, output);
+    output = output.replace(redaction.pattern, (...args: [string, ...unknown[]]) => {
+      const replacement = replacementFor(args);
       if (replacement !== args[0]) count += 1;
       return replacement;
     });
@@ -204,6 +222,30 @@ export function scrub(input: string, redactions: Redaction[] = buildRedactions()
   return { output, hits, totalHits };
 }
 
+function createReplacement(
+  replacement: Redaction["replacement"],
+  input: string,
+): (args: [string, ...unknown[]]) => string {
+  if (typeof replacement === "string") {
+    // A function replacer does not expand the replacement string's $n groups.
+    return (args) => expandReplacement(replacement, args);
+  }
+  const aliases = new Map<string, string>();
+  const reserved = new Set(input.match(/\b[\w-]+-recorded-\d+\b/g));
+  let ordinal = 0;
+  return ([match]) => {
+    const existing = aliases.get(match);
+    if (existing !== undefined) return existing;
+    let alias: string;
+    do {
+      alias = replacement(match, ++ordinal);
+      // A partially scrubbed fixture may already contain this alias.
+    } while (reserved.has(alias));
+    aliases.set(match, alias);
+    return alias;
+  };
+}
+
 function expandReplacement(template: string, matchArgs: unknown[]): string {
   return template.replace(/\$(\d)/g, (_marker, digit: string) => {
     const group = matchArgs[Number(digit)];
@@ -213,9 +255,8 @@ function expandReplacement(template: string, matchArgs: unknown[]): string {
 
 /**
  * The fields a recording is actually made of. Every redaction above is a
- * secret or identity pattern; none of them touch the model's prose, the shell
- * output or the patches — which per the recorder's own docs is the bulk of what
- * a raw recording contains.
+ * secret or identifier pattern. The model's prose, shell output and patches
+ * need a separate pass.
  */
 export const CONTENT_FIELDS = ["delta", "text", "aggregatedOutput", "diff"] as const;
 
@@ -284,11 +325,21 @@ const PROVIDER_PAYLOAD_FIELDS = new Set([
   "uri",
 ]);
 
+const CLAUDE_TASK_STATUSES = new Set([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+  "killed",
+  "paused",
+]);
+
 function stripProviderValue(value: unknown, onBlank: () => void): unknown {
   if (Array.isArray(value)) return value.map((entry) => stripProviderValue(entry, onBlank));
   if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => {
+    Object.entries(record).map(([key, entry]) => {
       if (key === "content" && Array.isArray(entry)) {
         return [
           key,
@@ -312,6 +363,21 @@ function stripProviderValue(value: unknown, onBlank: () => void): unknown {
           onBlank();
           return [key, "{"];
         }
+      }
+      if (
+        key === "patch" &&
+        record.type === "system" &&
+        record.subtype === "task_updated" &&
+        entry &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        "status" in entry &&
+        typeof entry.status === "string" &&
+        CLAUDE_TASK_STATUSES.has(entry.status)
+      ) {
+        // Task status controls replay. The rest of the patch can carry prose.
+        const { status, ...payload } = entry;
+        return [key, { ...(blankValue(payload, onBlank) as Record<string, unknown>), status }];
       }
       if (
         PROVIDER_PAYLOAD_FIELDS.has(key) ||

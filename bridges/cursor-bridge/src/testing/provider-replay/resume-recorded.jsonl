@@ -1,0 +1,37 @@
+{"replay":1,"bridge":"cursor","scenario":"resume","source":"recorded","provider":"@cursor/sdk","providerVersion":"1.4.1","description":"Captured Cursor SDK updates and run.wait results for a completed turn, a restart of the bridge over its published state, and a second turn on the restored session. The short replies and thinking are kept because Cursor renders no row for empty text."}
+{"action":"prompt","text":"Reply with exactly: first turn ready. Do not use any tools."}
+{"frame":{"type":"thinking-delta","text":"The"}}
+{"frame":{"type":"thinking-delta","text":" user"}}
+{"frame":{"type":"token-delta","tokens":2}}
+{"frame":{"type":"thinking-delta","text":" wants"}}
+{"frame":{"type":"token-delta","tokens":1}}
+{"frame":{"type":"thinking-delta","text":" me to reply with exactly \"first turn ready\" and not use any tools."}}
+{"frame":{"type":"token-delta","tokens":17}}
+{"frame":{"type":"thinking-completed","thinkingDurationMs":143}}
+{"frame":{"type":"text-delta","text":"first"}}
+{"frame":{"type":"token-delta","tokens":1}}
+{"frame":{"type":"text-delta","text":" turn"}}
+{"frame":{"type":"token-delta","tokens":1}}
+{"frame":{"type":"text-delta","text":" ready"}}
+{"frame":{"type":"token-delta","tokens":2}}
+{"frame":{"type":"model-call-completed","modelCallId":"cursor-id-recorded-1","usage":{"inputTokens":10061,"outputTokens":22,"cacheReadTokens":3968,"cacheWriteTokens":0,"reasoningTokens":19}}}
+{"frame":{"type":"step-completed","stepId":2,"stepDurationMs":789}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":10061,"outputTokens":22,"cacheReadTokens":3968,"cacheWriteTokens":0,"reasoningTokens":19}}}
+{"result":{"id":"run-recorded-1","requestId":"cursor-id-recorded-2","status":"finished","result":"first turn ready","model":{"id":"default"},"durationMs":4523,"usage":{"inputTokens":10061,"outputTokens":22,"cacheReadTokens":3968,"cacheWriteTokens":0,"totalTokens":10083,"reasoningTokens":19}},"action":"cursor-terminal"}
+{"action":"restart"}
+{"action":"observe","label":"restarted"}
+{"action":"prompt","text":"Reply with exactly: second turn ready. Do not use any tools."}
+{"frame":{"type":"thinking-delta","text":"The"}}
+{"frame":{"type":"thinking-delta","text":" user wants me to reply with exactly \"second turn ready\" and not use any tools."}}
+{"frame":{"type":"token-delta","tokens":20}}
+{"frame":{"type":"thinking-completed","thinkingDurationMs":3}}
+{"frame":{"type":"text-delta","text":"second"}}
+{"frame":{"type":"token-delta","tokens":2}}
+{"frame":{"type":"text-delta","text":" turn"}}
+{"frame":{"type":"token-delta","tokens":1}}
+{"frame":{"type":"text-delta","text":" ready"}}
+{"frame":{"type":"token-delta","tokens":1}}
+{"frame":{"type":"model-call-completed","modelCallId":"cursor-id-recorded-3","usage":{"inputTokens":11025,"outputTokens":22,"cacheReadTokens":9984,"cacheWriteTokens":0,"reasoningTokens":19}}}
+{"frame":{"type":"step-completed","stepId":2,"stepDurationMs":851}}
+{"frame":{"type":"turn-ended","usage":{"inputTokens":11025,"outputTokens":22,"cacheReadTokens":9984,"cacheWriteTokens":0,"reasoningTokens":19}}}
+{"result":{"id":"run-recorded-2","requestId":"cursor-id-recorded-4","status":"finished","result":"second turn ready","model":{"id":"default"},"durationMs":5568,"usage":{"inputTokens":11025,"outputTokens":22,"cacheReadTokens":9984,"cacheWriteTokens":0,"totalTokens":11047,"reasoningTokens":19}},"action":"cursor-terminal"}

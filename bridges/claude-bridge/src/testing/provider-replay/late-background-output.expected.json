@@ -48,7 +48,8 @@
       "revisedOutsideTail": []
     },
     "extra": {
-      "providerSessionId": "derived from the bridge id"
+      "providerSessionId": "derived from the bridge id",
+      "taskStatuses": ["running"]
     }
   },
   {
@@ -112,7 +113,8 @@
       "revisedOutsideTail": []
     },
     "extra": {
-      "providerSessionId": "derived from the bridge id"
+      "providerSessionId": "derived from the bridge id",
+      "taskStatuses": ["completed"]
     }
   }
 ]

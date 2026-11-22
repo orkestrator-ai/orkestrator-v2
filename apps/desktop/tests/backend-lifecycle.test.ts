@@ -161,3 +161,66 @@ test("AppImage replacement can claim the lock only after the old backend exits",
   order.push(locked ? "single-instance-rejected" : "replacement-started");
   expect(order).toEqual(["backend-exit", "unlock", "replacement-started"]);
 });
+
+test("AppImage replacement finds the old essential log already stopped", async () => {
+  const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { installEssentialLog } = await import("@orkestrator/protocol/node/essential-log");
+  const { resetLogger } = await import("@orkestrator/protocol/logger");
+  const root = await mkdtemp(path.join(os.tmpdir(), "desktop-appimage-handover-"));
+  const file = path.join(root, "logs", "essential", "essential.jsonl");
+  const lifecycle = async () =>
+    (await readFile(file, "utf8"))
+      .split("\n")
+      .filter((line) => line.includes('"area":"logging"'))
+      .map((line) => (JSON.parse(line) as { event: string }).event);
+  const old = installEssentialLog({ dataDir: root, owner: "desktop" });
+  let replacement: ReturnType<typeof installEssentialLog> | null = null;
+  try {
+    await prepareAppImageInstall(
+      {
+        releaseSingleInstanceLock: () => {
+          // The replacement wins the lock and starts writing the same file.
+          replacement = installEssentialLog({ dataDir: root, owner: "desktop" });
+        },
+      },
+      { stop: async () => {} },
+      old,
+    );
+    await replacement!.flush();
+    // The old process's will-quit hold stops it again; that must add nothing.
+    await old.stop();
+    await replacement!.flush();
+    expect(await lifecycle()).toEqual([
+      "essential.started",
+      "essential.stopped",
+      "essential.started",
+    ]);
+  } finally {
+    await (replacement as ReturnType<typeof installEssentialLog> | null)?.stop();
+    resetLogger();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an essential log that cannot stop does not hold an update forever", async () => {
+  let unlocked = false;
+  await prepareAppImageInstall(
+    { releaseSingleInstanceLock: () => (unlocked = true) },
+    { stop: async () => {} },
+    { stop: () => new Promise<void>(() => {}) },
+    10,
+  );
+  expect(unlocked).toBe(true);
+});
+
+test("a failed essential log stop still releases the lock", async () => {
+  let unlocked = false;
+  await prepareAppImageInstall(
+    { releaseSingleInstanceLock: () => (unlocked = true) },
+    { stop: async () => {} },
+    { stop: () => Promise.reject(new Error("disk gone")) },
+  );
+  expect(unlocked).toBe(true);
+});

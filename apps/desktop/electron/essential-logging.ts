@@ -28,3 +28,22 @@ export function exitWithEssentialLog(
   log?.flushSync();
   app.exit(code);
 }
+
+/**
+ * The renderer's process exit ("Close application"). Exit code 0 is an
+ * ordinary quit: the backend drains and the essential log records
+ * `essential.stopped`. `app.exit` would skip `will-quit`, so the next launch
+ * would read the close as a desktop that died (`logging:writer-died:desktop`).
+ * Any other code still exits at once, after draining what is queued.
+ */
+export function exitApplication(
+  app: Pick<Electron.App, "exit" | "quit">,
+  log: InstalledEssentialLog | null,
+  code = 0,
+): void {
+  if (code === 0) {
+    app.quit();
+    return;
+  }
+  exitWithEssentialLog(app, log, code);
+}

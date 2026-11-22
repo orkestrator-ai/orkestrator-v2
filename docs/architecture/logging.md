@@ -479,7 +479,10 @@ choice is for. Three limits follow from it:
   ([process-crashes-and-kills.md](../debugging/process-crashes-and-kills.md#7-a-native-dialog-during-a-quit-macos-sigsegv)).
   A native crash writes nothing, and only its next start can show it: `essential.started` with no
   `essential.stopped` before it means the last writer died. A process ended by a kill
-  rather than a quit reads the same way, as `dev:stop`'s does.
+  rather than a quit reads the same way, as `dev:stop`'s does. So every exit the app
+  chooses itself must write `essential.stopped` first: the in-app "Close application"
+  is an ordinary `app.quit()` (`exitApplication` in `essential-logging.ts`; only a
+  nonzero code still exits at once), and a quit is held until the marker is written.
 - **A container bridge has no hop**, so nothing in it reaches this file: its
   `session.resume-fell-back` stays in `/tmp/<provider>-bridge.log`. The backend's own
   `docker` `bridge.launched` is what records a container bridge's start or relaunch.
@@ -490,6 +493,13 @@ choice is for. Three limits follow from it:
   waits asynchronously for up to two seconds, then reports a counted write loss.
 - **A rejected desktop launch** installs no writer or shutdown marker: ownership
   starts only after winning Electron's single-instance lock.
+- **Releasing that lock hands the file over.** An AppImage update starts the new
+  version before the old one quits, as soon as the old one releases the lock
+  (`prepareAppImageInstall` in `backend-lifecycle.ts`). The old process writes
+  `essential.stopped` before releasing it, bounded at two seconds, so the new
+  `essential.started` never lands while the old writer still looks open, which
+  read as a desktop that died on every update. What the old process logs after
+  the handover is not written; its backend has already exited by then.
 
 ### What it holds
 

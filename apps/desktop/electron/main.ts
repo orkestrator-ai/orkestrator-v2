@@ -170,7 +170,7 @@ import {
   registerApplicationLoggingShutdown,
   registerWillQuitHold,
 } from "./application-logging.js";
-import { claimDesktopLogging, exitWithEssentialLog } from "./essential-logging.js";
+import { claimDesktopLogging, exitApplication } from "./essential-logging.js";
 import {
   browserPreviewPartitionForWindow,
   browserPreviewServicePartition,
@@ -881,7 +881,7 @@ async function startAutoUpdate(): Promise<void> {
       showMessageBox: (window, options) => nativeDialogs.showMessageBox("updater", options, window),
       onCheckResult: (report) => hostUpdates?.reportCheck(report),
       ...(process.platform === "linux"
-        ? { prepareForInstall: () => prepareAppImageInstall(app, backendProcess) }
+        ? { prepareForInstall: () => prepareAppImageInstall(app, backendProcess, essentialLog) }
         : {}),
     });
     autoUpdate.start();
@@ -1191,7 +1191,7 @@ function registerIpc(): void {
     createClipboardItem: (items) => new ClipboardItem(items),
     shellApi: shell,
     appApi: {
-      exit: (code) => exitWithEssentialLog(app, essentialLog, code),
+      exit: (code) => exitApplication(app, essentialLog, code),
       quit: () => app.quit(),
       relaunch: () => quitReopen.scheduleRelaunch(),
     },

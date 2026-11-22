@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { claimDesktopLogging, exitWithEssentialLog } from "../electron/essential-logging.js";
+import {
+  claimDesktopLogging,
+  exitApplication,
+  exitWithEssentialLog,
+} from "../electron/essential-logging.js";
 import { configureLogger, createLogger, resetLogger } from "@orkestrator/protocol/logger";
 
 test("a rejected secondary launch leaves the primary's unmatched start intact", async () => {
@@ -68,4 +72,23 @@ test("immediate native exit receives already persisted queued entries without wi
     resetLogger();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("closing the application with code 0 is an orderly quit, not an immediate exit", () => {
+  const calls: string[] = [];
+  const app = { quit: () => calls.push("quit"), exit: () => calls.push("exit") };
+  const log = { flushSync: () => calls.push("flushSync") };
+  exitApplication(app, log as never, 0);
+  exitApplication(app, log as never);
+  expect(calls).toEqual(["quit", "quit"]);
+});
+
+test("a failure exit code still exits at once after draining the essential log", () => {
+  const calls: string[] = [];
+  const app = {
+    quit: () => calls.push("quit"),
+    exit: (code?: number) => calls.push(`exit:${code}`),
+  };
+  exitApplication(app, { flushSync: () => calls.push("flushSync") } as never, 2);
+  expect(calls).toEqual(["flushSync", "exit:2"]);
 });

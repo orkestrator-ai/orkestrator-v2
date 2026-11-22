@@ -1,6 +1,7 @@
 import { registerWillQuitHold } from "./application-logging.js";
 import type { BackendHttpClient, BackendProcess } from "./backend-process.js";
 import { createLogger } from "@orkestrator/protocol/logger";
+import type { InstalledEssentialLog } from "@orkestrator/protocol/node/essential-log";
 
 const log = createLogger("desktop");
 
@@ -59,11 +60,38 @@ export function registerBackendShutdown(
   return { stopped: () => stopped ?? Promise.resolve() };
 }
 
-/** AppImageUpdater spawns before app.quit: drain and unlock before allowing that spawn. */
+/** Longest an update waits for the essential log's `essential.stopped` to reach disk. */
+export const ESSENTIAL_LOG_HANDOVER_WAIT_MS = 2_000;
+
+/**
+ * AppImageUpdater spawns the replacement before app.quit: drain the backend,
+ * hand over the essential log, then unlock, all before allowing that spawn.
+ *
+ * The single-instance lock is what makes this process the essential log's
+ * writer (`claimDesktopLogging`). The replacement writes its own
+ * `essential.started` as soon as it wins the lock, so this process must have
+ * written `essential.stopped` by then: otherwise the file reads as a desktop
+ * that died (`logging:writer-died:desktop`) on every update. Entries this
+ * process logs after the handover are not written; its backend has already
+ * exited, so they are only the end of its own quit.
+ */
 export async function prepareAppImageInstall(
   app: Pick<Electron.App, "releaseSingleInstanceLock">,
   backend: Pick<BackendProcess, "stop">,
+  essentialLog?: Pick<InstalledEssentialLog, "stop"> | null,
+  handoverWaitMs = ESSENTIAL_LOG_HANDOVER_WAIT_MS,
 ): Promise<void> {
   await backend.stop();
+  if (essentialLog) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      essentialLog.stop().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, handoverWaitMs);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+  }
   app.releaseSingleInstanceLock();
 }

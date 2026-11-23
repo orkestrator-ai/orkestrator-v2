@@ -21,7 +21,9 @@ classifies each failing test from evidence that already exists
 ([failure triage](#failure-triage)). Address Findings runs targeted checks for the files
 it edits and fixes the recorded failures that relate to the ticket or the
 branch; for one it believes unrelated it cites the triage, and it never runs a
-check against the target branch. It ends by submitting a typed fix result
+check against the target branch. Multi Review's Address Findings follows the
+same rules against its branch
+([below](#multi-reviews-address-findings-repairs-failed-validation-too)). It ends by submitting a typed fix result
 ([below](#the-address-findings--verify-handoff)). Verify is a quick acceptance review of
 the diff, read alongside the recorded package and that result. It runs no
 suite, typecheck, lint or build, never builds or tests the target branch, and
@@ -41,7 +43,7 @@ Address Findings is a typed stage like Review and Verify. Its turn opens an `add
 workflow result slot, the same kind Multi Review's Address Findings step submits
 (`build-pipeline/context.ts` `workflowResultKind`), over the tool transport
 (`submit_address_findings_result`) or, where the rollout keeps it off, the provider-enforced
-schema. The prompt (`addressValidationInstruction`) says what goes where:
+schema. The prompt (`addressFindingsValidationInstruction`) says what goes where:
 `summary`, `filesChanged`, `commandsRun` with each check's result, the repairs
 and their commits in `notes`, and every finding left unaddressed and every
 excused failure, with its triage evidence or demonstrated environmental cause,
@@ -89,6 +91,40 @@ no check still fails and `limitations` is empty.
 
 The pipeline inspector shows an Address Findings session's report above its transcript
 (`PipelineAddressFindingsReport.tsx`).
+
+## Multi Review's Address Findings repairs failed validation too
+
+Multi Review's Address Findings fixes the round's failed validation as well as
+the reviewers' findings, under the pipeline's rules. Every way it starts gets
+the same instruction (`multiReviewAddressFindingsValidationInstruction` in
+`build-pipeline/prompts.ts`): the reused consolidation session, a fresh
+session, the replacement for a lost session, a custom Address Findings
+(`review/address-findings-dispatch.ts`) and the unattended step
+(`review/service.ts`). It is built from the pipeline's own pieces:
+
+- **The evidence.** `recordedValidationSection` names the review package and its
+  `validation`, `validationReport` and `failureTriage`, with
+  `VALIDATION_REPORT_GUIDE` and `FAILURE_TRIAGE_GUIDE`. A legacy inline package's
+  failing output is inlined, bounded.
+- **The repair rule.** Fix every recorded failure that relates to this branch's
+  changes and rerun that exact command, even when it is the full suite,
+  typecheck, lint or build. Passing recorded commands are not rerun.
+- **The excuse rule.** A failure unrelated to the branch may be left as
+  pre-existing, flaky or environmental only on the triage's `unrelated`
+  verdict or a demonstrated environmental cause, never by changing unrelated
+  code or tests. Nothing is run against the Multi Review's base branch.
+
+Multi Review has no ticket, so "related" means related to this branch's
+changes and the instruction names no acceptance criteria. No verifier follows,
+so two pipeline parts are left out: the validated-commit history rule and the
+Address Findings result contract. The session instead names each check, each
+repaired failure with its commit, and each excused failure with its evidence in
+its final summary. The unattended step records the same in its result's
+`commandsRun` and `notes`, so an excused failure does not make it incomplete.
+A review persisted without a package gets no instruction and dispatches as
+before. Request ids and at-most-once dispatch are unchanged. A graph-engine
+review's automatic Address Findings node has no package input, so it does not
+get the instruction yet.
 
 ## Fresh discovery for arbitrary repositories
 

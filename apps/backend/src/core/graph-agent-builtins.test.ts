@@ -582,7 +582,7 @@ describe("equivalence with the bound builders", () => {
     const instruction = "Only fix the P1 issue.";
     const custom = graphBuiltInPromptText({ ...context, instruction });
     expect(custom).toBe(
-      multiReviewCustomAddressFindingsPrompt(report, instruction).replace(
+      multiReviewCustomAddressFindingsPrompt(report, instruction, "").replace(
         wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
         wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION),
       ),

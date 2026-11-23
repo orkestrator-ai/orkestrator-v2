@@ -14,6 +14,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
+import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 import { StorageService } from "../storage.js";
 import { MultiReviewService } from "./service.js";
 import {
@@ -27,6 +28,7 @@ import {
   mutateStoredWorkflow,
   rewindGit,
   runInteractiveAddressFindings,
+  seedLegacyFixingWorkflow,
   stableReviewInvoker,
   startFollowUpStep,
   waitUntil,
@@ -1755,5 +1757,55 @@ test("the review-transcript push reads come from the record, probe through the r
     expect(
       await service.transcriptPushTarget({ workflowId: started.id, reviewerId: "gone" }),
     ).toBeNull();
+  });
+});
+
+test("an unattended Address Findings carries the round's recorded validation", async () => {
+  const provider = new Provider(false);
+  provider.statusValue = "running";
+  const environmentId = "env-unattended-address-validation";
+  await withService(environmentId, provider, async (context) => {
+    const { storage } = context;
+    const workflowId = await seedLegacyFixingWorkflow(storage, environmentId);
+    const sha256 = "b".repeat(64);
+    await mutateStoredWorkflow(storage, workflowId, (workflow) => {
+      workflow.addressFindingsModel = { agent: "codex", model: "default" };
+      workflow.addressFindingsSession!.agent = "codex";
+      workflow.activeRequest!.resultTransport = "structured-output-v1";
+      workflow.reviewPackage = {
+        kind: "file",
+        id: "review-package-address",
+        round: 1,
+        preparedAt: new Date(0).toISOString(),
+        targetBranch: "main",
+        baseRef: "1".repeat(40),
+        headRef: REVIEW_HEAD,
+        filePath: reviewPackageArtifactPath("review-package-address", sha256),
+        sha256,
+        bytes: 1024,
+        changedFileCount: 1,
+        limitations: [],
+      };
+    });
+    const sent = await advanceUntil(
+      context.service,
+      context.snapshot,
+      workflowId,
+      (workflow) => workflow.activeRequest?.state === "sent",
+    );
+    const prompt = provider.sends.get(sent.activeRequest!.requestId)!.prompt;
+    expect(prompt).toContain(reviewPackageArtifactPath("review-package-address", sha256));
+    expect(prompt).toContain(
+      "Fix every recorded failure that relates to this branch's changes, then rerun only that check.",
+    );
+    expect(prompt).toContain(
+      "record the checks in `commandsRun` and the fixed and excused failures",
+    );
+    expect(prompt).not.toContain("acceptance criteria");
+    expect(
+      prompt.split(
+        "do not redundantly rerun passing full-suite, typecheck, lint, or build commands",
+      ),
+    ).toHaveLength(2);
   });
 });

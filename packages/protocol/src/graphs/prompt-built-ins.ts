@@ -215,7 +215,7 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
     outputs: [addressFindingsResultOutput(true), workspaceOutput(false)],
     profiles: ["builder"],
     backend:
-      "addressFindingsReportPrompt (build-pipeline/prompts.ts) as Multi Review's Address Findings sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
+      "addressFindingsReportPrompt (build-pipeline/prompts.ts) as Multi Review's Address Findings sends it, without its recorded-validation instruction; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
     textMaxBytes: 8 * KIB,
   },
   {

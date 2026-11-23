@@ -1,9 +1,9 @@
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
-  MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
   MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+  multiReviewAddressFindingsPrompt,
   multiReviewCustomAddressFindingsPrompt,
   type MultiReviewAddressFindingsSession,
   type MultiReviewWorkflow,
@@ -13,7 +13,10 @@ import {
   NativeAgentProviderSessionMissingError,
   type NativeAgentService,
 } from "../native-agent/service.js";
-import { addressFindingsReportPrompt } from "../build-pipeline/index.js";
+import {
+  addressFindingsReportPrompt,
+  multiReviewAddressFindingsValidationInstruction,
+} from "../build-pipeline/index.js";
 import { MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS } from "./steps.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -59,6 +62,21 @@ type AddressFindingsNativeAgents = Pick<
   NativeAgentService,
   "adoptSession" | "ensureSession" | "dispatchIntent"
 >;
+
+/**
+ * The round's recorded validation and the pipeline's rule for repairing it,
+ * judged against this branch's changes (Multi Review has no ticket). Empty for
+ * a review persisted without a package. `includeRerunRule` is false only for
+ * {@link addressFindingsReportPrompt}, whose tail already says which recorded
+ * commands to rerun.
+ */
+function validationInstruction(workflow: MultiReviewWorkflow, includeRerunRule: boolean): string {
+  return multiReviewAddressFindingsValidationInstruction(
+    workflow.reviewPackage,
+    workflow.targetBranch,
+    includeRerunRule,
+  );
+}
 
 function replacementRequestId(workflow: MultiReviewWorkflow, providerSessionId: string): string {
   const replacement = createHash("sha256").update(providerSessionId).digest("hex").slice(0, 24);
@@ -127,7 +145,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
   const requestId = replacementRequestId(workflow, replacement.replacementProviderSessionId);
   const outcome = await nativeAgents.dispatchIntent({
     ...identity,
-    prompt: `${addressFindingsReportPrompt(workflow.consolidatedReport)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
+    prompt: `${addressFindingsReportPrompt(workflow.consolidatedReport, validationInstruction(workflow, false))}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
     requestId,
     mode: MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.mode,
   });
@@ -229,10 +247,14 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
     ? multiReviewCustomAddressFindingsPrompt(
         workflow.consolidatedReport!,
         workflow.customAddressFindingsInstruction!,
+        validationInstruction(workflow, true),
       )
     : createsFreshAddressFindingsSession
-      ? addressFindingsReportPrompt(workflow.consolidatedReport!)
-      : MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT;
+      ? addressFindingsReportPrompt(
+          workflow.consolidatedReport!,
+          validationInstruction(workflow, false),
+        )
+      : multiReviewAddressFindingsPrompt(validationInstruction(workflow, true));
   const preparedSession: MultiReviewAddressFindingsSession | undefined =
     createsFreshAddressFindingsSession
       ? {

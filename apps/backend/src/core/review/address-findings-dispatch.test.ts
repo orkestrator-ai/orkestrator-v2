@@ -1,9 +1,10 @@
 import { expect, mock, test } from "bun:test";
 import {
-  MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
+  MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+  multiReviewAddressFindingsPrompt,
   multiReviewCustomAddressFindingsPrompt,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
@@ -60,7 +61,7 @@ test("dispatchMultiReviewAddressFindingsPrompt adopts and dispatches the stable 
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt: MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
+      prompt: multiReviewAddressFindingsPrompt(""),
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),
@@ -242,6 +243,7 @@ test("dispatchMultiReviewAddressFindingsPrompt creates, publishes and dispatches
       prompt: multiReviewCustomAddressFindingsPrompt(
         custom.consolidatedReport!,
         custom.customAddressFindingsInstruction!,
+        "",
       ),
     }),
   );
@@ -422,4 +424,173 @@ test("recoverMissingMultiReviewAddressFindingsSession adopts and seeds the repla
     },
   });
   expect(result.addressFindingsSession.requestIds).toHaveLength(2);
+});
+
+const RERUN_RULE =
+  "do not redundantly rerun passing full-suite, typecheck, lint, or build commands";
+const BRANCH_REPAIR_RULE =
+  "Fix every recorded failure that relates to this branch's changes, then rerun only that check.";
+
+const packagedReport = {
+  issues: [{ title: "Packaged finding" }],
+  testCoverageGaps: [{ untestedBehavior: "Packaged coverage" }],
+} as MultiReviewWorkflow["consolidatedReport"];
+
+const packagedWorkflow = {
+  ...workflow,
+  phase: "interactive",
+  targetBranch: "develop",
+  consolidatedReport: packagedReport,
+  reviewPackage: {
+    kind: "file",
+    id: "review-package-1",
+    round: 1,
+    preparedAt: "2026-11-23T00:00:00.000Z",
+    targetBranch: "develop",
+    baseRef: "1".repeat(40),
+    headRef: "2".repeat(40),
+    filePath: ".orkestrator/review-packages/review-package-1.json",
+    sha256: "a".repeat(64),
+    bytes: 1024,
+    changedFileCount: 1,
+    limitations: [],
+  },
+} as MultiReviewWorkflow;
+
+function acceptingAgents(providerSessionId = "provider-fix") {
+  return {
+    adoptSession: mock(async () => undefined as never),
+    ensureSession: mock(async () => ({ providerSessionId }) as never),
+    dispatchIntent: mock(async (input: { prompt: string; requestId: string }) => ({
+      outcome: "accepted" as const,
+      requestId: input.requestId,
+    })),
+  };
+}
+
+function expectBranchValidationInstruction(prompt: string): void {
+  // The round's recorded evidence, read from the sealed package.
+  expect(prompt).toContain("**Recorded validation**");
+  expect(prompt).toContain(`\`${"2".repeat(40)}\``);
+  expect(prompt).toContain(".orkestrator/review-packages/review-package-1.json");
+  expect(prompt).toContain("**Validation report**");
+  expect(prompt).toContain("**Failure triage**");
+  // The pipeline's repair and excuse rules, judged against the branch.
+  expect(prompt).toContain(BRANCH_REPAIR_RULE);
+  expect(prompt).toContain(
+    "Only failures unrelated to this branch's changes may be excused as pre-existing, flaky or environmental, and only with evidence",
+  );
+  expect(prompt).toContain("Do not change unrelated code or tests to hide a failure.");
+  expect(prompt).toContain("git diff origin/develop...HEAD");
+  expect(prompt).toContain("rerun that exact command");
+  expect(prompt.split(RERUN_RULE)).toHaveLength(2);
+  expect(prompt).toContain(
+    "name each recorded failure you left as pre-existing, flaky, unrelated or environmental with its failure triage or validation report evidence",
+  );
+  // Multi Review has no ticket, no verifier and no submitted result.
+  expect(prompt).not.toContain("acceptance criteria");
+  expect(prompt).not.toContain("for the verifier");
+  expect(prompt).not.toContain("Address Findings result you submit");
+  expect(prompt).not.toContain("Keep the validated commit");
+}
+
+test("dispatchMultiReviewAddressFindingsPrompt gives the reused consolidation session the recorded validation", async () => {
+  const agents = acceptingAgents();
+  await dispatchMultiReviewAddressFindingsPrompt(agents, packagedWorkflow);
+  const sent = agents.dispatchIntent.mock.calls[0]![0];
+  expect(sent.requestId).toBe("multi-review-address:multi-1");
+  expectBranchValidationInstruction(sent.prompt);
+  expect(sent.prompt.startsWith(MULTI_REVIEW_ADDRESS_USER_INSTRUCTION)).toBe(true);
+  expect(sent.prompt).toContain(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION);
+});
+
+test("dispatchMultiReviewAddressFindingsPrompt gives a fresh Address Findings session the recorded validation", async () => {
+  const agents = acceptingAgents("provider-fix-new");
+  await dispatchMultiReviewAddressFindingsPrompt(agents, {
+    ...packagedWorkflow,
+    reviewModel: { agent: "claude", model: "review-coordinator" },
+    addressFindingsSession: undefined,
+  } as MultiReviewWorkflow);
+  const sent = agents.dispatchIntent.mock.calls[0]![0];
+  expect(sent.requestId).toBe("multi-review-address:multi-1");
+  expectBranchValidationInstruction(sent.prompt);
+  expect(sent.prompt).toContain("Packaged finding");
+});
+
+test("dispatchMultiReviewAddressFindingsPrompt gives a custom Address Findings the recorded validation", async () => {
+  const agents = acceptingAgents("provider-custom");
+  await dispatchMultiReviewAddressFindingsPrompt(agents, {
+    ...packagedWorkflow,
+    customAddressFindingsModel: packagedWorkflow.addressFindingsModel,
+    customAddressFindingsInstruction: "Only fix the regression",
+    addressRequestId: "multi-review-address:multi-1:launch-2",
+  } as MultiReviewWorkflow);
+  const sent = agents.dispatchIntent.mock.calls[0]![0];
+  expect(sent.requestId).toBe("multi-review-address:multi-1:launch-2");
+  expectBranchValidationInstruction(sent.prompt);
+  expect(sent.prompt).toContain("Only fix the regression");
+});
+
+test("recoverMissingMultiReviewAddressFindingsSession seeds the replacement with the recorded validation", async () => {
+  const agents = acceptingAgents();
+  await recoverMissingMultiReviewAddressFindingsSession(
+    agents,
+    {
+      ...packagedWorkflow,
+      addressFindingsSession: {
+        ...packagedWorkflow.addressFindingsModel,
+        sessionKey: "multi-review:multi-1:interactive",
+        providerSessionId: "provider-fix",
+        requestIds: ["multi-review-address:multi-1"],
+        status: "idle",
+        startedAt: "2026-11-23T00:00:00.000Z",
+      },
+    } as MultiReviewWorkflow,
+    {
+      tabId: "multi-review-fix:multi-1",
+      expectedProviderSessionId: "provider-fix",
+      replacementProviderSessionId: "provider-replacement",
+    },
+  );
+  const sent = agents.dispatchIntent.mock.calls[0]![0];
+  expect(sent.requestId).toMatch(/^multi-review-address-replacement:multi-1:/);
+  expectBranchValidationInstruction(sent.prompt);
+  expect(sent.prompt).toContain("Packaged finding");
+});
+
+test("dispatchMultiReviewAddressFindingsPrompt still dispatches a review persisted with an inline legacy package", async () => {
+  const agents = acceptingAgents();
+  await dispatchMultiReviewAddressFindingsPrompt(agents, {
+    ...packagedWorkflow,
+    reviewPackage: {
+      id: "legacy-package",
+      round: 1,
+      preparedAt: "2026-01-01T00:00:00.000Z",
+      targetBranch: "develop",
+      baseRef: "1".repeat(40),
+      headRef: "3".repeat(40),
+      commit: null,
+      completeDiff: "",
+      changedFiles: [],
+      validation: [
+        { command: "bun test", status: "failed", exitCode: 1, stdout: "1 fail", stderr: "" },
+      ],
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+    },
+  } as unknown as MultiReviewWorkflow);
+  const sent = agents.dispatchIntent.mock.calls[0]![0];
+  expect(sent.prompt).toContain("<recorded-validation-json>");
+  expect(sent.prompt).toContain("1 fail");
+  expect(sent.prompt).toContain(BRANCH_REPAIR_RULE);
+});
+
+test("dispatchMultiReviewAddressFindingsPrompt sends no validation instruction for a review without a package", async () => {
+  const agents = acceptingAgents();
+  await dispatchMultiReviewAddressFindingsPrompt(agents, workflow);
+  const sent = agents.dispatchIntent.mock.calls[0]![0];
+  expect(sent.prompt).toBe(multiReviewAddressFindingsPrompt(""));
+  expect(sent.prompt).not.toContain("**Recorded validation**");
+  expect(sent.prompt).not.toContain(BRANCH_REPAIR_RULE);
 });

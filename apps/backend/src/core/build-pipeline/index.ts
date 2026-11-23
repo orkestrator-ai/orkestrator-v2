@@ -66,6 +66,7 @@ export {
   addressFindingsValidationGuidance,
   buildPipelineReviewPackageContext,
   buildTaskPrompt,
+  multiReviewAddressFindingsValidationInstruction,
   type ObservedWorktreeSnapshot,
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,

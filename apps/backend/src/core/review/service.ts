@@ -5,6 +5,7 @@ import {
   type AgentModelCatalogReader,
   connectionDefaultsFor,
   createAgentModelCatalogReader,
+  multiReviewAddressFindingsValidationInstruction,
   type PipelineWorkerMailbox,
   resolveFastMode,
   structuredReportRepairPrompt,
@@ -4822,7 +4823,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               }),
           });
         } else {
-          prompt = addressFindingsReportPrompt(workflow.consolidatedReport!);
+          prompt = addressFindingsReportPrompt(
+            workflow.consolidatedReport!,
+            multiReviewAddressFindingsValidationInstruction(
+              workflow.reviewPackage,
+              workflow.targetBranch,
+              false,
+            ),
+          );
         }
       }
       await this.assertFence(workflow.id, token);

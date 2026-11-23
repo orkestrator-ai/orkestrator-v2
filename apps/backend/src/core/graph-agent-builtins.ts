@@ -441,7 +441,7 @@ function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefi
     framed = findings;
   }
   // Without an instruction this is addressFindingsReportPrompt as Multi Review's Address Findings sends
-  // it (no validation instruction: no verifier follows).
+  // it, minus the recorded-validation instruction: this node has no package input to read it from.
   return instruction
     ? customAddressFindingsText(framed, instruction)
     : addressFindingsPrompt(findings);

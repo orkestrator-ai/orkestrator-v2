@@ -5,8 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
-import { AgentMailStore } from "./storage-agent-mail-store.js";
-import { createEnvironment, createProject } from "./storage.js";
+import { AgentMailStore } from "./storage/agent-mail-store.js";
+import { createEnvironment, createProject } from "./storage/service.js";
 import { mailAutoSwitchNotice } from "./agent-accounts/auto-switch-notices.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 

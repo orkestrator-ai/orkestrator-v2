@@ -40,7 +40,7 @@ import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { mailAutoSwitchNotice } from "../agent-accounts/auto-switch-notices.js";
 import type { NodeCoordinatorNotices, OutboxItem } from "../nodes/index.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 const log = createLogger("coordinator");
 

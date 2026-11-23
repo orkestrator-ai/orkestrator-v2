@@ -8,8 +8,8 @@ import {
 } from "./display-tail-scheduler.js";
 import { NativeAgentDisplayTailStore } from "./display-tail-store.js";
 import { createNativeAgentDisplayTail, type NativeAgentDisplayTail } from "./display-tails.js";
-import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import type { StorageDatabase } from "../storage/database.js";
+import { openBackendDatabase } from "../storage/stores.js";
 
 /** Deterministic timers: `advance` fires due callbacks in order and drains microtasks. */
 class FakeTimers {

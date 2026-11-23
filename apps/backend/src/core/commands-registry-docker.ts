@@ -90,7 +90,7 @@ import {
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
 import { resolveContainerGitHubToken } from "./git/index.js";
-import { createEnvironment } from "./storage.js";
+import { createEnvironment } from "./storage/index.js";
 import {
   asString,
   asOptionalString,

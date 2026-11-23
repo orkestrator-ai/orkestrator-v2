@@ -7,7 +7,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.
 import { refreshProjectGitMirror } from "./project-git-mirror.js";
 import { runCommand } from "./shell.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 test("backend shutdown settles a blocked mirror writer before another backend takes ownership", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-mirror-shutdown-"));

@@ -16,7 +16,7 @@ import {
 } from "@orkestrator/protocol/public-api-resources";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
-import { storageInternals } from "../storage-test-support.js";
+import { storageInternals } from "../storage/test-support.js";
 import { goalIdForRequest } from "../native-agent/goal-service.js";
 import { intentFingerprint, requestKey } from "./operation-ledger.js";
 import { reconcileOperation } from "./reconciler.js";

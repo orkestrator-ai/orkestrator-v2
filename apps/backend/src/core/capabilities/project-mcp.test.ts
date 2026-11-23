@@ -16,7 +16,7 @@ import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent
 
 import { createFixture, type Fixture as McpFixture } from "../mcp-management/test-support.js";
 import { runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { mcpManagementInstaller } from "./index.js";
 import { testCapabilityHomes } from "./native-ownership.js";
 import { isEmptyProjectMcpFile } from "./project-mcp.js";

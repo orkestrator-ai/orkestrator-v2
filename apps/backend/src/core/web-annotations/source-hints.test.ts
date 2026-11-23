@@ -17,7 +17,7 @@ import {
   fixtureDestination,
 } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { DispatchEnvironment } from "./contracts.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { WebAnnotationDispatchAdapter } from "./dispatch.js";
 import { checkWebAnnotationWorkspacePaths } from "./source-checks.js";
 import { ENV_A, createHarness, type ServiceHarness } from "./test-support.js";

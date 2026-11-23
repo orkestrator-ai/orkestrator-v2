@@ -12,7 +12,7 @@ import type { CapabilitySessionEvidenceRead } from "@orkestrator/protocol/capabi
 import type { EffectiveAgentResources } from "@orkestrator/protocol/capability-resources";
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { CapabilityArtifactStore } from "./artifact-store.js";
 import type { CapabilityDriftWorkflow } from "./drift.js";
 import type { CapabilityExecutor, McpInstaller } from "./executor.js";

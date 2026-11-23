@@ -31,7 +31,7 @@ import { createHash } from "node:crypto";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { isFeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 import type { CoordinatorStatus, CoordinatorStatusResource } from "./status-wakes.js";
-import type { FeaturePlan, FeaturePlanMessage, StorageService } from "../storage.js";
+import type { FeaturePlan, FeaturePlanMessage, StorageService } from "../storage/index.js";
 
 export type FeaturePlanObservation =
   | { status: CoordinatorStatus }

@@ -32,7 +32,7 @@ import {
 import { formatFeatureStoriesForBuild } from "@orkestrator/protocol/feature-planning";
 import { launchBuildPipeline } from "../build-pipeline/launch.js";
 import type { CommandContext } from "../commands-context.js";
-import type { FeaturePlan, KanbanTask } from "../storage-shared.js";
+import type { FeaturePlan, KanbanTask } from "../storage/index.js";
 
 type FeaturePlanBuildContext = Pick<CommandContext, "storage" | "buildPipelines">;
 

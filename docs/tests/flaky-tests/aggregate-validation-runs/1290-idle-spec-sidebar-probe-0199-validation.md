@@ -20,7 +20,7 @@ Current path for the relocated file: `apps/backend/src/core/native-agent/command
 
 | Owner | Aggregate failure | Rerun |
 | --- | --- | --- |
-| `apps/backend/src/core/storage-writer-guards.test.ts` | `name the store they write` timed out at 7,312 ms (5,000 ms budget). Earlier observations: [1003](1003-legacy-migration-0058-validation.md), [1010](1010-environment-disk-cleanup-0023-validation.md), [1247](1247-pending-rename-recovery-validation.md). | Also timed out alone, at 7,203 ms, still under load. On a clean `origin/main` (`6a6009a09`) checkout it timed out the same way (6,088 ms), so it is load, not this branch. |
+| `apps/backend/src/core/storage/writer-guards.test.ts` | `name the store they write` timed out at 7,312 ms (5,000 ms budget). Earlier observations: [1003](1003-legacy-migration-0058-validation.md), [1010](1010-environment-disk-cleanup-0023-validation.md), [1247](1247-pending-rename-recovery-validation.md). | Also timed out alone, at 7,203 ms, still under load. On a clean `origin/main` (`6a6009a09`) checkout it timed out the same way (6,088 ms), so it is load, not this branch. |
 | `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | Maximal-list filtering expected one projection read and saw two (3,919 ms). Recurrence of [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). | Passed alone: `bun --cwd=apps/web test src/components/native-agent/AgentNativeTab.commands.test.tsx src/components/federation/node-action-requests.test.tsx` (the federation owner failed in that run, see below). |
 | `apps/web/src/components/federation/node-action-requests.test.tsx` | Over-limit root-change approval timed out at 8,610 ms. | Also timed out alone, at 7,295 ms, under load. It timed out the same way on clean `origin/main` (5,905 ms). |
 
@@ -69,7 +69,7 @@ unchanged by this branch. Evidence: `/tmp/orkestrator-test-run.3QKeuI/` and
 
 | Owner | Aggregate result | Complete owner rerun |
 | --- | --- | --- |
-| `apps/backend/src/core/storage-writer-guards.test.ts` | 5 s deadline expired at 8,126 ms, as in Run 1. | Still failed at 5,146 ms; not classified as a new flake. Evidence: `/tmp/orkestrator-test-run.J7YiLY/`. |
+| `apps/backend/src/core/storage/writer-guards.test.ts` | 5 s deadline expired at 8,126 ms, as in Run 1. | Still failed at 5,146 ms; not classified as a new flake. Evidence: `/tmp/orkestrator-test-run.J7YiLY/`. |
 | `apps/backend/src/core/native-agent-command-catalogue-scale.test.ts` | Maximal inventories timed out at 6,192 ms; existing [0826](../native-agents-and-transcripts/0826-command-catalogue-maximal-inventories-timeout.md). | Passed unchanged, 6.3 s. |
 | `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | Maximal-list filtering failed; existing [0722](../native-agents-and-transcripts/0722-native-command-filter-projection-read.md). | Passed unchanged, 11.4 s. |
 | `apps/web/src/lib/chat/rich-conversation-revocation.test.tsx` | Sibling ledger length was 0 instead of 1; existing [0626](../native-agents-and-transcripts/0626-rich-content-sibling-ledger-aggregate.md). | Passed unchanged, 2.2 s. |

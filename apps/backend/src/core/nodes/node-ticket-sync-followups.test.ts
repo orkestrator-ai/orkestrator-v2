@@ -8,10 +8,10 @@ import type {
   TicketSyncStatusResult,
 } from "@orkestrator/protocol/ticket-sync";
 
-import { mergeSnapshotImages } from "../storage-kanban-sync.js";
-import { readStoredValue, seedStore } from "../storage-test-support.js";
-import { createProject } from "../storage.js";
-import type { KanbanImage, KanbanTask } from "../storage-shared.js";
+import { mergeSnapshotImages } from "../storage/kanban-sync.js";
+import { readStoredValue, seedStore } from "../storage/test-support.js";
+import { createProject } from "../storage/service.js";
+import type { KanbanImage, KanbanTask } from "../storage/shared.js";
 import { readKanbanImageData } from "../ticket-sync-images.js";
 import {
   cleanupFleets,

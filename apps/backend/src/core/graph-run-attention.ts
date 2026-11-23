@@ -37,8 +37,7 @@ import {
 } from "@orkestrator/protocol/graphs/run";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { AgentActivityCompletionOutcome, Environment } from "./models.js";
-import type { ResourceChangeListener } from "./storage-shared.js";
-import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import type { ResourceChangeListener, GraphRunsStorage } from "./storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("graph");

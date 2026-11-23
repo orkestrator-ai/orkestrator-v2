@@ -25,7 +25,7 @@ import {
   requireProjectLinearBoard,
 } from "./commands-registry-linear-boards.js";
 import { linearKeyFingerprint } from "./linear-boards.js";
-import { nowIso } from "./storage-shared-core.js";
+import { nowIso } from "./storage/index.js";
 
 /**
  * The machine's Linear connection and issue reads, in the `kanban` domain

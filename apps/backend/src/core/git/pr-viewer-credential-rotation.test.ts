@@ -6,7 +6,7 @@ import * as shell from "../shell.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";
-import { createEnvironment, StorageService } from "../storage.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
 import { detectEnvironmentPullRequest } from "../commands-pr-monitor.js";
 
 const PR = "https://github.com/acme/repo/pull/1";

@@ -27,7 +27,7 @@ still put their code in the message text and readers match it:
 `ContainerLifecycleError:<code>:` (`packages/protocol/src/container-lifecycle.ts`),
 `McpManagementError:<code>:` (`apps/backend/src/core/mcp-management/service.ts`),
 `Pane layout revision conflict:` (`pane-layout.ts`), `Design revision conflict:`
-(`design-canvas.ts`), `Prompt queue message conflict:` (`storage-prompts.ts`),
+(`design-canvas.ts`), `Prompt queue message conflict:` (`storage/prompts.ts`),
 and the desktop node refusal codes (`contract/node-refusal.ts`).
 
 **Context.** `REGISTERED_ERROR_CODES` in `packages/protocol/src/contract/ipc-error.ts`

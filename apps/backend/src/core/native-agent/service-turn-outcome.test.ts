@@ -16,7 +16,7 @@ import {
   type ProviderStatus,
 } from "./provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./service.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { launchInternals } from "./service-test-collaborators.js";
 import { claudeConnection } from "../agent-provider-test-support.js";
 

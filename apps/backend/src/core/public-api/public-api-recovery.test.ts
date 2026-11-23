@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, jest, mock, test } from "bun:test";
 import path from "node:path";
 import { CommandFailedError } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 import { requestKey } from "./operation-ledger.js";
 

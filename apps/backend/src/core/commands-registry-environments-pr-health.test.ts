@@ -5,7 +5,7 @@ import path from "node:path";
 import { BackendRuntime } from "./backend-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 
 test("PR health filters by project and bounded allowlist and composes the monitor's real health", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ork-pr-health-"));

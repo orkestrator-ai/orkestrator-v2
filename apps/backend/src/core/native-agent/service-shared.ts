@@ -87,13 +87,16 @@ import type {
 import type { AgentSessionOwner } from "@orkestrator/protocol/coordinator";
 import type { ViewRevisionStamp } from "@orkestrator/protocol/view-sync";
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
-import type { StorageService } from "../storage.js";
+import {
+  type StorageService,
+  PendingNativeAgentDispatchError,
+  PendingNativeAgentSteerError,
+} from "../storage/index.js";
 import type { CheckoutChanges } from "../project-git-service.js";
 import type { DirectHistoryPageCacheLimits } from "./direct-history.js";
 import type { ProjectedMessageCacheLimits } from "./projection-entries.js";
 import type { ArtifactLedgerReader } from "./service-projection-artifacts.js";
 import type { ArtifactTurnDispatch } from "../workflows/index.js";
-import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "../storage.js";
 import {
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,

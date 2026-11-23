@@ -87,7 +87,7 @@ import {
   recoverDirectoryReplacement,
   treeDigest,
 } from "./security.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import {
   dropEmptyIndexes,
   managedLocationEntries,

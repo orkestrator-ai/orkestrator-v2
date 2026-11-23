@@ -1,8 +1,8 @@
-import type { StoreLayout } from "./storage-database.js";
+import type { StoreLayout } from "./storage/index.js";
 
 /**
  * Database store holding recorded agent usage, one row per agent session.
- * Imported by the store registry (storage-stores.ts), so keep this module free
+ * Imported by the store registry (storage/stores.ts), so keep this module free
  * of other imports.
  */
 export const USAGE_HISTORY_STORE = "usage-history";

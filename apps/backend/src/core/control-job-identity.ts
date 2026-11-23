@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { isRecord } from "./storage-shared-core.js";
-import { paneLayoutLeaves } from "./storage-shared-pane-layout.js";
+import { isRecord, paneLayoutLeaves } from "./storage/index.js";
 
 /** The persisted tab is the authority for the platform chosen on first launch. */
 export function controlJobId(environmentId: string, requestId: string): string {

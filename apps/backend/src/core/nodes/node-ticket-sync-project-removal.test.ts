@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { createProject } from "../storage.js";
-import { storageInternals } from "../storage-test-support.js";
+import { createProject } from "../storage/service.js";
+import { storageInternals } from "../storage/test-support.js";
 import {
   cleanupFleets,
   COMMAND_ID,

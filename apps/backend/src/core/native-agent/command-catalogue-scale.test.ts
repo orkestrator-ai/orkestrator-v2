@@ -37,7 +37,7 @@ import {
   type FakeCatalogueBridge,
 } from "./command-catalogue-test-support.js";
 import { NativeAgentService } from "./service.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const KEY = commandCatalogueKey("env-1", "claude", "s1");
 const PAYLOAD_100 = bridgeCataloguePayload(syntheticCommandRows(100));

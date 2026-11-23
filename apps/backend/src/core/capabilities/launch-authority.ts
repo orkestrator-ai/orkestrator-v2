@@ -42,7 +42,7 @@ import {
 import { answerCapabilityNodeLaunchCommand } from "@orkestrator/protocol/contract/domains/capabilities";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { CapabilityArtifactStore } from "./artifact-store.js";
 import { parseNodePlanTargets, type NodePlanTarget } from "./executor.js";
 import { installName } from "./native-ownership.js";

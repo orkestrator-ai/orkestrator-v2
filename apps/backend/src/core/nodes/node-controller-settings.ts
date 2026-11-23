@@ -8,7 +8,7 @@ import {
 } from "@orkestrator/protocol/controller-settings";
 import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 
-import type { NodesStorage } from "../storage-nodes.js";
+import type { NodesStorage } from "../storage/index.js";
 
 /**
  * Leaf side of inherited settings: the copy each attached command node sent,

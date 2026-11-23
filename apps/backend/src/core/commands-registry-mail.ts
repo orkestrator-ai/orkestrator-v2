@@ -29,7 +29,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/agent-mail";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-mail");

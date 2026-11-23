@@ -11,7 +11,7 @@ import type { ProviderInteractiveSnapshot } from "../agent-provider-contract.js"
 import { createNativeAgentDisplayTail } from "./display-tails.js";
 import { nativeAgentSessionStorageKey } from "./service-shared.js";
 import { projectionInternals } from "./service-test-collaborators.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import {
   createProviderStub,
   waitForCondition,

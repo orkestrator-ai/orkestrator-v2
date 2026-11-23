@@ -6,8 +6,8 @@ import type {
   NativeAgentPermissionRule,
   PermissionRuleApplication,
 } from "@orkestrator/protocol/permission-rules";
-import { StorageService } from "../storage.js";
-import { storageDatabase } from "../storage-test-support.js";
+import { StorageService } from "../storage/service.js";
+import { storageDatabase } from "../storage/test-support.js";
 import { PERMISSION_RULES_STORE } from "./layout.js";
 import { MAX_PERMISSION_RULE_APPLICATIONS } from "./store.js";
 

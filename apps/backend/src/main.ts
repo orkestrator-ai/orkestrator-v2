@@ -45,7 +45,7 @@ import {
 import { readHostCpuTimes } from "@orkestrator/protocol/node/host-cpu-times";
 import { commandTimings } from "./core/command-timing.js";
 import { recurringWorkMetrics } from "./core/recurring/index.js";
-import { slowStorageOperations } from "./core/storage-slow-operations.js";
+import { slowStorageOperations } from "./core/storage/index.js";
 import {
   DESKTOP_SUPERVISED_ENV,
   readApplicationLogPolicy,

@@ -14,7 +14,7 @@ import {
 } from "./process-identity.js";
 import { recurringWorkMetrics } from "./recurring/index.js";
 import type { DatabaseSummaryCache } from "./database-summary.js";
-import type { StorageDatabase } from "./storage-database.js";
+import type { StorageDatabase } from "./storage/index.js";
 
 const log = createLogger("backend");
 

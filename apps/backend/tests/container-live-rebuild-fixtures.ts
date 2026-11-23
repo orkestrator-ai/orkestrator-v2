@@ -6,7 +6,7 @@ import { BackendRuntime } from "../src/core/backend-runtime.js";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks.js";
 import type { RegistryWriter } from "../src/core/registry-writer-lease.js";
 import { runCommand } from "../src/core/shell.js";
-import type { StorageService } from "../src/core/storage.js";
+import type { StorageService } from "../src/core/storage/service.js";
 
 /**
  * Fault-injection fixtures for container-live-rebuild-faults.test.ts. Nothing

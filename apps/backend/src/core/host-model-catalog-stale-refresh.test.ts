@@ -8,7 +8,7 @@ import {
   refreshStaleHostModelCatalogsInBackground,
 } from "./host-model-catalog-seed.js";
 import type { AgentModelCatalogCache } from "./models.js";
-import { AGENT_MODEL_CATALOG_MAX_AGE_MS } from "./storage-shared.js";
+import { AGENT_MODEL_CATALOG_MAX_AGE_MS } from "./storage/shared.js";
 
 const DAY = AGENT_MODEL_CATALOG_MAX_AGE_MS;
 const NOW = Date.parse("2026-11-18T12:00:00.000Z");

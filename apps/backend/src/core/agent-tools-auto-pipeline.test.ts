@@ -6,7 +6,7 @@ import { AUTO_PIPELINE_TOOL_NAME } from "@orkestrator/protocol/build-pipeline";
 import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
 import { AgentToolsServer } from "./agent-tools.js";
 import type { AutoPipelineToolHost, AutoPipelineToolScope } from "./agent-tools-auto-pipeline.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 
 type RpcBody = {

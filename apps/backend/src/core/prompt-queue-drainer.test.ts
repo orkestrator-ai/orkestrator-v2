@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 
 const ENVIRONMENT_ID = "env-1";

@@ -30,7 +30,7 @@ import type { WorkflowResultError } from "@orkestrator/protocol/workflow-results
 import type { ObservedWorktreeSnapshot } from "./prompts.js";
 import { sessionForCurrentPhase } from "./service-helpers.js";
 import { sessionWorkspaceBaseline } from "./validation-worktree.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import {
   WorkspaceReadOnlyGuard,
   readOnlyAcceptanceCheck,

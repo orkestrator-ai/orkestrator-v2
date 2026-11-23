@@ -9,7 +9,7 @@ import { createCredentialHost } from "./credentials-host.js";
 import { interactivePolicy } from "./credentials/service-test-support.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
-import { createEnvironment, StorageService } from "./storage.js";
+import { createEnvironment, StorageService } from "./storage/service.js";
 
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {

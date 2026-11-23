@@ -28,7 +28,7 @@ import { isGraphRunTerminal } from "@orkestrator/protocol/graphs/run";
 import type { EnvironmentMutationFence } from "./environments/index.js";
 import { retryGitWithoutFsmonitorOnTimeout } from "./git/index.js";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
-import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import type { GraphRunsStorage } from "./storage/index.js";
 
 /** Runs `git` with `args` in the environment's worktree and returns stdout. */
 export type EnvironmentGit = (environmentId: string, args: string[]) => Promise<string>;

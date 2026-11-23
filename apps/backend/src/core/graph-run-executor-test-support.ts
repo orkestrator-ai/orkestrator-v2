@@ -51,7 +51,7 @@ import type {
 } from "./graph-run-executors.js";
 import { GraphRunService, type GraphRunServiceOptions } from "./graph-run-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 export interface FakeExecutorCall {
   runId: string;

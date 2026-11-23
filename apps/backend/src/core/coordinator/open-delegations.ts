@@ -1,5 +1,5 @@
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
-import type { CoordinatorsStorage } from "../storage-coordinators.js";
+import type { CoordinatorsStorage } from "../storage/index.js";
 
 /** One open delegation as it stands now, or undefined once it has closed. */
 export type OpenDelegationLookup = (

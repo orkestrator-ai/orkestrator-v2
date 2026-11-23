@@ -5,7 +5,7 @@ import type { TranscriptRead } from "./transcript-store.js";
  * Shared helpers for build-pipeline transcripts that live outside the
  * workflow control record (plan step 16). Pure functions only; the store is
  * `transcript-store.ts`, storage wiring is
- * `storage-build-pipelines.ts`, and the supervisor's checkpointing is
+ * `storage/build-pipelines.ts`, and the supervisor's checkpointing is
  * `transcript-checkpoints.ts`.
  */
 

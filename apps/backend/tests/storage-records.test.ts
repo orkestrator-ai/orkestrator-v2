@@ -17,8 +17,8 @@ import {
   sanitizeBranchName,
   sanitizeEnvironmentName,
   StorageService,
-} from "../src/core/storage";
-import { hasStore, readStoredValue } from "../src/core/storage-test-support";
+} from "../src/core/storage/service";
+import { hasStore, readStoredValue } from "../src/core/storage/test-support";
 import {
   abandonLease,
   createTempDir,

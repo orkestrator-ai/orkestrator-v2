@@ -11,7 +11,7 @@ The main implementation points are:
 - `apps/desktop/electron/backend-process.ts` — backend environment isolation.
 - `apps/backend/src/core/commands.ts` — provider launch, credential delivery,
   live catalogue discovery, and container mounts.
-- `apps/backend/src/core/storage.ts` — durable application-level catalogues.
+- `apps/backend/src/core/storage/service.ts` — durable application-level catalogues.
 - `docker/entrypoint.sh` — bounded host-state import into writable containers.
 - `bridges/codex-bridge/src/models-cache.ts` and
   `bridges/codex-bridge/src/index.ts` — Codex-native cache and refresh order.

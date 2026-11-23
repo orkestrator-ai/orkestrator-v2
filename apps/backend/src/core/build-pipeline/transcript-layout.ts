@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database stores holding build-pipeline transcript metadata (chunk blobs stay
- * files). Imported by the store registry (storage-stores.ts), so keep this
+ * files). Imported by the store registry (storage/stores.ts), so keep this
  * module free of other imports.
  */
 

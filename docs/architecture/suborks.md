@@ -12,7 +12,7 @@ resolution, carrier, delivery body),
 [`control-mcp/coordinator-suborks.ts`](../../apps/backend/src/core/control-mcp/coordinator-suborks.ts)
 and [`coordinator/subork-actions.ts`](../../apps/backend/src/core/coordinator/subork-actions.ts)
 (the same tool in coordinator conversations) and
-[`storage-suborks.ts`](../../apps/backend/src/core/storage-suborks.ts) (the store).
+[`storage/suborks.ts`](../../apps/backend/src/core/storage/suborks.ts) (the store).
 Outstanding live checks: the 4340 (retired) items of the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 

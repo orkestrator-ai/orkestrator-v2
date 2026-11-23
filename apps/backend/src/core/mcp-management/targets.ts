@@ -23,7 +23,7 @@ import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecyc
 
 import type { Environment, Project } from "../models.js";
 import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
-import type { PreviewServicesStorage } from "../storage-preview-services.js";
+import type { PreviewServicesStorage } from "../storage/index.js";
 import type { TargetContextInfo } from "./types.js";
 
 export interface TargetStorage {

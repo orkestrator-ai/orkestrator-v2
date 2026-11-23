@@ -14,7 +14,7 @@ import { capabilityLockfileDocument } from "@orkestrator/protocol/capability-res
 import { capabilityPackageId, MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 import { revisionDigest } from "@orkestrator/protocol/capability-resources-resolve";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { ManifestSigningKeys } from "./manifest-signing.js";
 import { testCapabilityHomes } from "./native-ownership.js";
 import {

@@ -40,9 +40,9 @@ const runs = Number(arg("runs", "50"));
 const asJson = process.argv.includes("--json");
 const core = path.resolve(arg("core", path.join(import.meta.dir, "../apps/backend/src/core")));
 
-const { StorageService, createEnvironment } = await import(path.join(core, "storage.ts"));
-const { seedStore, storageDatabase } = await import(path.join(core, "storage-test-support.ts"));
-const { openBackendDatabase } = await import(path.join(core, "storage-stores.ts"));
+const { StorageService, createEnvironment } = await import(path.join(core, "storage/service.ts"));
+const { seedStore, storageDatabase } = await import(path.join(core, "storage/test-support.ts"));
+const { openBackendDatabase } = await import(path.join(core, "storage/stores.ts"));
 const { UsageHistoryStore } = await import(path.join(core, "usage-history-store.ts"));
 const { USAGE_HISTORY_STORE } = await import(path.join(core, "usage-history-layout.ts"));
 const { NATIVE_AGENT_DISPLAY_TAIL_STORE } = await import(

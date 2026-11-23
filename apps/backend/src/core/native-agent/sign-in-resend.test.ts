@@ -11,7 +11,7 @@ import {
 import type { DispatchNativeAgentPromptInput } from "./service-shared.js";
 import { nativeAgentSessionStorageKey } from "./service-shared.js";
 import type { PersistedNativeAgentSession } from "../models.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const NOTICE = "Not logged in · Please run /login";
 const ENVIRONMENT = "env-1";

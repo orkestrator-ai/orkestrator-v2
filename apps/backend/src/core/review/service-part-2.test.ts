@@ -29,7 +29,7 @@ import {
   MissingMultiReviewAddressFindingsSessionError,
   MultiReviewAddressFindingsDispatchError,
 } from "./address-findings-dispatch.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { MultiReviewService } from "./service.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 import { workflowResultProviderSchema } from "../workflows/result-registry.js";

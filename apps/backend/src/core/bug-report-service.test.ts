@@ -34,7 +34,7 @@ import { reapOrphanedLocalServers } from "./local-server-reaper.js";
 import * as credentials from "./git/github-credentials.js";
 import { GitHubCliSelection } from "./git/index.js";
 import * as shell from "./shell.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 const dataDirs: string[] = [];
 const scratchDirs: string[] = [];

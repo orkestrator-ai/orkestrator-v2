@@ -2962,7 +2962,7 @@ describe("authoritative resync", () => {
 
     const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-resource-restart-"));
     const { StorageService, createEnvironment, createProject } =
-      await import("../../../backend/src/core/storage");
+      await import("../../../backend/src/core/storage/service");
     const { createCommandRegistry } = await import("../../../backend/src/core/commands");
     const nativeEvents = await import("@/lib/native/events");
     const listenMock = nativeEvents.listen as ReturnType<typeof mock>;

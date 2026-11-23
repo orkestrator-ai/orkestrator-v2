@@ -8,7 +8,7 @@ import {
   COMPATIBILITY_PATH_USAGE_STORE,
   type CompatibilityPathUsageSnapshot,
 } from "./compatibility-path-usage.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import { openBackendDatabase } from "./storage/stores.js";
 
 test("backend lifecycle persists compatibility counts, detaches on shutdown, and reads them after restart", async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-compatibility-"));

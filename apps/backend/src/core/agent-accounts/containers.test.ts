@@ -54,7 +54,7 @@ import {
   replaceStagedInputFile,
   stagePortableInputs,
 } from "../portable-inputs.js";
-import { createEnvironment, StorageService } from "../storage.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
 
 const ENV_KEYS = [
   "HOME",

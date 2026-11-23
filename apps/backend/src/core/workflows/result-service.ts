@@ -34,8 +34,8 @@ import {
   type WorkflowResultValidationIssue,
 } from "@orkestrator/protocol/workflow-results";
 import { recurringWorkMetrics } from "../recurring/index.js";
-import { StoreCorruptError, type StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { StoreCorruptError, type StorageDatabase } from "../storage/index.js";
+import { openBackendDatabase } from "../storage/stores.js";
 import { isConsolidationScopeLists } from "../review/consolidation-scope.js";
 import { validateWorkflowResult } from "./result-contracts.js";
 import {

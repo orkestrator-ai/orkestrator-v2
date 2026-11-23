@@ -5,7 +5,7 @@ import { semver } from "bun";
 import { cp, mkdir, readFile, realpath, writeFile, symlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createEnvironment } from "../src/core/storage";
+import { createEnvironment } from "../src/core/storage/service";
 import { agentTestHostCursorCredentialPath } from "../src/core/agent-test-cursor-credential";
 import {
   root,

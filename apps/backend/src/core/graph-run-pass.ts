@@ -90,7 +90,7 @@ import type {
   GraphLoadedValue,
 } from "./graph-run-view.js";
 import { type ReviewFanoutConcurrency, runBoundedTasks } from "./review/index.js";
-import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import type { GraphRunsStorage } from "./storage/index.js";
 import type { AdmissionLease } from "./work-admission.js";
 import { stableSpreadMs } from "./workflows/index.js";
 

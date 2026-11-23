@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/database.js";
 import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { ChangeTrackingService, type EvidenceSource } from "./service.js";
 import type { ChangeTrackingPolicy } from "./policy-registry.js";

@@ -83,7 +83,7 @@ if (platform === "claude") {
 }
 
 const { OrkestratorBackend } = await import("../src/core/index");
-const { createEnvironment, createProject } = await import("../src/core/storage");
+const { createEnvironment, createProject } = await import("../src/core/storage/service");
 const backend = new OrkestratorBackend({
   dataDir: paths.dataDir,
   toolchainBinDir: paths.toolchainBin,

@@ -12,7 +12,7 @@ import {
   nativeAgentSessionStorageKey,
 } from "../src/core/native-agent/service.js";
 import { queueInternals } from "../src/core/native-agent/service-test-collaborators.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 
 /**
  * Drives the *real* native activity sweep and native prompt-queue scan

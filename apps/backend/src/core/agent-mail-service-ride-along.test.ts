@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import { agentMailboxId, type AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { AgentMailService } from "./agent-mail-service.js";
 import { fixture } from "./agent-mail-service-test-support.js";
-import { RIDE_ALONG_MAX_AGE_MS } from "./storage-agent-mail-injects.js";
-import type { StorageService } from "./storage.js";
+import { RIDE_ALONG_MAX_AGE_MS } from "./storage/agent-mail-injects.js";
+import type { StorageService } from "./storage/service.js";
 
 const realNow = Date.now;
 afterEach(() => {

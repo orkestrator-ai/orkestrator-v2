@@ -66,7 +66,7 @@ import {
   ChangeTrackingService,
   type EvidenceSource,
 } from "../../apps/backend/src/core/change-tracking/service";
-import { StorageDatabase } from "../../apps/backend/src/core/storage-database";
+import { StorageDatabase } from "../../apps/backend/src/core/storage/database";
 
 // ---------------------------------------------------------------------------
 // Arguments
@@ -190,7 +190,7 @@ function transactionCaller(): string {
   for (const frame of frames) {
     if (
       frame.includes("ledger-scale.ts") ||
-      frame.includes("storage-database.ts") ||
+      frame.includes("storage/database.ts") ||
       /ChangeLedger\.transaction|at transaction /.test(frame) ||
       frame.includes("bun:sqlite")
     )

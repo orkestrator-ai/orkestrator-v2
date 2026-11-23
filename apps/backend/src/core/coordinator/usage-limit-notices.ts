@@ -45,8 +45,8 @@ import type { CoordinatorNoticeRouter } from "./notice-router.js";
 import type {
   UsageLimitNoticeGroup,
   UsageLimitNoticeLedger,
-} from "../storage-coordinator-notices.js";
-import type { StorageService } from "../storage.js";
+  StorageService,
+} from "../storage/index.js";
 
 const log = createLogger("coordinator");
 

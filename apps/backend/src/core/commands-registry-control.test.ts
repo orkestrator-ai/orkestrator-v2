@@ -5,7 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import {
   COORDINATOR_DELEGATION_PRESENTATION,
   COORDINATOR_JOB_DELEGATION_INSTRUCTION,
@@ -22,7 +22,7 @@ import {
 } from "./native-agent/provider.js";
 import { queueInternals } from "./native-agent/service-test-collaborators.js";
 import { resendToOpenJobTab } from "./native-agent/job-tab-reuse.js";
-import { NATIVE_JOB_RECEIPT_LIMIT, NativeJobReceiptCapacityError } from "./storage-prompts.js";
+import { NATIVE_JOB_RECEIPT_LIMIT, NativeJobReceiptCapacityError } from "./storage/prompts.js";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 

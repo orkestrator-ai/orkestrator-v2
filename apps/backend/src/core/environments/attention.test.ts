@@ -8,8 +8,8 @@ import {
 } from "@orkestrator/protocol/environment-attention";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { installStorageEventFanout } from "../backend-event-fanout.js";
-import { createEnvironment } from "../storage.js";
-import { withTemporaryStorage } from "../storage-test-support.js";
+import { createEnvironment } from "../storage/service.js";
+import { withTemporaryStorage } from "../storage/test-support.js";
 
 describe("environment attention events", () => {
   test("one event per unread edge an agent or terminal raises, never for a re-light or a manual mark", async () => {

@@ -22,7 +22,7 @@ import {
 } from "@orkestrator/protocol/native-agent-goal";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
-import { isPromptQueueMessageConflict } from "../storage-prompts.js";
+import { isPromptQueueMessageConflict } from "../storage/index.js";
 import type { AgentActivityState, PersistedNativeAgentSession } from "./service-shared.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

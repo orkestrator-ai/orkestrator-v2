@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 import * as shell from "./shell.js";
 import { CommandFailedError, runCommand } from "./shell.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/service.js";
 
 const roots: string[] = [];
 

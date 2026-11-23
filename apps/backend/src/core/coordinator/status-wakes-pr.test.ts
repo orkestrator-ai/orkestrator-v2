@@ -20,7 +20,7 @@ import {
   CoordinatorStatusWakes,
   type CoordinatorStatusWakeTimers,
 } from "./status-wakes.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { multiReviewAddressFindingsIdentity } from "../review/address-findings-identity.js";
 import type { Environment } from "../models.js";
 

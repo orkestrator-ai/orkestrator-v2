@@ -12,12 +12,12 @@ import {
 } from "@orkestrator/protocol/backend-profile";
 import { createCommandRegistry } from "./commands.js";
 import type { CommandContext } from "./commands-context.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import {
   BackendProfileConflictError,
   defaultMachineDisplayName,
-} from "./storage-preview-services.js";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+} from "./storage/preview-services.js";
+import { readStoredValue, seedStore } from "./storage/test-support.js";
 
 const directories: string[] = [];
 const services: StorageService[] = [];

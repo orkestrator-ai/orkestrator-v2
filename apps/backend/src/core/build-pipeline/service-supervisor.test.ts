@@ -23,7 +23,7 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 import { BuildPipelineService } from "./service.js";
 

@@ -2,10 +2,10 @@ import { Database } from "bun:sqlite";
 import {
   instrumentSqliteConnection,
   SlowStorageOperations,
-} from "../src/core/storage-slow-operations.js";
+} from "../src/core/storage/slow-operations.js";
 
 /**
- * What the slow-operation record (`storage-slow-operations.ts`) costs a SQLite
+ * What the slow-operation record (`storage/slow-operations.ts`) costs a SQLite
  * call that is not slow:
  *
  *   mise exec -- bun apps/backend/scripts/storage-timing-overhead.ts [--calls 200000] [--runs 7]

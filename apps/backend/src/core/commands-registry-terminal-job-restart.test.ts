@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 // `launch_terminal_job` without `data`: Reconnect on a launched tab whose shell
 // went away with a backend restart asks for a new shell in the same tab. The

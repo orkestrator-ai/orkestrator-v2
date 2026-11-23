@@ -16,7 +16,7 @@ import {
 } from "./control-mcp/server.js";
 import { DesignService } from "./design/service.js";
 import { createTestRenderer } from "./design/test-support.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import type { WebAnnotationToolHost } from "./web-annotations/contracts.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 

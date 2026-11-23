@@ -34,7 +34,7 @@ const KIB = 1024;
 const MIB = 1024 * KIB;
 
 export const GRAPH_RUN_FORMAT = "orkestrator.graph-run";
-/** Bumped only with a record upgrade (see `storage-record-upgrades.ts`). */
+/** Bumped only with a record upgrade (see `apps/backend/src/core/storage/record-upgrades.ts`). */
 export const GRAPH_RUN_FORMAT_VERSION = 1;
 export const GRAPH_ARTIFACT_FORMAT_VERSION = 1;
 

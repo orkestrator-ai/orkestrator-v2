@@ -31,7 +31,7 @@ import type {
   PreviewMutationRecord,
   PreviewServiceStore,
   PreviewServicesStorage,
-} from "../storage-preview-services.js";
+} from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");

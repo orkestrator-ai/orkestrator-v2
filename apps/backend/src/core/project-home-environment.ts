@@ -2,7 +2,7 @@ import type { EnvironmentOperations } from "./environments/index.js";
 import type { Environment, Project } from "./models.js";
 import { runCommand } from "./shell.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 /**
  * The project home is the one environment whose working directory is the

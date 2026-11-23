@@ -1,7 +1,7 @@
 /**
  * Pure rules of the public operation store: request-key scope, namespaces and
  * their expiry fence, record bounds, and the receipt projection. The storage
- * layer (`storage-public-operations.ts`) applies these under its lock.
+ * layer (`storage/public-operations.ts`) applies these under its lock.
  *
  * Durability scope: records are written with the same atomic temp-file +
  * rename (+ fsync of the temp file) as the other structural stores. That

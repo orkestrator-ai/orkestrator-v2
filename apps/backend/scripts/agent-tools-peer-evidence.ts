@@ -17,7 +17,7 @@ import {
 import { DOCKER_LABEL_OWNER } from "../src/core/constants.js";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { runCommand } from "../src/core/shell.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import {
   cleanupEvidenceResources,
   daemonIsRootless,

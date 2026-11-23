@@ -8,7 +8,7 @@ import {
   INTERRUPTED_ENVIRONMENT_LIFECYCLE_ERROR,
   reconcileInterruptedEnvironmentLifecycleTasks,
 } from "./lifecycle-tasks.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 function deferred<T>(): {
   promise: Promise<T>;

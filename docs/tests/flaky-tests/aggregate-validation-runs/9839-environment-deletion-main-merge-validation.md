@@ -75,7 +75,7 @@ Second-pass validation: `mise run test:logged -- --name merge-pass2-static -- mi
 
 ### Pass 1
 
-- `apps/backend/src/core/storage-projects.ts`
+- `apps/backend/src/core/storage/projects.ts`
 - `apps/web/src/components/environments/EnvironmentItem.tsx`
 - `apps/web/src/components/environments/environment-row-facts.ts`
 - `apps/web/src/components/environments/environment-row-model.ts`

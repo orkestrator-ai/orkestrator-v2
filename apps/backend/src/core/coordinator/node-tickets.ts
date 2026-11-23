@@ -13,7 +13,7 @@ import { asNonBlankString } from "../commands-helpers.js";
 import { ASYNC_HANDLER } from "../commands-registry-async-decode.js";
 import type { CommandRegistrar } from "../commands-registry-types.js";
 import { requireCoordinatorConversation } from "./action-scope.js";
-import type { KanbanTask } from "../storage-shared.js";
+import type { KanbanTask } from "../storage/index.js";
 
 /**
  * A command node coordinator's ticket tools with a `nodeId`

@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database stores behind rich interactions (docs/architecture/rich-interactions.md).
- * Imported by the store registry (storage-stores.ts), so keep this module free
+ * Imported by the store registry (storage/stores.ts), so keep this module free
  * of other runtime imports. Every row is owned by its environment, so deleting
  * an environment removes its requests, receipts, drafts and deliverable
  * metadata in one owner sweep.

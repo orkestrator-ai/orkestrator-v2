@@ -34,7 +34,7 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 
 /**
  * Presentation state every client shares, which browsers used to keep in
- * their own localStorage (storage-client-state.ts), and the backend-side
+ * their own localStorage (storage/client-state.ts), and the backend-side
  * decisions that went with it.
  *
  * - `get_client_state_capabilities` → which of these this backend owns.

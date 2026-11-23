@@ -14,7 +14,7 @@ import {
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { EnvironmentMutationFence } from "./environments/replacement-fence.js";
 import { CoordinatorRequestFlights } from "./coordinator/request-flights.js";
 

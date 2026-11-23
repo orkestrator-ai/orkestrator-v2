@@ -6,7 +6,7 @@ import {
   type CoordinatorWorkspace,
 } from "@orkestrator/protocol/coordinator";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /**
  * What closed coordinator conversations leave behind, and how it reaches the

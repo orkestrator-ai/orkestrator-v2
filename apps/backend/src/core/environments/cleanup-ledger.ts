@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { StoreCorruptError, type StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { StoreCorruptError, type StorageDatabase } from "../storage/index.js";
+import { openBackendDatabase } from "../storage/stores.js";
 
 /**
  * Host-side resources a deleted environment can leave behind. Each step is

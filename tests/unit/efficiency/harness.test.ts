@@ -406,7 +406,7 @@ describe("supervision workloads", () => {
           "apps/backend/src/core/transcript-progress.ts",
           "apps/backend/src/core/native-agent/transcript-progress.ts",
         ],
-        ["apps/backend/src/core/storage.ts"],
+        ["apps/backend/src/core/storage/service.ts"],
         ["apps/backend/src/core/build-pipeline/transcript-checkpoints.ts"],
         ["packages/protocol/src/node/bridge-transcript-summary.ts"],
       ] as const) {

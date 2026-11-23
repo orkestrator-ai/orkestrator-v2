@@ -5,7 +5,7 @@ import path from "node:path";
 import { LOG_DETAIL_EXPIRY_MS } from "@orkestrator/protocol/log-policy";
 import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import { LogPolicyService, startLogPolicyService } from "./log-policy-service.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 const directories: string[] = [];
 const open: StorageService[] = [];

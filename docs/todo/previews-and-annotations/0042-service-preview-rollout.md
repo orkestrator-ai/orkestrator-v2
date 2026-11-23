@@ -179,7 +179,7 @@ this flip is no longer the only fix for M1.
 
 **Investigation.** `DEFAULT_PREVIEW_SETTINGS` has `transport: true`,
 `relay: true` since 2026-11-04
-(`apps/backend/src/core/storage-preview-services.ts`).
+(`apps/backend/src/core/storage/preview-services.ts`).
 `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` remain the
 overrides. The maintainer chose both decisions below on 2026-11-04 (D19): flip
 right after, not after a cohort, and sign-off by the maintainer.
@@ -414,14 +414,14 @@ partitions, and the evidence log where run results are now recorded.
 ## Current state
 
 - Defaults: `DEFAULT_PREVIEW_SETTINGS`
-  (`apps/backend/src/core/storage-preview-services.ts`) sets
+  (`apps/backend/src/core/storage/preview-services.ts`) sets
   `transport: true`, `relay: true` and `publication.enabled: false`. A backend
   with saved settings keeps them (D20).
   `PreviewRuntime.effectiveSettings` (`core/previews/runtime.ts`) applies the
   `ORKESTRATOR_PREVIEW_TRANSPORT` and `ORKESTRATOR_PREVIEW_RELAY` overrides.
   Since #969, settings, definitions and identity are the SQLite stores
   `preview-settings`, `preview-services` and `backend-identity`
-  (`core/storage-stores.ts`), imported once from the old JSON files.
+  (`core/storage/stores.ts`), imported once from the old JSON files.
 - These are always on, whatever the settings: the registry and the legacy path
   (`PreviewRuntime.capabilities`), service tabs opened from the environment
   button (`environmentBrowserTarget`), and terminal-link intents
@@ -829,7 +829,7 @@ This replaces the 2026-09-23 file lists as the current baseline.
   | backend | `src/preview-vite.test.ts` | 0, 2 skipped (2 with the Vite fixture) |
   | backend | `tests/gateway-preview.test.ts` (rollback drill) | 8 |
   | backend | `tests/gateway-proxy.test.ts` (legacy route) | 31 |
-  | backend | `src/core/storage-writer-guards.test.ts` (#969 preview stores) | 20 |
+  | backend | `src/core/storage/writer-guards.test.ts` (#969 preview stores) | 20 |
   | desktop | 15 `tests/*preview*.test.ts` files | 221 |
   | desktop | `tests/desktop-window-lifecycle.test.ts` (partitions) | 6 |
   | web | `ServiceBrowserTab`, `BrowserTab`, `EnvironmentPreviewServices`, `PreviewSettings` | 75 |

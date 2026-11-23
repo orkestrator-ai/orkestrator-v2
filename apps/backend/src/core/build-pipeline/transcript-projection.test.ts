@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BUILD_PIPELINE_TRANSCRIPT_DIRECTORY } from "./transcript-store.js";
 import {
   BUILD_PIPELINE_PATCH_BUDGET_BYTES,

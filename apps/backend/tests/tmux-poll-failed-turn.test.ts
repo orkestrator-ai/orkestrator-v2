@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import {
   CLAUDE_STATE_ABSENT_MARKER,
   CLAUDE_STATE_POLL_INTERVAL_MS,

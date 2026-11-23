@@ -10,13 +10,13 @@ import {
 import { graphBuiltInType } from "@orkestrator/protocol/graphs/types";
 import { disputedCheckDigests } from "../review/disputed-checks.js";
 import { graphOutputSlotInput } from "./result-graph-output.js";
-import { StorageDatabase } from "../storage-database.js";
+import { StorageDatabase } from "../storage/database.js";
 import {
   readStoredValue,
   seedStore,
   seedUnreadableStore,
   storageFilesContain,
-} from "../storage-test-support.js";
+} from "../storage/test-support.js";
 import { WorkflowResultService } from "./result-service.js";
 
 const STORE = "workflow-results.json";

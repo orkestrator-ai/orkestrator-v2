@@ -48,7 +48,7 @@ import type {
   GraphExecutorContext,
   GraphNodeExecutor,
 } from "./graph-run-executors.js";
-import type { GraphEffectsStorage } from "./storage-graph-effects.js";
+import type { GraphEffectsStorage } from "./storage/index.js";
 
 type SystemNode = Extract<GraphPlanNode, { kind: "system" }>;
 

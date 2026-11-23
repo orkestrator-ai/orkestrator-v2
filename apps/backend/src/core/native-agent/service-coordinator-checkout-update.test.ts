@@ -24,7 +24,7 @@ import {
 import { ProjectGitService, type CheckoutChanges } from "../project-git-service.js";
 import { fastForwardBeforeCoordinatorMail } from "../coordinator/mail-upstream.js";
 import type { NativeAgentServiceOptions } from "./service-shared.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 
 const before = "b".repeat(40);
 const after = "a".repeat(40);

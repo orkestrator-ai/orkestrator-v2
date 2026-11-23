@@ -45,7 +45,7 @@ import {
   type SyntheticInventoryProfile,
 } from "../apps/backend/src/core/native-agent/command-catalogue-test-support";
 import { NativeAgentService } from "../apps/backend/src/core/native-agent/service";
-import { StorageService } from "../apps/backend/src/core/storage";
+import { StorageService } from "../apps/backend/src/core/storage/service";
 import { rankSlashCommands } from "../apps/web/src/lib/chat/slash-command-search";
 
 export const BENCHMARK_SCHEMA = "orkestrator.slash-command-catalogue-benchmark.v1";

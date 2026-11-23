@@ -10,7 +10,7 @@
  * other labels are kept, and an issue that already has the label is left
  * alone.
  */
-import type { LinearMergedLabelOutcome } from "./storage-linear.js";
+import type { LinearMergedLabelOutcome } from "./storage/index.js";
 import {
   asString,
   isRecord,

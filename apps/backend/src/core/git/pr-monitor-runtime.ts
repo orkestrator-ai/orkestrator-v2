@@ -8,7 +8,7 @@ import {
 import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-readiness";
 import { PrMonitorService, type PrMonitorServiceOptions } from "./pr-monitor.js";
 import type { Environment } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import type { BackendEmit, CommandContext } from "../commands-context.js";
 import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
 import { WorkAdmissionPool } from "../work-admission.js";

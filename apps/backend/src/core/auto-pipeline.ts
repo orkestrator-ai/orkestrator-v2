@@ -20,7 +20,7 @@ import {
   type EnvironmentGit,
 } from "./workspace-code-rewind.js";
 import { multiReviewWorkspaceUse } from "./workspace-writers.js";
-import { paneLayoutLeaves } from "./storage-shared.js";
+import { paneLayoutLeaves } from "./storage/index.js";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { buildPipelineStartWithSavedDefaults } from "./build-pipeline/launch.js";
 import { boundAdoptedTranscript } from "./auto-pipeline-transcript.js";

@@ -16,8 +16,8 @@ import {
   takeWorktreeSeedRefusals,
 } from "./containers/project-seed-files.js";
 import type { Environment } from "./models.js";
-import { createEnvironment } from "./storage-shared-core.js";
-import type { StorageService } from "./storage.js";
+import { createEnvironment } from "./storage/shared-core.js";
+import type { StorageService } from "./storage/service.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
 import * as remoteGit from "./git/noninteractive-env.js";

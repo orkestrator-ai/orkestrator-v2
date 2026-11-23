@@ -14,7 +14,7 @@ import {
 import type { NativeAgentPermissionRule } from "@orkestrator/protocol/permission-rules";
 import type { PermissionRuleRequestDetail } from "../agent-provider-contract.js";
 import type { Environment, PersistedNativeAgentSession } from "../models.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { PermissionRuleEnforcer, PermissionRuleRefusedError } from "./enforcer.js";
 import type { PermissionRuleStore } from "./store.js";
 

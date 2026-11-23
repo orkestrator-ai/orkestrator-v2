@@ -49,7 +49,7 @@ import { GRAPH_REVIEW_HEAD, graphReviewReport } from "./graph-test-support.js";
 import { MultiReviewGraphEngine } from "./graph-engine.js";
 import { MultiReviewService } from "./service.js";
 import { runCommand } from "../shell.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { WorkflowResultService } from "../workflows/index.js";
 
 const FINGERPRINT = "a".repeat(64);

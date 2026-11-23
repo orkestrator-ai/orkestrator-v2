@@ -50,7 +50,7 @@ import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { multiReviewGraphEngineTemplate } from "./review/graph-template.js";
 import { ManualTime } from "./recurring/test-support.js";
 import { runCommand } from "./shell.js";
-import { storageDatabase } from "./storage-test-support.js";
+import { storageDatabase } from "./storage/test-support.js";
 
 const REPORT_ONLY = process.env.GRAPH_RUN_BENCH_REPORT_ONLY === "1";
 const OUTPUT_PATH = process.env.GRAPH_RUN_BENCH_OUT;

@@ -4,7 +4,7 @@ import {
   seedUnreadableStore,
   storageDatabase,
   withTemporaryStorage,
-} from "../src/core/storage-test-support";
+} from "../src/core/storage/test-support";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { describe, expect, mock, test, setDefaultTimeout } from "bun:test";
 import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout.js";

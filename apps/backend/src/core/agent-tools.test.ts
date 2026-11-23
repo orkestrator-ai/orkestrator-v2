@@ -26,8 +26,8 @@ import {
   consumeAgentMailRateLimit,
   dropInheritedAgentToolConnection,
 } from "./agent-tools.js";
-import { StorageService } from "./storage.js";
-import { seedUnreadableStore } from "./storage-test-support.js";
+import { StorageService } from "./storage/service.js";
+import { seedUnreadableStore } from "./storage/test-support.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 import { WorkerTabCloseAdmission } from "./worker-tab-close-admission.js";
 

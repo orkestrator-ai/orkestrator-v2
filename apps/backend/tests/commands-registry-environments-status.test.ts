@@ -1,13 +1,13 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
-import { createProject } from "../src/core/storage";
+import { createProject } from "../src/core/storage/service";
 import {
   seedStore,
   storageDatabase,
   storageInternals,
   withTemporaryStorage,
-} from "../src/core/storage-test-support";
+} from "../src/core/storage/test-support";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

@@ -14,7 +14,7 @@ import {
 import { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
 import { int, refine, str, toolInput, withDefault } from "./tool-schema.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 export type AgentMessagingToolScope = {
   environmentId: string;

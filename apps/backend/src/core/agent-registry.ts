@@ -15,8 +15,11 @@ import {
 import type { NativeAgentGoalSummary } from "@orkestrator/protocol/native-agent-goal";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { runtimeTimeoutTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
-import { paneLayoutLeaves } from "./storage-shared.js";
-import type { CoordinatorsStorage, StorageService } from "./storage.js";
+import {
+  paneLayoutLeaves,
+  type CoordinatorsStorage,
+  type StorageService,
+} from "./storage/index.js";
 
 /** Live activity readers. In-memory only: a snapshot never waits on a provider. */
 export interface AgentRegistrySources {

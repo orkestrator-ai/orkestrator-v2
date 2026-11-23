@@ -28,7 +28,7 @@ import {
 } from "./service-projection-test-support.js";
 import { collaborators } from "./service-test-collaborators.js";
 import { NativeAgentService } from "./service.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 
 const key = (agent: BuildPipelineAgent, tab = "tab-1") =>
   nativeAgentSessionStorageKey("env-1", agent, tab);

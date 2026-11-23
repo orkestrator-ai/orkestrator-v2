@@ -63,7 +63,7 @@ import { GraphTemplateSharing } from "./graph-template-sharing.js";
 import type { AppConfig, Project } from "./models.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
-import type { GraphTemplatesStorage } from "./storage.js";
+import type { GraphTemplatesStorage } from "./storage/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("graph");

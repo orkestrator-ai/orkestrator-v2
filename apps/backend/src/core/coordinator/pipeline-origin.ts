@@ -1,5 +1,5 @@
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /** Also checked by background status reconciliation, independent of visible tabs or opt-in. */
 export function needsPipelineCreationRepair(association: CoordinatorWorkflowAssociation): boolean {

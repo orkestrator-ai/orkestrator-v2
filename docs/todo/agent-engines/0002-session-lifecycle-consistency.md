@@ -331,7 +331,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
       left, and the next prompt runs.
   - **Attachment-only drafts survive a backend restart.** Storage round-trips
     a text-less image draft across `StorageService` instances
-    (`storage-drafts.test.ts`), and hydrating one for Cursor or Grok keeps
+    (`storage/drafts.test.ts`), and hydrating one for Cursor or Grok keeps
     the image and never deletes or blanks the record
     (`draft-persistence.test.ts`).
 

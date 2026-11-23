@@ -55,8 +55,7 @@ import { graphMockValue } from "@orkestrator/protocol/graphs/mock";
 import { GraphRunServiceError, type GraphRunService } from "./graph-run-service.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import type { GraphTemplateService } from "./graph-template-service.js";
-import type { ResourceChangeListener } from "./storage-shared.js";
-import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import type { ResourceChangeListener, GraphRunsStorage } from "./storage/index.js";
 
 /** Finished environment-less mock runs kept per project. */
 export const GRAPH_MOCK_RUNS_RETAINED = 20;

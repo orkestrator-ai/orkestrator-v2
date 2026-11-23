@@ -1,7 +1,6 @@
-import { deletionMarker, markDeletion } from "../storage-deletion-fences.js";
+import { deletionMarker, markDeletion, type StorageDatabase } from "../storage/index.js";
 import { DesignError } from "./errors.js";
-import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { openBackendDatabase } from "../storage/stores.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("design");

@@ -3,7 +3,7 @@ import type {
   RichInteractionReceipt,
   RichInteractionRequest,
 } from "@orkestrator/protocol/rich-interactions";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import {
   RICH_DELIVERABLES_STORE,
   RICH_INTERACTION_DRAFTS_STORE,

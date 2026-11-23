@@ -32,7 +32,7 @@ import type {
   Environment,
   PersistedBuildPipeline,
 } from "../models.js";
-import type { ResourceChangeListener } from "../storage-shared.js";
+import type { ResourceChangeListener } from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("build-pipeline");

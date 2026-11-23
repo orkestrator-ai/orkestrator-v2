@@ -1,6 +1,6 @@
 import { BridgeSessionStore } from "../../../../../bridges/codex-bridge/src/sessions/persistence.js";
 import { DispatchJournal } from "../../../../../bridges/codex-bridge/src/sessions/dispatch-journal.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { hostClaudeJsonPath, hostCodexHome } from "../agent-accounts/homes.js";
 import osHome from "node:os";
 import { afterEach, describe, expect, test, spyOn } from "bun:test";

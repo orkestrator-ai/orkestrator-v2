@@ -36,7 +36,7 @@ import {
   type WebAnnotationRequest,
   type WebAnnotationStorageStatus,
 } from "@orkestrator/protocol/web-annotations";
-import { LEGACY_JSON_DIRECTORY } from "../storage-stores.js";
+import { LEGACY_JSON_DIRECTORY } from "../storage/stores.js";
 import { recordKey, type UnreadableRecord } from "./store-rows.js";
 import {
   WebAnnotationStorageError,

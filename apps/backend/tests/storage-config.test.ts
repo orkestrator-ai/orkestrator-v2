@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { REVIEW_INSTRUCTION_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "../../../packages/protocol/src/debug-logging";
-import { defaultConfig, StorageService } from "../src/core/storage";
+import { defaultConfig, StorageService } from "../src/core/storage/service";
 import { createTempDir, removeTempDirs } from "./storage-test-helpers";
 
 afterEach(removeTempDirs);

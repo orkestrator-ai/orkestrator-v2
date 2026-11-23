@@ -15,9 +15,9 @@ import {
   type DesignHarness,
   type TestRenderer,
 } from "./test-support.js";
-import { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
-import { storageFilesContain } from "../storage-test-support.js";
+import { StorageDatabase } from "../storage/database.js";
+import { openBackendDatabase } from "../storage/stores.js";
+import { storageFilesContain } from "../storage/test-support.js";
 
 const frameInput = { name: "Home", x: 0, y: 0, width: 400, height: 300, html: "<h1>Hello</h1>" };
 

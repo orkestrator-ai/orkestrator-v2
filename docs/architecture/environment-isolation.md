@@ -50,7 +50,7 @@ the OS uses for outgoing connections (Linux from 32768, macOS from 49152).
 The block is reserved on first use and kept on the environment record as
 `isolationPortBase` (backend-private; `toClientEnvironment` strips it).
 `EnvironmentIsolationRepository.assignEnvironmentPortBase`
-(`storage-environment-isolation.ts`) chooses and writes it under the
+(`storage/environment-isolation.ts`) chooses and writes it under the
 environment store's lease, the lease every environment write holds, so two
 environments starting at once cannot be handed the same block, and a restart
 keeps the same ports. Deleting the environment deletes the record. Before

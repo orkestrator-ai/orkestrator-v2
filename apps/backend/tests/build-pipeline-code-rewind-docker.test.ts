@@ -49,7 +49,7 @@ import {
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
 } from "../src/core/review/worktree-fingerprint";
 import { runCommand } from "../src/core/shell";
-import type { StorageService } from "../src/core/storage";
+import type { StorageService } from "../src/core/storage/service";
 import { removeLabelledResources } from "./container-live-cleanup";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";

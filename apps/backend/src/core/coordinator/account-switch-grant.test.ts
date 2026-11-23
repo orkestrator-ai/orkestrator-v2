@@ -25,7 +25,7 @@ import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";
 import { executeAgentAccountSwitch } from "../nodes/node-account-switch.js";
 import { NodeActionRequests, type NodeActionRequest } from "../nodes/node-action-requests.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";
-import { StorageService, createProject } from "../storage.js";
+import { StorageService, createProject } from "../storage/service.js";
 
 /**
  * `switch_provider_account` under the user's standing permission (Settings →

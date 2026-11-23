@@ -14,20 +14,20 @@
  * out, so the hourly snapshot of the app's stores no longer copies the ledger.
  * Nothing joins or writes across the two files.
  *
- * `storage-stores.ts` loads this module while opening the database, so it
+ * `storage/stores.ts` loads this module while opening the database, so it
  * imports only the storage layer at runtime, never the rest of change tracking.
  */
 
 import { createLogger } from "@orkestrator/protocol/logger";
-import { snapshotBeforeMigration } from "../storage-backups.js";
-import { backgroundCheckpointsByDefault } from "../storage-checkpointer.js";
-import { recurringDiagnosticsRegistry } from "../recurring/index.js";
 import {
+  snapshotBeforeMigration,
+  backgroundCheckpointsByDefault,
   CHANGE_LEDGER_DATABASE_FILE,
   StorageDatabase,
   type StorageDatabaseOptions,
   type StorageMigration,
-} from "../storage-database.js";
+} from "../storage/index.js";
+import { recurringDiagnosticsRegistry } from "../recurring/index.js";
 
 const log = createLogger("storage");
 
@@ -419,7 +419,7 @@ export function openChangeLedgerDatabase(
 ): StorageDatabase {
   return new StorageDatabase(dataDir, {
     cacheGaugeRegistry: recurringDiagnosticsRegistry,
-    // Checkpoints off the event loop (`storage-checkpointer.ts`).
+    // Checkpoints off the event loop (`storage/checkpointer.ts`).
     backgroundCheckpoint: backgroundCheckpointsByDefault(),
     ...options,
     file: CHANGE_LEDGER_DATABASE_FILE,

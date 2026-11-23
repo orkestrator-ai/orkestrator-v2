@@ -3,14 +3,14 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { cleanupRetiredLoopedReviews } from "./retired-looped-review-cleanup.js";
-import { StorageDatabase } from "../storage-database.js";
+import { StorageDatabase } from "../storage/database.js";
 import {
   LOOPED_REVIEW_CLEANUP_STORE,
   RETIRE_LOOPED_REVIEWS_VERSION,
-} from "../storage-retired-features.js";
-import { STORAGE_MIGRATIONS, storeLayout } from "../storage-stores.js";
-import { createEnvironment, StorageService } from "../storage.js";
-import { storageDatabase } from "../storage-test-support.js";
+} from "../storage/retired-features.js";
+import { STORAGE_MIGRATIONS, storeLayout } from "../storage/stores.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
+import { storageDatabase } from "../storage/test-support.js";
 
 const directories: string[] = [];
 afterEach(async () => {

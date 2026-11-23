@@ -41,7 +41,7 @@ import {
   type NativeAgentServiceOptions,
 } from "./service.js";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 export type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 

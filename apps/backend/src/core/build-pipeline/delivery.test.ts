@@ -15,7 +15,7 @@ import { pushBranchPrompt } from "./prompts.js";
 import { readEnvironmentBranchPushState } from "./branch-push.js";
 import type { BuildPipelineService } from "./service.js";
 import { pipeline, startInput, withService } from "./service-test-support.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 
 const TICKET = "task-default";
 const KANBAN_SOURCE = { type: "kanban", taskId: TICKET } as const;

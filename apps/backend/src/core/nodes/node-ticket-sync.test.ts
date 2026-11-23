@@ -5,9 +5,9 @@ import {
   TICKET_SYNC_OUTBOX_READY_EVENT,
 } from "@orkestrator/protocol/ticket-sync";
 
-import { seedStore, readStoredValue } from "../storage-test-support.js";
-import { emptyKanbanSyncStore, journalTicketOp } from "../storage-kanban-sync.js";
-import { createProject } from "../storage.js";
+import { seedStore, readStoredValue } from "../storage/test-support.js";
+import { emptyKanbanSyncStore, journalTicketOp } from "../storage/kanban-sync.js";
+import { createProject } from "../storage/service.js";
 import { cleanupFleets, COMMAND_ID, fleet, LEAF_ID } from "./node-ticket-sync-test-support.js";
 
 /**

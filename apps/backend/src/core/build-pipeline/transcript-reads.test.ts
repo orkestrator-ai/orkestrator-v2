@@ -15,7 +15,7 @@ import type { StructuredOutputResult } from "@orkestrator/protocol/structured-ou
 import { bridgeTranscriptSummaryUpdate } from "@orkestrator/protocol/node/bridge-transcript-summary";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { codexConnection, httpProvider } from "../agent-provider-test-support.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BuildPipelineService } from "./service.js";
 import type {
   ProviderSessionObservation,

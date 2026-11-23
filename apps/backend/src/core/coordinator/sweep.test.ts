@@ -19,7 +19,7 @@ import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
 import { runCommand } from "../shell.js";
-import { createEnvironment, createProject } from "../storage.js";
+import { createEnvironment, createProject } from "../storage/service.js";
 
 const worlds: MailWorld[] = [];
 const roots: string[] = [];

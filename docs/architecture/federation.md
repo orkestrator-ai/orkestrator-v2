@@ -73,7 +73,7 @@ command nodes span all connected nodes.
 | Protocol | `packages/protocol/src/device-catalogue.ts` | Catalogue v2 schema, validators, v1 migration, v1 down-projection |
 | Protocol | `packages/protocol/src/connections.ts` | Renderer-safe `ConnectionSummary` fields, transport/identity vocabulary |
 | Backend | `apps/backend/src/gateway-auth.ts`, `gateway-lifecycle.ts` | `GET /__orkestrator/hello`, loopback client listener |
-| Backend | `core/storage-preview-services.ts`, `core/commands-registry-backend-profile.ts` | Profile store and commands |
+| Backend | `core/storage/preview-services.ts`, `core/commands-registry-backend-profile.ts` | Profile store and commands |
 | Desktop | `electron/connection-manager.ts` (+ `connection-*.ts`, `backend-hello.ts`) | Catalogue, bindings, observations, routes, handover |
 | Desktop | `electron/connection-catalogue-store.ts` | Native catalogue file, backup, v1 snapshot |
 | Desktop | `electron/ssh/*` | OpenSSH tunnel supervisor |

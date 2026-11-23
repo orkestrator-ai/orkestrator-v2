@@ -10,7 +10,7 @@ import { startLocalServerUnlocked } from "./commands-servers.js";
 import { CoordinatorService } from "./coordinator/service.js";
 import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./opencode2/host-server.js";
 import { runCommand } from "./shell.js";
-import { createProject, StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage/service.js";
 
 /**
  * An OpenCode coordinator's server is the conversation's `opencode` local

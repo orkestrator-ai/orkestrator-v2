@@ -1,6 +1,6 @@
 import { BuildPipelineService } from "../build-pipeline/service.js";
 import { FakeProvider } from "../build-pipeline/service-test-support.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 /**

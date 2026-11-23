@@ -47,7 +47,7 @@ import type { ArtifactOwner } from "@orkestrator/protocol/transcript-artifacts";
 import { deleteConversationRecords } from "./conversation-deletion.js";
 import { ArtifactAssetStaging } from "./service-assets.js";
 import { ArtifactDraftReads } from "./service-drafts.js";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import { ArtifactGarbageCollector, type ArtifactCleanupReport } from "./gc.js";
 import {
   ArtifactGrantService,

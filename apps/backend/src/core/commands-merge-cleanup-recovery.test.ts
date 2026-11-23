@@ -9,7 +9,7 @@ import type { CommandContext } from "./commands.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { closeEnvironmentCleanupStorage } from "./environments/cleanup-ledger.js";
 import type { Environment } from "./models.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 const directories: string[] = [];
 

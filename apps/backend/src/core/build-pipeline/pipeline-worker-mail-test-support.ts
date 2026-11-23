@@ -21,7 +21,7 @@ import type { BuildPipelineProvider } from "./provider.js";
 import type { BuildPipelineAgents } from "./service-agents.js";
 import { BuildPipelineWorkerMail, dispatchWorkerMailTurn } from "./worker-mail.js";
 import type { MailWorld } from "../agent-mail-world-test-support.js";
-import { createEnvironment, type StorageService } from "../storage.js";
+import { createEnvironment, type StorageService } from "../storage/service.js";
 
 export const PIPELINE_ID = "11111111-2222-4333-8444-555555555555";
 

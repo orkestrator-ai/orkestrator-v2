@@ -1,7 +1,8 @@
 // The nodes domain's public surface: the only module other backend code
 // imports. Re-export by name (never `export *`) so the surface stays reviewable.
-// The storage layer imports node-store-format.js directly: routing it through
-// here would close a runtime import cycle with storage.
+// The storage layer (storage/nodes.ts) imports the stored-format readers from
+// here: only storage/service.ts reaches it, and nothing this file reaches
+// imports service.ts at run time.
 export { parseNodeActionApproval } from "./node-action-requests.js";
 export {
   accountSwitchGrantState,
@@ -37,6 +38,7 @@ export {
   isGlobalConfigWriteCommand,
 } from "./workspace-grant-scope.js";
 export { readSeedManifest } from "./node-seed.js";
+export { readStoredNodeAttachments, readStoredNodeRegistry } from "./node-store-format.js";
 export { errorCode, NodeService, type NodeServiceOptions } from "./node-service.js";
 export { createNodeSshFactory } from "./node-ssh.js";
 export { environmentMailMarkers, isWorkingPipelineRecord } from "./node-summary-markers.js";

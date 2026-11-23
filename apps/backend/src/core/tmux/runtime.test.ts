@@ -2,7 +2,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import { deferred, flushMicrotasks, ManualTime } from "../recurring/test-support.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import type { Environment } from "../models.js";
 import { TmuxBackend } from "./backend.js";
 import { TmuxSession } from "./session-manager.js";
@@ -103,7 +103,7 @@ describe("tmux completion attention across tabs and restart", () => {
   async function fixture() {
     const { promises: fs } = await import("node:fs");
     const os = await import("node:os");
-    const { StorageService } = await import("../storage.js");
+    const { StorageService } = await import("../storage/service.js");
     const { graphEnvironmentFixture } = await import("../graph-run-test-support.js");
     const root = await fs.mkdtemp(`${os.tmpdir()}/tmux-attention-`);
     const storage = new StorageService(root);

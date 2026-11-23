@@ -65,7 +65,7 @@ import {
 import { observeProjectMcpEntries, projectMcpInstaller } from "./project-mcp.js";
 import { projectCapabilityLocation, projectMcpLocation } from "./scoped-locations.js";
 import { CapabilityError } from "./security.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { CapabilityState, InstallationReceipt } from "./types.js";
 import type { LeafScopedReport } from "./launch-authority.js";
 import {

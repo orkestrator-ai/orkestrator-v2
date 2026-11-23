@@ -16,14 +16,14 @@
 | Unchanged owner | Aggregate failure | Complete owner rerun |
 | --- | --- | --- |
 | `apps/web/src/components/federation/node-action-requests.test.tsx` | `root-change approval handles over-limit and still permits rejection` exceeded its 5,000 ms deadline (5,380.73 ms). | Passed alone, 3.4 s. |
-| `apps/backend/src/core/storage-writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` exceeded its 5,000 ms deadline (5,781.68 ms). | Passed alone, 5.3 s for the complete file. See existing case 1309. |
+| `apps/backend/src/core/storage/writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` exceeded its 5,000 ms deadline (5,781.68 ms). | Passed alone, 5.3 s for the complete file. See existing case 1309. |
 | `apps/backend/tests/codex-subagent-cards.test.ts` | `each child keeps one card, its transcript and status across a fresh backend and a cold restart` expected `idle`, received `recovering` (930.21 ms). | Passed alone, 1.8 s. See existing case 0310. |
 
 The complete owner rerun commands were:
 
 ```bash
 mise run test:logged -- --name approval-timeout-owner -- bun test --cwd apps/web ./src/components/federation/node-action-requests.test.tsx --parallel=1 --only-failures
-mise run test:logged -- --name storage-scan-owner -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name storage-scan-owner -- bun test --cwd apps/backend ./src/core/storage/writer-guards.test.ts --parallel=1 --only-failures
 mise run test:logged -- --name codex-subagent-owner -- bun test --cwd apps/backend ./tests/codex-subagent-cards.test.ts --parallel=1 --only-failures
 ```
 

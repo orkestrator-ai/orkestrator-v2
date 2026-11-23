@@ -4,7 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { runCommand } from "../shell.js";
-import { StorageService, createEnvironment } from "../storage.js";
+import { StorageService, createEnvironment } from "../storage/service.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./isolation.js";
 
 // Opt in: two disposable Postgres stacks; never uses a registered project.

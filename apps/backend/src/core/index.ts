@@ -142,7 +142,7 @@ import { PreviewRuntime } from "./previews/index.js";
 import type { RecurringJobKind } from "@orkestrator/protocol/recurring-work";
 import { recurringWorkMetrics, recurringDiagnosticsRegistry } from "./recurring/index.js";
 import { BackendDiagnostics } from "./backend-diagnostics.js";
-import { pauseBackgroundCheckpoints } from "./storage-checkpointer.js";
+import { pauseBackgroundCheckpoints } from "./storage/index.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 import { WorkAdmissionPool } from "./work-admission.js";
 import {
@@ -220,7 +220,7 @@ import {
   coordinatorBridgeIdentityFromEnvironment,
 } from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux/index.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import {

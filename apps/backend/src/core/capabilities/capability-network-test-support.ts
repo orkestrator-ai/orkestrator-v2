@@ -20,7 +20,7 @@ import {
   CAPABILITY_LEAF_REQUESTED_EVENT,
 } from "@orkestrator/protocol/contract/domains/capabilities";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { TestNode, TestNodeNetwork } from "../nodes/node-network-test-support.js";
 import type { NodeServiceOptions } from "../nodes/node-service.js";
 import { CapabilityEnvironmentAuthority } from "./environment-authority.js";

@@ -30,7 +30,7 @@ import type { CapabilityTargetStatus } from "@orkestrator/protocol/capability-re
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { capabilityLocation } from "@orkestrator/protocol/capability-resources-support";
 

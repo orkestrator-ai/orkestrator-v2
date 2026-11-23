@@ -32,7 +32,7 @@ import {
 } from "@orkestrator/protocol/environment-hydration";
 import { asString, asNumber, stripWorkflowRendererSecrets } from "./commands-helpers.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
-import { isFrozenPromptQueueMessage } from "./storage-prompts.js";
+import { isFrozenPromptQueueMessage } from "./storage/index.js";
 import { resetAgentMailBudget } from "./commands-registry-mail.js";
 import {
   AGENT_HANDOFF_CAPABILITIES,

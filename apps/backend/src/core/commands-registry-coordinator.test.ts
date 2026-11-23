@@ -6,7 +6,7 @@ import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { CoordinatorService } from "./coordinator/service.js";
-import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 import { runCommand } from "./shell.js";
 import {
   COORDINATOR_REQUEST_ID_REUSED_ERROR,
@@ -25,7 +25,7 @@ import { parseBackendId } from "@orkestrator/protocol/federation";
 import { NodeCoordinatorRemote } from "./nodes/node-coordinator-remote.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./coordinator/workflow-retention.js";
-import { seedStore, readStoredValue } from "./storage-test-support.js";
+import { seedStore, readStoredValue } from "./storage/test-support.js";
 import { multiReviewInputWithDefaults } from "./coordinator/launch-defaults.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 

@@ -1,4 +1,4 @@
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail-bench-fixture.js";
 
 /**

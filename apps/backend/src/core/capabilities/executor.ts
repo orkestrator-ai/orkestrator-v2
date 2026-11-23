@@ -69,7 +69,7 @@ import {
   parseMcpDefinitions,
   type McpDefinitionShape,
 } from "./source-inspection.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import {
   CLAUDE_PLUGIN_MANIFEST,
   type ClaudePluginAdapter,

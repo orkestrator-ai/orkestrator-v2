@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
 import { CoordinatorService } from "./coordinator/service.js";
-import { seedStore } from "./storage-test-support.js";
+import { seedStore } from "./storage/test-support.js";
 import { NodeService } from "./nodes/node-service.js";
 
 test("composition root connects node release and registry authority to coordinators", async () => {

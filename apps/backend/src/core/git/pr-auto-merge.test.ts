@@ -11,7 +11,7 @@ import {
   PrAutoMergeController,
 } from "./pr-auto-merge.js";
 import type { Environment } from "../models.js";
-import { createEnvironment } from "../storage.js";
+import { createEnvironment } from "../storage/service.js";
 
 const PR_URL = "https://github.com/acme/repo/pull/7";
 

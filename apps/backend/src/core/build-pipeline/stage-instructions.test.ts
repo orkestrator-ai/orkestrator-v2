@@ -21,7 +21,7 @@ import {
   withPipeline,
 } from "./review-fanout-test-support.js";
 import { TEST_ADDRESS_FINDINGS_RESULT, TEST_REVIEW_PREPARATION } from "./test-fixtures.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { UNATTENDED_POLICY_INSTRUCTION } from "./service-helpers.js";
 
 /** The rendered frame around one step's text, as a stage prompt carries it. */

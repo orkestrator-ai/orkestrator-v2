@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database layout of the transcript-artifact stores. Imported by the store
- * registry (storage-stores.ts), so keep this module free of other imports.
+ * registry (storage/stores.ts), so keep this module free of other imports.
  *
  * One envelope store per environment, `transcript-artifacts/<environmentId>`,
  * so environment deletion removes every record in one transaction behind the
@@ -78,5 +78,5 @@ export function transcriptArtifactStoreName(environmentId: string): string {
   return `${TRANSCRIPT_ARTIFACT_STORE_PREFIX}${environmentId}`;
 }
 
-/** Deletion-fence scope shared with `storage-deletion-fences.ts`. */
+/** Deletion-fence scope shared with `storage/deletion-fences.ts`. */
 export const TRANSCRIPT_ARTIFACT_DELETION_SCOPE = "transcript-artifacts";

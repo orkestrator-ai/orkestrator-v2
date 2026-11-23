@@ -3,9 +3,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSummaryCache } from "./database-summary.js";
-import { BACKUP_DIRECTORY } from "./storage-backups.js";
-import { CHANGE_LEDGER_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import { BACKUP_DIRECTORY } from "./storage/backups.js";
+import { CHANGE_LEDGER_DATABASE_FILE, type StorageDatabase } from "./storage/database.js";
+import { openBackendDatabase } from "./storage/stores.js";
 
 const directories: string[] = [];
 const open: StorageDatabase[] = [];

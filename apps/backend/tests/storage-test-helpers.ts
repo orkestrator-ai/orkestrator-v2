@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openBackendDatabase } from "../src/core/storage-stores";
+import { openBackendDatabase } from "../src/core/storage/stores";
 
 /** Shared by the `tests/storage*.test.ts` files split out of `storage.test.ts`. */
 

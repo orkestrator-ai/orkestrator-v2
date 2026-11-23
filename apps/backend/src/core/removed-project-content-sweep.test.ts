@@ -4,9 +4,9 @@ import { sweepRemovedProjectContentAtStartup } from "./removed-project-content-s
 import {
   NoStoredProjectsError,
   type RemovedProjectSweepResult,
-} from "./storage-kanban-removed-projects.js";
-import { createProject } from "./storage.js";
-import { withTemporaryStorage } from "./storage-test-support.js";
+} from "./storage/kanban-removed-projects.js";
+import { createProject } from "./storage/service.js";
+import { withTemporaryStorage } from "./storage/test-support.js";
 
 const NOTHING: RemovedProjectSweepResult = {
   projects: 0,

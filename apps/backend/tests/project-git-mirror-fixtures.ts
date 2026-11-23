@@ -26,7 +26,7 @@ import {
 } from "../src/core/project-git-mirror";
 import type { GitMirrorAccess } from "../src/core/project-git-mirror-access";
 import { runCommand } from "../src/core/shell";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 
 export const setupScript = path.join(
   import.meta.dir,

@@ -10,7 +10,7 @@ import {
 } from "./agent-tools.js";
 import { OrkestratorBackend } from "./index.js";
 import type { CommandContext } from "./commands-context.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 describe("Claude state signal route", () => {
   let dataDir: string;

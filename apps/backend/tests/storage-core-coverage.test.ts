@@ -2,10 +2,10 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createEnvironment, defaultConfig, StorageService } from "../src/core/storage";
+import { createEnvironment, defaultConfig, StorageService } from "../src/core/storage/service";
 import type { ClaudeModelCatalogSnapshot } from "../src/core/models";
-import { openBackendDatabase } from "../src/core/storage-stores";
-import { storageDatabase, storageInternals } from "../src/core/storage-test-support.js";
+import { openBackendDatabase } from "../src/core/storage/stores";
+import { storageDatabase, storageInternals } from "../src/core/storage/test-support.js";
 
 const tempDirs: string[] = [];
 

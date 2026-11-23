@@ -10,7 +10,7 @@
 // (`last-usage.ts`, `shared-usage.ts`, `usage-sharing.ts`), other machines'
 // accounts (`machines.ts`), session accounts (`session.ts`), promotion and the
 // runtime state (`runtime.ts`). The command registry
-// (`commands-registry-accounts.ts`), storage (`storage-agent-accounts.ts`),
+// (`commands-registry-accounts.ts`), storage (`storage/agent-accounts.ts`),
 // usage-limit reads (`agent-usage-limits.ts`) and the host login refreshers
 // (`claude-host-login-refresh.ts`, `codex-host-login-refresh.ts`) stay with
 // their own prefix groups.
@@ -28,7 +28,7 @@
 //   is for `backend-runtime.ts` and, for one type, `commands-servers.ts`;
 // - `store.ts`, `homes.ts` and `auto-switch-notices.ts` are imported from
 //   below the modules this file re-exports: the storage layer
-//   (`storage-agent-accounts.ts`, `storage-config.ts`), `commands-servers.ts`,
+//   (`storage/agent-accounts.ts`, `storage/config.ts`), `commands-servers.ts`,
 //   the host model catalogue, `permission-rules/`, `mcp-management/`,
 //   `capabilities/`, `environments/move-sessions.ts`,
 //   `codex-host-login-refresh.ts` and `coordinator/notice-router.ts`. The

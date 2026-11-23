@@ -11,7 +11,7 @@ import { openCode2LegacyReconcileMarker } from "./credential-upgrade.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { openCode2ServerKey } from "./host-server-state.js";
 import { openCode2HostPaths } from "./server.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 type FakeChild = ChildProcessWithoutNullStreams & { exited: boolean };
 

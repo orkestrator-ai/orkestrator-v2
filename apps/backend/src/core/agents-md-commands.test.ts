@@ -12,7 +12,7 @@ import { CoordinatorRequestFlights } from "./coordinator/request-flights.js";
 import { CoordinatorService } from "./coordinator/service.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { runCommand } from "./shell.js";
-import { StorageService, createProject } from "./storage.js";
+import { StorageService, createProject } from "./storage/service.js";
 
 let root: string;
 let storage: StorageService;

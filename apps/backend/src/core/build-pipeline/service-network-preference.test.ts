@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import type { NetworkAccessMode } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
 import { startBuilding, startInput, withService } from "./service-test-support.js";
 

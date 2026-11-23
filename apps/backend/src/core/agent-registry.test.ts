@@ -16,7 +16,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { AgentRegistry } from "./agent-registry.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 async function fixture(extraNativeTabs = 0) {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-agent-registry-"));

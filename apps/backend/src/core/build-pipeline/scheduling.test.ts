@@ -25,7 +25,7 @@ import {
   type Deferred,
 } from "../recurring/test-support.js";
 import { recurringWorkMetrics } from "../recurring/work-metrics.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { WorkflowResultService } from "../workflows/result-service.js";
 
 /** Build-stage stand-in: busy until released, then idle with a result. */

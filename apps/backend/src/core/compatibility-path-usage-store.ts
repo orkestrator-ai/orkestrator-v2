@@ -5,8 +5,8 @@ import {
   type CompatibilityPathUsageSink,
 } from "./compatibility-path-usage.js";
 import { existsSync } from "node:fs";
-import type { StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import type { StorageDatabase } from "./storage/index.js";
+import { openBackendDatabase } from "./storage/stores.js";
 
 /** A sink on the backend database of `dataDir`, opened on first use. */
 export function compatibilityPathUsageDatabaseSink(dataDir: string): CompatibilityPathUsageSink {

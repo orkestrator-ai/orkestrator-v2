@@ -20,7 +20,7 @@ import {
   normalizeAgentPlatforms,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import type { Environment } from "../models.js";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";

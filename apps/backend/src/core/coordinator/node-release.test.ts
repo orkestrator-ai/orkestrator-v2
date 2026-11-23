@@ -9,7 +9,7 @@ import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import type { CoordinatorRemoteAccess, RemoteWorkerState } from "./remote.js";
 import { selectCoordinatorWorkflowsToClear } from "./workflow-retention.js";
-import { seedStore } from "../storage-test-support.js";
+import { seedStore } from "../storage/test-support.js";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./workflow-retention.js";
 import { NODE_OFFLINE_NOTICE_MS, CoordinatorNodeReleases } from "./node-release.js";
 import { WorkerTabCloseAdmission } from "../worker-tab-close-admission.js";

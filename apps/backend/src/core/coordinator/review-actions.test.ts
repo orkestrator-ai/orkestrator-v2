@@ -1,5 +1,5 @@
 import { actionHash } from "./action-scope.js";
-import { readStoredValue, seedStore, upgradedLaunchReceipt } from "../storage-test-support.js";
+import { readStoredValue, seedStore, upgradedLaunchReceipt } from "../storage/test-support.js";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./workflow-retention.js";
 import { BackendRuntime } from "../backend-runtime.js";
@@ -9,7 +9,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService, createEnvironment, createProject } from "../storage.js";
+import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 import { CoordinatorService } from "./service.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";

@@ -12,7 +12,7 @@ import { BuildPipelineAgents } from "./service-agents.js";
 import { BuildPipelineRecovery } from "./service-recovery.js";
 import { BuildPipelineInteractions } from "./service-interactions.js";
 import { BuildPipelineSupervisor } from "./service-supervisor.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { ADDRESS_FINDINGS_RESULT_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
 
 function session(phase: PipelineSessionPhase, key: string, iteration = 0): PipelineSession {

@@ -9,7 +9,7 @@ import type {
 } from "@orkestrator/protocol/multi-review";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
-import { StorageService, createEnvironment, createProject } from "../storage.js";
+import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 
 /**
  * `launch_multi_review`: the renderer's Multi Review button, the same durable

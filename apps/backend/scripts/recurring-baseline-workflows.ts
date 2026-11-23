@@ -21,7 +21,7 @@ import { MultiReviewService } from "../src/core/review/service.js";
 import { parseReviewPackageReference } from "../src/core/review/index.js";
 import { ManualTime, advanceKeyedWork } from "../src/core/recurring/test-support.js";
 import { recurringWorkMetrics } from "../src/core/recurring/work-metrics.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 
 /**
  * Drives the *real* feature-planning, build-pipeline and multi-review

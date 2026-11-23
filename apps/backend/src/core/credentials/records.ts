@@ -7,7 +7,7 @@ import {
   type CredentialVaultKind,
 } from "@orkestrator/protocol/agent-credentials";
 import type { CredentialProcessOwner } from "./owner.js";
-import type { StorageDatabase, StoreRows } from "../storage-database.js";
+import type { StorageDatabase, StoreRows } from "../storage/index.js";
 import {
   CREDENTIAL_CONNECTIONS_STORE,
   CREDENTIAL_GRANTS_STORE,

@@ -38,7 +38,7 @@ import {
 import { NodeActionRequests, type NodeActionRequest } from "../nodes/node-action-requests.js";
 import { ScheduledJobExecutor } from "../scheduled-jobs/executor.js";
 import { ScheduledJobService } from "../scheduled-jobs/service.js";
-import { StorageService, createProject } from "../storage.js";
+import { StorageService, createProject } from "../storage/service.js";
 
 /**
  * A coordinator's self-timers and provider-account tools over the real

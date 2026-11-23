@@ -32,7 +32,7 @@ import { ScheduledJobExecutor } from "../scheduled-jobs/executor.js";
 import { ScheduledJobService } from "../scheduled-jobs/service.js";
 import { registerScheduledJobCommands } from "../commands-registry-scheduled-jobs.js";
 import { runCommand } from "../shell.js";
-import { StorageService, createEnvironment, createProject } from "../storage.js";
+import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

@@ -15,7 +15,7 @@ import { withShortLivedBridge, __testing as refreshTesting } from "./host-model-
 import { HOST_ACP_MODEL_FETCH_TIMEOUT_MS } from "./commands-servers.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "./opencode2/fake-server.test-support.js";
 import { spawnCommand } from "./shell.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 type ProbeSpawn = {
   command: string;

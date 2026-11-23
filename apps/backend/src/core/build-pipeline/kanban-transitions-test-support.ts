@@ -4,7 +4,7 @@ import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { BuildPipelineContext } from "./context.js";
 import { buildPipelineKanbanUpdate } from "./kanban-lifecycle.js";
 import { BuildPipelineRecovery } from "./service-recovery.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 
 /**
  * The build lifecycle's ticket writes as one machine's backend makes them: the

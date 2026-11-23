@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { CapabilityExecutor, type NodePlanTarget } from "./executor.js";
 import { capabilityHomes } from "./index.js";

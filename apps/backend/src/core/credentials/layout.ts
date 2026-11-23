@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database stores behind agent credentials (docs/architecture/agent-credentials.md).
- * Imported by the store registry (storage-stores.ts), so keep this module free
+ * Imported by the store registry (storage/stores.ts), so keep this module free
  * of other runtime imports.
  *
  * Every row is metadata. Values live in the credential vault (`vault.ts`),

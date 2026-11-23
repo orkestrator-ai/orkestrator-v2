@@ -38,7 +38,7 @@ import type {
   StructuredOutputResult,
 } from "@orkestrator/protocol/structured-output";
 import type { PersistedBuildPipeline } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import type { AgentToolConnection } from "../agent-tools.js";
 import {
   type ArtifactLedgerSource,

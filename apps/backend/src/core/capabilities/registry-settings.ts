@@ -19,7 +19,7 @@ import {
 
 import type { CapabilityRegistryPackageList } from "@orkestrator/protocol/capability-resources-api";
 
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { ManifestSigningKeys } from "./manifest-signing.js";
 import { newCorrelationId, recordActivity } from "./operations.js";
 import {

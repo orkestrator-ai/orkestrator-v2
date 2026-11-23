@@ -9,9 +9,9 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPipeline, PipelineSession } from "@orkestrator/protocol/build-pipeline";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BuildPipelineTranscriptCheckpoints } from "./transcript-checkpoints.js";
-import { readStoredValue, storageInternals } from "../storage-test-support.js";
+import { readStoredValue, storageInternals } from "../storage/test-support.js";
 
 /**
  * The active-tail cases first build several long histories (about 40 real

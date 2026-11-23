@@ -5,7 +5,7 @@ import { GraphArtifactStore } from "../graph-artifacts.js";
 import { GraphRunLaunchService } from "../graph-run-launch.js";
 import { GraphRunService } from "../graph-run-service.js";
 import { GraphTemplateService } from "../graph-template-service.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 /**

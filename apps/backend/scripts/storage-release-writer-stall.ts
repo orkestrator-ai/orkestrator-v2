@@ -2,8 +2,8 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import fs from "node:fs";
 import path from "node:path";
 import { startEventLoopStallMonitor } from "@orkestrator/protocol/event-loop-stall-monitor";
-import { releaseFreePagesInChildProcess } from "../src/core/storage-backups.js";
-import { StorageDatabase } from "../src/core/storage-database.js";
+import { releaseFreePagesInChildProcess } from "../src/core/storage/backups.js";
+import { StorageDatabase } from "../src/core/storage/database.js";
 
 /**
  * Whether the background free-page release holds the backend's own writers,

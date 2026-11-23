@@ -54,8 +54,8 @@ import {
   type PersistedSuborkBranch,
   type PersistedSuborkRefusal,
   type SuborksStorage,
-} from "../storage-suborks.js";
-import type { StorageService } from "../storage.js";
+  type StorageService,
+} from "../storage/index.js";
 import { nativeAgentSessionStorageKey } from "./service-shared.js";
 import type { RecordUsageTurnsInput } from "../usage-history-store.js";
 import { ElapsedPollGate, type WorkflowResultService } from "../workflows/index.js";

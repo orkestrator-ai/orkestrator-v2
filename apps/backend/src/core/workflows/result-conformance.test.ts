@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeReadOnlyAllowedTools } from "../../../../../bridges/claude-bridge/src/services/read-only-policy.js";
 import { AgentToolsServer } from "../agent-tools.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { WorkflowResultService } from "./result-service.js";
 
 /**

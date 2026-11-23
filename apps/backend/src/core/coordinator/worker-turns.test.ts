@@ -9,7 +9,7 @@ import { launchDelegationRequest } from "./delegation-request.js";
 import { CoordinatorService } from "./service.js";
 import type { ProviderCommandCatalogue, ProviderSendOptions } from "../native-agent/provider.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "../public-api/test-provider.js";
-import { createEnvironment } from "../storage.js";
+import { createEnvironment } from "../storage/service.js";
 
 /**
  * The coordinator's worker-turn tools on this node, over the real command

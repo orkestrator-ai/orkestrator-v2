@@ -15,7 +15,7 @@ import { CoordinatorService } from "./service.js";
 import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { CoordinatorRequestFlights } from "./request-flights.js";
 import { runCommand } from "../shell.js";
-import { StorageService, createEnvironment, createProject } from "../storage.js";
+import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

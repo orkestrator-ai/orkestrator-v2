@@ -9,7 +9,7 @@ import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import { CoordinatorService } from "./service.js";
 import { runCommand } from "../shell.js";
-import { StorageService, createProject } from "../storage.js";
+import { StorageService, createProject } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

@@ -8,7 +8,7 @@ import type { CommandContext } from "../commands-context.js";
 import { environmentToPrMonitorTarget } from "../commands-pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { recurringDiagnosticsRegistry } from "../recurring/diagnostics.js";
-import { createEnvironment, type StorageService } from "../storage.js";
+import { createEnvironment, type StorageService } from "../storage/service.js";
 
 for (const initialized of [false, true]) {
   test(`PR shutdown is terminal with an ${initialized ? "initialized" : "unused"} monitor`, async () => {

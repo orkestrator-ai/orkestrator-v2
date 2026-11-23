@@ -24,7 +24,7 @@ import {
 } from "./graph-describe-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import { GraphTemplateService } from "./graph-template-service.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 
 /** A run input summarized by one observer: compiles with no errors. */

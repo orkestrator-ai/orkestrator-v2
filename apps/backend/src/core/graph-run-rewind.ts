@@ -87,7 +87,7 @@ import {
   transitionGraphRun,
 } from "./graph-run-transitions.js";
 import type { Environment } from "./models.js";
-import type { GraphRunsStorage } from "./storage-graph-runs.js";
+import type { GraphRunsStorage } from "./storage/index.js";
 import {
   codeRewindRefComponent,
   inspectCodeRewind,

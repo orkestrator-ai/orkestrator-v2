@@ -12,7 +12,7 @@ import {
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { WorkflowResultSlotInput } from "@orkestrator/protocol/workflow-results";
 import { AgentToolsServer } from "../agent-tools.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import {
   graphOutputCombinedSchema,
   graphOutputPortIssues,

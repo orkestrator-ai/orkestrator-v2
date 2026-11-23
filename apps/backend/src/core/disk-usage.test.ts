@@ -15,7 +15,7 @@ import {
   type DiskUsageProbes,
 } from "./disk-usage.js";
 import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { StorageService, createProject } from "./storage.js";
+import { StorageService, createProject } from "./storage/service.js";
 import type { Environment } from "./models.js";
 
 const directories: string[] = [];

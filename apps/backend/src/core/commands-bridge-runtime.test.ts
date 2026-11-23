@@ -8,7 +8,7 @@ import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands.js";
 import { getBridgePath, prepareBridgePath, startLocalServerUnlocked } from "./commands-servers.js";
 import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
-import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 
 let root: string;
 let context: CommandContext;

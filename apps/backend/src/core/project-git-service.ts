@@ -19,7 +19,7 @@ import {
   runRemoteGit,
 } from "./git/index.js";
 import { isProjectHomeEnvironment, projectHomeBranchUpdates } from "./project-home-environment.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 const FETCH_COOLDOWN_MS = 60_000;
 const FETCH_TIMEOUT_MS = 60_000;

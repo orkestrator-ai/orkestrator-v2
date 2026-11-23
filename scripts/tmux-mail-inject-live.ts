@@ -1,4 +1,4 @@
-import { readStoredValue } from "../apps/backend/src/core/storage-test-support";
+import { readStoredValue } from "../apps/backend/src/core/storage/test-support";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";

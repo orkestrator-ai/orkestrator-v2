@@ -13,7 +13,7 @@ import {
 } from "./checkout-turn.js";
 import { CoordinatorService } from "./service.js";
 import { runCommand } from "../shell.js";
-import { StorageService, createProject } from "../storage.js";
+import { StorageService, createProject } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

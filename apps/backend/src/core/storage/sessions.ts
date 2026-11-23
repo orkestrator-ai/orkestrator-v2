@@ -1,0 +1,1446 @@
+import { STARTUP_AGENT_TAB_ID } from "@orkestrator/protocol/tab-initial-prompt";
+import * as shared from "./shared.js";
+import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
+import { StoreCorruptError } from "./database.js";
+import { UsageHistoryStore, type RecordUsageTurnsInput } from "../usage-history-store.js";
+import type { UsageEnvironmentLabel } from "../usage-history-record.js";
+import type { UsageHistoryQuery, UsageHistoryReport } from "@orkestrator/protocol/usage-history";
+import { keyInformationTabId, MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+import { preserveNotesCompletion } from "@orkestrator/protocol/pane-layout-merge";
+import {
+  AGENT_HANDOFF_PRUNE_GRACE_MS,
+  MAX_SESSIONS_PER_ENVIRONMENT,
+  PANE_LAYOUT_VERSION,
+  assertPaneLayoutGeneration,
+  assertPaneLayoutRootWithinBounds,
+  assertPaneLayoutSelectionIntentWithinBounds,
+  createSessionObject,
+  environmentIsReadyForSetupHandoff,
+  isNonNegativeInteger,
+  isRecord,
+  mergePersistedPaneLayouts,
+  nowIso,
+  paneLayoutAgentHandoffIds,
+  paneLayoutDroppedAgentHandoff,
+  paneLayoutLeaves,
+  selectedTabIsSetupHandoffSource,
+  suppressLateSetupTabAdditions,
+} from "./shared.js";
+import { paneLayoutRevisionConflict } from "../pane-layout-conflict.js";
+import type { NativeAgentJobCompletionAction } from "../models.js";
+import type { StorageContext } from "./context.js";
+import type { StorageFiles } from "./files.js";
+import type { StorageRepositories } from "./repositories.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("storage");
+type AgentInteractionOrigin = shared.AgentInteractionOrigin;
+type AgentInteractionPolicy = shared.AgentInteractionPolicy;
+type AgentInteractionResolutionJournal = shared.AgentInteractionResolutionJournal;
+type StoredDesktopConnections = shared.StoredDesktopConnections;
+type FeaturePlanningRecord = shared.FeaturePlanningRecord;
+type BuildPipelineAgent = shared.BuildPipelineAgent;
+type PaneLayoutMergeInput = shared.PaneLayoutMergeInput;
+type PaneLayoutSelectionIntent = shared.PaneLayoutSelectionIntent;
+type ConditionalResourceSnapshot<T> = shared.ConditionalResourceSnapshot<T>;
+type ResourceChange = shared.ResourceChange;
+type ResourceKind = shared.ResourceKind;
+type ResourceManifestKind = shared.ResourceManifestKind;
+type ResourceRevisionManifest = shared.ResourceRevisionManifest;
+type ResourceRevisionMap = shared.ResourceRevisionMap;
+type ResourceSnapshotRevision = shared.ResourceSnapshotRevision;
+type AgentModel = shared.AgentModel;
+type AgentActivityState = shared.AgentActivityState;
+type AgentActivitySource = shared.AgentActivitySource;
+type AgentModelCatalogCache = shared.AgentModelCatalogCache;
+type AppConfig = shared.AppConfig;
+type ClaudeModelCatalogSnapshot = shared.ClaudeModelCatalogSnapshot;
+type ClaudeModelCatalogEntry = shared.ClaudeModelCatalogEntry;
+type CodexModelCatalogEntry = shared.CodexModelCatalogEntry;
+type CodexReasoningEffort = shared.CodexReasoningEffort;
+type Environment = shared.Environment;
+type EnvironmentStatus = shared.EnvironmentStatus;
+type EnvironmentType = shared.EnvironmentType;
+type OpenCodeModelCatalogEntry = shared.OpenCodeModelCatalogEntry;
+type OpenCodeModelCatalogSnapshot = shared.OpenCodeModelCatalogSnapshot;
+type PortMapping = shared.PortMapping;
+type PrState = shared.PrState;
+type Project = shared.Project;
+type PersistedPaneLayout = shared.PersistedPaneLayout & {
+  /** Published with the early pane, and retained if the user closes that pane. */
+  startupNativeReservation?: { generation: number; agent: BuildPipelineAgent };
+};
+type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
+type PersistedBuildPipeline = shared.PersistedBuildPipeline;
+type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
+type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
+type PersistedComposeDraft = shared.PersistedComposeDraft;
+type PersistedFileDraft = shared.PersistedFileDraft;
+type PersistedPromptQueue = shared.PersistedPromptQueue;
+type PersistedAgentHandoff = shared.PersistedAgentHandoff;
+type RepositoryConfig = shared.RepositoryConfig;
+type Session = shared.Session;
+type SessionType = shared.SessionType;
+type JsonRecord = shared.JsonRecord;
+type KanbanComment = shared.KanbanComment;
+type KanbanImage = shared.KanbanImage;
+type KanbanStatus = shared.KanbanStatus;
+type MutablePaneLayoutLeaf = shared.MutablePaneLayoutLeaf;
+type KanbanTask = shared.KanbanTask;
+type ProjectNotes = shared.ProjectNotes;
+type FeaturePlanStatus = shared.FeaturePlanStatus;
+type FeaturePlanMessage = shared.FeaturePlanMessage;
+type FeatureStoryCard = shared.FeatureStoryCard;
+type FeaturePlan = shared.FeaturePlan;
+type LinearAuth = shared.LinearAuth;
+type LinearCompletionComment = shared.LinearCompletionComment;
+type GitHubCompletionComment = shared.GitHubCompletionComment;
+type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
+type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
+type ResourceChangeListener = shared.ResourceChangeListener;
+
+export type StorageLayerTypes = [
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
+];
+
+/** Renderer saves cannot remove backend metadata from a retained tab. */
+function preserveBackendTabMetadata(root: unknown, previousRoot: unknown): unknown {
+  const previousTabs = new Map(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .map((tab) => [tab.id, tab]),
+  );
+  const actions = new Map(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .filter((tab) => tab.jobCompletionAction === "refresh-pr-after-agent-completion")
+      .map((tab) => [tab.id, tab.jobCompletionAction]),
+  );
+  const consumedHandoffs = new Set(
+    paneLayoutLeaves(previousRoot)
+      .flatMap((leaf) => leaf.tabs)
+      .filter((tab) => tab.setupHandoffConsumed === true)
+      .map((tab) => tab.id),
+  );
+  const next = structuredClone(root);
+  for (const leaf of paneLayoutLeaves(next)) {
+    leaf.tabs = leaf.tabs.map((tab) => preserveNotesCompletion(tab, previousTabs.get(tab.id)));
+    for (const tab of leaf.tabs) {
+      if (consumedHandoffs.has(tab.id)) tab.setupHandoffConsumed = true;
+      if (tab.type === "agent-native" && actions.has(tab.id))
+        tab.jobCompletionAction = actions.get(tab.id);
+    }
+  }
+  return next;
+}
+
+export class SessionsRepository {
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  enqueuePaneLayoutMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.paneLayoutsFile(), "pane layout storage", operation);
+  }
+
+  private usageHistoryStoreInstance: UsageHistoryStore | null = null;
+
+  /**
+   * Recorded agent usage: its own database store, one row per agent session.
+   * Constructed lazily so an installation that never runs an agent never
+   * creates it.
+   */
+  private usageHistoryStore(): UsageHistoryStore {
+    this.usageHistoryStoreInstance ??= new UsageHistoryStore({
+      database: () => this.context.database,
+    });
+    return this.usageHistoryStoreInstance;
+  }
+
+  /**
+   * Records the turns of one agent session that are not recorded yet, and
+   * answers how many were new. Content-free: counts, a model name and a
+   * platform.
+   */
+  recordAgentUsageTurns(input: RecordUsageTurnsInput): number {
+    return this.usageHistoryStore().recordTurns(input);
+  }
+
+  /**
+   * Stamps an environment's names onto its recorded usage, so the usage pane
+   * can still name it once it is deleted. Returns how many rows changed.
+   */
+  labelAgentUsageEnvironment(environmentId: string, label: UsageEnvironmentLabel): number {
+    return this.usageHistoryStore().labelEnvironment(environmentId, label);
+  }
+
+  /** The range report the usage panes render. */
+  getAgentUsageHistory(query: UsageHistoryQuery = {}): UsageHistoryReport {
+    return this.usageHistoryStore().report(query);
+  }
+
+  async createSession(
+    environmentId: string,
+    containerId: string,
+    tabId: string,
+    sessionType: SessionType,
+  ): Promise<Session> {
+    const session = createSessionObject(environmentId, containerId, tabId, sessionType);
+    const file = this.files.sessionsFile();
+    // One transaction, so the order and the cap are decided against the rows
+    // this write commits next to, in this or another backend.
+    const evicted = this.context.database.transaction(() => {
+      const envSessions = this.context
+        .loadStoreRowsByOwner<Session>(file, environmentId, { unreadable: "throw" })
+        .filter((candidate) => candidate.environmentId === environmentId);
+      session.order = Math.max(-1, ...envSessions.map((candidate) => candidate.order)) + 1;
+      let oldest: Session | undefined;
+      if (envSessions.length >= MAX_SESSIONS_PER_ENVIRONMENT) {
+        oldest = envSessions
+          .filter((candidate) => candidate.status === "disconnected")
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+        if (oldest) {
+          if (this.context.database.readStoreHeader("sessions")?.mode === "document") {
+            const evicted = oldest;
+            this.context.updateDocumentArrayRows<Session>(this.files.sessionsFile(), (sessions) => {
+              const index = sessions.findIndex(
+                (item) => item.id === evicted.id && item.environmentId === environmentId,
+              );
+              if (index >= 0) sessions.splice(index, 1);
+            });
+          } else {
+            this.context.updateStoreRow(file, oldest.id, () => ({
+              result: undefined,
+              delete: true,
+            }));
+          }
+        }
+      }
+      this.context.updateStoreRow(file, session.id, () => ({ result: undefined, value: session }));
+      return oldest;
+    });
+    if (evicted) await this.repos.drafts.deleteSessionBuffer(evicted.id);
+    this.context.changes.announce("session", environmentId);
+    return session;
+  }
+
+  async getPaneLayout(environmentId: string): Promise<PersistedPaneLayout | null> {
+    const stored = this.context.loadStoreRow(this.files.paneLayoutsFile(), environmentId);
+    return stored === undefined ? null : (stored as PersistedPaneLayout);
+  }
+
+  getStartupNativeReservation(environment: Environment): BuildPipelineAgent | undefined {
+    const layout = this.context.loadStoreRow(this.files.paneLayoutsFile(), environment.id) as
+      PersistedPaneLayout | undefined;
+    return startupNativeReservation(layout, environment)?.agent;
+  }
+
+  /**
+   * Remove every parent, reviewer, and adopted fix tab owned by one Multi Review,
+   * and the step session tabs its "Open session" opened.
+   */
+  async removeMultiReviewTabs(environmentId: string, workflowId: string): Promise<string[]> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      if (!previous) return [];
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const removed: string[] = [];
+      for (const leaf of paneLayoutLeaves(root)) {
+        const retained = leaf.tabs.filter((tab) => {
+          const tabId = typeof tab.id === "string" ? tab.id : "";
+          const reviewData = isRecord(tab.multiReviewTabData) ? tab.multiReviewTabData : undefined;
+          const fixTabPrefix = `multi-review-fix:${workflowId}`;
+          const owned =
+            reviewData?.workflowId === workflowId ||
+            tabId === fixTabPrefix ||
+            tabId.startsWith(`${fixTabPrefix}:`) ||
+            tabId.startsWith(`multi-review-review:${workflowId}:`);
+          if (owned && tabId) removed.push(tabId);
+          return !owned;
+        });
+        if (retained.length === leaf.tabs.length) continue;
+        leaf.tabs = retained;
+        if (!retained.some((tab) => tab.id === leaf.activeTabId)) {
+          const fallbackId = retained.at(-1)?.id;
+          leaf.activeTabId = typeof fallbackId === "string" ? fallbackId : null;
+        }
+      }
+      if (removed.length === 0) return [];
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        root,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
+      return removed;
+    });
+  }
+
+  /**
+   * Loads the layout store once for destructive reconciliation. An absent
+   * store is a valid empty store; a present one that cannot be read (imported
+   * from a corrupt file no backup could repair) is unavailable, never evidence
+   * that every tab was deleted.
+   */
+  async loadPaneLayoutsForReconciliation(): Promise<{
+    available: boolean;
+    layouts: Record<string, PersistedPaneLayout>;
+  }> {
+    try {
+      const stored = this.context.loadStoreStrict<unknown>(this.files.paneLayoutsFile());
+      if (!stored) return { available: true, layouts: {} };
+      if (!isRecord(stored.value)) return { available: false, layouts: {} };
+      return {
+        available: true,
+        layouts: stored.value as Record<string, PersistedPaneLayout>,
+      };
+    } catch (error) {
+      if (error instanceof StoreCorruptError) return { available: false, layouts: {} };
+      throw error;
+    }
+  }
+
+  async savePaneLayout(
+    environmentId: string,
+    layout: Pick<PersistedPaneLayout, "version" | "containerId" | "activePaneId" | "root">,
+    expectedRevision: number,
+  ): Promise<PersistedPaneLayout> {
+    if (!isNonNegativeInteger(expectedRevision)) {
+      throw new Error("Pane layout expected revision must be a non-negative integer");
+    }
+    assertPaneLayoutRootWithinBounds(layout.root);
+
+    let previousRoot: unknown;
+    const saved = await this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(environmentId);
+      if (!environment) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      // The CAS token alone does not make this write current: a renderer holding
+      // a layout from a previous container generation can still read the latest
+      // revision and overwrite the live tree with dead tabs. Without this guard
+      // the invariant applyPaneLayoutIntent enforces is bypassable by pointing
+      // the same renderer at save_pane_layout instead.
+      assertPaneLayoutGeneration(environment, layout.containerId, "write");
+
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      previousRoot = previous?.root;
+      const currentRevision = previous?.revision ?? 0;
+      if (currentRevision !== expectedRevision) {
+        throw paneLayoutRevisionConflict(expectedRevision, currentRevision);
+      }
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        version: layout.version,
+        environmentId,
+        containerId: layout.containerId,
+        activePaneId: layout.activePaneId,
+        root:
+          previous?.containerId === layout.containerId
+            ? preserveBackendTabMetadata(layout.root, previous.root)
+            : layout.root,
+        updatedAt: nowIso(),
+        revision: currentRevision + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[environmentId] = saved;
+      // Selection changes make this a high-churn record. Keep one current
+      // recovery snapshot without rotating five near-identical historical
+      // backups for every focus change.
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
+      return saved;
+    });
+    await this.pruneDroppedAgentHandoffs(environmentId, previousRoot, saved.root);
+    return saved;
+  }
+
+  /**
+   * Reclaims the handoffs a layout write stopped referencing (a closed tab, a
+   * tab that resumed another session). Runs after the layout lease is
+   * released, and only when a reference was dropped: layout writes are
+   * high-churn and the handoff store is large. Records inside the grace window
+   * survive, and the periodic sweep reclaims them later. Never fails the
+   * layout write it follows.
+   */
+  private async pruneDroppedAgentHandoffs(
+    environmentId: string,
+    previousRoot: unknown,
+    nextRoot: unknown,
+  ): Promise<void> {
+    if (!paneLayoutDroppedAgentHandoff(previousRoot, nextRoot)) return;
+    await this.repos.drafts
+      .pruneAgentHandoffs(environmentId, [...paneLayoutAgentHandoffIds(nextRoot)], {
+        graceMs: AGENT_HANDOFF_PRUNE_GRACE_MS,
+      })
+      .catch((error: unknown) => {
+        log.warn("handoffs.prune-failed", { error: formatLogError(error) });
+      });
+  }
+
+  /**
+   * Records that a tab's handoff reached its provider, for every client.
+   *
+   * The backend delivers the handoff with the destination's first dispatch;
+   * this is the display state that follows it (renderers stop offering the
+   * history as pending and keep hiding its carrier). Idempotent, and a no-op
+   * when the tab has since moved to another handoff or closed.
+   */
+  async markTabAgentHandoffConsumed(
+    environmentId: string,
+    tabId: string,
+    handoffId: string,
+  ): Promise<boolean> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      if (!previous) return false;
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const tab = paneLayoutLeaves(root)
+        .flatMap((leaf) => leaf.tabs)
+        .find((candidate) => candidate.id === tabId);
+      if (!tab || tab.agentHandoffId !== handoffId || tab.consumedAgentHandoffId === handoffId) {
+        return false;
+      }
+      tab.consumedAgentHandoffId = handoffId;
+      layouts[environmentId] = {
+        ...previous,
+        root: root as PersistedPaneLayout["root"],
+        updatedAt: nowIso(),
+        revision: (previous.revision ?? 0) + 1,
+      };
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
+      return true;
+    });
+  }
+
+  /**
+   * Applies one optimistic renderer mutation against the latest durable tree.
+   * The read, three-way rebase, revision increment, and write share the pane
+   * mutation queue, so concurrent windows cannot race a renderer-side CAS
+   * retry or lose the mutation during a renderer crash.
+   */
+  async applyPaneLayoutIntent(
+    environmentId: string,
+    base: PaneLayoutMergeInput,
+    desired: PaneLayoutMergeInput,
+    selectionIntent?: PaneLayoutSelectionIntent,
+  ): Promise<PersistedPaneLayout> {
+    assertPaneLayoutRootWithinBounds(base.root);
+    assertPaneLayoutRootWithinBounds(desired.root);
+    assertPaneLayoutSelectionIntentWithinBounds(selectionIntent);
+    let previousRoot: unknown;
+    const saved = await this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(environmentId);
+      if (!environment) {
+        throw new Error(`Environment not found: ${environmentId}`);
+      }
+      // Both sides of the three-way merge come from the untrusted renderer. A
+      // current `desired` with a dead `base` still merges against `previous`,
+      // which resurrects the tabs that ancestor carried.
+      assertPaneLayoutGeneration(environment, desired.containerId, "intent");
+      assertPaneLayoutGeneration(environment, base.containerId, "intent");
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      previousRoot = previous?.root;
+      const sameGeneration =
+        previous &&
+        previous.version === desired.version &&
+        previous.containerId === desired.containerId;
+      let next = sameGeneration
+        ? mergePersistedPaneLayouts(
+            base,
+            desired,
+            {
+              version: previous.version,
+              containerId: previous.containerId,
+              activePaneId: previous.activePaneId,
+              root: previous.root,
+            } as PaneLayoutMergeInput,
+            { selectionIntent },
+          )
+        : desired;
+      if (isEnvironmentSetupSettled(environment)) {
+        next = suppressLateSetupTabAdditions(next, previous, base);
+      }
+      if (sameGeneration)
+        next = {
+          ...next,
+          root: preserveBackendTabMetadata(
+            next.root,
+            previous.root,
+          ) as PaneLayoutMergeInput["root"],
+        };
+      assertPaneLayoutRootWithinBounds(next.root);
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        ...next,
+        environmentId,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      layouts[environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
+      return saved;
+    });
+    await this.pruneDroppedAgentHandoffs(environmentId, previousRoot, saved.root);
+    return saved;
+  }
+
+  /** Add the backend-owned build surface before start_build_pipeline returns. */
+  async ensureBuildPipelineTab(input: {
+    pipelineId: string;
+    taskId: string;
+    environmentId: string;
+    isLocal: boolean;
+    /**
+     * `setup-handoff` is the publish that follows setup: it takes focus only
+     * from the setup terminal, never from a tab the user opened meanwhile.
+     */
+    activate?: "setup-handoff";
+  }): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+
+      type Leaf = {
+        kind: "leaf";
+        id: string;
+        tabs: Array<Record<string, unknown>>;
+        activeTabId: string | null;
+      };
+      const leaves: Leaf[] = [];
+      const visit = (node: unknown): void => {
+        if (!node || typeof node !== "object" || Array.isArray(node)) return;
+        const record = node as Record<string, unknown>;
+        if (record.kind === "leaf" && typeof record.id === "string" && Array.isArray(record.tabs)) {
+          leaves.push(record as unknown as Leaf);
+          return;
+        }
+        if (record.kind === "split" && Array.isArray(record.children)) {
+          for (const child of record.children) visit(child);
+        }
+      };
+      visit(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+      const existing = leaves.find((leaf) =>
+        leaf.tabs.some((tab) => {
+          const build = tab.buildTabData;
+          return (
+            tab.type === "claude-build" &&
+            build !== null &&
+            typeof build === "object" &&
+            !Array.isArray(build) &&
+            (build as Record<string, unknown>).taskId === input.taskId
+          );
+        }),
+      );
+      const target =
+        existing ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
+      const existingTab = existing?.tabs.find((tab) => {
+        const build = tab.buildTabData as Record<string, unknown> | undefined;
+        return tab.type === "claude-build" && build?.taskId === input.taskId;
+      });
+      const tabId =
+        typeof existingTab?.id === "string" && existingTab.id.length > 0
+          ? existingTab.id
+          : `build-${input.pipelineId}`;
+      const buildTabData = {
+        environmentId: input.environmentId,
+        pipelineId: input.pipelineId,
+        taskId: input.taskId,
+        isLocal: input.isLocal,
+      };
+      if (existingTab) {
+        existingTab.id = tabId;
+        existingTab.buildTabData = buildTabData;
+      } else {
+        target.tabs.push({
+          id: tabId,
+          type: "claude-build",
+          buildTabData,
+        });
+      }
+      const focusedLeaf = leaves.find((leaf) => leaf.id === previous?.activePaneId);
+      const takesFocus =
+        input.activate !== "setup-handoff" ||
+        (selectedTabIsSetupHandoffSource(target) &&
+          (!focusedLeaf || focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf)));
+      if (takesFocus) target.activeTabId = tabId;
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId: environment.containerId,
+        activePaneId: takesFocus ? target.id : (previous?.activePaneId ?? target.id),
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish a finished build pipeline's notes tab and select it, so the run
+   * lands on its notes in every client, including one that was closed, on
+   * another environment or another node when the run finished.
+   *
+   * The tab opens in the pane holding the pipeline's own tab, else the active
+   * pane; an open notes tab is selected rather than duplicated. Its id is the
+   * one every renderer derives (`keyInformationTabId`), so a renderer that
+   * opens the same tab merges with this one. A full layout, or an environment
+   * with no layout yet, is left as it is. Returns null when nothing changed.
+   */
+  async ensureBuildPipelineNotesTab(input: {
+    pipelineId: string;
+    environmentId: string;
+    completionRevision?: number;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) return null;
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      if (!previous) return null;
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) return null;
+
+      const isNotesTab = (tab: Record<string, unknown>): boolean => {
+        const data = tab.keyInformationTabData;
+        return (
+          tab.type === "key-information" &&
+          isRecord(data) &&
+          data.pipelineId === input.pipelineId &&
+          data.view === "notes"
+        );
+      };
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some(isNotesTab));
+      const existingTab = existingLeaf?.tabs.find(isNotesTab);
+      // Replaying an already published completion cannot overwrite a newer
+      // user selection. Older completion attempts cannot regress its identity.
+      const publishedRevision = isRecord(existingTab?.keyInformationTabData)
+        ? existingTab.keyInformationTabData.completionRevision
+        : undefined;
+      if (
+        input.completionRevision !== undefined &&
+        isRecord(existingTab?.keyInformationTabData) &&
+        existingTab.keyInformationTabData.completionPublished === true &&
+        typeof publishedRevision === "number" &&
+        publishedRevision >= input.completionRevision
+      )
+        return null;
+      let target = existingLeaf;
+      let tabId = typeof existingTab?.id === "string" ? existingTab.id : undefined;
+      if (!target || !tabId) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        // A full layout keeps the pipeline tab, where the Notes step is selected.
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) return null;
+        target =
+          leaves.find((leaf) =>
+            leaf.tabs.some((tab) => {
+              const build = tab.buildTabData;
+              return (
+                tab.type === "claude-build" &&
+                isRecord(build) &&
+                build.pipelineId === input.pipelineId
+              );
+            }),
+          ) ??
+          leaves.find((leaf) => leaf.id === previous.activePaneId) ??
+          leaves[0]!;
+        tabId = keyInformationTabId(input.environmentId, input.pipelineId, "notes");
+        target.tabs.push({
+          id: tabId,
+          type: "key-information",
+          keyInformationTabData: {
+            environmentId: input.environmentId,
+            pipelineId: input.pipelineId,
+            view: "notes",
+            completionPublished: true,
+            ...(input.completionRevision === undefined
+              ? {}
+              : { completionRevision: input.completionRevision }),
+          },
+        });
+      }
+      // Mark reused manual tabs too: only this backend completion path publishes
+      // the focus handoff. Ordinary renderer openings carry no such marker.
+      if (existingTab && isRecord(existingTab.keyInformationTabData)) {
+        existingTab.keyInformationTabData.completionPublished = true;
+        if (input.completionRevision !== undefined) {
+          existingTab.keyInformationTabData.completionRevision = input.completionRevision;
+        }
+      }
+      target.activeTabId = tabId;
+      if (
+        previous.activePaneId === target.id &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return null;
+      }
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        environmentId: input.environmentId,
+        activePaneId: target.id,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish the terminal that shows environment setup, as the first tab.
+   *
+   * Only setup knows whether it has anything to show, so this is called once
+   * there is: repository preparation output, or setup commands about to run.
+   * An environment with neither never gets this tab. It takes focus unless the
+   * user has already opened a tab of their own; the automatic surfaces that
+   * replace setup afterwards (a build tab) are not a user's choice.
+   */
+  async ensureSetupTab(environmentId: string): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(environmentId);
+      if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.isSetupTab === true));
+      const existingTab = existingLeaf?.tabs.find((tab) => tab.isSetupTab === true);
+      const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+      if (!existingTab && tabCount >= MAX_TABS_PER_ENVIRONMENT) {
+        // Setup still runs. A full layout only costs this view of its output.
+        if (previous) return previous;
+      }
+
+      const target = existingLeaf ?? leaves[0]!;
+      // `default` may already name an ordinary terminal whose PTY is unrelated.
+      const defaultIdTaken = leaves.some((leaf) => leaf.tabs.some((tab) => tab.id === "default"));
+      const tab =
+        existingTab ??
+        ({
+          id: defaultIdTaken ? "setup-terminal" : "default",
+          type: "plain",
+          isSetupTab: true,
+        } as Record<string, unknown>);
+      target.tabs = [tab, ...target.tabs.filter((candidate) => candidate !== tab)];
+
+      const focused = leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? target;
+      const selected = focused.tabs.find((candidate) => candidate.id === focused.activeTabId);
+      const selectedAgentData = selected?.nativeAgentData as
+        { sessionId?: string; platform?: string } | undefined;
+      // A startup tab locked to a platform carries the opening prompt, and it
+      // shows setup progress itself, so the setup terminal opens behind it. An
+      // unlocked startup tab (a prompt-less launch) still yields to setup.
+      const userChoseTab =
+        selected !== undefined &&
+        selected !== tab &&
+        selected.type !== "claude-build" &&
+        (selected.id !== STARTUP_AGENT_TAB_ID ||
+          !environment.pendingAgentLaunch ||
+          Boolean(selectedAgentData?.sessionId) ||
+          Boolean(selectedAgentData?.platform && environment.initialPrompt?.trim()));
+      if (!userChoseTab) target.activeTabId = tab.id as string;
+
+      const containerId = environment.environmentType === "local" ? null : environment.containerId;
+      const activePaneId = userChoseTab ? (previous?.activePaneId ?? target.id) : target.id;
+      if (
+        previous &&
+        (previous.containerId ?? null) === (containerId ?? null) &&
+        previous.activePaneId === activePaneId &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return previous;
+      }
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        version: PANE_LAYOUT_VERSION,
+        environmentId,
+        containerId,
+        activePaneId,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish a backend-owned native agent tab for an independently launched job.
+   *
+   * The request id which produced `tabId` is stable, so retrying an MCP call
+   * converges on this same tab instead of opening a duplicate. The provider
+   * session is bound in a later call because a cold bridge may take long enough
+   * for the client transport to disappear; either side of that boundary is
+   * therefore safe to replay.
+   */
+  async ensureNativeAgentJobTab(input: {
+    environmentId: string;
+    tabId: string;
+    agent: BuildPipelineAgent;
+    providerSessionId?: string;
+    title?: string;
+    isReviewTab?: boolean;
+    activate?: boolean;
+    /** Durable record of the job this tab runs; a user-editable title cannot identify it. */
+    completionAction?: NativeAgentJobCompletionAction;
+  }): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === input.tabId));
+      const existingTab = existingLeaf?.tabs.find((tab) => tab.id === input.tabId);
+      if (existingTab && existingTab.type !== "agent-native") {
+        throw new Error(`Tab ID is already in use: ${input.tabId}`);
+      }
+      const existingPlatform = isRecord(existingTab?.nativeAgentData)
+        ? existingTab.nativeAgentData.platform
+        : undefined;
+      if (existingPlatform !== undefined && existingPlatform !== input.agent) {
+        throw new Error(`Tab belongs to a different agent platform: ${input.tabId}`);
+      }
+      if (!existingTab) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) {
+          throw new Error(
+            `Environment already has the maximum of ${MAX_TABS_PER_ENVIRONMENT} tabs`,
+          );
+        }
+      }
+
+      const target =
+        existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
+      const previousNativeAgentData = isRecord(existingTab?.nativeAgentData)
+        ? existingTab.nativeAgentData
+        : {};
+      const nativeAgentData: Record<string, unknown> = {
+        ...previousNativeAgentData,
+        platform: input.agent,
+        environmentId: input.environmentId,
+        isLocal: environment.environmentType === "local",
+      };
+      if (environment.environmentType === "local") {
+        delete nativeAgentData.containerId;
+      } else if (environment.containerId) {
+        nativeAgentData.containerId = environment.containerId;
+      }
+      if (input.providerSessionId) nativeAgentData.sessionId = input.providerSessionId;
+
+      const tab: Record<string, unknown> = {
+        ...existingTab,
+        id: input.tabId,
+        type: "agent-native",
+        nativeAgentData,
+        ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
+        ...(input.isReviewTab === true ? { isReviewTab: true } : {}),
+        ...(input.completionAction ? { jobCompletionAction: input.completionAction } : {}),
+      };
+      if (existingTab) Object.assign(existingTab, tab);
+      else target.tabs.push(tab);
+      const activateNewTab = input.activate === true && !existingTab;
+      if (!target.activeTabId || activateNewTab) target.activeTabId = input.tabId;
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId: environment.environmentType === "local" ? null : environment.containerId,
+        activePaneId: activateNewTab ? target.id : (previous?.activePaneId ?? target.id),
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /** Publish a terminal/tmux tab whose process was already started by the backend. */
+  async ensureTerminalJobTab(input: {
+    environmentId: string;
+    tabId: string;
+    type: BuildPipelineAgent | "plain" | "claude-tmux";
+    title?: string;
+    /** `setup-handoff` takes focus only from the setup terminal. */
+    activate?: boolean | "setup-handoff";
+    terminalSessionId?: string | null;
+    existingOnly?: boolean;
+    /**
+     * Refuse, rather than create, a tab that is not in the layout. A shell-only
+     * restart of a launched tab uses it so a request still in flight when the
+     * user closed the tab cannot bring the tab back.
+     */
+    requireExistingTab?: boolean;
+  }): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === input.tabId));
+      const existingTab = existingLeaf?.tabs.find((tab) => tab.id === input.tabId);
+      // The post-bootstrap identity publish must lose a race with an explicit
+      // user close. Returning the current snapshot keeps the command result
+      // idempotent without recreating the tab the user removed.
+      if (input.requireExistingTab && !existingTab) {
+        throw new Error(`Terminal tab no longer exists: ${input.tabId}`);
+      }
+      if (input.existingOnly && !existingTab) {
+        if (!previous) throw new Error("Persisted pane layout disappeared during terminal launch");
+        return previous;
+      }
+      if (existingTab && existingTab.type !== input.type) {
+        throw new Error(`Tab ID is already in use: ${input.tabId}`);
+      }
+      if (!existingTab) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) {
+          throw new Error(
+            `Environment already has the maximum of ${MAX_TABS_PER_ENVIRONMENT} tabs`,
+          );
+        }
+      }
+
+      const target =
+        existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
+      const tab: Record<string, unknown> = {
+        ...existingTab,
+        id: input.tabId,
+        type: input.type,
+        // The backend creates and bootstraps this tab's PTY. A renderer that
+        // sees the pane before launch completion must attach/retry only; it
+        // must never synthesize a second command from the tab type.
+        backendManagedTerminal: true,
+        ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
+      };
+      if (input.terminalSessionId === null) {
+        delete tab.backendTerminalSessionId;
+      } else if (input.terminalSessionId !== undefined) {
+        tab.backendTerminalSessionId = input.terminalSessionId;
+      }
+      delete tab.initialPrompt;
+      delete tab.initialCommands;
+      delete tab.initialAgentPlatform;
+      delete tab.initialAgentModel;
+      delete tab.initialReasoningEffort;
+      delete tab.initialConversationMode;
+      delete tab.initialFastMode;
+      if (input.type === "claude-tmux") {
+        tab.claudeTmuxData = {
+          environmentId: input.environmentId,
+          isLocal: environment.environmentType === "local",
+          ...(environment.environmentType === "local" || !environment.containerId
+            ? {}
+            : { containerId: environment.containerId }),
+        };
+      } else {
+        delete tab.claudeTmuxData;
+      }
+      delete tab.nativeAgentData;
+      if (existingTab) {
+        const existingIndex = target.tabs.findIndex((candidate) => candidate.id === input.tabId);
+        target.tabs[existingIndex] = tab;
+      } else {
+        target.tabs.push(tab);
+      }
+      const focusedTerminalLeaf = leaves.find((leaf) => leaf.id === previous?.activePaneId);
+      const activateTab =
+        input.activate === true ||
+        (input.activate === "setup-handoff" &&
+          !existingTab?.setupHandoffConsumed &&
+          selectedTabIsSetupHandoffSource(target) &&
+          (!focusedTerminalLeaf ||
+            focusedTerminalLeaf === target ||
+            selectedTabIsSetupHandoffSource(focusedTerminalLeaf)));
+      if (input.activate === "setup-handoff") tab.setupHandoffConsumed = true;
+      if (!target.activeTabId || activateTab) target.activeTabId = input.tabId;
+
+      const containerId = environment.environmentType === "local" ? null : environment.containerId;
+      const activePaneId = activateTab ? target.id : (previous?.activePaneId ?? target.id);
+      // The startup reconciler calls this while setup is still running. Once
+      // the same tab has been published, a sweep must not manufacture a new
+      // layout revision or resource event every two seconds.
+      if (
+        previous &&
+        (previous.containerId ?? null) === (containerId ?? null) &&
+        (previous.activePaneId ?? target.id) === activePaneId &&
+        JSON.stringify(previous.root) === JSON.stringify(root)
+      ) {
+        return previous;
+      }
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId,
+        activePaneId,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Invalidate PTY identities owned by a previous runtime generation.
+   *
+   * Renderer reloads do not call this method, so they keep attaching to live
+   * background terminals. A backend or environment restart cannot honour the
+   * old ids, however, and must remove them before a renderer can hydrate the
+   * pane snapshot.
+   */
+  async clearBackendTerminalSessionIds(environmentId?: string): Promise<number> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const changedEnvironmentIds: string[] = [];
+      let cleared = 0;
+
+      for (const [layoutEnvironmentId, previous] of Object.entries(layouts)) {
+        if (environmentId && layoutEnvironmentId !== environmentId) continue;
+        const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+        let changed = false;
+        for (const leaf of paneLayoutLeaves(root)) {
+          for (const tab of leaf.tabs) {
+            if (!("backendTerminalSessionId" in tab)) continue;
+            delete tab.backendTerminalSessionId;
+            cleared += 1;
+            changed = true;
+          }
+        }
+        if (!changed) continue;
+        assertPaneLayoutRootWithinBounds(root);
+        layouts[layoutEnvironmentId] = {
+          ...previous,
+          root,
+          updatedAt: nowIso(),
+          revision: previous.revision + 1,
+        };
+        changedEnvironmentIds.push(layoutEnvironmentId);
+      }
+
+      if (changedEnvironmentIds.length === 0) return 0;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      for (const environmentId of changedEnvironmentIds) {
+        this.context.changes.announce("pane-layout", environmentId);
+      }
+      return cleared;
+    });
+  }
+
+  /**
+   * Publish the native surface for a backend-owned environment launch.
+   *
+   * The pane is published before provider startup and updated with provider
+   * identity later. The launch intent is not consumed until both have
+   * converged. That keeps a renderer which was unmounted during setup from
+   * being the only process capable of creating the tab. `existingOnly` is used
+   * at startup to repair the historical Cursor/Grok bug without resurrecting a
+   * tab the user deliberately closed, and `upgradeOnly` keeps that repair off a
+   * tab that already holds the native identity.
+   *
+   * The existing tab is merged into, never replaced: it carries user state this
+   * method does not own (`displayTitle`, `agentHandoffId`, the one-shot
+   * `initial*` selections) plus `nativeAgentData.hostPort`, and a wholesale
+   * rewrite silently discarded all of it on every backend start.
+   *
+   * Creating the tab selects it unless the user has opened another tab since
+   * setup started. Republishing does not, with one exception: the
+   * publish that binds a provider session to a still-setup-focused tab is the
+   * post-setup handoff — the same moment `ensureBuildPipelineTab` moves
+   * selection onto the build surface. Every other republish leaves the
+   * selection alone, because the renderer may be watching the setup terminal
+   * and the reconcile sweep runs every two seconds for the whole launch.
+   */
+  async ensureStartupNativeAgentTab(input: {
+    environmentId: string;
+    agent: BuildPipelineAgent;
+    providerSessionId?: string;
+    /** A pending launch may publish only while it still owns this generation. */
+    launchGeneration?: number;
+    /** Commit the execution style and early presentation together. */
+    reserveEarly?: boolean;
+    existingOnly?: boolean;
+    upgradeOnly?: boolean;
+    /**
+     * Bind the tab to `agent` even before a provider session exists.
+     *
+     * Used when the create dialog already submitted an opening prompt: that
+     * dispatch is committed, so the user must not be able to switch providers
+     * underneath it. Prompt-less launches leave the tab unassigned and only
+     * lock once the first send creates a session.
+     */
+    lockPlatform?: boolean;
+    /**
+     * Treat this publish like the first provider-session bind for setup
+     * focus handoff. Prompt-less launches never bind a session, but they
+     * still need to move off the setup terminal once setup is ready.
+     */
+    activateOnSetupHandoff?: boolean;
+    initialAgentPlatform?: BuildPipelineAgent;
+    initialAgentModel?: string;
+    initialReasoningEffort?: string;
+    initialConversationMode?: "build" | "plan";
+    initialFastMode?: boolean;
+  }): Promise<PersistedPaneLayout | null> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.repos.projects.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      if (
+        input.launchGeneration !== undefined &&
+        (!environment.pendingAgentLaunch ||
+          input.launchGeneration !== (environment.startupLaunchGeneration ?? 0))
+      )
+        return null;
+      const layouts = await this.context.loadJson<Record<string, PersistedPaneLayout>>(
+        this.files.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const reservation = startupNativeReservation(previous, environment);
+      if (input.existingOnly && !previous) return null;
+
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+      type Leaf = {
+        kind: "leaf";
+        id: string;
+        tabs: Array<Record<string, unknown>>;
+        activeTabId: string | null;
+      };
+      const leaves: Leaf[] = [];
+      const visit = (node: unknown): void => {
+        if (!node || typeof node !== "object" || Array.isArray(node)) return;
+        const record = node as Record<string, unknown>;
+        if (record.kind === "leaf" && typeof record.id === "string" && Array.isArray(record.tabs)) {
+          leaves.push(record as unknown as Leaf);
+          return;
+        }
+        if (record.kind === "split" && Array.isArray(record.children)) {
+          for (const child of record.children) visit(child);
+        }
+      };
+      visit(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) =>
+        leaf.tabs.some((tab) => tab.id === STARTUP_AGENT_TAB_ID),
+      );
+      // An explicit close is durable even while the opening dispatch is
+      // waiting for setup. Binding a session must leave that close in place.
+      if (input.launchGeneration !== undefined && reservation && !existingLeaf) {
+        return previous ?? null;
+      }
+      if (input.existingOnly && !existingLeaf) return null;
+      const target =
+        existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
+      const existingIndex = target.tabs.findIndex((tab) => tab.id === STARTUP_AGENT_TAB_ID);
+      const existingTab = existingIndex >= 0 ? target.tabs[existingIndex]! : undefined;
+      if (input.upgradeOnly && existingTab?.type === "agent-native") return previous ?? null;
+
+      const previousNativeAgentData =
+        existingTab?.nativeAgentData &&
+        typeof existingTab.nativeAgentData === "object" &&
+        !Array.isArray(existingTab.nativeAgentData)
+          ? (existingTab.nativeAgentData as Record<string, unknown>)
+          : undefined;
+      const nativeAgentData: Record<string, unknown> = {
+        ...previousNativeAgentData,
+        environmentId: input.environmentId,
+      };
+      const previousProviderSessionId =
+        typeof previousNativeAgentData?.sessionId === "string"
+          ? previousNativeAgentData.sessionId
+          : undefined;
+      // A provider session, or an already-committed opening prompt, is what
+      // locks the tab. Until then the create-dialog agent is only a preselect
+      // on the unassigned composer. A stale platform left by an older build or
+      // a partial launch must not keep the tab locked after a prompt-less
+      // republish.
+      if (input.providerSessionId || input.lockPlatform) {
+        nativeAgentData.platform = input.agent;
+      } else if (previousProviderSessionId === undefined) {
+        delete nativeAgentData.platform;
+      }
+      if (environment.environmentType === "local") {
+        nativeAgentData.isLocal = true;
+        // A worktree environment has no container, so a stale id carried over
+        // from a previous Docker incarnation must not survive the merge.
+        delete nativeAgentData.containerId;
+      } else {
+        nativeAgentData.isLocal = false;
+        if (environment.containerId) nativeAgentData.containerId = environment.containerId;
+        else delete nativeAgentData.containerId;
+      }
+      if (input.providerSessionId) nativeAgentData.sessionId = input.providerSessionId;
+
+      const tab: Record<string, unknown> = {
+        ...existingTab,
+        id: STARTUP_AGENT_TAB_ID,
+        type: "agent-native",
+        nativeAgentData,
+      };
+      if (input.initialAgentPlatform !== undefined) {
+        tab.initialAgentPlatform = input.initialAgentPlatform;
+      }
+      if (input.initialAgentModel !== undefined) tab.initialAgentModel = input.initialAgentModel;
+      if (input.initialReasoningEffort !== undefined) {
+        tab.initialReasoningEffort = input.initialReasoningEffort;
+      }
+      if (input.initialConversationMode !== undefined) {
+        tab.initialConversationMode = input.initialConversationMode;
+      }
+      if (input.initialFastMode !== undefined) tab.initialFastMode = input.initialFastMode;
+      // The tab is definitively a native agent surface now, so payloads that
+      // belong to the other tab kinds cannot apply. Everything else the tab
+      // carried is user state and is preserved by the spread above.
+      for (const foreign of [
+        "fileData",
+        "claudeTmuxData",
+        "buildTabData",
+        "loopedReviewTabData",
+        "multiReviewTabData",
+        "browserData",
+        "initialCommands",
+      ])
+        delete tab[foreign];
+      if (existingIndex >= 0) target.tabs[existingIndex] = tab;
+      else target.tabs.push(tab);
+
+      // The handoff is driven by launch convergence, never by "setup is ready"
+      // on its own. Readiness stays true for the life of the environment and
+      // `isSetupTab` is never cleared, so a state-only condition would re-steal
+      // the selection on every two-second reconcile sweep — and every ten-second
+      // launch retry — for as long as the launch stays pending. Convergence is
+      // either the first provider-session bind (an opening prompt was sent) or
+      // the one-shot `activateOnSetupHandoff` publish that consumes a
+      // prompt-less launch. Both happen once, and the launch intent is consumed
+      // immediately afterwards.
+      const bindsNewProviderSession =
+        input.providerSessionId !== undefined &&
+        previousProviderSessionId !== input.providerSessionId;
+      const shouldHandoffAfterSetup =
+        !reservation && (bindsNewProviderSession || input.activateOnSetupHandoff === true);
+      // Resolved from the same leaf list as `target` so both reads see one
+      // parse of one tree, and a hit can be compared by reference.
+      const focusedLeaf = previous
+        ? leaves.find((leaf) => leaf.id === previous.activePaneId)
+        : undefined;
+      // Both panes must consent: the startup agent's own pane is the one whose
+      // selection changes, and the focused pane is where the user is actually
+      // looking. Either one holding a deliberately chosen tab means this is no
+      // longer a setup handoff. `target.tabs` already holds the agent, so a
+      // pane with nothing selected still reads as a handoff source.
+      const selectionAllowsHandoff =
+        selectedTabIsSetupHandoffSource(target) &&
+        (!focusedLeaf || focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf));
+      const shouldActivateStartupAgent =
+        !input.existingOnly &&
+        selectionAllowsHandoff &&
+        (existingIndex < 0 ||
+          (shouldHandoffAfterSetup && environmentIsReadyForSetupHandoff(environment)));
+      if (shouldActivateStartupAgent) target.activeTabId = STARTUP_AGENT_TAB_ID;
+
+      // Pane focus follows the tab handoff and nothing else. Unconditionally
+      // pointing it at the startup agent's pane moved the user's focus to that
+      // pane on every republish, and — because a mismatch also defeated the
+      // `unchanged` check below — did it on every sweep in a split layout.
+      const nextActivePaneId =
+        !previous || shouldActivateStartupAgent ? target.id : previous.activePaneId;
+
+      const unchanged =
+        previous &&
+        previous.containerId === environment.containerId &&
+        previous.activePaneId === nextActivePaneId &&
+        JSON.stringify(previous.root) === JSON.stringify(root);
+      const reserve = input.reserveEarly && !reservation;
+      if (unchanged && !reserve) return previous;
+
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId: environment.containerId,
+        activePaneId: nextActivePaneId,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+        ...(reserve
+          ? {
+              startupNativeReservation: {
+                generation: environment.startupLaunchGeneration ?? 0,
+                agent: input.agent,
+              },
+            }
+          : {}),
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.context.saveJson(this.files.paneLayoutsFile(), layouts, { backup: false });
+      this.context.changes.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+}
+
+function startupNativeReservation(
+  layout: PersistedPaneLayout | undefined,
+  environment: Environment,
+) {
+  const reservation = layout?.startupNativeReservation;
+  return environment.pendingAgentLaunch &&
+    reservation?.generation === (environment.startupLaunchGeneration ?? 0)
+    ? reservation
+    : undefined;
+}

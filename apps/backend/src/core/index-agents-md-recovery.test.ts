@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { OrkestratorBackend } from "./index.js";
 import type { NodeActionRequest } from "./nodes/node-action-requests.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/service.js";
 
 test("backend init resumes persisted AGENTS.md approval once and mails the result", async () => {
   const world = await MailWorld.create();

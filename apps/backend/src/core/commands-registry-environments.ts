@@ -95,7 +95,12 @@ import { normalizeAgentMessagingSettings } from "@orkestrator/protocol/agent-mai
 import { environmentMailMarkers, isWorkingPipelineRecord } from "./nodes/index.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
-import { createEnvironment, defaultEnvironmentName, sanitizeEnvironmentName } from "./storage.js";
+import {
+  createEnvironment,
+  defaultEnvironmentName,
+  sanitizeEnvironmentName,
+  ControlRequestConflictError,
+} from "./storage/index.js";
 import { discoverAgentExtensions } from "./extension-discovery.js";
 import type { Environment } from "./models.js";
 import {
@@ -130,7 +135,6 @@ import {
   logEnvironmentLifecycleFailure,
   enqueueEnvironmentLifecycleOperation,
 } from "./commands-helpers.js";
-import { ControlRequestConflictError } from "./storage-projects.js";
 import { forkEnvironmentRecord } from "./commands-environment-fork.js";
 import type { CommandContext } from "./commands-context.js";
 import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";

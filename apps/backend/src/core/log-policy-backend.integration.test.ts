@@ -5,7 +5,7 @@ import path from "node:path";
 import { parseLogRecordLine, resetLogger } from "@orkestrator/protocol/logger";
 import { OrkestratorBackend } from "./index.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { lifecycleEnvironment } from "../../tests/container-lifecycle-fixtures.js";
 import { installStandaloneBackendLogging } from "../standalone-logging.js";
 import {

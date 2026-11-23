@@ -7,7 +7,7 @@ import {
   parseRichInteractionPrompt,
 } from "@orkestrator/protocol/rich-interactions";
 import { RICH_KIND_FIXTURES } from "@orkestrator/protocol/testing/rich-interaction-fixtures";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import {
   ProductCommandRegistry,
   graphWorkflowCommands,

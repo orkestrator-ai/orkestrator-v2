@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicExecOutputWindow } from "@orkestrator/protocol/public-api-resources";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 /**

@@ -6,8 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
 import { readHealthRows } from "./health-summary.js";
-import { BackgroundCheckpointer } from "./storage-checkpointer.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import { BackgroundCheckpointer } from "./storage/checkpointer.js";
+import { openBackendDatabase } from "./storage/stores.js";
 
 function createBackend(dataDir: string) {
   return new OrkestratorBackend({

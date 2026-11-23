@@ -42,7 +42,7 @@ import { AGENT_MAIL_MAX_LIST_LIMIT } from "@orkestrator/protocol/agent-mail";
 import type { StructuredOutputProvider } from "@orkestrator/protocol/structured-output";
 import { SUBORK_RESULT_KIND } from "@orkestrator/protocol/suborks";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
-import type { KanbanStatus, KanbanTask, StorageService } from "./storage.js";
+import type { KanbanStatus, KanbanTask, StorageService } from "./storage/index.js";
 import type { ScheduleOwner } from "@orkestrator/protocol/scheduled-jobs";
 import {
   assertCallerMailbox,

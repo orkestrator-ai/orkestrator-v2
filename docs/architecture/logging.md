@@ -299,10 +299,10 @@ text, parameters, rows, command arguments or results.
 
 | Area | Event | Level | Written when | Code |
 | --- | --- | --- | --- | --- |
-| `storage` | `operation.slow` | `warn`, essential | A synchronous SQLite call or outermost transaction took 250 ms or more | `storage-slow-operations.ts` |
+| `storage` | `operation.slow` | `warn`, essential | A synchronous SQLite call or outermost transaction took 250 ms or more | `storage/slow-operations.ts` |
 | `backend` | `command.slow` | `info`; `warn` when its synchronous part took 250 ms or more | A registered command took 2 s or more to settle | `command-timing.ts` |
 | `event-loop` | `stalled` | as before | The stall line gains the backend's context fields | `event-loop-stall-monitor.ts` |
-| `storage` | `upkeep.finished` | `info` | Every periodic upkeep pass (every five minutes) | `storage-backups.ts` |
+| `storage` | `upkeep.finished` | `info` | Every periodic upkeep pass (every five minutes) | `storage/backups.ts` |
 
 What the lines look like (values illustrative, except the second, which a
 migration commit on a loaded Mac wrote during this work's tests):
@@ -417,7 +417,7 @@ carries on), `not-incremental` (the file has no incremental auto-vacuum), `no-fr
 child's run, which does not hold the event loop.
 
 Thresholds live beside the code that applies them: `SLOW_STORAGE_OPERATION_MS`
-and its spacing constants in `storage-slow-operations.ts`, `SLOW_COMMAND_MS` and
+and its spacing constants in `storage/slow-operations.ts`, `SLOW_COMMAND_MS` and
 `SLOW_COMMAND_SYNC_MS` in `command-timing.ts`.
 
 ## The essential event log

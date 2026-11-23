@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "../src/core/agent-tools.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { claudeStateSignalInstaller } from "../src/core/claude-state-signal.js";
 import {
   ClaudeStatePollManager,

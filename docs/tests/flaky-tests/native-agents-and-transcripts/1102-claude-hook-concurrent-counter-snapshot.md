@@ -19,7 +19,7 @@ case took 2493.64 ms. The host was also running other admitted suites.
 The logged command was:
 
 ```sh
-mise run test:logged -- --name legacy-focused -- bun --cwd apps/backend test --preload ../../tests/setup-node.ts ./src/core/storage-record-upgrades.test.ts ./src/core/storage-prompt-queues.test.ts ./src/core/native-agent-prompt-queue-dispatcher.test.ts --parallel=3 --only-failures
+mise run test:logged -- --name legacy-focused -- bun --cwd apps/backend test --preload ../../tests/setup-node.ts ./src/core/storage/record-upgrades.test.ts ./src/core/storage/prompt-queues.test.ts ./src/core/native-agent-prompt-queue-dispatcher.test.ts --parallel=3 --only-failures
 ```
 
 The `bun --cwd ... test` form invoked the backend package's test script, whose

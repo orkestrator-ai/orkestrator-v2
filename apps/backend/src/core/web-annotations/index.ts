@@ -4,9 +4,9 @@
 //
 // Two leaf modules are named exceptions in `.oxlintrc.json`, because routing
 // their importer through this file would close a runtime import cycle (this
-// file reaches `storage-stores.ts` through `service.ts` and the storage layer,
+// file reaches `storage/stores.ts` through `service.ts` and the storage layer,
 // and `agent-tools.ts` through `dispatch.ts` and the native agent providers):
-// `storage-stores.ts` imports `store-layout.js` and `agent-tools.ts` imports
+// `storage/stores.ts` imports `store-layout.js` and `agent-tools.ts` imports
 // `tools.js` directly. Both are still re-exported here.
 export { maxBase64Chars } from "./assets.js";
 export { compileWebAnnotationBrief, composeWebAnnotationDispatchText } from "./brief.js";

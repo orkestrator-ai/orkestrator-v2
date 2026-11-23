@@ -615,7 +615,7 @@ on `self` and on each node:
   reads as fully covered; `latestSampleAgeSeconds` says how old that reading is.
 - **Restarts.** History survives a restart or update. `MachineLoadSampler`
   (`apps/backend/src/core/machine-load.ts`) keeps it in memory and in one
-  row of the `machine-load-history` store (`storage-machine-load-history.ts`;
+  row of the `machine-load-history` store (`storage/machine-load-history.ts`;
   the user's decision of 2026-11-14, built under to-do 8104 (retired
   2026-11-15)). The row is read once at start, written when a 15-minute
   period has passed since the last write, and written once more when the
@@ -2723,7 +2723,7 @@ every round. There is no pane tab for any of them; the mailbox is the worker.
   one worker instance; three parallel reviewers have three addresses.
 - **Discovery.** `pipelineWorkers(pipeline)` derives the list from the
   pipeline record alone. The mailbox directory
-  (`storage-agent-mail-directory.ts`) publishes one mailbox of kind
+  (`storage/agent-mail-directory.ts`) publishes one mailbox of kind
   `pipeline` per worker of a running pipeline, with `pipelineWorker`: step
   (`build`, `preparation`, `review`, `consolidation`, `address-findings`,
   `verify`, `rework`, `pr`, `resolve-conflicts`), round, reviewer slot, label, model and
@@ -4525,7 +4525,7 @@ press the menu used.
 - Marks are keyed by the card's stable `id` within one coordinator
   conversation, and stored by the backend that owns the conversation
   (`coordinator-action-marks`, one row per conversation owned by its project,
-  in `storage-client-state.ts`; deleted with the project). The `coordinator`
+  in `storage/client-state.ts`; deleted with the project). The `coordinator`
   domain's `get_coordinator_action_marks` and `set_coordinator_action_mark`
   read and change them; the set is idempotent and refuses a mark beyond 500
   per conversation rather than evicting one. Each change announces

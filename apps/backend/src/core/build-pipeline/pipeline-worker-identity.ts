@@ -9,12 +9,11 @@
  * worker's credential can never act as another worker's mailbox.
  */
 import { timingSafeEqual } from "node:crypto";
-import { isRecord } from "../storage-shared.js";
+import { isRecord, type StorageService } from "../storage/index.js";
 import {
   isPipelineWorkerTabId,
   pipelineWorkerTabId,
 } from "@orkestrator/protocol/pipeline-worker-mail";
-import type { StorageService } from "../storage.js";
 import type { WorkflowResultService } from "../workflows/index.js";
 import type { AgentToolConnection } from "../agent-tools.js";
 import type { ProviderWorkerMail } from "../agent-provider-contract.js";

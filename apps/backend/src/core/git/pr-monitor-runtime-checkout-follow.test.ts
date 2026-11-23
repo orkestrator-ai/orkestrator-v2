@@ -5,7 +5,7 @@ import type { Environment } from "../models.js";
 import { ProjectCheckoutMergeFollower } from "../project-checkout-merge-follow.js";
 import type { ProjectGitService } from "../project-git-service.js";
 import { PrMonitorRuntime } from "./pr-monitor-runtime.js";
-import { createEnvironment, type StorageService } from "../storage.js";
+import { createEnvironment, type StorageService } from "../storage/service.js";
 
 const prUrl = "https://github.com/o/r/pull/7";
 

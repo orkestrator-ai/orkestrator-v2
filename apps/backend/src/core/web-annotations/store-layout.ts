@@ -1,9 +1,9 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database layout of the web-annotation stores: one store per environment,
  * named `${WEB_ANNOTATION_STORE_PREFIX}<environmentId>`. Imported by the store
- * registry (storage-stores.ts), so keep this module free of other imports.
+ * registry (storage/stores.ts), so keep this module free of other imports.
  *
  * Every field lives in a collection (one row per item); the envelope document
  * holds only collection markers. PNG bytes stay files under

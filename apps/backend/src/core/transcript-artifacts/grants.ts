@@ -22,7 +22,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { canonicalJson } from "@orkestrator/protocol/canonical-json";
 import { ARTIFACT_TOOL_POLICY } from "@orkestrator/protocol/rich-content-policy";
 import type { ArtifactOwner } from "@orkestrator/protocol/transcript-artifacts";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import { sha256Hex } from "./hashing.js";
 import {
   TRANSCRIPT_ARTIFACT_AUTHORITY_STORE,

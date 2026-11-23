@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { HttpBridgeProvider } from "../src/core/http-bridge/index.js";
 import { MultiReviewService } from "../src/core/review/service.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { readProviderStatus } from "../src/core/agent-provider-contract.js";
 import { captureReviewWorktreeSnapshot } from "../src/core/review/fanout.js";
 import {

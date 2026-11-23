@@ -27,7 +27,7 @@ import { graphEnvironmentFixture } from "./graph-run-test-support.js";
 import type { GraphEnvironmentShell } from "./graph-system-environment.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { ManualTime } from "./recurring/test-support.js";
-import { StorageService, createProject } from "./storage.js";
+import { StorageService, createProject } from "./storage/service.js";
 
 const GRAPH_MOCK_WORLD_EPOCH = Date.parse("2026-10-29T00:00:00.000Z");
 

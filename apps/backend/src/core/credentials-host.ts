@@ -24,7 +24,7 @@ import type {
 } from "./credentials/index.js";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent/index.js";
-import { paneLayoutLeaves } from "./storage-shared-pane-layout.js";
+import { paneLayoutLeaves } from "./storage/index.js";
 import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environments/index.js";
 

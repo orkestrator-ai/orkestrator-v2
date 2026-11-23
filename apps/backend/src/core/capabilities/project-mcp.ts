@@ -29,7 +29,7 @@ import {
   projectMcpLocationFor,
   type ProjectMcpLocation,
 } from "./scoped-locations.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { CapabilityExecutorState } from "./types.js";
 
 export interface ProjectMcpContext {

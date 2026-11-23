@@ -2,7 +2,7 @@ import { multiReviewAddressFindingsIdentity } from "./address-findings-identity.
 import { resolveEnvironmentActionDefault } from "../action-default-selection.js";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("pull-request");

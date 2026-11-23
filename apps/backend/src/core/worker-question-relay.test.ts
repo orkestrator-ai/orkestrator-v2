@@ -15,7 +15,7 @@ import { grantAdmits } from "./nodes/workspace-grant-test-support.js";
 import { NodeActionRequests } from "./nodes/node-action-requests.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { runCommand } from "./shell.js";
-import { StorageService, createEnvironment, createProject } from "./storage.js";
+import { StorageService, createEnvironment, createProject } from "./storage/service.js";
 
 let root: string;
 let storage: StorageService;

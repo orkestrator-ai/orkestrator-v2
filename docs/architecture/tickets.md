@@ -7,7 +7,7 @@ not checked, with evidence. The design options were weighed in to-do 0742
 (retired 2026-11-10).
 
 Code: `packages/protocol/src/ticket-sections.ts` (schema, markdown, mirrors,
-migration), `apps/backend/src/core/storage-kanban.ts` (reads and writes),
+migration), `apps/backend/src/core/storage/kanban.ts` (reads and writes),
 `apps/web/src/components/tickets/` (tiles).
 
 ## Kinds
@@ -129,7 +129,7 @@ read these.
   This is how every writer that predates sections changes a ticket.
 - **Legacy rows** (no sections, written before v2.34.2-beta) were given their
   sections once, by a storage migration (`upgradeKanbanTaskRecords`,
-  `storage-record-upgrades.ts`, version 10): sections are derived from the
+  `storage/record-upgrades.ts`, version 10): sections are derived from the
   text, which is kept as written. A legacy `- [x]` becomes a manual pass dated
   at the ticket's creation, and an edit that keeps the criterion keeps that
   date.
@@ -145,7 +145,7 @@ ticket with none has no field. Each project also has a label catalogue (store
 `kanban-labels`, one row per project): labels created ahead of use, with an
 optional colour (`#rrggbb`) and description. Code:
 `packages/protocol/src/ticket-labels.ts` (rules and limits),
-`apps/backend/src/core/storage-kanban-labels.ts` (the catalogue) and
+`apps/backend/src/core/storage/kanban-labels.ts` (the catalogue) and
 `KanbanRepository.setKanbanTaskLabel`/`getKanbanLabels`/`createKanbanLabel`.
 
 - **Names.** One line, 1 to 50 characters, whitespace runs collapsed to one
@@ -499,7 +499,7 @@ every other ticket opens on Ticket (`defaultTicketViewTab`).
 `updatedAt`. `updatedAt` equals `createdAt` on a new ticket and is refreshed
 by every change to the ticket's content or state: title, sections, criteria
 and their results, status, labels, comments, images, and its build, pull
-request and remote-work links (`touchTicket` in `storage-kanban-sync.ts`,
+request and remote-work links (`touchTicket` in `storage/kanban-sync.ts`,
 called from the board's one commit). Moving a ticket within its column, and
 local bookkeeping such as lifecycle markers, are not updates. A row stored
 before `updatedAt` existed reads as updated when it was created
@@ -527,8 +527,8 @@ criterion's result under the rationale.
 A project's board is shared by every machine in a fleet that has a copy of
 the same repository (matched by repository identity, as everything else
 across nodes is). Code: `@orkestrator/protocol/ticket-sync` (wire shapes,
-limits, messages), `apps/backend/src/core/storage-kanban-sync.ts` (the rules),
-`KanbanSyncRepository` (`storage-kanban-sync-repository.ts`, reached as
+limits, messages), `apps/backend/src/core/storage/kanban-sync.ts` (the rules),
+`KanbanSyncRepository` (`storage/kanban-sync-repository.ts`, reached as
 `storage.ticketSync`: the sync methods, under the Kanban lease it shares with
 `KanbanRepository` through `KanbanBoardStore`),
 `nodes/node-ticket-sync.ts` (the command node's runs),
@@ -673,7 +673,7 @@ sidecars of its deleted tickets. The remove-project confirmation says so.
 
 `removeProject` first writes a content fence for the project
 (`KanbanRepository.fenceProjectContent`, held by `KanbanProjectRemovalStore`
-in `storage-kanban-project-removal.ts` as a tombstone in
+in `storage/kanban-project-removal.ts` as a tombstone in
 `storage-deletion-fences`). Every writer that creates content for a project
 checks it under the lease or transaction the delete also takes: creating a
 ticket, applying a sync snapshot, recording a leaf's pairing, creating a
@@ -688,7 +688,7 @@ unlinked from the journal; a file or sidecar that cannot be removed fails the
 removal, keeping the project, and the journal lets a retry, even after a
 restart, find files whose tickets are already gone. It is not a ticket deletion as far as sync is
 concerned: no deletion is queued for a command node and no tombstone is
-written (`forgetSyncProject` in `storage-kanban-sync.ts`). The removed
+written (`forgetSyncProject` in `storage/kanban-sync.ts`). The removed
 project's replica links, tombstones, pruned cursor, each leaf's pairing with
 it and its conflicts are dropped. So:
 
@@ -721,7 +721,7 @@ its board behind. Each backend start runs `sweepRemovedProjectContentAtStartup`
 delivery sidecars, label catalogues, notes, feature plans and sync
 bookkeeping that name a project no longer stored, and the Linear and GitHub completion comment records of
 pipelines no longer stored (`sweepRemovedProjectRows`,
-`storage-kanban-removed-projects.ts`). Each decision reads the owner store
+`storage/kanban-removed-projects.ts`). Each decision reads the owner store
 strictly inside the lease or transaction that deletes, so a project added
 meanwhile keeps its rows; an unreadable or invalid projects store, or one
 holding no project, refuses the whole sweep and deletes nothing, and an
@@ -731,8 +731,8 @@ with nothing left over writes nothing.
 
 Kanban tickets are not linked to Linear issues or GitHub issues (see
 [Linear](#linear)), so removing a project changes nothing in either.
-`storage-kanban-project-removal.test.ts`,
-`storage-kanban-removed-projects.test.ts` and
+`storage/kanban-project-removal.test.ts`,
+`storage/kanban-removed-projects.test.ts` and
 `nodes/node-ticket-sync-project-removal.test.ts` cover it.
 
 ## Linear
@@ -781,7 +781,7 @@ Disconnects are kept for 180 days, at most 50.
 **One board per project, by repository.** A project links to one Linear team
 (its board), optionally narrowed to one Linear project in that team
 (`set_linear_board_link`). The link is keyed by the project's repository
-(`repo:<host/owner/name>`, `linearBoardLinkKey` in `storage-linear.ts`), so the
+(`repo:<host/owner/name>`, `linearBoardLinkKey` in `storage/linear.ts`), so the
 same repository's project on every machine uses it; a project with no Git
 remote is keyed by its id and stays on its machine. A machine refuses a second
 of its projects on a board another one already has, and sync keeps that rule:

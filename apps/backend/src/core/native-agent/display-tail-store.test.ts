@@ -15,9 +15,9 @@ import {
   displayTailChecksum,
   type NativeAgentDisplayTail,
 } from "./display-tails.js";
-import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
-import { storageFilesContain } from "../storage-test-support.js";
+import type { StorageDatabase } from "../storage/database.js";
+import { openBackendDatabase } from "../storage/stores.js";
+import { storageFilesContain } from "../storage/test-support.js";
 
 const directories: string[] = [];
 const databases: StorageDatabase[] = [];

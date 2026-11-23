@@ -455,7 +455,7 @@ export const clientEnvironmentFields = {
    *
    * Supersedes `defaultAgent`, `claudeMode`, `claudeNativeBackend`,
    * `opencodeMode` and `codexMode`, which the backend folds onto this shape on
-   * load (`storage-agent-settings.ts`) and then deletes from the record.
+   * load (`apps/backend/src/core/storage/agent-settings.ts`) and then deletes from the record.
    */
   agentSettings: Schema.optional(AgentSettingsTierSchema),
   setupScriptsComplete: optionalBoolean,

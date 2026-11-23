@@ -20,7 +20,7 @@ import {
 import { TEST_REVIEW_PREPARATION } from "./test-fixtures.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerControllerWorkflowCommands } from "../commands-registry-controller-workflows.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 
 const HEAD = "a".repeat(40);
 const TICKET = {

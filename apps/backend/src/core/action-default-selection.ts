@@ -10,7 +10,7 @@ import {
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
 import type { Environment } from "./models.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 /**
  * The agent, model and effort an action-bar button would use in an

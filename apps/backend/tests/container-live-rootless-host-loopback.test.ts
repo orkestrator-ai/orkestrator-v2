@@ -53,7 +53,7 @@ import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES } from "@orkestrator/protocol/conta
 import { IMAGE_MANIFEST_PATH } from "@orkestrator/protocol/image-manifest";
 import { runCommand } from "../src/core/shell";
 import { AgentToolsServer } from "../src/core/agent-tools";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { waitForContainerBoot } from "../src/core/containers/readiness";
 import type { Environment } from "../src/core/models";

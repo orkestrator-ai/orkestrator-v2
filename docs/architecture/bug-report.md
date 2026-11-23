@@ -14,7 +14,7 @@ web counterpart of `orkestrator --fix AGENT`
 | --- | --- |
 | Prompt sections, draft parsing, runtime ids, limits | [`packages/protocol/src/bug-report.ts`](../../packages/protocol/src/bug-report.ts) |
 | Host facts (versions, logs, backend descriptor; never contents) | [`packages/protocol/src/node/bug-report-facts.ts`](../../packages/protocol/src/node/bug-report-facts.ts) |
-| Report records (`bug-reports.json`) | [`storage-bug-reports.ts`](../../apps/backend/src/core/storage-bug-reports.ts) |
+| Report records (`bug-reports.json`) | [`storage/bug-reports.ts`](../../apps/backend/src/core/storage/bug-reports.ts) |
 | Synthetic runtime `bug-report:<id>` | [`bug-report-runtime.ts`](../../apps/backend/src/core/bug-report-runtime.ts) |
 | Create, assign, draft, screenshot, file, discard | [`bug-report-service.ts`](../../apps/backend/src/core/bug-report-service.ts), commands in [`commands-registry-bug-reports.ts`](../../apps/backend/src/core/commands-registry-bug-reports.ts) |
 | Sheet | [`BugReportSheet.tsx`](../../apps/web/src/components/bug-report/BugReportSheet.tsx), hosted once per window by `AppShell` (`BugReportSheetHost`) |

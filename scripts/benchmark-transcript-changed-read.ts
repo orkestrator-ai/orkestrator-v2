@@ -74,7 +74,7 @@ process.env.NODE_ENV = "test";
 
 const core = path.join(import.meta.dir, "../apps/backend/src/core");
 const { NativeAgentService } = await import(path.join(core, "native-agent/service.ts"));
-const { StorageService } = await import(path.join(core, "storage.ts"));
+const { StorageService } = await import(path.join(core, "storage/service.ts"));
 const { isNormalizedProgressiveMessage } = await import(
   path.join(core, "native-agent/projection-helpers.ts")
 );

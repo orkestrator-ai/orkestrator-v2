@@ -10,7 +10,7 @@ import {
   NodeCoordinatorRemote,
   type NodeCoordinatorRemoteDeps,
 } from "../nodes/node-coordinator-remote.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 
 // Real MCP dispatch, scope checks, receipts, controller commands, native job
 // admission and tab persistence; only the node transport and agent are simulated.

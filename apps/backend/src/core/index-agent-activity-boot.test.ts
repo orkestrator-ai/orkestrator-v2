@@ -5,8 +5,8 @@ import path from "node:path";
 import type { BuildPipelineActivity } from "./build-pipeline/activity.js";
 import { OrkestratorBackend } from "./index.js";
 import type { ClientEnvironment, Environment } from "./models.js";
-import { readStoredValue, seedStore, storageDatabase } from "./storage-test-support.js";
-import type { StorageService } from "./storage.js";
+import { readStoredValue, seedStore, storageDatabase } from "./storage/test-support.js";
+import type { StorageService } from "./storage/service.js";
 
 /**
  * A `frontend` activity snapshot is only meaningful while the renderer that

@@ -159,10 +159,10 @@ checklist on 2026-11-10.
    (`bridges/claude-bridge/src/routes/session.ts`, test "config applies %s
    and ignores stale permission parameters"). The residue went on 2026-10-25:
    a stored legacy value is dropped by every control update
-   (`storage-native.ts`, `native-agent/retired-parameters.ts`) and is never
+   (`storage/native.ts`, `native-agent/retired-parameters.ts`) and is never
    forwarded in a prompt's `parameterValues` (`http-bridge-prompt-body.ts`).
    Tests: "drops a stored pre-approval-mode permissionMode value on any
-   control update" (`storage-native-agent-sessions.test.ts`) and the
+   control update" (`storage/native-agent-sessions.test.ts`) and the
    `parameterValues` assertion in "runs Claude build turns in the session's
    approval mode" (`http-bridge-provider.test.ts`).
 4. ~~**`maxBudgetUsd`.**~~ Done 2026-10-25: dropped from the Claude bridge.

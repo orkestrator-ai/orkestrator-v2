@@ -11,7 +11,7 @@ import {
 } from "../src/core/build-pipeline/kanban-transitions-test-support.js";
 import { findKanbanTaskForEnvironment } from "../src/core/commands-pr-monitor.js";
 import { PR_CLOSED_COMMENT, PrMonitorService, type PrDetection } from "../src/core/git/pr-monitor";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 
 /**
  * A pull request that closes without merging sends its build's ticket back

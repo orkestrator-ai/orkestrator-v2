@@ -296,7 +296,7 @@ one self-contained function. It reads:
   recorded as `related` through
   `native-agent/projection-encoding.ts` (at 3 and 8 hops) are now
   `undetermined`, as are case 6600's seven owners had their branch changed
-  `web-annotations.ts` (3 and 4 hops); with `storage.ts` changed, the one
+  `web-annotations.ts` (3 and 4 hops); with `storage/service.ts` changed, the one
   owner that imports it directly stays `related` and six become
   `undetermined`. The limit does not help with a module that most production
   modules import directly, such as `packages/protocol/src/logger.ts`: every
@@ -852,7 +852,7 @@ independently of panel size, up to the 32-reviewer maximum:
 | Provider transcript reads | At most one progress read per live reviewer per 60 s; none on other passes | `review/progress.ts`, `review/fanout-transcript.ts` |
 | Observational writes | At most one workflow write per pass, for any panel size | `ReviewFanoutRunner.stageObservation` |
 | Controller fence checks | One committed row read each, with no lease, whatever the panel size or retained review history; four per running reviewer per pass, plus one (and one per pending request) on providers that report interactions | `ReviewsRepository.validateMultiReviewController` |
-| Multi Review store work per running pass | No whole-store read; two lease acquisitions (the controller claim and the observational flush) at any panel size | `storage-reviews.ts` |
+| Multi Review store work per running pass | No whole-store read; two lease acquisitions (the controller claim and the observational flush) at any panel size | `storage/reviews.ts` |
 | Running-reviewer observation | Next pass 3 s after the previous one finishes, plus up to 1 s stable per-workflow jitter; admission, dispatch and consolidation work runs at 1 s | `review/service.ts` |
 | Accepted report | 1 MiB, 100 issues, 16 KiB per prose field | `packages/protocol/src/structured-review/budgets.ts` |
 | Consolidation input | 640 KiB with every source ID kept; overflow fails before dispatch | `review/consolidation-evidence.ts` |
@@ -939,7 +939,7 @@ seconds per generation on local disk, against reviews that take minutes. Contain
 `review/fanout-efficiency.test.ts` (transcript reads, writes per pass,
 admission, isolation), `review/service-efficiency.test.ts` and
 `review/reviewer-transcript.test.ts` (reviewer-tab snapshots),
-`storage-multi-review.test.ts`
+`storage/multi-review.test.ts`
 (fence checks read one row without the lease),
 `structured-review/budgets.test.ts` (reports) and
 `review/consolidation-evidence.test.ts` (consolidation input). Open

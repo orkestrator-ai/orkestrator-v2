@@ -10,7 +10,7 @@ import {
   readOriginUrl,
 } from "../commands-projects.js";
 import { cleanupProjectForRemoval } from "../commands-registry-projects.js";
-import { ProjectHasEnvironmentsError } from "../storage-projects.js";
+import { ProjectHasEnvironmentsError } from "../storage/index.js";
 import type { Environment } from "../models.js";
 import { requireProject } from "./actions-discovery.js";
 import { runWithContinuation } from "./background.js";

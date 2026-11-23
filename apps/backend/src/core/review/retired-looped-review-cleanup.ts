@@ -1,6 +1,6 @@
 import { createBuildPipelineProvider } from "../build-pipeline/provider.js";
 import type { PlanUsageState } from "../plan-usage/index.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /** Reconnect to the surviving runtime, without creating or dispatching a turn. */
 export async function cleanupRetiredLoopedReviews(

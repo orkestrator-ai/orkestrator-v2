@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
 import { OrkestratorBackend } from "./index.js";
-import { createEnvironment } from "./storage.js";
-import { seedStore, storageDatabase } from "./storage-test-support.js";
+import { createEnvironment } from "./storage/service.js";
+import { seedStore, storageDatabase } from "./storage/test-support.js";
 
 test("the production backend wires PR terminal effects to merge cleanup recovery", async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), "ork-backend-pr-cleanup-"));

@@ -20,8 +20,8 @@ import {
   WATCHED_PR_POLL_INTERVAL_MS,
   watchedPullRequestReading,
 } from "./pr-watches.js";
-import type { StorageService } from "../storage.js";
-import { withTemporaryStorage } from "../storage-test-support.js";
+import type { StorageService } from "../storage/service.js";
+import { withTemporaryStorage } from "../storage/test-support.js";
 
 const PROJECT_ID = "project-a";
 

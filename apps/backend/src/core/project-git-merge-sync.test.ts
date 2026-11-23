@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import type { ProjectGitStatus } from "@orkestrator/protocol/coordinator";
 import { ProjectGitService } from "./project-git-service.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/service.js";
 
 for (const fails of [false, true]) {
   test(`user sync and turn admission wait for background sync (failure=${fails})`, async () => {

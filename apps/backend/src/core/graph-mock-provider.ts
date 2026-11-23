@@ -66,7 +66,7 @@ import type {
   GraphNodeExecutor,
   GraphNodeExecutorRegistry,
 } from "./graph-run-executors.js";
-import type { GraphEffectsStorage } from "./storage-graph-effects.js";
+import type { GraphEffectsStorage } from "./storage/index.js";
 
 export interface GraphMockExecutorDependencies {
   storage: { graphEffects: Pick<GraphEffectsStorage, "recordSimulatedGraphEffect"> };

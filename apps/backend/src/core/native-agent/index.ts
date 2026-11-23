@@ -16,7 +16,7 @@
 // samples that review and pipeline supervisors compare for progress
 // (`transcript-progress.ts`), and the saved copies of the local images
 // transcript messages showed (`transcript-media-pins.ts`). The
-// session stores (`storage-native*.ts`), the native commands
+// session stores (`storage/native*.ts`), the native commands
 // (`commands-registry-native*.ts`) and the session invalidation metrics
 // (`native-session-invalidation-metrics.ts`, which the storage layer and the
 // recurring diagnostics also read) stay with their own groups.
@@ -32,8 +32,8 @@
 //   actions, the credentials host, bug reports, the coordinator's goal
 //   actions, PR auto-merge and web annotations), `suborks.ts` and
 //   `goal-verifier.ts` (the composition root) and `provider.ts` (the build
-//   pipeline's stage provider) reach the storage layer (`storage-native.ts`,
-//   `storage-stores.ts`), the HTTP bridge provider, OpenCode 2's coordinator
+//   pipeline's stage provider) reach the storage layer (`storage/native.ts`,
+//   `storage/stores.ts`), the HTTP bridge provider, OpenCode 2's coordinator
 //   and transcript snapshot, the graph run launch and the workflow transcript
 //   artifacts, which import `session-controls.ts`, `display-tail*.ts`,
 //   `retired-parameters.ts`, `inline-files.ts`, `execution-policy.ts` and

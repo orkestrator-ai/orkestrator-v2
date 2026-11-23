@@ -32,7 +32,7 @@ import type {
   PortMapping,
 } from "./models.js";
 import type { AgentSkillProvider } from "./agent-skills.js";
-import type { JsonRecord, KanbanStorage } from "./storage.js";
+import type { JsonRecord, KanbanStorage } from "./storage/index.js";
 import type {
   NativeAgentControlUpdate,
   NativeAgentSessionAction,

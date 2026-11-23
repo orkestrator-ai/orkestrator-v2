@@ -16,7 +16,7 @@ import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
 import { CoordinatorService } from "./coordinator/service.js";
 import { runCommand } from "./shell.js";
-import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 
 /**
  * The bridge launch side of `ORKESTRATOR_AGENT_TEST_ANTHROPIC_ORIGIN`

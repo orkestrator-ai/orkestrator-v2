@@ -13,7 +13,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/projects";
 import { sanitizeCoordinatorError } from "./coordinator/index.js";
 import { listProjectCopyCandidates, listProjectCopyFiles } from "./nodes/index.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 /**
  * The per-machine half of copying a project between machines (see

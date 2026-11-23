@@ -8,7 +8,7 @@ import type { CommandContext } from "../commands-context.js";
 import { registerScheduledJobCommands } from "../commands-registry-scheduled-jobs.js";
 import { rpc } from "../control-mcp/test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "../control-mcp/server.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { ScheduledJobExecutor } from "./executor.js";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { ScheduledJobService } from "./service.js";

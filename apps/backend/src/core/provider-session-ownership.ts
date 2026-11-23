@@ -9,7 +9,7 @@ import {
   type TabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
 import type { Environment } from "./models.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 /**
  * The rules for when an Orkestrator path that stops showing a provider session

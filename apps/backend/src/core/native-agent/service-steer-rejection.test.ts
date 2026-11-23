@@ -14,7 +14,7 @@ import {
 import type { NativeAgentRuntimeProvider } from "./provider.js";
 import { nativeAgentSessionStorageKey } from "./service.js";
 import { createProviderStub, withService } from "./service-projection-test-support.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 
 type SteerAction = Parameters<NonNullable<NativeAgentRuntimeProvider["performSessionAction"]>>[1];
 

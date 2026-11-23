@@ -14,7 +14,7 @@
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { replaceRuntimePreservingState } from "../src/core/containers/replacement";
 import { openRegistryWriter } from "../src/core/registry-writer-lease";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 import { durableLifecycleContext } from "./container-live-rebuild-fixtures";
 
 export interface KillDriverConfig {

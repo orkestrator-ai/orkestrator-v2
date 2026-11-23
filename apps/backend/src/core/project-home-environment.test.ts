@@ -8,7 +8,7 @@ import {
   refreshProjectHomeBranch,
   type ProjectHomeDependencies,
 } from "./project-home-environment.js";
-import { createEnvironment } from "./storage-shared-core.js";
+import { createEnvironment } from "./storage/shared-core.js";
 
 let operations: EnvironmentOperations;
 beforeEach(() => {

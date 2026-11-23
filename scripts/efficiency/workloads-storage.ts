@@ -61,7 +61,7 @@ interface StorageLike {
 export async function displayTailWorkload(context: WorkloadContext): Promise<WorkloadDefinition> {
   const storageModule = await context.load<{
     StorageService: new (dataDir: string) => StorageLike;
-  }>("apps/backend/src/core/storage.ts");
+  }>("apps/backend/src/core/storage/service.ts");
   const tails = await context.load<{ createNativeAgentDisplayTail: (input: Json) => unknown }>(
     "apps/backend/src/core/native-agent/display-tails.ts",
   );

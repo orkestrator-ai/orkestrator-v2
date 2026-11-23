@@ -3,7 +3,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Environment } from "./models.js";
-import { createEnvironment } from "./storage.js";
+import { createEnvironment } from "./storage/service.js";
 import { runCommand } from "./shell.js";
 import { countUntrackedFileLines, localGitScanCacheStats } from "./local-git-scan-caches.js";
 import * as baselineGit from "./diff-baseline.js";

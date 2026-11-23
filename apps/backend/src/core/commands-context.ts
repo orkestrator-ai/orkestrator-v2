@@ -7,7 +7,7 @@ import type {
 import type { BuildPipelineService } from "./build-pipeline/service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
 import type { EnvironmentLifecycleTaskTracker } from "./environments/index.js";
-import type { JsonRecord, StorageService } from "./storage.js";
+import type { JsonRecord, StorageService } from "./storage/index.js";
 import type { MultiReviewService } from "./review/service.js";
 import type { NativeAgentSuborkService } from "./native-agent/suborks.js";
 import type { NativeAgentService } from "./native-agent/service.js";

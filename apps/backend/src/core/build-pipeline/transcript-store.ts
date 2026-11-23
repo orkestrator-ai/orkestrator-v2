@@ -28,7 +28,7 @@ import {
   type LegacyManifestDeps,
   type LegacyManifestMigrationReport,
 } from "./transcript-legacy-manifests.js";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 
 /**
  * Durable build-pipeline display transcripts, stored apart from the workflow

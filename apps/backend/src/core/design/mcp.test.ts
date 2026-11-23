@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "../agent-tools.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { DesignService } from "./service.js";
 import { createTestRenderer, trackUnhandledRejections } from "./test-support.js";
 

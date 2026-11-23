@@ -20,7 +20,7 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
 } from "@orkestrator/protocol/structured-review";
 import { SYSTEM_INSTRUCTIONS_FRAME_OPEN } from "@orkestrator/protocol/review-evidence-frames";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BuildPipelineService } from "./service.js";
 import { MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES } from "./prompts.js";
 import {

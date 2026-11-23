@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
 import { ACCEPTANCE_CRITERIA_RULE } from "@orkestrator/protocol/ticket-sections";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { FeaturePlanningService } from "./planning.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 import { WorkflowResultRollout } from "../workflows/result-rollout.js";

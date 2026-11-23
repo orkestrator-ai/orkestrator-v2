@@ -13,7 +13,7 @@ Analysed 2026-11-05 against `main` at `cd7e963ec`, with coordinator batch C3 (Sw
 
 **Problem.** Finished workflow records stay in the coordinator store until it reaches 2,000 records, and the sweep, every coordinator read and the panel's view walk all of them. C3 measured that cost and found it small, but only on a synthetic store.
 
-**Context.** From coordinator report C3, part `0110`, task 4. `makeRoomForWorkflowAssociation` (`storage-coordinators.ts`) clears a batch of the oldest finished records only when a new record would go past `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`. The selection lives in `coordinator/workflow-retention.ts` and is tested. `docs/architecture/coordinator.md` (Workflow record limit and cleanup) says history stays until the room is needed, so `list_workflows` and the Work panel keep it.
+**Context.** From coordinator report C3, part `0110`, task 4. `makeRoomForWorkflowAssociation` (`storage/coordinators.ts`) clears a batch of the oldest finished records only when a new record would go past `MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS`. The selection lives in `coordinator/workflow-retention.ts` and is tested. `docs/architecture/coordinator.md` (Workflow record limit and cleanup) says history stays until the room is needed, so `list_workflows` and the Work panel keep it.
 
 **Investigation.** `apps/backend/scripts/coordinator-sweep-bench.ts` on an isolated synthetic store, after C3, mean milliseconds per call on one host:
 

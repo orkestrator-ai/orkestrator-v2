@@ -6,7 +6,7 @@ import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 
 import { linearKeyFingerprint } from "../linear-boards.js";
 import { applyLinearSyncState, readLinearSyncState } from "../linear-sync-state.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { NodeLinearSync, type LinearSyncLink } from "./node-linear-sync.js";
 
 const directories: string[] = [];

@@ -74,7 +74,7 @@ checklist, cited as `1000 (retired)` task 4.
 
 **Problem.** The reader matches error text. A provider rewording its message would hide a limit.
 
-**Context.** Codex `codexErrorInfoToCode` (`bridges/codex-bridge/src/app-server/errors.ts`), `EngineError.code`, `ThreadContext.errorCode` (`sessions/thread-registry.ts`) and `getStatus` (`app-server-runtime-sessions.ts`); Claude's `handleRateLimitEvent` (`session-manager-prompt-handlers/leaf.ts`), `TurnState.rateLimitRejected` and the failure path in `session-manager-prompt-settle.ts`, served by `GET /session/:id` (`routes/session.ts`); the backend's `throwExplainedTurnFailure` (`http-bridge-transport.ts`), `ProviderSessionFailedError.failureKind` and `readProviderStatus` (`agent-provider-contract.ts`), `PersistedNativeAgentTurnOutcome.failureKind` (`models.ts`, stored by `storage-native.ts`), `turnOutcomeFailureKind` (`agent-usage-limits.ts`).
+**Context.** Codex `codexErrorInfoToCode` (`bridges/codex-bridge/src/app-server/errors.ts`), `EngineError.code`, `ThreadContext.errorCode` (`sessions/thread-registry.ts`) and `getStatus` (`app-server-runtime-sessions.ts`); Claude's `handleRateLimitEvent` (`session-manager-prompt-handlers/leaf.ts`), `TurnState.rateLimitRejected` and the failure path in `session-manager-prompt-settle.ts`, served by `GET /session/:id` (`routes/session.ts`); the backend's `throwExplainedTurnFailure` (`http-bridge-transport.ts`), `ProviderSessionFailedError.failureKind` and `readProviderStatus` (`agent-provider-contract.ts`), `PersistedNativeAgentTurnOutcome.failureKind` (`models.ts`, stored by `storage/native.ts`), `turnOutcomeFailureKind` (`agent-usage-limits.ts`).
 
 **Investigation.** Re-checked 2026-11-05: still open. The Codex code survived only in a transient `session.warning`; the Claude SDK's `rate_limit_info.status` (`allowed`, `allowed_warning`, `rejected`) was not read, although the bridge already carried a refusal's words as the turn's error when the text classified (`result.ts`). Besides the coordinator's reader, the automatic switcher (`handleLimitStop`, `noteUnresentStop`), the native resend and four workflow call sites classified the same text, so they were given the structured kind too. Tests: `bridges/codex-bridge/src/app-server-runtime-usage-limit.test.ts`, `bridges/claude-bridge/src/services/session-manager-prompt-usage-limit.test.ts`, `routes/session.test.ts` ("reports a usage-limit errorCode…"), `apps/backend/src/core/http-bridge/usage-limit-signal.test.ts` (including an older bridge without the code), `native-agent/service-turn-outcome.test.ts` ("the drain records a bridge's usage-limit code, and an older bridge's limit by its text", "an observer returns and keeps…"), `agent-usage-limits.test.ts` (backend and protocol), `agent-accounts/auto-switch.test.ts` ("the bridge's usage-limit code counts whatever the wording").
 
@@ -191,7 +191,7 @@ Added 2026-11-04 after two approval requests waited about 4.5 hours overnight wh
 
   | Criterion | Where it is built | Test |
   | --- | --- | --- |
-  | 1. Per-provider tick, off by default, persisted | `CoordinatorAccountSwitchGrant.tsx` in each provider's accounts pane; `coordinatorAccountSwitchGrant` config key written only by `set_coordinator_account_switch_grant` | grant test "is off by default, per provider, and persisted"; `storage-config.test.ts` "keeps the coordinator account-switch permission across settings saves and restarts"; `CoordinatorAccountSwitchGrant.test.tsx` "is off by default, and ticking it grants the provider on this machine" |
+  | 1. Per-provider tick, off by default, persisted | `CoordinatorAccountSwitchGrant.tsx` in each provider's accounts pane; `coordinatorAccountSwitchGrant` config key written only by `set_coordinator_account_switch_grant` | grant test "is off by default, per provider, and persisted"; `storage/config.test.ts` "keeps the coordinator account-switch permission across settings saves and restarts"; `CoordinatorAccountSwitchGrant.test.tsx` "is off by default, and ticking it grants the provider on this machine" |
   | 2. Granted: switches at once, here and with `nodeId` | `switch_provider_account` → `run_granted_agent_account_switch` → `NodeActionRequests.runUnattended` | grant test "granted: switches at once on this machine, recorded and shown to the user" and "granted: switches a controlled machine with nodeId through the node link" |
   | 3. Off: approval request and self-timer unchanged | the `scheduleId` branch runs before the grant is read and is not modified | grant test "not granted: the switch is a request the user approves, as before"; the unmodified `coordinator/timers-and-accounts.test.ts` (timer scenario, lapse, other machine, other provider) |
   | 4. Signed-out or known-exhausted target refused | the `signedIn` check and `refuseExhausted` | grant test "refuses a signed-out or known-exhausted account even with the grant" and "an account with no usage reading is not treated as exhausted" |
@@ -253,10 +253,10 @@ Added 2026-11-04 after two approval requests waited about 4.5 hours overnight wh
   (b) write a whole synthetic session row; (c) wait for a real limit. Chose
   (a): the worker is a real tab with one finished turn, and only its newest
   outcome is added (`appendNativeAgentTurnOutcome` in
-  `storage-test-support.ts`, reached through `e2e/agent-testing/backend-store.ts`),
+  `storage/test-support.ts`, reached through `e2e/agent-testing/backend-store.ts`),
   so the session row stays one the backend wrote. A running backend observes
   it through the store's committed revision, which
-  `storage-test-support-turn-outcome.test.ts` checks against the usage-limit
+  `storage/test-support-turn-outcome.test.ts` checks against the usage-limit
   reader. (b) would have to reproduce the row's ownership and provider
   fields; (c) is the plan the decision above rejects.
 - **Which accounts.** One extra signed-in fixture account for the

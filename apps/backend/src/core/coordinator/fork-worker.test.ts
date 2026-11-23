@@ -18,7 +18,7 @@ import { NodeCoordination } from "../nodes/node-coordination.js";
 import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { CoordinatorRequestFlights } from "./request-flights.js";
 import { runCommand } from "../shell.js";
-import { StorageService, createEnvironment, createProject } from "../storage.js";
+import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 
 /**
  * `fork_worker`'s backend command against a real Git checkout (slow tier):

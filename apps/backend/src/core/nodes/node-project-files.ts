@@ -8,7 +8,7 @@ import { isBackendId, type BackendId } from "@orkestrator/protocol/federation";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 
 import { normalizeConfiguredProjectFiles } from "../commands-project-files.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import type { NodeActionRequest } from "./node-action-requests.js";
 import { routedDomainApi } from "./node-domain-clients.js";
 import {

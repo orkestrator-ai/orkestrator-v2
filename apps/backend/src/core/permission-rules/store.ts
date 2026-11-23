@@ -6,7 +6,7 @@ import {
   type NativeAgentPermissionRule,
   type PermissionRuleApplication,
 } from "@orkestrator/protocol/permission-rules";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import { PERMISSION_RULE_APPLICATIONS_STORE, PERMISSION_RULES_STORE } from "./layout.js";
 
 /**

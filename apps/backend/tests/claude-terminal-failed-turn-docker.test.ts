@@ -13,7 +13,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { claudeStateSignalSupport } from "../src/core/claude-state-signal.js";
 import { readImageManifest } from "../src/core/containers/image.js";
 import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux/poll.js";

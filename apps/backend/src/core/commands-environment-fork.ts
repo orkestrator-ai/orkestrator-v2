@@ -1,5 +1,5 @@
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
-import { createEnvironment, sanitizeEnvironmentName } from "./storage.js";
+import { createEnvironment, sanitizeEnvironmentName } from "./storage/index.js";
 import type { Environment, EnvironmentType, Project } from "./models.js";
 import type { ClientEnvironment, NetworkAccessMode } from "./models.js";
 import { isContainerRunning } from "./commands-container-exec.js";

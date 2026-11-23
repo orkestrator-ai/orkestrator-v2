@@ -15,7 +15,7 @@ import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import type { Project } from "./models.js";
 import { CommandFailedError, runCommand as shellRunCommand } from "./shell.js";
-import { createProject, StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage/service.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 const processCannotEnforceDirectoryModes =

@@ -16,8 +16,8 @@ import {
 } from "./health-summary.js";
 import { BridgeRestartCounter, bridgeRestarts } from "./bridge-restarts.js";
 import { HEALTH_SUMMARY_STORE } from "./health-summary-layout.js";
-import type { StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import type { StorageDatabase } from "./storage/database.js";
+import { openBackendDatabase } from "./storage/stores.js";
 import type { RecurringWorkSnapshot } from "@orkestrator/protocol/recurring-work";
 
 const directories: string[] = [];

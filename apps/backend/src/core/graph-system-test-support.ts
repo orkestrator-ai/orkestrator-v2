@@ -34,8 +34,8 @@ import type { GraphSystemDependencies, GraphSystemStorage } from "./graph-system
 import type { GraphEnvironmentShell, GraphShellOptions } from "./graph-system-environment.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
-import type { AgentMailSender } from "./storage-agent-mail-store.js";
-import { StorageService } from "./storage.js";
+import type { AgentMailSender } from "./storage/agent-mail-store.js";
+import { StorageService } from "./storage/service.js";
 
 export const SYSTEM_BRANCH = "feature/csv";
 export const SYSTEM_REPO = "acme/widgets";

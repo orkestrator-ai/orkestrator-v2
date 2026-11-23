@@ -17,7 +17,7 @@ import {
   type GraphRunWaitOpened,
 } from "./graph-run-attention.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 const T1 = "2026-10-29T12:00:00.000Z";
 const T2 = "2026-10-29T12:05:00.000Z";

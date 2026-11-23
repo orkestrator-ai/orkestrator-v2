@@ -14,8 +14,8 @@ import {
   withEnvironmentIsolation,
   environmentIsolationShellPrefix,
 } from "./isolation.js";
-import { createEnvironment } from "../storage-shared-core.js";
-import { withTemporaryStorage } from "../storage-test-support.js";
+import { createEnvironment } from "../storage/shared-core.js";
+import { withTemporaryStorage } from "../storage/test-support.js";
 
 const ID = "3f2a9c1e-77b4-4d1a-9e0f-0123456789ab";
 

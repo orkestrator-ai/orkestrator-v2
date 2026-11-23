@@ -29,7 +29,7 @@ import {
 } from "@orkestrator/protocol/change-resources";
 import type { DiffScanEvent } from "../diff-stats-service.js";
 import type { NativeAgentChangeTrackingHooks } from "../native-agent/service-shared.js";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import { recurringDiagnosticsRegistry, recurringWorkMetrics } from "../recurring/index.js";
 import { encodePath } from "./capture.js";
 import { ChangeLedger, TERMINAL_TURN_LIFECYCLES } from "./change-ledger.js";

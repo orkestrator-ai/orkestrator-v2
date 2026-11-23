@@ -15,7 +15,7 @@ import {
   unfenceTabTeardownSessionId,
 } from "@orkestrator/protocol/tab-teardown";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import type { NativeAgentProvider } from "./models.js";
 import { replacedSessionCloseIntent } from "./provider-session-ownership.js";

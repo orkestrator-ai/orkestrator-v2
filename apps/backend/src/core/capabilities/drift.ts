@@ -49,7 +49,7 @@ import {
 import { capabilityLocation } from "@orkestrator/protocol/capability-resources-support";
 import { exportCapabilityNodeItemCommand } from "@orkestrator/protocol/contract/domains/capabilities";
 
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { CapabilityArtifactStore } from "./artifact-store.js";
 import {
   hasConflictMarkers,

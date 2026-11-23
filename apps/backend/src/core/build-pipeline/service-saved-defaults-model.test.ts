@@ -15,7 +15,7 @@ import {
   savedLaunchSettings,
 } from "../coordinator/launch-defaults.js";
 import { resolveCodexDefaultModel } from "../session-held-model.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import type { BuildPipelineService } from "./service.js";
 import { pipeline, startInput, withService } from "./service-test-support.js";
 

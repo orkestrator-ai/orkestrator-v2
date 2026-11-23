@@ -12,7 +12,7 @@ import { resolveEnvironmentActionDefault } from "../action-default-selection.js"
 import type { CommandInvoker } from "../build-pipeline/index.js";
 import type { Environment } from "../models.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 

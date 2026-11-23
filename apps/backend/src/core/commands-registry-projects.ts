@@ -72,7 +72,7 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
 import { parseResetSettingsRequest } from "@orkestrator/protocol/setting-sources";
-import { parseUpdateObject } from "./storage.js";
+import { parseUpdateObject } from "./storage/index.js";
 import { runCommand } from "./shell.js";
 import {
   fallbackReasoningId,

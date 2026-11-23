@@ -24,7 +24,7 @@ import { registrarFrom } from "../commands-registry-contracts.js";
 import { registerCoordinatorCommandNodeMail } from "./node-coordinator-mail.js";
 import { nodeMailReplyTarget } from "../node-mail-reply-target.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 
 const worlds: MailWorld[] = [];
 const disposers: Array<() => void> = [];

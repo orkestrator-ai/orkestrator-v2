@@ -17,7 +17,7 @@ import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 
 import { readInputsManifest, stagePortableInputs } from "../portable-inputs.js";
 import { runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { CapabilityExecutor, type NodePlanTarget } from "./executor.js";
 import { validatePackageFiles } from "./security.js";
 import { stageContainerCapabilities } from "./container-staging.js";

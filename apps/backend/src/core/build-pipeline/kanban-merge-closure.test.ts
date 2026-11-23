@@ -1,8 +1,8 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { mutateStored, startBuilding, withService, pipeline } from "./service-test-support.js";
-import { readStoredValue, seedStore } from "../storage-test-support.js";
-import type { KanbanTask } from "../storage-shared.js";
+import { readStoredValue, seedStore } from "../storage/test-support.js";
+import type { KanbanTask } from "../storage/shared.js";
 
 const PR_URL = "https://github.com/acme/repo/pull/1";
 

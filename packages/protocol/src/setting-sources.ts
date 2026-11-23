@@ -36,7 +36,7 @@ const CREDENTIAL_KEYS: ReadonlySet<string> = new Set(CREDENTIAL_GLOBAL_SETTING_K
 
 /**
  * Global settings a reset may remove. Each stays absent through later saves
- * (`storage-config-setting-sources.test.ts` proves it per key), so the
+ * (`apps/backend/src/core/storage/config-setting-sources.test.ts` proves it per key), so the
  * machine follows the product default until the user sets it again.
  */
 export const RESETTABLE_GLOBAL_SETTING_KEYS = [

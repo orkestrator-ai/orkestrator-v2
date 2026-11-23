@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import type { ChangeMeasurement } from "@orkestrator/protocol/change-measurements";
 import type { DiffIdentity } from "@orkestrator/protocol/change-resources";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 
 export class OwnerFenceError extends Error {
   constructor(

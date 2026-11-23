@@ -2,14 +2,14 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 import {
   hasStore,
   readStoredValue,
   seedUnreadableStore,
   storageFilesContain,
-} from "../src/core/storage-test-support";
-import { storageDatabase } from "../src/core/storage-test-support.js";
+} from "../src/core/storage/test-support";
+import { storageDatabase } from "../src/core/storage/test-support.js";
 import {
   abandonLease,
   createTempDir,

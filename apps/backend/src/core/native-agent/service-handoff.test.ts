@@ -28,7 +28,7 @@ import {
   type NativeAgentRuntimeProvider,
 } from "./provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./service.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const ENVIRONMENT = "env-1";
 const TAB = "tab-destination";

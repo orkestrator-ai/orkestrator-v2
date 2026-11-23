@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { CREDENTIAL_ANY_TAB } from "@orkestrator/protocol/agent-credentials";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { CredentialCaller } from "./access.js";
 import type { CredentialHost, CredentialRuntimeInfo, CredentialSessionInfo } from "./context.js";
 import type { CredentialServiceOptions } from "./context.js";

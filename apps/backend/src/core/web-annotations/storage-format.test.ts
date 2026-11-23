@@ -13,8 +13,8 @@ import { join } from "node:path";
 import { WEB_ANNOTATION_DEGRADED } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { WebAnnotationStorage } from "./storage.js";
-import { StorageDatabase } from "../storage-database.js";
-import { LEGACY_JSON_DIRECTORY } from "../storage-stores.js";
+import { StorageDatabase } from "../storage/database.js";
+import { LEGACY_JSON_DIRECTORY } from "../storage/stores.js";
 import { webAnnotationStoreName } from "./store-layout.js";
 import {
   WEB_ANNOTATION_MANIFEST_VERSION,

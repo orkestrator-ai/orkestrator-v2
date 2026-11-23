@@ -10,7 +10,7 @@
  * running backend reads the rows uncached, so it sees the rule at once.
  */
 import { PermissionRuleStore } from "../../apps/backend/src/core/permission-rules/store";
-import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
+import { openBackendDatabase } from "../../apps/backend/src/core/storage/stores";
 
 const [dataDir, action] = process.argv.slice(2);
 if (!dataDir) throw new Error("usage: permission-rules-store.ts <dataDir> <list|create>");

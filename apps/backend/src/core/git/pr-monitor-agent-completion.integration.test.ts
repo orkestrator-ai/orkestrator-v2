@@ -9,7 +9,7 @@ import type { BuildPipelineProvider, ProviderStatus } from "../build-pipeline/pr
 import { createCommandRegistry, type CommandContext } from "../commands.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BackendRuntime } from "../backend-runtime.js";
 
 const PR_URL = "https://github.com/acme/repo/pull/7";

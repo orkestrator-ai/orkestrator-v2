@@ -63,7 +63,7 @@ import {
   recoverLocationReplacements,
   removeManagedPath,
 } from "./security.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 
 /** One managed copy in a worktree, by location and component (no paths). */
 export interface WorktreeEntry {

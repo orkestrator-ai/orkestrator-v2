@@ -6,9 +6,13 @@ import type {
 } from "@orkestrator/protocol/backend-diagnostics";
 import fs from "node:fs";
 import path from "node:path";
-import { CHANGE_LEDGER_DATABASE_FILE, type StorageDatabase } from "./storage-database.js";
+import {
+  CHANGE_LEDGER_DATABASE_FILE,
+  type StorageDatabase,
+  readTopTables,
+  summarizeStorageSnapshots,
+} from "./storage/index.js";
 import { STORAGE_DATABASE_FILE } from "@orkestrator/protocol/node/storage-database";
-import { readTopTables, summarizeStorageSnapshots } from "./storage-backups.js";
 
 /** A `/metrics` poll never costs more than one refresh of this age. */
 export const DATABASE_SUMMARY_MAX_AGE_MS = 60_000;
@@ -68,7 +72,7 @@ function validTopTables(value: unknown): DatabaseTopTables | null {
  * but must not run per `/metrics` request. Figures can be a minute old.
  *
  * Top tables and store families come from the backup child
- * (`storage-backups.ts`); this only reads the file it leaves. Nothing here scans a table or writes.
+ * (`storage/backups.ts`); this only reads the file it leaves. Nothing here scans a table or writes.
  */
 export class DatabaseSummaryCache {
   private cached: { at: number; summary: DatabaseSummary } | null = null;

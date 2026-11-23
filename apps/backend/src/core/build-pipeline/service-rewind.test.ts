@@ -15,7 +15,7 @@ import {
 } from "./key-information.js";
 import { BuildPipelineService } from "./service.js";
 import { BuildPipelineSupervisor } from "./service-supervisor.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { TEST_REVIEW_PREPARATION } from "./test-fixtures.js";
 import {
   cleanReview,

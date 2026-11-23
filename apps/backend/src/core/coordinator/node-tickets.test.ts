@@ -20,7 +20,7 @@ import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js"
 import type { RegistryDependencies } from "../commands-registry-types.js";
 import { registerCoordinatorNodeTicketCommands } from "./node-tickets.js";
 import { NodeTicketSync } from "../nodes/node-ticket-sync.js";
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 
 const BASE = "b".repeat(40);
 const REPO = "git@github.com:acme/site.git";

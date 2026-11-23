@@ -36,7 +36,7 @@ until a new host note refers to them.
 | Page runtime | `apps/desktop/electron/browser-preview-annotation-script.ts`, `browser-preview-anchor-script.ts`, `browser-preview-pins-script.ts`; host side in `browser-preview-capture-pins.ts` |
 | Native capture and spool | `apps/desktop/electron/browser-preview-capture.ts`, `browser-preview-capture-store.ts`, `browser-preview-capture-validation.ts` |
 | Backend storage and service | `apps/backend/src/core/web-annotations/storage.ts`, `web-annotations/store-layout.ts`, `web-annotations/store-rows.ts`, `web-annotations/legacy-import.ts`, `web-annotations/assets.ts`, `web-annotations/sync.ts`, `web-annotations/service*.ts`, `web-annotations/migration.ts` |
-| Execution adapters | `web-annotations/brief.ts`, `web-annotations/dispatch.ts`, `web-annotations/tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage-prompts.ts` |
+| Execution adapters | `web-annotations/brief.ts`, `web-annotations/dispatch.ts`, `web-annotations/tools.ts`; `enqueuePromptQueueMessageIfAbsent` in `storage/prompts.ts` |
 | Commands | `commands-registry-web-annotations.ts` (every name in `WEB_ANNOTATION_COMMANDS`) |
 | Renderer | `apps/web/src/lib/web-annotations/`, `stores/webAnnotationStore.ts`, `hooks/useWebAnnotations.ts`, `components/browser/annotations/`, `components/chat/WebAnnotationRequestChip.tsx` |
 

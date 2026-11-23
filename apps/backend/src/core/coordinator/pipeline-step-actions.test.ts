@@ -8,7 +8,7 @@ import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import { ControlMcpServer } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "../control-mcp/tools.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 
 // A coordinator restarting a build pipeline step, here and on a connected
 // node: real MCP dispatch, scope checks, receipts and controller commands on

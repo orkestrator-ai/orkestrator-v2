@@ -8,7 +8,7 @@
  *   of that type (none declared: nothing is stored). Outputs carry the
  *   activation's inputs as their lineage.
  * - **Effects** (`effect(key, perform)`) are journaled in the run's effect
- *   rows (`storage-graph-effects.ts`) before they happen: a key already
+ *   rows (`storage/graph-effects.ts`) before they happen: a key already
  *   `done` replays its recorded data and does nothing; an intent left
  *   unsettled by a crash or a stop, or a failed attempt, first asks the
  *   action's probe whether the effect happened. Keys are per run, plus node and iteration
@@ -42,9 +42,13 @@ import type { GraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import type { GraphEnvironmentShell } from "./graph-system-environment.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment, Project } from "./models.js";
-import type { AgentMailSender } from "./storage-agent-mail-store.js";
-import type { GraphEffectRecord, GraphEffectsStorage } from "./storage-graph-effects.js";
-import type { KanbanStorage, StorageService } from "./storage.js";
+import type {
+  AgentMailSender,
+  GraphEffectRecord,
+  GraphEffectsStorage,
+  KanbanStorage,
+  StorageService,
+} from "./storage/index.js";
 
 /** A failure an action reports on purpose, with the cause retries match on. */
 export class GraphSystemActionError extends Error {

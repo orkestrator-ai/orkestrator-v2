@@ -8,7 +8,7 @@ import { gitHubGitCredentials } from "./github-git-credentials.js";
 import type { GitHubCloneRepositoryList } from "@orkestrator/protocol/github-clone";
 import type { Project } from "../models.js";
 import { runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

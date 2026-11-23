@@ -22,7 +22,7 @@ import {
 } from "./fsmonitor.js";
 import { CommandFailedError, runCommand } from "../shell.js";
 import * as shell from "../shell.js";
-import { StorageService, createProject } from "../storage.js";
+import { StorageService, createProject } from "../storage/service.js";
 import { ProjectGitService } from "../project-git-service.js";
 import { listRootChanges } from "../root-changes.js";
 import { readWorktreeStatus } from "../workspace-code-rewind.js";

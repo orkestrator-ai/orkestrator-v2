@@ -12,7 +12,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "./workflow-retention.js";
-import { seedStore, readStoredValue } from "../storage-test-support.js";
+import { seedStore, readStoredValue } from "../storage/test-support.js";
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import { BuildPipelineService } from "../build-pipeline/service.js";
 import {
@@ -36,7 +36,7 @@ import {
 import { ControlMcpServer, readControlMcpDescriptor } from "../control-mcp/server.js";
 import { rpc } from "../control-mcp/server-test-support.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "../control-mcp/tools.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 import { graphRunFixture } from "../graph-run-test-support.js";
 import { coordinatorEnvironmentRefusals } from "./environment-refusals.js";
 

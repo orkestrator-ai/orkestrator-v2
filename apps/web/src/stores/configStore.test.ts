@@ -8,7 +8,7 @@ import { requestResourceResync } from "@/lib/resource-sync";
 import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import { configStore, effectiveConfig, runScopedConfigCommand } from "./configStore";
-import { defaultConfig } from "../../../backend/src/core/storage";
+import { defaultConfig } from "../../../backend/src/core/storage/service";
 import type { AppConfig, GlobalConfig, RepositoryConfig } from "../types";
 import { DEFAULT_AGENT_MESSAGING_SETTINGS } from "@orkestrator/protocol/agent-mail";
 import { appCommandStore } from "@/test/app-command-store";

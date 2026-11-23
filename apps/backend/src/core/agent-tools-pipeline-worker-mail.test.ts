@@ -21,7 +21,7 @@ import {
   pipelineSnapshot,
   stageSession,
 } from "./build-pipeline/pipeline-worker-mail-test-support.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/service.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 
 type RpcBody = {

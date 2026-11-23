@@ -71,7 +71,7 @@ import {
   graphStorageHash,
   type GraphArtifactUsage,
   type GraphRunsStorage,
-} from "./storage-graph-runs.js";
+} from "./storage/index.js";
 
 /** Why an artifact could not be handed to a consumer. */
 export type GraphArtifactVerificationCode =

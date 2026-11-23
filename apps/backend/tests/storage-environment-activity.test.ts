@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { createEnvironment, StorageService } from "../src/core/storage";
-import { readStoredValue, seedStore } from "../src/core/storage-test-support";
+import { createEnvironment, StorageService } from "../src/core/storage/service";
+import { readStoredValue, seedStore } from "../src/core/storage/test-support";
 import { createTempDir, removeTempDirs } from "./storage-test-helpers";
 
 afterEach(removeTempDirs);

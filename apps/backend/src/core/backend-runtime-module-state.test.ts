@@ -27,8 +27,8 @@ import {
   type EnsureProjectHomeResult,
   type ProjectHomeDependencies,
 } from "./project-home-environment.js";
-import { createEnvironment } from "./storage-shared-core.js";
-import type { StorageService } from "./storage.js";
+import { createEnvironment } from "./storage/shared-core.js";
+import type { StorageService } from "./storage/service.js";
 
 /**
  * Two backends in one process do not share the module state #1525 moved

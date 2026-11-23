@@ -10,7 +10,7 @@ import { createLocalWorktree } from "../commands-environment.js";
 import { assertForkCommitUsable } from "../commands-environment-fork.js";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
 import { ProjectGitService } from "../project-git-service.js";
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 import { runCommand } from "../shell.js";
 import { runRemoteGit } from "./noninteractive-env.js";
 

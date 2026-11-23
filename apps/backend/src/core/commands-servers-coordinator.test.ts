@@ -21,7 +21,7 @@ import { stopLocalServerUnlocked } from "./commands-local-server-lifecycle.js";
 import { defaultCoordinatorHostCapabilities } from "./coordinator/providers.js";
 import { CoordinatorService } from "./coordinator/service.js";
 import { startLocalServerUnlocked } from "./commands-servers.js";
-import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 import { runCommand } from "./shell.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
 

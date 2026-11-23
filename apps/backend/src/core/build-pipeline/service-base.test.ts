@@ -20,7 +20,7 @@ import {
 
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 import { BuildPipelineService } from "./service.js";
 

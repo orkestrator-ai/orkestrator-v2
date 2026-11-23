@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 /** The persisted agent-mail store, as far as these tests edit it. */
 export type StoredMail = {

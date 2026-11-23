@@ -11,7 +11,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { AgentMailNotice } from "@orkestrator/protocol/agent-mail";
 import { noticeText } from "@orkestrator/protocol/coordinator-notices";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("agent-accounts");

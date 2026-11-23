@@ -9,8 +9,8 @@ import {
   PR_CLOSED_COMMENT,
   PR_MERGED_COMMENT,
 } from "./kanban-merge-closure.js";
-import type { KanbanTask } from "./storage-shared.js";
-import { StorageService } from "./storage.js";
+import type { KanbanTask } from "./storage/shared.js";
+import { StorageService } from "./storage/service.js";
 
 const PR1 = "https://github.com/org/repo/pull/1";
 const PR2 = "https://github.com/org/repo/pull/2";

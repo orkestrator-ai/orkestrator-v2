@@ -3,7 +3,7 @@ import {
   isTerminalFeaturePlanningPhase,
   type FeaturePlanningRecord,
 } from "@orkestrator/protocol/feature-planning";
-import type { KanbanStorage } from "../storage.js";
+import type { KanbanStorage } from "../storage/index.js";
 import type { WorkflowDiscoveryResult } from "../workflows/index.js";
 
 /**

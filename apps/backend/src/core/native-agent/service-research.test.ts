@@ -11,8 +11,8 @@ import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agen
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./service.js";
 import type { NativeAgentRuntimeProvider } from "./provider.js";
 import { resolveNativeAgentExecutionPolicy } from "./execution-policy.js";
-import { createProject, StorageService } from "../storage.js";
-import { seedStore } from "../storage-test-support.js";
+import { createProject, StorageService } from "../storage/service.js";
+import { seedStore } from "../storage/test-support.js";
 
 for (const agent of ["codex", "opencode"] as const) {
   test(`${agent} continues a legacy coordinator through research changes and restart`, async () => {

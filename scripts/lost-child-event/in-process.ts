@@ -46,7 +46,7 @@ import {
   headCommit,
 } from "../../apps/backend/src/core/public-api/test-support";
 import * as shell from "../../apps/backend/src/core/shell";
-import { createEnvironment } from "../../apps/backend/src/core/storage";
+import { createEnvironment } from "../../apps/backend/src/core/storage/service";
 import * as watchHost from "../../apps/backend/src/core/watch-host";
 
 // Loaded as test 1's file loads them, though the cut test no longer calls them.

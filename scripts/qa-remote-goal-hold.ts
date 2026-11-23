@@ -55,7 +55,7 @@ import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { MailWorld } from "../apps/backend/src/core/agent-mail-world-test-support.ts";
 import { nativeAgentSessionStorageKey } from "../apps/backend/src/core/native-agent/service-shared.ts";
 import { NodeCoordinatorRemote } from "../apps/backend/src/core/nodes/node-coordinator-remote.ts";
-import { StorageService } from "../apps/backend/src/core/storage.ts";
+import { StorageService } from "../apps/backend/src/core/storage/service.ts";
 import { WorkerTabCloseAdmission } from "../apps/backend/src/core/worker-tab-close-admission.ts";
 import { PairFixtures } from "./two-node/fixtures.ts";
 import {

@@ -25,7 +25,7 @@
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { Environment, KanbanTask, PersistedBuildPipeline } from "../storage-shared.js";
+import type { Environment, KanbanTask, PersistedBuildPipeline } from "../storage/index.js";
 
 const log = createLogger("build-pipeline");
 

@@ -11,7 +11,7 @@ import {
   artifactError,
   type ArtifactToolName,
 } from "@orkestrator/protocol/transcript-artifacts";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type {
   ArtifactContentServer,
   InteractivePreparer,

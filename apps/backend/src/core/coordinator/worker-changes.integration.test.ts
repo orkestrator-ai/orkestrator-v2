@@ -6,7 +6,7 @@ import { createGitFetchScheduler } from "../diff-stats-tracking.js";
 import { getLocalGitStatusDetailed } from "../commands-files.js";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 
 /** A real worker checkout measured by change tracking, and the controller read over it. */
 async function withWorker(

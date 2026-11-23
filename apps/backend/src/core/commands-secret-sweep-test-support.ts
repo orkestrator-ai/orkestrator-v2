@@ -116,8 +116,8 @@ async function main(root: string, resultFile: string): Promise<void> {
   }) as unknown as typeof fetch;
 
   const { createCommandRegistry } = await import("./commands.js");
-  const { StorageService, createProject } = await import("./storage.js");
-  const { createEnvironment } = await import("./storage-shared-core.js");
+  const { StorageService, createProject } = await import("./storage/service.js");
+  const { createEnvironment } = await import("./storage/shared-core.js");
   const { EnvironmentLifecycleTaskTracker } = await import("./environments/lifecycle-tasks.js");
   const { BackendRuntime } = await import("./backend-runtime.js");
 

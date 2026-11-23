@@ -4,8 +4,8 @@ import type { MailboxPresence } from "@orkestrator/protocol/agent-mail";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { AgentMailService } from "./agent-mail-service.js";
 import { fixture } from "./agent-mail-service-test-support.js";
-import { AGENT_MAIL_HELD_BACKOFF_MAX_MS } from "./storage-agent-mail-injects.js";
-import type { StorageService } from "./storage.js";
+import { AGENT_MAIL_HELD_BACKOFF_MAX_MS } from "./storage/agent-mail-injects.js";
+import type { StorageService } from "./storage/service.js";
 
 /*
  * A Claude CLI still running background work refuses a prompt (HTTP 409)

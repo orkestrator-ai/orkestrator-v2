@@ -144,7 +144,7 @@ credential reaches.
 
 A config stored before this setting existed has no value, and is migrated once
 to what its containers were already getting: `host-cli` if it used the host
-login, `pat` if not (`storage-shared-config.ts`). Absent in memory means `none`.
+login, `pat` if not (`storage/shared-config.ts`). Absent in memory means `none`.
 A value that is present but unknown also means `none`.
 
 Without a credential a container reaches public repositories only. Private

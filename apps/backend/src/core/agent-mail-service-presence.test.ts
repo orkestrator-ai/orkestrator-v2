@@ -8,7 +8,7 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import { AgentMailService } from "./agent-mail-service.js";
 import { fixture, replaceRecipientTab } from "./agent-mail-service-test-support.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/service.js";
 
 /**
  * A presence refresh skips the per-mailbox reads of an environment that is not

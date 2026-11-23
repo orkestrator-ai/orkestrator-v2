@@ -1,6 +1,6 @@
 import path from "node:path";
 import { actionHash } from "./coordinator/action-scope.js";
-import { readStoredValue, seedStore, upgradedLaunchReceipt } from "./storage-test-support.js";
+import { readStoredValue, seedStore, upgradedLaunchReceipt } from "./storage/test-support.js";
 /**
  * A coordinator acting on a node it controls, over the real coordinator
  * store: receipts, associations and delegations are kept here with the

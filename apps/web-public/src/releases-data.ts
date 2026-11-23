@@ -51,6 +51,31 @@ export function releaseNotesUrl(release: Pick<ReleaseSummary, "tag">): string {
 
 export const RELEASES: readonly ReleaseSummary[] = [
   {
+    version: "2.39.12-beta",
+    tag: "v2.39.12-beta",
+    date: "2026-11-23",
+    channel: "beta",
+    intro: "Changes since 2.39.11-beta.",
+    new: [
+      "Antigravity joins the agent platforms you can chat with in an environment.",
+      "Build pipeline stages can hand slow checks to the pipeline, so long test suites finish instead of being cut off by the stage's time limit.",
+      "Dropping a folder onto the files panel copies the whole folder.",
+    ],
+    improved: [
+      "Address Findings in Multi Review also fixes failed validation.",
+      "Review marks a failing test as pre-existing when it also fails on the branch your work started from.",
+      "A build pipeline never opens a pull request that conflicts with its base branch; it merges and resolves the conflicts first.",
+      "An environment created with an opening prompt shows its agent tab straight away while setup runs.",
+      "Cmd/Ctrl+Enter submits the Design workspace dialog.",
+    ],
+    fixed: [
+      "Claude sessions no longer refuse every prompt after you sign in to GitHub again while background work is running.",
+      "Agent results with a stray closing bracket are repaired instead of refused.",
+      "Repository headings in the sidebar line up with their environment rows.",
+      "Health reports tell a computer restart apart from a backend crash, and record why the backend stopped unexpectedly.",
+    ],
+  },
+  {
     version: "2.39.11-beta",
     tag: "v2.39.11-beta",
     date: "2026-11-20",
@@ -150,30 +175,6 @@ export const RELEASES: readonly ReleaseSummary[] = [
       "Commands that keep running after an agent's turn ends are shown as left running instead of stuck.",
       "File watching keeps working when a worktree contains folders it cannot read, and deleting an environment is quicker.",
       "Projects whose checkout is on another machine show the right status, and new environments are created on the right machine.",
-    ],
-  },
-  {
-    version: "2.37.3-beta",
-    tag: "v2.37.3-beta",
-    date: "2026-11-09",
-    channel: "beta",
-    intro: "Changes since 2.37.1-beta.",
-    new: [
-      "Each project has a Scheduling tab where you create, edit and reuse schedules, including ones that run on another machine.",
-      "An opt-in setting runs new OpenCode sessions on OpenCode 2, alongside the current version, on your computer and in containers.",
-      "Queued messages keep their attachments when they are sent after a turn, and keep them when you edit the message.",
-      "A signed-out agent account can be signed in again right where it is listed.",
-    ],
-    improved: [
-      "The coordinator's Actions panel can be collapsed and remembers that per project, the chat moves aside when the panel is docked, and the composer explains the @ and ! shortcuts.",
-      "Review views adapt to the window size and keep your reading position when the layout changes.",
-      "Jumping to an item in a transcript briefly highlights it.",
-    ],
-    fixed: [
-      "When a local environment cannot reach its Git remote over SSH, Orkestrator offers to switch it to HTTPS.",
-      "On Linux, file watching recovers after a folder is deleted and recreated.",
-      "Notices at the bottom of the chat no longer cover the end of the transcript.",
-      "Auto-pipeline launches are more reliable, keep your draft edits and open agent tabs in the right environment.",
     ],
   },
 ];

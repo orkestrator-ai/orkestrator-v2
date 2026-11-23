@@ -908,12 +908,13 @@ describe("AgentMailService", () => {
           body: "Deliver on the next idle sweep.",
         },
       );
+      let presence: "idle" | "working" = "idle";
       service = new AgentMailService(
         storage,
         {
           reconcileMailInject: async () => "unknown",
-          sessionActivitySnapshot: () => "idle",
-          mailInjectPresence: async () => "idle",
+          sessionActivitySnapshot: () => presence,
+          mailInjectPresence: async () => presence,
           dispatchMailInject: async (input) => {
             dispatches += 1;
             return dispatches === 1
@@ -924,9 +925,16 @@ describe("AgentMailService", () => {
         { dispatchMailInject: async () => ({ outcome: "accepted" }) },
       );
       await service.init();
+      // The gate saw a turn start after presence last read idle.
       await service.drainInjects();
       expect(await storage.listPendingAgentMailInjects()).toEqual([]);
 
+      presence = "working";
+      await service.drainInjects();
+      expect(dispatches).toBe(1);
+
+      // The turn ends: the next pass delivers without waiting out the backoff.
+      presence = "idle";
       await service.drainInjects();
       expect(dispatches).toBe(2);
       expect(await storage.getAgentMailMessage("recipient", "agent", message.id)).toMatchObject({

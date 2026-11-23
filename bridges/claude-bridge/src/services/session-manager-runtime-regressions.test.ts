@@ -240,36 +240,67 @@ describe("retained launch configuration", () => {
     await firstPrompt;
   });
 
-  test.each(["token-B", ""])(
-    "credential rotation or clearing is refused (%s)",
-    async (nextToken) => {
-      const previous = process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE;
-      process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE = "/test/credential";
-      let token = "token-A";
-      const originalReader = mockReadFile.getMockImplementation()!;
-      mockReadFile.mockImplementation((path, ...args) =>
-        path === "/test/credential"
-          ? (Promise.resolve(token) as ReturnType<typeof originalReader>)
-          : originalReader(path, ...args),
-      );
-      try {
-        const { session, call, firstPrompt } = await releaseWithBackgroundWork("credentials");
-        token = nextToken;
-        await expect(assertClaudeRuntimeAccepts(session, undefined)).rejects.toMatchObject({
-          code: "conflict",
-        });
-        await expect(sendPrompt(session.id, "rotated")).rejects.toMatchObject({ code: "conflict" });
-        expect(JSON.stringify(session.claudeRuntime!.launch)).not.toContain("token-A");
-        expect(session.status).toBe("idle");
-        await noReplacement();
-        call.finish();
-        await firstPrompt;
-      } finally {
-        if (previous === undefined) delete process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE;
-        else process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE = previous;
-      }
-    },
-  );
+  async function withCredentialFile(run: (setToken: (next: string) => void) => Promise<void>) {
+    const previous = process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE;
+    process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE = "/test/credential";
+    let token = "token-A";
+    const originalReader = mockReadFile.getMockImplementation()!;
+    mockReadFile.mockImplementation((path, ...args) =>
+      path === "/test/credential"
+        ? (Promise.resolve(token) as ReturnType<typeof originalReader>)
+        : originalReader(path, ...args),
+    );
+    try {
+      await run((next) => {
+        token = next;
+      });
+    } finally {
+      mockReadFile.mockImplementation(originalReader);
+      if (previous === undefined) delete process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE;
+      else process.env.ORKESTRATOR_GITHUB_CREDENTIAL_FILE = previous;
+    }
+  }
+
+  test("clearing the GitHub credential is refused, naming the sign-in", async () => {
+    await withCredentialFile(async (setToken) => {
+      const { session, call, firstPrompt } = await releaseWithBackgroundWork("credentials");
+      setToken("");
+      await expect(assertClaudeRuntimeAccepts(session, undefined)).rejects.toMatchObject({
+        code: "conflict",
+        message: expect.stringContaining("GitHub sign-in"),
+      });
+      await expect(sendPrompt(session.id, "cleared")).rejects.toMatchObject({
+        code: "conflict",
+        message: expect.stringContaining("still running background work"),
+      });
+      expect(JSON.stringify(session.claudeRuntime!.launch)).not.toContain("token-A");
+      expect(session.status).toBe("idle");
+      await noReplacement();
+      call.finish();
+      await firstPrompt;
+    });
+  });
+
+  // A `gh auth login` while a coordinator watched a pipeline refused every
+  // prompt and mail for hours: the background work already runs on the old
+  // token, so the prompt joins it rather than waiting the work out.
+  test("a rotated GitHub token joins the CLI that owes work, which keeps its launch token", async () => {
+    await withCredentialFile(async (setToken) => {
+      const { session, call, input, firstPrompt } = await releaseWithBackgroundWork("rotation");
+      const runtime = session.claudeRuntime!;
+      expect(call.options.env?.GH_TOKEN).toBe("token-A");
+      setToken("token-B");
+      await assertClaudeRuntimeAccepts(session, undefined);
+      const secondPrompt = sendPrompt(session.id, "rotated");
+      expect((await input.next()).done).toBe(false);
+      await firstPrompt;
+      await noReplacement();
+      expect(session.claudeRuntime).toBe(runtime);
+      expect(JSON.stringify(runtime.launch)).not.toContain("token-");
+      call.finish();
+      await secondPrompt.catch(() => undefined);
+    });
+  });
 });
 
 describe("join setup", () => {

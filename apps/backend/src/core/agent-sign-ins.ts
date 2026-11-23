@@ -148,6 +148,10 @@ export async function readHostAgentSignIns(
 const SIGN_IN_COMMANDS: Record<HostSignInPlatform, string> = {
   grok: "grok login",
   pi: "pi",
+  // agy's own ACP terminal sign-in ("Log in with Google interactively, then
+  // exit"), the login the bridge's sessions then use. Auto-update stays off,
+  // as it is for the bridge's children, so the pinned binary is the one run.
+  antigravity: "AGY_CLI_DISABLE_AUTO_UPDATE=1 agy acp --login",
 };
 
 /** The same readiness `launch_terminal_job` requires before it opens a terminal. */
@@ -189,7 +193,7 @@ export async function openAgentSignInTerminal(
       "Start a local environment on this machine first: the sign-in runs in one of its terminals.",
     );
   }
-  const label = platform === "grok" ? "Grok" : "Pi";
+  const label = platform === "grok" ? "Grok" : platform === "pi" ? "Pi" : "Antigravity";
   const { tabId } = await options.launchTerminalJob({
     environmentId: environment.id,
     requestId: `agent-sign-in-${platform}-${Date.now()}`,

@@ -114,7 +114,16 @@ const SIGNALS = new Set([
   "SIGXCPU",
   "SIGXFSZ",
 ]);
-const PROVIDERS = new Set(["claude", "codex", "opencode", "cursor", "grok", "acp", "pi"]);
+const PROVIDERS = new Set([
+  "claude",
+  "codex",
+  "opencode",
+  "cursor",
+  "grok",
+  "acp",
+  "pi",
+  "antigravity",
+]);
 /** `containers/bridge-listener.ts`'s refusal reasons. */
 const BRIDGE_LISTENER_REASONS = new Set([
   "different-socket",
@@ -149,7 +158,10 @@ const CLAUDE_API_ERRORS = new Set([
   "cloud_credential_error",
 ]);
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const SOURCE = new RegExp(`^(?:claude|codex|opencode|cursor|grok|acp|pi):${UUID}$`, "i");
+const SOURCE = new RegExp(
+  `^(?:claude|codex|opencode|cursor|grok|acp|pi|antigravity):${UUID}$`,
+  "i",
+);
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 /**
  * An app version as releases name it (`hostUpdateChannelOfVersion`): a bare

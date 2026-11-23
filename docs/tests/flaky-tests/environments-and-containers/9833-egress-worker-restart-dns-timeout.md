@@ -35,3 +35,16 @@ The original failure remains at
 No assertion, timeout or skip was changed to obtain the pass. The optional
 older-image case was not enabled. Both runs used suite-owned resources and
 completed their cleanup.
+
+## Recurrence: Container live qualification on pull request #2541 (2026-11-23)
+
+Run 45175338998, job "Live suites (linux-x64)", head `297c7b885` (merged
+with `main` at `d14e326bd`), step "Live egress name checks (M12)". The case
+failed at `container-live-egress-filter.test.ts:518`, the first `dig` after
+the worker restart: it expected `status: REFUSED` and received
+`;; no servers could be reached`. The other four M12 cases passed. The same
+step passed on this pull request's previous run (45091972830, head
+`f1dee962c`) and on the run for #2543 (45092486300). The branch's only
+change under `docker/` adds the Antigravity CLI to `docker/Dockerfile`; it
+does not touch the gateway or the egress filter. `mise run flaky:recurrence -- 9833`
+reported the case open.

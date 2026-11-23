@@ -99,6 +99,9 @@ const PERMISSION_CANCELLATION_CATEGORIES = new Set(["PermissionRejected", "Permi
  * continued on the bridge's own refusal record.
  */
 function endedOnPolicyRefusal(state: SessionState, result: unknown, deniedBefore: number): boolean {
+  // Grok's ending a turn on a refusal was observed and qualified; how
+  // Antigravity ends one has not been, so its turn is never continued.
+  if (provider === "antigravity") return false;
   if ((state.policyDeniedRequests ?? 0) <= deniedBefore) return false;
   const meta = (result as { _meta?: unknown })._meta;
   const category =

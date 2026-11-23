@@ -109,6 +109,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
       "prompt.provider-refused":
         "A prompt turn ended because Claude refused it on the account's or the service's state; `reason` is the SDK's API error code and the session reports the error.",
       "prompt.received": "A prompt reached the bridge; only its length is logged.",
+      "prompt.refused":
+        "The session refused a prompt with 409 conflict (busy with background work, or a claim held elsewhere); the caller may retry.",
       "prompt.send-failed": "A prompt request failed; the route answered with an error.",
       "prompt.usage-limited":
         "A prompt turn ended because the account's plan allowance is used up; the session reports the limit.",
@@ -146,6 +148,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
         "A prompt joined a running CLI and re-read the requests it still waits on; outcome is read, unsupported, timeout, failed or skipped.",
       "runtime.ended-under-resumed-turn":
         "The Claude runtime ended while a resumed root turn was still open.",
+      "runtime.github-token-rotation-deferred":
+        "A prompt joined a CLI still running background work after the GitHub token rotated; the CLI keeps the token it launched with until it is next replaced.",
       "server.listening": "The HTTP server is listening.",
       "server.starting": "The HTTP server is about to bind.",
       "session.compact-failed": "A requested compaction failed.",

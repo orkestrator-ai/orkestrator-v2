@@ -55,6 +55,7 @@ const CRITICAL: Record<string, readonly string[]> = {
   write_container_file: ["expected"],
   rename_local_file: ["expectedKind"],
   rename_container_file: ["expectedKind"],
+  import_external_entry: ["target"],
   delete_container_annotation_evidence: ["digest"],
   claude_tmux_answer_selection_prompt: [
     "expectedGeneration",
@@ -64,9 +65,9 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("terminals, files and claude-tmux definitions", () => {
-  it("define 27, 30 and 29 commands, each since version 1 of its domain or added in 2", () => {
+  it("define 27, 31 and 29 commands, each since version 1 of its domain or added in 2", () => {
     expect(TERMINALS_COMMANDS).toHaveLength(27);
-    expect(FILES_COMMANDS).toHaveLength(30);
+    expect(FILES_COMMANDS).toHaveLength(31);
     expect(CLAUDE_TMUX_COMMANDS).toHaveLength(29);
     expect(new Set(ALL.map((def) => def.name)).size).toBe(ALL.length);
     for (const def of ALL) {

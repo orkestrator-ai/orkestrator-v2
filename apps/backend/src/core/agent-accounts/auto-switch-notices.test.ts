@@ -131,4 +131,15 @@ describe("who the notice skips", () => {
     await mailAutoSwitchNotice(storageWith(send), NOTICE, "leaf", { requireDelivery: true });
     expect(send).toHaveBeenCalledTimes(2);
   });
+
+  test("a switch already placed in other words was delivered, so a retry resolves", async () => {
+    const send = mock(async () => {
+      throw new AgentMailError(
+        "idempotency-conflict",
+        "requestId was already used with different content",
+      );
+    });
+    await mailAutoSwitchNotice(storageWith(send), NOTICE, "leaf", { requireDelivery: true });
+    expect(send).toHaveBeenCalledTimes(2);
+  });
 });

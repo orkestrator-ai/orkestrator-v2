@@ -113,6 +113,7 @@ import { readBridgeResumableSessions } from "./resumable-sessions.js";
 import { readBridgeSessionBranches, switchBridgeSessionBranch } from "./session-branches.js";
 import { readBridgeHumanPrompts } from "./human-prompts.js";
 import { HttpBridgeSteerQualification } from "./steer-qualification.js";
+import { isAcpBridgeAgent, servesSharedBridgeSurface } from "./bridge-agents.js";
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   readonly agent: HttpBridgeAgent;
@@ -170,7 +171,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     this.activityBatchReader = new HttpBridgeActivityBatchReader(connection, fetchImpl);
     this.changeEvidenceSource = bridgeChangeEvidenceSource(connection, fetchImpl);
     this.interactions = this.interactionAdapter;
-    if (this.agent === "grok") {
+    if (isAcpBridgeAgent(this.agent)) {
       this.turnTerminalError = (sessionId, requestId) =>
         readAcpTurnTerminalError(connection, fetchImpl, sessionId, requestId);
     }
@@ -237,7 +238,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 agentMcp: options.agentMcp,
                 policy: this.wirePolicy(options.policy),
               }
-            : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
+            : servesSharedBridgeSurface(this.agent)
               ? {
                   title: label,
                   clientSessionKey,
@@ -277,7 +278,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     sessionId: string,
     options: { agentMcp?: ProviderSendOptions["agentMcp"]; workflowResultTool?: string } = {},
   ): Promise<void> {
-    if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") return;
+    if (!servesSharedBridgeSurface(this.agent)) return;
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/attach`,
@@ -630,7 +631,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       // the foreground path while a bounded refresh runs for every bridge.
       void this.refreshRuntimeMetadata(sessionId);
     }
-    if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
+    if (servesSharedBridgeSurface(this.agent)) {
       const [response, transcript, health, bridgeQueue] = await Promise.all([
         bridgeFetch(
           this.connection,
@@ -1048,7 +1049,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       if (outcome?.durable) this.codexModes.set(sessionId, outcome.mode);
       return undefined;
     }
-    if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") {
+    if (!servesSharedBridgeSurface(this.agent)) {
       return undefined;
     }
     const response = await bridgeFetch(
@@ -1195,7 +1196,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     policy?: NativeAgentExecutionPolicy,
   ): Promise<string> {
     const parameterValues = withoutRetiredParameterValues(this.agent, controls?.parameterValues);
-    if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
+    if (servesSharedBridgeSurface(this.agent)) {
       const response = await bridgeFetch(
         this.connection,
         "/session/resume",
@@ -1306,7 +1307,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   ): Promise<NativeAgentSessionActionOutcome> {
     // The ACP bridge serves only `compact`, by running the agent's own
     // `/compact` (422 `command-unavailable` when the agent offers none).
-    if (this.agent === "grok" && action.kind !== "compact") {
+    if (isAcpBridgeAgent(this.agent) && action.kind !== "compact") {
       throw new PromptRejectedError(`${this.agent} does not support ${action.kind}`);
     }
     const base = `/session/${encodeURIComponent(sessionId)}`;

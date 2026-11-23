@@ -47,6 +47,7 @@ describe("enforcement tiers", () => {
 
   test("reproduces the coordinator's tiers for the coordinator policy", () => {
     expect(tiers(coordinatorEnforcementPolicy(), sandboxed)).toEqual({
+      antigravity: "advisory",
       claude: "enforced",
       codex: "enforced",
       cursor: "provider-configured",
@@ -150,6 +151,7 @@ describe("enforcement tiers", () => {
       },
     };
     expect(tiers(offline)).toEqual({
+      antigravity: "advisory",
       claude: "provider-configured",
       codex: "provider-configured",
       cursor: "provider-configured",
@@ -185,12 +187,12 @@ describe("enforcement tiers", () => {
     ]);
   });
 
-  test("the matrix and the floor filter agree, and the default floor hides Grok (D4)", () => {
+  test("the matrix and the floor filter agree, and the default floor hides Grok (D4) and Antigravity", () => {
     const policy = profilePolicy("reviewer");
     const matrix = agentPolicyEnforcementMatrix(policy, sandboxed);
     expect(Object.keys(matrix)).toEqual([...AGENT_PLATFORMS]);
     expect(agentPlatformsMeetingFloor(policy, "provider-configured", sandboxed)).toEqual(
-      AGENT_PLATFORMS.filter((platform) => platform !== "grok"),
+      AGENT_PLATFORMS.filter((platform) => platform !== "grok" && platform !== "antigravity"),
     );
     expect(agentPlatformsMeetingFloor(policy, "enforced", unsandboxed)).toEqual(["codex", "pi"]);
     for (const profile of GRAPH_CAPABILITY_PROFILES) {
@@ -235,6 +237,7 @@ describe("user MCP selection axis (item 404)", () => {
     expect(
       Object.fromEntries(Object.entries(mcp).map(([platform, axis]) => [platform, axis?.tier])),
     ).toEqual({
+      antigravity: "advisory",
       claude: "provider-configured",
       codex: "provider-configured",
       cursor: "provider-configured",

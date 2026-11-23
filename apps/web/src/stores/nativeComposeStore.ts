@@ -116,6 +116,7 @@ const VALID_AGENT_PLATFORMS = new Set<AgentPlatform>([
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ]);
 
 const DRAFT_METADATA_CACHE = new WeakMap<NativeComposeDraft, Readonly<Record<string, unknown>>>();

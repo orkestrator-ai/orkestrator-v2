@@ -23,6 +23,7 @@ const log = createLogger("agent-accounts");
  * one. Mail that is turned off or refused for one coordinator does not stop the
  * others hearing, unless `requireDelivery` asks for a failure to be raised so the
  * sender can try again. A full mailbox is never raised: retrying cannot help.
+ * Nor is a request id already used for this switch: it was delivered.
  */
 export async function mailAutoSwitchNotice(
   storage: Pick<StorageService, "sendAgentMail"> & {
@@ -97,6 +98,11 @@ export async function mailAutoSwitchNotice(
           },
         )
         .catch((error: unknown) => {
+          // The request id names this switch for this coordinator, so a conflict
+          // means it was already placed, in words an earlier build rendered
+          // differently. It was delivered: raising it kept a leaf's notice in
+          // the outbox, conflicting on every collect, for good.
+          if (error instanceof AgentMailError && error.code === "idempotency-conflict") return;
           // A mailbox full of mail that needs an answer will not take awareness
           // on a retry either. Raising it kept the leaf's notice in its outbox
           // and retried it, and every switch after it, for good.

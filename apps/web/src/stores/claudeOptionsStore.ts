@@ -2,7 +2,7 @@ import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachme
 import { defineScopedStore } from "@/lib/node-scope/scoped-store";
 import { scopedStoreHook } from "@/lib/node-scope/scoped-store";
 
-export type AgentType = "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi";
+export type AgentType = "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "antigravity";
 
 export interface ClaudeOptions {
   launchAgent: boolean;

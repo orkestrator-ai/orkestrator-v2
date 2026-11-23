@@ -272,11 +272,13 @@ export function DraggableTab({
             ? "Cursor"
             : nativeAgentData?.platform === "grok"
               ? "Grok"
-              : nativeAgentData?.platform === "codex"
-                ? "Codex"
-                : nativeAgentData?.platform === "claude"
-                  ? "Claude"
-                  : "Agent";
+              : nativeAgentData?.platform === "antigravity"
+                ? "Antigravity"
+                : nativeAgentData?.platform === "codex"
+                  ? "Codex"
+                  : nativeAgentData?.platform === "claude"
+                    ? "Claude"
+                    : "Agent";
       return `${label} ${tabNumber}`;
     }
 

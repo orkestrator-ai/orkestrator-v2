@@ -26,6 +26,7 @@ export const REPOSITORY_BRIDGES: Readonly<Record<string, string>> = Object.freez
   pi: "pi-bridge",
   cursor: "cursor-bridge",
   grok: "acp-bridge",
+  antigravity: "acp-bridge",
 });
 
 const PACKAGED_BRIDGES = ["claude-bridge", "codex-bridge"] as const;

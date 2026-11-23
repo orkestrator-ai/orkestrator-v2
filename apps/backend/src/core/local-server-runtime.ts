@@ -15,9 +15,13 @@ import { createLogger } from "@orkestrator/protocol/logger";
 const log = createLogger("local-server");
 const BACKEND_SHUTTING_DOWN = "backend shutting down";
 
-export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
-/** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
-export type AcpLocalServerKind = Extract<LocalServerKind, "grok">;
+export type LocalServerKind =
+  "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity";
+/**
+ * The ACP-speaking subset of `LocalServerKind`, launched through the ACP
+ * bridge (`acp-provider-launch.ts`). Each runs its own bridge process.
+ */
+export type AcpLocalServerKind = Extract<LocalServerKind, "grok" | "antigravity">;
 
 export const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = [
   "opencode",
@@ -26,6 +30,7 @@ export const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = [
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ];
 
 /**

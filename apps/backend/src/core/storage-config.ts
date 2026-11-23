@@ -604,7 +604,7 @@ export class ConfigRepository {
 
   /** `StorageService`'s overloads pair each agent with its model type. */
   async cacheAgentModelCatalog(
-    agent: "claude" | "codex" | "cursor" | "grok" | "pi",
+    agent: "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity",
     models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[] | AgentModel[],
   ): Promise<AgentModelCatalogCache> {
     const normalizedModels =

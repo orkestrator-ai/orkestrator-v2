@@ -163,6 +163,7 @@ export const STARTUP_AGENT_TAB_TYPES: Record<TabType, boolean> = {
   cursor: true,
   grok: true,
   pi: true,
+  antigravity: true,
   // Not startup agents: pipeline/review surfaces and non-agent tabs.
   "claude-build": false,
   "key-information": false,

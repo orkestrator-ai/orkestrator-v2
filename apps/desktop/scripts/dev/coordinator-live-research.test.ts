@@ -30,7 +30,7 @@ const servers = [{ name: "context7", url: "https://mcp.context7.com/mcp" }];
 
 /** How each platform's transcript shows a call to Context7's resolve tool. */
 const RESOLVE_ROW: Record<
-  Exclude<AgentPlatform, "grok">,
+  Exclude<AgentPlatform, "grok" | "antigravity">,
   { toolName: string; toolTitle?: string }
 > = {
   claude: { toolName: "mcp__context7__resolve-library-id" },
@@ -73,14 +73,19 @@ describe("research scenario", () => {
     expect(prompt).toContain(RESEARCH_REPORT_MARKER);
   });
 
-  test("every platform says how its research rows are attributed, and only Grok has none", () => {
+  test("every platform says how its research rows are attributed, except for Grok and Antigravity", () => {
     expect(Object.keys(RESEARCH_TOOL_NAMING).toSorted()).toEqual([...AGENT_PLATFORMS].toSorted());
     expect(AGENT_PLATFORMS.filter((platform) => !researchApplies(platform).applies)).toEqual([
       "grok",
+      "antigravity",
     ]);
     const grok = researchApplies("grok");
     expect(grok.applies).toBe(false);
     if (!grok.applies) expect(grok.reason).toContain("no research servers");
+    expect(researchApplies("antigravity")).toMatchObject({
+      applies: false,
+      reason: "Antigravity is not qualified to run a coordinator",
+    });
   });
 
   test.each(Object.entries(RESOLVE_ROW))(

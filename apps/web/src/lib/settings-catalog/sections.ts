@@ -17,6 +17,7 @@ export const SETTINGS_SECTION_LABELS: Record<GlobalSettingsSection, string> = {
   grok: "Grok",
   opencode: "OpenCode",
   pi: "Pi",
+  antigravity: "Antigravity",
   capabilities: "Capabilities",
   skills: "Skills and plugins",
   terminal: "Terminal",

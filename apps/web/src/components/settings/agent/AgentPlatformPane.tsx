@@ -35,6 +35,7 @@ import {
 import { inheritedFrom, withPlatformField, TIER_LABELS } from "@/lib/agent-settings";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  isNativeOnlyPlatform,
   resolveAgentPlatformSettings,
   SHIPPED_PLATFORM_MODES,
   type AgentLaunchMode,
@@ -217,9 +218,11 @@ export function AgentPlatformPane({
 
   return (
     <div className="space-y-8">
-      {platform === "cursor" ? (
+      {isNativeOnlyPlatform(platform) ? (
         <SettingsSectionHeader title="Mode">
-          Cursor always runs in Native mode through its TypeScript SDK.
+          {platform === "cursor"
+            ? "Cursor always runs in Native mode through its TypeScript SDK."
+            : `${label} always runs in Native mode through its ACP server.`}
         </SettingsSectionHeader>
       ) : (
         <div data-setting-anchor={`${platform}.mode`} className="space-y-3">

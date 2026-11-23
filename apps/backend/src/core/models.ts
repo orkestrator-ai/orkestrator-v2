@@ -117,7 +117,8 @@ type StoredPortField =
   | "localCodexPort"
   | "localCursorPort"
   | "localGrokPort"
-  | "localPiPort";
+  | "localPiPort"
+  | "localAntigravityPort";
 
 /**
  * The stored environment record, backend-private: the protocol's
@@ -143,6 +144,7 @@ export interface Environment extends Omit<
   localCursorPort?: number;
   localGrokPort?: number;
   localPiPort?: number;
+  localAntigravityPort?: number;
   /** Idempotency key for an externally requested environment launch. */
   controlRequestId?: string;
   /**
@@ -197,6 +199,7 @@ export interface Environment extends Omit<
   cursorBridgePid?: number;
   grokBridgePid?: number;
   piBridgePid?: number;
+  antigravityBridgePid?: number;
   /** Last backend-owned Claude model catalog for this environment. */
   claudeModelCatalog?: ClaudeModelCatalogSnapshot;
   /** Durable cleanup work written before a tab's external resources are closed. */

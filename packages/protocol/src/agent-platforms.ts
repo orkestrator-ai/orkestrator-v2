@@ -6,6 +6,7 @@ export const AGENT_PLATFORMS = Object.freeze([
   "grok",
   "opencode",
   "pi",
+  "antigravity",
 ] as const);
 
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];
@@ -17,6 +18,7 @@ export const AGENT_PLATFORM_LABELS: Readonly<Record<AgentPlatform, string>> = Ob
   grok: "Grok Build",
   opencode: "OpenCode",
   pi: "Pi",
+  antigravity: "Antigravity",
 });
 
 /** Existing installations keep their pre-selection behavior after upgrading. */

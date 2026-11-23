@@ -657,7 +657,7 @@ describe("HTTP bridge provider", () => {
     "keeps a retryable HTTP %s dispatch refusal's reason",
     async (status) => {
       const reason =
-        "Claude is still running background work in this session, so a prompt that changes its plugins cannot start until that work finishes or is stopped";
+        "Claude can't take this message yet: the enabled Claude plugins changed since this conversation's Claude process started, and that process is still running background work. Stop the background work to continue now, or wait for it to finish.";
       const explained = httpProvider(() => Response.json({ error: reason }, { status }));
       const error = await explained.provider
         .send("session-1", "Build it", { requestId: "request-1" })
@@ -665,9 +665,8 @@ describe("HTTP bridge provider", () => {
       // Still retryable: the refusal clears once the background work ends.
       expect(error).toBeInstanceOf(ProviderUnavailableError);
       expect(error).not.toBeInstanceOf(AmbiguousPromptDispatchError);
-      expect((error as Error).message).toBe(
-        `claude prompt dispatch is temporarily unavailable (HTTP ${status}): ${reason}`,
-      );
+      // The bridge's reason alone: the person reads it as is.
+      expect((error as Error).message).toBe(reason);
 
       const bare = httpProvider(() => new Response(null, { status }));
       await expect(
@@ -716,7 +715,7 @@ describe("HTTP bridge provider", () => {
         await expect(sent).rejects.toBeInstanceOf(ProviderUnavailableError);
         await expect(sent).rejects.not.toBeInstanceOf(AmbiguousPromptDispatchError);
         await expect(sent).rejects.toMatchObject({
-          message: `claude prompt dispatch is temporarily unavailable (HTTP ${status}): ${detail}`,
+          message: detail,
         });
       }
     },

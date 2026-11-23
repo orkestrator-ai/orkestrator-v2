@@ -1544,6 +1544,8 @@ export function TerminalContainer({
         (launchModeOverride === "native" || (!launchModeOverride && codexMode === "native"));
       const shouldUseAcpNative =
         type === "cursor" ||
+        // Antigravity is native-only, like Cursor (ACP through the bridge).
+        type === "antigravity" ||
         (type === "grok" && launchModeOverride !== "cli") ||
         (type === "pi" &&
           (launchModeOverride === "native" || (!launchModeOverride && piMode === "native")));
@@ -1657,7 +1659,7 @@ export function TerminalContainer({
       }
 
       if (shouldUseAcpNative) {
-        const provider = type as "cursor" | "grok" | "pi";
+        const provider = type as "cursor" | "grok" | "pi" | "antigravity";
         const newTab = createAgentNativeTab({
           id: newTabId,
           platform: prelockNativePlatform ? provider : undefined,

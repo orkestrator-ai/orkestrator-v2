@@ -1,6 +1,6 @@
 import { projectionInternals } from "./service-test-collaborators.js";
 import { launchSelectionReport } from "../control-shared-actions.js";
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
@@ -4664,12 +4664,23 @@ describe("NativeAgentService shared observations", () => {
           await mail.drainInjects();
           await mail.drainInjects({ includeDeferred: false });
           expect(send).toHaveBeenCalledTimes(1);
-          // A deferred message is retried only once a post-dispatch sweep
-          // has read the session idle again.
+          // A deferred message is not retried before a post-dispatch sweep
+          // has read the session idle again...
           await mail.drainInjects();
           expect(send).toHaveBeenCalledTimes(1);
+          // ...nor once one has: idle is what the session read when the bridge
+          // refused it (a CLI busy with background work), so the refusal
+          // waits out its backoff instead of repeating every pass.
           await service.reconcileAgentActivity();
           await mail.drainInjects();
+          expect(send).toHaveBeenCalledTimes(1);
+          setSystemTime(new Date(Date.now() + 2_001));
+          try {
+            await service.reconcileAgentActivity();
+            await mail.drainInjects();
+          } finally {
+            setSystemTime();
+          }
           expect(send).toHaveBeenCalledTimes(2);
           await mail.drainInjects({ includeDeferred: false });
           expect(send).toHaveBeenCalledTimes(2);

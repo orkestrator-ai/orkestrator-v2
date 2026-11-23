@@ -106,8 +106,14 @@ writers on one `.jsonl`. When touching the prompt path:
   claim for the 30 s stale window (flakes 1305, 1308).
 - **Launch-only settings are refused, not ignored.** Output schema, execution
   policy, agent, settings sources, effective context beta, prompt suggestions,
-  effective Chrome access, plugins, managed credentials and tool input
-  streaming cannot change on a live CLI. Adaptive thinking
+  effective Chrome access, plugins, the GitHub sign-in (whether a token is
+  present), the model connection and tool input streaming cannot change on a
+  live CLI. A rotated GitHub token (still present, different value, as after
+  `gh auth login` or a refreshed credential file) is not refused: a prompt
+  joins a CLI that owes work, which keeps the token it launched with
+  (`claudeLaunchRotated`, logged as `runtime.github-token-rotation-deferred`),
+  and a warm CLI is retired so the next launch takes the new one. Refusing it
+  locked a coordinator watching a pipeline out for hours. Adaptive thinking
   can only reset a runtime launched in adaptive mode; bypass mode requires the
   launch capability. A prompt that changes them while the runtime still owes
   work (a live task, an owed continuation, a parked card) is a 409 before

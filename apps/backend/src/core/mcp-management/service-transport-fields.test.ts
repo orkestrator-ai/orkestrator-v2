@@ -29,6 +29,7 @@ const USER_SOURCE: Record<AgentPlatform, string> = {
   cursor: "cursor:user",
   grok: "grok:user",
   pi: "pi:user",
+  antigravity: "antigravity:injected",
 };
 
 async function addBoth(provider: AgentPlatform) {

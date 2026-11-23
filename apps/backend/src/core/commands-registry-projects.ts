@@ -677,9 +677,12 @@ export function registerProjectCommands(
       ensureAgent !== "opencode" &&
       ensureAgent !== "cursor" &&
       ensureAgent !== "grok" &&
-      ensureAgent !== "pi"
+      ensureAgent !== "pi" &&
+      ensureAgent !== "antigravity"
     ) {
-      throw new Error("ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi");
+      throw new Error(
+        "ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi, antigravity",
+      );
     }
     const environment = await storage.getEnvironment(id);
     let cache = await storage.getAgentModelCatalogCache();
@@ -776,6 +779,7 @@ export function registerProjectCommands(
         ...(cache.cursor?.models ?? []),
         ...(cache.grok?.models ?? []),
         ...(cache.pi?.models ?? []),
+        ...(cache.antigravity?.models ?? []),
       ].filter((model) => qualified.has(model.platform));
       if (!ensureAgent) return coordinatorModels;
       return {
@@ -852,7 +856,11 @@ export function registerProjectCommands(
       if (ensureAgent === "opencode") {
         openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
       }
-    } else if (!hostSeeded && ensureAgent && !cache[ensureAgent]?.models.length) {
+    } else if (
+      !hostSeeded &&
+      ensureAgent &&
+      (ensureAgent === "antigravity" || !cache[ensureAgent]?.models.length)
+    ) {
       // The empty-tab picker is the first consumer on a fresh installation, so
       // there may be neither a live bridge nor a durable last-known-good list.
       // Start only the platform the user is trying to select; eagerly starting
@@ -891,7 +899,9 @@ export function registerProjectCommands(
     }
     // Only the platform this read is trying to seed is held to the remaining
     // budget. The others are already answering from local bridge state.
-    const firstUseFetchTimeoutMs = (kind: "cursor" | "grok" | "pi"): number | undefined =>
+    const firstUseFetchTimeoutMs = (
+      kind: "cursor" | "grok" | "pi" | "antigravity",
+    ): number | undefined =>
       firstUseDeadline !== null && kind === ensureAgent
         ? firstUseCatalogFetchTimeoutMs(firstUseDeadline)
         : undefined;
@@ -942,7 +952,7 @@ export function registerProjectCommands(
         isSelectableOpenCodeModelId(model.id, openCodeModelProviders) &&
         isConnectedOpenCodeModel(model.id),
     );
-    const [cursorFetch, grokFetch, piFetch, codexFetch] = await Promise.all([
+    const [cursorFetch, grokFetch, piFetch, antigravityFetch, codexFetch] = await Promise.all([
       fetchAcpNormalizedModelsResult(
         environment,
         context,
@@ -951,6 +961,12 @@ export function registerProjectCommands(
       ),
       fetchAcpNormalizedModelsResult(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
       fetchAcpNormalizedModelsResult(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
+      fetchAcpNormalizedModelsResult(
+        environment,
+        context,
+        "antigravity",
+        firstUseFetchTimeoutMs("antigravity"),
+      ),
       codexDiscovery,
     ]);
     if (codexFetch?.status === "ok") {
@@ -969,10 +985,12 @@ export function registerProjectCommands(
     const cursorModels = cursorFetch.models;
     const grokModels = grokFetch.models;
     const piModels = piFetch.models;
+    const antigravityModels = antigravityFetch.models;
     for (const [agent, models] of [
       ["cursor", cursorModels],
       ["grok", grokModels],
       ["pi", piModels],
+      ["antigravity", antigravityModels],
     ] as const) {
       if (models.length === 0) continue;
       try {
@@ -1009,13 +1027,17 @@ export function registerProjectCommands(
       ...(cursorModels.length > 0 ? cursorModels : (cache.cursor?.models ?? [])),
       ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
       ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
+      // Only a live probe can qualify these account-scoped model IDs.
+      ...antigravityModels,
     ];
     if (!ensureAgent) return result;
     const ensuredStatus = hostSeeded
       ? seedFailed
         ? "failed"
         : "ok"
-      : { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent].status;
+      : { cursor: cursorFetch, grok: grokFetch, pi: piFetch, antigravity: antigravityFetch }[
+          ensureAgent
+        ].status;
     return {
       models: result,
       status: result.some((model) => model.platform === ensureAgent)

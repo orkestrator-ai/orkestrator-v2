@@ -72,6 +72,11 @@ export const CURSOR_BRIDGE_PORT = 4099;
 export const GROK_ACP_BRIDGE_PORT = 4100;
 export const PI_BRIDGE_PORT = 4101;
 /**
+ * Reserved for an Antigravity container bridge. Nothing publishes it yet:
+ * Antigravity runs only in local environments (`acpContainerUnavailableReason`).
+ */
+export const ANTIGRAVITY_ACP_BRIDGE_PORT = 4104;
+/**
  * The OpenCode (2.x) server inside a container (`opencode2/container-server-lifecycle.ts`).
  * Published on every new container; only an image with `opencode2` runs it.
  */

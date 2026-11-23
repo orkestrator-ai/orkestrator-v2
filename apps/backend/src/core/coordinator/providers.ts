@@ -133,7 +133,22 @@ function judge(platform: AgentPlatform, host: CoordinatorHostCapabilities): Tier
   return { tier, ...(reason ? { reason } : {}), mcpClient: true };
 }
 
+/**
+ * Platforms registered for ordinary interactive use whose coordinator
+ * boundary has not been qualified at all, whatever tier the enforcement
+ * matrix would give them. Antigravity's native tools, project resources, MCP
+ * selection, network behaviour and credential withholding have not been
+ * tested under a coordinator's read-only policy
+ * (docs/architecture/agent-engines.md, "Antigravity").
+ */
+const UNQUALIFIED_COORDINATOR_PLATFORMS: Readonly<Partial<Record<AgentPlatform, string>>> = {
+  antigravity:
+    "Antigravity is not qualified to run a coordinator: its read-only boundary has not been tested against its own tools.",
+};
+
 function qualify(platform: AgentPlatform, host: CoordinatorHostCapabilities): Qualification {
+  const unqualified = UNQUALIFIED_COORDINATOR_PLATFORMS[platform];
+  if (unqualified) return { tier: "unavailable", delegation: false, reason: unqualified };
   const { tier, reason, mcpClient } = judge(platform, host);
   const delegation = mcpClient && delegationDeliverable(platform);
   // The caveat travels with the platform rather than being discovered when a

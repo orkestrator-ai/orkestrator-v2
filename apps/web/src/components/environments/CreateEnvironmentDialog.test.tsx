@@ -1095,3 +1095,93 @@ describe("CreateEnvironmentDialog remembered Build choice", () => {
     expect(pressed("Task")).toBe("true");
   });
 });
+
+test("container and pipeline admission keep an Antigravity opening draft and use an eligible agent", async () => {
+  appCommandStore(configStore).setState({
+    config: {
+      ...baseConfig,
+      global: {
+        ...baseConfig.global,
+        enabledAgentPlatforms: ["antigravity", "claude"],
+        agentSettings: { ...baseConfig.global.agentSettings, defaultAgent: "antigravity" },
+      },
+      repositories: {
+        ...baseConfig.repositories,
+        ["ag-review"]: {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+          lastEnvironmentType: "local",
+        },
+      },
+    },
+  });
+  const onCreate = mock(async (_options: ClaudeOptions) => false);
+  const onCreateFeatureBuild = mock(async (_options: unknown) => false);
+  renderInAppCommandScope(
+    <DockerAvailabilityProvider available>
+      <CreateEnvironmentDialog
+        open
+        projectId="ag-review"
+        localEnvironmentAvailable
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />
+    </DockerAvailabilityProvider>,
+  );
+  const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+  const submit = screen.getByRole("button", { name: "Create environment" }) as HTMLButtonElement;
+  fireEvent.change(screen.getByLabelText(/Initial prompt/), {
+    target: { value: "Keep the draft" },
+  });
+  expect(picker.textContent).toContain("Antigravity");
+  fireEvent.click(screen.getByRole("button", { name: "Containerized" }));
+  expect(screen.getByText(/available in local environments only/)).toBeTruthy();
+  expect(submit.disabled).toBe(true);
+  await act(async () => fireEvent.pointerDown(picker));
+  expect(await screen.findByRole("button", { name: /^claude models/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^antigravity models/ }) === null).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: /^claude models/ }));
+  act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
+  fireEvent.click(submit);
+  await waitFor(() =>
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentType: "claude",
+        environmentType: "containerized",
+        initialPrompt: "Keep the draft",
+      }),
+    ),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Local" }));
+  await act(async () => fireEvent.pointerDown(picker));
+  fireEvent.click(await screen.findByRole("button", { name: /^antigravity models/ }));
+  act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect(picker.textContent).toContain("Antigravity");
+
+  fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
+  expect(picker.textContent).not.toContain("Antigravity");
+  expect((screen.getByLabelText(/^Description/) as HTMLTextAreaElement).value).toBe(
+    "Keep the draft",
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+  fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+  const group = screen.getByRole("group", { name: "Pipeline model customization" });
+  const reviewer = within(group).getByRole("combobox", {
+    name: "Review 1 agent, model and reasoning",
+  });
+  await act(async () => fireEvent.pointerDown(reviewer));
+  expect(await screen.findByRole("button", { name: /^claude models/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^antigravity models/ }) === null).toBe(true);
+  act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
+  fireEvent.click(submit);
+  await waitFor(() =>
+    expect(onCreateFeatureBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentType: "claude",
+        reviewers: expect.arrayContaining([expect.objectContaining({ agent: "claude" })]),
+      }),
+    ),
+  );
+});

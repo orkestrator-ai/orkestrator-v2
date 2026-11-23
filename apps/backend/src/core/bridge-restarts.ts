@@ -26,6 +26,7 @@ export const BRIDGE_RESTART_PROVIDERS = [
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ] as const;
 export type BridgeRestartProvider = (typeof BRIDGE_RESTART_PROVIDERS)[number];
 

@@ -96,6 +96,29 @@ function cursorSessionResult() {
 }
 
 describe("normalizeAcpSessionConfig", () => {
+  test("leaves Antigravity's approval-policy modes out of the conversation modes", () => {
+    const normalized = normalizeAcpSessionConfig("antigravity", {
+      modes: {
+        currentModeId: "auto",
+        availableModes: [
+          { id: "default", name: "Default" },
+          { id: "plan", name: "Plan" },
+          { id: "auto", name: "Auto" },
+          { id: "accept-edits", name: "Accept edits" },
+        ],
+      },
+    });
+    const ids = normalized.composer.modes.map((mode) => mode.id);
+    expect(ids).not.toContain("auto");
+    expect(ids).not.toContain("accept-edits");
+    expect(normalized.composer.selectedModeId).not.toBe("auto");
+    // Grok keeps whatever it announces.
+    const grok = normalizeAcpSessionConfig("grok", {
+      modes: { currentModeId: "auto", availableModes: [{ id: "auto", name: "Auto" }] },
+    });
+    expect(grok.composer.modes.map((mode) => mode.id)).toContain("auto");
+  });
+
   test("preserves an unmapped ACP mode instead of silently dropping it", () => {
     const normalized = normalizeAcpSessionConfig("grok", {
       modes: {
@@ -859,4 +882,43 @@ describe("persisted session config", () => {
       composer,
     );
   });
+});
+
+test("Antigravity maps config-only modes, masks approval modes and scopes effort to the active model", () => {
+  const select = (id: string, category: string, currentValue: string, values: string[]) => ({
+    id,
+    category,
+    currentValue,
+    type: "select",
+    options: values.map((value) => ({ value, name: value })),
+  });
+  const result = {
+    configOptions: [
+      select("vendor-mode", "mode", "default", ["default", "plan", "auto", "accept-edits"]),
+      select("model", "model", "model-a", ["model-a", "model-b"]),
+      select("a-effort", "thought_level", "medium", ["medium", "high"]),
+    ],
+  };
+  const current = normalizeAcpSessionConfig("antigravity", result);
+  expect(current.composer.modes.map(({ id }) => id)).toEqual(["build", "plan"]);
+  expect(current.composer.selectedModeId).toBe("build");
+  expect(current.composer.models[0]?.reasoning?.map(({ id }) => id)).toEqual(["medium", "high"]);
+  expect(current.composer.models[1]?.reasoning).toBeUndefined();
+  expect(planComposerApply("session", current, { mode: "plan" }, "antigravity")).toEqual([
+    {
+      method: "session/set_config_option",
+      params: { sessionId: "session", configId: "vendor-mode", value: "plan" },
+    },
+  ]);
+  expect(planComposerApply("session", current, { mode: "auto" as never }, "antigravity")).toEqual(
+    [],
+  );
+  const approvalMode = applyCurrentModeUpdate(current, "auto", "antigravity");
+  expect(approvalMode.composer.selectedModeId).toBeUndefined();
+  expect(
+    applyConfigOptionUpdate("antigravity", approvalMode, {}).composer.selectedModeId,
+  ).toBeUndefined();
+  expect(() =>
+    planComposerApply("session", current, { modelId: "removed" }, "antigravity"),
+  ).toThrow("selected Antigravity model is unavailable");
 });

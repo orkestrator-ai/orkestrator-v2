@@ -96,7 +96,7 @@ export function includeMissingOpenCodeModels(
 /** The model-catalog store fields a launcher's catalogue is built from (one node's). */
 export type ReviewCatalogModels = Pick<
   AgentModelCatalogState,
-  "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels"
+  "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels" | "antigravityModels"
 >;
 
 /**
@@ -136,6 +136,7 @@ export function buildReviewModelCatalog(models: ReviewCatalogModels): ReviewMode
   const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
   const grok = toLaunchOptions(cachedAcpCatalog.grokModels);
   const pi = toLaunchOptions(cachedAcpCatalog.piModels);
+  const antigravity = toLaunchOptions(cachedAcpCatalog.antigravityModels);
 
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,
@@ -155,6 +156,12 @@ export function buildReviewModelCatalog(models: ReviewCatalogModels): ReviewMode
       ? pi
       : [PI_DEFAULT_MODEL, ...pi],
     opencode: [{ id: "default", name: "Default", reasoningEfforts: [] }],
+    // The signed-in account's own models, as the bridge last listed them; the
+    // placeholder lets a session start on agy's default before any list exists.
+    antigravity:
+      antigravity.length > 0
+        ? antigravity
+        : [{ id: "default", name: "Antigravity default", reasoningEfforts: [] }],
   };
 }
 

@@ -4,7 +4,7 @@ import { appendFileSync, closeSync, existsSync } from "node:fs";
 export type JsonObject = Record<string, unknown>;
 
 export const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
-export const provider = process.env.ACP_PROVIDER === "grok" ? "grok" : "acp-fixture";
+export const provider = process.env.ACP_PROVIDER ?? "acp-fixture";
 
 export const genericConfig = {
   sessionId: "fake-session",

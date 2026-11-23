@@ -23,7 +23,39 @@ export function processExecutionPolicyIsCoordinator(env: NodeJS.ProcessEnv = pro
   return env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only";
 }
 
-export function coordinatorProcessPolicy(): NativeAgentExecutionPolicy {
+/**
+ * The provider this bridge process runs, from the launcher's `ACP_PROVIDER`
+ * (the backend always sets it; a bare bridge is Grok, its built-in record).
+ * Read here rather than imported from `acp-context.ts`, which imports this
+ * module.
+ */
+export function acpPolicyProviderId(env: NodeJS.ProcessEnv = process.env): string {
+  return env.ACP_PROVIDER?.trim() || "grok";
+}
+
+/**
+ * Antigravity's read-only note. agy has no qualified tool-removal lever, so a
+ * read-only Antigravity session holds only the approvals axis: every
+ * permission request is denied and the ACP client write and terminal methods
+ * are withheld, but agy's own edit and command tools are not removed.
+ */
+export const ANTIGRAVITY_READ_ONLY_NOTE =
+  "Antigravity's permission requests are denied and Orkestrator's client write and terminal methods are withheld; agy's own edit and command tools are not removed, so the read-only boundary is advisory.";
+
+export function coordinatorProcessPolicy(
+  providerId: string = acpPolicyProviderId(),
+): NativeAgentExecutionPolicy {
+  if (providerId === "antigravity") {
+    return {
+      id: "coordinator-read-only",
+      sandbox: "provider",
+      approvals: "deny",
+      projectResources: false,
+      capabilityPolicy: coordinatorCapabilityPolicy("off"),
+      networkAccess: "restricted",
+      note: ANTIGRAVITY_READ_ONLY_NOTE,
+    };
+  }
   return {
     id: "coordinator-read-only",
     sandbox: "provider",
@@ -82,7 +114,9 @@ export function acpReportedPolicy(
   if (applied.projectResources) return applied;
   return appendNativeAgentPolicyNote(
     { ...applied, projectResources: true },
-    `${agent} loads a project's own configuration by its own folder trust, whatever this session's policy says.`,
+    acpPolicyProviderId() === "antigravity"
+      ? `${agent} loads the checkout's own rules, skills and MCP servers itself; Orkestrator has not qualified a way to switch them off, whatever this session's policy says.`
+      : `${agent} loads a project's own configuration by its own folder trust, whatever this session's policy says.`,
   );
 }
 
@@ -142,6 +176,35 @@ export const FULL_ACP_CLIENT_METHOD_GRANT: AcpClientMethodGrant = Object.freeze(
  * already run under its policy (`effectiveExecutionPolicy`).
  */
 export function acpClientMethodGrant(
+  policy: NativeAgentExecutionPolicy | undefined,
+  providerId: string = acpPolicyProviderId(),
+): AcpClientMethodGrant {
+  const ceiling = Object.hasOwn(ACP_CLIENT_METHOD_CEILINGS, providerId)
+    ? ACP_CLIENT_METHOD_CEILINGS[providerId]
+    : undefined;
+  const granted = policyClientMethodGrant(policy);
+  return ceiling
+    ? {
+        writeTextFile: granted.writeTextFile && ceiling.writeTextFile,
+        terminal: granted.terminal && ceiling.terminal,
+      }
+    : granted;
+}
+
+/**
+ * The most a provider is ever granted, whatever its policy allows, keyed by
+ * provider id. Antigravity keeps its own edit and command tools: advertising
+ * `fs/write_text_file` makes agy replace its native diff edits with
+ * whole-file client writes, and a client terminal would replace its own
+ * command tool (both observed in T3's Antigravity adapter, which withholds
+ * them the same way). Withholding them is not a sandbox: agy's own tools
+ * still write and run commands under its permission requests.
+ */
+const ACP_CLIENT_METHOD_CEILINGS: Readonly<Record<string, AcpClientMethodGrant>> = {
+  antigravity: Object.freeze({ writeTextFile: false, terminal: false }),
+};
+
+function policyClientMethodGrant(
   policy: NativeAgentExecutionPolicy | undefined,
 ): AcpClientMethodGrant {
   if (!policy) return FULL_ACP_CLIENT_METHOD_GRANT;

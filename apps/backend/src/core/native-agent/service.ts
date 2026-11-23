@@ -3218,7 +3218,10 @@ export class NativeAgentService {
       },
     };
     const maxAttempts =
-      input.agent === "cursor" || input.agent === "grok" || input.agent === "pi"
+      input.agent === "cursor" ||
+      input.agent === "grok" ||
+      input.agent === "pi" ||
+      input.agent === "antigravity"
         ? ACP_SESSION_CREATE_ATTEMPTS
         : 1;
     let providerSessionId: string | undefined;

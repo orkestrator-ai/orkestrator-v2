@@ -18,6 +18,7 @@ import type { AgentSkillProvider } from "./agent-skills.js";
 import type { AgentExtensionId, ExtensionCommandRunner } from "./extension-discovery.js";
 import { dockerExec } from "./commands-container-exec.js";
 import type { AcpLocalServerKind } from "./local-server-runtime.js";
+import { ACP_TOOLCHAIN_NAMES } from "./acp-provider-launch.js";
 import type { CommandContext } from "./commands-context.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { runRemoteGit } from "./git/index.js";
@@ -397,18 +398,19 @@ export function resolvePiBinary(context: CommandContext): string {
 }
 
 /**
- * Resolve the locally launchable Grok ACP agent.
+ * Resolve the locally launchable ACP agent for `kind`: Grok's `grok` or
+ * Antigravity's `antigravity` (`agy`) toolchain entry.
  *
- * Grok never falls back to a PATH lookup. A platform enabled from Settings
+ * Neither falls back to a PATH lookup. A platform enabled from Settings
  * after startup can make `which` succeed for an executable this backend
  * generation never activated, so availability reporting and bridge startup
  * both go through the managed toolchain.
  */
 export function resolveManagedAcpBinary(
   context: CommandContext,
-  _kind: AcpLocalServerKind,
+  kind: AcpLocalServerKind,
 ): string | undefined {
-  return resolveManagedBinary(context, "grok");
+  return resolveManagedBinary(context, ACP_TOOLCHAIN_NAMES[kind]);
 }
 
 export function extensionCliName(agent: AgentExtensionId): string {

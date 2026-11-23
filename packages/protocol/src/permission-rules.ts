@@ -157,6 +157,7 @@ export const PERMISSION_RULE_PROVIDERS = [
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ] as const satisfies readonly AgentInteractionProvider[];
 const PROVIDERS = new Set<string>(PERMISSION_RULE_PROVIDERS);
 const KINDS = new Set<string>(PERMISSION_RULE_KINDS);

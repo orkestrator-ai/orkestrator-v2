@@ -13,6 +13,9 @@ export function agentTerminalSignInCommand(platform: string): string | undefined
   switch (platform) {
     case "grok":
       return "grok login";
+    // agy's own ACP terminal sign-in; the bridge's sessions use that login.
+    case "antigravity":
+      return "agy acp --login";
     case "opencode":
       return "opencode auth login";
     // Pi's login is its own interactive `/login`, which an initial message

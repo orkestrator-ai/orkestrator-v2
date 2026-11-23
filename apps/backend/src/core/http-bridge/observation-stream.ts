@@ -59,6 +59,7 @@ export const BRIDGE_OBSERVATION_STREAM_AGENTS: ReadonlySet<string> = new Set([
   "cursor",
   "pi",
   "grok",
+  "antigravity",
 ]);
 
 /** Sessions whose last frame revisions the stream remembers, to drop repeats. */

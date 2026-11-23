@@ -157,7 +157,8 @@ export function claudeNativeParameterValues(
 /**
  * What each platform does when no tier has an opinion.
  *
- * Cursor is SDK-only and therefore always native. Claude also ships native;
+ * Cursor is SDK-only and therefore always native. Antigravity has only a
+ * native (ACP) integration, so it is native too. Claude also ships native;
  * the remaining CLI-backed platforms default to terminal mode.
  */
 export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchMode>> =
@@ -168,6 +169,7 @@ export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchM
     grok: "terminal",
     opencode: "terminal",
     pi: "terminal",
+    antigravity: "native",
   });
 
 function tierPlatform(
@@ -175,6 +177,14 @@ function tierPlatform(
   platform: AgentPlatform,
 ): AgentPlatformSettings | undefined {
   return tier?.platforms?.[platform];
+}
+
+/**
+ * Platforms with no terminal mode: Cursor (SDK only) and Antigravity (ACP
+ * only). They always run native, whatever a tier stores.
+ */
+export function isNativeOnlyPlatform(platform: AgentPlatform): boolean {
+  return platform === "cursor" || platform === "antigravity";
 }
 
 /** The agent used when nothing narrower named one. */
@@ -203,10 +213,9 @@ export function resolveAgentPlatformSettings(
   const repository = tierPlatform(tiers.repository, platform);
   const global = tierPlatform(tiers.global, platform);
 
-  const mode =
-    platform === "cursor"
-      ? "native"
-      : (environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform]);
+  const mode = isNativeOnlyPlatform(platform)
+    ? "native"
+    : (environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform]);
 
   // A model id belongs to one platform's catalogue, so it only ever travels
   // down its own column. This is the rule the old repository `defaultModel`
@@ -353,7 +362,7 @@ function normalizePlatformSettings(
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
   const mode =
-    platform !== "cursor" && (record.mode === "terminal" || record.mode === "native")
+    !isNativeOnlyPlatform(platform) && (record.mode === "terminal" || record.mode === "native")
       ? record.mode
       : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : "";

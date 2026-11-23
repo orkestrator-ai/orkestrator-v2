@@ -41,6 +41,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     cursorBridgePid: _cursorBridgePid,
     grokBridgePid: _grokBridgePid,
     piBridgePid: _piBridgePid,
+    antigravityBridgePid: _antigravityBridgePid,
     tabTeardownIntents: _tabTeardownIntents,
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,

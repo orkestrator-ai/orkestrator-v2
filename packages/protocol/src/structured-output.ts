@@ -16,7 +16,8 @@ export interface StructuredOutputTurnRecord {
   accepted: boolean;
 }
 
-export type StructuredOutputProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
+export type StructuredOutputProvider =
+  "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi" | "antigravity";
 
 export type StructuredOutputFailureCode =
   "schema_retry_exhausted" | "malformed_output" | "provider_error" | "interrupted";
@@ -101,7 +102,8 @@ export function isStructuredOutputResult(value: unknown): value is StructuredOut
     result.provider !== "opencode" &&
     result.provider !== "cursor" &&
     result.provider !== "grok" &&
-    result.provider !== "pi"
+    result.provider !== "pi" &&
+    result.provider !== "antigravity"
   ) {
     return false;
   }

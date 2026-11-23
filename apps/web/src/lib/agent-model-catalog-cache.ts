@@ -10,7 +10,8 @@ import {
   type AgentModelCatalogState,
 } from "@/stores/agentModelCatalogStore";
 
-type ModelField = "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels";
+type ModelField =
+  "claudeModels" | "codexModels" | "cursorModels" | "grokModels" | "piModels" | "antigravityModels";
 type AppliedRead = {
   models: AgentModelCatalogState[ModelField];
   request: number;
@@ -97,5 +98,6 @@ export async function hydrateAgentModelCatalogCache(
     cursorModels: modelsFromCache("cursorModels", cache.cursor),
     grokModels: modelsFromCache("grokModels", cache.grok),
     piModels: modelsFromCache("piModels", cache.pi),
+    antigravityModels: modelsFromCache("antigravityModels", cache.antigravity),
   });
 }

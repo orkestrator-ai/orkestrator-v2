@@ -9,6 +9,7 @@ import {
 } from "../agent-provider-contract.js";
 import type { HttpBridgeAgent } from "./catalog.js";
 import { withoutRetiredParameterValues } from "../native-agent/index.js";
+import { servesSharedBridgeSurface } from "./bridge-agents.js";
 
 /**
  * The workflow-result attempt a turn runs for, for a bridge that gates tools
@@ -87,7 +88,7 @@ export function bridgePromptBody(
             ...workflowResultTurnFields(options),
             ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
           }
-        : agent === "cursor" || agent === "grok" || agent === "pi"
+        : servesSharedBridgeSurface(agent)
           ? {
               fastMode: options.fastMode ?? connection.fastMode,
               model: options.model ?? connection.model,

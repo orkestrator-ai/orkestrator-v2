@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import type { CommandContext } from "./commands-context.js";
-import { openAgentSignInTerminal, readGrokSignIn, readPiSignIn } from "./agent-sign-ins.js";
+import {
+  openAgentSignInTerminal,
+  readGrokSignIn,
+  readHostAgentSignIns,
+  readPiSignIn,
+} from "./agent-sign-ins.js";
 import type { Environment } from "./models.js";
 
 let home: string;
@@ -15,6 +20,19 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true });
+});
+
+test("host sign-ins treat Antigravity token files as unconfirmed", async () => {
+  const tokenFile = path.join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token");
+  await fs.mkdir(path.dirname(tokenFile), { recursive: true });
+  for (const contents of [
+    "",
+    "invalid JSON",
+    '{"token":{"access_token":"expired","expiry_date":1}}',
+  ]) {
+    await fs.writeFile(tokenFile, contents);
+    expect((await readHostAgentSignIns({ HOME: home })).antigravity).toBeUndefined();
+  }
 });
 
 describe("readGrokSignIn", () => {
@@ -116,6 +134,13 @@ describe("openAgentSignInTerminal", () => {
 
     await openAgentSignInTerminal(context, "pi", { environmentId: "older", launchTerminalJob });
     expect(launched[1]).toMatchObject({ environmentId: "older", data: "pi\n" });
+    await openAgentSignInTerminal(context, "antigravity", { launchTerminalJob });
+    expect(launched.at(-1)).toMatchObject({
+      tabType: "plain",
+      title: "Antigravity sign-in",
+      data: "AGY_CLI_DISABLE_AUTO_UPDATE=1 agy acp --login\n",
+    });
+    launched.pop();
     // A container is not this machine's login.
     await openAgentSignInTerminal(context, "pi", { environmentId: "container", launchTerminalJob });
     expect(launched[2]).toMatchObject({ environmentId: "newer" });

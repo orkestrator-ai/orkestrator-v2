@@ -1,3 +1,4 @@
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { MultiReviewWorkerMail } from "./worker-mail.js";
 import {
   addressFindingsReportPrompt,
@@ -29,6 +30,7 @@ import { probeReviewWorktree } from "./worktree-probe.js";
 import { multiReviewDeleteRefusal, multiReviewStartRefusal } from "./refusals.js";
 import { EnvironmentMutationFence } from "../environments/index.js";
 import {
+  isPipelineQualifiedAgent,
   MAX_CODE_REWIND_PREVIEW_PATHS,
   type BuildPipelineCodeRewindPreview,
 } from "@orkestrator/protocol/build-pipeline";
@@ -1312,6 +1314,18 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     reservedWorkflowId?: string,
   ): Promise<MultiReviewWorkflow> {
     if (!isStartMultiReviewInput(input)) throw new Error("Invalid multi review start request");
+    // Reviews deliver structured results, which Antigravity has not been
+    // qualified for (`PIPELINE_UNQUALIFIED_AGENTS`).
+    const unqualified = [
+      ...input.reviewers,
+      ...(input.reviewModel ? [input.reviewModel] : []),
+      input.addressFindingsModel,
+    ].find((selection) => !isPipelineQualifiedAgent(selection.agent));
+    if (unqualified) {
+      throw new Error(
+        `${AGENT_PLATFORM_LABELS[unqualified.agent]} cannot run Multi Review yet: its structured results have not been qualified. Choose another agent.`,
+      );
+    }
     const environment = await this.storage.getEnvironment(input.environmentId);
     if (
       !environment ||

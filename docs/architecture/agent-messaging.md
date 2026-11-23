@@ -513,6 +513,14 @@ session’s dispatch journal (`reconcileMailInject`).
   and a hard `retryAt` — 10 s, 30 s, 1 min, 2 min, 5 min, 10 min, then every
   15 min for as long as the message is retained. Busy backoff resets on an
   activity edge; `retryAt` does not.
+- A busy hold waits 2 s, doubling to at most a minute
+  (`AGENT_MAIL_HELD_BACKOFF_MAX_MS`). A session that refuses as busy while
+  its presence reads idle or unknown (a Claude CLI still running background
+  work answers 409) waits out that backoff: reading idle again is no news, so
+  only a real presence change or a settled delivery ends it early. Presence
+  reads that overlap the drain's own dispatch are dropped, since its pending
+  row reads as `working`. The repeating hold logs one `inject.dispatched`
+  line; the line that ends it carries `previousHoldRepeats`.
 - A native dispatch whose outcome is unknown goes to `pending-inject` with
   reason `verifying`. Before anything is resent the drain asks the session's
   dispatch journal under the request id it was sent with: delivered settles as

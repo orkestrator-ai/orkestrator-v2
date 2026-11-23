@@ -43,7 +43,6 @@ import {
   catalogCache,
   catalogProbe,
   clientSessionKeys,
-  configuredAcpMcpServers,
   isObject,
   provider,
   rememberCatalog,
@@ -82,6 +81,7 @@ const log = createLogger("bridge.acp");
 export async function listNormalizedModels(
   signal?: AbortSignal,
 ): Promise<NativeAgentComposerState["models"]> {
+  if (provider === "antigravity") return (await probeCatalog(signal)).models;
   const live = mergeComposerCatalog(provider, [
     ...(catalogCache ? [catalogCache] : []),
     ...[...sessions.values()].map((state) => state.sessionConfig.composer),
@@ -96,18 +96,20 @@ export async function listNormalizedModels(
 }
 
 export async function probeCatalog(signal?: AbortSignal): Promise<NativeAgentComposerState> {
-  if (catalogCache && catalogCache.models.length > 0) return catalogCache;
+  if (provider !== "antigravity" && catalogCache && catalogCache.models.length > 0)
+    return catalogCache;
   if (catalogProbe) return catalogProbe;
   const operation = (async () => {
-    const child = new AcpProcess();
+    let child: AcpProcess | undefined;
     try {
+      child = new AcpProcess();
       await child.initialize(signal);
       const created = await child.request(
         "session/new",
         {
           cwd: workingDirectory,
           additionalDirectories: [],
-          mcpServers: configuredAcpMcpServers(),
+          mcpServers: child.configuredMcpServers(),
         },
         RPC_TIMEOUT_MS,
         signal,
@@ -119,7 +121,7 @@ export async function probeCatalog(signal?: AbortSignal): Promise<NativeAgentCom
       }
       return sessionConfig.composer;
     } finally {
-      await child.close();
+      await child?.close();
       setCatalogProbe(null);
     }
   })();

@@ -1,4 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { adoptCompletedBuild, type CompletedBuildAttempt } from "./completed-build.js";
 /**
  * Public build pipeline operations: init and shutdown, admission, and every
@@ -18,6 +19,7 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  unqualifiedPipelineAgent,
   isReviewPackagePreparationSession,
   BRANCH_PUSH_SESSION_LABEL,
   isSupersededPipelineSession,
@@ -471,6 +473,12 @@ export class BuildPipelineLifecycle {
     completedBuild?: CompletedBuildAttempt,
   ): Promise<BuildPipeline> {
     if (!isStartBuildPipelineInput(input)) throw new Error("Invalid build pipeline start request");
+    const unqualified = unqualifiedPipelineAgent(input);
+    if (unqualified) {
+      throw new Error(
+        `${AGENT_PLATFORM_LABELS[unqualified]} cannot run build pipeline steps yet: its structured results have not been qualified. Choose another agent for this pipeline.`,
+      );
+    }
     // An existing checkout cannot be admitted while a promotion or rewind owns it.
     // The promotion's own admission inherits the exclusive owner's context.
     const release = input.existingEnvironmentId?.trim()

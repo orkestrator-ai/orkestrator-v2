@@ -1447,7 +1447,9 @@ for (const diff of [false, true]) {
     globalThis.Image = function () {
       const img = document.createElement("img");
       Object.defineProperty(img, "src", {
-        set: () => queueMicrotask(() => img.dispatchEvent(new Event("error"))),
+        set: () => {
+          queueMicrotask(() => img.dispatchEvent(new Event("error")));
+        },
       });
       return img;
     } as unknown as typeof Image;

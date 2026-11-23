@@ -44,14 +44,16 @@ const browserConnections: NonNullable<Window["orkestrator"]>["connections"] = {
 const OrkestratorApp = lazy(() => import("@/App"));
 
 export function PublicApp() {
-  const initialConnection = useRef(loadSavedConnection());
+  const [initialConnection] = useState(loadSavedConnection);
+  // The auto-connect effect reads it through a ref so it runs once, on mount.
+  const autoConnection = useRef(initialConnection);
   const autoConnectStarted = useRef(false);
   const connectionController = useRef<AbortController | null>(null);
-  const [address, setAddress] = useState(initialConnection.current.address);
-  const [token, setToken] = useState(initialConnection.current.token);
+  const [address, setAddress] = useState(initialConnection.address);
+  const [token, setToken] = useState(initialConnection.token);
   const [showToken, setShowToken] = useState(false);
   const [hasSavedConnection, setHasSavedConnection] = useState(
-    Boolean(initialConnection.current.address || initialConnection.current.token),
+    Boolean(initialConnection.address || initialConnection.token),
   );
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -98,8 +100,8 @@ export function PublicApp() {
   useEffect(() => {
     if (autoConnectStarted.current) return;
     autoConnectStarted.current = true;
-    if (initialConnection.current.address && initialConnection.current.token) {
-      void connect(initialConnection.current);
+    if (autoConnection.current.address && autoConnection.current.token) {
+      void connect(autoConnection.current);
     }
     return () => {
       autoConnectStarted.current = false;

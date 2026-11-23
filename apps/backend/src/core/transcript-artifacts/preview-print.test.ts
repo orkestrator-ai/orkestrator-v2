@@ -369,7 +369,7 @@ test("the worker bundle ships pdf.js but never its scripting sandbox", () => {
 
 test("pdf.js bundles are pinned, verified at load and licensed Apache-2.0", async () => {
   for (const bundle of [RENDERER_BUNDLES.pdfjs, RENDERER_BUNDLES.pdfjsWorker]) {
-    expect(bundle.version).toBe("6.4.299");
+    expect(bundle.version).toBe("6.5.438");
     expect(bundle.license).toBe("Apache-2.0");
     expect(bundle.notice).toContain("Mozilla Foundation");
     const bytes = await loadPinnedBundle(bundle);

@@ -114,52 +114,52 @@ export const ARTIFACT_DEPENDENCY_MANIFEST: readonly ArtifactDependency[] = Objec
 
 export const RENDERER_BUNDLES = Object.freeze({
   mermaid: {
-    id: "mermaid@12.2.0",
+    id: "mermaid@12.3.0",
     packageName: "mermaid",
-    version: "12.2.0",
+    version: "12.3.0",
     packageFile: "dist/mermaid.min.js",
     distName: "mermaid.min.js",
-    sha256: "a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b9f",
+    sha256: "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3",
     license: "MIT",
-    notice: "mermaid 12.2.0 https://mermaid.js.org (MIT License)",
+    notice: "mermaid 12.3.0 https://mermaid.js.org (MIT License)",
     licenseFiles: ["LICENSE"],
   },
   dompurify: {
-    id: "dompurify@3.4.17",
+    id: "dompurify@3.5.0",
     packageName: "dompurify",
-    version: "3.4.17",
+    version: "3.5.0",
     packageFile: "dist/purify.min.js",
     distName: "purify.min.js",
-    sha256: "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31",
+    sha256: "f69a46022ab1f53e969c8ebbca98172c8995785a9b3be72ea4a12d25b1a1bf67",
     license: "(MPL-2.0 OR Apache-2.0)",
-    notice: "DOMPurify 3.4.17 https://github.com/cure53/DOMPurify (MPL-2.0 OR Apache-2.0)",
+    notice: "DOMPurify 3.5.0 https://github.com/cure53/DOMPurify (MPL-2.0 OR Apache-2.0)",
     licenseFiles: ["LICENSE", "LICENSE-MPL"],
   },
   // pdf.js renders the first page of PDF attachments inside the preview
   // worker only (main-thread "fake worker": the worker module is loaded as a
   // module, never as a Web Worker). Never injected into artifact documents.
   pdfjs: {
-    id: "pdfjs-dist@6.4.299",
+    id: "pdfjs-dist@6.5.438",
     packageName: "pdfjs-dist",
-    version: "6.4.299",
+    version: "6.5.438",
     packageFile: "build/pdf.min.mjs",
     distName: "pdf.min.mjs",
-    sha256: "57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2",
+    sha256: "3a88402882cfa3e7e72c2c9b5149f52f0f88baf1c5b62aa11a41abdbc2072440",
     license: "Apache-2.0",
     notice:
-      "PDF.js (pdfjs-dist) 6.4.299 https://mozilla.github.io/pdf.js/ Copyright 2024 Mozilla Foundation (Apache License 2.0)",
+      "PDF.js (pdfjs-dist) 6.5.438 https://mozilla.github.io/pdf.js/ Copyright 2024 Mozilla Foundation (Apache License 2.0)",
     licenseFiles: ["LICENSE"],
   },
   pdfjsWorker: {
-    id: "pdfjs-dist-worker@6.4.299",
+    id: "pdfjs-dist-worker@6.5.438",
     packageName: "pdfjs-dist",
-    version: "6.4.299",
+    version: "6.5.438",
     packageFile: "build/pdf.worker.min.mjs",
     distName: "pdf.worker.min.mjs",
-    sha256: "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18",
+    sha256: "1e64c8240e54735ec5913b37acd5134747799cb8c6bb3777c70adbc01232d2aa",
     license: "Apache-2.0",
     notice:
-      "PDF.js worker (pdfjs-dist) 6.4.299 https://mozilla.github.io/pdf.js/ Copyright 2024 Mozilla Foundation (Apache License 2.0)",
+      "PDF.js worker (pdfjs-dist) 6.5.438 https://mozilla.github.io/pdf.js/ Copyright 2024 Mozilla Foundation (Apache License 2.0)",
     licenseFiles: ["LICENSE"],
   },
 } satisfies Record<string, PinnedBundle>);

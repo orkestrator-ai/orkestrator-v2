@@ -561,7 +561,7 @@ container (any other container id is `policy_denied`), or
 (its inline `data:` bytes). Files over 20 MiB (or over the reader's own
 10 MiB binary limit), or without a `%PDF-` signature, are refused with
 metadata before a worker starts. A `pdf-thumbnail` job then runs the pinned
-`pdfjs-dist@6.4.299` (`pdf.min.mjs` and `pdf.worker.min.mjs` in
+`pdfjs-dist@6.5.438` (`pdf.min.mjs` and `pdf.worker.min.mjs` in
 `RENDERER_BUNDLES`, Apache-2.0, sha256-verified at load and shipped in
 `dist/artifact-runtime/` and the image) inside the worker's isolated page:
 the modules load from in-memory sources, the worker module runs on the page's

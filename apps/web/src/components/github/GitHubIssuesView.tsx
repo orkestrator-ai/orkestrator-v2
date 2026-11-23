@@ -172,12 +172,13 @@ export function GitHubIssuesView({ projectId }: GitHubIssuesViewProps) {
     return grouped;
   }, [snapshot?.issues]);
 
+  const issues = snapshot?.issues;
   const activeIssue = useMemo(
     () =>
       activeIssueNumber === null
         ? undefined
-        : snapshot?.issues.find((issue) => issue.number === activeIssueNumber),
-    [activeIssueNumber, snapshot?.issues],
+        : issues?.find((issue) => issue.number === activeIssueNumber),
+    [activeIssueNumber, issues],
   );
   const selectedSummary =
     selectedIssueNumber === null

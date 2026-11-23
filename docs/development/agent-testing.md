@@ -190,11 +190,15 @@ ORKESTRATOR_E2E_PORT` and `--free-port ORKESTRATOR_PUBLIC_E2E_PORT`, and the
 wrapper sets each unset variable to a port the kernel just handed out and
 prints `[loopback-network] review validation: NAME=PORT for this run`. If another
 process takes a chosen port before the server binds, an explicit collision on
-that port retries the command with fresh ports (at most three attempts).
-Caller-set ports and other failures are never retried. The fixed
-defaults (1422 and 4423) were otherwise taken by another checkout's fixture
-server or a dev server, and the suite failed before any test ran. A person's run
-keeps the defaults so it can reuse a server they left running, and inside the
+that port retries the command with fresh ports (at most three attempts). A
+collision is Vite's or Node's "in use" message, Playwright's "is already
+used" for a `webServer` it may not reuse, or the fixture ownership check's
+"in use" message if a listener takes the port during the build. Caller-set
+ports and other failures are never retried. The fixed defaults (1422 and 4423) were otherwise taken by
+another checkout's fixture server or a dev server, and the suite failed before
+any test ran. A person's run keeps the defaults, so a dev server they left
+running is reused (`ORKESTRATOR_E2E_FIXTURE_SERVER=dev`; see the
+[testing guide](testing-guide.md#the-fixture-server)), and inside the
 namespace every port is free already.
 
 Both full browser tasks (`test:agent:browser` and its isolated variant) build

@@ -366,3 +366,44 @@ if (!fs.existsSync(marker)) {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("retries when Playwright refuses a chosen port it may not reuse", () => {
+  // The component suite never reuses a server for its fixture build, so a
+  // port taken first fails in Playwright's words rather than Vite's.
+  const dir = mkdtempSync(path.join(tmpdir(), "ork-port-reuse-"));
+  try {
+    const fixture = path.join(dir, "refused.cjs");
+    writeFileSync(
+      fixture,
+      `
+const fs = require('node:fs');
+const marker = ${JSON.stringify(path.join(dir, "attempt"))};
+const port = process.env.ORK_TEST_FREE_PORT;
+if (!fs.existsSync(marker)) {
+ fs.writeFileSync(marker, port);
+ console.error('Error: http://127.0.0.1:' + port + ' is already used, make sure that nothing is running on the port/url or set reuseExistingServer:true in config.webServer.');
+ process.exitCode = 1;
+}
+`,
+    );
+    const result = spawnSync(
+      process.execPath,
+      [script, "--free-port", "ORK_TEST_FREE_PORT", "--", process.execPath, fixture],
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        env: {
+          ...process.env,
+          [HOST_NETWORK_ENV]: "1",
+          [REVIEW_VALIDATION_ENV]: "1",
+          ORK_TEST_FREE_PORT: "",
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("is already used");
+    expect(result.stderr).toContain("retrying with fresh ports");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

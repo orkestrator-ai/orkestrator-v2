@@ -12,10 +12,12 @@ test("remote network defaults wait for their owner and preserve an explicit choi
 }, info) => {
   await page.goto("/delivery-policy?launch&machines");
   // Exercise the actual dialog and routing hooks, with a controlled remote owner.
-  const moduleUrl = `/@fs${path.join(process.cwd(), "apps/web/src/lib/portal/portal-store.ts")}`;
-  await page.evaluate(async (url) => {
-    const { portalStore } = await import(url);
-    portalStore.invokeOnNode = async (_node: string, command: string) => {
+  await page.evaluate(async () => {
+    const { portalStore } = await window.__fixtureModules!["lib/portal/portal-store"]();
+    const store = portalStore as unknown as {
+      invokeOnNode: (node: string, command: string) => Promise<unknown>;
+    };
+    store.invokeOnNode = async (_node: string, command: string) => {
       if (command === "check_docker") return { available: true };
       if (command === "get_config")
         return new Promise((resolve, reject) => {
@@ -28,7 +30,7 @@ test("remote network defaults wait for their owner and preserve an explicit choi
         });
       throw new Error(`Unexpected fixture command: ${command}`);
     };
-  }, moduleUrl);
+  });
   await pickMachine(page, "Builder");
   const where = page.getByRole("radiogroup", { name: "Where it runs" });
   await expect(where.getByRole("radio", { name: /^Container/ })).toBeEnabled();

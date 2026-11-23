@@ -102,3 +102,12 @@ reported 1,606 pass, 1 skip and 2 fail across 71 files (53.90 s).
 `bun test ./src/core/review/evaluation-drivers.test.ts` from `apps/backend`
 then passed all 22 tests alone. Logs are in `orkestrator-test-run.RkBCPb`
 under the host temporary directory.
+
+## Recurrence on 2026-11-23
+
+- **Branch and base:** `upgrade-packages-0a3b6266bb77-r1`, a dependency-upgrade batch that does not touch the review drivers, on base `307d19317`. `mise run flaky:recurrence -- 9820 --base 307d19317` confirmed the case was open.
+- **Original command:** `mise run test:logged -- --name full-suite-3 -- mise run test` on macOS arm64, with other worktrees holding test slots.
+- **Failure:** Only the Claude case failed this time: `subprocess bounds > a claude CLI that ignores SIGTERM times out, is killed and leaves no directory` (404.74 ms) hit `ENOENT` reading the fake CLI's `pid` at `evaluation-drivers.test.ts:306`.
+- **Suite counts:** The backend package reported 20,212 pass, 212 skip and 2 fail across 1,431 files (the other failure was the unrelated `tests/storage-core-coverage.test.ts`, which also fails on the base).
+- **Isolated rerun:** The aggregate runner reran the file alone and it passed 22 of 22 tests in 4.4 s.
+- **Aggregate evidence:** `orkestrator-test-run.DMIe79/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and its `rerun-*evaluation-drivers*` log in the host temporary directory.

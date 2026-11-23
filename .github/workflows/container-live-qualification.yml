@@ -59,6 +59,7 @@ on:
       - "apps/backend/scripts/github-ranges-seed.ts"
       - "docker/artifact-preview-worker/**"
       - "apps/backend/src/core/transcript-artifacts/preview-container.test.ts"
+      - "apps/backend/src/core/transcript-artifacts/preview-print.test.ts"
 
 # Only pull request runs supersede each other. Scheduled and manual runs need
 # unique groups so a newer pending run cannot replace an older one.
@@ -334,6 +335,12 @@ jobs:
         env:
           ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
         run: docker image inspect "$ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE" > /dev/null && mise run test:logged -- --name preview-worker-container -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1
+
+      - name: Live PDF print and thumbnail in the fresh preview worker
+        if: ${{ !cancelled() }}
+        env:
+          ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
+        run: mise run test:logged -- --name preview-worker-pdf -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-print.test.ts --parallel=1 --test-name-pattern 'prints and previews PDFs inside the network-less container'
 
       # Numbers only, compared by hand with the Docker Desktop figures
       # (container-qualification.md, "Exec cost and container change signals").

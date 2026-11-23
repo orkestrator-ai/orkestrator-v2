@@ -27,7 +27,7 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
  *   the managed copy is unavailable.
  */
 export const PINNED_SUPPORT_TOOL_VERSIONS = {
-  gh: "2.104.0",
+  gh: "2.105.0",
 } as const;
 
 export type AgentToolchainName = keyof typeof PINNED_TOOLCHAIN_VERSIONS;
@@ -813,48 +813,48 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
     "darwin",
     "arm64",
     {
-      size: 14_087_367,
-      sha256: "23b12706219b9892e44236f988444a24adcf29284e16b35e03ba5b863fb6eb8e",
+      size: 14_135_394,
+      sha256: "2a5d03103ae444927383b93d9ffd65579a26e2eb900ce1cf11f55258d5319ded",
     },
     {
-      size: 38_918_208,
-      sha256: "f91ac17c5d4ea4c5e943e3af2723e04cf35d6a5626d38a6f4567e36cfc69abd5",
+      size: 39_019_376,
+      sha256: "31dc9ba8d1a68a6ae01e7cec4aea39579948d81693ff7010c27ecd83b22d9fd4",
     },
   ),
   ghArtifact(
     "darwin",
     "x64",
     {
-      size: 15_683_594,
-      sha256: "a8c2a708dbae89dc7c05ba7b0beafc95bd8d09ab4a3505467b77d32ebf364dc6",
+      size: 15_734_736,
+      sha256: "23602cbccbbdc6285a8520745b714cb927ce2ca621779373c2a20cd8e33fda66",
     },
     {
-      size: 42_147_680,
-      sha256: "5c8fd50bd8371289df00142e3638860b540d26c0ca228fb43da6c01146d5fd08",
+      size: 42_253_584,
+      sha256: "a23748af178ecfe35e76d6d36247489ce4f110fb8893ca3281e7f2dc0bd5a4a2",
     },
   ),
   ghArtifact(
     "linux",
     "arm64",
     {
-      size: 13_642_444,
-      sha256: "cb34cefc6f4e77b90731374a2b737516bb8f3033c6ca46aa949e5344f68069e3",
+      size: 13_684_308,
+      sha256: "b1278c75107423d818f1937fd92cafc9e5e9b606631568f68d7fb816f5885a02",
     },
     {
-      size: 38_142_112,
-      sha256: "f5ea822b80129fd841cce54df49f699e3a019dade3d70b48255807ca33a6eefa",
+      size: 38_207_648,
+      sha256: "2ef7512bb4d097c62d98bd248465fee66e7488f213dd49af345ad5af10d15d20",
     },
   ),
   ghArtifact(
     "linux",
     "x64",
     {
-      size: 15_007_172,
-      sha256: "98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e",
+      size: 15_050_573,
+      sha256: "79e7ab5db738c48777b696e374f8b428f0647debfb424f44d2f426370407fe2f",
     },
     {
-      size: 41_083_040,
-      sha256: "fca7ac8a8386e3ad65c9a96a96cbf272d1dcc4f76de174dae91d54e50729e240",
+      size: 41_189_536,
+      sha256: "fa7cff06d4db9eee98e00b10ac93beebfe1822109ac04a6cbbf9d806c21d0073",
     },
   ),
 ] as const;

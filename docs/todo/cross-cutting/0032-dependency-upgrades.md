@@ -5,17 +5,17 @@ with `npm view`, `bun audit` and Electron's release schedule the same day.
 
 ## Task analysis
 
-Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day through the npm registry's dist-tags, `nodejs.org/dist/index.json` and `bun audit`.
+Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day through the npm registry's dist-tags, `nodejs.org/dist/index.json` and `bun audit`. Tasks 2, 3 and 4 re-checked 2026-11-23 against `main` at `307d1931` during the routine in-range batch (decision 8).
 
 ### Tasks
 
 1. **Electron 46**: adopt it once stable, with a HiDPI capture-masking live run and a macOS floor re-check. Status: blocked (on Electron 46 stable, due 2027-01-05; `alpha` is 46.0.0-alpha.2).
-2. **electron-builder 27 and electron-updater 7 with signed update manifests**: migrate the config, auto-update API and macOS feed edit, and wire the keys. Status: blocked (on electron-builder 27 stable; `next` is 27.0.0-alpha.13; the public keys also wait on 7568: 0032 task 2 update keys). Generating the key pairs and installing the private key on the release machines moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
-3. **`marked` 18**: move once `@tiptap/markdown` accepts it. Status: blocked (`@tiptap/markdown` 3.32.0, still latest, depends on `marked ^17.0.1`).
-4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is 5.0.0-rc.1).
+2. **electron-builder 27 and electron-updater 7 with signed update manifests**: migrate the config, auto-update API and macOS feed edit, and wire the keys. Status: blocked (on electron-builder 27 stable; `next` is 27.0.0-alpha.15; the `v26` patches 26.18.1 and 6.8.12 landed 2026-11-23; the public keys also wait on 7568: 0032 task 2 update keys). Generating the key pairs and installing the private key on the release machines moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10.
+3. **`marked` 18**: move once `@tiptap/markdown` accepts it. Status: blocked (`@tiptap/markdown` 3.35.0, latest on 2026-11-23, still depends on `marked ^17.0.1`).
+4. **hono 5**: move claude-bridge and codex-bridge once 5 is stable. Status: blocked (`next` is still 5.0.0-rc.1 on 2026-11-23; 4.13.20 landed).
 5. **`@dnd-kit/react` 1.0**: rewrite the drag-and-drop users once 1.0 ships. Status: blocked (latest is 0.5.1).
 6. **Accepted advisories**: `postcss-selector-parser` via `@tailwindcss/typography`, `undici` 8.10.2 via the Pi SDK. Status: moved to [7541](7541-clear-current-dependency-advisories.md) (2026-11-07): Pi 1.5.0 now ships `undici` 8.12.3, so the `undici` half is unblocked; `@tailwindcss/typography` is still 0.5.20. 7541 also holds the newer `@hono/node-server`, `qs` and `minimatch` advisories and Electron 45.2.3.
-7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26); 24.22.2 done 2026-11-02; amd64 image smoke and `test:agent:docker` passed (20 passed, 4 live-provider skips).
+7. **Node in the Docker image**: Node 26 after its LTS settles, and Node 24.22.1 or later meanwhile. Status: deferred (Node 26, which became LTS "Lithium" with 26.13.1 on 2026-11-10); 24.22.2 done 2026-11-02; amd64 image smoke and `test:agent:docker` passed (20 passed, 4 live-provider skips). 24.22.3, the 2026-11-10 security release, done 2026-11-23 (decision 10).
 
 ### 1. Electron 46
 
@@ -41,7 +41,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Context.** Security finding L6 also tracks this, in [5020](5020-signed-appimage-update-manifests.md). The key decision is made: Ed25519, current and next key, release machines hold the current key. A signed release is a one-way door. `scripts/mac-update-feed.ts` edits the macOS feed after it is written, which would invalidate a signature.
 
-**Investigation.** Pins are `electron-builder ^26.18.0` (`package.json:29`) and `electron-updater 6.8.11` (`apps/desktop/package.json:30`). Upstream `next` moved to 27.0.0-alpha.13 and 7.0.0-alpha.12. Newly published: a `v26` dist-tag carrying electron-builder 26.18.1 and electron-updater 6.8.12, patch releases this file does not mention. `auto-update.ts` still sets `updater.autoInstallOnAppQuit = true` (`apps/desktop/electron/auto-update.ts:148`) and calls `quitAndInstall` at `:191` and `:339`. `scripts/mac-update-feed.ts:27` still writes `minimumSystemVersion` after the build.
+**Investigation.** Pins are `electron-builder ^26.18.0` (`package.json:29`) and `electron-updater 6.8.11` (`apps/desktop/package.json:30`). Upstream `next` moved to 27.0.0-alpha.13 and 7.0.0-alpha.12. Newly published: a `v26` dist-tag carrying electron-builder 26.18.1 and electron-updater 6.8.12, patch releases this file does not mention. They were taken on 2026-11-23 (decision 8): `electron-builder ^26.18.1`, `electron-updater 6.8.12`; `latest` is still 26.18.0 / 6.8.11 and `next` 27.0.0-alpha.15 / 7.0.0-alpha.14. `auto-update.ts` still sets `updater.autoInstallOnAppQuit = true` (`apps/desktop/electron/auto-update.ts:148`) and calls `quitAndInstall` at `:191` and `:339`. `scripts/mac-update-feed.ts:27` still writes `minimumSystemVersion` after the build.
 
 **Decisions.**
 
@@ -66,7 +66,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Context.** `@tiptap/markdown` pins `marked ^17.0.1`. 18 stops keeping trailing blank lines in block tokens' `raw`.
 
-**Investigation.** Still blocked: npm `@tiptap/markdown` latest is 3.32.0 with `marked ^17.0.1`. Pins at `apps/web/package.json:46` and `:57`. The `raw` comparisons are in `apps/web/src/components/markdown/tiptap-extensions.ts:181`-`:183`; `SearchTextRenderer extends Renderer` at `apps/web/src/components/chat/native-message-search.ts:26`.
+**Investigation.** Still blocked: npm `@tiptap/markdown` latest is 3.35.0 (2026-11-23) with `marked ^17.0.1`; `marked` latest is 18.2.1. The 2026-11-23 batch tried 18.2.1 and reverted it (decision 9): the markdown and chat tests passed, but `assessMarkdownForRichEditing` would lex with 18 while tiptap parses with its own 17. Pins at `apps/web/package.json:46` and `:57`. The `raw` comparisons are in `apps/web/src/components/markdown/tiptap-extensions.ts:181`-`:183`; `SearchTextRenderer extends Renderer` at `apps/web/src/components/chat/native-message-search.ts:26`.
 
 **Decisions.**
 
@@ -84,7 +84,7 @@ Analysed 2026-10-27 against `main` at `863b5782`. Upstream checked the same day 
 
 **Context.** Only once 5 is stable.
 
-**Investigation.** Both pin `hono ^4.13.13` (`bridges/claude-bridge/package.json:21`, `bridges/codex-bridge/package.json:17`); npm `latest` is 4.13.14 and `next` 5.0.0-rc.1. claude-bridge has its own `bun.lock`, which the file notes is awkward to regenerate.
+**Investigation.** Both pin `hono ^4.13.20` (`bridges/claude-bridge/package.json:21`, `bridges/codex-bridge/package.json:17`) since 2026-11-23; npm `latest` is 4.13.20 and `next` still 5.0.0-rc.1. claude-bridge has its own `bun.lock`, which the file notes is awkward to regenerate.
 
 **Decisions.**
 
@@ -189,12 +189,13 @@ not claimed. See 1202 task 14 for the qualification command, setup constraints a
 
 ## Current state
 
-- **Landed.** Bun 1.4.4, Electron 45.0.0, electron-builder 26.18.0,
-  electron-updater 6.8.11, Vite 8.3.4 with `@vitejs/plugin-react` 6.1.2,
-  lucide-react 1.56, `@hono/node-server` 2, happy-dom 21.0.4, `@types/node` 26
-  (24 in `apps/desktop`, matching Electron 45's `^24.9.0`), oxlint 1.88,
-  Playwright 1.64, Monaco 0.57, `sharp` 0.35.5 and the MCP SDK security bumps.
-  Root `overrides.dompurify` is 3.4.17. Formatting moved from oxfmt to
+- **Landed.** Bun 1.4.4, Electron 45.4.1, electron-builder 26.18.1,
+  electron-updater 6.8.12, Vite 8.3.8 with `@vitejs/plugin-react` 6.3.0,
+  lucide-react 1.77, `@hono/node-server` 2.1.11, hono 4.13.20, happy-dom
+  21.0.4, `@types/node` 26.6.6 (24 in `apps/desktop`, matching Electron 45's
+  `^24.9.0`), oxlint 1.94, React Flow (`@xyflow/react`) 13, Playwright 1.65.1,
+  Monaco 0.57, `sharp` 0.35.5 and the MCP SDK security bumps (2026-11-23
+  batch: decision 8). Root `overrides.dompurify` is 3.5.0. Formatting moved from oxfmt to
   `bun fmt` (configured by `[fmt]` in `bunfig.toml`) and typechecking from
   `tsc --noEmit` to `bun check`. `typescript` stays so editors run the same
   TypeScript (7.0.2) that `bun check` matches.
@@ -202,11 +203,17 @@ not claimed. See 1202 task 14 for the qualification command, setup constraints a
   [`linting.md`](../../development/linting.md#severity-policy)).
   `no-unused-vars` is the only warning.
 - **Held on purpose.** `marked` 17.0.6 (`apps/web`), because
-  `@tiptap/markdown` 3.32.0 (still latest) depends on `marked ^17.0.1`
-  (`marked` latest is 18.1.1). `test-fixtures/preview-vite` stays on Vite 7.3.6
+  `@tiptap/markdown` 3.35.0 (still latest) depends on `marked ^17.0.1`
+  (`marked` latest is 18.2.1; decision 9). `react-virtuoso` 4.18.19, because
+  `patches/react-virtuoso@4.18.19.patch` is a 130 KB patch over the minified
+  build that a bump would have to re-port. The transcript-artifact
+  dependencies `d3@7.9.0` and `chart.js@4.5.1`, because those ids are what
+  interactive artifacts declare in `dependencyIds`. `test-fixtures/preview-vite` stays on Vite 7.3.6
   as a stand-in user app.
-- **Docker.** `NODE_VERSION=24.22.2` (2026-11-02), which includes the
-  24.22.1 security release. The container's Node runs npm-installed agent
+- **Docker.** `NODE_VERSION=24.22.3` (2026-11-23, the 2026-11-10 security
+  release; 24.22.2 landed 2026-11-02). mise 2026.11.12 (also in
+  `config/mise-version.json`), Starship 1.27.0 and git-delta 0.21.2 moved
+  with it (decision 10). The container's Node runs npm-installed agent
   CLIs and users' projects, not Orkestrator code; the drift test now enforces
   ≥24.22.1. Node 26 is item 9.
 - **Pre-release upstream (2026-10-25).** Electron `alpha` is 46.0.0-alpha.1
@@ -453,6 +460,52 @@ None. The update-manifest key question is decided below.
    - Pros: the actionable advisory work sits in one file with its own rating.
    - Cons: `postcss-selector-parser` is now tracked in 7541 rather than beside
      the other blocked upgrades here.
+
+8. **Take every routine in-range and minor bump in one batch (2026-11-23).**
+   - Options: (a) only patch and in-range bumps; (b) those plus the minor and
+     0.x bumps that can change lint, types or bundles (oxlint 1.94,
+     `@rolldown/plugin-babel` 0.3, `@agentclientprotocol/sdk` 2.9, the
+     transcript-artifact renderer bundles) and the React Flow 13 major;
+     (c) everything `bun outdated` lists, including the agent SDKs.
+   - Choice: (b), as the user asked. Agent SDKs and CLIs stay with
+     [`upgrade-agents.md`](../../development/upgrade-agents.md).
+   - Why: each extra bump in (b) needed at most a few code edits:
+     React Flow 13 (`NodeChangeset`, `forceColorMode`, `fitView` padding
+     in percent, `elevateEdgesOnSelect={false}` to keep the old stacking, and
+     importing its stylesheet into `layer(components)`, because its rules now
+     sit in `@layer xyflow` and under `base` lost to Tailwind preflight) and
+     three oxlint 1.94 findings. Renderer bundles carry new SHA-256 pins, and
+     the render identity already includes `rendererBundleHash`, so older
+     receipts go stale on their own.
+   - Pros: one lockfile change and one validation run.
+   - Cons: a larger diff; the React Flow change is visible on the Graphs
+     canvas.
+9. **Task 3: keep `marked` 17 (2026-11-23).**
+   - Options: (a) take 18.2.1 in `apps/web` beside tiptap's 17; (b) keep 17.
+   - Choice: (b), the user's choice after the trade-off was laid out.
+   - Why: with (a) the rich-editing gate (`assessMarkdownForRichEditing`)
+     lexes with 18 while tiptap parses with 17. 18's fixes are in exactly the
+     lazy-line, nested-list and table cases where the two disagree.
+   - Pros: one parser for the gate and the editor; no duplicate bundle.
+   - Cons: chat search keeps 17's slower worst case on unmatched emphasis
+     runs until tiptap moves.
+
+10. **Take the image tools and `gh` in the same batch; leave Bun for its own change (2026-11-23).**
+   - Options: (a) Node 24.22.3, mise 2026.11.12, Starship 1.27.0, git-delta
+     0.21.2 and `gh` 2.105.0 here, Bun 1.4.5 separately; (b) all of them,
+     Bun included, in this batch; (c) leave them for a later pass.
+   - Choice: (a), at the user's request for every non-agent item that was
+     ready.
+   - Why: Node 24.22.3 is a security release. The others only move pinned
+     versions and SHA-256s, each checked against its release's published
+     checksums (GitHub's asset digest for git-delta, which publishes none),
+     and `scripts/verify-toolchain-artifacts.ts` verified the four `gh`
+     artifacts. [`upgrade-agents.md`](../../development/upgrade-agents.md)
+     ("Bun alone") requires a Bun bump to be its own change, because every
+     later change regenerates lockfiles with the Bun `mise.toml` pins.
+   - Pros: the image and the managed `gh` are current with one image
+     rebuild.
+   - Cons: the image change needs its own smoke run on both architectures.
 
 ## Related
 

@@ -1,6 +1,12 @@
 @import "tailwindcss";
-/* React Flow (the Graphs designer canvas) in the base layer, so utilities override it. */
-@import "@xyflow/react/dist/style.css" layer(base);
+/*
+ * React Flow (the Graphs designer canvas) in the components layer, so
+ * utilities override it. Since React Flow 13 its rules sit in its own
+ * `@layer xyflow`, which nests here as `components.xyflow`. Under `base` it
+ * would lose to Tailwind's preflight (margin reset, transparent buttons), which
+ * strips the panels' margin and the controls' buttons.
+ */
+@import "@xyflow/react/dist/style.css" layer(components);
 @plugin "@tailwindcss/typography";
 
 /*

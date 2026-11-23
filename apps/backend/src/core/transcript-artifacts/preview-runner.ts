@@ -228,10 +228,8 @@ const INTERACTIVE_RENDERER_HASH = sha256Hex(
 /** Printing reuses the static and interactive paths; its identity names both. */
 const PRINT_RENDERER_HASH = sha256Hex(`print:${STATIC_RENDERER_HASH}:${INTERACTIVE_RENDERER_HASH}`);
 
-function rendererBundleHash(kind: PreviewJob["kind"]): string {
+function rendererBundleHash(kind: Exclude<PreviewJob["kind"], "mermaid">): string {
   switch (kind) {
-    case "mermaid":
-      return mermaidRendererBundleHash();
     case "html-static":
       return STATIC_RENDERER_HASH;
     case "html-interactive":
@@ -1342,9 +1340,29 @@ export class TranscriptPreviewRunner implements PreviewRunner {
       );
       return;
     }
+    const expectedBundleHash =
+      kind === "mermaid" ? mermaidRendererBundleHash() : rendererBundleHash(kind);
+    if (kind === "mermaid" && result.rendererBundleHash !== expectedBundleHash) {
+      const message =
+        this.options.isolation === "container"
+          ? "Rebuild the isolated preview worker to use this version's Mermaid renderer"
+          : "The preview worker could not verify this version's Mermaid renderer";
+      this.settle(
+        ticket,
+        failed(
+          kind,
+          artifactError("renderer_unavailable", message, {
+            operationId,
+            resource: "mermaid-bundle",
+          }),
+          build,
+        ),
+      );
+      return;
+    }
     const base = {
       browserBuild: build,
-      rendererBundleHash: rendererBundleHash(kind),
+      rendererBundleHash: expectedBundleHash,
       diagnostics: bounded.diagnostics,
       omittedDiagnostics: bounded.omitted,
       blockedRequests,

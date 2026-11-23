@@ -20,6 +20,7 @@ import path from "node:path";
 import { retryOnAddressInUse } from "@orkestrator/protocol/testing/ports";
 
 import type { PreviewRunner } from "./contracts.js";
+import { createHarness, key, settle, ENV } from "./service-test-support.js";
 import { WORKER_CONTEXT_LABEL, workerContextDigest } from "./preview-worker-context-digest.js";
 import { localWorkerPinFile, prepareWorkerImage } from "./preview-worker-prepare.js";
 import {
@@ -482,26 +483,83 @@ describe("a locally prepared worker after an upgrade", () => {
     });
   }
 
-  test("an explicit container setting keeps running an outdated worker and says so", async () => {
-    const { logger, warns } = capture();
-    const runtime = await createTranscriptArtifactRuntime({
-      dataDir: preparedEarlier(OTHER_CONTEXT),
-      env: {
-        ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker(true, OTHER_CONTEXT).cli,
-        ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "container",
-      },
-      workerBuildContext: { context: buildContext(), stageScript: null },
-      logger,
-    });
-    cleanups.push(() => runtime.close());
-    expect(runtime.config).toMatchObject({
-      isolation: "container",
-      isolationSelection: "configured",
-      workerImage: { reference: BUILT_ID, pinned: true },
-    });
-    expect(runtime.workerPreparation()).toMatchObject({ available: true, outdated: true });
-    expect(warns.join("\n")).toContain("keeps running it until it is prepared again");
-  });
+  test.each([undefined, "0".repeat(64)])(
+    "an explicit container setting refuses Mermaid evidence from an outdated worker (%s)",
+    async (rendererBundleHash) => {
+      const { logger, warns } = capture();
+      const runtime = await createTranscriptArtifactRuntime({
+        dataDir: preparedEarlier(OTHER_CONTEXT),
+        env: {
+          ORKESTRATOR_ARTIFACT_PREVIEW_DOCKER: fakeDocker(true, OTHER_CONTEXT).cli,
+          ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "container",
+        },
+        workerBuildContext: { context: buildContext(), stageScript: null },
+        logger,
+        runner: {
+          supervise: () => ({
+            outcome: Promise.resolve({
+              type: "result" as const,
+              result: {
+                ok: true,
+                kind: "mermaid" as const,
+                browserBuild: "old-chromium",
+                diagnostics: [],
+                blockedRequests: {},
+                captures: [],
+                ...(rendererBundleHash ? { rendererBundleHash } : {}),
+                svg: '<svg xmlns="http://www.w3.org/2000/svg"><g/></svg>',
+                diagramType: "flowchart",
+                edges: 0,
+              },
+            }),
+            exited: Promise.resolve({ verified: true, pids: [], browserPid: null }),
+            cancel: () => undefined,
+            browserPid: () => null,
+            workerPid: () => null,
+            scratchDir: () => null,
+            reap: async () => true,
+          }),
+        },
+      });
+      cleanups.push(() => runtime.close());
+      expect(runtime.config).toMatchObject({
+        isolation: "container",
+        isolationSelection: "configured",
+        workerImage: { reference: BUILT_ID, pinned: true },
+      });
+      expect(runtime.workerPreparation()).toMatchObject({ available: true, outdated: true });
+      expect(warns.join("\n")).toContain("keeps running it until it is prepared again");
+      const harness = await createHarness({ runtime });
+      cleanups.push(() => harness.close());
+      const { artifactId } = await harness.call("create_artifact", {
+        requestKey: key(),
+        draft: {
+          title: "Diagram",
+          summary: "",
+          payload: { kind: "mermaid", source: "flowchart TD\n A-->B" },
+        },
+      });
+      const { operationId } = await harness.call("preview_artifact", {
+        requestKey: key(),
+        artifactId,
+        revision: 1,
+      });
+      const { operation } = await settle(harness, operationId);
+      expect(operation).toMatchObject({
+        status: "failed",
+        error: {
+          code: "renderer_unavailable",
+          resource: "mermaid-bundle",
+          message: expect.stringContaining("Rebuild the isolated preview worker"),
+        },
+      });
+      expect(operation.receiptId).toBeUndefined();
+      harness.service.store.transact(ENV, (records) => {
+        expect(records.list("receipt")).toEqual([]);
+      });
+      expect(runtime.runner.status().isolation).toBe("container");
+    },
+  );
 
   test("an image Docker cannot inspect is missing, not outdated", async () => {
     const { logger, warns } = capture();

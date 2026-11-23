@@ -14,6 +14,7 @@ import path from "node:path";
 import { DEFAULT_PREVIEW_PROFILE } from "@orkestrator/protocol/transcript-artifacts-validation";
 
 import type { PreviewJob } from "./contracts.js";
+import { mermaidRendererBundleHash } from "./dependency-manifest.js";
 import { MERMAID_MATH_LABELS_UNSUPPORTED, detectMermaidMathLabels } from "./mermaid-svg.js";
 import {
   PROCESS_INTERACTIVE_REFUSAL,
@@ -225,6 +226,7 @@ function fakeSupervise(plan: { reapAfter: number | null; reaps: { count: number 
         diagnostics: [],
         blockedRequests: {},
         captures: [],
+        rendererBundleHash: mermaidRendererBundleHash(),
         svg: '<svg xmlns="http://www.w3.org/2000/svg"><g><rect width="1" height="1"/></g></svg>',
         diagramType: "flowchart",
         edges: 0,

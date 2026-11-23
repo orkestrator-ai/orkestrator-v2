@@ -13,6 +13,7 @@ import { PREVIEW_ADMISSION_POLICY } from "@orkestrator/protocol/rich-content-pol
 import type { ArtifactProbeV1 } from "@orkestrator/protocol/transcript-artifacts";
 import { DEFAULT_PREVIEW_PROFILE } from "@orkestrator/protocol/transcript-artifacts-validation";
 
+import { mermaidRendererBundleHash } from "./dependency-manifest.js";
 import { TranscriptInteractivePreparer } from "./interactive-prepare.js";
 import {
   containerRunArgs,
@@ -20,13 +21,17 @@ import {
   reapOrphanPreviewContainers,
 } from "./preview-supervisor.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
+import { createHarness, ENV, key, settle } from "./service-test-support.js";
 import {
+  createTranscriptArtifactRuntime,
   DEFAULT_PREVIEW_WORKER_IMAGE,
   PREVIEW_WORKER_USER,
   resolveSeccompProfile,
+  type TranscriptArtifactRuntime,
 } from "./runtime.js";
 
 const IMAGE = process.env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE ?? DEFAULT_PREVIEW_WORKER_IMAGE;
+const PREVIOUS_IMAGE = process.env.ORKESTRATOR_TEST_PREVIOUS_ARTIFACT_PREVIEW_IMAGE;
 const imagePresent =
   spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore", timeout: 10_000 }).status ===
   0;
@@ -154,13 +159,6 @@ describe("container isolation", () => {
       );
       if (!result.ok) console.error("[preview-container.test]", result.error, result.diagnostics);
       expect(result.ok).toBe(true);
-      const mermaid = await runner.run(
-        { kind: "mermaid", source: "flowchart TD\n A-->B", theme: "dark" },
-        { environmentId: "env-c", conversationKey: "m", operationId: "op_container02" },
-        new AbortController().signal,
-      );
-      expect(mermaid.ok).toBe(true);
-
       // A page that never becomes ready: the supervisor kills the container and verifies it is gone.
       const loop = await preparer.prepare({
         artifactId: "art_container02",
@@ -216,6 +214,74 @@ describe("container isolation", () => {
       }
     },
     180_000,
+  );
+
+  liveTest(
+    "publishes Mermaid only with a receipt from the current container renderer",
+    async () => {
+      const harness = await createHarness();
+      let runtime: TranscriptArtifactRuntime | undefined;
+      try {
+        const { artifactId } = await harness.call("create_artifact", {
+          requestKey: key(),
+          draft: {
+            title: "Container diagram",
+            summary: "",
+            payload: { kind: "mermaid", source: "flowchart TD\n A-->B" },
+          },
+        });
+        const preview = async (image: string) => {
+          await runtime?.close();
+          runtime = await createTranscriptArtifactRuntime({
+            dataDir: harness.dataDir,
+            env: {
+              ORKESTRATOR_ARTIFACT_PREVIEW_ISOLATION: "container",
+              ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: image,
+            },
+          });
+          expect(runtime.config.isolation).toBe("container");
+          harness.service.attachRuntime(runtime);
+          const { operationId } = await harness.call("preview_artifact", {
+            requestKey: key(),
+            artifactId,
+            revision: 1,
+          });
+          const { operation } = await settle(harness, operationId);
+          return operation;
+        };
+        const publish = (receiptId: string) =>
+          harness.call("publish_artifact", {
+            requestKey: key(),
+            artifactId,
+            expectedRevision: 1,
+            receiptId,
+          });
+        // Opt in with a locally built worker from before worker attestation.
+        if (PREVIOUS_IMAGE) {
+          const previous = await preview(PREVIOUS_IMAGE);
+          expect(previous).toMatchObject({
+            status: "failed",
+            error: { code: "renderer_unavailable", resource: "mermaid-bundle" },
+          });
+          expect(previous.receiptId).toBeUndefined();
+          expect(await publish("receipt_missing")).toMatchObject({
+            ok: false,
+            error: { code: "not_found" },
+          });
+        }
+        const current = await preview(IMAGE);
+        expect(current.status).toBe("succeeded");
+        harness.service.store.transact(ENV, (records) => {
+          const receipt = records.get("receipt", current.receiptId);
+          expect(receipt?.identity.rendererBundleHash).toBe(mermaidRendererBundleHash());
+        });
+        expect((await publish(current.receiptId)).ok).toBe(true);
+      } finally {
+        await runtime?.close();
+        await harness.close();
+      }
+    },
+    120_000,
   );
 
   liveTest(

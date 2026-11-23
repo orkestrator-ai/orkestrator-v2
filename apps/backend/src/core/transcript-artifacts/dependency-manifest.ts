@@ -270,7 +270,9 @@ export function artifactDependencyManifestHash(): string {
 
 /** Identity of the application-owned Mermaid renderer bundles used by the preview worker. */
 export function mermaidRendererBundleHash(): string {
-  return dependencyListIdentity([RENDERER_BUNDLES.mermaid, RENDERER_BUNDLES.dompurify]);
+  // Invalidate receipts from backends that stamped their own hash on worker output.
+  const bundles = dependencyListIdentity([RENDERER_BUNDLES.mermaid, RENDERER_BUNDLES.dompurify]);
+  return sha256Hex(`mermaid-worker-attestation:v1:${bundles}`);
 }
 
 /** Identity of the pinned pdf.js bundles the worker renders PDF previews with. */

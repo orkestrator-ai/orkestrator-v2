@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { MERMAID_POLICY } from "@orkestrator/protocol/rich-content-policy";
 
 import { resolveDesignChromiumPath } from "../design/index.js";
+import { mermaidRendererBundleHash } from "./dependency-manifest.js";
 import { verifyMermaidSvg } from "./mermaid-svg.js";
 import { isAlive, listProcesses } from "./preview-process-tree.js";
 import { TranscriptPreviewRunner } from "./preview-runner.js";
@@ -81,6 +82,7 @@ function controlledPolicyRunner() {
         diagnostics: [],
         blockedRequests: {},
         captures: [],
+        rendererBundleHash: mermaidRendererBundleHash(),
         svg: svgWithElements(elements),
         diagramType: "flowchart",
         edges,
@@ -169,7 +171,7 @@ describe("mermaid rendering", () => {
         expect(result.svg).not.toMatch(UNSAFE);
         expect(result.svgElements).toBeGreaterThan(3);
         expect(result.svgElements).toBeLessThanOrEqual(MERMAID_POLICY.maxSvgElements);
-        expect(result.rendererBundleHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(result.rendererBundleHash).toBe(mermaidRendererBundleHash());
         expect((await verifyMermaidSvg(result.svg)).ok).toBe(true);
         if (name === "flowchart") expect(result.svg).toContain('marker-end="url(#');
       },

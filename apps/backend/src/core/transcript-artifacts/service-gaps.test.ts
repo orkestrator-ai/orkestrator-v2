@@ -10,6 +10,7 @@ import { TranscriptPreviewRunner } from "./preview-runner.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ARTIFACT_TOOL_POLICY, utf8ByteLength } from "@orkestrator/protocol/rich-content-policy";
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
+import { RENDERER_BUNDLES, dependencyListIdentity } from "./dependency-manifest.js";
 import { requestIdentity, reserveRequest } from "./service-context.js";
 import { identityInputHash } from "./service-identity.js";
 import {
@@ -328,6 +329,24 @@ describe("receipt freshness at publish", () => {
     expect(stale.error.message).toContain("browserBuild");
     h.runner.browserBuild = "chromium-test-1";
     expect((await publish(mermaid.artifactId, mermaid.receiptId)).ok).toBe(true);
+  });
+
+  test("a Mermaid receipt stamped without worker attestation stays stale without a runner", async () => {
+    h.runner.bundleHashes.mermaid = dependencyListIdentity([
+      RENDERER_BUNDLES.mermaid,
+      RENDERER_BUNDLES.dompurify,
+    ]);
+    const { artifactId, receiptId } = await receiptFor({
+      title: "M",
+      summary: "",
+      payload: { kind: "mermaid", source: "graph TD; A-->B" },
+    });
+    h.service.attachRuntime({});
+    const stale = await publish(artifactId, receiptId);
+    expect(stale.error).toMatchObject({
+      code: "preview_stale",
+      message: expect.stringContaining("rendererBundleHash"),
+    });
   });
 
   test("a chart receipt binds the versioned chart renderer bundle", async () => {

@@ -18,7 +18,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
-import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
+import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { resetDockerTopologyCache } from "../src/core/containers/image";
 import { imageManifestArchive } from "./container-lifecycle-fixtures";

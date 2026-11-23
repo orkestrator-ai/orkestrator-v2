@@ -9,7 +9,7 @@
   - `bridges/cursor-bridge/src/initial-run.test.ts`: `replaces an unused warm agent when a read-only prompt changes its policy` (5001.32 ms).
   - `apps/desktop/scripts/dev/coordinator-live.test.ts`: `fixture tree digest > names every class of change a coordinator could make` (5013.68 ms).
   - `apps/backend/src/core/coordinator/service.test.ts`: `project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe` (5082.51 ms); see [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md).
-  - `apps/backend/src/core/environment-move.test.ts`: `restart recovery re-links submodules of an adopted or abandoned copy` (5166.33 ms); see [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md).
+  - `apps/backend/src/core/environments/move.test.ts`: `restart recovery re-links submodules of an adopted or abandoned copy` (5166.33 ms); see [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md).
 - **Owner reruns:** each complete unchanged owner passed alone with `bun test <file>` from its package: backend pair 93 passed (36.97 s), desktop 48 passed (2.42 s), cursor bridge 18 passed (4.41 s).
 - **Evidence:** `orkestrator-test-run.TPZZNA/` under the host temporary directory.
 
@@ -21,4 +21,4 @@ Stays open. Root failures were branch defects fixed in the change; the digest, c
 
 ## Triage (2026-11-15)
 
-Left open. `apps/backend/src/core/coordinator/service.test.ts` and `apps/backend/src/core/environment-move.test.ts` each call `setDefaultTimeout(30_000)`, a budget smaller than `tests/default-test-timeout.ts` (60 s), so the shared default does not govern them; their per-file cases [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) own the fix. The `coordinator-live.test.ts` digest case ([0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)) and the Cursor `initial-run.test.ts` case set no budget for the failing test, so the shared default now covers them; no Cursor owner case exists yet.
+Left open. `apps/backend/src/core/coordinator/service.test.ts` and `apps/backend/src/core/environments/move.test.ts` each call `setDefaultTimeout(30_000)`, a budget smaller than `tests/default-test-timeout.ts` (60 s), so the shared default does not govern them; their per-file cases [0165](../coordinator-and-multi-review/0165-coordinator-bound-discard-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) own the fix. The `coordinator-live.test.ts` digest case ([0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md)) and the Cursor `initial-run.test.ts` case set no budget for the failing test, so the shared default now covers them; no Cursor owner case exists yet.

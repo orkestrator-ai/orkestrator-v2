@@ -24,7 +24,7 @@ import {
   SETUP_FAILURE_REASONS,
   setupFailureReasonOscSequence,
 } from "./containers/scripts.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import type { PtyExitEvent, PtyProcess } from "./pty.js";
 import { createPreviewHarness } from "./previews/test-support.js";
 import {
@@ -35,6 +35,9 @@ import {
 } from "./setup-terminal-attempt.js";
 import type { ContainerTerminalShell } from "./containers/terminal-shell.js";
 import { TerminalRuntime } from "./terminals/runtime.js";
+
+/** Setup shells end in `exec <shell> -l`, which ignores SIGTERM: escalate fast. */
+const FAST_TERMINATE = { terminateGraceMs: 50 };
 
 const ROOT_REASON = setupFailureReasonOscSequence("root-steps-need-full-network");
 
@@ -257,7 +260,7 @@ describe("retireFinishedSetupTerminal", () => {
 
   test("a retry whose old tree survives spawns no replacement", async () => {
     const harness = await createPreviewHarness();
-    const runtime = new BackendRuntime({ emit: () => undefined });
+    const runtime = new BackendRuntime({ emit: () => undefined, terminals: FAST_TERMINATE });
     try {
       await harness.addLocalEnvironment("a");
       await harness.storage.updateEnvironment("a", { worktreePath: harness.dir });
@@ -358,7 +361,7 @@ describe("setup retry", () => {
     "a retry after a failed run runs its commands in a new terminal and settles",
     async () => {
       const harness = await createPreviewHarness();
-      const runtime = new BackendRuntime({ emit: () => undefined });
+      const runtime = new BackendRuntime({ emit: () => undefined, terminals: FAST_TERMINATE });
       const originalShell = process.env.SHELL;
       // The setup command ends in `exec <shell> -l`; a plain sh keeps the host
       // user's interactive configuration out of the test.
@@ -445,10 +448,10 @@ test.each(["reserved", "failed"])(
       ENVIRONMENT_ISOLATION_ENV_NAMES,
       environmentIsolationVariables,
       formatEnvironmentIsolationNotice,
-    } = await import("./environment-isolation.js");
+    } = await import("./environments/isolation.js");
     const { quoteShell } = await import("./commands-agent-support.js");
     const harness = await createPreviewHarness();
-    const runtime = new BackendRuntime({ emit: () => undefined });
+    const runtime = new BackendRuntime({ emit: () => undefined, terminals: FAST_TERMINATE });
     const inherited = [...ENVIRONMENT_ISOLATION_ENV_NAMES, "SHELL"].map(
       (name) => [name, process.env[name]] as const,
     );

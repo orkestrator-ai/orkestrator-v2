@@ -18,10 +18,10 @@ describe("pinned bundle licenses", () => {
       expect(ALL_PINNED_BUNDLES.map((bundle) => bundle.id).sort()).toEqual([
         "chart.js@4.5.1",
         "d3@7.9.0",
-        "dompurify@3.4.17",
-        "mermaid@12.2.0",
-        "pdfjs-dist-worker@6.4.299",
-        "pdfjs-dist@6.4.299",
+        "dompurify@3.5.0",
+        "mermaid@12.3.0",
+        "pdfjs-dist-worker@6.5.438",
+        "pdfjs-dist@6.5.438",
       ]);
       for (const bundle of ALL_PINNED_BUNDLES) {
         expect(bundle.licenseFiles.length).toBeGreaterThan(0);

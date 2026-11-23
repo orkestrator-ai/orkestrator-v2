@@ -13,21 +13,21 @@ import { StorageService } from "./storage.js";
 import {
   EnvironmentLifecycleTaskTracker,
   reconcileInterruptedEnvironmentLifecycleTasks,
-} from "./environment-lifecycle-tasks.js";
+} from "./environments/lifecycle-tasks.js";
 import {
   closeEnvironmentCleanupStorage,
   ENVIRONMENT_CLEANUP_LEDGER_STORE,
   environmentCleanupLedger,
-} from "./environment-cleanup-ledger.js";
+} from "./environments/cleanup-ledger.js";
 import { StorageDatabase } from "./storage-database.js";
-import { reconcileEnvironmentCleanup } from "./environment-cleanup-reconciler.js";
-import { environmentStateDirectories } from "./environment-state-paths.js";
+import { reconcileEnvironmentCleanup } from "./environments/cleanup-reconciler.js";
+import { environmentStateDirectories } from "./environments/state-paths.js";
 import { setupTerminalSessionId } from "./commands-terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
 import { dockerOwnerNamespace } from "./containers/ownership.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { deleteEnvironmentTask } from "./environment-delete.js";
+import { deleteEnvironmentTask } from "./environments/delete.js";
 
 import { projectHomeMailAttachmentDir } from "./mail-attachments.js";
 import {

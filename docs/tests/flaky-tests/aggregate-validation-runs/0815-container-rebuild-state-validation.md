@@ -13,7 +13,7 @@
   - `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx`: `AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning`.
   - `apps/backend/src/core/commands-agent-tools.test.ts`: `OpenCode agent-tool configuration > reconciles in the background and memoizes a healthy generation`.
   - `apps/backend/tests/standalone-ready.test.ts`: `waitForStandaloneBackendReady > escalates SIGTERM to SIGKILL after the grace period`.
-  - `apps/backend/src/core/environment-move.test.ts`: `restart recovery re-links submodules of an adopted or abandoned copy` (5051.39 ms); see [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md).
+  - `apps/backend/src/core/environments/move.test.ts`: `restart recovery re-links submodules of an adopted or abandoned copy` (5051.39 ms); see [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md).
 - **Owner reruns (unchanged files, alone, `--parallel=1` through `test:logged`):**
   - Passed on the first rerun: the codex coalescer, desktop partition retention, desktop transport manager, web agent commands, backend agent tools and backend standalone-ready owners.
   - `environment-move.test.ts` failed its first logged rerun. It then passed directly (37 passed, 0 failed) and on a second logged rerun.

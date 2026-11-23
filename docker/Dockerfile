@@ -132,7 +132,7 @@ RUN groupmod -n node bun \
 # terminals — need genuine Node (not bun's node shim). This also provides npm
 # for the global CLI installs below. /usr/local/bin precedes the bun-node
 # fallback on PATH, so this node takes precedence.
-ARG NODE_VERSION=24.22.2
+ARG NODE_VERSION=24.22.3
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
     amd64) NODE_ARCH=x64 ;; \
@@ -174,11 +174,11 @@ RUN mkdir -p /workspace /opencode-state /home/node/.claude /home/node/.codex /ho
 
 WORKDIR /workspace
 
-ARG GIT_DELTA_VERSION=0.20.1
+ARG GIT_DELTA_VERSION=0.21.2
 RUN ARCH=$(dpkg --print-architecture) && \
   case "$ARCH" in \
-    amd64) GIT_DELTA_SHA=0683067a4cbbcc19b9fd2841253131d1b37ccfa724725098d811d4d0d9fcc25b ;; \
-    arm64) GIT_DELTA_SHA=6e08b734d611037eb9eb5db883cab7ac0a089216a9efdc1d2caac44319029c28 ;; \
+    amd64) GIT_DELTA_SHA=a4e159f91f97ebee8db223b697a81356c0cfedd312af6f1c161bdc4176b03d9d ;; \
+    arm64) GIT_DELTA_SHA=fe53d5a3d07687a8f444e419a0ae4ed1098792658af58e4006b012e5c5c198b0 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   wget "https://github.com/dandavison/delta/releases/download/${GIT_DELTA_VERSION}/git-delta_${GIT_DELTA_VERSION}_${ARCH}.deb" && \
@@ -362,7 +362,7 @@ RUN find /usr/local/share/npm-global/lib/node_modules/@openai \
 # namespaces (the default seccomp profile blocks them), so an explicit
 # `chromiumSandbox: true` dies with "Chromium sandboxing failed!". The container
 # is the isolation boundary.
-ARG PLAYWRIGHT_VERSION=1.65.0
+ARG PLAYWRIGHT_VERSION=1.65.1
 # One shared browser root, readable by `node` and by the uid-0 `orkroot` used for
 # root terminals, instead of a per-user ~/.cache/ms-playwright copy.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -401,11 +401,11 @@ USER root
 # Starship owns the interactive Zsh prompt. Use the static musl artifacts on
 # both supported architectures so the prompt binary has no runtime libc
 # dependency, and verify the pinned release before installing it.
-ARG STARSHIP_VERSION=1.26.0
+ARG STARSHIP_VERSION=1.27.0
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3 ;; \
-    arm64) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b ;; \
+    amd64) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=10c8eb4cb3b761d9bf59ea828444c2dab36c900b7d69a69e08814b286969df89 ;; \
+    arm64) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=341f5cbf24699fa0b27ec88965ad25f862ea09e15d35a543fd6ffdff1d2aa00d ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   STARSHIP_TARBALL="starship-${STARSHIP_TARGET}.tar.gz" && \
@@ -427,11 +427,11 @@ RUN ARCH="$(dpkg --print-architecture)" && \
 # (`mise install --system` would add another 107 MB binary and a 50 MB download
 # cache). A repository pinning the same Bun therefore needs no download, and the
 # install stays visible if a devcontainer mounts over the node user's home.
-ARG MISE_VERSION=2026.10.9
+ARG MISE_VERSION=2026.11.12
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) MISE_ARCH=x64; MISE_SHA=7af2e3d798e9ddec142f5a968a18c3f33aa68d19aa8a4111302d4c7d04feb6fa ;; \
-    arm64) MISE_ARCH=arm64; MISE_SHA=9a58b5b72e58ed66f38d6d2550c2f6279d8c39884574c389a39a9c441a5580b9 ;; \
+    amd64) MISE_ARCH=x64; MISE_SHA=4b029e19afc575875a4962dfe5d5e31cc93ab0317242768d0234adec219d3e14 ;; \
+    arm64) MISE_ARCH=arm64; MISE_SHA=9a125763f8445ea28d2da0e943fe5ad7d81b397d78f173cc07c1cc18ee2bee47 ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   MISE_TARBALL="mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" && \

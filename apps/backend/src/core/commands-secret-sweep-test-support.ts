@@ -118,7 +118,7 @@ async function main(root: string, resultFile: string): Promise<void> {
   const { createCommandRegistry } = await import("./commands.js");
   const { StorageService, createProject } = await import("./storage.js");
   const { createEnvironment } = await import("./storage-shared-core.js");
-  const { EnvironmentLifecycleTaskTracker } = await import("./environment-lifecycle-tasks.js");
+  const { EnvironmentLifecycleTaskTracker } = await import("./environments/lifecycle-tasks.js");
   const { BackendRuntime } = await import("./backend-runtime.js");
 
   const projectPath = path.join(root, "project");

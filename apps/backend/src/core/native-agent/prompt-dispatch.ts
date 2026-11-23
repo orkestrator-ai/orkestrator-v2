@@ -78,7 +78,7 @@ import {
   isProjectHomeEnvironment,
   reconcileProjectHomeEnvironment,
 } from "../project-home-environment.js";
-import { isGeneratedEnvironmentName } from "../environment-name.js";
+import { isGeneratedEnvironmentName } from "../environments/index.js";
 import { parseGoalCarrier } from "@orkestrator/protocol/native-agent-goal";
 import { GoalCommandError } from "./goal-service.js";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";

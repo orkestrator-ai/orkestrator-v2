@@ -24,7 +24,7 @@ owning package directory.
 | `apps/desktop/electron/application-logging.test.ts` | `application logging shutdown > holds the quit open until the flush completes, then quits once` (73.4 ms). | 25 pass, 0 fail. |
 | `apps/desktop/tests/backend-lifecycle.test.ts` | `desktop backend lifecycle > quits anyway when the backend outlives its exit deadline` (120.0 ms). | 5 pass, 0 fail. |
 | `tests/unit/disk-report.test.ts` | `disk report > reports an isolated checkout and only fixes named legacy Turbo artifacts` hit the five-second deadline (5,027 ms). | The first rerun failed one case. The next three complete reruns each gave 5 pass, 0 fail. |
-| `apps/backend/src/core/environment-move.test.ts` | `move_environment > a failed submodule re-link restores the original checkout` hit the deadline (5,154.8 ms). | 37 pass, 0 fail. |
+| `apps/backend/src/core/environments/move.test.ts` | `move_environment > a failed submodule re-link restores the original checkout` hit the deadline (5,154.8 ms). | 37 pass, 0 fail. |
 | `apps/backend/src/core/agent-skills.test.ts` | `scanAgentSkills > bounds entries per root and total skills across plugin roots` (6,476.6 ms). | 86 pass, 0 fail. |
 
 Existing related cases:

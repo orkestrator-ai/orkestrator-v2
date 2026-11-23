@@ -1,16 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 import { ProviderUnavailableError, readProviderStatus } from "../agent-provider-contract.js";
-import {
-  OPENCODE2_STOP_CLEANUP_MS,
-  OPENCODE2_STOP_SETTLE_MS,
-  OpenCode2BackgroundWork,
-} from "./background-subagents.js";
+import { OpenCode2BackgroundWork } from "./background-subagents.js";
 import { OpenCode2Client } from "./client.js";
 import { openCode2TurnTerminalError } from "./environment-provider.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
 import { OpenCode2Provider } from "./provider.js";
 import { openCode2RequestRun } from "./workflow-results.js";
 import type { OpenCode2Message } from "./types.js";
+
+/**
+ * A short stop settle window, so stops whose assertions do not depend on its
+ * length do not each wait out the production three seconds.
+ */
+const SETTLE_MS = 250;
+const CLEANUP_DEADLINE_MS = 1_250;
 
 /**
  * OpenCode 2.3.0 runs every sub-agent in the background: the parent's run
@@ -32,6 +36,7 @@ function setup() {
   server = new FakeOpenCode2Server();
   clock = Date.now();
   provider = new OpenCode2Provider(server.client(), {
+    stopSettleMs: SETTLE_MS,
     monitorEvents: false,
     now: () => clock,
   });
@@ -272,6 +277,7 @@ describe("background shells (2.3.1)", () => {
       throw new Error("offline");
     };
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: async () => new Set(),
       now: () => clock,
     });
@@ -288,7 +294,11 @@ describe("shell settlement and Stop interleavings", () => {
     server = new FakeOpenCode2Server();
     clock = Date.now();
     const client = server.client();
-    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    provider = new OpenCode2Provider(client, {
+      monitorEvents: false,
+      stopSettleMs: SETTLE_MS,
+      now: () => clock,
+    });
     return { server, provider, client };
   }
 
@@ -380,7 +390,10 @@ describe("shell settlement and Stop interleavings", () => {
         turn: { requestId: "old", settled: false },
       });
     };
-    const replacement = new OpenCode2Provider(server.client(), { monitorEvents: false });
+    const replacement = new OpenCode2Provider(server.client(), {
+      monitorEvents: false,
+      stopSettleMs: SETTLE_MS,
+    });
     try {
       const stopping = provider.abort(id);
       await reached.promise;
@@ -427,6 +440,7 @@ describe("shell settlement and Stop interleavings", () => {
       return interrupt(...args);
     };
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: () => clock,
       sleep: async (ms) => {
@@ -447,6 +461,7 @@ describe("shell settlement and Stop interleavings", () => {
     server.backgroundShells[0]!.time.completed = clock;
     let polls = 0;
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: () => clock,
       sleep: async (ms) => {
@@ -469,36 +484,42 @@ describe("shell settlement and Stop interleavings", () => {
       const { server, provider, client } = setupWork();
       const parent = await provider.createSession("build", "stop");
       const child = server.addChildSession(parent, { running: false });
-      let elapsed = 0;
+      const timers = new ManualClock();
       const scans: number[] = [];
       const activeSessions = client.activeSessions.bind(client);
       client.activeSessions = (...args) => {
-        scans.push(elapsed);
+        scans.push(timers.now());
         if (scans.length === 2) {
-          elapsed = OPENCODE2_STOP_SETTLE_MS - 50;
+          timers.advance(100);
           server.reportChild(child);
         }
+        // The final reconciliation can still read just before the cleanup deadline.
+        if (scans.length === 3) timers.advance(CLEANUP_DEADLINE_MS - 1 - timers.now());
         return activeSessions(...args);
       };
       const interrupt = client.interrupt.bind(client);
       const interrupted: string[] = [];
       client.interrupt = async (...args) => {
         interrupted.push(args[0]);
-        elapsed += 100;
+        timers.advance(100);
         return clearsRun ? interrupt(...args) : false;
       };
       const work = new OpenCode2BackgroundWork(client, {
+        stopSettleMs: SETTLE_MS,
         running: () => client.activeSessions(),
         now: () => clock,
-        monotonicNow: () => elapsed,
+        monotonicNow: () => timers.now(),
+        timers,
         sleep: async (ms) => {
-          elapsed += ms;
+          timers.advance(ms);
         },
       });
 
       expect(await work.stop(parent)).toBe(clearsRun);
       expect(interrupted).toEqual([parent]);
-      expect(scans).toEqual([0, 100, OPENCODE2_STOP_SETTLE_MS + 50]);
+      expect(scans).toEqual([0, 100, 300]);
+      expect(timers.now()).toBe(CLEANUP_DEADLINE_MS - 1);
+      expect(timers.pendingCount()).toBe(0);
       expect(server.sessions.get(parent)?.running).toBe(!clearsRun);
     },
   );
@@ -530,6 +551,7 @@ describe("shell settlement and Stop interleavings", () => {
         ),
       });
       const work = new OpenCode2BackgroundWork(malformedClient, {
+        stopSettleMs: SETTLE_MS,
         running: () => client.activeSessions(),
         now: () => clock,
         sleep: async (ms) => {
@@ -555,6 +577,7 @@ describe("shell settlement and Stop interleavings", () => {
       throw new Error("refused");
     };
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: () => clock,
       sleep: async (ms) => {
@@ -570,6 +593,8 @@ describe("shell settlement and Stop interleavings", () => {
     const { server, provider } = setupWork();
     const id = await provider.createSession("build", "hung deletes");
     for (let n = 0; n < 8; n++) server.addBackgroundShell(id);
+    const timers = new ManualClock();
+    const poolStarted = Promise.withResolvers<void>();
     let sent = 0;
     let aborted = 0;
     const client = new OpenCode2Client({
@@ -579,8 +604,10 @@ describe("shell settlement and Stop interleavings", () => {
       fetch: Object.assign(
         async (...args: Parameters<typeof fetch>) => {
           if (args[1]?.method !== "DELETE") return fetch(...args);
-          sent++;
           const signal = args[1].signal!;
+          signal.throwIfAborted();
+          sent++;
+          if (sent === 4) poolStarted.resolve();
           return new Promise<Response>((_, reject) => {
             signal.addEventListener(
               "abort",
@@ -596,14 +623,27 @@ describe("shell settlement and Stop interleavings", () => {
       ),
     });
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: Date.now,
+      monotonicNow: () => timers.now(),
+      timers,
     });
-    const start = performance.now();
-    expect(await work.stop(id)).toBe(false);
-    expect(performance.now() - start).toBeLessThan(OPENCODE2_STOP_CLEANUP_MS + 1_000);
-    expect([sent, aborted]).toEqual([4, 4]);
-  }, 8_000);
+    const pending = work.stop(id);
+    try {
+      expect(timers.pendingDelays()).toEqual([CLEANUP_DEADLINE_MS]);
+      await Promise.race([pending, poolStarted.promise]);
+      timers.advance(CLEANUP_DEADLINE_MS - 1);
+      expect([sent, aborted]).toEqual([4, 0]);
+      timers.advance(1);
+      expect(await pending).toBe(false);
+      expect([sent, aborted]).toEqual([4, 4]);
+      expect(timers.pendingCount()).toBe(0);
+    } finally {
+      work.dispose();
+      await pending;
+    }
+  });
 });
 
 describe("openCode2RequestRun", () => {
@@ -671,6 +711,7 @@ describe("background work read failures and stop races", () => {
     const { server, parent } = await launched();
     const client = server.client();
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: async () => {
         throw new Error("offline");
       },
@@ -678,6 +719,7 @@ describe("background work read failures and stop races", () => {
     });
     expect(await work.live(parent)).toBe(true);
     const work2 = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: async () => new Set(),
       now: () => clock,
     });
@@ -695,7 +737,11 @@ describe("background work read failures and stop races", () => {
   test("a failed inbox read keeps observation pending and suppresses the launch result", async () => {
     server = new FakeOpenCode2Server();
     const client = server.client();
-    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    provider = new OpenCode2Provider(client, {
+      monitorEvents: false,
+      stopSettleMs: SETTLE_MS,
+      now: () => clock,
+    });
     const parent = await provider.createSession("plan", "p");
     await provider.send(parent, "plan", { requestId: "read-failure", schema: { type: "object" } });
     const child = server.addChildSession(parent, { running: false });
@@ -733,6 +779,9 @@ describe("background work read failures and stop races", () => {
       }
       let polls = 0;
       const work = new OpenCode2BackgroundWork(client, {
+        // The late change lands on the third poll; the instant fake sleep
+        // makes the poll count, not real time, bound this window.
+        stopSettleMs: 1_000,
         now: () => clock,
         running: async () =>
           new Set([...server.sessions.values()].filter((s) => s.running).map((s) => s.id)),

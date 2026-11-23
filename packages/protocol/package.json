@@ -428,7 +428,7 @@
     "./testing/codex-managed-network-card": "./src/testing/codex-managed-network-card.ts"
   },
   "dependencies": {
-    "effect": "4.1.2"
+    "effect": "4.1.5"
   },
   "scripts": {
     "build": "bun check -p tsconfig.json",

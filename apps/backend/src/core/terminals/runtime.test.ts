@@ -1,21 +1,23 @@
 import { eventSink } from "../backend-emit.js";
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import {
   installControlledTimeout,
   type ControlledTimeout,
 } from "../../../../../tests/helpers/controlled-timeout.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
-import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
+import { setupTerminalSessionId } from "../commands-terminal.js";
+import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { createEnvironment, type StorageService } from "../storage.js";
 import type { ContainerTerminalShell } from "../containers/terminal-shell.js";
-import type { PtyProcess } from "../pty.js";
+import type { PtyProcess, PtyTerminateOptions } from "../pty.js";
 import {
   TERMINAL_ACTIVITY_PERSIST_RETRY_DELAYS_MS,
   TERMINAL_ACTIVITY_SETTLE_MS,
   TERMINAL_COMPLETION_NOTIFY_RETRY_DELAYS_MS,
   TERMINAL_OUTPUT_RETENTION_MS,
-  type TerminalRuntime,
+  TerminalRuntime,
 } from "./runtime.js";
 
 const runtimes: BackendRuntime[] = [];
@@ -92,6 +94,34 @@ function fixture() {
 function settlePromises(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
+describe("terminal environment termination", () => {
+  test.each([
+    [50, { graceMs: 50 }],
+    [0, { graceMs: 0 }],
+    [undefined, undefined],
+  ] as const)("passes the configured grace period %s to the PTY", async (graceMs, expected) => {
+    const terminals = new TerminalRuntime({ terminateGraceMs: graceMs });
+    const terminate = mock(async (_options?: PtyTerminateOptions) => true);
+    const id = setupTerminalSessionId("environment");
+    terminals.registerProcess(id, {
+      pid: fakePid(1),
+      onData: () => ({ dispose: () => undefined }),
+      onExit: () => ({ dispose: () => undefined }),
+      write: () => undefined,
+      resize: () => undefined,
+      kill: () => undefined,
+      terminate,
+    });
+    try {
+      expect(await terminals.terminateSessionsForEnvironment("environment")).toEqual([]);
+      expect(terminate.mock.calls).toEqual([[expected]]);
+      expect(terminals.hasProcess(id)).toBe(false);
+    } finally {
+      terminals.shutdown();
+    }
+  });
+});
 
 describe("terminal runtime shutdown", () => {
   test("cancels only its own output-retention and activity timers", async () => {

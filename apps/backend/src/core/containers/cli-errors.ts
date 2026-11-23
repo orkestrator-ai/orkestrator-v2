@@ -150,3 +150,48 @@ export async function dockerContainerExitEvidence(
     return "unknown";
   }
 }
+
+/**
+ * Which daemon start a call reached. Docker publishes no start time of its
+ * own, but every daemon start deletes and recreates the default `bridge`
+ * network when no container survives the restart (moby
+ * `configureNetworking`, "Clear stale bridge network"), so that network's ID
+ * and creation time change exactly when the daemon restarts. Live-restore
+ * keeps it while containers survive; so does a daemon run with
+ * `--bridge=none`, which has no such network and reads as `unknown`.
+ */
+export type DockerDaemonStart =
+  { kind: "started"; marker: string } | { kind: "unreachable" } | { kind: "unknown" };
+
+export async function dockerDaemonStart(timeoutMs = 10_000): Promise<DockerDaemonStart> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      ["network", "inspect", "bridge", "--format", "{{.Id}} {{.Created}}"],
+      { timeoutMs },
+    );
+    const marker = stdout.trim();
+    return /^[0-9a-f]{12,} \S/.test(marker) ? { kind: "started", marker } : { kind: "unknown" };
+  } catch (error) {
+    if (error instanceof CommandFailedError && error.timedOut) return { kind: "unreachable" };
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/permission denied|access denied/i.test(message) && isDockerDaemonUnreachable(message)) {
+      return { kind: "unreachable" };
+    }
+    return { kind: "unknown" };
+  }
+}
+
+/**
+ * Compares the daemon start read before a step with the one read after it.
+ * `restarted` only when both reads named a start and they differ; a daemon
+ * that does not answer afterwards is `unreachable`.
+ */
+export function dockerDaemonRestartBetween(
+  before: DockerDaemonStart,
+  after: DockerDaemonStart,
+): "restarted" | "same" | "unreachable" | "unknown" {
+  if (after.kind === "unreachable") return "unreachable";
+  if (before.kind !== "started" || after.kind !== "started") return "unknown";
+  return before.marker === after.marker ? "same" : "restarted";
+}

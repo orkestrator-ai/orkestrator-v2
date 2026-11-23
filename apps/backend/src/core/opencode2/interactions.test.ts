@@ -17,7 +17,7 @@ afterEach(async () => {
 
 async function setup() {
   server = new FakeOpenCode2Server();
-  provider = new OpenCode2Provider(server.client(), { monitorEvents: false });
+  provider = new OpenCode2Provider(server.client(), { monitorEvents: false, stopSettleMs: 250 });
   const sessionId = await provider.createSession("build", "x");
   return { server, provider, sessionId, session: server.sessions.get(sessionId)! };
 }

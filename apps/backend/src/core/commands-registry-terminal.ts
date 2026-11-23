@@ -229,7 +229,7 @@ import {
   applyActiveAgentAccountsForContainerTerminal,
   stripInheritedAgentCredentials,
 } from "./agent-accounts/index.js";
-import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environments/index.js";
 
 /**
  * Starts a container terminal's `docker exec -it` shell, marked with a fresh

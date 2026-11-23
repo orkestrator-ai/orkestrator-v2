@@ -141,15 +141,15 @@ describe("container runtime environment wiring", () => {
     const gitAliases = read("docker/container-git-aliases.zsh");
     const shellVerifier = read("docker/verify-container-shell.sh");
 
-    expect(dockerfile).toContain("ARG STARSHIP_VERSION=1.26.0");
+    expect(dockerfile).toContain("ARG STARSHIP_VERSION=1.27.0");
     expect(dockerfile).toContain(
       "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/${STARSHIP_TARBALL}",
     );
     expect(dockerfile).toContain(
-      "amd64) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=b7c232b0e8249d8e55a40beb79c5c43a7d370f3f9408bd215deb0170daeaadf3 ;;",
+      "amd64) STARSHIP_TARGET=x86_64-unknown-linux-musl; STARSHIP_SHA=10c8eb4cb3b761d9bf59ea828444c2dab36c900b7d69a69e08814b286969df89 ;;",
     );
     expect(dockerfile).toContain(
-      "arm64) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=dc30189378d2f2e287384e8a692d3f95ad1df64cf0e8c36aa9201516028aed6b ;;",
+      "arm64) STARSHIP_TARGET=aarch64-unknown-linux-musl; STARSHIP_SHA=341f5cbf24699fa0b27ec88965ad25f862ea09e15d35a543fd6ffdff1d2aa00d ;;",
     );
     expect(dockerfile).toContain("sha256sum -c -");
     expect(dockerfile).toContain("COPY docker/starship.toml /etc/starship.toml");

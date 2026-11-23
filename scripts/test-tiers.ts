@@ -106,10 +106,10 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/coordinator/surface-actions.test.ts",
     "src/core/design/renderer.test.ts",
     "src/core/diff-stats-tracking.test.ts",
-    "src/core/environment-cleanup-reconciler.test.ts",
-    "src/core/environment-cleanup.test.ts",
-    "src/core/environment-move.test.ts",
-    "src/core/environment-move.*.test.ts",
+    "src/core/environments/cleanup-reconciler.test.ts",
+    "src/core/environments/cleanup.test.ts",
+    "src/core/environments/move.test.ts",
+    "src/core/environments/move.*.test.ts",
     "src/core/index.test.ts",
     "src/core/native-agent/service-progressive.test.ts",
     "src/core/nodes/node-project-copy.test.ts",
@@ -129,9 +129,14 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     "src/core/credentials/service-runs.test.ts",
     "src/core/terminals/history-part-*.test.ts",
     "src/core/worktrees/snapshots-git.test.ts",
+    // Every case spawns real CLI processes that cold-boot the gateway.
+    "src/gateway-result-channels.test.ts",
     "src/preview-publication.test.ts",
     "src/remote-bandwidth-baseline.test.ts",
     "tests/gateway-proxy-idle-timers.test.ts",
+    // Command-line checks of the mail-store size benchmark: ten cold `bun`
+    // subprocesses, one of them a real sized run.
+    "tests/agent-mail-store-size-bench.test.ts",
     // Twenty concurrent `sh` hook writers, and one held off by a real flock holder.
     "tests/claude-state-signal-hook-writers.test.ts",
     "tests/commands-environment-fork.test.ts",
@@ -155,6 +160,9 @@ export const SLOW_TESTS: Readonly<Record<string, readonly string[]>> = {
     // Runs the real entrypoint.sh setup section in bash about 60 times.
     "tests/portable-inputs-stamps.test.ts",
     "tests/recurring-baseline.test.ts",
+    // The terminal-latency harness: a real PTY and client and producer
+    // processes, asserting a wall-clock budget.
+    "tests/terminal-latency-smoke.test.ts",
     "tests/standalone.test.ts",
     "tests/standalone.*.test.ts",
     "tests/worktree-watcher-real.test.ts",

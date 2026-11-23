@@ -14,7 +14,7 @@ import {
   useUpdateNodeInternals,
   type Connection,
   type EdgeMouseHandler,
-  type NodeChange,
+  type NodeChangeset,
   type NodeMouseHandler,
   type OnNodeDrag,
   type XYPosition,
@@ -200,11 +200,8 @@ function GraphCanvasInner({
     [model.edges, selection],
   );
 
-  const onNodesChange = useCallback((changes: NodeChange<GraphCanvasNode>[]) => {
-    const sizes = changes.filter(
-      (change): change is Extract<NodeChange<GraphCanvasNode>, { type: "dimensions" }> =>
-        change.type === "dimensions" && Boolean(change.dimensions),
-    );
+  const onNodesChange = useCallback((changes: NodeChangeset<GraphCanvasNode>) => {
+    const sizes = changes.getByType("dimensions").filter((change) => Boolean(change.dimensions));
     if (sizes.length > 0) {
       setMeasured((previous) => {
         const next = new Map(previous);
@@ -212,10 +209,7 @@ function GraphCanvasInner({
         return next;
       });
     }
-    const moves = changes.filter(
-      (change): change is Extract<NodeChange<GraphCanvasNode>, { type: "position" }> =>
-        change.type === "position" && Boolean(change.position),
-    );
+    const moves = changes.getByType("position").filter((change) => Boolean(change.position));
     if (moves.length > 0) {
       setDragged((previous) => {
         const next = new Map(previous);
@@ -351,7 +345,8 @@ function GraphCanvasInner({
   useEffect(() => {
     if (!isActive || !nodesInitialized || fittedRef.current) return;
     fittedRef.current = true;
-    void flow.fitView({ padding: 0.12, maxZoom: 1 }).then(() => {
+    // React Flow 13 reads a bare number as pixels; 0.12 in the old units is 5.4%.
+    void flow.fitView({ padding: "5.4%", maxZoom: 1 }).then(() => {
       if (flow.getZoom() >= GRAPH_READABLE_ZOOM) return;
       const bounds = flow.getNodesBounds(flow.getNodes());
       const height = wrapperRef.current?.clientHeight ?? 0;
@@ -516,8 +511,10 @@ function GraphCanvasInner({
           nodesFocusable
           edgesFocusable={false}
           elementsSelectable={false}
+          // React Flow 13 lifts selected edges above the nodes by default.
+          elevateEdgesOnSelect={false}
           disableKeyboardA11y
-          colorMode="dark"
+          forceColorMode="dark"
           minZoom={0.15}
           maxZoom={1.75}
           proOptions={{ hideAttribution: true }}

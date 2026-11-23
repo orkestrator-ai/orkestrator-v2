@@ -4,7 +4,7 @@
 - **Status:** open
 - **Date observed:** 2026-11-18
 - **Test:** `rejected path commit clears the journal and preserves subsequent edits (false)`
-- **File:** `apps/backend/src/core/environment-move.recovery.test.ts`
+- **File:** `apps/backend/src/core/environments/move.recovery.test.ts`
 - **Host:** GitHub Actions `ubuntu-latest`, job `Tests (backend)` of CI run
   44337206799, Bun 1.4.4.
 - **Observing head:** `a671716be` (`main`, #2427).
@@ -29,7 +29,7 @@ worktree's Git admin directory was missing when the watcher armed.
 
 The runner's automatic rerun of the owning file alone passed (5.7 s, "PASSED
 ALONE … likely a load flake"). Locally on 2026-11-18 (arktech-mini, macOS
-arm64) `bun test src/core/environment-move.recovery.test.ts` from
+arm64) `bun test src/core/environments/move.recovery.test.ts` from
 `apps/backend` passed: 23 pass, 0 fail. The same test passed in every other
 `main` run on 2026-11-18 (runs 44311961894, 44330445220, 44340094394,
 44347375426, 44363313590).
@@ -56,7 +56,7 @@ restored registration and, if it did, when it went missing again.
 ## Investigation — 2026-11-19 (stays open)
 
 Not reproduced on macOS at base `fe9d1f5d6`:
-`mise run test:logged -- --name move-9822 -- bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=apps/backend test ./src/core/environment-move.recovery.test.ts -t "rejected path commit" --rerun-each=30`
+`mise run test:logged -- --name move-9822 -- bun scripts/test-under-contention.ts --burners 6 -- bun --cwd=apps/backend test ./src/core/environments/move.recovery.test.ts -t "rejected path commit" --rerun-each=30`
 passed (32.2 s, 60 runs). Reading `moveEnvironmentTask` for the
 `forceCopy=false` path: the forward and rollback moves are both
 `git worktree move`, and a cleared journal means the rollback command exited

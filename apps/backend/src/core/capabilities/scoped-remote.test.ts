@@ -11,7 +11,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { graphBranchWorktreePath } from "@orkestrator/protocol/graphs/run";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { GraphBranchWorktrees } from "../graph-branch-worktrees.js";
 import type { Environment } from "../models.js";
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";

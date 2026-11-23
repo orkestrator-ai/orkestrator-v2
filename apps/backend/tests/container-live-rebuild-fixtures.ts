@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import net from "node:net";
 import type { CommandContext } from "../src/core/commands-context.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";
-import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks.js";
 import type { RegistryWriter } from "../src/core/registry-writer-lease.js";
 import { runCommand } from "../src/core/shell.js";
 import type { StorageService } from "../src/core/storage.js";

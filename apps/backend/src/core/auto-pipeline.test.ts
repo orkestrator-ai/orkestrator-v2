@@ -1,4 +1,4 @@
-import { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "./environments/replacement-fence.js";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { expect, test, spyOn, setDefaultTimeout } from "bun:test";
 

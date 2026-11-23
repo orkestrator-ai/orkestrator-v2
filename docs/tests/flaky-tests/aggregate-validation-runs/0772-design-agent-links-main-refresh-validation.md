@@ -55,9 +55,9 @@ Every non-OpenCode failing Bun owner ultimately passed unchanged with `--paralle
 | `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | AgentNativeTab commands > typing after the sigil filters a maximal list without fetching, refreshing or scanning (5030.50 ms) | Passed unchanged (9.3 s). |
 | `apps/backend/tests/standalone.test.ts` | standalone backend service > returns the shell-compatible SIGINT exit code (20056.04 ms) | Passed unchanged (132.4 s). |
 | `apps/backend/tests/standalone.test.ts` | standalone backend service > drains an active local server process tree before exiting (20037.16 ms) | Passed unchanged (132.4 s). |
-| `apps/backend/src/core/environment-move.test.ts` | move_environment > moves every file and re-points git (copy) (5036.86 ms) | Passed unchanged (58.2 s). |
-| `apps/backend/src/core/environment-move.test.ts` | move_environment > moves a worktree with nested submodules (same disk) (5143.84 ms) | Passed unchanged (58.2 s). |
-| `apps/backend/src/core/environment-move.test.ts` | move_environment > moves a worktree with nested submodules (copy) (5075.98 ms) | Passed unchanged (58.2 s). |
+| `apps/backend/src/core/environments/move.test.ts` | move_environment > moves every file and re-points git (copy) (5036.86 ms) | Passed unchanged (58.2 s). |
+| `apps/backend/src/core/environments/move.test.ts` | move_environment > moves a worktree with nested submodules (same disk) (5143.84 ms) | Passed unchanged (58.2 s). |
+| `apps/backend/src/core/environments/move.test.ts` | move_environment > moves a worktree with nested submodules (copy) (5075.98 ms) | Passed unchanged (58.2 s). |
 | `apps/backend/src/core/coordinator/service.test.ts` | project coordinator > Git status permits confirmed dirty branch switches and detects external context changes (5401.21 ms) | Passed unchanged (44.5 s). |
 | `apps/backend/src/core/terminal-history.test.ts` | terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages (5006.14 ms) | Passed unchanged (16.0 s). |
 | `apps/backend/src/core/containers/git-fetch-git.test.ts` | container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (5093.33 ms) | Passed unchanged (11.7 s). |
@@ -95,7 +95,7 @@ Each line is a separate logged suite. The disk-report final retry supplements it
 - `mise run test:logged -- --name design-links-owner-cursor-conformance -- bun test --cwd bridges/cursor-bridge --preload ../../tests/setup-node.ts ./src/conformance-interactions.test.ts --parallel=1 --only-failures` → exit 0, 7.6 s.
 - `mise run test:logged -- --name design-links-owner-acp-generalization -- bun test --cwd bridges/acp-bridge --preload ../../tests/setup-node.ts ./src/acp-generalization.test.ts --parallel=1 --only-failures` → exit 0, 2.5 s.
 - `mise run test:logged -- --name design-links-owner-codex-titles -- bun test --cwd bridges/codex-bridge --preload ../../tests/setup-node.ts ./src/session-titles.test.ts --parallel=1 --only-failures` → exit 0, 5.6 s.
-- `mise run test:logged -- --name design-links-owner-backend-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` → exit 0, 58.2 s.
+- `mise run test:logged -- --name design-links-owner-backend-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts --parallel=1 --only-failures` → exit 0, 58.2 s.
 - `mise run test:logged -- --name design-links-owner-backend-standalone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone.test.ts --parallel=1 --only-failures` → exit 0, 132.4 s.
 - `mise run test:logged -- --name design-links-owner-coordinator -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` → exit 0, 44.5 s.
 - `mise run test:logged -- --name design-links-owner-terminal-history -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` → exit 0, 16.0 s.

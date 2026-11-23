@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { lifecycleMachine } from "./build-pipeline/kanban-transitions-test-support.js";
 import type { CommandContext } from "./commands-context.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import {
   LINEAR_MERGED_LABEL_MAX_RETRY_MS,
   LINEAR_MERGED_LABEL_TIMEOUT_MS,

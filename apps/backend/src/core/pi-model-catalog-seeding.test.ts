@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { announceFakeBridgeReady } from "../../tests/fake-bridge-startup.js";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { promises as fs } from "node:fs";
@@ -18,6 +18,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import { terminateProcessTree } from "./process-tree.js";
 import { spawnCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
+import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "./commands-server-health.js";
 
 /**
  * The catalogue probe is the one path that spawns a bridge with no environment
@@ -133,14 +134,21 @@ function stubBridgeSpawn(respond: (spawned: ProbeSpawn) => unknown): void {
 function context(overrides: Record<string, unknown> = {}): CommandContext {
   return {
     appRoot,
-    resourceRoot: appRoot,
+    // Both development and packaged lookup should find the same fixture.
+    resourceRoot: path.join(appRoot, "bridges"),
     toolchainBinDir: "",
     runtime,
     ...overrides,
   } as unknown as CommandContext;
 }
 
+// Every probe waits for the stand-in bridge's health; poll it every 20 ms, as
+// the command fixtures do, rather than at the production 200 ms.
+let originalLocalServerPoll: string | undefined;
+
 beforeEach(async () => {
+  originalLocalServerPoll = process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV];
+  process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV] = "20";
   appRoot = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pi-seed-"));
   await fs.mkdir(path.join(appRoot, "bridges", "pi-bridge", "dist"), { recursive: true });
   await fs.writeFile(path.join(appRoot, "bridges", "pi-bridge", "dist", "index.js"), "");
@@ -165,10 +173,16 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const server of servers) await new Promise((resolve) => server.close(resolve));
-  expect(runtime.localServers.hasEnvironmentOperations()).toBe(false);
-  runtime.shutdown();
-  await fs.rm(appRoot, { recursive: true, force: true });
+  try {
+    for (const server of servers) await new Promise((resolve) => server.close(resolve));
+    const hadOperations = runtime.localServers.hasEnvironmentOperations();
+    runtime.shutdown();
+    await fs.rm(appRoot, { recursive: true, force: true });
+    expect(hadOperations).toBe(false);
+  } finally {
+    if (originalLocalServerPoll === undefined) delete process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV];
+    else process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV] = originalLocalServerPoll;
+  }
 });
 
 describe("discoverHostPiModelCatalog", () => {
@@ -179,7 +193,15 @@ describe("discoverHostPiModelCatalog", () => {
       ]),
     );
 
-    const models = await discoverHostPiModelCatalog(context());
+    const timers = spyOn(globalThis, "setTimeout");
+    let models: Awaited<ReturnType<typeof discoverHostPiModelCatalog>>;
+    try {
+      models = await discoverHostPiModelCatalog(context());
+      // The stand-in announces readiness asynchronously, after the first poll.
+      expect(timers.mock.calls.map(([, delay]) => delay)).toContain(20);
+    } finally {
+      timers.mockRestore();
+    }
 
     expect(models).toEqual([
       {

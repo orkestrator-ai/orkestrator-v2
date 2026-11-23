@@ -15,7 +15,7 @@ None of the failing owners imports the changed modules (checked by walking `envi
 
 | Owner | Original failure | Complete owner result |
 | --- | --- | --- |
-| `apps/backend/src/core/environment-move.test.ts` | `move_environment > moves a worktree with nested submodules (copy)` exceeded five seconds after a submodule clone failed with "Unable to read current working directory" (same family as 0248, 0291 and 0621). | Failed alone twice at load 57 to 61 on five-second timeouts in different cases (0248 among them); `env-move-alone-3` passed all 37 in 57.8 s at load 75. |
+| `apps/backend/src/core/environments/move.test.ts` | `move_environment > moves a worktree with nested submodules (copy)` exceeded five seconds after a submodule clone failed with "Unable to read current working directory" (same family as 0248, 0291 and 0621). | Failed alone twice at load 57 to 61 on five-second timeouts in different cases (0248 among them); `env-move-alone-3` passed all 37 in 57.8 s at load 75. |
 | `apps/desktop/scripts/dev/coordinator-live.test.ts` | Recurrence of [0258](../coordinator-and-multi-review/0258-coordinator-fixture-digest-aggregate-timeout.md). | Failed alone once on the same timeout; `coordinator-live-alone-2` passed in 5.6 s. |
 | `bridges/codex-bridge/src/app-server-runtime-prompt.test.ts` | Four `at-most-once dispatch` cases: [0492](../agent-bridges/0492-codex-deleted-session-initial-retry-race.md) (expected 404 after deletion), "shutdown cancels a delayed retry and leaves a durable retry marker" and "shutdown during the retry window settles the thread instead of leaving it starting" ("first initial prompt attempt did not run"), and "a deleted session's retry window does not wedge a thread another tab holds" (expected 404, received a processing result). | `codex-runtime-prompt-alone` passed in 10.6 s. |
 
@@ -57,7 +57,7 @@ Complete unit-owner reruns used `mise run test:logged`, explicit paths and `--pa
 | `apps/backend/src/core/coordinator/service.test.ts` | Two Git branch/discard cases timed out. | Passed unchanged (37.4 s logged). |
 | `apps/backend/src/core/public-api/public-api-exec.test.ts` | Process exit-status/stream separation case failed. | Passed unchanged (17.3 s logged). |
 | `apps/web/src/App.test.tsx` | Failed-retry Docker warning case failed. | First rerun: 114 passed and one different startup-probe case failed (22.7 s logged; evidence `orkestrator-test-run.CvOUQr`). The complete unchanged owner passed after the browser runs ended (6.1 s logged). |
-| `apps/backend/src/core/environment-move.test.ts` | Nested-submodule move and recovery cases exceeded five seconds. | First rerun: 36 passed, one recovery timeout and one associated late error (66.8 s logged; evidence `orkestrator-test-run.6c9J0C`). The complete unchanged owner passed after the browser runs ended (30.6 s logged). |
+| `apps/backend/src/core/environments/move.test.ts` | Nested-submodule move and recovery cases exceeded five seconds. | First rerun: 36 passed, one recovery timeout and one associated late error (66.8 s logged; evidence `orkestrator-test-run.6c9J0C`). The complete unchanged owner passed after the browser runs ended (30.6 s logged). |
 | `tests/unit/hooks/useVirtuosoScrollState.test.ts` | Sticky reactivation scroll-state case failed. | Passed unchanged (2.9 s logged). |
 | `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | External watchdog case missed its elapsed deadline; recurrence of 0512. | Passed unchanged (24.9 s logged). |
 

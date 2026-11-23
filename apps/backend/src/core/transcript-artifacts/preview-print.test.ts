@@ -43,27 +43,18 @@ if (!CHROMIUM)
     "[preview-print.test] browser cases skipped: no Chromium executable (set ORKESTRATOR_DESIGN_CHROMIUM_PATH)",
   );
 const browserTest = CHROMIUM ? test : test.skip;
-const IMAGE = process.env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE ?? DEFAULT_PREVIEW_WORKER_IMAGE;
-const imageHasPdfJs =
-  spawnSync(
-    "docker",
-    [
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--entrypoint",
-      "ls",
-      IMAGE,
-      "/opt/artifact-preview-worker/pdf.min.mjs",
-    ],
-    { stdio: "ignore", timeout: 30_000 },
-  ).status === 0;
-if (!imageHasPdfJs)
+const configuredImage = process.env.ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE;
+const IMAGE = configuredImage ?? DEFAULT_PREVIEW_WORKER_IMAGE;
+// Qualification names the image it just built. Missing image or renderer
+// files must fail that run. Host Chromium is optional for the parity check.
+const imagePresent =
+  spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore", timeout: 10_000 }).status ===
+  0;
+if (!imagePresent && !configuredImage)
   console.warn(
-    `[preview-print.test] container cases skipped: Docker or an image ${IMAGE} with pdf.js is unavailable (rebuild with docker/artifact-preview-worker/build.sh)`,
+    `[preview-print.test] container cases skipped: Docker or image ${IMAGE} unavailable`,
   );
-const containerTest = imageHasPdfJs && CHROMIUM ? test : test.skip;
+const containerTest = configuredImage || imagePresent ? test : test.skip;
 
 let runner: TranscriptPreviewRunner;
 let strictRunner: TranscriptPreviewRunner;
@@ -369,7 +360,7 @@ test("the worker bundle ships pdf.js but never its scripting sandbox", () => {
 
 test("pdf.js bundles are pinned, verified at load and licensed Apache-2.0", async () => {
   for (const bundle of [RENDERER_BUNDLES.pdfjs, RENDERER_BUNDLES.pdfjsWorker]) {
-    expect(bundle.version).toBe("6.4.299");
+    expect(bundle.version).toBe("6.5.438");
     expect(bundle.license).toBe("Apache-2.0");
     expect(bundle.notice).toContain("Mozilla Foundation");
     const bytes = await loadPinnedBundle(bundle);
@@ -382,6 +373,7 @@ describe("container worker", () => {
   containerTest(
     "prints and previews PDFs inside the network-less container",
     async () => {
+      expect(imagePresent, `Preview worker image ${IMAGE} has not been built`).toBe(true);
       const container = new TranscriptPreviewRunner({
         isolation: "container",
         container: {
@@ -398,14 +390,19 @@ describe("container worker", () => {
         );
         expect(printed.pageCount).toBeGreaterThanOrEqual(2);
         expect(Math.round(mediaBox(printed.pdf)[2]!)).toBe(612);
-        const local = expectOk(await run(printJob(STATIC_HTML, "letter")), "html-print");
-        // The same sanitized document is printed in either boundary.
-        expect(printed.effectiveHtmlSha256).toBe(local.effectiveHtmlSha256!);
+        expect(printed.effectiveHtmlSha256).toMatch(/^[0-9a-f]{64}$/);
+        if (CHROMIUM) {
+          // The same sanitized document is printed in either boundary.
+          const local = expectOk(await run(printJob(STATIC_HTML, "letter")), "html-print");
+          expect(printed.effectiveHtmlSha256).toBe(local.effectiveHtmlSha256!);
+        }
         const thumbnail = expectOk(
           await run({ kind: "pdf-thumbnail", pdf: printed.pdf, maxDimension: 300 }, container),
           "pdf-thumbnail",
         );
         expect(thumbnail.pageCount).toBe(printed.pageCount);
+        expect(thumbnail.refusal).toBeUndefined();
+        expect(Array.from(thumbnail.thumbnail!.png.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
         expect(
           Math.max(thumbnail.thumbnail!.width, thumbnail.thumbnail!.height),
         ).toBeLessThanOrEqual(300);

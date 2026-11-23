@@ -13,7 +13,7 @@ import {
   applyAgentKeyInformationUpdate,
   recordReviewIssuesInKeyInformation,
 } from "./key-information.js";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import type { EnvironmentGit } from "./code-rewind.js";
 import { EnvironmentUnavailableError } from "../workspace-code-rewind.js";
 import { TEST_ADDRESS_FINDINGS_RESULT, TEST_REVIEW_PREPARATION } from "./test-fixtures.js";

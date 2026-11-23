@@ -3,7 +3,7 @@
  * environment and container source.
  *
  * Records live under the `mcp-environment-overlays` environment state root
- * (`environment-state-paths.ts`), keyed by environment id — never by
+ * (`environments/state-paths.ts`), keyed by environment id — never by
  * container or runtime generation, so a preserving rebuild, a stop and start
  * or a backend restart all find the same record. Environment deletion and the
  * orphan reconciler remove that root with the rest of the environment's
@@ -19,7 +19,7 @@ import path from "node:path";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { MCP_MANAGEMENT_LIMITS, mcpFailure } from "@orkestrator/protocol/mcp-management";
 
-import { environmentStateDirectory } from "../environment-state-paths.js";
+import { environmentStateDirectory } from "../environments/index.js";
 import { OVERLAY_SCHEMA_VERSION, type OverlayChange, type OverlayRecord } from "./overlay.js";
 
 export type OverlayRead =

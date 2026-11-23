@@ -141,6 +141,8 @@ export interface OpenCode2ProviderDependencies {
   /** Disable the live event monitor (tests that only exercise reads). */
   monitorEvents?: boolean;
   now?: () => number;
+  /** The background-stop settle window (tests; `OPENCODE2_STOP_SETTLE_MS` by default). */
+  stopSettleMs?: number;
   /** MCP registration timing (tests). */
   mcp?: ConstructorParameters<typeof OpenCode2McpServers>[1];
   /** The user's `openCodeModelProviders`, normalized; shapes the 2.x model picker. */
@@ -210,6 +212,9 @@ export class OpenCode2Provider implements NativeAgentRuntimeProvider {
     this.background = new OpenCode2BackgroundWork(client, {
       running: (fresh) => this.runningSessions([], fresh),
       now: () => this.now(),
+      ...(dependencies.stopSettleMs !== undefined
+        ? { stopSettleMs: dependencies.stopSettleMs }
+        : {}),
     });
     this.interactions = this.reads.interactions;
     const mcp = new OpenCode2McpServers(client, dependencies.mcp);

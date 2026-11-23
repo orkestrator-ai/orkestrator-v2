@@ -252,10 +252,10 @@ is not permission to execute. The editor never changes an execution policy.
     list (`list_agent_plugins`) is the CLI's own `plugin list`, run from the
     home directory and only when its Plugins view is opened, so it can name a
     plugin the skill scan does not, such as a disabled one. The environment
-    scanner (`environment-agent-skills.ts`) reads user and project settings,
+    scanner (`environments/agent-skills.ts`) reads user and project settings,
     as an ordinary session does; local settings are an opt-in per prompt and
     never change its default. Fixtures in `agent-skills.test.ts` ("Claude
-    plugin discovery") and `environment-agent-skills.test.ts` cover enabled,
+    plugin discovery") and `environments/agent-skills.test.ts` cover enabled,
     disabled, never-enabled, project overrides, local-only enablement and
     `CLAUDE_CONFIG_DIR`.
   - The bridge passes every plugin as a `--plugin-dir` plugin, whose id is
@@ -731,7 +731,7 @@ the container owns itself stay read-only, each with its reason.
 intent in a private backend record and writes the container's file:
 
 - Records live under the `mcp-environment-overlays` environment state root
-  (`environment-state-paths.ts`), one owner-only JSON file per environment and
+  (`environments/state-paths.ts`), one owner-only JSON file per environment and
   source, keyed by environment id (never by container or runtime generation),
   bounded by `overlayRecordMaxBytes`. Environment deletion and the orphan
   reconciler remove the root with the rest of the environment's state. Nothing

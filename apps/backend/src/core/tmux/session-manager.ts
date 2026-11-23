@@ -1,7 +1,7 @@
 import {
   localEnvironmentIsolationEnv,
   environmentIsolationShellPrefix,
-} from "../environment-isolation.js";
+} from "../environments/index.js";
 import {
   claudeTmuxEvent,
   tmuxAgentUsageEvent,

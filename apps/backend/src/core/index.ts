@@ -107,7 +107,6 @@ import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-se
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
 import { resolveManagedBinary } from "./commands-agent-support.js";
-import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
 import {
   compatibilityPathUsage,
   type CompatibilityPathUsageSink,
@@ -291,17 +290,18 @@ import {
 } from "@orkestrator/protocol/coordinator";
 import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import {
+  closeEnvironmentCleanupStorage,
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
   reconcileInterruptedEnvironmentLifecycleTasks,
-} from "./environment-lifecycle-tasks.js";
-import { recoverInterruptedEnvironmentMoves } from "./environment-move.js";
+} from "./environments/index.js";
+import { recoverInterruptedEnvironmentMoves } from "./environments/move.js";
 import { sweepRemovedProjectContentAtStartup } from "./removed-project-content-sweep.js";
 import { createBackendChangeTracking } from "./change-tracking/index.js";
 import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
-} from "./environment-cleanup-reconciler.js";
+} from "./environments/cleanup-reconciler.js";
 import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";

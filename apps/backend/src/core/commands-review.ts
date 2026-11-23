@@ -7,7 +7,7 @@ import {
   isMergePermissionError,
   retryGitWithoutFsmonitorOnTimeout,
 } from "./git/index.js";
-import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "./environments/index.js";
 import {
   reconcileProjectHomeEnvironment,
   isProjectHomeEnvironment,

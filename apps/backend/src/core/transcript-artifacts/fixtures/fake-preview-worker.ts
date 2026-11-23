@@ -26,6 +26,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { mermaidRendererBundleHash } from "../dependency-manifest.js";
 
 const ORPHAN_CHECK_MS = 250;
 const LAUNCHER_FLAG = "--fake-launcher-pid=";
@@ -92,6 +93,7 @@ if (source === "split-utf8") {
     diagnostics: [{ severity: "info", code: "env-report", message: report }],
     blockedRequests: {},
     captures: [],
+    rendererBundleHash: mermaidRendererBundleHash(),
     svg: '<svg xmlns="http://www.w3.org/2000/svg"><g><rect width="1" height="1"/></g></svg>',
     diagramType: "flowchart",
     svgElements: 3,
@@ -110,6 +112,7 @@ if (source === "split-utf8") {
       diagnostics: [],
       blockedRequests: {},
       captures: [],
+      rendererBundleHash: mermaidRendererBundleHash(),
       svg: '<svg xmlns="http://www.w3.org/2000/svg"><g><rect width="1" height="1"/></g></svg>',
       diagramType: "flowchart",
       svgElements: 3,

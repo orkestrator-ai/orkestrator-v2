@@ -20,7 +20,7 @@ import {
   waitForContainerBoot,
   withEnvironmentDraining,
 } from "../src/core/containers/readiness";
-import { EnvironmentOperations } from "../src/core/environment-operations";
+import { EnvironmentOperations } from "../src/core/environments/operations";
 import { tempDir, withDockerScript } from "./container-lifecycle-fixtures";
 
 const cleanup: string[] = [];

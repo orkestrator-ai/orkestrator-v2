@@ -13,7 +13,7 @@ import {
   deleteMergedEnvironmentRemoteBranch,
   startEnvironmentOnce,
 } from "./commands-environment.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { NativeAgentService } from "./native-agent/service.js";
 import type { NativeAgentRuntimeProvider } from "./native-agent/provider.js";

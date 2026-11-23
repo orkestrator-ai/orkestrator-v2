@@ -4,11 +4,11 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `orphaned environment state sweep > startup revisits a young orphan after it ages without a restart`
-- **Owner:** `apps/backend/src/core/environment-cleanup-reconciler.test.ts:284`
+- **Owner:** `apps/backend/src/core/environments/cleanup-reconciler.test.ts:284`
 - **Original command:** `mise run test:logged -- --name merge2-tests -- mise run test`, merging `origin/main` at `c85ab60a` into `9467f965`, macOS arm64 and Bun 1.4.3.
 - **Workers:** workspace/root/bridges/protocol reservations 4/1/2/1, with component and isolated browser validation on the host.
 - **Failure:** the initial `expect(await exists(orphan)).toBe(true)` received false (184.14 ms). The fixture creates the orphan 150 ms short of the minimum age, then creates a second directory and runs startup cleanup before that assertion. Crossing the age boundary during these steps is a hypothesis, not a measured cause.
-- **Owning-file rerun:** `mise run test:logged -- --name merge2-orphan-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-cleanup-reconciler.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 23.3 seconds logged). The owner also passed in the earlier three-file one-worker backend rerun, whose other files failed.
+- **Owning-file rerun:** `mise run test:logged -- --name merge2-orphan-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/cleanup-reconciler.test.ts --parallel=1 --only-failures` passed unchanged (exit 0, 23.3 seconds logged). The owner also passed in the earlier three-file one-worker backend rerun, whose other files failed.
 - **Evidence:** `orkestrator-test-run.0J1rem/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory after aggregate completion.
 - **Assessment:** the unchanged isolated pass confirms intermittence. No implementation, assertion, timeout or skip changed.
 
@@ -25,7 +25,7 @@ Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend r
   `expect(await exists(orphan)).toBe(true)`. Not a product race: in production
   the hourly sweep is meant to remove anything past the age.
 - **Fix:** `runStartupEnvironmentCleanup`
-  (`apps/backend/src/core/environment-cleanup-reconciler.ts`) accepts the
+  (`apps/backend/src/core/environments/cleanup-reconciler.ts`) accepts the
   same optional `now` clock its sweeps already take and passes it to
   `sweepOrphanedEnvironmentState` and `sweepPreLedgerDiskState`. The test
   dates its fixtures from one captured instant, holds the injected clock
@@ -35,6 +35,6 @@ Aggregate result: `merge2-tests` exited 1 after 1132.1 seconds logged. Backend r
   fixture set-up and `runStartupEnvironmentCleanup` failed the unchanged test
   with the recorded `Expected: true / Received: false` at the first
   assertion; with the fix and the same sleep the test passed.
-- **Stress:** `mise run test:logged -- --name stress-0441 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-cleanup-reconciler.test.ts -t "young orphan" --rerun-each=20`
+- **Stress:** `mise run test:logged -- --name stress-0441 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/cleanup-reconciler.test.ts -t "young orphan" --rerun-each=20`
   passed 20 of 20 (unpinned burners on macOS); the complete owner passed
   (`owner-0441`, 35.3 s at host load average about 35).

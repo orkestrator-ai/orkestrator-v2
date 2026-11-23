@@ -169,7 +169,7 @@ import {
   NativeAgentGoalService,
   type GoalCommandResult,
 } from "./goal-service.js";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/index.js";
 import { NativeAgentHandoffs } from "./handoffs.js";
 import { NativeAgentSignInResends } from "./sign-in-resend.js";
 import { SettledTurnUsage } from "./settled-turn-usage.js";

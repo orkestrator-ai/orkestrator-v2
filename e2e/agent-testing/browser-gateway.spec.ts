@@ -28,7 +28,7 @@ import { dismissSidebarTooltip } from "./sidebar-tooltip";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { environmentStateDirectories } from "../../apps/backend/src/core/environment-state-paths";
+import { environmentStateDirectories } from "../../apps/backend/src/core/environments/state-paths";
 import type {
   MultiReviewActionResult,
   MultiReviewWorkflow,

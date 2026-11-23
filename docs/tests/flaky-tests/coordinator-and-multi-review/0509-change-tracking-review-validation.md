@@ -27,14 +27,14 @@ The unrelated backend failures were:
 - `Electron backend environment lifecycle commands > retains the environment and process ownership when deletion cannot reap a server`
   (same file): 7,321.12 ms, beyond the five-second timeout (0226 recurrence).
 - `restart recovery re-links submodules of an adopted or abandoned copy`
-  (`apps/backend/src/core/environment-move.test.ts`): 5,142.10 ms, followed by
+  (`apps/backend/src/core/environments/move.test.ts`): 5,142.10 ms, followed by
   its interrupted asynchronous assertion (0248 recurrence).
 
 The unchanged owning files passed separately:
 
 - `mise run test:logged -- --name deletion-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/commands-registry-environments.test.ts --parallel=1 --only-failures`
   passed in 24.2 seconds.
-- `mise run test:logged -- --name move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+- `mise run test:logged -- --name move-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts --parallel=1 --only-failures`
   passed in 24.5 seconds.
 
 The logged runner deletes passing output; isolated per-test counts were not

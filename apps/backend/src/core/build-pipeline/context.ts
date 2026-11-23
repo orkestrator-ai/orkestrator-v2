@@ -78,7 +78,7 @@ import {
   type BuildPipelineObligation,
 } from "./scheduling.js";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/index.js";
 import {
   assertNoOtherWorkflowWriting,
   resetWorktreeToCommit,

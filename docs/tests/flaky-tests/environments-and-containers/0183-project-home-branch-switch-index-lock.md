@@ -137,7 +137,7 @@ The aggregate used 2/3/2/1 worker slots for workspace/root/bridges/protocol,
 with one Bun worker per workspace package. Backend totals were 5879 passed,
 23 failed and 15 skipped across 329 files in 339.04 seconds; the aggregate
 finished in 346.9 seconds. The other 22 failures were in
-`apps/backend/src/core/environment-move.test.ts` and reported incomplete
+`apps/backend/src/core/environments/move.test.ts` and reported incomplete
 Claude tmux cleanup on this host, which has no `tmux` executable.
 
 With the same GNU-tool PATH, the unchanged project-home owning file passed
@@ -160,7 +160,7 @@ alone (12 passed, 22 failed, exit 1) in 17.3 seconds with the same GNU-tool PATH
 ```bash
 mise run test:logged -- --name environment-move-isolated -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/environment-move.test.ts --parallel=1 --only-failures
+  ./src/core/environments/move.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: `/tmp/orkestrator-test-run.KVtJas/environment-move-isolated.log.gz`.

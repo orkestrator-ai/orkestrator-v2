@@ -18,7 +18,7 @@ import {
 } from "./containers/index.js";
 import { CoordinatorRequestFlights } from "./coordinator/index.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
-import { EnvironmentOperations } from "./environment-operations.js";
+import { EnvironmentOperations } from "./environments/index.js";
 import { FeatureBuildTasks } from "./features/index.js";
 import { GitHubCliSelection } from "./git/index.js";
 import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./git/pr-monitor-runtime.js";

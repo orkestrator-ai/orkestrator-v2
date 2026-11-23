@@ -23,6 +23,7 @@ import {
   type TranscriptArtifactRef,
 } from "@orkestrator/protocol/transcript-artifacts";
 import { validateWorkflowSnapshot } from "@orkestrator/protocol/workflow-snapshot";
+import { mermaidRendererBundleHash } from "./dependency-manifest.js";
 import { snapshotHash } from "./hashing.js";
 import { notFound, ownsRecord, type ResolvedArtifactCaller } from "./owner.js";
 import {
@@ -316,7 +317,9 @@ export class ArtifactPublisher {
       current.browserBuild = status.browserBuild;
     }
     if (kind === "html-static" || kind === "html-interactive" || kind === "mermaid") {
-      const bundle = status?.rendererBundleHashes?.[kind];
+      const bundle =
+        status?.rendererBundleHashes?.[kind] ??
+        (kind === "mermaid" ? mermaidRendererBundleHash() : undefined);
       if (bundle) current.rendererBundleHash = bundle;
     }
     if (kind === "chart") current.rendererBundleHash = CHART_RENDERER_BUNDLE_HASH;

@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { toast } from "sonner";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type { CreatableTabType, CreateTabOptions } from "@/contexts/TerminalContext";
@@ -24,6 +32,7 @@ import {
 import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePickHostPath } from "@/lib/host-path-picker";
+import { isSubmitShortcut } from "@/lib/keyboard-shortcuts";
 import { buildReviewModelCatalog, type ReviewCatalogModels } from "@/lib/review-launch-options";
 import { useNodeScope } from "@/lib/node-scope/providers";
 import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
@@ -214,6 +223,7 @@ export function DesignWorkspaceDialog({
   // brief as attachments of the agent's first message.
   const [briefImages, setBriefImages] = useState<DesignPromptImage[]>([]);
   const briefRef = useRef<HTMLDivElement>(null);
+  const newDesignFormRef = useRef<HTMLFormElement>(null);
   const [preset, setPreset] = useState<DesignFramePresetId>("none");
   const [busy, setBusy] = useState(false);
   const [uploadFallback, setUploadFallback] = useState(false);
@@ -595,10 +605,29 @@ export function DesignWorkspaceDialog({
     );
   };
 
+  const createDisabled = busy || imagePaste.isPasting || Boolean(createBlocker);
+  const openDisabled = busy || !environmentId;
+
+  // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
+  // current tab's primary button does when enabled. Consume the chord even
+  // on repeats and Saved designs so it cannot open a focused Select.
+  const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || !isSubmitShortcut(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat || mode === "saved") return;
+    if (mode === "new") {
+      // Through the form, so the Name field's constraints apply as on a click.
+      if (!createDisabled) newDesignFormRef.current?.requestSubmit();
+      return;
+    }
+    if (!openDisabled) void openFromPicker();
+  };
+
   const showNameError = nameTouched && nameProblem;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="2xl">
+      <DialogContent size="2xl" onKeyDownCapture={handleDialogKeyDown}>
         <DialogHeader>
           <DialogTitle>Design workspace</DialogTitle>
           <DialogDescription>
@@ -628,6 +657,7 @@ export function DesignWorkspaceDialog({
           </TabsList>
           <TabsContent value="new">
             <form
+              ref={newDesignFormRef}
               className="grid gap-3"
               aria-label="New design"
               onSubmit={(event) => {
@@ -752,7 +782,7 @@ export function DesignWorkspaceDialog({
               )}
               <Button
                 type="submit"
-                disabled={busy || imagePaste.isPasting || Boolean(createBlocker)}
+                disabled={createDisabled}
                 aria-describedby={createBlocker ? "design-create-blocker" : undefined}
               >
                 {busy ? "Opening…" : withAgent ? "Create design workspace" : "Create blank canvas"}
@@ -784,7 +814,7 @@ export function DesignWorkspaceDialog({
               <Button
                 type="button"
                 variant="outline"
-                disabled={busy || !environmentId}
+                disabled={openDisabled}
                 onClick={() => void openFromPicker()}
               >
                 {busy ? "Opening…" : "Choose .orkdes file…"}

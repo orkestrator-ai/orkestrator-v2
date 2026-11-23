@@ -134,3 +134,24 @@ and two failing tests across 1,434 files. The same one-worker rerun passed all
 - **Suite counts:** The backend package reported 20,212 pass, 212 skip and 2 fail across 1,431 files (the other failure was the unrelated `tests/storage-core-coverage.test.ts`, which also fails on the base).
 - **Isolated rerun:** The aggregate runner reran the file alone and it passed 22 of 22 tests in 4.4 s.
 - **Aggregate evidence:** `orkestrator-test-run.DMIe79/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and its `rerun-*evaluation-drivers*` log in the host temporary directory.
+
+
+## Design workspace shortcut review preparation (2026-11-23)
+
+`cd '.' && mise run test:logged -- --name review-default-tests -- mise run test`
+ran on macOS at `39473d630a39a9a6d49f2dd9b394410ad28d1c72` with merge base
+`2391fd8c9ab4a9bed4b3d5daa2d09efc0d8bd3dc`. The recurrence check against
+`origin/main` confirmed the case was open. The Codex case failed at 405.81 ms
+with `ENOENT` reading the fake CLI's `pid` file at
+`evaluation-drivers.test.ts:306`. The backend group used four isolated Bun
+workers and reported 20,243 pass, 212 skip and 1 fail across 1,431 files
+(298.69 s).
+
+The runner retried the owning file from `apps/backend` with
+`bun test ./src/core/review/evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`.
+All 22 tests passed in 4.17 s. The reviewed diff touches only the Design
+workspace dialog and its component test. Review triage recorded
+`undetermined` because its dependency graph was incomplete. The existing
+startup timing hypothesis remains unconfirmed. The review package retains
+`validation-02.stderr.txt`, and the workspace and isolated rerun logs are in
+`orkestrator-test-run.oTOiZM` under the host temporary directory.

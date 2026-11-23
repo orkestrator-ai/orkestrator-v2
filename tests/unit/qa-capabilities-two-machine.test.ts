@@ -141,13 +141,15 @@ test("the cleanup script leaves recovery evidence if an owned session will not s
     async (host, command, input, ms, signal) => {
       let script = String(input);
       if (refuseTermination) {
-        // Keep the actual cleanup shell, replacing only its Linux process probes and signal.
+        // Keep the actual cleanup shell, replacing only its Linux process probes,
+        // signal and sleep.
         script = script.replace(
           "session_live() {",
           `
 worker_is_ours() { return 0; }
 ps() { printf '%s S\\n' "${pid}"; }
 kill() { printf '%s\\n' "$*" >>"$R/signal-attempts"; return 1; }
+sleep() { :; }
 session_live() {`,
         );
       }
@@ -161,9 +163,15 @@ session_live() {`,
     await writeFile(pidFile, `${pid} 42\n`);
     await writeFile(token, "fixture-token");
     await expect(remote.cleanup(false)).rejects.toThrow(remote.root);
+    // Each attempt escalates TERM to KILL; the no-op sleep skips the waits
+    // between them rather than letting the SSH deadline end the attempt.
     expect(
       (await readFile(path.join(remote.root, "signal-attempts"), "utf8")).trim().split("\n"),
-    ).toEqual(Array(3).fill(`-TERM -- -${pid}`));
+    ).toEqual(
+      Array(3)
+        .fill([`-TERM -- -${pid}`, `-KILL -- -${pid}`])
+        .flat(),
+    );
     expect(await readFile(token, "utf8")).toBe("fixture-token");
   } finally {
     refuseTermination = false;

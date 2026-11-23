@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 function provider(fake: FakeOpenCode2Server): OpenCode2Provider {
-  const created = new OpenCode2Provider(fake.client(), { monitorEvents: false });
+  const created = new OpenCode2Provider(fake.client(), { monitorEvents: false, stopSettleMs: 250 });
   providers.push(created);
   return created;
 }

@@ -139,10 +139,16 @@ export function createTestAdmission(
     readPressure?: () => HostPressure | undefined;
     /** Identity scope for learned group CPU; the repository's Git common directory by default. */
     usageScope?: string;
+    /** Tests: how often a queued group re-checks admission (100 ms by default). */
+    queuePollMs?: number;
+    /** Tests: the shortest gap between two pressure-gate reads (250 ms by default). */
+    pressureCheckMs?: number;
   } = {},
 ) {
   const clock = options.clock ?? (() => performance.now());
   const now = options.now ?? (() => Date.now());
+  const queuePollMs = options.queuePollMs ?? 100;
+  const pressureCheckMs = options.pressureCheckMs ?? 250;
   if (env.ORKESTRATOR_TEST_PARENT_RESERVATION) {
     throw new Error(
       "Nested aggregate validation requires this exact command in .orkestrator-test-scheduler.json; no tests were started (avoided double reservation)",
@@ -208,7 +214,7 @@ export function createTestAdmission(
   const gateOpens = () => {
     const at = now();
     // PSI averages move over seconds; polling it per group per 100 ms is noise.
-    if (at - lastGateCheck < 250) return overflow;
+    if (at - lastGateCheck < pressureCheckMs) return overflow;
     lastGateCheck = at;
     let pressure: HostPressure | undefined;
     try {
@@ -376,13 +382,19 @@ export function createTestAdmission(
         const queuedAt = now();
         const { deadline } = group;
         let lastReason: string | undefined;
-        let granted = workers;
+        let granted: number;
+        let queuedMs: number;
         while (true) {
           const status = scheduler.poll(id);
           const job = jobs.get(id)!;
           job.queueReason = status.queueReason;
           if (status.state === "running") {
+            queuedMs = Math.max(0, Math.floor(now() - queuedAt));
             granted = status.workers;
+            advanceClock();
+            job.state = "running";
+            delete job.queueReason;
+            publish();
             break;
           }
           if (status.queueReason !== lastReason) {
@@ -427,7 +439,7 @@ export function createTestAdmission(
             lastReason = undefined;
             continue;
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, queuePollMs));
         }
         if (cancelled) throw new Error("Validation was cancelled before execution");
         // The deadline covers the queue wait, so the child gets only what is
@@ -465,23 +477,17 @@ export function createTestAdmission(
           if (status.stdout.replaceAll("\0", "").trim())
             log("NOTE worktree is dirty while queued; continuing with recorded environment drift");
         }
-        const job = jobs.get(id);
-        if (job) {
-          advanceClock();
-          job.state = "running";
-          delete job.queueReason;
-        }
-        publish();
         log(
-          `RUNNING ${group.name} (${granted} worker slots; waited ${((now() - queuedAt) / 1000).toFixed(1)}s${learned !== undefined ? `; adaptive: learned ${learned} of ${planned} planned` : ""})`,
+          `RUNNING ${group.name} (${granted} worker slots; waited ${(queuedMs / 1000).toFixed(1)}s${learned !== undefined ? `; adaptive: learned ${learned} of ${planned} planned` : ""})`,
         );
         const ticket = id;
-        const result = await execute({
+        const executed = await execute({
           ...group,
           timeoutMs,
           measureCpu: true,
           onSpawn: (pid) => scheduler.registerChild(ticket, pid),
         });
+        const result = { ...executed, queuedMs };
         if (result.infrastructureError || result.timeoutReason || result.outputLimitExceeded)
           incomplete = true;
         // Learn only from an undisturbed run: a failed, cut-short or cancelled

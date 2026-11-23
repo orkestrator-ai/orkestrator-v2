@@ -33,8 +33,11 @@ export function certificates(
   if (!existsSync(join(dir, "ca.key"))) writeFileSync(join(dir, "ca.key"), sharedKeys.ca);
   if (!existsSync(join(dir, "leaf.key"))) writeFileSync(join(dir, "leaf.key"), sharedKeys.leaf);
   const run = (...args: string[]) => execFileSync("openssl", args, { cwd: dir, stdio: "pipe" });
+  // `-new` is explicit: Apple's LibreSSL (macOS `/usr/bin/openssl`) otherwise
+  // reads a certificate request from stdin instead of making one from the key.
   run(
     "req",
+    "-new",
     "-x509",
     "-key",
     "ca.key",

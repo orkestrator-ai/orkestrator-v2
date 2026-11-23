@@ -119,3 +119,9 @@ All 22 tests passed in 4.60 seconds. The evaluation driver files are outside
 the branch diff. Startup timing remains a possible cause. The workspace and
 isolated logs are in `orkestrator-test-run.a6NdnH` in the host temporary
 directory.
+
+The same command after the graph pin fix, at `0dcb5542d` on the same base,
+failed both cases at 406.42 ms (Claude) and 408.62 ms (Codex) with the same
+missing `pid` error. The backend again reported 20,248 passing, 212 skipped
+and two failing tests across 1,434 files. The same one-worker rerun passed all
+22 tests in 4.46 seconds. Logs are in `orkestrator-test-run.gGeMAf`.

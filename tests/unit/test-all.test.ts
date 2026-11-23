@@ -1549,7 +1549,14 @@ describe("scripts/test-all.ts", () => {
         [
           {
             group,
-            result: { status: 1, logPath: failingLog, outputBytes: 14 },
+            result: {
+              status: 1,
+              logPath: failingLog,
+              outputBytes: 14,
+              queuedMs: 1,
+              observedCores: 1.234,
+              reservedSlots: 4,
+            },
             elapsedMs: 2,
           },
         ],
@@ -1564,10 +1571,17 @@ describe("scripts/test-all.ts", () => {
       ) as { succeeded: boolean };
       const failingSummary = JSON.parse(
         await readFile(path.join(failingDirectory, "summary.json"), "utf8"),
-      ) as { succeeded: boolean; groups: Array<{ artifact?: string }> };
+      ) as { succeeded: boolean; groups: Array<Record<string, unknown>> };
       expect(passingSummary.succeeded).toBe(true);
       expect(failingSummary.succeeded).toBe(false);
-      expect(failingSummary.groups[0]?.artifact).toBe("failing.log.gz");
+      // The admission wait is recorded apart from elapsedMs, which includes it.
+      expect(failingSummary.groups[0]).toMatchObject({
+        artifact: "failing.log.gz",
+        elapsedMs: 2,
+        queuedMs: 1,
+        observedCores: 1.23,
+        reservedSlots: 4,
+      });
       expect((await stat(passingDirectory)).mode & 0o777).toBe(0o700);
       expect((await stat(path.join(passingDirectory, "summary.json"))).mode & 0o777).toBe(0o600);
     } finally {

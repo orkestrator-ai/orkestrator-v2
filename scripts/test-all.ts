@@ -90,6 +90,12 @@ export interface CommandResult {
   observedCores?: number;
   /** Slots the group held while it ran, set together with {@link observedCores}. */
   reservedSlots?: number;
+  /**
+   * How long the group waited for host admission before its command started.
+   * A group's `elapsedMs` includes this wait, so `elapsedMs - queuedMs` is the
+   * time it actually ran.
+   */
+  queuedMs?: number;
 }
 
 export interface TestGroup {
@@ -809,6 +815,15 @@ export async function finalizeTestLogs(
       name: entry.group.name,
       status: entry.result.status ?? 1,
       elapsedMs: entry.elapsedMs,
+      // Host-admission wait inside elapsedMs, so a slow run shows whether it
+      // waited or ran slowly; slots and cores only for a measured, undisturbed
+      // run (Linux).
+      queuedMs: entry.result.queuedMs,
+      reservedSlots: entry.result.reservedSlots,
+      observedCores:
+        entry.result.observedCores === undefined
+          ? undefined
+          : Math.round(entry.result.observedCores * 100) / 100,
       outputBytes: entry.result.outputBytes ?? 0,
       outputLimitExceeded: entry.result.outputLimitExceeded ?? false,
       timeoutReason: entry.result.timeoutReason,

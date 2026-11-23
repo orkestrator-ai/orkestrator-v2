@@ -956,6 +956,7 @@ test("an undisturbed measured group records its parallelism and reports it, with
     ]);
     expect(result.observedCores).toBeCloseTo(1.4, 5);
     expect(result.reservedSlots).toBe(6);
+    expect(result.queuedMs).toBeGreaterThanOrEqual(0);
     // Busiest of the last runs, rounded up: the earlier 0.5 and this 1.4.
     expect(scheduler.estimateWorkers(usageKeyFor())).toBe(2);
   } finally {
@@ -987,6 +988,8 @@ test("only undisturbed groups that ran at least a second teach the scheduler", a
     for (const result of disturbed) {
       expect(result.observedCores).toBeUndefined();
       expect(result.reservedSlots).toBeUndefined();
+      // The admission wait is reported whatever the outcome.
+      expect(result.queuedMs).toBeGreaterThanOrEqual(0);
     }
     expect(scheduler.estimateWorkers(usageKeyFor())).toBeUndefined();
     // A cancelled run is not learned from either.

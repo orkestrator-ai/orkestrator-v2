@@ -482,12 +482,14 @@ export function createTestAdmission(
           `RUNNING ${group.name} (${granted} worker slots; waited ${((now() - queuedAt) / 1000).toFixed(1)}s${learned !== undefined ? `; adaptive: learned ${learned} of ${planned} planned` : ""})`,
         );
         const ticket = id;
-        const result = await execute({
+        const queuedMs = Math.max(0, Math.floor(now() - queuedAt));
+        const executed = await execute({
           ...group,
           timeoutMs,
           measureCpu: true,
           onSpawn: (pid) => scheduler.registerChild(ticket, pid),
         });
+        const result = { ...executed, queuedMs };
         if (result.infrastructureError || result.timeoutReason || result.outputLimitExceeded)
           incomplete = true;
         // Learn only from an undisturbed run: a failed, cut-short or cancelled

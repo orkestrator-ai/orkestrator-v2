@@ -1125,11 +1125,13 @@ session.post("/:id/prompt", async (c) => {
       202,
     );
   } catch (error) {
-    log.error("prompt.send-failed", { error: formatLogError(error) });
-    return c.json(
-      { error: errorMessage(error, "Failed to send prompt") },
-      sessionErrorStatus(error),
-    );
+    const status = sessionErrorStatus(error);
+    // A conflict is the session answering as designed (a CLI still running
+    // background work, a claim another request holds), and its caller
+    // retries it: an ERROR per attempt filled a day's log with 11,843 of them.
+    if (status === 409) log.warn("prompt.refused", { status, error: formatLogError(error) });
+    else log.error("prompt.send-failed", { error: formatLogError(error) });
+    return c.json({ error: errorMessage(error, "Failed to send prompt") }, status);
   }
 });
 

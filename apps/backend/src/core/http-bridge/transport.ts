@@ -605,16 +605,20 @@ export async function bridgeErrorDetail(response: Response, operation: string): 
   return rawDetail ? rawDetail.replace(/[\r\n\t]+/g, " ").slice(0, 500) : "";
 }
 
-/** Preserve a retryable dispatch refusal's reason without trusting its response body. */
+/**
+ * Preserve a retryable dispatch refusal's reason without trusting its response
+ * body. The bridge's own words are shown as they are: the person sees this
+ * message, and "prompt dispatch is temporarily unavailable (HTTP 409)" in
+ * front of it told them nothing and called a refusal that can last hours
+ * temporary. Without a detail the message still names the agent and status.
+ */
 export async function promptDispatchUnavailableError(
   agent: ProviderAgent,
   response: Response,
 ): Promise<ProviderUnavailableError> {
   const detail = await bridgeErrorDetail(response, "prompt dispatch");
   return new ProviderUnavailableError(
-    `${agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})${
-      detail ? `: ${detail}` : ""
-    }`,
+    detail || `${agent} prompt dispatch is temporarily unavailable (HTTP ${response.status})`,
   );
 }
 

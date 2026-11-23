@@ -113,7 +113,20 @@ export interface ClaudeLaunchProfile {
   thinking: string;
   bypassCapable: boolean;
   plugins?: string;
-  credentials?: string;
+  /**
+   * Which GitHub token variables the CLI was given (present or not), never
+   * their values. Signing in or out is a launch change, refused while the CLI
+   * owes work.
+   */
+  githubSignIn?: string;
+  /**
+   * Digest of the GitHub token values. A rotated token (still present) does
+   * not refuse a prompt: it joins a CLI that owes work, which keeps the token
+   * it launched with, and retires a warm one (`claudeLaunchRotated`).
+   */
+  githubToken?: string;
+  /** Digest of the model connection (endpoint and its credential). */
+  modelConnection?: string;
   repositoryInstructions?: string;
   cwd: string;
   /**
@@ -204,25 +217,32 @@ export function effectiveClaudeContext1m(options: PromptOptions | undefined): bo
   );
 }
 
+/** The GitHub token variables a CLI's environment can carry. */
+const GITHUB_TOKEN_ENV_NAMES = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
+] as const;
+
 /**
- * Hash only credential fields (the managed GitHub token and the model
- * connection a read-only turn takes from the user settings); never retain
- * their values in the profile.
+ * Hash only credential fields (the GitHub token and the model connection a
+ * read-only turn takes from the user settings); never retain their values in
+ * the profile. The GitHub sign-in is kept apart from the token itself, so a
+ * rotation (`gh auth login` again, a refreshed managed credential file) can
+ * be told from signing in or out.
  */
 export function claudeLaunchResourceProfile(
   plugins: readonly { path: string }[],
   environment: NodeJS.ProcessEnv,
-): Pick<ClaudeLaunchProfile, "plugins" | "credentials"> {
+): Pick<ClaudeLaunchProfile, "plugins" | "githubSignIn" | "githubToken" | "modelConnection"> {
   const digest = (value: unknown) =>
     createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const tokens = GITHUB_TOKEN_ENV_NAMES.map((name) => environment[name]?.trim() || null);
   return {
     plugins: digest(plugins.map((plugin) => plugin.path)),
-    credentials: digest([
-      environment.GH_TOKEN ?? null,
-      environment.GITHUB_TOKEN ?? null,
-      environment.GITHUB_PERSONAL_ACCESS_TOKEN ?? null,
-      connectionEnvFingerprint(environment),
-    ]),
+    githubSignIn: JSON.stringify(tokens.map((token) => token !== null)),
+    githubToken: digest(tokens),
+    modelConnection: digest(connectionEnvFingerprint(environment)),
   };
 }
 
@@ -266,6 +286,32 @@ export function claudeTurnSettingSources(
 }
 
 /**
+ * What changed outside the prompt, for each launch conflict a person cannot
+ * undo by sending the message differently. Every other conflict is a setting
+ * the prompt itself asks for.
+ */
+const EXTERNAL_LAUNCH_CHANGES: Readonly<Record<string, string>> = {
+  "GitHub sign-in": "the GitHub sign-in available to it changed (signed in or out)",
+  "model connection": "the model connection in the Claude settings changed",
+  plugins: "the enabled Claude plugins changed",
+  "repository instructions": "the repository's instructions changed",
+  "working directory": "its working directory changed",
+};
+
+/**
+ * The refusal a prompt gets while the running CLI owes work and cannot take
+ * it. Names what changed, and that stopping the background work lets it
+ * through. Keeps "still running background work", which callers and the
+ * live steer spec wait on.
+ */
+export function claudeRuntimeBusyRefusalMessage(conflict: string): string {
+  const external = EXTERNAL_LAUNCH_CHANGES[conflict];
+  return external
+    ? `Claude can't take this message yet: ${external} since this conversation's Claude process started, and that process is still running background work. Stop the background work to continue now, or wait for it to finish.`
+    : `Claude can't take this message yet: it needs a different ${conflict} from the one this conversation's Claude process started with, and that process is still running background work. Stop the background work to continue now, wait for it to finish, or send it without that change.`;
+}
+
+/**
  * Refuse a prompt the session's running process cannot take.
  *
  * Launch-only settings cannot change on a live CLI, and starting a second one
@@ -281,17 +327,16 @@ export function assertClaudeRuntimeStaticAccepts(
   const runtime = openClaudeRuntime(session);
   if (!runtime || !claudeRuntimeOwesWork(runtime)) return;
   const conflict = claudeLaunchConflict(runtime.launch, claudeLaunchProfile(session, options));
-  if (conflict)
-    throw sessionOperationError(
-      "conflict",
-      `Claude is still running background work in this session, so a prompt that changes its ${conflict} cannot start until that work finishes or is stopped`,
-    );
+  if (conflict) throw sessionOperationError("conflict", claudeRuntimeBusyRefusalMessage(conflict));
 }
 
 export async function assertClaudeRuntimeAccepts(
   session: SessionState,
   options: PromptOptions | undefined,
-  resources?: Pick<ClaudeLaunchProfile, "plugins" | "credentials" | "repositoryInstructions"> & {
+  resources?: Pick<
+    ClaudeLaunchProfile,
+    "plugins" | "githubSignIn" | "githubToken" | "modelConnection" | "repositoryInstructions"
+  > & {
     settingSources?: string;
   },
   readOnlyCommandSandbox?: ReturnType<typeof claudeReadOnlyCommandSandbox>,
@@ -301,10 +346,7 @@ export async function assertClaudeRuntimeAccepts(
   const request = claudeLaunchProfile(session, options, readOnlyCommandSandbox);
   const refuse = (conflict: string | undefined) => {
     if (conflict)
-      throw sessionOperationError(
-        "conflict",
-        `Claude is still running background work in this session, so a prompt that changes its ${conflict} cannot start until that work finishes or is stopped`,
-      );
+      throw sessionOperationError("conflict", claudeRuntimeBusyRefusalMessage(conflict));
   };
   refuse(claudeLaunchConflict(runtime.launch, request));
   if (!resources) {
@@ -493,8 +535,10 @@ export function claudeLaunchConflict(
   )
     return "repository instructions";
   if (request.plugins !== undefined && runtime.plugins !== request.plugins) return "plugins";
-  if (request.credentials !== undefined && runtime.credentials !== request.credentials)
-    return "managed credentials";
+  if (request.githubSignIn !== undefined && runtime.githubSignIn !== request.githubSignIn)
+    return "GitHub sign-in";
+  if (request.modelConnection !== undefined && runtime.modelConnection !== request.modelConnection)
+    return "model connection";
   if (runtime.cwd !== request.cwd) return "working directory";
   if (runtime.boundary !== request.boundary) return "execution policy";
   if (runtime.outputSchema !== request.outputSchema) return "structured output";
@@ -503,6 +547,23 @@ export function claudeLaunchConflict(
     return "settings sources";
   }
   return undefined;
+}
+
+/**
+ * Whether `request` carries a rotated GitHub token: still signed in, but not
+ * with the token `runtime` launched with.
+ *
+ * Not a conflict. A CLI that owes work keeps the token it launched with, which
+ * its background work is already using: refusing every prompt until that work
+ * ends locked a coordinator out for hours after a `gh auth login`. A warm CLI
+ * that owes nothing is retired so the next launch takes the new token
+ * (`joinableRuntime`). Signing in or out stays a conflict (`githubSignIn`).
+ */
+export function claudeLaunchRotated(
+  runtime: ClaudeLaunchProfile,
+  request: Pick<ClaudeLaunchProfile, "githubToken">,
+): boolean {
+  return request.githubToken !== undefined && runtime.githubToken !== request.githubToken;
 }
 
 /** Remember which turn's row holds `toolUseId`, within the bound. */

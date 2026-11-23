@@ -139,10 +139,16 @@ export function createTestAdmission(
     readPressure?: () => HostPressure | undefined;
     /** Identity scope for learned group CPU; the repository's Git common directory by default. */
     usageScope?: string;
+    /** Tests: how often a queued group re-checks admission (100 ms by default). */
+    queuePollMs?: number;
+    /** Tests: the shortest gap between two pressure-gate reads (250 ms by default). */
+    pressureCheckMs?: number;
   } = {},
 ) {
   const clock = options.clock ?? (() => performance.now());
   const now = options.now ?? (() => Date.now());
+  const queuePollMs = options.queuePollMs ?? 100;
+  const pressureCheckMs = options.pressureCheckMs ?? 250;
   if (env.ORKESTRATOR_TEST_PARENT_RESERVATION) {
     throw new Error(
       "Nested aggregate validation requires this exact command in .orkestrator-test-scheduler.json; no tests were started (avoided double reservation)",
@@ -208,7 +214,7 @@ export function createTestAdmission(
   const gateOpens = () => {
     const at = now();
     // PSI averages move over seconds; polling it per group per 100 ms is noise.
-    if (at - lastGateCheck < 250) return overflow;
+    if (at - lastGateCheck < pressureCheckMs) return overflow;
     lastGateCheck = at;
     let pressure: HostPressure | undefined;
     try {
@@ -427,7 +433,7 @@ export function createTestAdmission(
             lastReason = undefined;
             continue;
           }
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, queuePollMs));
         }
         if (cancelled) throw new Error("Validation was cancelled before execution");
         // The deadline covers the queue wait, so the child gets only what is

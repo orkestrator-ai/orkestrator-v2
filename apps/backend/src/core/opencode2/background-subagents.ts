@@ -93,6 +93,12 @@ export interface OpenCode2BackgroundWorkDependencies {
   now(): number;
   monotonicNow?(): number;
   sleep?(ms: number): Promise<void>;
+  /**
+   * The stop's settle window ({@link OPENCODE2_STOP_SETTLE_MS} by default).
+   * Tests whose assertions do not depend on the window's length shorten it so
+   * each stop does not wait out three real seconds.
+   */
+  stopSettleMs?: number;
 }
 
 export class OpenCode2BackgroundWork {
@@ -218,8 +224,12 @@ export class OpenCode2BackgroundWork {
     this.stops.add(controller);
     const signal = controller.signal;
     const monotonicNow = this.deps.monotonicNow ?? (() => performance.now());
-    const settleUntil = monotonicNow() + OPENCODE2_STOP_SETTLE_MS;
-    const timeout = setTimeout(() => controller.abort(), OPENCODE2_STOP_CLEANUP_MS);
+    const settleMs = this.deps.stopSettleMs ?? OPENCODE2_STOP_SETTLE_MS;
+    const settleUntil = monotonicNow() + settleMs;
+    const timeout = setTimeout(
+      () => controller.abort(),
+      settleMs + (OPENCODE2_STOP_CLEANUP_MS - OPENCODE2_STOP_SETTLE_MS),
+    );
     const sleep = this.deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
     const inputHead = async () => {
       const page = await this.client.listMessages(sessionId, { limit: 199, order: "desc", signal });
@@ -234,7 +244,7 @@ export class OpenCode2BackgroundWork {
         !signal.aborted && (await inputHead()) === initialInput && !signal.aborted;
       await interruptParent?.(signal);
       const attempted = new Set<string>();
-      const lastPoll = OPENCODE2_STOP_SETTLE_MS / STOP_POLL_MS;
+      const lastPoll = Math.ceil(settleMs / STOP_POLL_MS);
       let pollCost = 0;
       for (let poll = 0; poll <= lastPoll; poll += 1) {
         const pollStarted = monotonicNow();

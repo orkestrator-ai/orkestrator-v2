@@ -18,6 +18,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import { terminateProcessTree } from "./process-tree.js";
 import { spawnCommand } from "./shell.js";
 import type { CommandContext } from "./commands-context.js";
+import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "./commands-server-health.js";
 
 /**
  * The catalogue probe is the one path that spawns a bridge with no environment
@@ -140,7 +141,12 @@ function context(overrides: Record<string, unknown> = {}): CommandContext {
   } as unknown as CommandContext;
 }
 
+// Every probe waits for the stand-in bridge's health; poll it every 20 ms, as
+// the command fixtures do, rather than at the production 200 ms.
+const originalLocalServerPoll = process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV];
+
 beforeEach(async () => {
+  process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV] = "20";
   appRoot = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pi-seed-"));
   await fs.mkdir(path.join(appRoot, "bridges", "pi-bridge", "dist"), { recursive: true });
   await fs.writeFile(path.join(appRoot, "bridges", "pi-bridge", "dist", "index.js"), "");
@@ -169,6 +175,8 @@ afterEach(async () => {
   expect(runtime.localServers.hasEnvironmentOperations()).toBe(false);
   runtime.shutdown();
   await fs.rm(appRoot, { recursive: true, force: true });
+  if (originalLocalServerPoll === undefined) delete process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV];
+  else process.env[LOCAL_SERVER_POLL_OVERRIDE_ENV] = originalLocalServerPoll;
 });
 
 describe("discoverHostPiModelCatalog", () => {

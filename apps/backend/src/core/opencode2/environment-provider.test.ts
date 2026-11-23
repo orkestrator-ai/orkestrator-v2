@@ -53,6 +53,7 @@ function setup(options: { running?: boolean; refreshConfiguration?: () => Promis
       createProvider: () => {
         const provider = new OpenCode2Provider(fake.client(), {
           monitorEvents: false,
+          stopSettleMs: 250,
           // Every provider, so the fixture model reaches the picker.
           allowedModelProviders: async () => [],
         });

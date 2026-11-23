@@ -13,6 +13,12 @@ import { openCode2RequestRun } from "./workflow-results.js";
 import type { OpenCode2Message } from "./types.js";
 
 /**
+ * A short stop settle window, so stops whose assertions do not depend on its
+ * length do not each wait out the production three seconds.
+ */
+const SETTLE_MS = 250;
+
+/**
  * OpenCode 2.3.0 runs every sub-agent in the background: the parent's run
  * settles while its child works, and the child's report wakes the parent
  * later. 2.3.1 does the same with a shell command still running when its
@@ -32,6 +38,7 @@ function setup() {
   server = new FakeOpenCode2Server();
   clock = Date.now();
   provider = new OpenCode2Provider(server.client(), {
+    stopSettleMs: SETTLE_MS,
     monitorEvents: false,
     now: () => clock,
   });
@@ -272,6 +279,7 @@ describe("background shells (2.3.1)", () => {
       throw new Error("offline");
     };
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: async () => new Set(),
       now: () => clock,
     });
@@ -288,7 +296,11 @@ describe("shell settlement and Stop interleavings", () => {
     server = new FakeOpenCode2Server();
     clock = Date.now();
     const client = server.client();
-    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    provider = new OpenCode2Provider(client, {
+      monitorEvents: false,
+      stopSettleMs: SETTLE_MS,
+      now: () => clock,
+    });
     return { server, provider, client };
   }
 
@@ -380,7 +392,10 @@ describe("shell settlement and Stop interleavings", () => {
         turn: { requestId: "old", settled: false },
       });
     };
-    const replacement = new OpenCode2Provider(server.client(), { monitorEvents: false });
+    const replacement = new OpenCode2Provider(server.client(), {
+      monitorEvents: false,
+      stopSettleMs: SETTLE_MS,
+    });
     try {
       const stopping = provider.abort(id);
       await reached.promise;
@@ -427,6 +442,7 @@ describe("shell settlement and Stop interleavings", () => {
       return interrupt(...args);
     };
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: () => clock,
       sleep: async (ms) => {
@@ -447,6 +463,7 @@ describe("shell settlement and Stop interleavings", () => {
     server.backgroundShells[0]!.time.completed = clock;
     let polls = 0;
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: () => clock,
       sleep: async (ms) => {
@@ -530,6 +547,7 @@ describe("shell settlement and Stop interleavings", () => {
         ),
       });
       const work = new OpenCode2BackgroundWork(malformedClient, {
+        stopSettleMs: SETTLE_MS,
         running: () => client.activeSessions(),
         now: () => clock,
         sleep: async (ms) => {
@@ -555,6 +573,7 @@ describe("shell settlement and Stop interleavings", () => {
       throw new Error("refused");
     };
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: () => clock,
       sleep: async (ms) => {
@@ -596,6 +615,7 @@ describe("shell settlement and Stop interleavings", () => {
       ),
     });
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: () => client.activeSessions(),
       now: Date.now,
     });
@@ -671,6 +691,7 @@ describe("background work read failures and stop races", () => {
     const { server, parent } = await launched();
     const client = server.client();
     const work = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: async () => {
         throw new Error("offline");
       },
@@ -678,6 +699,7 @@ describe("background work read failures and stop races", () => {
     });
     expect(await work.live(parent)).toBe(true);
     const work2 = new OpenCode2BackgroundWork(client, {
+      stopSettleMs: SETTLE_MS,
       running: async () => new Set(),
       now: () => clock,
     });
@@ -695,7 +717,11 @@ describe("background work read failures and stop races", () => {
   test("a failed inbox read keeps observation pending and suppresses the launch result", async () => {
     server = new FakeOpenCode2Server();
     const client = server.client();
-    provider = new OpenCode2Provider(client, { monitorEvents: false, now: () => clock });
+    provider = new OpenCode2Provider(client, {
+      monitorEvents: false,
+      stopSettleMs: SETTLE_MS,
+      now: () => clock,
+    });
     const parent = await provider.createSession("plan", "p");
     await provider.send(parent, "plan", { requestId: "read-failure", schema: { type: "object" } });
     const child = server.addChildSession(parent, { running: false });
@@ -733,6 +759,9 @@ describe("background work read failures and stop races", () => {
       }
       let polls = 0;
       const work = new OpenCode2BackgroundWork(client, {
+        // The late change lands on the third poll; the instant fake sleep
+        // makes the poll count, not real time, bound this window.
+        stopSettleMs: 1_000,
         now: () => clock,
         running: async () =>
           new Set([...server.sessions.values()].filter((s) => s.running).map((s) => s.id)),

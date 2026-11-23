@@ -1198,7 +1198,16 @@ describe("experimental aggregate pressure gate", () => {
         worktreeRoot(),
         { ORKESTRATOR_TEST_SCHEDULER_DIR: directory, ...env },
         (line) => lines.push(line),
-        { exclusiveSuite: true, readPressure, usageScope: SCOPE, now },
+        // Poll and re-read pressure quickly: these tests wait for the gate to
+        // have been weighed several times, not for real PSI averages to move.
+        {
+          exclusiveSuite: true,
+          readPressure,
+          usageScope: SCOPE,
+          now,
+          queuePollMs: 5,
+          pressureCheckMs: 10,
+        },
       );
       runs.push(admission);
       let started = false;

@@ -20,6 +20,7 @@ function setup(options: { monitorEvents?: boolean } = {}) {
   server = new FakeOpenCode2Server();
   provider = new OpenCode2Provider(server.client(), {
     monitorEvents: options.monitorEvents ?? false,
+    stopSettleMs: 250,
     monitorRetryMs: 5,
   });
   return { server, provider };

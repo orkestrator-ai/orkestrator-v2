@@ -92,6 +92,12 @@ export type TerminalRuntimeOptions = {
   closeContainerShell?: (shell: ContainerTerminalShell, signal: AbortSignal) => Promise<void>;
   /** Size-ownership clock and lease; tests drive them. */
   sizeOwnership?: TerminalSizeOwnershipOptions;
+  /**
+   * SIGTERM grace before `terminateSessionsForEnvironment` escalates to
+   * SIGKILL (the PTY's own two seconds by default). Interactive shells ignore
+   * SIGTERM, so tests that terminate real shells shorten it.
+   */
+  terminateGraceMs?: number;
 };
 
 type TerminalBootstrapResult = {
@@ -150,11 +156,13 @@ export class TerminalRuntime {
   private readonly outputRetentionMs: number;
   private readonly survivesTermination: ((environmentId: string) => boolean) | undefined;
   private readonly closeContainerShellOption: TerminalRuntimeOptions["closeContainerShell"];
+  private readonly terminateGraceMs: number | undefined;
 
   constructor(options: TerminalRuntimeOptions = {}) {
     this.outputRetentionMs = options.outputRetentionMs ?? TERMINAL_OUTPUT_RETENTION_MS;
     this.survivesTermination = options.survivesTermination;
     this.closeContainerShellOption = options.closeContainerShell;
+    this.terminateGraceMs = options.terminateGraceMs;
     this.history = new TerminalHistory(options.history);
     this.sizeOwnership = new TerminalSizeOwnership(options.sizeOwnership);
   }
@@ -710,7 +718,11 @@ export class TerminalRuntime {
         const process = this.processes.get(id);
         if (!process) return;
         const exited = await Promise.resolve()
-          .then(() => process.terminate())
+          .then(() =>
+            process.terminate(
+              this.terminateGraceMs === undefined ? undefined : { graceMs: this.terminateGraceMs },
+            ),
+          )
           .catch(() => false);
         if (!exited) survivors.push(id);
       }),

@@ -1384,6 +1384,17 @@ export function CreateEnvironmentDialog({
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
     modelsForAgent(modelCatalog, platform).map((option) => toPickerModel(platform, option)),
   );
+  const featurePickerFallback =
+    buildIntent === "feature" &&
+    featurePlatforms.length > 0 &&
+    !startupPlatforms.includes(agentType)
+      ? effectiveFeatureModels.build
+      : undefined;
+  const featurePickerFallbackLabel = featurePickerFallback
+    ? modelsForAgent(modelCatalog, featurePickerFallback.agent).find(
+        (candidate) => candidate.id === featurePickerFallback.model,
+      )?.name
+    : undefined;
   const selectedModel = availableModels.find((candidate) => candidate.id === model);
   const availableReasoningEfforts =
     availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
@@ -2345,28 +2356,44 @@ export function CreateEnvironmentDialog({
                       startupPlatforms.includes(option.platform),
                     )}
                     enabledPlatforms={startupPlatforms}
-                    selectedPlatform={agentType}
+                    selectedPlatform={featurePickerFallback?.agent ?? agentType}
                     favorites={favoriteModels.filter((favorite) =>
                       startupPlatforms.includes(favorite.platform),
                     )}
                     onPlatformChange={selectAgent}
                     onToggleFavorite={toggleFavoriteModel}
                     onReorderFavorites={reorderFavorites}
-                    selectedModelId={model}
-                    selectedModelLabel={selectedModel?.name ?? "Select model"}
+                    selectedModelId={featurePickerFallback?.model ?? model}
+                    selectedModelLabel={
+                      (featurePickerFallback ? featurePickerFallbackLabel : selectedModel?.name) ??
+                      "Select model"
+                    }
                     onModelChange={selectModel}
                     onModelSelect={selectAgentModel}
-                    reasoningOptions={reasoningOptions}
-                    selectedReasoningId={reasoningEffort}
+                    reasoningOptions={featurePickerFallback ? [] : reasoningOptions}
+                    selectedReasoningId={featurePickerFallback?.reasoningEffort ?? reasoningEffort}
                     selectedReasoningLabel={
-                      reasoningOptions.find((option) => option.id === reasoningEffort)?.label
+                      featurePickerFallback?.reasoningEffort
+                        ? effortLabel(featurePickerFallback.reasoningEffort)
+                        : !featurePickerFallback
+                          ? reasoningOptions.find((option) => option.id === reasoningEffort)?.label
+                          : undefined
                     }
                     onReasoningChange={selectReasoningEffort}
-                    speedCapable={speedCapable}
-                    fastModeAvailable={speedAvailable}
-                    fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
-                    onFastModeChange={speedAvailable ? setFastMode : undefined}
-                    disabled={isLoading || (!launchAgent && buildIntent !== "feature")}
+                    speedCapable={!featurePickerFallback && speedCapable}
+                    fastModeAvailable={!featurePickerFallback && speedAvailable}
+                    fastModeEnabled={
+                      featurePickerFallback?.fastMode ??
+                      (speedAvailable ? (fastMode ?? false) : false)
+                    }
+                    onFastModeChange={
+                      !featurePickerFallback && speedAvailable ? setFastMode : undefined
+                    }
+                    disabled={
+                      isLoading ||
+                      startupPlatforms.length === 0 ||
+                      (!launchAgent && buildIntent !== "feature")
+                    }
                     title="Choose agent, model, and reasoning"
                     className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}
                   />
@@ -2387,18 +2414,6 @@ export function CreateEnvironmentDialog({
                   </div>
                 </div>
               </div>
-              {startupAgentBlocked && (
-                <p className="px-4 py-2 text-sm text-muted-foreground sm:px-6" role="status">
-                  {agentType === "antigravity" && environmentType === "containerized"
-                    ? "Antigravity is available in local environments only. Choose another agent to launch in this container."
-                    : "Choose an enabled agent to launch in this environment."}
-                </p>
-              )}
-              {buildIntent === "feature" && featurePlatforms.length === 0 && (
-                <p className="px-4 py-2 text-sm text-muted-foreground sm:px-6" role="status">
-                  Enable a pipeline-compatible agent in Settings to start a feature build.
-                </p>
-              )}
               {deferredTerminalPrompt && !launchAgent && (
                 <p
                   className="border-b border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
@@ -2658,6 +2673,24 @@ export function CreateEnvironmentDialog({
           onRefresh={launchBase.refresh}
           disabled={isLoading}
         />
+        {startupAgentBlocked && (
+          <p
+            className="shrink-0 border-t border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
+            role="status"
+          >
+            {agentType === "antigravity" && environmentType === "containerized"
+              ? "Antigravity is available in local environments only. Choose another agent to launch in this container."
+              : "Choose an enabled agent to launch in this environment."}
+          </p>
+        )}
+        {buildIntent === "feature" && featurePlatforms.length === 0 && (
+          <p
+            className="shrink-0 border-t border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
+            role="status"
+          >
+            Enable a pipeline-compatible agent in Settings to start a feature build.
+          </p>
+        )}
         <DialogFooter className="m-0 grid shrink-0 grid-cols-2 border-t border-divider px-4 py-2.5 sm:m-0 sm:flex sm:flex-row sm:px-6">
           <Button
             type="button"

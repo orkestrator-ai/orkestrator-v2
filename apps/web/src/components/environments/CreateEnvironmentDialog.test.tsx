@@ -1154,7 +1154,14 @@ test("container and pipeline admission keep an Antigravity opening draft and use
     ),
   );
 
+  fireEvent.click(screen.getByRole("button", { name: "Local" }));
+  await act(async () => fireEvent.pointerDown(picker));
+  fireEvent.click(await screen.findByRole("button", { name: /^antigravity models/ }));
+  act(() => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect(picker.textContent).toContain("Antigravity");
+
   fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
+  expect(picker.textContent).not.toContain("Antigravity");
   expect((screen.getByLabelText(/^Description/) as HTMLTextAreaElement).value).toBe(
     "Keep the draft",
   );

@@ -170,13 +170,17 @@ describe("backend prompt display contract", () => {
   });
 
   test("renders evidence from the exact custom-fix prompt producer", () => {
+    const validationInstruction = "Rerun the recorded validation command.";
     const source = multiReviewCustomAddressFindingsPrompt(
       TEST_STRUCTURED_REVIEW_REPORT,
       "Preserve the public API.",
+      validationInstruction,
     );
     const presentation = userPromptPresentation(source);
 
     expect(presentation.displayText).toContain("Preserve the public API.");
+    expect(source).toContain(validationInstruction);
+    expect(presentation.displayText).not.toContain(validationInstruction);
     expect(presentation.displayText).not.toContain(
       STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText,
     );

@@ -229,10 +229,11 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         prompt: { builtIn: "address-findings" },
         inputs: [
           { name: "report", type: "review-report@1", render: "json-frame" },
+          { name: "package", type: "review-package@2", render: "file" },
           { name: "code", type: "workspace@1" },
         ],
         outputs: [
-          { name: "result", type: "address-findings-result@1" },
+          { name: "result", type: "address-findings-result@2" },
           { name: "code", type: "workspace@1" },
         ],
       },
@@ -242,7 +243,7 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
         label: "Address Findings complete?",
         description: "Only proof that Address Findings completed queues the pull request.",
         inputs: [
-          { name: "result", type: "address-findings-result@1" },
+          { name: "result", type: "address-findings-result@2" },
           { name: "code", type: "workspace@1" },
         ],
         branches: [
@@ -288,6 +289,11 @@ export function multiReviewBuiltInTemplate(): GraphTemplateV1 {
       edge("plan-package-code", port("plan", "code"), target("package", "code")),
       edge("package-review", port("package", "package"), target("review", "package")),
       edge("package-consolidate", port("package", "package"), target("consolidate", "package")),
+      edge(
+        "package-address-findings",
+        port("package", "package"),
+        target("address-findings", "package"),
+      ),
       edge("review-consolidate", port("review", "report"), target("consolidate", "reports")),
       edge("consolidate-gate", port("consolidate", "report"), target("has-findings", "report")),
       edge("plan-gate", port("plan", "code"), target("has-findings", "code")),

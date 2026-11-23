@@ -10,7 +10,11 @@
  * registry (item 103) can bind them. Custom types never name a validator.
  */
 import { isVerificationVerdict } from "../build-pipeline.js";
-import { parseAddressFindingsResult, parsePrResult } from "../review-results.js";
+import {
+  parseAddressFindingsResult,
+  parseMultiReviewAddressFindingsResult,
+  parsePrResult,
+} from "../review-results.js";
 import {
   isReviewPackageReference,
   isSafeReviewTargetBranch,
@@ -35,6 +39,7 @@ export const GRAPH_BUILT_IN_VALIDATOR_IDS = [
   "review-finding",
   "verification-verdict",
   "address-findings-result",
+  "multi-review-address-findings-result",
   "pr-result",
   "pr-description",
   "check-summary",
@@ -470,6 +475,16 @@ const VALIDATORS: readonly GraphBuiltInValidator[] = [
     summary: "Complete only without failed commands or limitations; incomplete only with one.",
     wraps: "review-results.ts#parseAddressFindingsResult",
     check: (value) => parses(parseAddressFindingsResult, value),
+    backend: {
+      checks: PLACEHOLDER_CHECKS,
+      existing: `${CONTRACTS_MODULE} (kind address-findings-result)`,
+    },
+  },
+  {
+    id: "multi-review-address-findings-result",
+    summary: "Multi Review can complete when each remaining failure has a documented excuse.",
+    wraps: "review-results.ts#parseMultiReviewAddressFindingsResult",
+    check: (value) => parses(parseMultiReviewAddressFindingsResult, value),
     backend: {
       checks: PLACEHOLDER_CHECKS,
       existing: `${CONTRACTS_MODULE} (kind address-findings-result)`,

@@ -123,15 +123,16 @@ export function consolidatedReportIsClean(
 
 /**
  * Whether consolidation hands its report to Address Findings: auto-address findings is on and the
- * report has issues or test coverage gaps. Otherwise the review is ready.
+ * report has issues or gaps, or recorded validation still needs triage.
  */
 export function multiReviewAutoAddressFindingsDue(
   workflow: Pick<MultiReviewWorkflow, "autoAddressFindings" | "consolidatedReport">,
+  validationNeedsAttention = false,
 ): boolean {
   return (
     workflow.autoAddressFindings === true &&
     workflow.consolidatedReport !== undefined &&
-    !consolidatedReportIsClean(workflow)
+    (!consolidatedReportIsClean(workflow) || validationNeedsAttention)
   );
 }
 
@@ -146,8 +147,12 @@ export function addressFindingsResultCompletes(result: { complete: boolean }): b
  * whether the review was started by the button, a coordinator, or any other
  * caller that turned auto-PR on.
  */
-export function queueCleanReviewAutoPr(workflow: MultiReviewWorkflow): void {
-  if (workflow.autoPr !== true || !consolidatedReportIsClean(workflow)) return;
+export function queueCleanReviewAutoPr(
+  workflow: MultiReviewWorkflow,
+  validationNeedsAttention = false,
+): void {
+  if (workflow.autoPr !== true || validationNeedsAttention || !consolidatedReportIsClean(workflow))
+    return;
   const state = workflow.autoPrLaunch?.state;
   if (state === "pending" || state === "launched") return;
   workflow.autoPrLaunch = {

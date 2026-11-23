@@ -338,7 +338,7 @@ describe("type library", () => {
     const briefs = library.resolve("list<design-brief@1>");
     expect(briefs.ok && graphValueTypeLabel(briefs.type)).toBe("list<design-brief@1>");
     expect(briefs.ok && briefs.type.kind === "list" && briefs.type.element.kind).toBe("named");
-    expect(library.definitions().length).toBe(GRAPH_BUILT_IN_TYPE_NAMES.length + 2);
+    expect(library.definitions().length).toBe(graphBuiltInTypes().length + 1);
   });
 
   test("reports unknown types, versions and malformed refs", () => {

@@ -5,6 +5,7 @@ import {
   REVIEW_MAX_CONTEXT_BYTES,
   REVIEW_MAX_CONTEXT_LIST_ENTRIES,
   REVIEW_MAX_CONTEXT_TEXT_LENGTH,
+  type ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
 import {
   ADDRESS_FINDINGS_RESULT_FRAME_CLOSE,
@@ -32,6 +33,8 @@ import {
   MAX_REPORTED_UNCOMMITTED_PATHS,
   MAX_STRUCTURED_REPORT_REPAIR_PROMPT_BYTES,
   MERGE_REPOSITORY_TOOLING_INSTRUCTION,
+  MULTI_REVIEW_ADDRESS_FINDINGS_VALIDATION_REPORTING,
+  multiReviewAddressFindingsValidationInstruction,
   prPrompt,
   MAX_PULL_REQUEST_FOLLOW_UP_BYTES,
   pullRequestDescriptionPrompt,
@@ -57,6 +60,21 @@ function contractIssue(
     ...overrides,
   };
 }
+
+const fileReviewPackage: ReviewPackageReference = {
+  kind: "file",
+  id: "package-1",
+  round: 1,
+  preparedAt: "2026-07-29T09:00:00.000Z",
+  targetBranch: "release",
+  baseRef: "base-sha",
+  headRef: "validated-sha",
+  filePath: ".orkestrator/review/package-1.json",
+  sha256: "abc",
+  bytes: 10,
+  changedFileCount: 2,
+  limitations: [],
+};
 
 function pipeline(): BuildPipeline {
   return {
@@ -442,7 +460,7 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain(
       "do not redundantly rerun passing full-suite, typecheck, lint, or build commands",
     );
-    // Standalone Multi Review has no verifier, so it gets no triage or report contract.
+    // Without a validation instruction there is no triage or report contract.
     expect(prompt).not.toContain("validation report");
     expect(prompt).toContain("Stage only related safe files");
     expect(prompt).toContain("commit every relevant fix before finishing");
@@ -1173,6 +1191,95 @@ describe("build pipeline prompts", () => {
     // The contract stays inside the system frame, before the implementation-mode rules.
     expect(prompt.indexOf("Report your work in the fix result")).toBeLessThan(
       prompt.indexOf("This is an implementation turn"),
+    );
+  });
+
+  test("the pipeline address repair rule is unchanged by the Multi Review variant", () => {
+    const instruction = addressFindingsValidationInstruction(fileReviewPackage, "release");
+    expect(instruction).toContain(
+      "Fix every recorded failure that relates to the ticket or this branch's changes, then rerun only that check. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/release. Only failures unrelated to the ticket acceptance criteria may be excused as pre-existing or environmental, and only with evidence: a failure triage verdict of `unrelated` and its reasons, or a demonstrated cause such as a missing tool or an operating-system path difference rather than the code. A timeout or a check that produced no output may be excused only when the triage classifies it `unrelated` or the cause is demonstrably a missing tool. A timeout or silence alone is not evidence of an environmental cause. For a failure you believe is unrelated: Check whether the failure involves code this branch changes (git diff origin/release...HEAD); if it does, it is not unrelated. Do not run any check against origin/release, check it out, or create another worktree to reproduce a failure there: the failure triage already records the evidence that exists (the target branch's CI result, the repository's flake registry, other pipelines on the same merge-base, the test's imports), so cite it. Leave an `undetermined` failure you cannot tie to this branch's diff for the verifier, and say why in `limitations`. Do not change unrelated code or tests to hide a failure.",
+    );
+    expect(instruction).not.toContain(MULTI_REVIEW_ADDRESS_FINDINGS_VALIDATION_REPORTING);
+    // A pipeline without a package still gets the repair rule, as before.
+    expect(addressFindingsValidationInstruction(undefined, "release")).toContain(
+      "Fix every recorded failure that relates to the ticket",
+    );
+  });
+
+  test("Multi Review's address instruction repairs branch failures without a ticket or verifier", () => {
+    const instruction = multiReviewAddressFindingsValidationInstruction(
+      fileReviewPackage,
+      "release",
+      true,
+    );
+    expect(instruction).toContain("`.orkestrator/review/package-1.json`");
+    expect(instruction).toContain("**Validation report**");
+    expect(instruction).toContain("**Failure triage**");
+    expect(instruction).toContain(
+      "Fix every recorded failure that relates to this branch's changes, then rerun only that check.",
+    );
+    expect(instruction).toContain(
+      "A failure related to this branch's changes must be repaired even if it also occurs on origin/release.",
+    );
+    expect(instruction).toContain(
+      "Only failures unrelated to this branch's changes may be excused as pre-existing, flaky or environmental, and only with evidence: a failure triage verdict of `unrelated`",
+    );
+    expect(instruction).toContain(
+      "A timeout or silence alone is not evidence of an environmental cause.",
+    );
+    expect(instruction).toContain("Do not run any check against origin/release");
+    expect(instruction).toContain("Do not change unrelated code or tests to hide a failure.");
+    expect(instruction).toContain(
+      "do not redundantly rerun passing full-suite, typecheck, lint, or build commands. After repairing a failed or incomplete recorded command, rerun that exact command",
+    );
+    expect(instruction).toContain(MULTI_REVIEW_ADDRESS_FINDINGS_VALIDATION_REPORTING);
+    expect(instruction).not.toContain("ticket");
+    expect(instruction).not.toContain("acceptance criteria");
+    expect(instruction).not.toContain("verifier");
+    expect(instruction).not.toContain("Address Findings result you submit");
+    expect(instruction).not.toContain(ADDRESS_FINDINGS_OUTPUT_CONTRACT);
+    expect(instruction).not.toContain("Keep the validated commit");
+
+    // addressFindingsReportPrompt's tail already states the rerun rule once.
+    const prompt = addressFindingsReportPrompt(
+      { issues: [], testCoverageGaps: [] } as unknown as StructuredReviewReport,
+      multiReviewAddressFindingsValidationInstruction(fileReviewPackage, "release", false),
+    );
+    expect(
+      prompt.split(
+        "do not redundantly rerun passing full-suite, typecheck, lint, or build commands",
+      ),
+    ).toHaveLength(2);
+    expect(prompt).toContain("Fix every recorded failure that relates to this branch's changes");
+  });
+
+  test("Multi Review's address instruction is empty without a review package", () => {
+    expect(multiReviewAddressFindingsValidationInstruction(undefined, "main", true)).toBe("");
+  });
+
+  test("Multi Review's address instruction inlines a legacy package's failing diagnostics", () => {
+    const legacy = {
+      id: "legacy",
+      round: 1,
+      preparedAt: "2026-01-01T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: "base",
+      headRef: "head",
+      commit: null,
+      completeDiff: "",
+      changedFiles: [],
+      validation: [
+        { command: "bun test", status: "failed", exitCode: 1, stdout: "1 fail", stderr: "" },
+      ],
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+    } as unknown as LegacyReviewPackage;
+    const instruction = multiReviewAddressFindingsValidationInstruction(legacy, "main", true);
+    expect(instruction).toContain("<recorded-validation-json>");
+    expect(instruction).toContain("1 fail");
+    expect(instruction).toContain(
+      "Fix every recorded failure that relates to this branch's changes",
     );
   });
 

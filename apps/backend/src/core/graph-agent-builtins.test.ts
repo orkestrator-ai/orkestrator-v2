@@ -97,6 +97,7 @@ function artifact(
   if (name === "review-package") {
     const descriptor = value as ReviewPackageReference;
     entry.file = { path: descriptor.filePath, sha256: descriptor.sha256, bytes: descriptor.bytes };
+    entry.validationChecks = [];
   }
   const items = graphBuiltInType(ref)?.items;
   if (items && name === "review-report") {
@@ -582,7 +583,7 @@ describe("equivalence with the bound builders", () => {
     const instruction = "Only fix the P1 issue.";
     const custom = graphBuiltInPromptText({ ...context, instruction });
     expect(custom).toBe(
-      multiReviewCustomAddressFindingsPrompt(report, instruction).replace(
+      multiReviewCustomAddressFindingsPrompt(report, instruction, "").replace(
         wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION),
         wrapSystemInstructions(MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION),
       ),

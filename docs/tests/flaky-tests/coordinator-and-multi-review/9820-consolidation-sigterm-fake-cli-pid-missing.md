@@ -103,6 +103,29 @@ reported 1,606 pass, 1 skip and 2 fail across 71 files (53.90 s).
 then passed all 22 tests alone. Logs are in `orkestrator-test-run.RkBCPb`
 under the host temporary directory.
 
+## Multi Review validation repair (2026-11-23)
+
+The recorded default command, `mise run test:logged -- --name review-default-tests -- mise run test`,
+ran on macOS during validation of `0aec2c10e` with merge base
+`b8473d21e996c391c838168a75249d2a8ad602fc`. The recurrence check against
+`origin/main` confirmed this case was open. With two isolated Bun workers
+in the backend package, the Codex case failed at 406.63 ms with `ENOENT`
+reading the fake CLI's `pid` at `evaluation-drivers.test.ts:306`. The backend
+reported 20,248 passing, 212 skipped and two failing tests across 1,434 files.
+
+The runner then used one Bun worker for the owning file in `apps/backend`
+with `bun test ./src/core/review/evaluation-drivers.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`.
+All 22 tests passed in 4.60 seconds. The evaluation driver files are outside
+the branch diff. Startup timing remains a possible cause. The workspace and
+isolated logs are in `orkestrator-test-run.a6NdnH` in the host temporary
+directory.
+
+The same command after the graph pin fix, at `0dcb5542d` on the same base,
+failed both cases at 406.42 ms (Claude) and 408.62 ms (Codex) with the same
+missing `pid` error. The backend again reported 20,248 passing, 212 skipped
+and two failing tests across 1,434 files. The same one-worker rerun passed all
+22 tests in 4.46 seconds. Logs are in `orkestrator-test-run.gGeMAf`.
+
 ## Recurrence on 2026-11-23
 
 - **Branch and base:** `upgrade-packages-0a3b6266bb77-r1`, a dependency-upgrade batch that does not touch the review drivers, on base `307d19317`. `mise run flaky:recurrence -- 9820 --base 307d19317` confirmed the case was open.

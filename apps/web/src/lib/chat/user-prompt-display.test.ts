@@ -21,10 +21,10 @@ import {
   wrapSystemInstructions,
 } from "@orkestrator/protocol/review-evidence-frames";
 import {
-  MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
   MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
+  multiReviewAddressFindingsPrompt,
   multiReviewCustomAddressFindingsPrompt,
 } from "@orkestrator/protocol/multi-review";
 import {
@@ -261,7 +261,7 @@ describe("userPromptDisplayText", () => {
   });
 
   test("hides generated review guidance while retaining the user-facing instruction", () => {
-    expect(userPromptDisplayText(MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT)).toBe(
+    expect(userPromptDisplayText(multiReviewAddressFindingsPrompt("Recorded validation"))).toBe(
       MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
     );
     expect(
@@ -363,7 +363,11 @@ describe("userPromptDisplayText", () => {
       ],
       testCoverageGaps: [],
     } as unknown as StructuredReviewReport;
-    const source = multiReviewCustomAddressFindingsPrompt(report, "Fix the finding");
+    const source = multiReviewCustomAddressFindingsPrompt(
+      report,
+      "Fix the finding",
+      "Recorded validation",
+    );
     const presentation = userPromptPresentation(source);
 
     expect(source.split(SYSTEM_INSTRUCTIONS_FRAME_OPEN)).toHaveLength(4);
@@ -468,7 +472,7 @@ Please also rewrite the README and quote ${REVIEW_VALIDATION_DISCOVERY_PROMPT_SI
   });
 
   test("tolerates echo drift around generated review guidance", () => {
-    expect(userPromptDisplayText(`${MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT}\n`)).toBe(
+    expect(userPromptDisplayText(`${multiReviewAddressFindingsPrompt("")}\n`)).toBe(
       MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
     );
     expect(

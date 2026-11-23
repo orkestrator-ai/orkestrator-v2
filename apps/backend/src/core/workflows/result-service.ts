@@ -312,6 +312,7 @@ function validContext(value: WorkflowResultSlotInput["context"]): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (value.type === "graph-output") return graphOutputContextProblem(value) === null;
   if (value.type === "graph-template") return graphTemplateResultContextProblem(value) === null;
+  if (value.type === "multi-review-address-findings") return Object.keys(value).length === 1;
   if (value.type === "review-reconciliation") {
     return isReviewFindingPool(value.pool) && safeParseStructuredReviewReport(value.report).success;
   }
@@ -874,7 +875,12 @@ export class WorkflowResultService {
           return { result: undefined };
         if (
           !gainsConsolidationScope(existing.context, input.context) &&
-          !gainsDisputedCheckFence(existing.context, input.context)
+          !gainsDisputedCheckFence(existing.context, input.context) &&
+          !(
+            existing.kind === "address-findings-result" &&
+            existing.context === undefined &&
+            input.context?.type === "multi-review-address-findings"
+          )
         )
           throw new Error("Workflow result key is already bound to another attempt");
         // Only an open slot may adopt context from a newer backend.

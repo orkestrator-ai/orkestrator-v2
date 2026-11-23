@@ -186,6 +186,7 @@ export interface WorkflowResultSlotInput {
         disputedCheckDigests?: string[];
       }
     | WorkflowGraphOutputContext
+    | { type: "multi-review-address-findings" }
     | GraphTemplateResultContext;
 }
 

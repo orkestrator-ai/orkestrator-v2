@@ -1,4 +1,4 @@
-import { deletionMarker, markDeletion } from "../storage-deletion-fences.js";
+import { deletionMarker, markDeletion, type StorageDatabase } from "../storage/index.js";
 /**
  * Durable per-environment storage for web annotations.
  *
@@ -44,8 +44,7 @@ import {
   type WebAnnotationErrorDetail,
   type WebAnnotationStorageStatus,
 } from "@orkestrator/protocol/web-annotations";
-import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import { openBackendDatabase } from "../storage/stores.js";
 import {
   WEB_ANNOTATION_MAX_RECORD_BYTES,
   archiveLegacyEnvironment,

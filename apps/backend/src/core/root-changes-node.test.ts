@@ -12,7 +12,7 @@ import { NodeOutcomeUnknownError, NodeUnavailableError } from "./nodes/index.js"
 import { MAX_NODE_ROOT_CHANGE_PATCH_BYTES } from "./root-changes-node.js";
 import { runCommand } from "./shell.js";
 import * as shell from "./shell.js";
-import { StorageService, createEnvironment, createProject } from "./storage.js";
+import { StorageService, createEnvironment, createProject } from "./storage/service.js";
 
 // The command node's checkout, coordinator, receipts and approval command run
 // for real, and so does the leaf's `apply_controller_root_patch` with real

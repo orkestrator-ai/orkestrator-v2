@@ -42,7 +42,7 @@ import type { Environment } from "../models.js";
 import type { MultiReviewProgressTracker } from "../review/index.js";
 import { resolveEnvironmentExecutionPolicy } from "./execution-policy.js";
 import type { RecordUsageTurnsInput } from "../usage-history-store.js";
-import type { PersistedSuborkBatch, PersistedSuborkBranch } from "../storage-suborks.js";
+import type { PersistedSuborkBatch, PersistedSuborkBranch } from "../storage/index.js";
 import {
   LAST_ASSISTANT_TEXT_READ_LIMIT,
   lastAssistantText,

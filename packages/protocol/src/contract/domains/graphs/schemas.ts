@@ -513,7 +513,7 @@ export const GraphMockLaunchResultSchema = modelRecord<GraphMockLaunchResultShap
   placeholderRoles: StringArray,
 });
 
-/** One effect journal row (`storage-graph-effects.ts` `GraphEffectRecord`). */
+/** One effect journal row (`apps/backend/src/core/storage/graph-effects.ts` `GraphEffectRecord`). */
 export interface GraphRunEffectShape {
   id: string;
   runId: string;

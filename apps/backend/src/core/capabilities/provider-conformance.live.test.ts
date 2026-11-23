@@ -30,7 +30,7 @@ import path from "node:path";
 
 import { PINNED_TOOLCHAIN_VERSIONS } from "@orkestrator/toolchain/manifest";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { CapabilityExecutor, type NodePlanTarget } from "./executor.js";
 import { testCapabilityHomes, type CapabilityHomes } from "./native-ownership.js";

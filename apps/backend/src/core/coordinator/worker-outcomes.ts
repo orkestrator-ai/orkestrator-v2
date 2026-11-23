@@ -30,7 +30,7 @@ import { prKeyTag, WORKER_OUTCOME_AWARENESS } from "./pr-status.js";
 import type { CoordinatorRemoteAccess } from "./remote.js";
 import type { CoordinatorStatus, CoordinatorStatusResource } from "./status-wakes.js";
 import type { Environment } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 type PrState = NonNullable<CoordinatorWorkerOutcome["prState"]>;
 

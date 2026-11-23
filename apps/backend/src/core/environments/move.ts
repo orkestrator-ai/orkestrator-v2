@@ -25,7 +25,7 @@ import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import { stopEnvironmentExecWorkers } from "../public-api/index.js";
 import { stopEnvironmentReviewValidation } from "../review/validation-service.js";
 import { pathExists, runCommand } from "../shell.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { cleanupEnvironmentTmux } from "../tmux/index.js";
 import { getWorktreeBaseDir, validateWorktreeLocation } from "../worktrees/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

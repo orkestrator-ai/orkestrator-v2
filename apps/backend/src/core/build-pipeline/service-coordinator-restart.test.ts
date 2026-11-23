@@ -3,7 +3,7 @@ import { failedStepTarget } from "./restart-targets.js";
 import { isCancelledBuildPipeline, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { BuildPipelineService } from "./service.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { TEST_ADDRESS_FINDINGS_RESULT, TEST_REVIEW_PREPARATION } from "./test-fixtures.js";
 import {
   cleanReview,

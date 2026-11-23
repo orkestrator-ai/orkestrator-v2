@@ -39,7 +39,7 @@ import {
   TICKET_SECTION_LIMITS,
   type DeliveryPolicy,
 } from "@orkestrator/protocol/ticket-sections";
-import type { KanbanTask } from "../storage-shared-core.js";
+import type { KanbanTask } from "../storage/index.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import type { Environment, PersistedBuildPipeline } from "../models.js";
 import { type BuildPipelineProvider } from "./provider.js";

@@ -23,7 +23,7 @@ import type { ReviewerRecord } from "@orkestrator/protocol/review-fanout";
 import { PromptRejectedError, type BuildPipelineProvider } from "../build-pipeline/provider.js";
 import type { PipelineWorkerMailPort } from "../build-pipeline/worker-mail.js";
 import type { MailSteerDispatchOutcome } from "../native-agent/service-shared.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 export interface MultiReviewWorkerMailDeps {
   storage: Pick<StorageService, "listMultiReviewWorkflows">;

@@ -17,7 +17,7 @@ import * as tmux from "../tmux/commands.js";
 import { TmuxBackend } from "../tmux/backend.js";
 import { claudeTmuxRuntimeRootPrefix, tmuxSessionName } from "../tmux/shared.js";
 import { realTmux, withPrivateTmux } from "../../../tests/tmux-lifecycle-fixture.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import {
   listTmuxSessions,
   setup,

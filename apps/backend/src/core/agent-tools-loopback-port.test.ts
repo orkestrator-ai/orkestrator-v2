@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { AgentToolsServer } from "./agent-tools.js";
 import { bindListener, closeListeners } from "./agent-tools-listen.js";
 import { AgentToolsPeerFilter, type AgentToolsPeerGate } from "./agent-tools-peer-filter.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 
 /**

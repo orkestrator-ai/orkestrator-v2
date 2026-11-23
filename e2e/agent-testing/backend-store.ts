@@ -21,7 +21,7 @@ import {
   readStoredValue,
   seedBuildPipeline,
   seedStore,
-} from "../../apps/backend/src/core/storage-test-support";
+} from "../../apps/backend/src/core/storage/test-support";
 
 const [dataDir, file, action] = process.argv.slice(2);
 if (!dataDir || !file) throw new Error("usage: backend-store.ts <dataDir> <store.json> <action>");

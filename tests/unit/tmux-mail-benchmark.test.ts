@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { seedStore } from "../../apps/backend/src/core/storage-test-support";
+import { seedStore } from "../../apps/backend/src/core/storage/test-support.js";
 import {
   runMailBenchmark,
   parseOptions,

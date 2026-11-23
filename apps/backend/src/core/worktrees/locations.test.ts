@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import {
   getWorktreeBaseDir,
   getWorktreeLocations,

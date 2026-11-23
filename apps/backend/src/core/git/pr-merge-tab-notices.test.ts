@@ -7,9 +7,9 @@ import { deliverPrMergeTabNotices, renderPrMergeTabNotice } from "./pr-merge-tab
 import type { CommandContext } from "../commands-context.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { PrMonitorRuntime } from "./pr-monitor-runtime.js";
-import { StorageService } from "../storage.js";
-import { readStoredValue, seedStore } from "../storage-test-support.js";
-import type { PersistedAgentMailStore } from "../storage-agent-mail-store.js";
+import { StorageService } from "../storage/service.js";
+import { readStoredValue, seedStore } from "../storage/test-support.js";
+import type { PersistedAgentMailStore } from "../storage/agent-mail-store.js";
 import { AgentMailService } from "../agent-mail-service.js";
 import { createLifecycleHarness } from "../../../tests/pr-monitor-test-harness.js";
 

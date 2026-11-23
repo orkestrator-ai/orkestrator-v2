@@ -9,7 +9,7 @@ import {
   type CoordinatorWaitingOn,
 } from "@orkestrator/protocol/coordinator-context";
 import { coordinatorProviderQualification } from "./providers.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 export async function agentMessagingEnabled(
   storage: Pick<StorageService, "loadConfig">,

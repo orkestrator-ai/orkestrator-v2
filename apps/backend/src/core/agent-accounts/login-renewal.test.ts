@@ -6,7 +6,7 @@ import path from "node:path";
 import { removeAgentAccount, renewAgentAccountLogin } from "./accounts.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const NOW = Date.parse("2026-11-03T12:00:00Z");
 const ACCOUNT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";

@@ -10,7 +10,7 @@ import * as serverHealth from "../commands-server-health.js";
 import { CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT } from "../constants.js";
 import { coordinatorSessionAccount, readSessionAgentAccount } from "./session.js";
 import type { Environment } from "../models.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const SECOND = "11111111-2222-4333-8444-555555555555";
 

@@ -22,7 +22,7 @@
  * (`build-pipeline/service-recovery.ts`, `persistPullRequest`). Each closed
  * pull request is decided once (`prClosedReturnUrl`).
  */
-import type { KanbanTask } from "./storage-shared.js";
+import type { KanbanTask } from "./storage/index.js";
 
 /** The PR monitor's comment on a ticket whose pull request merged; followed by `: <url>`. */
 export const PR_MERGED_COMMENT = "🎉 PR merged";

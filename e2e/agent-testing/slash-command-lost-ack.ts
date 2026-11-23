@@ -4,7 +4,7 @@
  * restoring the durable parked record that an interrupted dispatch leaves.
  * Run under Bun from the Playwright spec, never imported by Node.
  */
-import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
+import { openBackendDatabase } from "../../apps/backend/src/core/storage/stores";
 import type { PersistedNativeAgentSession } from "../../apps/backend/src/core/models";
 
 const [dataDir, environmentId, agent, logicalSessionKey, requestId, prompt] = process.argv.slice(2);

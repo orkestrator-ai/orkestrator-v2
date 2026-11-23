@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { registerKanbanCommands } from "../commands-registry-kanban.js";
 import { registrarFrom } from "../commands-registry-contracts.js";
 import type { CommandHandler } from "../commands-context.js";

@@ -13,7 +13,7 @@ import {
 } from "../mail-attachments.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import { recordSeedFile, SEED_MANIFEST } from "./node-seed.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /**
  * File operations a command node uses on a node (including itself) for

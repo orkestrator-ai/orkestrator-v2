@@ -1,8 +1,7 @@
 import type { TranscriptArtifactService } from "../transcript-artifacts/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { nativeAgentSessionStorageKey } from "../native-agent/index.js";
-import type { StorageService } from "../storage.js";
-import { isPromptQueueMessageConflict } from "../storage-prompts.js";
+import { type StorageService, isPromptQueueMessageConflict } from "../storage/index.js";
 import {
   ProductCommandRegistry,
   graphWorkflowCommands,

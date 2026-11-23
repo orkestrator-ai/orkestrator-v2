@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { conciseError } from "./commands-error-text.js";
 import { CommandFailedError, runCommand } from "./shell.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 /**
  * Names the path and the machine, because a remote machine's project is shown

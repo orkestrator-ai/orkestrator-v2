@@ -25,9 +25,9 @@ import {
 import { recordFileStem } from "../keyed-record-format.js";
 import { writeLegacyTranscriptSession as writeLegacySession } from "./transcript-test-fixtures.js";
 import { transcriptFingerprint } from "./service-helpers.js";
-import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
-import { storageFilesContain } from "../storage-test-support.js";
+import type { StorageDatabase } from "../storage/database.js";
+import { openBackendDatabase } from "../storage/stores.js";
+import { storageFilesContain } from "../storage/test-support.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 

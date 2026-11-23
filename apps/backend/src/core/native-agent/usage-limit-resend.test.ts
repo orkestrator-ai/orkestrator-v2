@@ -421,7 +421,7 @@ test("native continuation reaches the replacement HTTP bridge with its new token
 test.each(["steer", "recovered"] as const)(
   "%s dispatch retains its turn mode for one weekly-limit resend",
   async (kind) => {
-    const { StorageService } = await import("../storage.js");
+    const { StorageService } = await import("../storage/service.js");
     const { mkdtemp, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");

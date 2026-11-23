@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "../src/core/agent-tools.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { containerWorktreeSignalInstaller } from "../src/core/containers/worktree-signal-install.js";
 import { DiffStatsTracking } from "../src/core/diff-stats-tracking.js";
 import type { DiffScanEvent } from "../src/core/diff-stats-service.js";

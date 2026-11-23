@@ -5,7 +5,7 @@ import {
   parseTmuxPromptAttachments,
 } from "@orkestrator/protocol/tmux-prompt";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 import type { Environment } from "./models.js";
 import { isGeneratedEnvironmentName } from "./environments/index.js";
 import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";

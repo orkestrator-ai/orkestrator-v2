@@ -23,7 +23,7 @@ import {
   createStorage,
   refusingInvoke,
 } from "./service-projection-test-support.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 
 const HEAD = "a".repeat(40);
 

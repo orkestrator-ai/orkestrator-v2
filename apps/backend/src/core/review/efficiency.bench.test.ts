@@ -41,8 +41,8 @@ import { testGeneratedReviewPackage } from "../build-pipeline/test-fixtures.js";
 import { syntheticReport } from "./efficiency-fixtures.js";
 import { parseReviewPackageReference } from "./package.js";
 import { MultiReviewService } from "./service.js";
-import { StorageService } from "../storage.js";
-import { storageDatabase } from "../storage-test-support.js";
+import { StorageService } from "../storage/service.js";
+import { storageDatabase } from "../storage/test-support.js";
 
 jest.setTimeout(120_000);
 

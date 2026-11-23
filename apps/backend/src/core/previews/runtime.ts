@@ -26,7 +26,7 @@ import {
   DEFAULT_PREVIEW_SETTINGS,
   type PreviewServicesStorage,
   type PreviewSettings,
-} from "../storage-preview-services.js";
+} from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("preview");

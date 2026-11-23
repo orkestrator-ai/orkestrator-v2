@@ -10,13 +10,13 @@ import { existsSync, promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createBackendChangeTracking } from "./backend-wiring.js";
-import { listStorageSnapshots } from "../storage-backups.js";
+import { listStorageSnapshots } from "../storage/backups.js";
 import {
   STORAGE_DATABASE_FILE,
   StorageDatabase,
   StorageDatabaseVersionError,
-} from "../storage-database.js";
-import { STORAGE_MIGRATIONS, openBackendDatabase, storeLayout } from "../storage-stores.js";
+} from "../storage/database.js";
+import { STORAGE_MIGRATIONS, openBackendDatabase, storeLayout } from "../storage/stores.js";
 import {
   CHANGE_LEDGER_DATABASE_FILE,
   CHANGE_LEDGER_FILE_SCHEMA_VERSION,

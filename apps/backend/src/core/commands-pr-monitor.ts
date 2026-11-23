@@ -22,7 +22,7 @@ import {
 } from "./git/pr-required-checks.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
-import type { KanbanStorage, StorageService } from "./storage.js";
+import type { KanbanStorage, StorageService } from "./storage/index.js";
 import { withContainerRuntimeCredential } from "./containers/index.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {

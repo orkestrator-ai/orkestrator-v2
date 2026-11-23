@@ -4,7 +4,7 @@ import {
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
 import type { PersistedBuildPipeline } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import type { WorkflowDiscoveryResult } from "../workflows/index.js";
 
 /**

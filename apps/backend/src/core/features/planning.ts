@@ -39,7 +39,7 @@ import {
   type FeaturePlan,
   type FeaturePlanMessage,
   type StorageService,
-} from "../storage.js";
+} from "../storage/index.js";
 import type { Environment } from "../models.js";
 import type { AgentToolConnection } from "../agent-tools.js";
 import {

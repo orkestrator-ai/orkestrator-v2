@@ -280,7 +280,7 @@ new.
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
     `native-agent/`, `recurring/`, `tmux/`, `terminals/`, `containers/`,
-    `environments/`) are
+    `environments/`, `storage/`) are
     reached only
     through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
@@ -389,6 +389,30 @@ new.
     skips `@orkestrator/protocol/contract/domains/environments/*`, the
     protocol's environments contract folder, which is not the backend domain.
 
+    The `storage/` boundary has three exceptions for runtime cycles.
+    `storage/service.ts` (the `StorageService` facade) reaches every
+    repository, `storage/stores.ts` (`openBackendDatabase`) imports each
+    domain's store layout and migration, and `storage/coordinators.ts`
+    (`coordinatorAttachmentsRoot`) imports `coordinator/index.ts`; each
+    reaches modules that import `storage/index.ts`. Unlike the other
+    boundaries, `storage/index.ts` still re-exports their types with
+    `export type`, which adds no runtime edge, so the many type-only
+    importers of `StorageService` go through `index.ts` and only the code
+    that constructs a `StorageService` (`index.ts`, `control-mcp/server.ts`)
+    or calls the other two values imports the module directly. Because
+    `storage/index.ts` does not reach the repositories, three repositories
+    take a domain's module through its `index.ts` without a cycle:
+    `storage/nodes.ts` (`nodes/index.ts`), `storage/scheduled-jobs.ts`
+    (`scheduled-jobs/index.ts`) and `storage/public-operations.ts`
+    (`public-api/index.ts`). The store registry's imports of
+    `change-tracking/ledger-schema.ts`, `transcript-artifacts/store-layout.ts`,
+    `web-annotations/store-layout.ts` and `scheduled-jobs/layout.ts`, and
+    `storage/public-operation-rows.ts`'s import of
+    `public-api/operation-ledger.ts`, still close cycles and stay
+    exceptions of those domains. Its `tests/unit/**` pattern has three
+    exceptions: `storage/service.ts`, `storage/stores.ts` and
+    `storage/test-support.ts`.
+
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import
     `previews/test-support.ts`, `public-api/test-provider.ts` imports
@@ -406,7 +430,10 @@ new.
     `native-agent-deferred-normalization.test.ts`), and
     `containers/network.ts` and `containers/replacement.ts` (for
     `firewall-refresh.test.ts` and the `migrate-copy*.test.ts` files, whose
-    modules `containers/index.ts` cannot re-export). Write those specifiers
+    modules `containers/index.ts` cannot re-export), and
+    `storage/service.ts`, `storage/stores.ts` and `storage/test-support.ts`
+    (for the tests that construct a `StorageService`, open the database or
+    seed stores). Write those specifiers
     with the `.js` extension: the exceptions name `.js` paths, so an
     extensionless specifier is reported.
 

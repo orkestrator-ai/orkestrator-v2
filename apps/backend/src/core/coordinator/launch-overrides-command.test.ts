@@ -14,7 +14,7 @@ import { ControlMcpServer } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";
 import { CoordinatorService } from "./service.js";
 import { cleanupSessionHarnesses, setup } from "../public-api/test-provider.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

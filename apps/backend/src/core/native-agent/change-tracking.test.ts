@@ -19,7 +19,7 @@ import {
 } from "./provider.js";
 import { NativeAgentService } from "./service.js";
 import type { NativeAgentChangeTrackingHooks } from "./service-shared.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const SESSION = "env-env-1:tab-1";
 const harnesses: Harness[] = [];

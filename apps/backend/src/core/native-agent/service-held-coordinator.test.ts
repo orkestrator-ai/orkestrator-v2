@@ -11,7 +11,7 @@ import { AgentMailService } from "../agent-mail-service.js";
 import { createNativeAgentDisplayTail } from "./display-tails.js";
 import type { NativeAgentService } from "./service.js";
 import { nativeAgentSessionStorageKey } from "./service-shared.js";
-import { createProject, type StorageService } from "../storage.js";
+import { createProject, type StorageService } from "../storage/service.js";
 import { createProviderStub, withService } from "./service-projection-test-support.js";
 
 const CONVERSATION = "held";

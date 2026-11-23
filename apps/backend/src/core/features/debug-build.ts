@@ -46,7 +46,7 @@ import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resource
 import { launchBuildPipeline } from "../build-pipeline/launch.js";
 import { assertValidPromptImages } from "../prompt-attachments.js";
 import type { Environment } from "../models.js";
-import type { KanbanTask } from "../storage-shared.js";
+import type { KanbanTask } from "../storage/index.js";
 import {
   normalizeFeatureImages,
   refineProvisionalTicketTitle,

@@ -16,7 +16,7 @@ import {
   type TranscriptManifestRow,
   type TranscriptManifestRows,
 } from "./transcript-manifests.js";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 
 /**
  * Import of the manifests the pre-database transcript store kept as files

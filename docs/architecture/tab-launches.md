@@ -28,7 +28,7 @@ it from here, and that lives in `tabLaunchStore`, never in the pane layout.
 | What is on its way | `apps/web/src/stores/tabLaunchStore.ts` |
 | Placeholder tab and shimmer outlines | `apps/web/src/components/pane-layout/TabLaunchShimmer.tsx` |
 | Focus when the tab arrives | `requestPaneTabActivation`, `flushPaneTabActivation` (`pane-layout-authoritative.ts`) |
-| The setup tab | `ensureSetupTab` (`storage-sessions.ts`), published by `commands-environment.ts` |
+| The setup tab | `ensureSetupTab` (`storage/sessions.ts`), published by `commands-environment.ts` |
 | The job tab and its handoff | `ensureStartupNativeAgentTab`, `ensureTerminalJobTab`, `ensureBuildPipelineTab` |
 | ⌘T | `new-agent-tab` in `APP_SHORTCUTS`; see [keyboard-shortcuts.md](keyboard-shortcuts.md) |
 

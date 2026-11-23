@@ -15,8 +15,8 @@ import {
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
   selectCoordinatorWorkflowsToClear,
 } from "./workflow-retention.js";
-import { createEnvironment, createProject } from "../storage.js";
-import { readStoredValue, seedStore, withTemporaryStorage } from "../storage-test-support.js";
+import { createEnvironment, createProject } from "../storage/service.js";
+import { readStoredValue, seedStore, withTemporaryStorage } from "../storage/test-support.js";
 
 const NOW = Date.parse("2026-11-02T12:00:00.000Z");
 const OLD = "2026-10-01T00:00:00.000Z";

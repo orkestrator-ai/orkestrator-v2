@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database store holding scheduled jobs, one row per schedule. Imported by
- * the store registry (storage-stores.ts), so keep this module free of other
+ * the store registry (storage/stores.ts), so keep this module free of other
  * runtime imports.
  */
 export const SCHEDULED_JOBS_STORE = "scheduled-jobs";

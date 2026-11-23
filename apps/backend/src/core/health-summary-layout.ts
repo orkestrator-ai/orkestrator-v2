@@ -1,4 +1,4 @@
-import type { StoreLayout } from "./storage-database.js";
+import type { StoreLayout } from "./storage/index.js";
 
 /**
  * Database store holding the rolling health summary, one row per sample or

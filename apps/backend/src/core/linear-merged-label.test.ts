@@ -16,7 +16,7 @@ import {
   linearMergedLabelRetryDelay,
 } from "./linear-merged-label.js";
 import { PrMonitorRuntime } from "./git/pr-monitor-runtime.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 /**
  * The `merged` label on a Linear-sourced build's issue

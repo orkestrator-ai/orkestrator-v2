@@ -51,8 +51,7 @@ import {
   type InheritedGlobalSettings,
 } from "@orkestrator/protocol/controller-settings";
 
-import type { NodeStoreMutation, NodesStorage } from "../storage-nodes.js";
-import type { PreviewServicesStorage } from "../storage-preview-services.js";
+import type { NodeStoreMutation, NodesStorage, PreviewServicesStorage } from "../storage/index.js";
 import {
   LeafControllerSettings,
   type ControllerSettingsStorage,

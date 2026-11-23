@@ -9,30 +9,41 @@ namespace), their per-file lock files and five-deep backup ladders.
 
 | File | Purpose |
 | --- | --- |
-| `apps/backend/src/core/storage-database.ts` | `StorageDatabase`: connection, migrations, stores, leases |
-| `apps/backend/src/core/storage-database-rows.ts` | How a value splits into rows under its layout, row ids and positions; no SQLite |
-| `apps/backend/src/core/storage-stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
-| `apps/backend/src/core/storage-record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
-| `apps/backend/src/core/storage-workflow-vocabulary-upgrade.ts` | The one-shot rename of stored build pipeline and Multi Review names to Rework and Address Findings (version 11) |
-| `apps/backend/src/core/storage-package-preparation-phase-upgrade.ts` | The one-shot move of stored build pipeline package preparation from Rework to its own phase (version 12) |
-| `apps/backend/src/core/storage-graph-vocabulary-upgrade.ts` | The one-shot rename of stored graph templates, runs, artifacts, workflow results and scheduled workflow actions to Rework and Address Findings names (version 13) |
-| `apps/backend/src/core/storage-coordinator-receipt-vocabulary-upgrade.ts` | The one-shot rename of stored coordinator custom Address Findings receipts (version 14) |
-| `apps/backend/src/core/storage-retired-features.ts` | The migrations that remove data of retired features (Looped Review, the OpenCode 2 preview's session record) |
-| `apps/backend/src/core/storage-backups.ts` | Pre-migration and daily snapshots, rotation |
-| `apps/backend/src/core/storage-context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
-| `apps/backend/src/core/storage-changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
-| `apps/backend/src/core/storage.ts` | `StorageService`, the facade every caller uses: forwarders, plus area fields typed as a `Pick` of one repository |
-| `apps/backend/src/core/storage-repositories.ts` | `StorageRepositories`, which builds every repository over one context |
-| `apps/backend/src/core/storage-files.ts` | `StorageFiles`: the paths of shared stores and of the files beside the database |
-| `apps/backend/src/core/storage-<area>.ts` | One repository per store group (`ProjectsRepository`, `KanbanRepository`, …; see [Code layout](#code-layout)) |
-| `apps/backend/src/core/storage-shared.ts` | The record types and pure helpers every repository shares, re-exported from `storage-shared-core.ts` (base guards, record types, protocol names) the topic modules `storage-shared-<topic>.ts` (pane layouts, agent activity, persisted records, native sessions, model catalogues, config normalisation) and `storage-shared-extra.ts` (OpenCode catalogues, the storage error classes) |
+| `apps/backend/src/core/storage/database.ts` | `StorageDatabase`: connection, migrations, stores, leases |
+| `apps/backend/src/core/storage/database-rows.ts` | How a value splits into rows under its layout, row ids and positions; no SQLite |
+| `apps/backend/src/core/storage/stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
+| `apps/backend/src/core/storage/record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
+| `apps/backend/src/core/storage/workflow-vocabulary-upgrade.ts` | The one-shot rename of stored build pipeline and Multi Review names to Rework and Address Findings (version 11) |
+| `apps/backend/src/core/storage/package-preparation-phase-upgrade.ts` | The one-shot move of stored build pipeline package preparation from Rework to its own phase (version 12) |
+| `apps/backend/src/core/storage/graph-vocabulary-upgrade.ts` | The one-shot rename of stored graph templates, runs, artifacts, workflow results and scheduled workflow actions to Rework and Address Findings names (version 13) |
+| `apps/backend/src/core/storage/coordinator-receipt-vocabulary-upgrade.ts` | The one-shot rename of stored coordinator custom Address Findings receipts (version 14) |
+| `apps/backend/src/core/storage/retired-features.ts` | The migrations that remove data of retired features (Looped Review, the OpenCode 2 preview's session record) |
+| `apps/backend/src/core/storage/backups.ts` | Pre-migration and daily snapshots, rotation |
+| `apps/backend/src/core/storage/context.ts` | `StorageContext`, the state every store shares: database handle, `loadJson`/`saveJson` routing, `updateStore`, `serialize` (with the lease order), `atomically` |
+| `apps/backend/src/core/storage/changes.ts` | `StorageChanges`: resource announcements, the change journal and the revision manifests |
+| `apps/backend/src/core/storage/service.ts` | `StorageService`, the facade every caller uses: forwarders, plus area fields typed as a `Pick` of one repository |
+| `apps/backend/src/core/storage/repositories.ts` | `StorageRepositories`, which builds every repository over one context |
+| `apps/backend/src/core/storage/files.ts` | `StorageFiles`: the paths of shared stores and of the files beside the database |
+| `apps/backend/src/core/storage/index.ts` | The storage domain's public surface: what backend code outside `core/storage/` imports (see [Code layout](#code-layout)) |
+| `apps/backend/src/core/storage/<area>.ts` | One repository per store group (`ProjectsRepository`, `KanbanRepository`, …; see [Code layout](#code-layout)) |
+| `apps/backend/src/core/storage/shared.ts` | The record types and pure helpers every repository shares, re-exported from `storage/shared-core.ts` (base guards, record types, protocol names), the topic modules `storage/shared-<topic>.ts` (pane layouts, agent activity, persisted records, native sessions, model catalogues, config normalisation) and `storage/shared-extra.ts` (OpenCode catalogues, the storage error classes) |
 | `packages/protocol/src/node/storage-database.ts` | On-disk format and a read-only reader for Bun scripts |
-| `apps/backend/src/core/storage-test-support.ts` | Test helpers: seed, read and inspect stores |
-| `apps/backend/src/core/storage-writer-guards-test-support.ts` | The writer guard's static analysis; its tests are `storage-writer-guards.test.ts` (the facade's stores), `storage-writer-guards-raw.test.ts` (raw `StorageDatabase` writers) and `storage-writer-guards-analysis.test.ts` (fixtures for the analysis itself) |
+| `apps/backend/src/core/storage/test-support.ts` | Test helpers: seed, read and inspect stores |
+| `apps/backend/src/core/storage/writer-guards-test-support.ts` | The writer guard's static analysis; its tests are `storage/writer-guards.test.ts` (the facade's stores), `storage/writer-guards-raw.test.ts` (raw `StorageDatabase` writers) and `storage/writer-guards-analysis.test.ts` (fixtures for the analysis itself) |
 
 ## Code layout
 
-`StorageService` (`storage.ts`) is a facade with no base class. Callers
+The storage layer is the `apps/backend/src/core/storage/` folder. Backend code
+outside it imports the domain through `storage/index.ts`, which re-exports by
+name what that code uses; a deep import is a lint error
+([linting.md](../development/linting.md#module-boundaries)). Three modules
+are exceptions, imported directly at run time, because each reaches modules
+that import `index.ts`: `service.ts` (to construct a `StorageService`),
+`stores.ts` (`openBackendDatabase`, for engines with their own stores) and
+`coordinators.ts` (`coordinatorAttachmentsRoot`). Their types still come
+from `index.ts`, as type-only re-exports.
+
+`StorageService` (`storage/service.ts`) is a facade with no base class. Callers
 (mostly through `CommandContext.storage`) reach a store in one of two ways:
 
 - a public method of the facade, which forwards to the repository that owns
@@ -51,7 +62,7 @@ The area fields are `kanban` (`KanbanStorage`), `linear` (`LinearStorage`), `coo
 (`SetupApprovalsStorage`), `environmentIsolation` (`EnvironmentIsolationStorage`), `suborks` (`SuborksStorage`), `watchedPullRequests`
 (`WatchedPullRequestsStorage`) and `openCode2Sessions`
 (`OpenCode2SessionsStorage`). Each area type is declared next to
-its repository and re-exported from `storage.ts`, and lists only the methods
+its repository and re-exported from `storage/service.ts`, and lists only the methods
 code outside the storage files calls; a consumer that needs a few of them
 takes `Pick<KanbanStorage, "listAllFeaturePlans">` (or a nested
 `{ coordinators: Pick<CoordinatorsStorage, …> }` beside facade methods) rather
@@ -64,49 +75,49 @@ the change journal.
 
 | Repository | File | Stores |
 | --- | --- | --- |
-| `ProjectsRepository` | `storage-projects.ts` | Projects, environments, project removal fences, the project-creation lease |
-| `ConfigRepository` | `storage-config.ts` | `config.json`, `agent-platforms.json`, model catalogues |
-| `SessionsRepository` | `storage-sessions.ts` | Sessions, pane layouts |
-| `ReviewsRepository` | `storage-reviews.ts` | Looped and Multi Review workflows |
-| `NativeAgentSessionsRepository` | `storage-native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
-| `NativeAgentDeliveries` | `storage-native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
-| `PromptQueueStore` | `storage-prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and the restore of claims older backends left on disk |
-| `PromptsRepository` | `storage-prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
-| `PromptQueueEditsRepository` | `storage-prompt-queue-edits.ts` | In-place edits of queued prompts, reached as `storage.promptQueueEdits`: the edit lease (`editLeases` on the queue row) that the dispatch and steer reservations respect, its renewal, and the commit of text and attachments together ([native-agent-service.md](native-agent-service.md#editing-a-queued-prompt-in-place)) |
-| `BuildPipelinesRepository` | `storage-build-pipelines.ts` | Build pipelines and their transcripts |
-| `DraftsRepository` | `storage-drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
-| `AgentMailRepository` | `storage-agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention (an environment's deletion is planned in `storage-agent-mail-deletion.ts`) |
-| `AgentMailboxDirectory` | `storage-agent-mail-directory.ts` | Mailbox synchronisation from pane layouts and coordinators, descriptors and snapshots, mailbox policy |
-| `AgentMailInjects` | `storage-agent-mail-injects.ts` | Inject scheduling: the pending queue, claim and settle, retries and verification, delegation and stored-mail holds |
-| `AgentMailBudgets` | `storage-agent-mail-budgets.ts` | Routed mail budgets: pair loop budget and hourly limit, resets, releases and the held-mail notice |
-| `KanbanRepository` | `storage-kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
-| `LinearRepository` | `storage-linear.ts` | Linear board links per repository, disconnects to apply on other machines, and `create_linear_issue` request keys ([tickets.md](tickets.md#linear)), reached as `storage.linear` |
-| `KanbanSyncRepository` | `storage-kanban-sync-repository.ts` | Kanban sync across machines ([tickets.md](tickets.md#sync-across-machines)), reached as `storage.ticketSync`; shares `KanbanBoardStore` (`storage-kanban-board.ts`: the Kanban lease, its reads and the commit that stamps each change for sync) with `KanbanRepository` |
-| `PreviewServicesRepository` | `storage-preview-services.ts` | Preview services and settings, the backend profile and identity |
-| `NodesRepository` | `storage-nodes.ts` | Command-node stores |
-| `PublicOperationsRepository` | `storage-public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
-| `CoordinatorsRepository` | `storage-coordinators.ts` | Coordinator workspaces and workflow associations |
-| `AgentAccountsRepository` | `storage-agent-accounts.ts` | The provider account registry |
-| `GraphTemplatesRepository` | `storage-graph-templates.ts` | `graph-templates`: user graph templates (one row each, revision compare-and-swap inside the row's transaction) and per-project trust records and capability ceilings; a project's row is deleted with the project. Item 405 adds `sharing` (one row: the installation's share-bundle signing key, whose private half no command returns, and the trusted public keys) and `approvals` (one row per project: approved template copies for review diffs, bounded per template and per project, and rejected digests), deleted with the project too |
-| `GraphRunsRepository` | `storage-graph-runs.ts` | Graph runs (`graph-runs`, one row per run, revision compare-and-swap) and their artifacts (`graph-artifacts`: one row per artifact plus a per-run usage row that enforces the budgets); run writes and deletions announce the `graph-run` resource. Runs leave with their environment; an environment-less mock run (item 213) is removed by `deleteEnvironmentlessGraphRun` (mock-run retention) |
-| `GraphEffectsRepository` | `storage-graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease. A mock run records `simulated` rows instead (`recordSimulatedGraphEffect`, data `{ wouldRun }`, item 213) |
-| `SuborksRepository` | `storage-suborks.ts` | `native-agent-suborks`: one row per `ask_agents` call, holding each target's branch record, its bounded answer and the delivery state ([suborks.md](suborks.md)); revision compare-and-swap inside the row's transaction; owned by the environment, deleted with it. Its transcripts share the content-addressed transcript store |
-| `GraphDescribeRepository` | `storage-graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
-| `ClientStateRepository` | `storage-client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`); `coordinator-action-marks` (one row per coordinator conversation, owned by its project and deleted with it: the action cards the user marked done by hand, at most 500, a further mark refused; announces `coordinator-action-marks`; commands in the `coordinator` domain, [coordinator.md](coordinator.md#marking-actions-done-by-hand)). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
-| `WatchedPullRequestsRepository` | `storage-watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
-| `MachineLoadHistoryRepository` | `storage-machine-load-history.ts` | `machine-load-history`: one row (`local`) holding this machine's load history for coordinators choosing a machine ([coordinator.md](coordinator.md#choosing-a-machine)), numbers only and under 16 KB; written by the sampler with `updateStoreRow` about once every 15 minutes and at shutdown, an unreadable row replaced; validated by the sampler on load, never deleted |
-| `SetupApprovalsRepository` | `storage-setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
-| `EnvironmentIsolationRepository` | `storage-environment-isolation.ts` | No store of its own: reserves a local environment's host port block ([environment-isolation.md](environment-isolation.md)) as `isolationPortBase` on its environment row, chosen and written under the environment store's lease so two environments are never handed the same block; row reservation removed on deletion, with bound ports excluded by host probes before reassignment |
-| `ScheduledJobsRepository` | `storage-scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
-| `CapabilitiesRepository` | `storage-capabilities.ts` | `capabilities`: the Agent Capabilities envelope (packages, components, setups, assignments, operations, receipts, observations, updates, drift, activity, artifact refcounts, machines, inspections, approvals, request keys, imports, launches), written only through `updateStore` so every compare-and-swap is one transaction and pruned by count with in-flight records kept; `capability-executor`: this machine's accepted epoch and applied plan keys ([agent-capabilities-management.md](agent-capabilities-management.md)). Package bytes live in `capability-artifacts/`, never in a row |
-| `PermissionRulesRepository` | `storage-permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
-| `RichInteractionsRepository` | `storage-rich-interactions.ts` | Adapts the rich interaction store ([rich-interactions.md](rich-interactions.md)) to the shared context; the store owns its row transactions (requests, receipts, drafts, deliverable metadata, all owned by their environment) |
-| `CredentialsRepository` | `storage-credentials.ts` | Adapts the agent credential records ([agent-credentials.md](agent-credentials.md)): `credential-connections` (one row per saved credential) and `credential-requests`, `credential-grants`, `credential-operations` (owned by the environment, at most 400 rows each per environment, settled rows pruned first). Metadata only: values live in the credential vault, never in the database; the store owns its row transactions and announces the `credential` resource |
+| `ProjectsRepository` | `storage/projects.ts` | Projects, environments, project removal fences, the project-creation lease |
+| `ConfigRepository` | `storage/config.ts` | `config.json`, `agent-platforms.json`, model catalogues |
+| `SessionsRepository` | `storage/sessions.ts` | Sessions, pane layouts |
+| `ReviewsRepository` | `storage/reviews.ts` | Looped and Multi Review workflows |
+| `NativeAgentSessionsRepository` | `storage/native.ts` | Native agent sessions: records and their lease, owners, controls and resume identity, the interaction journal, display tails, turn outcomes and interrupts |
+| `NativeAgentDeliveries` | `storage/native-deliveries.ts` | The dispatch and steer journals on a session record, and a queued steer's reservation and settlement in the prompt queue |
+| `PromptQueueStore` | `storage/prompt-queue-store.ts` | The prompt-queue lease, row reads and row writes, and the restore of claims older backends left on disk |
+| `PromptsRepository` | `storage/prompts.ts` | Prompt-queue operations for dispatch, the compose-draft lease |
+| `PromptQueueEditsRepository` | `storage/prompt-queue-edits.ts` | In-place edits of queued prompts, reached as `storage.promptQueueEdits`: the edit lease (`editLeases` on the queue row) that the dispatch and steer reservations respect, its renewal, and the commit of text and attachments together ([native-agent-service.md](native-agent-service.md#editing-a-queued-prompt-in-place)) |
+| `BuildPipelinesRepository` | `storage/build-pipelines.ts` | Build pipelines and their transcripts |
+| `DraftsRepository` | `storage/drafts.ts` | Compose and file drafts, agent handoffs, session buffers, and the session and pane-layout edits they make |
+| `AgentMailRepository` | `storage/agent-mail.ts` | Agent mail: sending, replies, per-message state, conversations, deletion and retention (an environment's deletion is planned in `storage/agent-mail-deletion.ts`) |
+| `AgentMailboxDirectory` | `storage/agent-mail-directory.ts` | Mailbox synchronisation from pane layouts and coordinators, descriptors and snapshots, mailbox policy |
+| `AgentMailInjects` | `storage/agent-mail-injects.ts` | Inject scheduling: the pending queue, claim and settle, retries and verification, delegation and stored-mail holds |
+| `AgentMailBudgets` | `storage/agent-mail-budgets.ts` | Routed mail budgets: pair loop budget and hourly limit, resets, releases and the held-mail notice |
+| `KanbanRepository` | `storage/kanban.ts` | Kanban, project notes, feature plans, Linear and GitHub completion comments |
+| `LinearRepository` | `storage/linear.ts` | Linear board links per repository, disconnects to apply on other machines, and `create_linear_issue` request keys ([tickets.md](tickets.md#linear)), reached as `storage.linear` |
+| `KanbanSyncRepository` | `storage/kanban-sync-repository.ts` | Kanban sync across machines ([tickets.md](tickets.md#sync-across-machines)), reached as `storage.ticketSync`; shares `KanbanBoardStore` (`storage/kanban-board.ts`: the Kanban lease, its reads and the commit that stamps each change for sync) with `KanbanRepository` |
+| `PreviewServicesRepository` | `storage/preview-services.ts` | Preview services and settings, the backend profile and identity |
+| `NodesRepository` | `storage/nodes.ts` | Command-node stores |
+| `PublicOperationsRepository` | `storage/public-operations.ts` | The public-operation ledger, and the project and config writes it admits |
+| `CoordinatorsRepository` | `storage/coordinators.ts` | Coordinator workspaces and workflow associations |
+| `AgentAccountsRepository` | `storage/agent-accounts.ts` | The provider account registry |
+| `GraphTemplatesRepository` | `storage/graph-templates.ts` | `graph-templates`: user graph templates (one row each, revision compare-and-swap inside the row's transaction) and per-project trust records and capability ceilings; a project's row is deleted with the project. Item 405 adds `sharing` (one row: the installation's share-bundle signing key, whose private half no command returns, and the trusted public keys) and `approvals` (one row per project: approved template copies for review diffs, bounded per template and per project, and rejected digests), deleted with the project too |
+| `GraphRunsRepository` | `storage/graph-runs.ts` | Graph runs (`graph-runs`, one row per run, revision compare-and-swap) and their artifacts (`graph-artifacts`: one row per artifact plus a per-run usage row that enforces the budgets); run writes and deletions announce the `graph-run` resource. Runs leave with their environment; an environment-less mock run (item 213) is removed by `deleteEnvironmentlessGraphRun` (mock-run retention) |
+| `GraphEffectsRepository` | `storage/graph-effects.ts` | The system-node effect journal (item 207): one row per side effect of a run, `intended` before the effect and `done`/`failed` after it, keyed by the action's idempotency key. Rows live in `graph-artifacts` beside the run's artifacts (`<run>/effect:<sha256 of the key>`, owned by the run, marked by `effectFormatVersion`), so they leave with the run on environment deletion; writes share the graph runs' lease. A mock run records `simulated` rows instead (`recordSimulatedGraphEffect`, data `{ wouldRun }`, item 213) |
+| `SuborksRepository` | `storage/suborks.ts` | `native-agent-suborks`: one row per `ask_agents` call, holding each target's branch record, its bounded answer and the delivery state ([suborks.md](suborks.md)); revision compare-and-swap inside the row's transaction; owned by the environment, deleted with it. Its transcripts share the content-addressed transcript store |
+| `GraphDescribeRepository` | `storage/graph-describe.ts` | `graph-describe` (item 215): one row per environment holding its latest "Describe a graph" job (the runner's branch record, the description, the compile context and, once completed, the draft), owned by the environment and deleted with it; revision compare-and-swap inside the row's transaction; writes announce the `graph-describe` resource |
+| `ClientStateRepository` | `storage/client-state.ts` | Presentation state every client shares that used to live in one browser's localStorage. `coordinator-pane-layouts` (one row per project, the coordinator page's tab groups, revision compare-and-swap, announces `coordinator-pane-layout`) and `coordinator-upstream-declines` and `coordinator-upstream-auto-merge` (one row per project each, written only by older clients through the retired decline and auto-merge commands; `check_coordinator_upstream_merge` no longer reads them, not announced) are deleted with the project; `notice-dismissals` (one row: dismissed notice occurrences per session identity, bounded in both dimensions, oldest-touched sessions leave first, announces `notice-dismissal`); `coordinator-action-marks` (one row per coordinator conversation, owned by its project and deleted with it: the action cards the user marked done by hand, at most 500, a further mark refused; announces `coordinator-action-marks`; commands in the `coordinator` domain, [coordinator.md](coordinator.md#marking-actions-done-by-hand)). Commands: `commands-registry-client-state.ts`; clients learn which of these a backend owns from `get_client_state_capabilities`, import their browser copy once and then stop reading it |
+| `WatchedPullRequestsRepository` | `storage/watched-pull-requests.ts` | `coordinator-watched-pull-requests`: one row per project holding the pull requests its coordinator watches ([coordinator.md](coordinator.md#watched-pull-requests)), at most 100 (least recently seen first out), plus the keys settled in the last week; deleted with the project |
+| `MachineLoadHistoryRepository` | `storage/machine-load-history.ts` | `machine-load-history`: one row (`local`) holding this machine's load history for coordinators choosing a machine ([coordinator.md](coordinator.md#choosing-a-machine)), numbers only and under 16 KB; written by the sampler with `updateStoreRow` about once every 15 minutes and at shutdown, an unreadable row replaced; validated by the sampler on load, never deleted |
+| `SetupApprovalsRepository` | `storage/setup-approvals.ts` | `setup-approvals`: one row per project holding the hashes of the `setupLocal` command lists the user approved on this machine ([setup-approval.md](setup-approval.md)), bounded per project, oldest first out; deleted with the project |
+| `EnvironmentIsolationRepository` | `storage/environment-isolation.ts` | No store of its own: reserves a local environment's host port block ([environment-isolation.md](environment-isolation.md)) as `isolationPortBase` on its environment row, chosen and written under the environment store's lease so two environments are never handed the same block; row reservation removed on deletion, with bound ports excluded by host probes before reassignment |
+| `ScheduledJobsRepository` | `storage/scheduled-jobs.ts` | Adapts the scheduled-job engine to the shared context; the engine owns its single-row writes |
+| `CapabilitiesRepository` | `storage/capabilities.ts` | `capabilities`: the Agent Capabilities envelope (packages, components, setups, assignments, operations, receipts, observations, updates, drift, activity, artifact refcounts, machines, inspections, approvals, request keys, imports, launches), written only through `updateStore` so every compare-and-swap is one transaction and pruned by count with in-flight records kept; `capability-executor`: this machine's accepted epoch and applied plan keys ([agent-capabilities-management.md](agent-capabilities-management.md)). Package bytes live in `capability-artifacts/`, never in a row |
+| `PermissionRulesRepository` | `storage/permission-rules.ts` | Adapts the permission-rule store ([permission-rules.md](permission-rules.md)) to the shared context; the store owns its row transactions |
+| `RichInteractionsRepository` | `storage/rich-interactions.ts` | Adapts the rich interaction store ([rich-interactions.md](rich-interactions.md)) to the shared context; the store owns its row transactions (requests, receipts, drafts, deliverable metadata, all owned by their environment) |
+| `CredentialsRepository` | `storage/credentials.ts` | Adapts the agent credential records ([agent-credentials.md](agent-credentials.md)): `credential-connections` (one row per saved credential) and `credential-requests`, `credential-grants`, `credential-operations` (owned by the environment, at most 400 rows each per environment, settled rows pruned first). Metadata only: values live in the credential vault, never in the database; the store owns its row transactions and announces the `credential` resource |
 
 A store written by more than one repository is written under the same lease
 by each, or only through transactions; the guard checks that per store. The
 four agent mail classes share one `AgentMailStore`
-(`storage-agent-mail-store.ts`): the `agent-mail.json` lease (`enqueue`), its
+(`storage/agent-mail-store.ts`): the `agent-mail.json` lease (`enqueue`), its
 load and its size-checked save, plus the pure helpers on the persisted shape.
 Read-only paths (the directory, inboxes, status, the inject sweep and the UI
 summaries) use `snapshot()` instead of `load()`: one deeply frozen value shared
@@ -126,7 +137,7 @@ and `messageStatus`
 (`loadStoreRowsSerialized`: named keys, or the `environmentId\0` key range,
 since every mailbox id is `environmentId\0tabId`). They parse only those rows,
 reusing the read model's or an earlier keyed read's parse of an unchanged
-value (`storage-agent-mail-keyed-rows.ts`, bounded to 512 rows and 8 Mi
+value (`storage/agent-mail-keyed-rows.ts`, bounded to 512 rows and 8 Mi
 characters), and check the envelope's version once per committed revision.
 A status read finds the message's mailbox from a bounded location hint learnt
 from rows this process parsed or wrote, verified against the row, then its
@@ -160,7 +171,7 @@ paths that cross stores work: project removal deletes compose drafts
 (`this.repos.drafts`) and the project's tickets, ticket images, labels, notes
 and feature plans (`this.repos.kanban.deleteProjectContent`, behind a
 content fence in `storage-deletion-fences` and with a `kanban-image-deletions`
-journal, both in `storage-kanban-project-removal.ts`; what that means for sync
+journal, both in `storage/kanban-project-removal.ts`; what that means for sync
 is in [tickets.md](tickets.md#sync-across-machines)), deleting a pipeline
 deletes its Linear and GitHub completion comment records before its row
 (`deleteCompletionCommentsForPipelines`, which project removal also calls for
@@ -169,7 +180,7 @@ deletes the rows that projects removed before that change left behind, and
 the completion comment records of pipelines that are gone, deciding each one
 from a strict read of the projects and pipelines stores
 (`ProjectsRepository.sweepRemovedProjectContent`, `sweepRemovedProjectRows` in
-`storage-kanban-removed-projects.ts`; from to-do 8111, retired 2026-11-16),
+`storage/kanban-removed-projects.ts`; from to-do 8111, retired 2026-11-16),
 session removal deletes the session buffer, public
 operations write projects and environments under those stores' leases
 (`this.repos.projects.enqueueEnvironmentMutation`). A lease
@@ -177,12 +188,12 @@ wrapper (`enqueueEnvironmentMutation`, `enqueueConfigMutation`, …) lives in
 the repository that owns its store, with its target, label and timeout
 unchanged.
 
-Nothing outside the `storage*.ts` files names a repository, the registry or
+Nothing outside the files in `core/storage/` names a repository, the registry or
 `StorageContext` (callers name the area types instead);
-`storage-writer-guards.test.ts` checks both. Tests that need
+`storage/writer-guards.test.ts` checks both. Tests that need
 a primitive or a repository helper the facade does not expose use
 `storageInternals(storage)` or `storageDatabase(storage)` from
-`storage-test-support.ts`.
+`storage/test-support.ts`.
 
 ## What stays a file
 
@@ -243,7 +254,7 @@ as reading the values whichever size expression is used.
 ## Stores and layouts
 
 A store is named by the JSON path it replaced, without `.json` (`kanban`,
-`public-operations/index`). `storage-stores.ts` maps each store to a layout:
+`public-operations/index`). `storage/stores.ts` maps each store to a layout:
 
 | Layout | Persisted as | Used for |
 | --- | --- | --- |
@@ -410,7 +421,7 @@ from that.
   clear a bad row now, and read whole it would hide every queue for good.
   Deletion writes one row per queue, so a crash part-way leaves the rest for the
   caller's retry. It also removes rows that name no environment, and keeps a row
-  naming another one. `storage-writer-guards.test.ts` holds the lease on every
+  naming another one. `storage/writer-guards.test.ts` holds the lease on every
   row write of this store (`LEASED_ROW_STORES`).
 
   Environments keep their store lease too, because a write awaits between its
@@ -421,7 +432,7 @@ from that.
   lease sweeps, a container status change) commits only the rows it changed, in
   one transaction. A row write also refuses a row that has gone since the read,
   so a holder whose lease was taken over cannot bring back a removed environment.
-  `storage-writer-guards.test.ts` requires the lease on every row write of this
+  `storage/writer-guards.test.ts` requires the lease on every row write of this
   store (`LEASED_ROW_STORES`), since a row transaction alone would not serialize
   the read before it.
 
@@ -475,7 +486,7 @@ rows that an unleased transaction committed after the save's read. An
 buffers the value and commits it whole, and so does `deleteStore`. Each write,
 helper call and `atomically` call on the way must be awaited or returned inside
 the lease, and a lease taken inside `atomically` does not count, because the
-scope commits after it is released. `storage-writer-guards.test.ts` parses
+scope commits after it is released. `storage/writer-guards.test.ts` parses
 `StorageService` and every class it reaches through a typed field (the
 registry, `StorageFiles` and every repository) and enforces all of this per
 store, with no exceptions; a write it cannot follow fails. It resolves each
@@ -486,7 +497,7 @@ callers. The entry points are the facade's public methods and the members its
 area fields pick; a public facade field that is not such a `Pick` (a whole
 repository, or a copy of a private field) fails the scan, as does a `Pick` of
 a name the repository does not have publicly.
-The primitives are implemented on `StorageContext` (`storage-context.ts`,
+The primitives are implemented on `StorageContext` (`storage/context.ts`,
 whose `serialize` also records the lease order). The guard fails a class
 that holds a `StorageContext` without the facade reaching it, a scanned class
 that uses `this.context` as a value outside a constructor, a scanned class
@@ -502,7 +513,7 @@ rather than detected in production by revision checks on save.
 Engines with stores of their own (workflow results, the cleanup ledger,
 display tails, web annotations, transcript artifacts, usage history, design
 signals, …) write through `StorageDatabase` directly, outside that scan.
-`storage-writer-guards-raw.test.ts` resolves the store each of those writes
+`storage/writer-guards-raw.test.ts` resolves the store each of those writes
 names, through constants, template literals, small name functions
 (`webAnnotationStoreName`), constructor-set fields and row helpers that take
 the store as a parameter, and fails a write whose store it cannot name or
@@ -511,8 +522,8 @@ text can name a raw writer method, when a store name being resolved is
 imported from it, or when it can call a row helper whose store parameter is
 being followed. The text check decodes `\u` escapes, so it never skips a file
 in which a full parse would find a write.
-The import and record upgrades in `storage-stores.ts`,
-`storage-record-upgrades.ts` and `storage-retired-features.ts` are exempt: they
+The import and record upgrades in `storage/stores.ts`,
+`storage/record-upgrades.ts` and `storage/retired-features.ts` are exempt: they
 run inside the migration transaction at open, before any writer.
 
 Whole-store reads are cached per store and revalidated against the committed
@@ -624,7 +635,7 @@ primitives above serialize their writes.
   `fullfsync` (each commit) stays off.
 - Each of the backend's two files (`orkestrator.sqlite` and the change ledger)
   has one worker thread per backend process. Enabled connections to the
-  resolved file path share the worker (`storage-checkpointer.ts`). SQLite's
+  resolved file path share the worker (`storage/checkpointer.ts`). SQLite's
   automatic checkpoint runs in whichever commit pushes the WAL past
   `wal_autocheckpoint` frames, and with the barrier sync above it took up to
   seconds when other processes were syncing the same disk; that commit was
@@ -664,7 +675,7 @@ primitives above serialize their writes.
   handler until every reader has moved past it, so a reader holding an older
   snapshot (an hourly copy in progress, another backend's long read) used to
   block the event loop for the whole ten-second busy timeout
-  (`storage-database-upkeep.test.ts` shows the wait). It now runs with
+  (`storage/database-upkeep.test.ts` shows the wait). It now runs with
   `busy_timeout = 0`: it checkpoints what it can and reports the rest busy. A
   busy or failed scrub is retried from a timer, also without waiting, five
   seconds later and doubling up to a minute, until the WAL truncates or the
@@ -673,7 +684,7 @@ primitives above serialize their writes.
   logged as `[storage] scrub.checkpoint-failed`, throttled, with a
   `throttle.recovered` line once it succeeds. macOS's system SQLite calls the
   busy handler in a truncating checkpoint as Linux's does (checked on macOS
-  27.2, SQLite 3.54.0); `bun test src/core/storage-database-upkeep.test.ts` in
+  27.2, SQLite 3.54.0); `bun test src/core/storage/database-upkeep.test.ts` in
   `apps/backend` repeats the check on another release.
 - `foreign_keys` is off: no table declares a foreign key, so the PRAGMA would
   promise checks nothing enforces. A migration that declares keys turns it on
@@ -701,7 +712,7 @@ primitives above serialize their writes.
 ### Snapshots
 
 WAL covers crashes and torn writes, not a bad migration, a bug that deletes
-data or damage to the file. `storage-backups.ts` keeps snapshots in
+data or damage to the file. `storage/backups.ts` keeps snapshots in
 `<dataDir>/backups/` (0700, files 0600), each a consistent `VACUUM INTO` copy
 verified with `quick_check` before it is renamed into place. The hourly copies
 hold `orkestrator.sqlite` only; the change-tracking ledger has its own file
@@ -802,7 +813,7 @@ are as old as the last copy, so they are absent until one runs, and a machine wi
 changes takes no copy.
 
 `acquireLease` records every wait in a fixed-bucket histogram per lease family
-(`storage-lease-metrics.ts`): `native-agent-session-leases/<hash>` counts as
+(`storage/lease-metrics.ts`): `native-agent-session-leases/<hash>` counts as
 `native-agent-session-leases`, a path outside the data directory as
 `outside-data-dir`, and the table holds at most 64 families. A timeout also writes
 `storage` `lease.timed-out` with the lease's name and `holderAgeMs`, the time since its
@@ -815,8 +826,8 @@ with `SQLITE_BUSY` is counted as `transactionsBusy`.
 `database.activity` in the same three places counts what this process's connections
 did since its first one opened (`since`), per file (`main`, `ledger`, `other`), in
 fixed-bucket histograms (`bucketsMs`, 0.1 ms to 1 s and an overflow bucket)
-(`storage-activity-metrics.ts`). `instrumentSqliteConnection`
-(`storage-slow-operations.ts`) classifies each completed call, a prepared statement
+(`storage/activity-metrics.ts`). `instrumentSqliteConnection`
+(`storage/slow-operations.ts`) classifies each completed call, a prepared statement
 once:
 
 - `commits`: a transaction that ran an INSERT, UPDATE or DELETE that changed a row,
@@ -1004,7 +1015,7 @@ Look at this again if a same-user process stops being able to read those host
 logins (for example, if every local agent runs in a sandbox that denies them), or
 if a container gains a bind on the data directory.
 
-`storage-secrets-at-rest.test.ts` checks the modes and scans a data directory to
+`storage/secrets-at-rest.test.ts` checks the modes and scans a data directory to
 show that only `config.json` and its backups hold the fields.
 `container-data-directory-reach.test.ts` checks a container's binds and the staged
 key, and `commands-secret-sweep.test.ts` plants canaries and calls every
@@ -1016,12 +1027,12 @@ registered command.
 transaction and records the version in `PRAGMA user_version`. A database
 newer than the build refuses to open (`StorageDatabaseVersionError`) instead
 of being written by older code. Add a migration to `STORAGE_MIGRATIONS` in
-`storage-stores.ts` with the next version; it must be synchronous.
+`storage/stores.ts` with the next version; it must be synchronous.
 
 A database only ever holds data written by this build or a newer one (a newer
 database refuses to open; older builds never open it). So an older record
 shape, which can only arrive through the legacy import, is upgraded **once**
-by a migration (`storage-record-upgrades.ts`, version 3: native-session
+by a migration (`storage/record-upgrades.ts`, version 3: native-session
 version/origin/policy, Codex-named coordinator bridge fields, first-generation
 prompt-queue dispatch errors) and its readers have no legacy branch. Readers
 that default or normalize values current writers may still omit (environment
@@ -1033,7 +1044,7 @@ could write a prompt-queue claim (`outstandingClaim`), an exclusive lease on the
 queue's head. No current writer produces one, and since 2026-11-16 nothing reads
 a claim as a lease (the user's legacy-retirement decision of 2026-11-14 took
 every claim-writing backend out of use), but a claim may still be stored. So
-`restoreLegacyPromptQueueClaims` (`storage-record-upgrades.ts`) runs on every
+`restoreLegacyPromptQueueClaims` (`storage/record-upgrades.ts`) runs on every
 read of a prompt queue, one row or the whole list, and returns every stored
 claim's message to the head, replacing a queued copy of its id, whatever its
 lease says; a claim with no message record is dropped. The next write of that
@@ -1063,7 +1074,7 @@ confirms idle or missing. Unreachable and still-running turns remain queued for
 minute-by-minute retry and survive backend restarts.
 
 Version 6 (`backfill-build-pipeline-review-reports`,
-`storage-record-upgrades.ts`) fills `testResults.notRun` on the structured
+`storage/record-upgrades.ts`) fills `testResults.notRun` on the structured
 review reports a stored pipeline carries, written before the field existed. The
 current contract requires it, and the renderer no longer repairs a report it
 reads. The legacy localStorage import applies the same backfill.
@@ -1117,13 +1128,13 @@ Each pass writes one `storage` `upkeep.finished` line with how long
 release stopped (`slow-step` for the case above); slow SQLite calls on either file write `operation.slow`
 ([what ran during a stall](logging.md#what-ran-during-a-stall)).
 
-Version 8 (`retire-opencode2-sessions`, `storage-retired-features.ts`)
+Version 8 (`retire-opencode2-sessions`, `storage/retired-features.ts`)
 deletes the `opencode2-sessions` store. The OpenCode 2 preview recorded there
 which workflow sessions it had put on OpenCode 2, so a router could keep them
 off OpenCode 1.x; with 1.x retired every OpenCode session is a 2.x session and
 nothing reads it. It held only environment and session ids.
 
-Version 9 (`public-operation-rows`, `storage-public-operation-rows.ts`)
+Version 9 (`public-operation-rows`, `storage/public-operation-rows.ts`)
 rewrites each public operation namespace (`public-operations/ns-…`) from one
 `{ version: 1, namespace, operations: [...] }` document into a `record` store,
 one row per operation keyed by its `operationId`, in admission order. Before
@@ -1135,10 +1146,10 @@ keeps each namespace's validated rows by serialized value, re-parsing only rows
 whose value changed (`loadStoreSerialized`). A namespace that is unreadable, or
 whose records cannot be keyed, is left as it was, and the reader still refuses
 admissions on it. Retirement still deletes a namespace whole under the same
-lock; `storage-writer-guards.test.ts` allows that deletion beside the leased
+lock; `storage/writer-guards.test.ts` allows that deletion beside the leased
 row writes and nothing else.
 
-Version 10 (`derive-kanban-ticket-sections`, `storage-record-upgrades.ts`)
+Version 10 (`derive-kanban-ticket-sections`, `storage/record-upgrades.ts`)
 gives every Kanban row written before ticket sections (v2.21.0 to v2.34.1) its
 kind and sections, derived from its text exactly as a read used to derive them
 on every load; the text is kept as written and a legacy `- [x]` becomes a
@@ -1148,7 +1159,7 @@ strings is left verbatim. Reads keep only the `sectionsBasis` check
 sections, they are rebuilt from the text ([tickets.md](tickets.md#mirrors-and-migration)).
 
 Version 11 (`rename-workflow-vocabulary`,
-`storage-workflow-vocabulary-upgrade.ts`) rewrites every stored build pipeline
+`storage/workflow-vocabulary-upgrade.ts`) rewrites every stored build pipeline
 and Multi Review snapshot from the former step names to the Rework and Address
 Findings names (to-do 4740 task 1): in a pipeline `fixing`/`fix` become
 `reworking`/`rework`, `addressing`/`address` become
@@ -1163,7 +1174,7 @@ kept as written because transcript paths and worker mail tab ids derive from
 them. Readers have no legacy branch, and the version is the downgrade fence.
 
 Version 12 (`package-preparation-phase`,
-`storage-package-preparation-phase-upgrade.ts`) moves build pipeline package
+`storage/package-preparation-phase-upgrade.ts`) moves build pipeline package
 preparation off Rework (to-do 4740 task 4). A session labelled "Package
 Preparation Session" with phase `rework` becomes `package-preparation`, with
 the `rework` entries of its interaction transcript and a pending interaction
@@ -1174,7 +1185,7 @@ without a review package), `reworking` or `building` in `phase`,
 and active-prompt contexts becomes `preparing-package`. Session keys, restart
 and skip requests, rewinds and key information authors are left as written.
 
-Version 13 (`rename-graph-vocabulary`, `storage-graph-vocabulary-upgrade.ts`)
+Version 13 (`rename-graph-vocabulary`, `storage/graph-vocabulary-upgrade.ts`)
 renames the graph and workflow result names (to-do 4740 tasks 3 and 5): the
 result kind `fix-result` and type `fix-result@1` become
 `address-findings-result`, the role `fixer` becomes `addresser`, the prompts
@@ -1194,7 +1205,7 @@ would not validate is left as it was. Project templates live in their
 repositories and are not rewritten.
 
 Version 14 (`rename-coordinator-receipt-vocabulary`,
-`storage-coordinator-receipt-vocabulary-upgrade.ts`) renames the action of
+`storage/coordinator-receipt-vocabulary-upgrade.ts`) renames the action of
 stored coordinator receipts from `custom-fix` to `custom-address`, so a
 receipt an older build admitted is still recognised and a retry of it is
 refused rather than run again.
@@ -1234,7 +1245,7 @@ The archive stays that pre-migration copy, except that deletes reach it:
   `legacy-json/` byte-identical.
 - A save that removes content prunes only that content from every archived
   copy and keeps the rest as archived (`pruneRemovedContent` in
-  `storage-stores.ts`). Removed content means a record key that is gone, an
+  `storage/stores.ts`). Removed content means a record key that is gone, an
   array item with no counterpart, or a value cleared to `null`. Array items
   are matched by `id`, else by equal content, so an item without an `id` that
   was edited in place counts as removed.
@@ -1262,7 +1273,7 @@ The archive stays that pre-migration copy, except that deletes reach it:
 
 ## Testing
 
-Use `storage-test-support.ts` rather than writing files into a data directory:
+Use `storage/test-support.ts` rather than writing files into a data directory:
 `seedStore`, `seedUnreadableStore`, `readStoredValue`, `hasStore`,
 `deleteStoredValue` and `storageFilesContain`. `withTemporaryStorage(run)`
 runs `run` against an initialised service in a fresh data directory and

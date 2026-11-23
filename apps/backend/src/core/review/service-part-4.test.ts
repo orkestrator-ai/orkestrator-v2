@@ -15,7 +15,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { BuildPipelineProvider } from "../build-pipeline/provider.js";
 import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { MultiReviewService } from "./service.js";
 import {
   Provider,

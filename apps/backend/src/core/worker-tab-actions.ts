@@ -7,13 +7,13 @@ import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-r
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type { CoordinatorTabEditOperation } from "@orkestrator/protocol/coordinator-surfaces";
 import type { Environment } from "./models.js";
-import type { StorageService } from "./storage.js";
-import { isRecord } from "./storage-shared-core.js";
 import {
+  type StorageService,
+  isRecord,
   assertPaneLayoutRootWithinBounds,
   paneLayoutLeaves,
   type MutablePaneLayoutLeaf,
-} from "./storage-shared-pane-layout.js";
+} from "./storage/index.js";
 
 /**
  * Backend edits to a worker's pane layout on a coordinator's behalf: open or

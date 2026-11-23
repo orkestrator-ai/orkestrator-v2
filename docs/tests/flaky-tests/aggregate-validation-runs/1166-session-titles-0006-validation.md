@@ -36,7 +36,7 @@ branch's `node_modules` linked in (`/tmp/ork-0006/base`, since removed).
 | `apps/web/src/App.test.tsx` | `App Docker availability > keeps the first startup diagnostic when the confirming probe fails differently` (1.0 s) | 119 pass | not run |
 | `apps/web/src/components/chat/rich-transcript.long-fixture.test.tsx` | `long transcript fixture > bounded concurrency …` (120.8 s) | 3 pass | not run |
 | `apps/web/src/components/native-agent/AgentNativeTab.commands.test.tsx` | `typing after the sigil filters a maximal list …` (2.4 s) | 22 pass | not run |
-| `apps/backend/src/core/storage-writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` (5.4 s) | 36 pass | not run |
+| `apps/backend/src/core/storage/writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` (5.4 s) | 36 pass | not run |
 | `apps/backend/src/core/design/lifecycle.test.ts` | `the recycle bin is bounded by count and retention age` (5.0 s) | 28 pass | not run |
 | `apps/backend/src/core/public-api/public-api-project-init-cascade.test.ts` | `project.init > initializes a local repository …` (9.7 s) | 11 pass | not run |
 | `apps/backend/src/core/review-validation-worker.test.ts` | `cooperative parallel groups do not multiply queue or execution deadlines` (2.0 s) | 50 pass | not run |

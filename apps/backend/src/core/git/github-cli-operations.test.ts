@@ -7,7 +7,7 @@ import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { createEnvironmentCommandRunner, createLocalGhRunner } from "../commands-review.js";
 import { GitHubCliSelection } from "./github-cli-binary.js";
 import type { GitHubCliConfigSource } from "./github-credentials.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import type { AppConfig, Environment } from "../models.js";
 
 let root: string;

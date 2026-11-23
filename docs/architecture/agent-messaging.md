@@ -46,7 +46,7 @@ supported “inject-only” or “send-only” native provider.
 
 ## Shared store
 
-The store lives in backend application data (`storage-agent-mail.ts`). It is
+The store lives in backend application data (`storage/agent-mail.ts`). It is
 not a provider transcript and not chat history. Closing a tab tombstones its
 mailbox; the messages remain until retention prunes them.
 
@@ -292,7 +292,7 @@ the coordinator-exchange rule it was scheduled under.
 
 ### Scheduling
 
-`shouldScheduleInject` (`storage-agent-mail.ts`) is true only when all of
+`shouldScheduleInject` (`storage/agent-mail.ts`) is true only when all of
 these hold:
 
 1. Global messaging is enabled (and not relevantly paused for the schedule
@@ -858,7 +858,7 @@ capability row says so.
 | Topic | Path |
 | --- | --- |
 | Protocol, flags, carrier (rendering and reading it back) | `packages/protocol/src/agent-mail.ts` |
-| Persist, send, inject policy | `apps/backend/src/core/storage-agent-mail.ts` |
+| Persist, send, inject policy | `apps/backend/src/core/storage/agent-mail.ts` |
 | Drain, batch, presence cache | `apps/backend/src/core/agent-mail-service.ts` |
 | Native inject / presence | `apps/backend/src/core/native-agent/service.ts` |
 | Tmux inject | `apps/backend/src/core/prompt-queue-drainer.ts` |

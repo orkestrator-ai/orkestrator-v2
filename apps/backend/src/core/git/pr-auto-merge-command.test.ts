@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
-import { createEnvironment, StorageService } from "../storage.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
 
 async function withStorage(run: (storage: StorageService, dir: string) => Promise<void>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-auto-merge-"));

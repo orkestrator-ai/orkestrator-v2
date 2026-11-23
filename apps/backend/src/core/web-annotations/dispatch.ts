@@ -40,11 +40,11 @@ import {
   nativeAgentSessionStorageKey,
 } from "../native-agent/service-shared.js";
 import { assertValidPromptAttachments } from "../prompt-attachments.js";
-import type { StorageService } from "../storage.js";
 import {
+  type StorageService,
   isPromptQueueMessageConflict,
   PROMPT_QUEUE_NEW_PUBLICATION_REFUSED,
-} from "../storage-prompts.js";
+} from "../storage/index.js";
 import type {
   BriefDestinationCapabilities,
   CancelOutcome,

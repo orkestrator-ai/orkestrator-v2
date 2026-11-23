@@ -83,7 +83,7 @@ import {
   OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
-import { defaultRepositoryConfig } from "./storage.js";
+import { defaultRepositoryConfig } from "./storage/index.js";
 import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
 import { pathExists, runCommand } from "./shell.js";
 import type {

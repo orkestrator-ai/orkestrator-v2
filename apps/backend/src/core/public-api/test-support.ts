@@ -12,7 +12,7 @@ import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandRegistryOptions } from "../commands-registry-types.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { stopReconciler } from "./reconciler.js";
 import { BackendRuntime } from "../backend-runtime.js";
 

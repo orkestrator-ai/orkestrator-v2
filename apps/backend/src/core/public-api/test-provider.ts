@@ -8,7 +8,7 @@ import type { NativeAgentServiceOptions } from "../native-agent/service-shared.j
 import type { NativeAgentRuntimeProvider } from "../native-agent/provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { launchInternals } from "../native-agent/service-test-collaborators.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/index.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 
 /**

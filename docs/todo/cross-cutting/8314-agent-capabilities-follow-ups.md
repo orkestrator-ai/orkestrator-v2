@@ -75,7 +75,7 @@ Analysed 2026-11-19 against `main` at `fb2c01e83`; updated 2026-11-22 against `m
 
 **Problem.** The `registry` source kind is defined but refused ("No package registry is configured"), and team manifests are not signed.
 
-**Context.** `PackageSource` in `capability-resources.ts`; graph template sharing already has signing keys (`storage-graph-templates.ts`, item 405).
+**Context.** `PackageSource` in `capability-resources.ts`; graph template sharing already has signing keys (`storage/graph-templates.ts`, item 405).
 
 **Investigation.** Reusing the graph-sharing key pair would sign `orkestrator.capabilities.lock.json`.
 

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
 import { usageDayKey } from "@orkestrator/protocol/usage-history";
-import type { StorageDatabase } from "./storage-database.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import type { StorageDatabase } from "./storage/database.js";
+import { openBackendDatabase } from "./storage/stores.js";
 import { USAGE_HISTORY_STORE } from "./usage-history-layout.js";
 import {
   USAGE_HISTORY_PRUNE_BATCH_ROWS,

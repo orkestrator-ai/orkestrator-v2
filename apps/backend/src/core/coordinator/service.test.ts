@@ -22,8 +22,8 @@ import {
 } from "../commands-environment.js";
 import * as remoteGit from "../git/noninteractive-env.js";
 import { ProjectGitService } from "../project-git-service.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
-import { readStoredValue, seedStore, writeLegacyStore } from "../storage-test-support.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
+import { readStoredValue, seedStore, writeLegacyStore } from "../storage/test-support.js";
 import { runCommand } from "../shell.js";
 import { prepareCoordinatorCodexHome } from "../commands-servers.js";
 import { coordinatorRuntimeId, type CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";

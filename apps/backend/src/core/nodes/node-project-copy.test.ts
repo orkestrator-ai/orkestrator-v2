@@ -13,7 +13,7 @@ import { createCommandRegistry } from "../commands.js";
 import { createLocalWorktree } from "../commands-environment.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { NodeFileTransfer } from "./node-file-transfer.js";
 import { NodeFiles, type NodeFileScope } from "./node-files.js";
 import { NodeProjectCopies } from "./node-project-copy.js";

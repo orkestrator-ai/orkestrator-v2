@@ -10,7 +10,7 @@ import {
 } from "@orkestrator/protocol/codex-background-task";
 import { createLogger, formatLogError, type LogEventOf } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
-import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
+import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage/index.js";
 import { homePath, runCommand } from "./shell.js";
 import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environments/index.js";
 import type { Environment } from "./models.js";

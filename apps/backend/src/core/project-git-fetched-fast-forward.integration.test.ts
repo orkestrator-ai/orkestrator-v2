@@ -9,7 +9,7 @@ import path from "node:path";
 import { checkUpstreamBeforeMessage } from "./coordinator/message-upstream.js";
 import { ProjectGitService } from "./project-git-service.js";
 import { runCommand } from "./shell.js";
-import { createProject, StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage/service.js";
 
 // Real repositories and a fetch held open on purpose: slow tier by name.
 setDefaultTimeout(30_000);

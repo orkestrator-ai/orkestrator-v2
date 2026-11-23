@@ -18,8 +18,8 @@ import { GraphStorageError } from "./graph-run-errors.js";
 import { graphEnvironmentFixture, graphRunFixture } from "./graph-run-test-support.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
-import { StorageService } from "./storage.js";
-import { storageDatabase } from "./storage-test-support.js";
+import { StorageService } from "./storage/service.js";
+import { storageDatabase } from "./storage/test-support.js";
 
 const directories: string[] = [];
 const services: StorageService[] = [];

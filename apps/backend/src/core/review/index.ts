@@ -17,7 +17,7 @@
 // stages (`build-pipeline/review-*.ts`) are in the build-pipeline domain,
 // and the review commands (`commands-review.ts`,
 // `commands-registry-reviews.ts`) and the review stores
-// (`storage-reviews.ts`) stay with their own prefix groups.
+// (`storage/reviews.ts`) stay with their own prefix groups.
 //
 // Eight modules are named exceptions in `.oxlintrc.json`: imported directly,
 // not part of this surface, because routing their importers through this file

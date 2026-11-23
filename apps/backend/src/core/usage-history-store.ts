@@ -16,7 +16,7 @@ import {
   type UsageTotals,
 } from "@orkestrator/protocol/usage-history";
 import type { NativeAgentTurnUsage } from "@orkestrator/protocol/native-agent";
-import { StoreCorruptError, type StorageDatabase } from "./storage-database.js";
+import { StoreCorruptError, type StorageDatabase } from "./storage/index.js";
 import { USAGE_HISTORY_STORE } from "./usage-history-layout.js";
 import {
   applyLabelToRecord,

@@ -5,11 +5,13 @@ import type { ChangeTrackingService } from "./change-tracking/index.js";
 import { DatabaseSummaryCache } from "./database-summary.js";
 import { DiagnosticsBundles } from "./diagnostics-bundle.js";
 import { HealthSummary, readHealthRows, type HealthRow } from "./health-summary.js";
-import type { StorageDatabase } from "./storage-database.js";
-import { storageActivityMetrics } from "./storage-activity-metrics.js";
-import { leaseWaitMetrics } from "./storage-lease-metrics.js";
-import { slowStorageOperations } from "./storage-slow-operations.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import {
+  type StorageDatabase,
+  storageActivityMetrics,
+  leaseWaitMetrics,
+  slowStorageOperations,
+} from "./storage/index.js";
+import { openBackendDatabase } from "./storage/stores.js";
 
 /**
  * This backend's sources of health and database figures, held in one place so

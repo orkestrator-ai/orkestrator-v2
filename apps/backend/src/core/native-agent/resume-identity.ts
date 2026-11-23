@@ -1,5 +1,5 @@
 import type { PersistedNativeAgentSession } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 type IdentitySnapshot = { status?: unknown; resumableSessionId?: unknown };
 

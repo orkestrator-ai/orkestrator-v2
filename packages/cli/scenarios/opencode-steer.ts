@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { PublicTranscriptMessage } from "@orkestrator/protocol/public-api-resources";
-import { defaultConfig } from "../../../apps/backend/src/core/storage-shared-config.js";
+import { defaultConfig } from "../../../apps/backend/src/core/storage/shared-config.js";
 import { mergeOpenCodeFakeProvider } from "../../../e2e/agent-testing/opencode-fake-provider.js";
 import { ScriptedModel } from "../../../scripts/opencode2-steer-probe.js";
 import {

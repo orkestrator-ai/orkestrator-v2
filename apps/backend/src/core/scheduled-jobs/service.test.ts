@@ -9,7 +9,7 @@ import type {
   ScheduledJob,
 } from "@orkestrator/protocol/scheduled-jobs";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { PrViewerPermissionCache } from "../git/index.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";

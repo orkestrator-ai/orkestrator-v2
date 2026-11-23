@@ -39,7 +39,7 @@ import type {
 import { AmbiguousPromptDispatchError } from "../build-pipeline/provider.js";
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
 import { MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "@orkestrator/protocol/review-results";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";
 import { MultiReviewService, workflowCompletionOutcome } from "./service.js";

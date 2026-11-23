@@ -12,7 +12,7 @@ import {
   type ProviderStatus,
 } from "./provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./service.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 /**
  * Command intent through the real dispatch path: resolution happens before

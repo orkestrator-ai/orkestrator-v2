@@ -19,7 +19,7 @@ import {
 } from "@orkestrator/protocol/public-api-resources";
 import { applyEnvironmentAllowedDomains } from "../containers/network.js";
 import type { AppConfig, Environment, PortMapping, RepositoryConfig } from "../models.js";
-import { defaultRepositoryConfig, isPortMapping } from "../storage-shared.js";
+import { defaultRepositoryConfig, isPortMapping } from "../storage/index.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";
 import { PublicActionError } from "./errors.js";
 import { invalid, onlyActionKeys, optionalString, requiredId } from "./input.js";

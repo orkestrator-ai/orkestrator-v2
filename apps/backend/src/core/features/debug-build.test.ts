@@ -9,7 +9,7 @@ import {
   DEBUG_BUILD_TRANSCRIPT_MAX_CHARS,
   type DebugTranscriptMessage,
 } from "@orkestrator/protocol/debug-build";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { Environment, Project } from "../models.js";
 import { FeatureBuildTasks } from "./build-tasks.js";
 import { createDebugBuild, type DebugBuildPorts } from "./debug-build.js";

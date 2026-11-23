@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { deepFreeze } from "../storage-frozen-snapshot.js";
+import { deepFreeze } from "../storage/index.js";
 
 export const NATIVE_DISPLAY_TAIL_VERSION = 2 as const;
 export const NATIVE_DISPLAY_TAIL_SCHEMA = "native-agent-display-tail-v2";

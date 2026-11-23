@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
 import { ProjectGitService } from "../project-git-service.js";
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 import {
   backgroundFetchArgs,
   backgroundFetchRefspec,

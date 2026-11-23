@@ -5,7 +5,7 @@ import path from "node:path";
 import type { MachineLoadReport } from "@orkestrator/protocol/machine-load";
 import { OrkestratorBackend } from "./index.js";
 import { MACHINE_LOAD_COARSE_BUCKET_MS } from "./machine-load.js";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { readStoredValue, seedStore } from "./storage/test-support.js";
 
 const FILE = "machine-load-history.json";
 const MINUTE = 60_000;

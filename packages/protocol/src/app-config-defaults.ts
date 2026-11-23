@@ -47,7 +47,7 @@ export function createDefaultGlobalConfig() {
     envFilePatterns: [...DEFAULT_ENV_FILE_PATTERNS],
     useHostGitHubCredentials: true,
     // New installs only: an existing config without this field keeps the
-    // credential its containers already received (`storage-shared-config.ts`).
+    // credential its containers already received (`apps/backend/src/core/storage/shared-config.ts`).
     containerGitHubCredential: "none" as const,
     useHostClaudeCredentials: true,
     allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],

@@ -7,7 +7,7 @@ import type { ReviewIssue } from "@orkestrator/protocol/structured-review";
 import { REPORT_FINDING_TOOL_NAME } from "@orkestrator/protocol/workflow-results";
 import { AgentToolsServer } from "./agent-tools.js";
 import { ProvisionalFindingInbox } from "./review/provisional-findings.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
 
 type RpcBody = {

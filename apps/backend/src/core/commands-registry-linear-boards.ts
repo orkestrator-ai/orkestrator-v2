@@ -28,7 +28,7 @@ import {
   listLinearTeams,
   updateLinearIssue,
 } from "./linear-boards.js";
-import { linearBoardLinkKey, type LinearBoardLink } from "./storage-linear.js";
+import { linearBoardLinkKey, type LinearBoardLink } from "./storage/index.js";
 
 /**
  * Linear boards (docs/architecture/tickets.md, "Linear"): which board a

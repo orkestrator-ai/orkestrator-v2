@@ -552,7 +552,7 @@ Full table in [Appendix A](#appendix-a-store-classification). In short:
 | realm-only, delete | 2 | realmShellStore, most of remoteWorkspaceStore |
 
 **IDs are not safe to key alone.** Projects and environments are random UUIDs
-(`apps/backend/src/core/storage-shared-core.ts:409-440`) and project copy never
+(`apps/backend/src/core/storage/shared-core.ts:409-440`) and project copy never
 reuses a source id, but Kanban tickets keep the **same id on every node**
 (`command-nodes.md:803`), the default pane id is `"default"`
 (`paneLayoutStore.ts:337`), tab ids are time-and-counter strings, PR keys are

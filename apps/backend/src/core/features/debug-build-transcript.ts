@@ -26,7 +26,7 @@ import {
   sessionTranscript,
   type PublicActionContext,
 } from "../public-api/index.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /** Pages read per tab at most (100 messages each). */
 export const DEBUG_TRANSCRIPT_MAX_PAGES = 50;

@@ -18,8 +18,8 @@ import {
 } from "./agent-handoffs.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
 import type { CommandContext } from "./commands-context.js";
-import { AGENT_HANDOFF_PRUNE_GRACE_MS } from "./storage-shared-pane-layout.js";
-import { StorageService } from "./storage.js";
+import { AGENT_HANDOFF_PRUNE_GRACE_MS } from "./storage/shared-pane-layout.js";
+import { StorageService } from "./storage/service.js";
 
 const INPUT: CreateAgentHandoffInput = {
   handoffId: "handoff-new",

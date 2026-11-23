@@ -5,7 +5,7 @@ import path from "node:path";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
-import { createEnvironment, StorageService } from "../storage.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
 import { nativeTabsOfLayout } from "../public-api/summaries.js";
 
 const prUrl = "https://github.com/o/r/pull/1";

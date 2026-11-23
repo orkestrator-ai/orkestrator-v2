@@ -12,7 +12,7 @@ import { dockerOwnerNamespace } from "../containers/ownership.js";
 import type { Environment, PortMapping } from "../models.js";
 import { PreviewRuntime } from "./runtime.js";
 import type { DockerRunner } from "./target-resolver.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 export interface FakeContainer {
   id: string;

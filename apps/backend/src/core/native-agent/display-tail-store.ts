@@ -1,4 +1,10 @@
-import { deletionFence, deletionMarker, markDeletion } from "../storage-deletion-fences.js";
+import {
+  deletionFence,
+  deletionMarker,
+  markDeletion,
+  deepFreeze,
+  type StorageDatabase,
+} from "../storage/index.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { NATIVE_AGENT_DISPLAY_TAIL_STORE } from "./display-tail-layout.js";
@@ -10,8 +16,6 @@ import {
   preparedDisplayTailPayload,
   type NativeAgentDisplayTail,
 } from "./display-tails.js";
-import { deepFreeze } from "../storage-frozen-snapshot.js";
-import type { StorageDatabase } from "../storage-database.js";
 
 /**
  * Display tails (restart previews) as rows of the backend database: store

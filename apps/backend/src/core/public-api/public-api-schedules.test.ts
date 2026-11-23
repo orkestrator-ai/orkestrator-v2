@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, jest, test, spyOn } from "bun:test";
 import type { PublicActionName, PublicReceipt } from "@orkestrator/protocol/public-api";
 import type { ScheduledJob, ScheduledJobSummary } from "@orkestrator/protocol/scheduled-jobs";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import { AgentToolsServer } from "../agent-tools.js";
 import { ProjectGitService } from "../project-git-service.js";
 import { ScheduledJobExecutor } from "../scheduled-jobs/executor.js";

@@ -1,5 +1,5 @@
 import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { readStoredValue, seedStore } from "./storage-test-support.js";
+import { readStoredValue, seedStore } from "./storage/test-support.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import * as childProcess from "node:child_process";
@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import type { Environment } from "./models.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import {
   EnvironmentLifecycleTaskTracker,
   reconcileInterruptedEnvironmentLifecycleTasks,
@@ -19,7 +19,7 @@ import {
   ENVIRONMENT_CLEANUP_LEDGER_STORE,
   environmentCleanupLedger,
 } from "./environments/cleanup-ledger.js";
-import { StorageDatabase } from "./storage-database.js";
+import { StorageDatabase } from "./storage/database.js";
 import { reconcileEnvironmentCleanup } from "./environments/cleanup-reconciler.js";
 import { environmentStateDirectories } from "./environments/state-paths.js";
 import { setupTerminalSessionId } from "./commands-terminal.js";

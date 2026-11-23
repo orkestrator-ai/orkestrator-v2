@@ -5,8 +5,8 @@ import path from "node:path";
 import type { UsageHistoryReport } from "@orkestrator/protocol/usage-history";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { storageInternals } from "./storage-test-support.js";
-import { StorageService, createProject } from "./storage.js";
+import { storageInternals } from "./storage/test-support.js";
+import { StorageService, createProject } from "./storage/service.js";
 
 const directories: string[] = [];
 

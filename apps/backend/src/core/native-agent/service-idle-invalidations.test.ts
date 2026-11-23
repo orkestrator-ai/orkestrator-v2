@@ -5,7 +5,7 @@ import type { ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { ProviderActivityObservation } from "./provider.js";
 import { createProviderStub, withService } from "./service-projection-test-support.js";
 import type { NativeAgentService } from "./service.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { collaborators } from "./service-test-collaborators.js";
 import { nativeSessionInvalidationMetrics } from "../native-session-invalidation-metrics.js";
 

@@ -20,7 +20,7 @@ import { PROCESS_OUTPUT_LINE_LIMIT } from "@orkestrator/protocol/node/bounded-li
 import { configureLogger, formatLogError, resetLogger } from "@orkestrator/protocol/logger";
 import { applyPiHostCredentialEnvironment } from "../../backend/src/core/host-agent-credentials";
 import type { CommandContext } from "../../backend/src/core/commands-context";
-import { defaultConfig } from "../../backend/src/core/storage";
+import { defaultConfig } from "../../backend/src/core/storage/service";
 import {
   configureSshAgentSocketEnvironment,
   discoverSessionSshAgentSockets,

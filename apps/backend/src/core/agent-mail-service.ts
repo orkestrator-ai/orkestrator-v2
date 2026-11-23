@@ -21,7 +21,11 @@ import { randomUUID } from "node:crypto";
 import { coordinatorPlatformAllowed } from "./coordinator/index.js";
 import type { NativeAgentService } from "./native-agent/service.js";
 import type { MailSteerDispatchOutcome } from "./native-agent/service-shared.js";
-import type { StorageService } from "./storage.js";
+import {
+  type StorageService,
+  AGENT_MAIL_MAX_VERIFY_ATTEMPTS,
+  isRideAlongMessage,
+} from "./storage/index.js";
 import type { Environment } from "./models.js";
 import type { PromptQueueDrainer } from "./prompt-queue-drainer.js";
 import type {
@@ -30,10 +34,6 @@ import type {
   MailboxPresence,
 } from "@orkestrator/protocol/agent-mail";
 import { recurringWorkMetrics } from "./recurring/index.js";
-import {
-  AGENT_MAIL_MAX_VERIFY_ATTEMPTS,
-  isRideAlongMessage,
-} from "./storage-agent-mail-injects.js";
 import type { PipelineWorkerMailPort } from "./build-pipeline/worker-mail.js";
 import { pipelineWorkerEnded } from "@orkestrator/protocol/pipeline-worker-mail";
 

@@ -82,7 +82,7 @@ Backend code is in `apps/backend/src/core/capabilities/`:
 | `import-export.ts` | `orkestrator.capabilities.yaml` and `orkestrator.capabilities.lock.json`. |
 | `authoring.ts` | Skills, commands, prompts, subagents, hook manifests, MCP definitions and uploads authored in the UI. |
 
-Storage is the `capabilities` envelope store (`storage-capabilities.ts`,
+Storage is the `capabilities` envelope store (`storage/capabilities.ts`,
 `CapabilitiesRepository`, reached as `storage.capabilities`) written only
 through `updateStore`, so every compare-and-swap is one SQLite transaction; and
 `capability-executor`, this machine's accepted epoch and applied plan keys.

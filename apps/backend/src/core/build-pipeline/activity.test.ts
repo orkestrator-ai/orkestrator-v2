@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { BuildPhase, BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { BuildPipelineActivity } from "./activity.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 

@@ -165,7 +165,7 @@ Evidence: `multi-review-scale-support.test.ts` (13 tests), `agent-test-fanout-st
 
 **Done before this file was updated.** #1964 (`f7d345f65`, 2026-11-06) built the recommended option: `get_multi_review_workflow` accepts `knownRevision` and answers `unchanged` (`commands-registry-reviews.ts`), and `hydrateMultiReviewWorkflowOnce` (`apps/web/src/lib/multi-review-persistence.ts`) reads a held workflow through `getMultiReviewWorkflowConditional`, with one read in flight and one shared follow-up per workflow. Evidence: "reads a held workflow conditionally and keeps it when unchanged" in `multi-review-persistence.test.ts`. Found while checking this file on 2026-11-11; the Investigation below is the 2026-10-27 reading.
 
-**Investigation.** The refetch is `onResourceChanged("multi-review", …)` calling `hydrateMultiReviewWorkflow` (`apps/web/src/lib/store-resource-sync.ts:631`, `apps/web/src/lib/multi-review-persistence.ts:20`). `ResourceChange.revision` is indeed the global sequence (`packages/protocol/src/resource-events.ts:186`). But the premise is partly out of date. Each stored workflow row already carries its own `revision`, incremented on every save (`apps/backend/src/core/storage-reviews.ts:601`), and the renderer receives it (`PersistedLoopedReviewWorkflow.revision`, `apps/web/src/types/index.ts:296`). Build Pipeline already uses that pattern: `get_build_pipeline` takes `knownRevision` and answers unchanged (`apps/backend/src/core/commands-registry-build.ts:137`, `apps/web/src/lib/backend/workflows.ts:1078`).
+**Investigation.** The refetch is `onResourceChanged("multi-review", …)` calling `hydrateMultiReviewWorkflow` (`apps/web/src/lib/store-resource-sync.ts:631`, `apps/web/src/lib/multi-review-persistence.ts:20`). `ResourceChange.revision` is indeed the global sequence (`packages/protocol/src/resource-events.ts:186`). But the premise is partly out of date. Each stored workflow row already carries its own `revision`, incremented on every save (`apps/backend/src/core/storage/reviews.ts:601`), and the renderer receives it (`PersistedLoopedReviewWorkflow.revision`, `apps/web/src/types/index.ts:296`). Build Pipeline already uses that pattern: `get_build_pipeline` takes `knownRevision` and answers unchanged (`apps/backend/src/core/commands-registry-build.ts:137`, `apps/web/src/lib/backend/workflows.ts:1078`).
 
 **Decisions.**
 
@@ -311,8 +311,8 @@ platforms than Claude and Codex.
   through the launcher. How to run it is in
   [agent-testing.md](../../development/agent-testing.md#automated-checks).
 - **Storage.** `multi-reviews` is a SQLite `record` store (`STORE_LAYOUTS` in
-  `storage-stores.ts`), one row per workflow. `ReviewsRepository`
-  (`storage-reviews.ts`) reads and writes one row at a time (`loadStoreRow`,
+  `storage/stores.ts`), one row per workflow. `ReviewsRepository`
+  (`storage/reviews.ts`) reads and writes one row at a time (`loadStoreRow`,
   `updateStoreRow`); only launch, listing and the environment sweep read every
   workflow. Writers serialize on the store's mutation lease, and each save
   re-checks the controller fence and revision inside its own transaction.

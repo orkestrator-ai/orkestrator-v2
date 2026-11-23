@@ -5,7 +5,7 @@ import {
   type PublicJsonSchema,
 } from "@orkestrator/protocol/public-api-inputs";
 import type { PublicSettingsSnapshot } from "@orkestrator/protocol/public-api-resources";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import { createPublicApiHarness } from "./test-support.js";
 import { PublicActionError } from "./errors.js";
 import { buildPublicHandlerTable } from "./registry.js";

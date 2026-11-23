@@ -27,8 +27,8 @@ import type { PersistedAgentHandoff, PersistedPaneLayout } from "./models.js";
 import {
   AGENT_HANDOFF_PRUNE_GRACE_MS,
   paneLayoutAgentHandoffIds,
-} from "./storage-shared-pane-layout.js";
-import type { StorageService } from "./storage.js";
+  type StorageService,
+} from "./storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

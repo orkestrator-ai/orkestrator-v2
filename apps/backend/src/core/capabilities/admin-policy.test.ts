@@ -17,7 +17,7 @@ import {
   type CapabilityPackage,
 } from "@orkestrator/protocol/capability-resources";
 
-import { emptyCapabilityState, type CapabilitiesStorage } from "../storage-capabilities.js";
+import { emptyCapabilityState, type CapabilitiesStorage } from "../storage/capabilities.js";
 import { applyAdminPolicy, CapabilityAdminPolicyCommands } from "./admin-policy.js";
 import { desiredStateForNode } from "./planning.js";
 import { CapabilityError } from "./security.js";

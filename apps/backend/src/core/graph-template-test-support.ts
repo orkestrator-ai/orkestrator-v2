@@ -8,7 +8,7 @@ import {
   GraphTemplateService,
   type GraphTemplateServiceOptions,
 } from "./graph-template-service.js";
-import { StorageService, createProject } from "./storage.js";
+import { StorageService, createProject } from "./storage/service.js";
 
 /** A watch the test fires by hand, so re-read tests never wait on the OS. */
 export class FakeGraphProjectWatch {

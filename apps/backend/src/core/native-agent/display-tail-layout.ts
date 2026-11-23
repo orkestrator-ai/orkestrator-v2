@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database store holding native-agent display tails, one row per session key.
- * Imported by the store registry (storage-stores.ts), so keep this module free
+ * Imported by the store registry (storage/stores.ts), so keep this module free
  * of other imports.
  */
 export const NATIVE_AGENT_DISPLAY_TAIL_STORE = "native-agent-display-tail-records";

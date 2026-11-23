@@ -325,7 +325,7 @@
                 "message": "Import the design domain through design/index.js."
               },
               {
-                "group": ["**/nodes/*", "!**/nodes/index.js", "!**/nodes/node-store-format.js"],
+                "group": ["**/nodes/*", "!**/nodes/index.js"],
                 "message": "Import the nodes domain through nodes/index.js."
               },
               {
@@ -350,7 +350,6 @@
                   "**/scheduled-jobs/*",
                   "!**/scheduled-jobs/index.js",
                   "!**/scheduled-jobs/layout.js",
-                  "!**/scheduled-jobs/store.js",
                   "!**/scheduled-jobs/tools.js"
                 ],
                 "message": "Import the scheduled-jobs domain through scheduled-jobs/index.js."
@@ -363,12 +362,9 @@
                 "group": [
                   "**/public-api/*",
                   "!**/public-api/index.js",
-                  "!**/public-api/attention-cursor.js",
                   "!**/public-api/dispatch.js",
-                  "!**/public-api/errors.js",
                   "!**/public-api/exec-control.js",
-                  "!**/public-api/operation-ledger.js",
-                  "!**/public-api/revisions.js"
+                  "!**/public-api/operation-ledger.js"
                 ],
                 "message": "Import the public-api domain through public-api/index.js."
               },
@@ -593,6 +589,16 @@
                   "!@orkestrator/protocol/contract/domains/environments/*"
                 ],
                 "message": "Import the environments domain through environments/index.js."
+              },
+              {
+                "group": [
+                  "**/storage/*",
+                  "!**/storage/index.js",
+                  "!**/storage/coordinators.js",
+                  "!**/storage/service.js",
+                  "!**/storage/stores.js"
+                ],
+                "message": "Import the storage domain through storage/index.js."
               }
             ]
           }
@@ -821,6 +827,16 @@
                   "!**/backend/src/core/environments/index.js"
                 ],
                 "message": "Import the environments domain through environments/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/storage/*",
+                  "!**/backend/src/core/storage/index.js",
+                  "!**/backend/src/core/storage/service.js",
+                  "!**/backend/src/core/storage/stores.js",
+                  "!**/backend/src/core/storage/test-support.js"
+                ],
+                "message": "Import the storage domain through storage/index.js."
               }
             ]
           }

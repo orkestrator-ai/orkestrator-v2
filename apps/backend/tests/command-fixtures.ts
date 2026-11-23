@@ -372,7 +372,7 @@ export async function createCommandFixtures() {
    * Bun's `toEqual`/`toContainEqual` ignore properties whose value is `undefined`,
    * so such an assertion passes even when the keys are absent entirely. Key
    * *presence* is the clearing mechanism — `updateEnvironment` only writes a field
-   * when `field in updates` (storage.ts) — so check the keys explicitly.
+   * when `field in updates` (storage/service.ts) — so check the keys explicitly.
    */
   function expectClearsPendingAgentLaunch(update: unknown): void {
     const keys = Object.keys(update as Record<string, unknown>);

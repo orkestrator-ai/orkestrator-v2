@@ -17,7 +17,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
 import { CoordinatorService } from "./service.js";
 import { runCommand } from "../shell.js";
-import { createEnvironment, createProject } from "../storage.js";
+import { createEnvironment, createProject } from "../storage/service.js";
 
 const worlds: MailWorld[] = [];
 const roots: string[] = [];

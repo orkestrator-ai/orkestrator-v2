@@ -170,7 +170,7 @@ const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
  * real release's version, so self-improvement saw only "unknown" versions.
  */
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-(?:alpha|beta|rc)(?:\.\d{1,6})?)?$/;
-/** `storage-slow-operations.ts`: which file, the statement kind and a code-written table or pragma name. */
+/** `apps/backend/src/core/storage/slow-operations.ts`: which file, the statement kind and a code-written table or pragma name. */
 const STORAGE_DATABASES = new Set(["main", "ledger", "other"]);
 const STORAGE_OPERATIONS = new Set([
   "select",
@@ -186,7 +186,7 @@ const STORAGE_OPERATIONS = new Set([
 const TRANSACTION_MODES = new Set(["deferred", "immediate", "exclusive"]);
 /**
  * The tables and pragmas the backend's statements name: the store schema
- * (`storage-database.ts`), the pragmas it runs, and the change-tracking
+ * (`apps/backend/src/core/storage/database.ts`), the pragmas it runs, and the change-tracking
  * ledger's tables, which all start `change_`.
  */
 const STORAGE_TABLES = new Set([

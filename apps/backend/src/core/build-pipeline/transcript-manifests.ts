@@ -1,4 +1,4 @@
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import {
   BUILD_PIPELINE_TRANSCRIPT_MANIFEST_STORE,
   BUILD_PIPELINE_TRANSCRIPT_TOTALS_STORE,

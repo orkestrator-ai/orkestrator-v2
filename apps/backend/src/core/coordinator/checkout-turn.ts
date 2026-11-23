@@ -1,7 +1,7 @@
 import type { CoordinatorCheckoutTurn } from "@orkestrator/protocol/coordinator-activity";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentService } from "../native-agent/service.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 const ACTIVE_PROJECTION_PHASES = ["running", "blocked", "cancelling", "recovering"];
 

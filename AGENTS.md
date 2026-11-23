@@ -1151,7 +1151,7 @@ names at all. Three invariants keep it honest:
 | -------------------------------------- | -------------------------------------------------------- |
 | `apps/backend/src/core/commands.ts`    | Backend command registry and Docker/local env management |
 | `apps/backend/src/core/tmux/`          | Claude tmux mode backend                                 |
-| `apps/backend/src/core/storage.ts`     | `StorageService` (SQLite-backed; see `docs/architecture/storage.md`) |
+| `apps/backend/src/core/storage/service.ts`     | `StorageService` (SQLite-backed; see `docs/architecture/storage.md`) |
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
 | `apps/desktop/electron/preload-api.ts` | Renderer-facing native API                               |
 
@@ -1437,15 +1437,15 @@ Storage rules:
   lease, write only that key's row.
 - Give each store one kind of writer: `saveJson`/`saveSensitiveJson`/
   `deleteStore` awaited inside the store's lease, or `updateStore`/
-  `updateStoreRow`, never both. `storage-writer-guards.test.ts` enforces it.
+  `updateStoreRow`, never both. `storage/writer-guards.test.ts` enforces it.
 - `StorageService` is a facade over per-store repositories sharing one
   `StorageContext`; add store code to the owning repository and expose it
   through that repository's area type (`KanbanStorage`, a `Pick` reached as
   `storage.kanban`) or, for repositories without one yet, a forwarder on the
   facade, never a base class (`docs/architecture/storage.md`, "Code layout").
 - An older record shape is upgraded once by a migration
-  (`storage-record-upgrades.ts`), not by a reader on every load.
-- Tests seed and inspect stores through `storage-test-support.ts`, never by
+  (`storage/record-upgrades.ts`), not by a reader on every load.
+- Tests seed and inspect stores through `storage/test-support.ts`, never by
   writing JSON into a data directory.
 
 ## Testing

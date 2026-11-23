@@ -8,7 +8,7 @@ import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-comm
 import type { CommandContext } from "../commands-context.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./machines.js";
 import { NodeUnavailableError } from "../nodes/node-link.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 let root: string;
 let storage: StorageService;

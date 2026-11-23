@@ -16,7 +16,7 @@ import {
   type PeerVerdict,
 } from "./agent-tools-peer-filter.js";
 import { reportDockerNetworkChange } from "./containers/network-changes.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 /**
  * Sends one raw HTTP request and returns every byte the server wrote before

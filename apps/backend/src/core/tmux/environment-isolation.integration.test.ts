@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { TmuxBackend } from "./backend.js";
 import { TmuxSession } from "./session-manager.js";
-import { StorageService, createEnvironment } from "../storage.js";
+import { StorageService, createEnvironment } from "../storage/service.js";
 import { runCommand } from "../shell.js";
 import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,

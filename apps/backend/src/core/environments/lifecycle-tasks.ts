@@ -1,4 +1,4 @@
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 export const ENVIRONMENT_LIFECYCLE_SHUTDOWN_ERROR =
   "Backend is shutting down; environment lifecycle operations cannot be started";

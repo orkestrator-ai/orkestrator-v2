@@ -7,9 +7,9 @@ import {
   WEB_ANNOTATION_CAPACITY,
   WEB_ANNOTATION_LIMITS,
 } from "@orkestrator/protocol/web-annotations";
-import { STORAGE_DATABASE_FILE } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
-import { storageFilesContain } from "../storage-test-support.js";
+import { STORAGE_DATABASE_FILE } from "../storage/database.js";
+import { openBackendDatabase } from "../storage/stores.js";
+import { storageFilesContain } from "../storage/test-support.js";
 import { webAnnotationStoreName } from "./store-layout.js";
 import { readIndexSnapshot } from "./store-rows.js";
 import type { WebAnnotationFaultStage } from "./storage.js";

@@ -31,7 +31,7 @@ import {
 } from "@orkestrator/protocol/github-pull-requests";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { Environment } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 const log = createLogger("pull-request");
 

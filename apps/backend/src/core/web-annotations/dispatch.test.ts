@@ -13,7 +13,7 @@ import { fixtureRequest } from "@orkestrator/protocol/testing/web-annotations-fi
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { AmbiguousPromptDispatchError } from "../native-agent/provider.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import {
   WebAnnotationDispatchAdapter,
   webAnnotationQueueKey,

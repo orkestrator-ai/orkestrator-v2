@@ -1,8 +1,8 @@
-import type { StoreLayout } from "../storage-database.js";
+import type { StoreLayout } from "../storage/index.js";
 
 /**
  * Database stores behind Orkestrator's permission rules (todo 0723 (retired)). Imported
- * by the store registry (storage-stores.ts), so keep this module free of other
+ * by the store registry (storage/stores.ts), so keep this module free of other
  * runtime imports.
  */
 

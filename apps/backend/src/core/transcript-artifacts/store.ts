@@ -27,9 +27,13 @@ import { link, lstat, mkdir, open, readdir, readFile, rename, rm, utimes } from 
 import { join } from "node:path";
 import { ArtifactFailure, artifactError } from "@orkestrator/protocol/transcript-artifacts";
 import { ARTIFACT_TOOL_POLICY } from "@orkestrator/protocol/rich-content-policy";
-import type { StorageDatabase, StoreRows } from "../storage-database.js";
-import { deletionMarker, markDeletion } from "../storage-deletion-fences.js";
-import { openBackendDatabase } from "../storage-stores.js";
+import {
+  type StorageDatabase,
+  type StoreRows,
+  deletionMarker,
+  markDeletion,
+} from "../storage/index.js";
+import { openBackendDatabase } from "../storage/stores.js";
 import { syncDirectory, writeExclusivePrivateFile } from "../keyed-record-format.js";
 import { sha256Hex } from "./hashing.js";
 import {

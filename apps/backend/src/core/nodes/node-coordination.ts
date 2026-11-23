@@ -33,7 +33,7 @@ import {
   type MailAttachmentBatch,
   type OwnAttachment,
 } from "../mail-attachments.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { agentsMdBranchName, agentsMdRequestKey, type AgentsMdPrResult } from "../agents-md-pr.js";
 import {
   describeNodeAction,

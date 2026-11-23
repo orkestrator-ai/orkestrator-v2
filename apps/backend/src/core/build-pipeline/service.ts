@@ -63,7 +63,7 @@ import {
   createBuildPipelineKeyInformationHost,
   type BuildPipelineKeyInformationHost,
 } from "./key-information.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import {
   type KeyedWorkflowOwner,
   type WorkflowReconcileReport,

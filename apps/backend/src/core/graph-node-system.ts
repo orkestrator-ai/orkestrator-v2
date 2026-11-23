@@ -17,7 +17,7 @@
  *   only reads in-memory monitor state; a subscription to the PR monitor's
  *   events flags the activation when the monitor announces a change.
  * - **Idempotency** is the effect journal's (`graph-system-action.ts`,
- *   `storage-graph-effects.ts`): launching a job again, after a crash, a lost
+ *   `storage/graph-effects.ts`): launching a job again, after a crash, a lost
  *   save, a retry or a restart of the node, never repeats a recorded effect.
  * - **Cancel** aborts the job (its commands get the signal), asks the action
  *   to stop work it left in the environment (a validation run), and reports

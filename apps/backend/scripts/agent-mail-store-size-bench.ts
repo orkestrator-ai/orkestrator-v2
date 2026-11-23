@@ -4,14 +4,14 @@ import { recurringWorkMetrics } from "../src/core/recurring/work-metrics.js";
 import type {
   AgentMailStore,
   PersistedAgentMailStore,
-} from "../src/core/storage-agent-mail-store.js";
-import { openBackendDatabase } from "../src/core/storage-stores.js";
+} from "../src/core/storage/agent-mail-store.js";
+import { openBackendDatabase } from "../src/core/storage/stores.js";
 import {
   readStoredValue,
   seedStore,
   storageDatabase,
   storageInternals,
-} from "../src/core/storage-test-support.js";
+} from "../src/core/storage/test-support.js";
 import { benchOption as option, createAgentMailBenchFixture } from "./agent-mail-bench-fixture.js";
 
 /**

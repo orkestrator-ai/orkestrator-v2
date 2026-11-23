@@ -8,7 +8,7 @@ import { MAX_PIPELINE_USER_MESSAGES } from "@orkestrator/protocol/build-pipeline
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { dispatchUserMessageDuringBackgroundWork } from "./service-user-messages.js";
 import type { BuildPipelineContext } from "./context.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BuildPipelineService } from "./service.js";
 import {
   AmbiguousPromptDispatchError,

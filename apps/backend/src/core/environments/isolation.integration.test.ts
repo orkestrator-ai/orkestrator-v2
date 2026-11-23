@@ -8,8 +8,8 @@ import {
   withEnvironmentIsolation,
 } from "./isolation.js";
 import { environmentPortBlockAvailable } from "./port-probe.js";
-import { createEnvironment } from "../storage-shared-core.js";
-import { withTemporaryStorage } from "../storage-test-support.js";
+import { createEnvironment } from "../storage/shared-core.js";
+import { withTemporaryStorage } from "../storage/test-support.js";
 
 const FIRST = "3f2a9c1e-77b4-4d1a-9e0f-0123456789ab";
 const COLLIDING = "00000000-0000-4000-8000-000000000644";

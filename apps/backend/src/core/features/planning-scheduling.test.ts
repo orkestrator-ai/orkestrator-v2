@@ -17,7 +17,7 @@ import {
   type Deferred,
 } from "../recurring/test-support.js";
 import { recurringWorkMetrics } from "../recurring/work-metrics.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const PLANNER_REPLY = [
   "Here is what I understand so far.",

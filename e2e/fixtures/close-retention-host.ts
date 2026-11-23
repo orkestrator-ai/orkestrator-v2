@@ -55,7 +55,7 @@ import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agen
 import { createNativeAgentProvider } from "../../apps/backend/src/core/native-agent/provider";
 import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent/service";
 import { NativeAgentService } from "../../apps/backend/src/core/native-agent/service";
-import { StorageService } from "../../apps/backend/src/core/storage";
+import { StorageService } from "../../apps/backend/src/core/storage/service";
 import {
   serializeWithinBudget,
   type BudgetedSession,

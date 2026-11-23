@@ -11,7 +11,7 @@ import {
   PermissionRuleEnforcer,
   type PermissionRuleChoice,
 } from "../../apps/backend/src/core/permission-rules/enforcer";
-import { StorageService } from "../../apps/backend/src/core/storage";
+import { StorageService } from "../../apps/backend/src/core/storage/service";
 import type { PersistedNativeAgentSession, Environment } from "../../apps/backend/src/core/models";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 

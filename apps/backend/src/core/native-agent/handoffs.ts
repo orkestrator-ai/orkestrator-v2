@@ -46,9 +46,11 @@ import {
   type NativeAgentProjectionInput,
 } from "./service-shared.js";
 import { normalizeOpenCodeDisplayEntries } from "../opencode2/index.js";
-import { deliveredAgentHandoffIds } from "../storage-shared-native-sessions.js";
-import { pendingPaneLayoutAgentHandoffId } from "../storage-shared-pane-layout.js";
-import type { StorageService } from "../storage.js";
+import {
+  deliveredAgentHandoffIds,
+  pendingPaneLayoutAgentHandoffId,
+  type StorageService,
+} from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

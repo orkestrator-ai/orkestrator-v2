@@ -13,7 +13,7 @@
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@orkestrator/protocol/public-api";
 import type { Environment, Project } from "../models.js";
-import { defaultRepositoryConfig } from "../storage-shared-config.js";
+import { defaultRepositoryConfig } from "../storage/index.js";
 
 function digest(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value)).digest("hex").slice(0, 20);

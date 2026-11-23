@@ -6,8 +6,8 @@ import { join } from "node:path";
 import type { CommandHandler } from "./commands-context.js";
 import type { RegistryDependencies } from "./commands-registry-types.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
-import { withTemporaryStorage } from "./storage-test-support.js";
-import { StorageService } from "./storage.js";
+import { withTemporaryStorage } from "./storage/test-support.js";
+import { StorageService } from "./storage/service.js";
 
 const commands = new Map<string, CommandHandler>();
 registerKanbanCommands(

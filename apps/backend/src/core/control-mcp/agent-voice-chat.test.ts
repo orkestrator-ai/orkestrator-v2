@@ -10,7 +10,7 @@ import {
  * has not been written yet" into a failed assertion (flake 9927).
  */
 const LISTEN_UNTIL_SETTLED_MS = AGENT_VOICE_CHAT_LIMITS.waitMaxMs;
-import { readStoredValue, seedStore } from "../storage-test-support.js";
+import { readStoredValue, seedStore } from "../storage/test-support.js";
 import { adapterError } from "./results.js";
 import { AGENT_VOICE_CHAT_TOOL_NAMES } from "./agent-voice-chat.js";
 import { controlMcpHarness } from "./test-support.js";

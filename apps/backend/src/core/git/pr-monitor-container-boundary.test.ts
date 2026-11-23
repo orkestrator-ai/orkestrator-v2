@@ -4,7 +4,7 @@ import { detectEnvironmentPullRequest, PR_DETECTION_TIMEOUT_MS } from "../comman
 import { withContainerRuntimeCredential } from "../containers/scripts.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import { runStoredEnvironmentMerge } from "../commands-review.js";
-import { createEnvironment } from "../storage.js";
+import { createEnvironment } from "../storage/service.js";
 import type { CommandContext } from "../commands-context.js";
 import {
   PrViewerPermissionCache,

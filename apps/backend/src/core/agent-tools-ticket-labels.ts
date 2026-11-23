@@ -1,7 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";
-import type { KanbanTask, StorageService } from "./storage.js";
-import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
+import { type KanbanTask, type StorageService, parseKanbanLabelInput } from "./storage/index.js";
 import { describe, str, toolInput, withDefault } from "./tool-schema.js";
 import {
   ticketLabelColorField,

@@ -10,7 +10,7 @@ import {
   type CompatibilityPathUsageSink,
 } from "./compatibility-path-usage.js";
 import { compatibilityPathUsageDatabaseSink } from "./compatibility-path-usage-store.js";
-import { openBackendDatabase } from "./storage-stores.js";
+import { openBackendDatabase } from "./storage/stores.js";
 
 const dirs: string[] = [];
 

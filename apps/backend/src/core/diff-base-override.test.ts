@@ -15,7 +15,7 @@ import {
   type DiffBaseGit,
 } from "./diff-base-override.js";
 import type { Environment } from "./models.js";
-import { createEnvironment } from "./storage-shared-core.js";
+import { createEnvironment } from "./storage/shared-core.js";
 
 const TIP = "a".repeat(40);
 const OLDER = "b".repeat(40);

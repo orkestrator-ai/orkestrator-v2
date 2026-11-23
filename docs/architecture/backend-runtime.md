@@ -276,7 +276,7 @@ declaration:
 | `gateway-support-core.ts` | `activeDynamicCompressions` | CPU-bound compression admission per process: the bound protects the host's CPU, so a counter per backend would multiply it (gateway, not core; still on the `import/no-mutable-exports` allowlist for this binding). |
 | `disk-usage.ts` | `running`, `waiting` | Bound disk scans on the host, like `gitDockerScanPool`; a bound per backend would multiply it. |
 | `transcript-artifacts/interactive-modules.ts` | `macroCheck` | A fact about this Bun: whether it honours `macros: false`. |
-| `storage-agent-mail.ts` | `lastIdTime`, `idSequence` | One clock orders mail ids across every repository in the process, a stronger guarantee than one per repository; it shares nothing but ordering. |
+| `storage/agent-mail.ts` | `lastIdTime`, `idSequence` | One clock orders mail ids across every repository in the process, a stronger guarantee than one per repository; it shares nothing but ordering. |
 | `agent-test-cursor-credential.ts` | `hostCursorCredential` | Agent-test profiles only: the process entry loads it once from its own data directory, so two agent-test backends in one process would see one key. |
 | `containers/lifecycle-service.ts` | `activeOperations`, `operationClocks` | Keyed by the data directory's Docker owner namespace and the operation id, so two data directories never share an entry. |
 | `containers/lifecycle-service.ts` | `ownedByLabel` | A bounded memo of a container's owner label, which is immutable; a hit counts only for the owner the caller asks with. |

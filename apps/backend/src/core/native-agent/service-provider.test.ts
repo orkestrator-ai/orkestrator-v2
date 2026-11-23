@@ -29,7 +29,7 @@ import { AmbiguousPromptDispatchError } from "./provider.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "../opencode2/fake-server.test-support.js";
 import { OpenCode2Provider } from "../opencode2/provider.js";
-import { seedUnreadableStore } from "../storage-test-support.js";
+import { seedUnreadableStore } from "../storage/test-support.js";
 import { LocalServerRuntime } from "../local-server-runtime.js";
 
 import type { Environment } from "../models.js";
@@ -41,7 +41,7 @@ import {
   type NativeAgentServiceOptions,
 } from "./service.js";
 
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 
 import {
   COORDINATOR_EXECUTION_POLICY,

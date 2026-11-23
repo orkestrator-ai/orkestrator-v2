@@ -19,14 +19,18 @@
  * `--core` reads the storage code from another tree, so two versions can be
  * compared on one host:
  *
- *   git archive <commit> apps/backend/package.json apps/backend/src/core \
+ *   git archive <commit> apps/backend/package.json apps/backend/src \
  *     | tar -x -C output/benchmarks/store-before
  *   bun scripts/benchmark-store-writes.ts --core=output/benchmarks/store-before/apps/backend/src/core
+ *
+ * Make the archived backend's dependencies available before running the benchmark.
+ * For revisions with the same dependencies, link its apps/backend/node_modules
+ * to an absolute path to the current backend's node_modules.
  *
  *   bun scripts/benchmark-store-writes.ts [--runs=50] [--core=<dir>] [--json]
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -40,9 +44,17 @@ const runs = Number(arg("runs", "50"));
 const asJson = process.argv.includes("--json");
 const core = path.resolve(arg("core", path.join(import.meta.dir, "../apps/backend/src/core")));
 
-const { StorageService, createEnvironment } = await import(path.join(core, "storage.ts"));
-const { seedStore, storageDatabase } = await import(path.join(core, "storage-test-support.ts"));
-const { openBackendDatabase } = await import(path.join(core, "storage-stores.ts"));
+const storageService = path.join(core, "storage/service.ts");
+const hasStorageDirectory = existsSync(storageService);
+const { StorageService, createEnvironment } = await import(
+  hasStorageDirectory ? storageService : path.join(core, "storage.ts")
+);
+const { seedStore, storageDatabase } = await import(
+  path.join(core, hasStorageDirectory ? "storage/test-support.ts" : "storage-test-support.ts")
+);
+const { openBackendDatabase } = await import(
+  path.join(core, hasStorageDirectory ? "storage/stores.ts" : "storage-stores.ts")
+);
 const { UsageHistoryStore } = await import(path.join(core, "usage-history-store.ts"));
 const { USAGE_HISTORY_STORE } = await import(path.join(core, "usage-history-layout.ts"));
 const { NATIVE_AGENT_DISPLAY_TAIL_STORE } = await import(

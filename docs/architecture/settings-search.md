@@ -98,7 +98,7 @@ supplies the effective value.
 
 Only `RESETTABLE_GLOBAL_SETTING_KEYS` (`packages/protocol/src/setting-sources.ts`)
 qualify: keys whose absence the backend keeps through later saves.
-`storage-config-setting-sources.test.ts` proves that per key. Keys that
+`storage/config-setting-sources.test.ts` proves that per key. Keys that
 normalisation or validation writes back (terminal appearance, scrollback,
 enabled platforms, the agent settings block) are explained but not offered for
 reset. Allow web access uses its dedicated service control and is outside

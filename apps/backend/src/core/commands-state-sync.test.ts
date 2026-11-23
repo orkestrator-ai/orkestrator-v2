@@ -28,8 +28,8 @@ import {
 } from "./commands-registry-projects.js";
 import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import { cachedLaunchModels } from "./control-shared-actions.js";
-import { StorageService } from "./storage.js";
-import { seedUnreadableStore, storageInternals } from "./storage-test-support.js";
+import { StorageService } from "./storage/service.js";
+import { seedUnreadableStore, storageInternals } from "./storage/test-support.js";
 import type { ClaudeModelCatalogEntry } from "./models.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent/service.js";
 import { createProviderStub } from "./native-agent/service-projection-test-support.js";

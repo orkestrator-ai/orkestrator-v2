@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, realpath, rm, writeFile, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService, createEnvironment, createProject } from "./storage.js";
+import { StorageService, createEnvironment, createProject } from "./storage/service.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
 import { startEnvironmentSetupOnce } from "./commands-environment.js";

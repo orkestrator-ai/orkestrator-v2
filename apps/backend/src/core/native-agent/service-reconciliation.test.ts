@@ -40,7 +40,7 @@ import {
   type NativeAgentServiceOptions,
 } from "./service.js";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import { failEnvironmentSetup } from "../commands-environment.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";

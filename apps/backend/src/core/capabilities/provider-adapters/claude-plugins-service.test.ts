@@ -11,7 +11,7 @@ import path from "node:path";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 
-import { StorageService } from "../../storage.js";
+import { StorageService } from "../../storage/service.js";
 import { testCapabilityHomes } from "../native-ownership.js";
 import { CapabilityService } from "../service.js";
 import { ClaudePluginAdapter } from "./claude-plugins.js";

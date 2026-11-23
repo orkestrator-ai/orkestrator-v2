@@ -45,7 +45,7 @@ import type {
   AddressFindingsPackageVerifier,
   AddressFindingsValidationCheck,
 } from "./address-findings-validation.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./service.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 

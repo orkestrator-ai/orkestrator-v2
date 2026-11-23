@@ -1,5 +1,5 @@
 import { CREDENTIAL_HUMAN_ONLY_COMMANDS } from "@orkestrator/protocol/contract/domains/config";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";

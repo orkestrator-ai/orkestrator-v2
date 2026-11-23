@@ -5,7 +5,7 @@ import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { GraphMockLaunchResult } from "./graph-mock-launch.js";
 import { graphMockWorld, phase2Examples, type GraphMockWorld } from "./graph-mock-test-support.js";
-import type { GraphEffectRecord } from "./storage-graph-effects.js";
+import type { GraphEffectRecord } from "./storage/graph-effects.js";
 
 const commands = createCommandRegistry();
 const worlds: GraphMockWorld[] = [];

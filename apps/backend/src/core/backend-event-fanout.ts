@@ -5,7 +5,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/events";
 import { type ResourceChange } from "@orkestrator/protocol/resource-events";
 import type { BackendEmit } from "./commands-context.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 /**
  * Fans committed storage events out to every connected client.

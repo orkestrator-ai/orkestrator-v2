@@ -48,7 +48,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { INITIAL_PROMPT_STAGING_DIRECTORY } from "./prompt-attachments.js";
 import type { Environment, AppConfig } from "./models.js";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,

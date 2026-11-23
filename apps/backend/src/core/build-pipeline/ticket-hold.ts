@@ -14,7 +14,7 @@
  * A build holds the ticket it reports to: a pipeline whose source is that
  * Kanban ticket, which is the only kind the lifecycle ever moves.
  */
-import type { PersistedBuildPipeline } from "../storage-shared.js";
+import type { PersistedBuildPipeline } from "../storage/index.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

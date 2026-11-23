@@ -13,7 +13,7 @@ import {
   type PublicApiHarness,
 } from "./test-support.js";
 import { APP_VERSION } from "../constants.js";
-import { readStoredValue, seedStore, seedUnreadableStore } from "../storage-test-support.js";
+import { readStoredValue, seedStore, seedUnreadableStore } from "../storage/test-support.js";
 
 const harnesses: PublicApiHarness[] = [];
 
@@ -260,7 +260,7 @@ describe("request keys and receipts", () => {
       { requestId: "valid" },
     );
     const store = namespaceStores(h.dataDir)[0]!;
-    // One row per record, keyed by operation id (storage-public-operation-rows.ts).
+    // One row per record, keyed by operation id (storage/public-operation-rows.ts).
     const namespace = readStoredValue<Record<string, { requestKey: string }>>(h.dataDir, store)!;
     Object.values(namespace)[0]!.requestKey = "0".repeat(64);
     // Written by another connection after this backend cached the namespace:

@@ -37,7 +37,7 @@ import { stageCapabilityNodeHandoverCommand } from "@orkestrator/protocol/contra
 import { isIncompatibilityError } from "@orkestrator/protocol/contract/errors";
 
 import { assertAdmissibleExecutorEpoch } from "./executor.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { newCorrelationId, recordActivity } from "./operations.js";
 import { CapabilityError } from "./security.js";

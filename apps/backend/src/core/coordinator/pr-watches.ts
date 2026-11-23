@@ -4,7 +4,7 @@
  * When a coordinator conversation renders a link to a pull request of its
  * project's GitHub repository, or the user opens one from it, the renderer
  * calls `watch_coordinator_pull_request` and the pull request joins the
- * project's watch (`storage-watched-pull-requests.ts`). The coordinator repair
+ * project's watch (`storage/watched-pull-requests.ts`). The coordinator repair
  * sweep (every 60 s, beside the PR follows of `status-wakes.ts`)
  * reads a few due pull requests each pass through the GitHub REST client and
  * its conditional cache. The first reading is the baseline; every later change
@@ -48,11 +48,12 @@ import {
   type GitHubPullRequestStatus,
   resolveGitHubToken,
 } from "../git/index.js";
-import type { CoordinatorsStorage, StorageService } from "../storage.js";
 import type {
+  CoordinatorsStorage,
+  StorageService,
   WatchedPullRequest,
   WatchedPullRequestReading,
-} from "../storage-watched-pull-requests.js";
+} from "../storage/index.js";
 
 const log = createLogger("coordinator");
 

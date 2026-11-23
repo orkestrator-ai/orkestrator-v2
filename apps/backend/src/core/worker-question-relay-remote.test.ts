@@ -9,7 +9,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
-import { createEnvironment, createProject, StorageService } from "./storage.js";
+import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 
 // A worker on another node: real MCP dispatch, scope checks, receipts, the
 // request and its executor on the command node, and the controller command on

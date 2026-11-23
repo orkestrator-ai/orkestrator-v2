@@ -10,7 +10,7 @@ import path from "node:path";
 import { BUG_REPORT_SCREENSHOT_DIRECTORY } from "@orkestrator/protocol/bug-report";
 
 import type { ReadableHostRoot } from "./path-safety.js";
-import type { BugReportsStorage } from "./storage-bug-reports.js";
+import type { BugReportsStorage } from "./storage/index.js";
 
 export const BUG_REPORT_SCRATCH_PREFIX = "orkestrator-bug-report-";
 

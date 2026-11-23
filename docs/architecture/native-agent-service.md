@@ -225,7 +225,7 @@ all gone before shutting the provider registry down and clearing caches.
 
 A person can edit a queued prompt where it stands, from any client, without
 touching a composer draft (`@orkestrator/protocol/prompt-queue-edit`,
-`storage-prompt-queue-edits.ts`). The item keeps its id, its position, its
+`storage/prompt-queue-edits.ts`). The item keeps its id, its position, its
 request id and its settings; only its text and attachments change, and they
 change together.
 

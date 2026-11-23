@@ -5,7 +5,7 @@ import path from "node:path";
 import { BackendRuntime } from "../backend-runtime.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 import * as shell from "../shell.js";
 import { NodeReadModel } from "./node-read-model.js";
 import { stopTestNodeNetworks, TestNodeNetwork, settle } from "./node-network-test-support.js";

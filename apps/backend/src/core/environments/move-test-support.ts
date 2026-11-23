@@ -11,7 +11,7 @@ import { startEnvironmentOnce } from "../commands-environment.js";
 import { EnvironmentLifecycleTaskTracker } from "./lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
 import { TmuxBackend } from "../tmux/backend.js";
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import { removeFixturesAfterSettlement } from "../../../tests/fixture-cleanup.js";
 import { ownedTempDirPrefix, sweepStaleTempDirs } from "../../../../../tests/temp-sweep.js";

@@ -43,7 +43,7 @@ import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { HttpBridgeProvider } from "../src/core/http-bridge/index.js";
 import { NativeAgentService } from "../src/core/native-agent/service.js";
 import { projectionInternals } from "../src/core/native-agent/service-test-collaborators.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { collectStreamingSamples } from "./conditional-reads-samples.js";
 
 configureLogger({ level: "error" });

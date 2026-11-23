@@ -11,7 +11,7 @@ import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent
 import type { CapabilitySessionEvidenceRead } from "@orkestrator/protocol/capability-evidence";
 import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { testCapabilityHomes } from "./native-ownership.js";
 import type { ProviderCli } from "./provider-adapters/provider-cli.js";
 import { busyProvidersFrom } from "./running-work.js";

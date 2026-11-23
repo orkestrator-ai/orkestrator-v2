@@ -13,7 +13,7 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { ManualTime } from "./recurring/test-support.js";
 import type { AgentToolConnection } from "./agent-tools.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
-import { createEnvironment, StorageService } from "./storage.js";
+import { createEnvironment, StorageService } from "./storage/service.js";
 import { nativeSessionInvalidationMetrics } from "./native-session-invalidation-metrics.js";
 
 function fakeAgentTools(

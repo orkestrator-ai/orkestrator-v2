@@ -75,8 +75,8 @@ import {
 } from "./review/steps.js";
 import { REVIEW_RECONCILIATION_RESULT_JSON_SCHEMA } from "./review/prompts.js";
 import { REVIEW_FANOUT_FAN_IN, reviewFanoutReviewerMode } from "./review/fanout.js";
-import { RETIRED_LEGACY_STORES, retireLoopedReviewsMigration } from "./storage-retired-features.js";
-import { STORAGE_MIGRATIONS } from "./storage-stores.js";
+import { RETIRED_LEGACY_STORES, retireLoopedReviewsMigration } from "./storage/retired-features.js";
+import { STORAGE_MIGRATIONS } from "./storage/stores.js";
 import {
   REVIEW_CONSOLIDATION_PROVENANCE,
   workflowResultJsonSchema,

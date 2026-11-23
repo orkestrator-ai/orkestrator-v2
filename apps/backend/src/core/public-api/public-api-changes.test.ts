@@ -15,7 +15,7 @@ import {
   type PublicChangesView,
 } from "@orkestrator/protocol/public-api-resources";
 import type { DiffScanEvent, DiffStatsTarget } from "../diff-stats-service.js";
-import { createProject } from "../storage.js";
+import { createProject } from "../storage/service.js";
 import { createHarness, type Harness } from "../change-tracking/service-test-support.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 

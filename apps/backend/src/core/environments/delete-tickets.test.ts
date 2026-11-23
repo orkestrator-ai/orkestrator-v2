@@ -9,7 +9,7 @@ import { lifecycleMachine, PR_URL } from "../build-pipeline/kanban-transitions-t
 import { createCommandRegistry, type CommandContext } from "../commands.js";
 import { closeEnvironmentCleanupStorage } from "./cleanup-ledger.js";
 import { EnvironmentLifecycleTaskTracker } from "./lifecycle-tasks.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 /**
  * `delete_environment` settles the tickets of the environment's builds before

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { StorageService } from "../src/core/storage";
-import { seedStore } from "../src/core/storage-test-support";
+import { StorageService } from "../src/core/storage/service";
+import { seedStore } from "../src/core/storage/test-support";
 
 const tempDirs: string[] = [];
 const validImageBase64 = Buffer.from(

@@ -18,7 +18,7 @@ import {
   writeContainerReviewPackage,
   writeEnvironmentReviewPackage,
 } from "./commands-review.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { EnvironmentUnavailableError } from "./workspace-code-rewind.js";
 import { parsePrDetectionOutput } from "./commands-review.js";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";

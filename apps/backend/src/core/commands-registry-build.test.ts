@@ -13,7 +13,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import { FeatureBuildTasks } from "./features/build-tasks.js";
 import type { Environment, Project } from "./models.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 describe("create_debug_build registration", () => {
   test("reads the source tabs from the stored layout and their transcripts through the session reader", async () => {

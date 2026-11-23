@@ -30,7 +30,7 @@ import {
 } from "./goal-service.js";
 import { NativeAgentGoalVerifier } from "./goal-verifier.js";
 import type { PersistedNativeAgentSession } from "./service-shared.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 
 const KEY = "session-key";

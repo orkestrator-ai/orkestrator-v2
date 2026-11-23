@@ -4635,7 +4635,7 @@ case, since it changes the account). The billed run on real Claude and Codex
 coordinators, with the dialog, is on the manual-test checklist. The prompts and verdict are in
 `coordinator-live-account-switch.ts`; `coordinator-live-account-switch.test.ts`
 runs the orchestration over a scripted command transport, and
-`apps/backend/src/core/storage-test-support-turn-outcome.test.ts` shows a
+`apps/backend/src/core/storage/test-support-turn-outcome.test.ts` shows a
 running backend's usage-limit reader sees an outcome appended from outside.
 
 Each provider echoes the injected carrier as a user row in its own way, and the

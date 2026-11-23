@@ -19,7 +19,7 @@
  * `records` collection; record bodies are read one row at a time.
  */
 import type { WebAnnotationStorageStatus } from "@orkestrator/protocol/web-annotations";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import {
   WEB_ANNOTATION_INDEX_COLLECTIONS,
   WEB_ANNOTATION_RECORDS_COLLECTION,

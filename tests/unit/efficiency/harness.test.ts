@@ -40,6 +40,7 @@ import {
   summarizeResources,
   type MemorySample,
 } from "../../../scripts/efficiency/resources";
+import { projectionChangedReadWorkload } from "../../../scripts/efficiency/workloads-projection";
 import { displayTailWorkload } from "../../../scripts/efficiency/workloads-storage";
 import {
   activitySweepWorkload,
@@ -397,42 +398,61 @@ describe("supervision workloads", () => {
     });
   });
 
-  test("both supervision workloads report counters from a pre-move transcript progress path", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "efficiency-legacy-progress-"));
-    try {
-      // Re-export the real implementations in a fixture with only the old progress path.
-      for (const [destination, source = destination] of [
-        [
-          "apps/backend/src/core/transcript-progress.ts",
-          "apps/backend/src/core/native-agent/transcript-progress.ts",
-        ],
-        ["apps/backend/src/core/storage.ts"],
-        ["apps/backend/src/core/build-pipeline/transcript-checkpoints.ts"],
-        ["packages/protocol/src/node/bridge-transcript-summary.ts"],
-      ] as const) {
-        const file = path.join(root, destination);
-        await mkdir(path.dirname(file), { recursive: true });
-        await writeFile(file, `export * from ${JSON.stringify(path.join(context.root, source))};`);
-      }
-
-      const legacyContext = createContext(root);
-      for (const factory of [probeWorkload, pipelineCheckpointWorkload]) {
-        const workload = await factory(legacyContext);
-        const cases = workload.cases.filter((entry) => !entry.id.startsWith("reviewer-"));
-        expect(cases).toHaveLength(3);
-        for (const definition of cases) {
-          const report = await runCase(definition, 1, { sampleResources: false });
-          expect(report).toMatchObject({
-            supported: true,
-            countersStable: true,
-            counters: factory === probeWorkload ? { probes: 11 } : { passes: 20 },
-          });
+  test.each(["legacy", "current"] as const)(
+    "%s storage loads in the efficiency workloads",
+    async (layout) => {
+      const root = await mkdtemp(path.join(tmpdir(), "efficiency-legacy-progress-"));
+      try {
+        // Keep the old progress path and exercise both locations of the storage facade.
+        for (const [destination, source = destination] of [
+          [
+            "apps/backend/src/core/transcript-progress.ts",
+            "apps/backend/src/core/native-agent/transcript-progress.ts",
+          ],
+          [
+            layout === "legacy"
+              ? "apps/backend/src/core/storage.ts"
+              : "apps/backend/src/core/storage/service.ts",
+            "apps/backend/src/core/storage/service.ts",
+          ],
+          ["apps/backend/src/core/build-pipeline/transcript-checkpoints.ts"],
+          ["apps/backend/src/core/native-agent/service.ts"],
+          ["apps/backend/src/core/native-agent/display-tails.ts"],
+          ["apps/backend/src/core/native-agent/service-shared.ts"],
+          ["packages/protocol/src/node/progressive-transcript.ts"],
+          ["packages/protocol/src/node/bridge-transcript-summary.ts"],
+        ] as const) {
+          const file = path.join(root, destination);
+          await mkdir(path.dirname(file), { recursive: true });
+          await writeFile(
+            file,
+            `export * from ${JSON.stringify(path.join(context.root, source))};`,
+          );
         }
+
+        const fixtureContext = createContext(root);
+        for (const factory of [projectionChangedReadWorkload, displayTailWorkload]) {
+          const workload = await factory(fixtureContext);
+          expect(workload.cases.length).toBeGreaterThan(0);
+        }
+        for (const factory of [probeWorkload, pipelineCheckpointWorkload]) {
+          const workload = await factory(fixtureContext);
+          const cases = workload.cases.filter((entry) => !entry.id.startsWith("reviewer-"));
+          expect(cases).toHaveLength(3);
+          for (const definition of cases) {
+            const report = await runCase(definition, 1, { sampleResources: false });
+            expect(report).toMatchObject({
+              supported: true,
+              countersStable: true,
+              counters: factory === probeWorkload ? { probes: 11 } : { passes: 20 },
+            });
+          }
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
       }
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 });
 
 describe("display-tail checkpoint age", () => {

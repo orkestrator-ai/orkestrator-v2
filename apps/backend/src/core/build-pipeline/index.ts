@@ -14,7 +14,7 @@
 // `ticket-hold.ts`), the transcript store (`transcript*.ts`), worker mail and
 // worker identity (`worker-mail.ts`, `pipeline-worker-identity.ts`) and the
 // workflow summary a coordinator reads (`control-workflow-summary.ts`). The
-// build-pipeline store (`storage-build-pipelines.ts`), the build commands
+// build-pipeline store (`storage/build-pipelines.ts`), the build commands
 // (`commands-registry-build.ts`), Auto-pipeline (`auto-pipeline*.ts`) and the
 // coordinator's status line (`coordinator/build-pipeline-status.ts`) stay
 // with their own groups.
@@ -36,7 +36,7 @@
 //   too.
 // - `launch.ts` (the build, coordinator and controller commands,
 //   Auto-pipeline and feature builds) and `key-information-tools.ts` (the
-//   agent tools) reach `storage-stores.ts`, which imports
+//   agent tools) reach `storage/stores.ts`, which imports
 //   `transcript-layout.ts`.
 // - `control-workflow-summary.ts` (the coordinator's MCP tools and the public
 //   review actions) and the six above reach `review/prompts.ts`,

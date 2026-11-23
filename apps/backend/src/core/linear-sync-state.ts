@@ -6,13 +6,14 @@
  */
 import { createLogger } from "@orkestrator/protocol/logger";
 import { linearKeyFingerprint } from "./linear-boards.js";
-import type { KanbanStorage, LinearStorage } from "./storage.js";
 import {
+  type KanbanStorage,
+  type LinearStorage,
   isSyncableLinearLinkKey,
   linearBoardLinkKey,
   type LinearBoardLink,
   type LinearRevocation,
-} from "./storage-linear.js";
+} from "./storage/index.js";
 
 const log = createLogger("linear");
 

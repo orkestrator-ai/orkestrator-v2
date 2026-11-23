@@ -9,9 +9,8 @@ import {
   TICKET_SECTION_LIMITS,
 } from "@orkestrator/protocol/ticket-sections";
 import { normalizeTicketLabels } from "@orkestrator/protocol/ticket-labels";
-import type { KanbanTaskContentInput } from "./storage-kanban.js";
+import { type KanbanTaskContentInput, parseKanbanLabelInput } from "./storage/index.js";
 import { readKanbanImageData } from "./ticket-sync-images.js";
-import { parseKanbanLabelInput } from "./storage-kanban-labels.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import {
   addKanbanCommentCommand,

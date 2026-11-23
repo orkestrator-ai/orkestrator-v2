@@ -28,7 +28,7 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "../review/prompts.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 import { BuildPipelineService } from "./service.js";
 

@@ -37,8 +37,8 @@ import {
 } from "./service.js";
 
 import { deferred } from "../recurring/test-support.js";
-import { PendingNativeAgentDispatchError } from "../storage-shared-extra.js";
-import { StorageService } from "../storage.js";
+import { PendingNativeAgentDispatchError } from "../storage/shared-extra.js";
+import { StorageService } from "../storage/service.js";
 import { collaborators, queueInternals } from "./service-test-collaborators.js";
 
 type Invoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;

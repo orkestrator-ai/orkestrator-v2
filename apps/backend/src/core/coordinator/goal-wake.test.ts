@@ -13,7 +13,7 @@ import { CoordinatorService } from "./service.js";
 import { NativeAgentGoalService, type GoalCheckRun } from "../native-agent/goal-service.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { runCommand } from "../shell.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 import { workerSessionGoal } from "../worker-session-activity.js";
 import { WorkerTabCloseAdmission } from "../worker-tab-close-admission.js";
 

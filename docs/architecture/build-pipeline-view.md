@@ -7,7 +7,7 @@
 > Stored and transmitted values use the same names (`rework`, `reworking`,
 > `address-findings`, `addressing-findings`). Records older builds wrote with
 > `fix` and `address` are rewritten once by a storage migration
-> (`storage-workflow-vocabulary-upgrade.ts`), where "fix" meant Rework in a
+> (`storage/workflow-vocabulary-upgrade.ts`), where "fix" meant Rework in a
 > pipeline but Address Findings in a Multi Review. Package preparation is not
 > Rework: it has its own `package-preparation` and `preparing-package` values
 > (see [Stage table and the built-in template](#stage-table-and-the-built-in-template)).
@@ -102,7 +102,7 @@ listing filters decoded records and copies the matching environment's records.
 The single-record lookup reuses decoded records on a warm revision and reloads
 the control store after another
 connection changes its revision, as covered by the
-[storage read accounting tests](../../apps/backend/src/core/storage-read-accounting.test.ts).
+[storage read accounting tests](../../apps/backend/src/core/storage/read-accounting.test.ts).
 
 ## Starting a build
 
@@ -1047,7 +1047,7 @@ they follow every update and survive a reload.
 
 A finished run opens that tab and selects it. The backend does this when the
 pipeline completes (`ensureBuildPipelineNotesTab` in
-`apps/backend/src/core/storage-sessions.ts`, called from the recovery
+`apps/backend/src/core/storage/sessions.ts`, called from the recovery
 module's `complete`): it adds the notes tab to the environment's authoritative
 layout, in the pane holding the pipeline tab, else the active pane, and makes it
 that pane's tab and the active pane. So a run that finished while no client was
@@ -1164,7 +1164,7 @@ restarting it records a `review-package` request, and it cannot be skipped. A
 single-review Build or Rework turn that prepares the package inline keeps its
 own phase. Builds before storage version 12 stored preparation as a `rework`
 session while the pipeline was `reworking`;
-`storage-package-preparation-phase-upgrade.ts` moved those records once.
+`storage/package-preparation-phase-upgrade.ts` moved those records once.
 
 ## Constraints
 

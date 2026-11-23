@@ -35,10 +35,10 @@ import { EnvironmentLifecycleTaskTracker } from "./lifecycle-tasks.js";
 import { environmentStateDirectory } from "./state-paths.js";
 import type { Environment } from "../models.js";
 import { runCommand } from "../shell.js";
-import { StorageService, type CoordinatorsStorage } from "../storage.js";
+import { StorageService, type CoordinatorsStorage } from "../storage/service.js";
 import { DesignService } from "../design/index.js";
 import { createTestRenderer } from "../design/test-support.js";
-import { deleteStoredValue, seedStore, seedUnreadableStore } from "../storage-test-support.js";
+import { deleteStoredValue, seedStore, seedUnreadableStore } from "../storage/test-support.js";
 import { BackendRuntime } from "../backend-runtime.js";
 
 const tempDirectories: string[] = [];

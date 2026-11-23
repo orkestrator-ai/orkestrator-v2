@@ -10,7 +10,7 @@ import { type StructuredReviewReport } from "@orkestrator/protocol/structured-re
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 import type { ProviderActiveSteerRun, ProviderDispatchStatus } from "../agent-provider-contract.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BuildPipelineService } from "./service.js";
 import {
   type BuildPipelineProvider,

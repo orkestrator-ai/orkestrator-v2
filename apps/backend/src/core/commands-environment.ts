@@ -104,7 +104,7 @@ import path from "node:path";
 import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
-import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
+import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage/index.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import {
   type GitHubCliConfigSource,

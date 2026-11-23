@@ -1135,7 +1135,7 @@ describe("C22 live host-service reply", () => {
   live(
     "C22: the agent tools port answers a restricted runtime; another host port is refused",
     async () => {
-      const { StorageService } = await import("../src/core/storage");
+      const { StorageService } = await import("../src/core/storage/service");
       const { AgentToolsServer } = await import("../src/core/agent-tools");
       const { WorkflowResultService } = await import("../src/core/workflows/result-service");
       const {

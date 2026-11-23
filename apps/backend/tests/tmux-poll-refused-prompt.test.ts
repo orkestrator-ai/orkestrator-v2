@@ -21,7 +21,7 @@ import {
   type ClaudeStateSettler,
 } from "../src/core/claude-terminal-settle.js";
 import type { PtyProcess } from "../src/core/pty.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { TerminalRuntime } from "../src/core/terminals/runtime.js";
 import {
   CLAUDE_STATE_ABSENT_MARKER,

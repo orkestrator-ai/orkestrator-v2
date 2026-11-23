@@ -6,7 +6,7 @@
 // pull-request watches, delegation, worker turns, mail and changes, account
 // routing, node and remote coordination, and workflow retention. The
 // coordinator's MCP tools stay in `control-mcp/`, and its command registry
-// (`commands-registry-coordinator*.ts`) and storage (`storage-coordinator*.ts`)
+// (`commands-registry-coordinator*.ts`) and storage (`storage/coordinator*.ts`)
 // stay with their own prefix groups.
 //
 // Fourteen modules are named exceptions in `.oxlintrc.json`, not part of this
@@ -22,7 +22,7 @@
 //   `commands-registry-coordinator.ts`; and `review-actions.ts` for it and
 //   `commands-registry-controller-workflows.ts`;
 // - `mail-attachments.ts` and `node-coordinator-mail.ts` (reach
-//   `storage-config.ts` and `storage-coordinators.ts`), for
+//   `storage/config.ts` and `storage/coordinators.ts`), for
 //   `commands-registry.ts` and `commands-registry-coordinator-nodes.ts`, and
 //   a type of the first for `nodes/node-coordination.ts`;
 // - `pr.ts` (reaches `worker-action-receipts.ts`), for

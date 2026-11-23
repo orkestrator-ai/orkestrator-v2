@@ -19,7 +19,7 @@ import {
   CHANGE_PROJECTION_CHANGED_EVENT,
   type ChangeProjectionEvent,
 } from "@orkestrator/protocol/change-resources";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/database.js";
 import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { captureWorktree, displayPath, HostCaptureExecutor, readManifest } from "./capture.js";
 import { gitScopeResourceKey } from "./git-scopes.js";

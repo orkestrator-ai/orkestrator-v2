@@ -45,7 +45,7 @@ import { gitHubCli, gitHubCliEnv, resolveGitHubToken } from "./git/index.js";
 import { runCommand } from "./shell.js";
 import { MAX_BINARY_FILE_BYTES, writeConfinedFile } from "./path-safety.js";
 import { assertValidPromptImages, mimeTypeForImageData } from "./prompt-attachments.js";
-import type { BugReportRecord } from "./storage-bug-reports.js";
+import type { BugReportRecord } from "./storage/index.js";
 import {
   BUG_REPORT_SCRATCH_PREFIX,
   isOwnedBugReportScratchDir as ownedScratchDir,

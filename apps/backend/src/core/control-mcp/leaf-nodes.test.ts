@@ -1,8 +1,8 @@
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { AgentRegistry } from "../agent-registry.js";
 import { seedCoordinator } from "../public-api/test-coordinator.js";
-import { seedStore } from "../storage-test-support.js";
-import { createProject } from "../storage.js";
+import { seedStore } from "../storage/test-support.js";
+import { createProject } from "../storage/service.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { ControlMcpServer, readControlMcpDescriptor } from "./server.js";
 import { rpc, type RpcResult } from "./test-support.js";

@@ -12,9 +12,9 @@ import {
   parseEnvironmentCleanupLedger,
   type EnvironmentCleanupEntry,
 } from "./cleanup-ledger.js";
-import { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
-import { readStoredValue, seedStore, seedUnreadableStore } from "../storage-test-support.js";
+import { StorageDatabase } from "../storage/database.js";
+import { openBackendDatabase } from "../storage/stores.js";
+import { readStoredValue, seedStore, seedUnreadableStore } from "../storage/test-support.js";
 
 const LEDGER = "environment-cleanup-ledger.json";
 const tempDirectories: string[] = [];

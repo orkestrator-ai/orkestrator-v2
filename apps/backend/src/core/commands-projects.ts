@@ -13,12 +13,11 @@ import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-reposi
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createProject } from "./storage.js";
+import { createProject, type StorageService } from "./storage/index.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { conciseError, isGitSshAuthenticationFailure } from "./commands-error-text.js";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import type { ClaudeModelCatalogSnapshot, Project } from "./models.js";
-import type { StorageService } from "./storage.js";
 import { enqueueContainerBridgeOperation, startLocalServer } from "./commands-servers.js";
 import {
   startContainerClaudeServer,

@@ -84,7 +84,7 @@ async function loadModules(context: WorkloadContext): Promise<Modules> {
     "apps/backend/src/core/native-agent/service.ts",
   );
   const storage = await context.load<{ StorageService: Modules["storage"] }>(
-    "apps/backend/src/core/storage.ts",
+    "apps/backend/src/core/storage/service.ts",
   );
   const progressive = await context.load<{ bridgeTranscriptUpdate: Protocol }>(
     "packages/protocol/src/node/progressive-transcript.ts",

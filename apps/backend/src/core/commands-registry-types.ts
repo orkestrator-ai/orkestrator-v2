@@ -6,7 +6,7 @@ import type {
   ConditionalResourceSnapshot,
   ResourceManifestKind,
 } from "@orkestrator/protocol/resource-events";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 import type { AnyCommandDef, ArgsOf, ResultOf } from "@orkestrator/protocol/contract/command";
 import type { CommandContext, CommandHandler, CommandInvocation } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";

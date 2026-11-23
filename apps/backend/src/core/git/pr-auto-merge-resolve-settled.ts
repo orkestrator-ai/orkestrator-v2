@@ -2,7 +2,7 @@ import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-res
 import type { PersistedNativeAgentSession, PersistedPromptQueue } from "../models.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { nativePromptQueueKey, nativeTabsOfLayout } from "../public-api/index.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /**
  * Whether every open Resolve tab has finished its work, read from durable

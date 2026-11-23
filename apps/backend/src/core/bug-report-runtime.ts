@@ -10,7 +10,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 
 import type { Environment } from "./models.js";
-import type { BugReportRecord, BugReportsStorage } from "./storage-bug-reports.js";
+import type { BugReportRecord, BugReportsStorage } from "./storage/index.js";
 
 /**
  * The project id a bug report's synthetic environment carries. A report

@@ -4,7 +4,7 @@ import { PrAutoMergeController } from "./pr-auto-merge.js";
 import { PrMonitorService } from "./pr-monitor.js";
 import { environmentToPrMonitorTarget } from "../commands-pr-monitor.js";
 import type { Environment } from "../models.js";
-import { createEnvironment } from "../storage.js";
+import { createEnvironment } from "../storage/service.js";
 
 test("real monitor wakes auto-merge when mergeability is the only changed observation", async () => {
   const now = new Date().toISOString();

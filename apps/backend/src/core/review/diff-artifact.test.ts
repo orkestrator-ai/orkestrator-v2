@@ -24,7 +24,7 @@ import {
   verifyReviewDiffArtifact,
 } from "./diff-artifact.js";
 import { CommandFailedError } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 // Real Git runs under aggregate load; Bun's 5 s default is too tight for it.
 setDefaultTimeout(30_000);

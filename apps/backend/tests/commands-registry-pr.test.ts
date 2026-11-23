@@ -39,7 +39,7 @@ const {
 } = await createCommandFixtures();
 
 import type { Environment } from "./command-fixtures";
-import type { KanbanTask } from "../src/core/storage-shared-core";
+import type { KanbanTask } from "../src/core/storage/shared-core";
 
 function shimTest(name: string, run: () => Promise<void>): void {
   test(name, run, ASYNC_TEST_BUDGET_MS);

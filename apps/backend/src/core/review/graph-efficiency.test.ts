@@ -20,7 +20,7 @@ import {
   graphReviewWorld,
   type GraphReviewWorld,
 } from "./graph-test-support.js";
-import { storageDatabase } from "../storage-test-support.js";
+import { storageDatabase } from "../storage/test-support.js";
 
 const worlds: GraphReviewWorld[] = [];
 

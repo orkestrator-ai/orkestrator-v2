@@ -13,7 +13,7 @@ import {
   pipelineWorker,
   pipelineWorkerSessionKey,
 } from "@orkestrator/protocol/pipeline-worker-mail";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /** The most messages one read returns, as for a native tab. */
 export const MAX_PIPELINE_WORKER_TRANSCRIPT_MESSAGES = 100;

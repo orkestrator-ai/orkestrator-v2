@@ -562,7 +562,7 @@ export async function pipelineCheckpointWorkload(
 ): Promise<WorkloadDefinition> {
   const storageModule = await context.load<{
     StorageService: new (dataDir: string) => PipelineStorage;
-  }>("apps/backend/src/core/storage.ts");
+  }>("apps/backend/src/core/storage/service.ts");
   const checkpointsModule = await context.loadOptional<{
     BuildPipelineTranscriptCheckpoints: new (storage: unknown) => Checkpoints;
   }>("apps/backend/src/core/build-pipeline/transcript-checkpoints.ts");

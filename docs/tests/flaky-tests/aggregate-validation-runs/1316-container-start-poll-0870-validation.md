@@ -17,13 +17,13 @@
 
 | Unchanged owner | Aggregate failure | Complete owner rerun |
 | --- | --- | --- |
-| `apps/backend/src/core/storage-writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` exceeded its 5,000 ms deadline (7,063.26 ms). | Passed alone, 5.2 s for the complete file. See existing case 1309. |
+| `apps/backend/src/core/storage/writer-guards.test.ts` | `raw StorageDatabase writers outside StorageService > name the store they write` exceeded its 5,000 ms deadline (7,063.26 ms). | Passed alone, 5.2 s for the complete file. See existing case 1309. |
 | `tests/unit/mcp-fixture-cleanup.test.ts` | `MCP fixture cleanup contract > every test importing createFixture from MCP test-support awaits or returns cleanup` exceeded its 5,000 ms deadline (6,595.40 ms). | Passed alone, 2.3 s. |
 
 The complete owner rerun commands were:
 
 ```bash
-mise run test:logged -- --name storage-writers-alone -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts
+mise run test:logged -- --name storage-writers-alone -- bun test --cwd apps/backend ./src/core/storage/writer-guards.test.ts
 mise run test:logged -- --name mcp-fixture-alone -- bun test ./tests/unit/mcp-fixture-cleanup.test.ts
 ```
 

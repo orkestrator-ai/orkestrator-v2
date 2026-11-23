@@ -8,7 +8,7 @@ import {
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { BuildPipelineService } from "./service.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import {
   applyAgentKeyInformationUpdate,
   recordReviewIssuesInKeyInformation,

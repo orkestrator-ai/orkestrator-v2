@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { linearKeyFingerprint } from "../src/core/linear-boards";
 import { NodeLinearSync, type LinearSyncLink } from "../src/core/nodes/node-linear-sync";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 import { createCommandFixtures } from "./command-fixtures";
 
 /**

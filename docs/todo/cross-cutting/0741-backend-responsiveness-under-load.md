@@ -345,10 +345,10 @@ is 1.2 MiB today and may grow to its 32 MiB limit.
 - The 32 MiB limit is checked against the serialized rows the save writes
   anyway (`maxBytes` on `saveSensitiveJson`, `StoreTooLargeError`), not by
   pretty-printing the store a second time.
-- Tests: `storage-agent-mail-read-model.test.ts` (snapshot equals `load`
+- Tests: `storage/agent-mail-read-model.test.ts` (snapshot equals `load`
   across send, ack, seen and delete; frozen and shared; only changed rows
   are parsed; another connection's write is seen; an unreadable row reads as
-  `load` reads it) and `storage-database.test.ts` (`maxBytes`,
+  `load` reads it) and `storage/database.test.ts` (`maxBytes`,
   `readStoreSerialized`).
 
 ### 6. Qualify under load with the new stall log

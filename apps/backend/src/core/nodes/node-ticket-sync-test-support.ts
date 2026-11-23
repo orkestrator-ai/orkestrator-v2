@@ -9,7 +9,7 @@ import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-syn
 
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js";
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 import type { ContractEnvelope } from "./node-link.js";
 import { LeafTicketImageWants } from "./node-ticket-images.js";
 import { NodeTicketSync, type TicketSyncLink } from "./node-ticket-sync.js";

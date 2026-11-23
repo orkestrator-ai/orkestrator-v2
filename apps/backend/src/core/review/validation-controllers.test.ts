@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { MultiReviewService } from "./service.js";
 import { BuildPipelineSupervisor } from "../build-pipeline/service-supervisor.js";
 import { BuildPipelineService } from "../build-pipeline/service.js";

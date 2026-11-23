@@ -1,7 +1,7 @@
 /**
  * Result shapes of the `kanban` commands (plan item 7008), derived from the
  * backend's model types (`KanbanTask`, `ProjectNotes`, `FeaturePlan` in
- * `apps/backend/src/core/storage-shared-core.ts`, the Linear types in
+ * `apps/backend/src/core/storage/shared-core.ts`, the Linear types in
  * `apps/backend/src/core/linear.ts`) and the protocol's
  * `FeaturePlanningRecord` (`feature-planning.ts`), `TicketSections`
  * (`ticket-sections.ts`) and `ConditionalResourceSnapshot`

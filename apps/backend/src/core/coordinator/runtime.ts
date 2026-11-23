@@ -11,7 +11,7 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import type { Environment, Project } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { coordinatorProviderAllowed } from "./providers.js";
 
 export type CoordinatorRuntimeUnavailableReason =

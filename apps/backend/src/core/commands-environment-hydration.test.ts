@@ -8,7 +8,7 @@ import {
   type EnvironmentHydrationBatch,
 } from "@orkestrator/protocol/environment-hydration";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 const KEY = "claude env-e1:tab-1";

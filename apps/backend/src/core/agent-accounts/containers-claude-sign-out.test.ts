@@ -20,7 +20,7 @@ import {
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import type { Environment } from "../models.js";
-import { createEnvironment, StorageService } from "../storage.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
 
 /**
  * After the host signs out of Claude, the next container start removes the

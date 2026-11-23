@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PromptQueueDrainer } from "../src/core/prompt-queue-drainer.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 
 /**
  * Counts what delivering one agent-mail message to an idle claude-tmux tab

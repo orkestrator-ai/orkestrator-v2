@@ -1,0 +1,1643 @@
+import type { WorkerTabCloseAdmission } from "../worker-tab-close-admission.js";
+import type { GraphRun } from "@orkestrator/protocol/graphs/run";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+
+import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
+  COORDINATOR_WORKSPACE_VERSION,
+  isCoordinatorWorkspace,
+  normalizeCoordinatorDelegationRequest,
+  normalizeCoordinatorRoles,
+  normalizeCoordinatorSessionKeys,
+  type CoordinatorDelegationRequest,
+  type CoordinatorNodeRelease,
+  type CoordinatorWorkflowAssociation,
+  type CoordinatorWorkflowStoreState,
+  type CoordinatorWorkspace,
+} from "@orkestrator/protocol/coordinator";
+import {
+  isCoordinatorSurfaceAction,
+  MAX_COORDINATOR_ACTION_RECEIPTS,
+  MAX_COORDINATOR_ACTION_RESULT_BYTES,
+  type CoordinatorActionReceipt,
+  type CoordinatorSurfaceAction,
+} from "@orkestrator/protocol/coordinator-surfaces";
+
+import {
+  COORDINATOR_WORKFLOW_CLEANUP_BATCH,
+  COORDINATOR_WORKFLOW_NEAR_LIMIT,
+  COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS,
+  COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR,
+  coordinatorRequestAlias,
+  coordinatorRequestMatch,
+  coordinatorWorkflowStoreState,
+  MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
+  selectCoordinatorWorkflowsToClear,
+} from "../coordinator/index.js";
+import { assertValidPromptImages, mimeTypeForImageData } from "../prompt-attachments.js";
+import type { StorageContext } from "./context.js";
+import type { StorageFiles } from "./files.js";
+import type { StorageRepositories } from "./repositories.js";
+import type { DraftsRepository } from "./drafts.js";
+import { createLogger } from "@orkestrator/protocol/logger";
+
+const log = createLogger("coordinator");
+
+const MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES = 256;
+/** The payload hash of a request that joined a live pull-request follow. */
+const PULL_REQUEST_FOLLOW_ALIAS = "pull-request-follow";
+/**
+ * How long a computed `workflowStore` state is reused while the store is
+ * unchanged. Resource state in other stores and the replay window move on
+ * without a coordinator write, so an unchanged revision is not enough.
+ */
+const WORKFLOW_STORE_STATE_TTL_MS = 60_000;
+
+/**
+ * Every coordinator's staged attachments, under the application data
+ * directory. Only the backend writes here (`writeCoordinatorAttachment`), so
+ * the renderer may read it back to preview an image the user pasted.
+ */
+export function coordinatorAttachmentsRoot(dataDir: string): string {
+  return path.join(dataDir, "coordinator-attachments");
+}
+
+export class CoordinatorsRepository {
+  private workflowStoreStateCache: {
+    revision: number;
+    at: number;
+    state: CoordinatorWorkflowStoreState;
+  } | null = null;
+
+  constructor(
+    private readonly context: StorageContext,
+    private readonly files: StorageFiles,
+    private readonly repos: StorageRepositories,
+  ) {}
+
+  private enqueueCoordinatorMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.context.serialize(this.files.coordinatorsFile(), "coordinator storage", operation);
+  }
+
+  private async loadCoordinatorStore(): Promise<{
+    version: 1;
+    revision: number;
+    workspaces: Record<string, CoordinatorWorkspace>;
+    workflows: CoordinatorWorkflowAssociation[];
+    actionReceipts: CoordinatorActionReceipt[];
+  }> {
+    const value = await this.context.loadJson<unknown>(this.files.coordinatorsFile(), () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      revision: 0,
+      workspaces: {},
+      workflows: [],
+    }));
+    const empty = () => ({
+      version: COORDINATOR_WORKSPACE_VERSION,
+      revision: 0,
+      workspaces: {} as Record<string, CoordinatorWorkspace>,
+      workflows: [] as CoordinatorWorkflowAssociation[],
+      actionReceipts: [] as CoordinatorActionReceipt[],
+    });
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      log.warn("store.malformed");
+      return empty();
+    }
+    const store = value as {
+      version?: unknown;
+      revision?: unknown;
+      workspaces?: unknown;
+      workflows?: unknown;
+      actionReceipts?: unknown;
+    };
+    if (
+      store.version !== COORDINATOR_WORKSPACE_VERSION ||
+      !store.workspaces ||
+      typeof store.workspaces !== "object" ||
+      Array.isArray(store.workspaces)
+    ) {
+      log.warn("store.unsupported-version");
+      return empty();
+    }
+    const workspaces: Record<string, CoordinatorWorkspace> = {};
+    for (const [projectId, workspace] of Object.entries(store.workspaces)) {
+      // Codex-named bridge fields were upgraded once at import (record-upgrades.ts).
+      if (!isCoordinatorWorkspace(workspace) || workspace.projectId !== projectId) {
+        log.warn("store.invalid-workspace");
+        continue;
+      }
+      // Read-time migration to one main plus side agents, and to the session
+      // key the renderer uses; persisted on the next write, and idempotent
+      // until then.
+      workspaces[projectId] = normalizeCoordinatorSessionKeys(normalizeCoordinatorRoles(workspace));
+    }
+    const workflows = Array.isArray(store.workflows)
+      ? store.workflows.filter(
+          (item): item is CoordinatorWorkflowAssociation =>
+            Boolean(item) &&
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            typeof (item as CoordinatorWorkflowAssociation).id === "string" &&
+            typeof (item as CoordinatorWorkflowAssociation).projectId === "string" &&
+            typeof (item as CoordinatorWorkflowAssociation).coordinatorId === "string",
+        )
+      : [];
+    const actionReceipts = Array.isArray(store.actionReceipts)
+      ? store.actionReceipts.filter(isActionReceipt)
+      : [];
+    return {
+      version: COORDINATOR_WORKSPACE_VERSION,
+      revision: Number.isSafeInteger(store.revision) ? (store.revision as number) : 0,
+      workspaces,
+      workflows,
+      actionReceipts,
+    };
+  }
+
+  /**
+   * Called under the store lock before a new workflow record is added. When
+   * the store is at its limit, clears a batch of the oldest finished records
+   * (`coordinator/workflow-retention.ts` says which records count as
+   * finished) and leaves the caller to write the result with its own record.
+   * Returns a synchronous cleanup action to run immediately before the write,
+   * so no await separates reading resource activity from saving the selection.
+   * Refuses, saying why, when every record is still in use.
+   */
+  private async makeRoomForWorkflowAssociation(store: {
+    workflows: CoordinatorWorkflowAssociation[];
+  }): Promise<() => void> {
+    if (store.workflows.length < MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS) return () => {};
+    const environmentIds = new Set(
+      (await this.repos.projects.loadEnvironments()).map((environment) => environment.id),
+    );
+    return () => {
+      const needed = store.workflows.length - MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS + 1;
+      const cleared = selectCoordinatorWorkflowsToClear({
+        workflows: store.workflows,
+        environmentExists: (environmentId) => environmentIds.has(environmentId),
+        resourceState: (association) => this.workflowResourceState(association),
+        batch: Math.max(COORDINATOR_WORKFLOW_CLEANUP_BATCH, needed),
+      });
+      if (cleared.size < needed) {
+        log.warn("store.workflows-in-use", {
+          records: store.workflows.length,
+          clearable: cleared.size,
+        });
+        throw new Error(COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR);
+      }
+      store.workflows = store.workflows.filter((association) => !cleared.has(association.id));
+      log.info("store.workflows-cleared", {
+        cleared: cleared.size,
+        remaining: store.workflows.length,
+      });
+    };
+  }
+
+  /**
+   * How close the shared store is to refusing new records, for the panel.
+   * Below {@link COORDINATOR_WORKFLOW_NEAR_LIMIT} records it is `ok` without
+   * further reads: even if every one were in use, a cleanup at the limit would
+   * still free a whole batch. Above it, the records cleanup could clear are
+   * counted with the same rules it applies, and the answer is reused for a
+   * minute while the store is unchanged.
+   */
+  async getCoordinatorWorkflowStoreState(): Promise<CoordinatorWorkflowStoreState> {
+    const store = await this.loadCoordinatorStore();
+    if (store.workflows.length < COORDINATOR_WORKFLOW_NEAR_LIMIT) return "ok";
+    const cached = this.workflowStoreStateCache;
+    const now = Date.now();
+    if (
+      cached &&
+      cached.revision === store.revision &&
+      now - cached.at < WORKFLOW_STORE_STATE_TTL_MS
+    )
+      return cached.state;
+    const environmentIds = new Set(
+      (await this.repos.projects.loadEnvironments()).map((environment) => environment.id),
+    );
+    const clearable = selectCoordinatorWorkflowsToClear({
+      workflows: store.workflows,
+      environmentExists: (environmentId) => environmentIds.has(environmentId),
+      resourceState: (association) => this.workflowResourceState(association),
+      batch: store.workflows.length,
+      now,
+    });
+    const state = coordinatorWorkflowStoreState(store.workflows.length - clearable.size);
+    this.workflowStoreStateCache = { revision: store.revision, at: now, state };
+    return state;
+  }
+
+  /** Synchronous reads keep selection and the coordinator write in one event-loop step.
+   * Unknown/remote state is never evidence that work stopped.
+   */
+  private workflowResourceState(
+    association: CoordinatorWorkflowAssociation,
+  ): "active" | "finished" | "missing" | "unknown" {
+    // Nothing on a released node can be read from here any more.
+    if (association.nodeRelease) return "missing";
+    if (association.nodeId)
+      return association.environmentCreationSettledAt ? "finished" : "unknown";
+    if (association.kind === "feature-plan") return this.featurePlanResourceState(association);
+    const file =
+      association.kind === "multi-review"
+        ? this.files.multiReviewsFile()
+        : association.kind === "build-pipeline"
+          ? this.files.buildPipelinesFile()
+          : association.kind === "graph-run"
+            ? path.join(this.context.dataDir, "graph-runs.json")
+            : undefined;
+    if (!file) return "unknown";
+    const value = this.context.loadStoreRow(file, association.resourceId) as Record<
+      string,
+      unknown
+    > | null;
+    if (!value) return "missing";
+    const snapshot = value.snapshot as Record<string, unknown> | undefined;
+    const phase = association.kind === "graph-run" ? value.status : snapshot?.phase;
+    if (typeof phase !== "string") return "unknown";
+    if (!["complete", "completed", "failed", "cancelled"].includes(phase)) return "active";
+    // Give undelivered terminal notices a full day to reconcile. Missing or
+    // unreadable timestamps cannot establish that this grace period elapsed.
+    if (!association.terminalNotifiedAt) {
+      const updatedAt = Date.parse(String(value.updatedAt ?? snapshot?.updatedAt ?? ""));
+      if (
+        !Number.isFinite(updatedAt) ||
+        Date.now() - updatedAt < COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS
+      )
+        return "unknown";
+    }
+    return "finished";
+  }
+
+  /**
+   * A planning exchange is active while its record is attached and has not
+   * failed. Detached or failed, it is finished once its notice was sent or a
+   * day has passed without a change to the plan.
+   */
+  private featurePlanResourceState(
+    association: CoordinatorWorkflowAssociation,
+  ): "active" | "finished" | "missing" | "unknown" {
+    const plan = this.context.loadStoreRow(
+      this.files.featurePlansFile(),
+      association.resourceId,
+    ) as { updatedAt?: unknown; planning?: { operationId?: unknown; phase?: unknown } } | null;
+    if (!plan) return "missing";
+    if (
+      plan.planning?.operationId === association.featurePlan?.operationId &&
+      plan.planning?.phase !== "failed"
+    )
+      return "active";
+    if (association.terminalNotifiedAt) return "finished";
+    const updatedAt = Date.parse(String(plan.updatedAt ?? ""));
+    return Number.isFinite(updatedAt) &&
+      Date.now() - updatedAt >= COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS
+      ? "finished"
+      : "unknown";
+  }
+
+  /**
+   * Admit one coordinator surface action before it has any effect.
+   *
+   * Returns the receipt to replay when the same request already completed,
+   * `claimed: true` when this caller must run the action (a new request, or a
+   * pending one whose owner process is gone), and refuses a reused
+   * `requestId` whose payload differs. A pending request still owned by a
+   * live process is reported unclaimed so the caller can ask for a retry.
+   */
+  async admitCoordinatorActionReceipt(input: {
+    coordinatorId: string;
+    projectId: string;
+    conversationId: string;
+    requestId: string;
+    action: CoordinatorSurfaceAction;
+    payloadHash: string;
+  }): Promise<{ receipt: CoordinatorActionReceipt; claimed: boolean }> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const existing = store.actionReceipts.find(
+        (item) => item.coordinatorId === input.coordinatorId && item.requestId === input.requestId,
+      );
+      if (existing) {
+        if (
+          existing.action !== input.action ||
+          existing.projectId !== input.projectId ||
+          existing.payloadHash !== input.payloadHash
+        ) {
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+        }
+        if (existing.conversationId !== input.conversationId) {
+          throw new Error(
+            "This requestId was used by another conversation of this coordinator, so nothing was done. Use a new unique requestId for a new action.",
+          );
+        }
+        if (existing.state === "completed") return { receipt: existing, claimed: false };
+        // This process included: a pending receipt it owns is still running
+        // here (a failed run releases its receipt), so only a dead owner's
+        // receipt is reclaimed.
+        let ownerAlive = false;
+        if (existing.claimPid) {
+          try {
+            process.kill(existing.claimPid, 0);
+            ownerAlive = true;
+          } catch {
+            ownerAlive = false;
+          }
+        }
+        if (ownerAlive) return { receipt: existing, claimed: false };
+        existing.claimPid = process.pid;
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        return { receipt: existing, claimed: true };
+      }
+      if (store.actionReceipts.length >= MAX_COORDINATOR_ACTION_RECEIPTS) {
+        // Drop the oldest completed receipt; a pending one is still owed.
+        const oldest = store.actionReceipts.findIndex((item) => item.state === "completed");
+        if (oldest === -1) throw new Error("Coordinator action receipt store is full");
+        store.actionReceipts.splice(oldest, 1);
+      }
+      const receipt: CoordinatorActionReceipt = {
+        ...input,
+        state: "pending",
+        claimPid: process.pid,
+        createdAt: new Date().toISOString(),
+      };
+      store.actionReceipts.push(receipt);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return { receipt, claimed: true };
+    });
+  }
+
+  /** Record a claimed action's result so an identical retry replays it. */
+  async completeCoordinatorActionReceipt(
+    coordinatorId: string,
+    requestId: string,
+    result: Record<string, unknown>,
+  ): Promise<CoordinatorActionReceipt> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const receipt = store.actionReceipts.find(
+        (item) => item.coordinatorId === coordinatorId && item.requestId === requestId,
+      );
+      if (!receipt) throw new Error("Coordinator action receipt was not found");
+      if (receipt.state === "completed") return receipt;
+      const encoded = JSON.stringify(result);
+      receipt.result =
+        Buffer.byteLength(encoded, "utf8") > MAX_COORDINATOR_ACTION_RESULT_BYTES
+          ? { truncated: true }
+          : (JSON.parse(encoded) as Record<string, unknown>);
+      receipt.state = "completed";
+      receipt.completedAt = new Date().toISOString();
+      delete receipt.claimPid;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return receipt;
+    });
+  }
+
+  /**
+   * Drop a pending receipt whose action failed before any effect, so the
+   * same request may be retried as new. Completed receipts are kept.
+   */
+  async releaseCoordinatorActionReceipt(coordinatorId: string, requestId: string): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const index = store.actionReceipts.findIndex(
+        (item) =>
+          item.coordinatorId === coordinatorId &&
+          item.requestId === requestId &&
+          item.state === "pending",
+      );
+      if (index === -1) return;
+      store.actionReceipts.splice(index, 1);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  async getCoordinatorWorkspace(projectId: string): Promise<CoordinatorWorkspace | null> {
+    return (await this.loadCoordinatorStore()).workspaces[projectId] ?? null;
+  }
+
+  async getCoordinatorWorkspaceById(coordinatorId: string): Promise<CoordinatorWorkspace | null> {
+    return (
+      Object.values((await this.loadCoordinatorStore()).workspaces).find(
+        (workspace) => workspace.id === coordinatorId,
+      ) ?? null
+    );
+  }
+
+  async listCoordinatorWorkspaces(): Promise<CoordinatorWorkspace[]> {
+    return Object.values((await this.loadCoordinatorStore()).workspaces);
+  }
+
+  async listCoordinatorWorkflowAssociations(
+    projectId: string,
+  ): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) => association.projectId === projectId,
+    );
+  }
+
+  async listAllCoordinatorWorkflowAssociations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows;
+  }
+
+  async getCoordinatorReconciliationState(): Promise<{
+    workspaces: CoordinatorWorkspace[];
+    workflows: CoordinatorWorkflowAssociation[];
+  }> {
+    const store = await this.loadCoordinatorStore();
+    return { workspaces: Object.values(store.workspaces), workflows: store.workflows };
+  }
+
+  /** Keep the draft snapshot stable through the coordinator write. Lock order is drafts, then coordinator. */
+  async mutateCoordinatorWorkspaceWithComposeDrafts(
+    projectId: string,
+    mutate: (
+      current: CoordinatorWorkspace | null,
+      drafts: Awaited<ReturnType<DraftsRepository["listComposeDrafts"]>>,
+    ) => CoordinatorWorkspace | null,
+  ): Promise<CoordinatorWorkspace | null> {
+    return this.repos.prompts.enqueueComposeDraftMutation(async () => {
+      const drafts = Object.values(await this.repos.prompts.loadComposeDrafts());
+      return this.mutateCoordinatorWorkspace(projectId, (current) => mutate(current, drafts));
+    });
+  }
+
+  async mutateCoordinatorWorkspace(
+    projectId: string,
+    mutate: (current: CoordinatorWorkspace | null) => CoordinatorWorkspace | null,
+  ): Promise<CoordinatorWorkspace | null> {
+    if (!projectId.trim()) throw new Error("Coordinator project id is required");
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const current = store.workspaces[projectId] ?? null;
+      const mutated = mutate(current);
+      // Every write keeps the one-main and session-key invariants, whatever
+      // the mutator did.
+      const next =
+        mutated && mutated !== current
+          ? normalizeCoordinatorSessionKeys(normalizeCoordinatorRoles(mutated))
+          : mutated;
+      if (next && (!isCoordinatorWorkspace(next) || next.projectId !== projectId)) {
+        throw new Error("Coordinator workspace mutation returned an invalid record");
+      }
+      if (next === current) return current;
+      if (next) store.workspaces[projectId] = next;
+      else delete store.workspaces[projectId];
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", projectId, projectId);
+      return next;
+    });
+  }
+
+  /** Graph provisioning may finish after its launch receipt settled. Preserve
+   * creation before the graph's disposable run history can leave the store. */
+  async recordGraphEnvironmentCreation(run: GraphRun): Promise<void> {
+    if (!run.environmentId || !run.launch?.create || run.launch.requestedBy !== "coordinator")
+      return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "graph-run" ||
+          association.nodeId ||
+          association.projectId !== run.projectId ||
+          association.resourceId !== run.id ||
+          association.createdEnvironmentId === run.environmentId
+        )
+          continue;
+        association.createdEnvironmentId = run.environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /** A reclaimed pipeline admission can settle its receipt before provisioning. */
+  async recordPipelineEnvironmentCreation(
+    pipelineId: string,
+    projectId: string,
+    environmentId: string,
+    coordinatorLaunchId?: string,
+  ): Promise<void> {
+    if (!environmentId || !coordinatorLaunchId) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          association.kind !== "build-pipeline" ||
+          association.id !== coordinatorLaunchId ||
+          association.nodeId ||
+          association.projectId !== projectId ||
+          association.resourceId !== pipelineId ||
+          association.createsEnvironment !== true ||
+          association.createdEnvironmentId
+        )
+          continue;
+        association.createdEnvironmentId = environmentId;
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  async saveCoordinatorWorkflowAssociation(
+    association: CoordinatorWorkflowAssociation,
+  ): Promise<CoordinatorWorkflowAssociation> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const duplicate = existingWorkflowAssociation(store.workflows, association);
+      if (duplicate) return duplicate;
+      (await this.makeRoomForWorkflowAssociation(store))();
+      store.workflows.push(association);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
+  /**
+   * Adds new workflow records in order under one lease and one write,
+   * stopping at the first one a full store refuses. A record whose request is
+   * already stored is left as it is, as {@link saveCoordinatorWorkflowAssociation}
+   * does. Seeding uses this: one write per record is thousands of commits.
+   */
+  async saveCoordinatorWorkflowAssociations(
+    associations: CoordinatorWorkflowAssociation[],
+  ): Promise<{ added: number; refused: number }> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let added = 0;
+      let refused = 0;
+      for (const [index, association] of associations.entries()) {
+        if (existingWorkflowAssociation(store.workflows, association)) continue;
+        try {
+          (await this.makeRoomForWorkflowAssociation(store))();
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== COORDINATOR_WORKFLOW_STORE_IN_USE_ERROR
+          )
+            throw error;
+          refused = associations.length - index;
+          break;
+        }
+        store.workflows.push(association);
+        added += 1;
+      }
+      if (added > 0) {
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      }
+      return { added, refused };
+    });
+  }
+
+  async reserveCoordinatorWorkflowAssociation(
+    association: CoordinatorWorkflowAssociation,
+  ): Promise<{ association: CoordinatorWorkflowAssociation; claimed: boolean }> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const existing = store.workflows.find(
+        (item) =>
+          item.coordinatorId === association.coordinatorId &&
+          item.requestId === association.requestId,
+      );
+      if (existing) {
+        if (
+          existing.kind !== association.kind ||
+          existing.projectId !== association.projectId ||
+          existing.nodeId !== association.nodeId ||
+          existing.payloadHash !== association.payloadHash
+        ) {
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+        }
+        if (!existing.pending) return { association: existing, claimed: false };
+        let ownerAlive = false;
+        if (existing.claimPid && existing.claimPid !== process.pid) {
+          try {
+            process.kill(existing.claimPid, 0);
+            ownerAlive = true;
+          } catch {
+            ownerAlive = false;
+          }
+        }
+        if (ownerAlive) return { association: existing, claimed: false };
+        existing.claimPid = process.pid;
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        return { association: existing, claimed: true };
+      }
+      (await this.makeRoomForWorkflowAssociation(store))();
+      const reserved = { ...association, pending: true, claimPid: process.pid };
+      store.workflows.push(reserved);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return { association: reserved, claimed: true };
+    });
+  }
+
+  async completeCoordinatorWorkflowAssociation(
+    associationId: string,
+    resourceId: string,
+    createdEnvironmentId?: string,
+  ): Promise<CoordinatorWorkflowAssociation> {
+    if (!resourceId.trim()) throw new Error("Coordinator workflow resource id is required");
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association) throw new Error("Coordinator workflow reservation was not found");
+      if (!association.pending && association.resourceId !== resourceId) {
+        throw new Error("Coordinator workflow reservation is already complete");
+      }
+      // A leaf may reuse an active review after our pre-launch inventory read.
+      // Reconcile the actual workflow ID under the store mutation lock.
+      const owner =
+        association.kind === "multi-review" && association.nodeId
+          ? store.workflows.find(
+              (item) =>
+                item.id !== association.id &&
+                !item.pending &&
+                item.kind === association.kind &&
+                item.nodeId === association.nodeId &&
+                item.resourceId === resourceId,
+            )
+          : undefined;
+      if (owner) {
+        if (
+          owner.coordinatorId !== association.coordinatorId ||
+          owner.conversationId !== association.conversationId
+        ) {
+          throw new Error(
+            "This active review belongs to another conversation; adopt its workflow before opening it",
+          );
+        }
+        if (!association.payloadHash) {
+          throw new Error(
+            "Coordinator request payload hash is required to share an existing review",
+          );
+        }
+        const aliases = [
+          ...(owner.requestAliases ?? []),
+          {
+            requestId: association.requestId,
+            payloadHash: association.payloadHash,
+            receivedAt: new Date().toISOString(),
+          },
+          ...(association.requestAliases ?? []),
+        ];
+        if (aliases.length > MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
+          throw new Error("Coordinator workflow association has too many request aliases");
+        }
+        owner.requestAliases = aliases;
+        store.workflows = store.workflows.filter((item) => item.id !== association.id);
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        return owner;
+      }
+      association.resourceId = resourceId;
+      // Provisioning may have won the race with this completion. Look up the
+      // committed local pipeline as well as the start call's earlier snapshot.
+      if (
+        !createdEnvironmentId &&
+        association.kind === "build-pipeline" &&
+        !association.nodeId &&
+        association.createsEnvironment === true
+      ) {
+        const pipeline = await this.repos.buildPipelines.getBuildPipeline(resourceId);
+        if (
+          pipeline?.projectId === association.projectId &&
+          (pipeline.snapshot as { coordinatorLaunchId?: unknown } | null)?.coordinatorLaunchId ===
+            association.id
+        )
+          createdEnvironmentId = pipeline.environmentId || undefined;
+      }
+      if (createdEnvironmentId) association.createdEnvironmentId = createdEnvironmentId;
+      association.pending = false;
+      delete association.claimPid;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      // A completed launch makes this conversation the environment's creator,
+      // which changes how its mail is routed.
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      return association;
+    });
+  }
+
+  /**
+   * Drops a reservation whose launch was refused before it created anything
+   * (a graph launch's definite refusal, item 214), so the same request id can
+   * be retried with a corrected payload. Only a still-pending reservation this
+   * process holds is removed; whether one was.
+   */
+  async releasePendingCoordinatorWorkflowAssociation(associationId: string): Promise<boolean> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.pending || association.claimPid !== process.pid) return false;
+      store.workflows = store.workflows.filter((item) => item.id !== associationId);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return true;
+    });
+  }
+
+  async addCoordinatorWorkflowRequestAlias(
+    associationId: string,
+    coordinatorId: string,
+    conversationId: string,
+    requestId: string,
+    payloadHash: string,
+  ): Promise<CoordinatorWorkflowAssociation> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const existingRequest = store.workflows.find(
+        (item) =>
+          item.coordinatorId === coordinatorId &&
+          coordinatorRequestMatch(item, requestId) !== undefined,
+      );
+      if (existingRequest) {
+        const existingHash = coordinatorRequestMatch(existingRequest, requestId)?.payloadHash;
+        if (existingRequest.id !== associationId || existingHash !== payloadHash) {
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+        }
+        return existingRequest;
+      }
+      const association = store.workflows.find(
+        (item) =>
+          item.id === associationId &&
+          item.coordinatorId === coordinatorId &&
+          item.conversationId === conversationId &&
+          !item.pending,
+      );
+      if (!association) throw new Error("Coordinator workflow association is unavailable");
+      const aliases = Array.isArray(association.requestAliases)
+        ? association.requestAliases.filter(
+            (alias) =>
+              alias && typeof alias.requestId === "string" && typeof alias.payloadHash === "string",
+          )
+        : [];
+      if (aliases.length >= MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
+        throw new Error("Coordinator workflow association has too many request aliases");
+      }
+      association.requestAliases = [
+        ...aliases,
+        { requestId, payloadHash, receivedAt: new Date().toISOString() },
+      ];
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
+  /**
+   * Open one idempotent delegation without replacing another request.
+   * `admission` is the backend's (`context.runtime.coordinatorRequests.workerTabs`).
+   */
+  async openCoordinatorDelegation(
+    admission: WorkerTabCloseAdmission,
+    associationId: string,
+    workerTabId: string,
+    at = new Date().toISOString(),
+    /** What was asked and on what; bounded here, because this store is rewritten whole. */
+    request?: CoordinatorDelegationRequest,
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    if (!workerTabId.trim()) throw new Error("Coordinator delegation worker tab id is required");
+    const boundedRequest = normalizeCoordinatorDelegationRequest(request);
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association) return null;
+      if (association.delegation) {
+        if (association.delegation.workerTabId !== workerTabId) {
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+        }
+        // A retry of the same request must neither reset a running delegation
+        // nor reopen one that already produced its wake.
+        return association;
+      }
+      const release = admission.beginDelegation(
+        association.resourceId,
+        workerTabId,
+        association.nodeId,
+      );
+      try {
+        if (
+          !association.nodeId &&
+          (await this.repos.projects.getEnvironment(association.resourceId))?.tabTeardownIntents?.[
+            workerTabId
+          ]
+        )
+          throw new Error(
+            "This tab has pending teardown; finish closing it before delegating more work",
+          );
+        const overlapping = store.workflows.find(
+          (item) =>
+            item.id !== associationId &&
+            item.coordinatorId === association.coordinatorId &&
+            item.conversationId === association.conversationId &&
+            item.kind === "environment" &&
+            item.resourceId === association.resourceId &&
+            item.nodeId === association.nodeId &&
+            item.delegation?.workerTabId === workerTabId &&
+            item.delegation.state === "running",
+        );
+        if (overlapping) {
+          throw new Error("That worker tab already has an outstanding coordinator delegation");
+        }
+        association.delegation = {
+          requestedAt: at,
+          workerTabId,
+          state: "running",
+          ...(boundedRequest ? { request: boundedRequest } : {}),
+        };
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        this.context.changes.announce("coordinator", association.projectId, association.projectId);
+        return association;
+      } finally {
+        release();
+      }
+    });
+  }
+
+  /** Every delegation still waiting on its worker, for turn-end matching. */
+  async listOpenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) => association.delegation?.state === "running",
+    );
+  }
+
+  /**
+   * The committed revision of the coordinator store, read without loading it.
+   * Every write moves it, so an unchanged revision means a value read at it is
+   * still current. Null while the store has never been written.
+   */
+  coordinatorStoreRevision(): number | null {
+    return this.context.database.storeRevision(
+      this.context.storeForFile(this.files.coordinatorsFile())!,
+    );
+  }
+
+  /**
+   * The open delegations and the store revision they are at, for a caller that
+   * re-checks one delegation later and only needs to read again once the store
+   * has changed ({@link coordinatorStoreRevision}). The revision is taken
+   * before the read, so a write landing between them reads as a change.
+   */
+  async readOpenCoordinatorDelegations(): Promise<{
+    revision: number | null;
+    open: CoordinatorWorkflowAssociation[];
+  }> {
+    const revision = this.coordinatorStoreRevision();
+    return { revision, open: await this.listOpenCoordinatorDelegations() };
+  }
+
+  /**
+   * Every delegation that still owes its coordinator a wake: open, or closed
+   * and not yet woken. One read for both, as mail moves and orphaned holds
+   * need the two together.
+   */
+  async listOwedCoordinatorDelegationIds(): Promise<Set<string>> {
+    return new Set(
+      (await this.loadCoordinatorStore()).workflows
+        .filter(
+          ({ delegation }) =>
+            delegation !== undefined && (delegation.state === "running" || !delegation.wokenAt),
+        )
+        .map((association) => association.id),
+    );
+  }
+
+  /**
+   * Every delegation whose worker has finished but whose wake was not delivered.
+   *
+   * The close and the wake are two writes, so a crash between them is possible.
+   * This is what the reconcile sweep re-reads to finish the job.
+   */
+  async listUnwokenCoordinatorDelegations(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) =>
+        association.delegation !== undefined &&
+        association.delegation.state !== "running" &&
+        !association.delegation.wokenAt,
+    );
+  }
+
+  /**
+   * This node is no longer controlled from here (`CoordinatorNodeRelease`).
+   * In one write, every record on it is marked released: a running delegation
+   * closes as `stopped` with nothing further owed (one notice per coordinator
+   * replaces the per-worker wakes, `coordinator/node-release.ts`), an
+   * unreported workflow or pull-request follow is marked reported, and a live
+   * worker outcome watch ends. A record with nothing live left is marked
+   * notified at once, since there is nothing to tell. A pending reservation
+   * is left to its launch, which still owns it.
+   *
+   * Returns the records whose notice is owed.
+   */
+  async releaseCoordinatorNodeWorkflows(
+    nodeId: string,
+    reason: CoordinatorNodeRelease["reason"],
+    at = new Date().toISOString(),
+  ): Promise<CoordinatorWorkflowAssociation[]> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const owed: CoordinatorWorkflowAssociation[] = [];
+      const projects = new Set<string>();
+      for (const association of store.workflows) {
+        if (association.nodeId !== nodeId || association.nodeRelease || association.pending)
+          continue;
+        let live = false;
+        if (association.delegation?.state === "running") {
+          association.delegation = {
+            ...association.delegation,
+            state: "stopped",
+            completedAt: at,
+            wokenAt: at,
+          };
+          live = true;
+        }
+        if (association.kind !== "environment" && !association.terminalNotifiedAt) {
+          association.terminalNotifiedAt = at;
+          live = true;
+        }
+        // Ends the outcome watch, or the pipeline worker lookup that would start one.
+        if (
+          (association.kind === "environment" || association.kind === "build-pipeline") &&
+          !association.workerOutcome?.ended
+        ) {
+          association.workerOutcome = {
+            ...association.workerOutcome,
+            ended: { key: "untracked", at, notified: false },
+          };
+        }
+        association.nodeRelease = { at, reason, ...(live ? {} : { notifiedAt: at }) };
+        projects.add(association.projectId);
+        if (live) owed.push(association);
+      }
+      if (projects.size === 0) return [];
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      for (const projectId of projects)
+        this.context.changes.announce("coordinator", projectId, projectId);
+      return owed;
+    });
+  }
+
+  /** Released records whose coordinator has not yet been told (`releaseCoordinatorNodeWorkflows`). */
+  async listCoordinatorNodeReleaseNoticesOwed(): Promise<CoordinatorWorkflowAssociation[]> {
+    return (await this.loadCoordinatorStore()).workflows.filter(
+      (association) => association.nodeRelease && !association.nodeRelease.notifiedAt,
+    );
+  }
+
+  async markCoordinatorNodeReleaseNotified(
+    associationIds: readonly string[],
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    if (associationIds.length === 0) return;
+    const ids = new Set(associationIds);
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const association of store.workflows) {
+        if (
+          !ids.has(association.id) ||
+          !association.nodeRelease ||
+          association.nodeRelease.notifiedAt
+        )
+          continue;
+        association.nodeRelease = { ...association.nodeRelease, notifiedAt: at };
+        changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /** Every node an unreleased, settled record names: what the registry check compares. */
+  async listCoordinatorWorkflowNodeIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const association of (await this.loadCoordinatorStore()).workflows) {
+      if (association.nodeId && !association.nodeRelease && !association.pending)
+        ids.add(association.nodeId);
+    }
+    return Array.from(ids);
+  }
+
+  /**
+   * Record that a delegation's worker finished.
+   *
+   * Returns null when the delegation was already closed, so the caller can tell
+   * "I observed the edge" from "I am the one that observed it first" and only
+   * the winner releases mail or sends a notice.
+   */
+  async closeCoordinatorDelegation(
+    associationId: string,
+    state: "completed" | "failed" | "stopped",
+    at = new Date().toISOString(),
+    backgroundWorkTimeoutMs?: number,
+    options: {
+      /**
+       * Chooses the wake this close owes, recorded in the same write so the
+       * wake pass need not write it separately. Called under the store lock
+       * with the record and its coordinator as they are being closed, so no
+       * close of that coordinator's main can land between the choice and the
+       * write. Undefined leaves the choice to the wake pass.
+       */
+      wakeKind?: (
+        association: CoordinatorWorkflowAssociation,
+        owner: CoordinatorWorkspace | null,
+      ) => Promise<"report" | "notice" | undefined>;
+      /**
+       * False leaves the change unannounced, for a caller whose wake's final
+       * write announces it (`CoordinatorService`).
+       */
+      announce?: boolean;
+    } = {},
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.state !== "running") return null;
+      const owner =
+        Object.values(store.workspaces).find(
+          (workspace) => workspace.id === association.coordinatorId,
+        ) ?? null;
+      const wakeKind = options.wakeKind
+        ? await options.wakeKind(association, owner).catch(() => undefined)
+        : undefined;
+      association.delegation = {
+        ...association.delegation,
+        state,
+        completedAt: at,
+        ...(state === "completed" && backgroundWorkTimeoutMs !== undefined
+          ? { backgroundWorkTimeoutMs }
+          : {}),
+        ...(wakeKind ? { wakeKind } : {}),
+      };
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      if (options.announce !== false) {
+        this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      }
+      return association;
+    });
+  }
+
+  /** Announce a coordinator change whose write was not announced (`announce: false`). */
+  announceCoordinatorChange(projectId: string): void {
+    this.context.changes.announce("coordinator", projectId, projectId);
+  }
+
+  /**
+   * Persist what kind of wake this delegation owns before performing the
+   * separate mail-store write. A retry can then distinguish an already-released
+   * report from a genuinely silent worker. Not announced: the kind is the
+   * backend's bookkeeping, and the wake's final write announces the wake.
+   */
+  async prepareCoordinatorDelegationWake(
+    associationId: string,
+    wakeKind: "report" | "notice",
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.state === "running") return null;
+      if (association.delegation.wakeKind) return association;
+      association.delegation = { ...association.delegation, wakeKind };
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
+  /** Stamp a delivered wake so a retry after a crash cannot send a second one. */
+  async markCoordinatorDelegationWoken(
+    associationId: string,
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.wokenAt) return;
+      association.delegation = { ...association.delegation, wokenAt: at };
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+    });
+  }
+
+  /**
+   * Give up on a wake that keeps failing. `wokenAt` is stamped with it because
+   * nothing further is owed: retention, adoption and the wake pass all read it
+   * that way, as they do for a delegation whose coordinator is gone. The
+   * worker's own outcome in `state` is left as it was.
+   */
+  async markCoordinatorDelegationWakeFailed(
+    associationId: string,
+    at = new Date().toISOString(),
+  ): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association?.delegation || association.delegation.wokenAt) return;
+      association.delegation = { ...association.delegation, wokenAt: at, wakeFailedAt: at };
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+    });
+  }
+
+  /**
+   * Serialized read-modify-write of one association's bookkeeping.
+   *
+   * `mutate` edits the stored record in place and returns whether it changed;
+   * nothing is written otherwise. Most status-wake bookkeeping is backend-only
+   * and is not announced. A waiting episode starting or ending is: the
+   * coordinator panel marks that worker as needing a person.
+   */
+  async updateCoordinatorWorkflowAssociation(
+    associationId: string,
+    mutate: (association: CoordinatorWorkflowAssociation) => boolean,
+  ): Promise<CoordinatorWorkflowAssociation | null> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (!association) return null;
+      const waitingBefore = association.delegation?.waiting?.since;
+      const finalBefore = association.pullRequest?.final;
+      if (!mutate(association)) return association;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      if (
+        association.delegation?.waiting?.since !== waitingBefore ||
+        association.pullRequest?.final !== finalBefore
+      ) {
+        this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      }
+      return association;
+    });
+  }
+
+  /**
+   * Hide finished rows from the Work panel. The records stay: retention,
+   * replay and mail routing still read them. Returns how many changed.
+   */
+  async hideCoordinatorWork(
+    projectId: string,
+    associationIds: ReadonlySet<string>,
+  ): Promise<number> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const at = new Date().toISOString();
+      let hidden = 0;
+      for (const association of store.workflows) {
+        if (
+          association.projectId !== projectId ||
+          association.workHiddenAt ||
+          !associationIds.has(association.id)
+        )
+          continue;
+        association.workHiddenAt = at;
+        hidden += 1;
+      }
+      if (hidden === 0) return 0;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", projectId, projectId);
+      return hidden;
+    });
+  }
+
+  /**
+   * Several associations' bookkeeping in one write (a sweep's worker outcome
+   * watches). Each mutation returns whether it changed its association; the
+   * store is written once, and only when one did. Never for a delegation's
+   * waiting episode, which announces itself through the single-record update.
+   */
+  async updateCoordinatorWorkflowAssociations(
+    mutations: ReadonlyArray<{
+      associationId: string;
+      mutate: (association: CoordinatorWorkflowAssociation) => boolean;
+    }>,
+  ): Promise<void> {
+    if (mutations.length === 0) return;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      let changed = false;
+      for (const { associationId, mutate } of mutations) {
+        const association = store.workflows.find((item) => item.id === associationId);
+        if (association && mutate(association)) changed = true;
+      }
+      if (!changed) return;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+  }
+
+  /**
+   * Follow a worker's pull request for one coordinator (a `pull-request`
+   * association), or update the live record that already does.
+   *
+   * One live record per coordinator, worker and node: `create_pr` followed by
+   * `resolve_conflicts` share it, and a new Resolve run replaces the previous
+   * one's bookkeeping. A record for another PR URL, or one already finished
+   * (merged, closed, gone), is left alone and a new one is made. The same
+   * `requestId` returns the record it made, so a retry adds nothing.
+   */
+  async followCoordinatorPullRequest(input: {
+    projectId: string;
+    coordinatorId: string;
+    conversationId?: string;
+    environmentId: string;
+    nodeId?: string;
+    requestId: string;
+    source: NonNullable<CoordinatorWorkflowAssociation["pullRequest"]>["source"];
+    prUrl?: string;
+    reviewAssociationId?: string;
+    resolve?: { tabId: string; requestedAt: string };
+    publication?: { tabId: string; requestedAt: string };
+    /** A status the coordinator was already told elsewhere, recorded without a wake. */
+    seedNoticeKey?: string;
+  }): Promise<CoordinatorWorkflowAssociation> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const same = store.workflows.find(
+        (item) =>
+          item.coordinatorId === input.coordinatorId &&
+          (item.requestId === input.requestId ||
+            (item.kind === "pull-request" &&
+              coordinatorRequestAlias(item, input.requestId) !== undefined)),
+      );
+      if (same) {
+        if (
+          same.kind !== "pull-request" ||
+          same.resourceId !== input.environmentId ||
+          same.nodeId !== input.nodeId
+        )
+          throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+        return same;
+      }
+      const live = store.workflows.find(
+        (item) =>
+          item.kind === "pull-request" &&
+          item.coordinatorId === input.coordinatorId &&
+          item.projectId === input.projectId &&
+          item.resourceId === input.environmentId &&
+          item.nodeId === input.nodeId &&
+          !item.terminalNotifiedAt &&
+          (!input.prUrl || !item.pullRequest?.prUrl || item.pullRequest.prUrl === input.prUrl),
+      );
+      if (live) {
+        const follow = { ...(live.pullRequest ?? { source: input.source }) };
+        let changed = false;
+        if (input.prUrl && !follow.prUrl) {
+          follow.prUrl = input.prUrl;
+          changed = true;
+        }
+        if (input.publication && follow.publication?.tabId !== input.publication.tabId) {
+          follow.publication = { ...input.publication };
+          changed = true;
+        }
+        if (input.resolve && follow.resolve?.tabId !== input.resolve.tabId) {
+          follow.resolve = { ...input.resolve };
+          changed = true;
+        }
+        if (input.conversationId && live.conversationId !== input.conversationId) {
+          // The newest request comes from the conversation now following it.
+          live.conversationId = input.conversationId;
+          changed = true;
+        }
+        // The joining request stays findable (a review's handoff looks for its
+        // own request id), so the PR is reported by this follow alone.
+        const aliases = live.requestAliases ?? [];
+        if (aliases.length < MAX_COORDINATOR_WORKFLOW_REQUEST_ALIASES) {
+          live.requestAliases = [
+            ...aliases,
+            {
+              requestId: input.requestId,
+              payloadHash: PULL_REQUEST_FOLLOW_ALIAS,
+              receivedAt: new Date().toISOString(),
+            },
+          ];
+          changed = true;
+        }
+        if (input.reviewAssociationId && !follow.reviewAssociationId) {
+          follow.reviewAssociationId = input.reviewAssociationId;
+          changed = true;
+        }
+        // What the coordinator was told elsewhere (a review's `pr-opened`) is
+        // not news here either, unless this follow already told it of that PR.
+        const seedTag = input.seedNoticeKey?.slice(input.seedNoticeKey.indexOf(":") + 1);
+        if (input.seedNoticeKey && seedTag && !live.statusNotice?.key.endsWith(`:${seedTag}`)) {
+          live.statusNotice = { key: input.seedNoticeKey, notifiedAt: new Date().toISOString() };
+          follow.notices = (follow.notices ?? 0) + 1;
+          changed = true;
+        }
+        if (!changed) return live;
+        live.pullRequest = follow;
+        store.revision += 1;
+        await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+        return live;
+      }
+      (await this.makeRoomForWorkflowAssociation(store))();
+      const createdAt = new Date().toISOString();
+      const association: CoordinatorWorkflowAssociation = {
+        id: randomUUID(),
+        projectId: input.projectId,
+        coordinatorId: input.coordinatorId,
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+        kind: "pull-request",
+        resourceId: input.environmentId,
+        ...(input.nodeId ? { nodeId: input.nodeId } : {}),
+        requestId: input.requestId,
+        createdAt,
+        pullRequest: {
+          source: input.source,
+          ...(input.prUrl ? { prUrl: input.prUrl } : {}),
+          ...(input.reviewAssociationId ? { reviewAssociationId: input.reviewAssociationId } : {}),
+          ...(input.resolve ? { resolve: { ...input.resolve } } : {}),
+          ...(input.publication ? { publication: { ...input.publication } } : {}),
+        },
+        ...(input.seedNoticeKey
+          ? { statusNotice: { key: input.seedNoticeKey, notifiedAt: createdAt } }
+          : {}),
+      };
+      store.workflows.push(association);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      return association;
+    });
+  }
+
+  async markCoordinatorWorkflowNotified(associationId: string, revision: number): Promise<void> {
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const association = store.workflows.find((item) => item.id === associationId);
+      if (
+        !association ||
+        (association.terminalNotifiedAt && (association.lastNotifiedRevision ?? -1) >= revision)
+      )
+        return;
+      association.lastNotifiedRevision = revision;
+      association.terminalNotifiedAt = new Date().toISOString();
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      // The Work panel moves a followed pull request's row to Finished on this.
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+    });
+  }
+
+  async adoptCoordinatorWorkflowAssociation(
+    projectId: string,
+    coordinatorId: string,
+    associationId: string,
+    conversationId: string,
+    /** Backend-only: the main coordinator takes work from a side agent that is still open. */
+    options: { force?: boolean } = {},
+  ): Promise<CoordinatorWorkflowAssociation> {
+    return this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      const workspace = store.workspaces[projectId];
+      if (
+        !workspace ||
+        workspace.id !== coordinatorId ||
+        !workspace.conversations.some((item) => item.id === conversationId && !item.closedAt)
+      ) {
+        throw new Error("Coordinator conversation is unavailable");
+      }
+      const association = store.workflows.find(
+        (item) =>
+          item.id === associationId &&
+          item.projectId === projectId &&
+          item.coordinatorId === coordinatorId,
+      );
+      if (!association) throw new Error("Coordinator workflow association was not found");
+      if (
+        !options.force &&
+        association.conversationId &&
+        association.conversationId !== conversationId
+      ) {
+        const currentConversation = workspace.conversations.find(
+          (item) => item.id === association.conversationId,
+        );
+        if (currentConversation && !currentConversation.closedAt) {
+          throw new Error("Coordinator workflow belongs to another open conversation");
+        }
+      }
+      association.conversationId = conversationId;
+      association.adoptedByConversationId = conversationId;
+      // A completion notice addressed to the retired mailbox does not notify
+      // the adopting conversation. Re-open the durable delivery intent; its
+      // conversation-scoped idempotency key prevents duplicate delivery here.
+      delete association.lastNotifiedRevision;
+      delete association.terminalNotifiedAt;
+      delete association.statusNotice;
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+      this.context.changes.announce("coordinator", association.projectId, association.projectId);
+      return association;
+    });
+  }
+
+  /**
+   * Where one conversation's attachments live, outside the project checkout.
+   *
+   * A coordinator points at the user's own repository and must never write to
+   * it, so a pasted image is staged here instead. The bridge launcher hands
+   * this exact directory to the provider process as its extra readable
+   * attachment root, which is why the path is computed in one place rather
+   * than spelled out again at the launcher.
+   */
+  coordinatorAttachmentDirectory(coordinatorId: string, conversationId: string): string {
+    return path.join(
+      coordinatorAttachmentsRoot(this.context.dataDir),
+      coordinatorId,
+      conversationId,
+    );
+  }
+
+  /**
+   * Reclaim attachment directories after closed conversations leave the
+   * durable retention window.
+   *
+   * This sweeps the coordinator directory rather than deleting only the ids
+   * pruned by one mutation. A cleanup interrupted after the store write is
+   * therefore retried by the next retention pass instead of becoming a
+   * permanent orphan.
+   */
+  async pruneCoordinatorAttachmentDirectories(
+    coordinatorId: string,
+    retainedConversationIds: ReadonlySet<string>,
+  ): Promise<void> {
+    const root = path.join(coordinatorAttachmentsRoot(this.context.dataDir), coordinatorId);
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    });
+    await Promise.all(
+      entries
+        .filter((entry) => !retainedConversationIds.has(entry.name))
+        .map((entry) => fs.rm(path.join(root, entry.name), { recursive: true, force: true })),
+    );
+  }
+
+  async writeCoordinatorAttachment(
+    coordinatorId: string,
+    conversationId: string,
+    filename: string,
+    base64Data: string,
+  ): Promise<string> {
+    const workspace = await this.getCoordinatorWorkspaceById(coordinatorId);
+    if (
+      !workspace ||
+      !workspace.conversations.some((item) => item.id === conversationId && !item.closedAt)
+    ) {
+      throw new Error("Coordinator conversation is unavailable");
+    }
+    const [image] = assertValidPromptImages([{ filename, data: base64Data }]);
+    if (!image) throw new Error("Coordinator attachment is invalid");
+    const mediaType = mimeTypeForImageData(image.filename, image.data);
+    const extension = mediaType === "image/jpeg" ? "jpg" : mediaType.slice("image/".length);
+    const directory = this.coordinatorAttachmentDirectory(coordinatorId, conversationId);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const target = path.join(directory, `${randomUUID()}.${extension}`);
+    await fs.writeFile(target, Buffer.from(image.data, "base64"), { flag: "wx", mode: 0o600 });
+    return target;
+  }
+
+  async deleteCoordinatorByProject(projectId: string): Promise<void> {
+    let coordinatorId: string | undefined;
+    await this.enqueueCoordinatorMutation(async () => {
+      const store = await this.loadCoordinatorStore();
+      coordinatorId = store.workspaces[projectId]?.id;
+      delete store.workspaces[projectId];
+      store.workflows = store.workflows.filter((item) => item.projectId !== projectId);
+      store.actionReceipts = store.actionReceipts.filter((item) => item.projectId !== projectId);
+      store.revision += 1;
+      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
+    });
+    if (coordinatorId) {
+      await Promise.all([
+        fs.rm(path.join(coordinatorAttachmentsRoot(this.context.dataDir), coordinatorId), {
+          recursive: true,
+          force: true,
+        }),
+        fs.rm(path.join(this.context.dataDir, "coordinator-runtime", coordinatorId), {
+          recursive: true,
+          force: true,
+        }),
+      ]);
+    }
+  }
+}
+
+/**
+ * Coordinator workspaces, workflow associations, delegations and attachments: what callers reach as `storage.coordinators`.
+ *
+ * Every name here is an entry point `writer-guards.test.ts` follows
+ * store writes back to, like a public method of `StorageService`. Add a
+ * method here only when code outside the storage files calls it.
+ */
+export type CoordinatorsStorage = Pick<
+  CoordinatorsRepository,
+  | "getCoordinatorWorkspace"
+  | "getCoordinatorWorkspaceById"
+  | "listCoordinatorWorkspaces"
+  | "listCoordinatorWorkflowAssociations"
+  | "listAllCoordinatorWorkflowAssociations"
+  | "getCoordinatorReconciliationState"
+  | "mutateCoordinatorWorkspaceWithComposeDrafts"
+  | "mutateCoordinatorWorkspace"
+  | "saveCoordinatorWorkflowAssociation"
+  | "saveCoordinatorWorkflowAssociations"
+  | "reserveCoordinatorWorkflowAssociation"
+  | "completeCoordinatorWorkflowAssociation"
+  | "releasePendingCoordinatorWorkflowAssociation"
+  | "addCoordinatorWorkflowRequestAlias"
+  | "openCoordinatorDelegation"
+  | "listOpenCoordinatorDelegations"
+  | "listUnwokenCoordinatorDelegations"
+  | "coordinatorStoreRevision"
+  | "readOpenCoordinatorDelegations"
+  | "listOwedCoordinatorDelegationIds"
+  | "closeCoordinatorDelegation"
+  | "announceCoordinatorChange"
+  | "releaseCoordinatorNodeWorkflows"
+  | "listCoordinatorNodeReleaseNoticesOwed"
+  | "markCoordinatorNodeReleaseNotified"
+  | "listCoordinatorWorkflowNodeIds"
+  | "getCoordinatorWorkflowStoreState"
+  | "prepareCoordinatorDelegationWake"
+  | "markCoordinatorDelegationWoken"
+  | "markCoordinatorDelegationWakeFailed"
+  | "updateCoordinatorWorkflowAssociation"
+  | "updateCoordinatorWorkflowAssociations"
+  | "hideCoordinatorWork"
+  | "followCoordinatorPullRequest"
+  | "markCoordinatorWorkflowNotified"
+  | "adoptCoordinatorWorkflowAssociation"
+  | "coordinatorAttachmentDirectory"
+  | "pruneCoordinatorAttachmentDirectories"
+  | "writeCoordinatorAttachment"
+  | "deleteCoordinatorByProject"
+  | "admitCoordinatorActionReceipt"
+  | "completeCoordinatorActionReceipt"
+  | "releaseCoordinatorActionReceipt"
+>;
+
+/**
+ * The stored record for the same coordinator request, or `undefined`. Throws
+ * when that request id is already stored for a different resource.
+ */
+function existingWorkflowAssociation(
+  workflows: CoordinatorWorkflowAssociation[],
+  association: CoordinatorWorkflowAssociation,
+): CoordinatorWorkflowAssociation | undefined {
+  const duplicate = workflows.find(
+    (item) =>
+      item.coordinatorId === association.coordinatorId && item.requestId === association.requestId,
+  );
+  if (
+    duplicate &&
+    (duplicate.kind !== association.kind ||
+      duplicate.resourceId !== association.resourceId ||
+      duplicate.nodeId !== association.nodeId ||
+      duplicate.projectId !== association.projectId ||
+      (duplicate.payloadHash &&
+        association.payloadHash &&
+        duplicate.payloadHash !== association.payloadHash))
+  ) {
+    throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+  }
+  return duplicate;
+}
+
+function isActionReceipt(value: unknown): value is CoordinatorActionReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.coordinatorId === "string" &&
+    typeof item.projectId === "string" &&
+    typeof item.conversationId === "string" &&
+    typeof item.requestId === "string" &&
+    isCoordinatorSurfaceAction(item.action) &&
+    typeof item.payloadHash === "string" &&
+    (item.state === "pending" || item.state === "completed") &&
+    typeof item.createdAt === "string"
+  );
+}

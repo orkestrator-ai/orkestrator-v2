@@ -8,9 +8,9 @@ import {
   snapshotBeforeMigration,
   takeHourlySnapshotIfDue,
   takeLedgerSnapshotIfDue,
-} from "../src/core/storage-backups.js";
-import { StorageDatabase } from "../src/core/storage-database.js";
-import { storeLayout } from "../src/core/storage-stores.js";
+} from "../src/core/storage/backups.js";
+import { StorageDatabase } from "../src/core/storage/database.js";
+import { storeLayout } from "../src/core/storage/stores.js";
 
 /**
  * How long the periodic storage maintenance holds the backend's event loop

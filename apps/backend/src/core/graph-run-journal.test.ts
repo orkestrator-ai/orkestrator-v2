@@ -13,7 +13,7 @@ import {
 import { compiledPlan } from "./graph-run-executor-test-support.js";
 import { GraphRunService } from "./graph-run-service.js";
 import { graphEnvironmentFixture } from "./graph-run-test-support.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 let cleanup: (() => Promise<void>) | undefined;
 

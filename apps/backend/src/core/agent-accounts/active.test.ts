@@ -21,7 +21,7 @@ import type { LocalServerLaunch } from "../local-server-runtime.js";
 import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "../commands-servers.js";
 import { createCodexLoginRefresher } from "../codex-host-login-refresh.js";
 import { claudeKeychainService } from "./homes.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const ACCOUNT_IDS = {
   claude: "11111111-2222-4333-8444-555555555555",

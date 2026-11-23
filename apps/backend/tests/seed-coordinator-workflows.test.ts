@@ -13,7 +13,7 @@ import {
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
 } from "../src/core/coordinator/workflow-retention.js";
 import { workerOutcomeOwners } from "../src/core/coordinator/worker-outcomes.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 
 const roots: string[] = [];
 const stores: StorageService[] = [];

@@ -18,8 +18,7 @@ import {
   type TicketSectionsPatch,
 } from "@orkestrator/protocol/ticket-sections";
 import { criteriaEnvironmentHead } from "../ticket-criteria-head.js";
-import type { KanbanTask } from "../storage-shared-core.js";
-import { parseKanbanLabelInput } from "../storage-kanban-labels.js";
+import { type KanbanTask, parseKanbanLabelInput } from "../storage/index.js";
 import { paginate, requireProject } from "./actions-discovery.js";
 import { PublicActionError } from "./errors.js";
 import {

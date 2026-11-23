@@ -11,7 +11,7 @@ import {
   MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
 } from "../src/core/coordinator/workflow-retention.js";
 import { runCommand } from "../src/core/shell.js";
-import { createProject, StorageService } from "../src/core/storage.js";
+import { createProject, StorageService } from "../src/core/storage/service.js";
 import { isDefaultDataDir } from "../src/data-dir.js";
 
 /**

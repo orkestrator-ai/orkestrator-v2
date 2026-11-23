@@ -89,7 +89,7 @@ import {
 } from "./fanout-provenance.js";
 import { parseStructuredReportResult } from "./fanout.js";
 import { runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { validateWorkflowResult } from "../workflows/result-contracts.js";
 import { validateRegisteredWorkflowResult } from "../workflows/result-registry.js";
 

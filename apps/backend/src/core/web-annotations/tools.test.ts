@@ -17,7 +17,7 @@ import {
 } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import type { WebAnnotationResultReportInput } from "@orkestrator/protocol/web-annotations-validation";
 import { AgentToolsServer } from "../agent-tools.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { WebAnnotationToolHost, WebAnnotationToolScope } from "./contracts.js";
 import {
   WEB_ANNOTATION_TOOL_NAMES,

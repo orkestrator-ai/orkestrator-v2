@@ -6,7 +6,7 @@ on:
     paths:
       - .github/workflows/native-application-menu.yml
       - apps/backend/src/core/log-policy-service.ts
-      - apps/backend/src/core/storage-config.ts
+      - apps/backend/src/core/storage/config.ts
       - apps/backend/src/core/renderer-error-recorder.ts
       - apps/backend/src/core/commands-registry-system.ts
       - apps/desktop/electron/main.ts

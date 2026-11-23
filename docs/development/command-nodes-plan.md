@@ -585,7 +585,7 @@ Test names include the requirement ID (for example
 
 | ID | Requirement | M | Implementation | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| RG-01 | The registry in the backend holds identity, profile, routes, credential, preference and enabled state. | 1 | `node-registry-store.ts` | `storage-nodes.test.ts`; `node-service.test.ts` RG-01/RG-02 | Done |
+| RG-01 | The registry in the backend holds identity, profile, routes, credential, preference and enabled state. | 1 | `node-registry-store.ts` | `storage/nodes.test.ts`; `node-service.test.ts` RG-01/RG-02 | Done |
 | RG-02 | Leaf credentials stay on the command node, never in a response, event or log. | 1 | Redaction, `NodeView` | `node-service.test.ts` RG-01/RG-02 (views, status, events carry no token); `command-node-migration.test.ts` | Done |
 | RG-03 | Routes are hello-verified; identity mismatch, certificate and host-key failures block without bypass. | 1 | `NodeLinkManager` | `node-service.test.ts` RG-03; `qa-command-nodes.ts` RG-03 (restart and reconnect with the same identity) | Done |
 | RG-04 | SSH routes run from the backend using host OpenSSH with owned forwards, host-key trust and no remote install. | 1 | Moved supervisor | `node-ssh-integration.test.ts` RG-04 (real sshd: host key refused until trusted through the command node, hello over the forward, attach); `node-service.test.ts` RG-04/RG-05; desktop SSH suites cover the shared supervisor | Done |

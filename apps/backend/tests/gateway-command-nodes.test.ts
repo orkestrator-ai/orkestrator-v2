@@ -21,7 +21,7 @@ import { selfImprovementFleet } from "../src/core/commands-registry-self-improve
 import { ClientGrantService } from "../src/core/nodes/client-grants.js";
 import { NodeLink } from "../src/core/nodes/node-link.js";
 import { readBundleArchive } from "../src/core/self-improvement/bundle.js";
-import { withTemporaryStorage } from "../src/core/storage-test-support.js";
+import { withTemporaryStorage } from "../src/core/storage/test-support.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";

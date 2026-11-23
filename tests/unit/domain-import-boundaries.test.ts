@@ -10,22 +10,29 @@ const oxlint = join(repoRoot, "node_modules/.bin/oxlint");
 // Keep the cases independent of the config: removing a group or broadening an
 // exception must change the linter's result, rather than the test's expectation.
 const domains = [
-  { name: "nodes", leaf: "node-service.js", exceptions: ["node-store-format.js"] },
-  { name: "change-tracking", leaf: "capture.js", exceptions: ["ledger-schema.js"] },
-  { name: "transcript-artifacts", leaf: "service.js", exceptions: ["store-layout.js"] },
-  { name: "scheduled-jobs", leaf: "service.js", exceptions: ["layout.js", "store.js", "tools.js"] },
-  { name: "mcp-management", leaf: "service.js", exceptions: [] },
+  { name: "nodes", privateLeaves: ["node-service.js", "node-store-format.js"], exceptions: [] },
+  { name: "change-tracking", privateLeaves: ["capture.js"], exceptions: ["ledger-schema.js"] },
+  {
+    name: "transcript-artifacts",
+    privateLeaves: ["service.js"],
+    exceptions: ["store-layout.js"],
+  },
+  {
+    name: "scheduled-jobs",
+    privateLeaves: ["service.js", "store.js"],
+    exceptions: ["layout.js", "tools.js"],
+  },
+  { name: "mcp-management", privateLeaves: ["service.js"], exceptions: [] },
   {
     name: "public-api",
-    leaf: "registry.js",
-    exceptions: [
-      "attention-cursor.js",
-      "dispatch.js",
-      "errors.js",
-      "exec-control.js",
-      "operation-ledger.js",
-      "revisions.js",
-    ],
+    privateLeaves: ["registry.js", "attention-cursor.js", "errors.js", "revisions.js"],
+    exceptions: ["dispatch.js", "exec-control.js", "operation-ledger.js"],
+  },
+  {
+    name: "storage",
+    privateLeaves: ["context.js"],
+    exceptions: ["coordinators.js", "service.js", "stores.js"],
+    unitExceptions: ["service.js", "stores.js", "test-support.js"],
   },
 ];
 
@@ -94,17 +101,22 @@ describe("backend domain import boundaries", () => {
     for (const domain of domains) {
       test(`${scope.importer}: ${domain.name} permits its index and rejects private leaves`, () => {
         const base = `${scope.prefix}${domain.name}/`;
-        const exceptions = domain.exceptions.map((leaf) => `${base}${leaf}`);
+        const exceptions = scope.backend ? domain.exceptions : (domain.unitExceptions ?? []);
+        const allExceptions = Array.from(
+          new Set([...domain.exceptions, ...(domain.unitExceptions ?? [])]),
+        );
         const allowed = [
           `${base}index.js`,
-          ...(scope.backend ? exceptions : []),
-          `${scope.prefix}${domain.name}-extra/${domain.leaf}`,
+          ...exceptions.map((leaf) => `${base}${leaf}`),
+          `${scope.prefix}${domain.name}-extra/${domain.privateLeaves[0]}`,
         ];
         const blocked = [
-          `${base}${domain.leaf}`,
-          ...(scope.backend ? [] : exceptions),
+          ...domain.privateLeaves.map((leaf) => `${base}${leaf}`),
+          ...allExceptions
+            .filter((leaf) => !exceptions.includes(leaf))
+            .map((leaf) => `${base}${leaf}`),
           // A named cycle-breaking exception must not exempt adjacent modules.
-          ...domain.exceptions.map((leaf) => `${base}${leaf.replace(".js", "-internal.js")}`),
+          ...allExceptions.map((leaf) => `${base}${leaf.replace(".js", "-internal.js")}`),
         ];
         lintImports(
           scope.importer,
@@ -118,7 +130,7 @@ describe("backend domain import boundaries", () => {
   test("backend test files retain their exemption from private domain imports", () => {
     lintImports(
       "apps/backend/src/core/boundary-probe.test.ts",
-      domains.map((domain) => `./${domain.name}/${domain.leaf}`),
+      domains.flatMap((domain) => domain.privateLeaves.map((leaf) => `./${domain.name}/${leaf}`)),
       [],
     );
   });

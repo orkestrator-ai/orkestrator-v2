@@ -17,7 +17,7 @@ import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js"
 import { nativePromptQueueKey } from "./prompt-delivery.js";
 import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js";
 import type { PublicApiHarness } from "./test-support.js";
-import { storageInternals } from "../storage-test-support.js";
+import { storageInternals } from "../storage/test-support.js";
 
 /**
  * The CLI command surface added after the first release: selected slash

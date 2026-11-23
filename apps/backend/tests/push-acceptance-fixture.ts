@@ -73,7 +73,7 @@ import { NativeAgentService } from "../src/core/native-agent/service.js";
 import { projectionInternals } from "../src/core/native-agent/service-test-collaborators.js";
 import { registryCommandAccess } from "../src/core/nodes/workspace-grant-test-support.js";
 import { BackendPush } from "../src/core/push/index.js";
-import { StorageService } from "../src/core/storage.js";
+import { StorageService } from "../src/core/storage/service.js";
 import { OrkestratorGateway } from "../src/gateway.js";
 
 configureLogger({ level: "error" });

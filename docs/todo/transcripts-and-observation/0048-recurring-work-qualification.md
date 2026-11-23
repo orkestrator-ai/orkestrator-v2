@@ -467,7 +467,7 @@ after a restart. Follow-ups needing a decision were in 7120 (retired
 
 **Context.** The idle A/B decides none. The feature-planning keyed row read was decided from the harness (decision 4).
 
-**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux/interactive.ts`) and B20 (`review/validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage-kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage-database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
+**Investigation.** All still present at the values listed: `pr-check-rollup` 60 s (`packages/protocol/src/recurring-work.ts:191`), `mail-retention` 60 s (`:297`), admission limits (`apps/backend/src/core/work-admission.ts:85`; no re-prioritisation in `WorkAdmissionPool`, `:185`), `DOCKER_AVAILABILITY_POLL_INTERVAL_MS` (`apps/web/src/App.tsx:111`), `DESIGN_CANVAS_CURSOR_CHECK_MS` (`apps/web/src/components/design/design-controller.ts:38`), B19 (`tmux/interactive.ts`) and B20 (`review/validation-worker.ts`). The feature-planning item is done: `getFeaturePlan` reads one row (`apps/backend/src/core/storage/kanban.ts:684`) and warm reads come from the row cache (`apps/backend/src/core/storage/database.ts:500`). B18 (decision 3) has moved on in 0020 (retired 2026-11-17): `claude-state-signal` images now poll twice a minute when idle ([recurring-work.md](../../architecture/recurring-work.md), row B18), so the "59.9 of 63.9 `docker exec`" figure holds only for older images.
 
 **Decisions.**
 
@@ -915,7 +915,7 @@ and the decisions below were recorded.
   cache-served read shows none. Terminal session buffers and Kanban images
   are blob files: `file-read`s with bytes, not storage reads.
 - Keyed row reads (2026-10-25): feature planning's per-record pass reads its
-  plan as one row (`getFeaturePlan` uses `loadStoreRow`, `storage-kanban.ts`),
+  plan as one row (`getFeaturePlan` uses `loadStoreRow`, `storage/kanban.ts`),
   not the whole feature-plan store. `StorageDatabase.readStoreRow` takes the
   row from the connection's row cache when that cache holds the committed
   revision, so a warm keyed read fetches nothing; a miss fetches the one row
@@ -2008,7 +2008,7 @@ fetch reach"); it was decided on 2026-11-01 without tuning (decision 11).
   2026-10-25: `getFeaturePlan` reads one row, and a warm keyed read is served
   from the row cache. Evidence: harness counts unchanged, bytes in "Harness
   effect (2026-10-25)", 3.9 to 4.3 µs against 80.0 to 81.9 µs per pass over
-  202 plans, and `storage-read-accounting.test.ts` ("a feature-planning pass
+  202 plans, and `storage/read-accounting.test.ts` ("a feature-planning pass
   reads its plan's row, not the whole store").
 
 ### Code: after soak
@@ -2132,7 +2132,7 @@ Storage accounting, settled at `9906db30`:
   reuses values already decoded: a write diffing against cached rows,
   `storeRowStats`, the build-pipeline control-record and live-tag caches, and
   the file stat cache. A database fetch for an internal lookup is still a
-  read. `StorageDatabase` reports `read` or `stat`, and `storage-stores.ts` maps
+  read. `StorageDatabase` reports `read` or `stat`, and `storage/stores.ts` maps
   them one to one.
 - Why: the counter exists to catch extra reads. A cached whole-store read
   still parses every row, and whether the cache is warm depends on unrelated
@@ -2489,7 +2489,7 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     leaked owner shows as an extra source. Cons: a cache nobody registers
     stays invisible; the row cache's `bytes` is serialized length, not heap.
     Tests: `recurring/diagnostics-caches.test.ts`,
-    `storage-database-cache-gauges.test.ts`,
+    `storage/database-cache-gauges.test.ts`,
     `native-agent/projection-cache-gauges.test.ts`,
     `change-tracking/service-cache-gauges.test.ts`, and the worktree case
     in `public-api/test-support.test.ts`.

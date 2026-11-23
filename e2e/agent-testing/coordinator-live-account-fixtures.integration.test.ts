@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseAgentAccountStore } from "../../apps/backend/src/core/agent-accounts/store";
 import { nativeAgentSessionStorageKey } from "../../apps/backend/src/core/native-agent/service-shared";
-import { createEnvironment, StorageService } from "../../apps/backend/src/core/storage";
-import { readStoredValue, seedStore } from "../../apps/backend/src/core/storage-test-support";
+import { createEnvironment, StorageService } from "../../apps/backend/src/core/storage/service";
+import { readStoredValue, seedStore } from "../../apps/backend/src/core/storage/test-support";
 import { profileAccountFixtures } from "./coordinator-live-account-fixtures";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");

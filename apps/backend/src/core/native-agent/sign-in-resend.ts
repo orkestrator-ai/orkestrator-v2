@@ -35,8 +35,7 @@ import {
   type EnsureNativeAgentSessionInput,
   type NativeAgentProjectionInput,
 } from "./service-shared.js";
-import { sessionSignInResend } from "../storage-shared-native-sessions.js";
-import type { StorageService } from "../storage.js";
+import { sessionSignInResend, type StorageService } from "../storage/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");

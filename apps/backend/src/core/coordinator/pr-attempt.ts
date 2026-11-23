@@ -2,7 +2,7 @@ import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorRemoteAccess } from "./remote.js";
 import type { CoordinatorStatus } from "./status-wakes.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 /** Read failure is never evidence that a launch finished. Pending dispatches
  * also outlive the start grace when the provider is slow or queued.

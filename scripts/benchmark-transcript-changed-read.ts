@@ -66,7 +66,7 @@
  *   bun scripts/benchmark-transcript-changed-read.ts --snapshot --gateway
  */
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { cpus, tmpdir } from "node:os";
 import path from "node:path";
 
@@ -74,7 +74,10 @@ process.env.NODE_ENV = "test";
 
 const core = path.join(import.meta.dir, "../apps/backend/src/core");
 const { NativeAgentService } = await import(path.join(core, "native-agent/service.ts"));
-const { StorageService } = await import(path.join(core, "storage.ts"));
+const storageService = path.join(core, "storage/service.ts");
+const { StorageService } = await import(
+  existsSync(storageService) ? storageService : path.join(core, "storage.ts")
+);
 const { isNormalizedProgressiveMessage } = await import(
   path.join(core, "native-agent/projection-helpers.ts")
 );

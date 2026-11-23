@@ -14,7 +14,7 @@ import {
   PR_URL,
   type LifecycleMachine,
 } from "./kanban-transitions-test-support.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const PR_B_URL = "https://github.com/acme/repo/pull/8";
 

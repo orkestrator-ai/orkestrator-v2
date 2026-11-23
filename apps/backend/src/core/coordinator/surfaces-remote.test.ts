@@ -11,7 +11,7 @@ import { BackendRuntime } from "../backend-runtime.js";
 import { cleanReview } from "../build-pipeline/service-test-support.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createEnvironment, createProject, StorageService } from "../storage.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
 
 // Real MCP dispatch, scope checks, receipts, controller commands and tab
 // persistence on both nodes; only the node transport is simulated, and it can

@@ -2,12 +2,14 @@
 // imports. Re-export by name (never `export *`) so the surface stays reviewable.
 // This file reaches most of the backend through registry.js, so a module it
 // reaches cannot import it without closing a runtime import cycle. Those
-// modules import attention-cursor.js, dispatch.js, errors.js, exec-control.js,
-// operation-ledger.js and revisions.js directly: the storage layer
-// (storage-public-operations.ts), the environment commands
-// (commands-environment.ts, commands-servers.ts, containers/replacement.ts) and
-// the control MCP and scheduled-job callers (control-mcp/caller.ts,
-// scheduled-jobs/executor.ts).
+// modules import dispatch.js, exec-control.js and operation-ledger.js
+// directly: the storage layer's layout upgrade
+// (storage/public-operation-rows.ts, which storage/stores.ts imports), the
+// environment commands (commands-environment.ts, commands-servers.ts,
+// containers/replacement.ts) and the control MCP and scheduled-job callers
+// (control-mcp/caller.ts, scheduled-jobs/executor.ts).
+// storage/public-operations.ts imports this file: only storage/service.ts
+// reaches it, and nothing this file reaches imports service.ts at run time.
 export {
   commandArguments,
   listSessionCommands,

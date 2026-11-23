@@ -33,7 +33,7 @@ import type { SpawnLike } from "./login.js";
 import type { CommandContext } from "../commands-context.js";
 import type { PlanUsageReader } from "../plan-usage/reader.js";
 import { contextUsageWithPlanUsage } from "../plan-usage/cache.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 let root: string;
 let context: CommandContext;

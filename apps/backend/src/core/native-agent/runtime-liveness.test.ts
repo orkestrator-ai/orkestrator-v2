@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { bugReportRuntimeId } from "@orkestrator/protocol/bug-report";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { runtimeStillLive } from "./runtime-liveness.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 
 function storage(options: { closed?: boolean; reports?: Record<string, unknown> } = {}) {
   return {

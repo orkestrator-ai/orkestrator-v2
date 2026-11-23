@@ -25,7 +25,7 @@ import {
 import { isCapabilitySourceForbidden } from "@orkestrator/protocol/capability-registry";
 import { capabilityRevisionComponents } from "@orkestrator/protocol/capability-resources-resolve";
 
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import { newCorrelationId, recordActivity } from "./operations.js";
 import { CapabilityError } from "./security.js";
 import type { CapabilityState } from "./types.js";

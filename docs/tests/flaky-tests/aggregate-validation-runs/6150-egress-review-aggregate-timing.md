@@ -19,13 +19,13 @@ scan timeout. These owners are unchanged by the egress branch.
 | `APP_VERSION > resolves a empty environment value on import` | apps/backend/src/core/constants.test.ts | 5,002.53 ms timeout, first run | same complete owner pass |
 | `APP_VERSION > resolves a whitespace environment value on import` | apps/backend/src/core/constants.test.ts | 5,001.32 ms timeout, first run | same complete owner pass |
 | `PreviewRelaySupervisor (local relay process) > uploads are delivered in order under credit flow control` | apps/backend/src/preview-relay-supervisor.test.ts | 5,006.13 ms timeout, first run | passed, 1.4 s |
-| `StorageService store writers > no backend class outside the scan calls the store write primitives` | apps/backend/src/core/storage-writer-guards.test.ts | 7,508.21 ms timeout, second run | passed, 1.4 s |
+| `StorageService store writers > no backend class outside the scan calls the store write primitives` | apps/backend/src/core/storage/writer-guards.test.ts | 7,508.21 ms timeout, second run | passed, 1.4 s |
 
 Complete-owner commands (each exited 0):
 
 - `mise run test:logged -- --name constants-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/constants.test.ts --parallel=1 --only-failures`
 - `mise run test:logged -- --name preview-relay-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/preview-relay-supervisor.test.ts --parallel=1 --only-failures`
-- `mise run test:logged -- --name storage-writer-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage-writer-guards.test.ts --parallel=1 --only-failures`
+- `mise run test:logged -- --name storage-writer-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage/writer-guards.test.ts --parallel=1 --only-failures`
 
 Original workspace evidence is in `orkestrator-test-run.20KKVR` (first run) and
 `orkestrator-test-run.LAWw4i` (second run), under the host temporary directory.
@@ -59,7 +59,7 @@ The workspace group reserved six slots after a 1,016.6 s lease wait; backend
 used two isolated workers, alongside root, bridges and component-browser tests.
 
 `StorageService store writers > no backend class outside the scan calls the store write primitives`
-(`apps/backend/src/core/storage-writer-guards.test.ts`) exceeded its 5,000 ms
+(`apps/backend/src/core/storage/writer-guards.test.ts`) exceeded its 5,000 ms
 budget at 7,810.10 ms. Backend totals: 17,688 passed, 151 skipped, one failed;
 17,840 tests across 1,211 files in 442.84 s. The workspace's other failure was
 the protocol process-group assertion tracked in case 9840. Root, bridges and
@@ -67,7 +67,7 @@ protocol-lockfile groups passed; the aggregate exited 1 after 1,657.6 s includin
 its admission wait.
 
 The unchanged complete owner passed with
-`mise run test:logged -- --name storage-writer-owner-r3 -- bun test --cwd apps/backend ./src/core/storage-writer-guards.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name storage-writer-owner-r3 -- bun test --cwd apps/backend ./src/core/storage/writer-guards.test.ts --parallel=1 --only-failures`
 (exit 0, 0.8 s). Passing raw output was deleted; no isolated test count is claimed.
 `mise run flaky:recurrence -- 6150 --base c6de4733c5beb87a578f82a8548725305e1ff254`
 reports the existing case open. The branch changes storage layout code scanned
@@ -115,7 +115,7 @@ Repair, without changing any assertion:
   nothing to await, per AGENTS.md's budget rule.
 
 Owners after the change:
-`mise run test:logged -- --name storage-writer-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage-writer-guards.test.ts ./src/core/storage-writer-guards-raw.test.ts ./src/core/storage-writer-guards-analysis.test.ts --parallel=2 --only-failures`
+`mise run test:logged -- --name storage-writer-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage/writer-guards.test.ts ./src/core/storage/writer-guards-raw.test.ts ./src/core/storage/writer-guards-analysis.test.ts --parallel=2 --only-failures`
 passed (1.4 s). The raw-writer scan (case 1309) is not changed here.
 
 ## Completion Notes next preparation, 2026-11-10

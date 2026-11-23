@@ -59,7 +59,7 @@ import {
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { AgentTabState } from "@orkestrator/protocol/agent-registry";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { observeCoordinatorFeaturePlan } from "./feature-plan-status.js";
 import {
   graphRunCoordinatorStatus,

@@ -3,7 +3,7 @@ import {
   scheduleOwnerKey,
   type ScheduledJob,
 } from "@orkestrator/protocol/scheduled-jobs";
-import type { StorageDatabase } from "../storage-database.js";
+import type { StorageDatabase } from "../storage/index.js";
 import { isReminderToSelf } from "./reminders.js";
 import { SCHEDULED_JOBS_STORE } from "./layout.js";
 import { parseScheduledJob } from "./model.js";

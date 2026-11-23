@@ -39,8 +39,8 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Capabilities (106, 209, 404) | `capability-profiles.ts`, `capability-enforcement.ts`, `agent-enforcement.ts` | `graph-agent-policy.ts`, `graph-agent-guards.ts` | |
 | Compiler (107) | `compile.ts`, `compile-*.ts`, `plan.ts`, `cost.ts`, `lint.ts` | | |
 | Built-ins (108) | `builtins/`, `builtin-registry.ts`, `examples.ts` | `graph-builtin-templates.test.ts` | |
-| Library, trust, sharing (109, 405) | `library.ts`, `sharing.ts` | `graph-template-service.ts`, `storage-graph-templates.ts`, `graph-project-templates.ts`, `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graphs.ts`, `commands-registry-graph-sharing.ts` | `lib/backend/graph-templates.ts`, `lib/backend/graph-template-sharing.ts` |
-| Run record (201) | `run.ts`, `run-model.ts`, `run-identity.ts`, `run-guards.ts`, `run-lineage.ts`, `run-items.ts` | `storage-graph-runs.ts`, `graph-artifacts.ts`, `storage-graph-effects.ts` | |
+| Library, trust, sharing (109, 405) | `library.ts`, `sharing.ts` | `graph-template-service.ts`, `storage/graph-templates.ts`, `graph-project-templates.ts`, `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graphs.ts`, `commands-registry-graph-sharing.ts` | `lib/backend/graph-templates.ts`, `lib/backend/graph-template-sharing.ts` |
+| Run record (201) | `run.ts`, `run-model.ts`, `run-identity.ts`, `run-guards.ts`, `run-lineage.ts`, `run-items.ts` | `storage/graph-runs.ts`, `graph-artifacts.ts`, `storage/graph-effects.ts` | |
 | Runtime (202–207) | `run-branches.ts`, `run-fanout.ts`, `system-actions.ts`, `run-agent-session.ts` | `graph-run-service.ts`, `graph-run-supervisor.ts`, `graph-run-pass.ts`, `graph-run-scheduling.ts`, `graph-run-ready-set.ts`, `graph-run-loops.ts`, `graph-run-executors.ts`, `graph-node-*.ts`, `graph-agent-*.ts`, `graph-system-*.ts`, `graph-edge-transforms.ts`, `agent-branch-runner.ts` | |
 | Human nodes (208) | `run-human.ts` | `graph-node-human.ts`, `graph-run-attention.ts`, `graph-run-coordinator-status.ts` | `components/graph-run/GraphHumanNodePanel.tsx` |
 | Restart and rewind (210) | `run-rewind.ts` | `graph-run-rewind.ts` | `lib/backend/graph-run-rewind.ts` |
@@ -48,7 +48,7 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Designer (110, 212) | | | `components/graph-designer/`, `stores/graphDesignerStore.ts` |
 | Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands-registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
 | Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator/graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
-| Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflows/result-graph-template.ts`, `storage-graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
+| Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflows/result-graph-template.ts`, `storage/graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
 | Isolated branch worktrees (403) | `isolation.ts`, `testing/graph-isolation-template.ts` (fixture) | `graph-branch-worktrees.ts`, `graph-system-select.ts` | |
@@ -574,7 +574,7 @@ the `autoAddressFindings` parameter is true) feeds the
 artifacts written under the former names (`fix`, `address`, `fixer`,
 `autoFix`, `fix-result@1`, `pipeline-fix`, `fix-review-issues`,
 `address-review`) were rewritten once by storage migration 13
-(`storage-graph-vocabulary-upgrade.ts`). Pinning tests (`graph-builtin-templates.test.ts`,
+(`storage/graph-vocabulary-upgrade.ts`). Pinning tests (`graph-builtin-templates.test.ts`,
 `builtins/*.test.ts`) fail when either the engine or the template changes
 alone. A built-in cannot be saved, launched or mock-run as a graph
 (`engine-template`); duplicating it drops `engine`, and the copy runs on the
@@ -652,7 +652,7 @@ earlier approval is kept, so reverting the file restores trust.
 
 ## Storage
 
-Four record stores (`storage-stores.ts`; details in [storage.md](storage.md)):
+Four record stores (`storage/stores.ts`; details in [storage.md](storage.md)):
 
 | Store | Rows | Owner |
 | --- | --- | --- |
@@ -712,7 +712,7 @@ content crosses the boundary). Per run: 32 MiB inline, 256 MiB on disk, 8,192
 artifacts. Item ids (`run-items.ts`) are
 `<node>[/iter-<n>][/<branch>]/<idPrefix>-<k>` (`review/panel.2/issue-3`).
 
-**Effects** (`storage-graph-effects.ts`): one row per side effect of a system
+**Effects** (`storage/graph-effects.ts`): one row per side effect of a system
 node, `intended` before and `done`/`failed` after, keyed by the action's
 idempotency key; a mock run records `simulated` rows. `graph_run_effects
 {runId}` lists them (newest 500).
@@ -1755,7 +1755,7 @@ Every bound below is enforced by a guard or the runtime, not only documented
 | `maxLoops`, `maxIteration`, `maxFanOuts`, `maxTruncatedItemIds` | 64, 10, 500, 32 |
 | `maxInlineBytesPerRun`, `maxDiskBytesPerRun`, `maxArtifactsPerRun` | 32 MiB, 256 MiB, 8,192 |
 | `maxValueBytes`, `maxReferenceBytes`, artifact lineage `maxInputs`, `maxItemIds`/`maxItemIdChars` | 384 KiB, 32 MiB, 256, 10,000/128 |
-| Effect key, effect data (B`storage-graph-effects.ts`) | 512 chars, 64 KiB |
+| Effect key, effect data (B`storage/graph-effects.ts`) | 512 chars, 64 KiB |
 
 **Runtime** (B unless noted):
 

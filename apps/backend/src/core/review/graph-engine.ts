@@ -47,7 +47,7 @@ import {
   multiReviewGraphInstructionValue,
 } from "./graph-template.js";
 import { projectMultiReviewGraphRun } from "./graph-projection.js";
-import type { GraphRunsStorage } from "../storage-graph-runs.js";
+import type { GraphRunsStorage } from "../storage/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("review");

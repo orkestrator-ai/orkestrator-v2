@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCommandRegistry } from "./commands-registry.js";
 import type { CommandContext } from "./commands-context.js";
-import { createProject, StorageService } from "./storage.js";
+import { createProject, StorageService } from "./storage/service.js";
 import { BackendRuntime } from "./backend-runtime.js";
 
 describe("create_environment control request idempotency", () => {

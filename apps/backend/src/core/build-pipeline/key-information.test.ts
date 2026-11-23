@@ -22,7 +22,7 @@ import { registerKeyInformationTools } from "./key-information-tools.js";
 import { keyInformationInstruction } from "./prompts.js";
 import { callToolInProcess, listToolsInProcess } from "../mcp-in-process.js";
 import type { PersistedBuildPipeline } from "../models.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const SCOPE = { environmentId: "env-1", projectId: "project-1" };
 

@@ -9,7 +9,7 @@ import { lowPriorityCommand } from "./process-priority.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { runCommand } from "./shell.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { StorageService, createEnvironment, createProject } from "./storage.js";
+import { StorageService, createEnvironment, createProject } from "./storage/service.js";
 import { CoordinatorService } from "./coordinator/service.js";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import type { CommandContext } from "./commands-context.js";

@@ -5,9 +5,8 @@
  */
 
 import type { BackendEmit } from "../backend-emit.js";
-import type { StorageDatabase } from "../storage-database.js";
-import { openBackendDatabase } from "../storage-stores.js";
-import type { StorageService } from "../storage.js";
+import type { StorageDatabase, StorageService } from "../storage/index.js";
+import { openBackendDatabase } from "../storage/stores.js";
 import type { DiffStatsTracking } from "../diff-stats-tracking.js";
 import { baselineTargetBranch } from "../diff-baseline.js";
 import { importOpenCodeCommandJournals } from "./legacy-import.js";

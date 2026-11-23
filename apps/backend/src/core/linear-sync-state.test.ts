@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { linearKeyFingerprint } from "./linear-boards.js";
 import { applyLinearRevocations, type LinearSyncStorage } from "./linear-sync-state.js";
-import { StorageService } from "./storage.js";
+import { StorageService } from "./storage/service.js";
 
 const directories: string[] = [];
 const services: StorageService[] = [];

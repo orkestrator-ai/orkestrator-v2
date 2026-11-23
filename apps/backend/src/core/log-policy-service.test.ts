@@ -382,7 +382,7 @@ describe("LogPolicyService", () => {
 });
 
 test("backend lifecycle wires a real config save and removes its listener on shutdown", async () => {
-  const { StorageService } = await import("./storage.js");
+  const { StorageService } = await import("./storage/service.js");
   const { startLogPolicyService } = await import("./log-policy-service.js");
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "log-policy-wiring-"));
   directories.push(dataDir);

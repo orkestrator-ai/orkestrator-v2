@@ -13,7 +13,7 @@ import {
   type StorageService,
 } from "./service-shared.js";
 import type { NativeAgentTurnRecovery } from "./turn-recovery.js";
-import { deepFreeze } from "../storage-frozen-snapshot.js";
+import { deepFreeze } from "../storage/frozen-snapshot.js";
 
 function frozenCopy<T>(items: T[]): T[] {
   return [...deepFreeze(structuredClone(items))];

@@ -119,7 +119,7 @@ import {
   type WorkflowWakeReason,
 } from "../workflows/index.js";
 import type { AgentActivityCompletionOutcome, AppConfig, Environment } from "../models.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import type { AgentToolConnection } from "../agent-tools.js";
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
 import {

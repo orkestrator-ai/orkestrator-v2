@@ -156,7 +156,7 @@ export function formatEnvironmentIsolationNotice(variables: Record<string, strin
   return `[orkestrator] Isolation: Docker Compose project ${project} ($${COMPOSE_PROJECT_NAME_ENV}), ${ports}`;
 }
 
-/** The storage entry point that reserves a block (`storage-environment-isolation.ts`). */
+/** The storage entry point that reserves a block (`storage/environment-isolation.ts`). */
 export interface EnvironmentPortBlockStorage {
   environmentIsolation: {
     assignEnvironmentPortBase(environmentId: string): Promise<number | null>;

@@ -28,8 +28,12 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { addLinearIssueLabelByName, type LinearIssueLabelResult } from "./linear-issue-labels.js";
 import { sanitizeLinearError } from "./linear.js";
-import type { Environment, PersistedBuildPipeline } from "./storage-shared.js";
-import type { LinearMergedLabelInput, LinearStorage } from "./storage-linear.js";
+import type {
+  Environment,
+  PersistedBuildPipeline,
+  LinearMergedLabelInput,
+  LinearStorage,
+} from "./storage/index.js";
 
 const log = createLogger("linear");
 

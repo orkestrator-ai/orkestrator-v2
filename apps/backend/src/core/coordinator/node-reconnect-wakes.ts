@@ -1,6 +1,6 @@
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { createLogger, logErrorKind } from "@orkestrator/protocol/logger";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 
 const log = createLogger("coordinator");
 

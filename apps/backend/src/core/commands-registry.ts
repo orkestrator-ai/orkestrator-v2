@@ -35,7 +35,7 @@ import type {
   ConditionalResourceSnapshot,
   ResourceManifestKind,
 } from "@orkestrator/protocol/resource-events";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 import { createExtensionDiscoveryCache } from "./extension-discovery.js";
 import {
   isResourceGeneration,

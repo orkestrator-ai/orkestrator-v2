@@ -1227,12 +1227,12 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       "allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],",
     );
     expect(read("apps/web/src/stores/configStore.ts")).toContain("createDefaultAppConfig");
-    expect(read("apps/backend/src/core/storage-shared-config.ts")).toContain(
+    expect(read("apps/backend/src/core/storage/shared-config.ts")).toContain(
       "createDefaultAppConfig",
     );
     for (const rel of [
       "apps/web/src/stores/configStore.ts",
-      "apps/backend/src/core/storage-shared-config.ts",
+      "apps/backend/src/core/storage/shared-config.ts",
       "docker/init-firewall.sh",
       "docker/update-firewall.sh",
       "docker/firewall-domains.sh",

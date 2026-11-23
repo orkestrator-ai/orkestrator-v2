@@ -17,7 +17,7 @@
 // (`name.ts`) and start failure remedies (`start-remedy.ts`). The environment
 // command handlers (`commands-environment*.ts`,
 // `commands-registry-environments.ts`), `project-home-environment.ts` and the
-// storage layer's `storage-environment-*.ts` stay with their own groups.
+// storage layer's `storage/environment-*.ts` stay with their own groups.
 //
 // Five modules are named exceptions in the `apps/backend/src/**` pattern of
 // `.oxlintrc.json` and are not re-exported here. Each reaches, at runtime, a

@@ -12,7 +12,7 @@ import {
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import type { Environment } from "../models.js";
-import { createEnvironment, StorageService } from "../storage.js";
+import { createEnvironment, StorageService } from "../storage/service.js";
 
 /**
  * The login keeper's per-container sync compares the login it would hand over

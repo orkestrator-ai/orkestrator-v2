@@ -1,7 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import { NoStoredProjectsError } from "./storage-kanban-removed-projects.js";
-import type { StorageService } from "./storage.js";
+import { NoStoredProjectsError, type StorageService } from "./storage/index.js";
 
 const log = createLogger("storage");
 

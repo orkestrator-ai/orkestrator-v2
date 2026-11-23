@@ -42,9 +42,9 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 const asJson = process.argv.includes("--json");
 
 const core = path.join(import.meta.dir, "../apps/backend/src/core");
-const { StorageService } = await import(path.join(core, "storage.ts"));
-const { seedStore, storageDatabase } = await import(path.join(core, "storage-test-support.ts"));
-const { openBackendDatabase } = await import(path.join(core, "storage-stores.ts"));
+const { StorageService } = await import(path.join(core, "storage/service.ts"));
+const { seedStore, storageDatabase } = await import(path.join(core, "storage/test-support.ts"));
+const { openBackendDatabase } = await import(path.join(core, "storage/stores.ts"));
 const { createCommandRegistry } = await import(path.join(core, "commands.ts"));
 const { BackendRuntime } = await import(path.join(core, "backend-runtime.ts"));
 const { EnvironmentLifecycleTaskTracker } = await import(

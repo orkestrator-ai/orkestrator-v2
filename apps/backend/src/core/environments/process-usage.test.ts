@@ -23,9 +23,9 @@ import {
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { StorageService } from "../storage.js";
-import { seedStore } from "../storage-test-support.js";
-import { databaseStoreForPath } from "../storage-stores.js";
+import { StorageService } from "../storage/service.js";
+import { seedStore } from "../storage/test-support.js";
+import { databaseStoreForPath } from "../storage/stores.js";
 
 function environment(
   overrides: Partial<ProcessUsageEnvironment> & Pick<ProcessUsageEnvironment, "id" | "name">,

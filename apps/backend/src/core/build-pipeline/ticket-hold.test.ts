@@ -7,7 +7,7 @@ import { ticketHeldByBuild, ticketsHeldByBuilds } from "./ticket-hold.js";
 import { BUILD_PIPELINE_BUILD_STARTED_COMMENT } from "./kanban-lifecycle.js";
 import { lifecycleMachine, PR_URL } from "./kanban-transitions-test-support.js";
 import { startBuilding, startInput, withService } from "./service-test-support.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 
 const kanban = (taskId: string) => ({ taskId, source: { type: "kanban" as const, taskId } });
 

@@ -1,6 +1,6 @@
 import { COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coordinator";
 import type { AgentMailMessageSummary } from "@orkestrator/protocol/agent-mail";
-import type { StorageService } from "./storage.js";
+import type { StorageService } from "./storage/index.js";
 
 export function stoppedWorkerMailHook(
   storage: StorageService,

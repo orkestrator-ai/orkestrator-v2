@@ -7,7 +7,7 @@ import { invoke } from "@/lib/native/backend";
 import { configStore } from "@/stores/configStore";
 import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import { defaultConfig } from "../../../apps/backend/src/core/storage";
+import { defaultConfig } from "../../../apps/backend/src/core/storage/index.js";
 
 import * as realGlobalSettings from "../../../apps/web/src/components/settings/GlobalSettings";
 const realGlobalSettingsSnapshot = { ...realGlobalSettings };

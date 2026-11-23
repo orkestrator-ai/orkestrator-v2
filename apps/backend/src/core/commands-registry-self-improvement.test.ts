@@ -7,7 +7,7 @@ import {
 } from "./commands-registry-self-improvement.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { NODE_ROUTING_EXCLUDED_COMMANDS } from "./nodes/node-routing.js";
-import { withTemporaryStorage } from "./storage-test-support.js";
+import { withTemporaryStorage } from "./storage/test-support.js";
 
 describe("the self-improvement board over Kanban storage", () => {
   test("files, labels, comments and moves tickets on its own project only", async () => {

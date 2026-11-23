@@ -39,8 +39,7 @@ import {
   signGraphBundlePayload,
   verifyGraphBundleSignature,
 } from "./graph-template-signing.js";
-import type { PersistedGraphSharingKeys } from "./storage-graph-templates.js";
-import type { GraphTemplatesStorage } from "./storage.js";
+import type { PersistedGraphSharingKeys, GraphTemplatesStorage } from "./storage/index.js";
 
 /**
  * Template sharing and the project template review flow (item 405): signed or

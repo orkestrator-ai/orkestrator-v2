@@ -43,7 +43,7 @@ const log = createLogger("host");
  * CPU to a 200 ms point sample, and it runs GPU and disk probes this discards.
  *
  * History lives in memory. With a history store (the backend passes its
- * database document, `storage-machine-load-history.ts`) it is restored at
+ * database document, `storage/machine-load-history.ts`) it is restored at
  * start, written whenever a 15-minute period has passed since the last write,
  * and written once more at stop, so a restart or update costs at most the
  * newest 15 minutes after a crash and nothing after a clean stop. The time the

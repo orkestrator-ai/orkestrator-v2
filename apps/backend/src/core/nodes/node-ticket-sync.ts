@@ -20,7 +20,7 @@ import {
 } from "@orkestrator/protocol/ticket-sync";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { TicketSyncStorage } from "../storage-kanban-sync-repository.js";
+import type { TicketSyncStorage } from "../storage/index.js";
 import { linkDomainApi, type EnvelopeLink } from "./node-domain-clients.js";
 
 const log = createLogger("nodes");

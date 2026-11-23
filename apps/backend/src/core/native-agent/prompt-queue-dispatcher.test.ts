@@ -12,7 +12,7 @@ import {
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createProject, StorageService } from "../storage.js";
+import { createProject, StorageService } from "../storage/service.js";
 import {
   COORDINATOR_EXECUTION_POLICY,
   COORDINATOR_WORKSPACE_VERSION,
@@ -23,7 +23,7 @@ import {
   coordinatorRuntimeEnvironment,
   resolveCoordinatorRuntime,
 } from "../coordinator/runtime.js";
-import { seedLegacyPromptQueueClaim } from "../storage-test-support.js";
+import { seedLegacyPromptQueueClaim } from "../storage/test-support.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 

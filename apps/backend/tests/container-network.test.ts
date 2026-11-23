@@ -27,7 +27,7 @@ import {
   RegistrySchemaBlockedError,
 } from "../src/core/registry-writer-lease";
 import { environmentSnapshot } from "../src/core/public-api/actions-settings";
-import { defaultConfig } from "../src/core/storage-shared";
+import { defaultConfig } from "../src/core/storage/shared";
 import { containerNetworkView } from "../src/core/commands-registry-mcp";
 import { urlReachabilityWarning } from "../src/core/mcp-management/network-hints";
 import {

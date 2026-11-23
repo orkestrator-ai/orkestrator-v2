@@ -64,7 +64,7 @@ import { HttpBridgeInteractionAdapter } from "../src/core/http-bridge/interactio
 import type { Environment, PersistedNativeAgentSession } from "../src/core/models";
 import { resolveNativeAgentExecutionPolicy } from "../src/core/native-agent/execution-policy";
 import { PermissionRuleEnforcer } from "../src/core/permission-rules/enforcer";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 
 const LIVE = process.env.RUN_LIVE_CODEX_MANAGED_NETWORK_CARD === "1";
 const describeLive = LIVE ? describe : describe.skip;

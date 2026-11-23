@@ -15,7 +15,7 @@ import {
 } from "../../../apps/backend/src/core/commands";
 import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environments/index.js";
 import { runCommand } from "../../../apps/backend/src/core/shell";
-import { StorageService } from "../../../apps/backend/src/core/storage";
+import { StorageService } from "../../../apps/backend/src/core/storage/service.js";
 import { BackendRuntime } from "../../../apps/backend/src/core/backend-runtime";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
 

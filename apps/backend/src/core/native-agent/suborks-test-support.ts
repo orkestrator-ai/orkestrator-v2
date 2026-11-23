@@ -22,7 +22,7 @@ import {
 } from "../graph-agent-test-support.js";
 import { GraphAgentProviders } from "../graph-agent-providers.js";
 import { NativeAgentSuborkService, type NativeAgentSuborkServiceOptions } from "./suborks.js";
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/service.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 
 export const CATALOG: AgentModel[] = [

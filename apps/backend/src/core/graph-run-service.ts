@@ -82,9 +82,8 @@ import type {
 import type { Environment } from "./models.js";
 import type { EnvironmentGit } from "./workspace-code-rewind.js";
 import { reviewFanoutConcurrency, type ReviewFanoutConcurrency } from "./review/index.js";
-import type { ResourceChangeListener } from "./storage-shared.js";
+import type { ResourceChangeListener, GraphRunsStorage } from "./storage/index.js";
 import type { GraphCardExpectation } from "./rich-interactions/product-commands.js";
-import type { GraphRunsStorage } from "./storage-graph-runs.js";
 import {
   keyedSchedulingEnabled,
   type KeyedWorkflowOwner,

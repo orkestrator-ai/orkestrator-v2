@@ -12,7 +12,7 @@ import type {
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { AppConfig, RepositoryConfig } from "../models.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { BuildPipelineService } from "./service.js";
 import {
   AmbiguousPromptDispatchError,

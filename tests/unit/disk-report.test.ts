@@ -34,7 +34,7 @@ import {
   MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
   type EnvironmentCleanupEntry,
 } from "../../apps/backend/src/core/environments/index.js";
-import { openBackendDatabase } from "../../apps/backend/src/core/storage-stores";
+import { openBackendDatabase } from "../../apps/backend/src/core/storage/stores.js";
 import { privateTmpdirRoot } from "../private-tmpdir";
 import { defaultRuntimeProfileRoots } from "../../packages/protocol/src/node/runtime-profile-status";
 

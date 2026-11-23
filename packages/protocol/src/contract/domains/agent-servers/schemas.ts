@@ -137,7 +137,7 @@ export const AgentModelSchema = modelRecord<AgentModel>()({
 // item 7010): `apps/backend/src/core/models.ts` and the web's types re-export
 // the types below. The effort and source vocabularies are literals because
 // the backend keeps only the values it knows when it reads a catalogue
-// (`commands-containers.ts`, `storage-shared-model-catalogs.ts`,
+// (`commands-containers.ts`, `apps/backend/src/core/storage/shared-model-catalogs.ts`,
 // `commands-validation.ts`); a new value bumps the domain.
 
 /** `ClaudeEffortLevel`: an effort level a Claude model can run at. */

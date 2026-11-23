@@ -3,9 +3,9 @@ import { buildInitialPromptWithAttachmentReferences } from "@orkestrator/protoco
 import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 import { nativeAgentSessionStorageKey } from "./service.js";
 import { createProviderStub, withService } from "./service-projection-test-support.js";
-import { StorageService, isPersistedNativeAgentSession } from "../storage.js";
-import { restoreSteeredQueueItem } from "../storage-native-deliveries.js";
-import { storageInternals } from "../storage-test-support.js";
+import { StorageService, isPersistedNativeAgentSession } from "../storage/service.js";
+import { restoreSteeredQueueItem } from "../storage/native-deliveries.js";
+import { storageInternals } from "../storage/test-support.js";
 
 const identity = {
   environmentId: "env-1",

@@ -36,7 +36,7 @@ import {
   type ScopedTargetSources,
 } from "./scoped-delivery.js";
 import { desiredStateForNode } from "./planning.js";
-import type { CapabilitiesStorage } from "../storage-capabilities.js";
+import type { CapabilitiesStorage } from "../storage/index.js";
 import type { CapabilityState } from "./types.js";
 
 export interface EnvironmentDeliveryContext {

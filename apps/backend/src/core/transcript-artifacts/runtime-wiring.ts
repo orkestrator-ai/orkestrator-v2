@@ -8,7 +8,7 @@
  * chart and workflow artifacts work and HTML/Mermaid report
  * `renderer_unavailable`.
  */
-import type { StorageService } from "../storage.js";
+import type { StorageService } from "../storage/index.js";
 import { logArtifactEvent } from "./metrics.js";
 import {
   createTranscriptArtifactRuntime,

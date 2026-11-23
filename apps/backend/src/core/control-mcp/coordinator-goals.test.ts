@@ -20,8 +20,8 @@ import { CoordinatorService } from "../coordinator/service.js";
 import { copyCommittedCheckout } from "../git/checkout-template-test-support.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { cleanupSessionHarnesses, setup } from "../public-api/test-provider.js";
-import { createEnvironment, createProject } from "../storage.js";
-import { storageInternals } from "../storage-test-support.js";
+import { createEnvironment, createProject } from "../storage/service.js";
+import { storageInternals } from "../storage/test-support.js";
 import { WorkerTabCloseAdmission } from "../worker-tab-close-admission.js";
 
 const servers: ControlMcpServer[] = [];

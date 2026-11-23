@@ -3,7 +3,7 @@
  * No sleeps, provider credentials, or production-only test hooks are involved. */
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { BuildPipelineService } from "./service.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import type { BuildPipelineProvider } from "./provider.js";
 
 installFatalRejectionGuard({ label: "[held-dispatch fixture]" });

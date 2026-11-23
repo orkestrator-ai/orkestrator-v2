@@ -48,7 +48,7 @@ import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { Environment } from "./models.js";
 import type { MultiReviewProgressTracker } from "./review/index.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent/index.js";
-import type { PersistedGraphDescribeJob } from "./storage-graph-describe.js";
+import type { PersistedGraphDescribeJob } from "./storage/index.js";
 import type { WorkflowResultService } from "./workflows/index.js";
 
 export const GRAPH_DESCRIBE_WORDING: AgentBranchWording = Object.freeze({

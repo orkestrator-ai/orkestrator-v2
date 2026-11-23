@@ -19,14 +19,14 @@ Updated 2026-11-18 against `main` at `b2c91abb9`: tasks 3, 4 and 5 done; task 6 
 
 **Problem.** People and agents now read "Rework" and "Address Findings", and internal functions, types and files use those names, but what is stored and sent between versions still says `fix`, `fixing`, `address`, `addressing`, `fixModel`, `fixSession`, `autoFix` and so on. Code that handles those values therefore still reads in the old words.
 
-**Context.** Stage one's `packages/protocol/src/workflow-vocabulary.ts` held the complete map of new name to current name, one map per workflow, because "fix" is Rework in a build pipeline and Address Findings in a Multi Review. Stage-one builds ran it wherever a snapshot or start request entered the build: the renderer's stores and hydration (`buildPipelineStore.ts`, `build-pipeline-persistence.ts`, `multiReviewStore.ts`, `multi-review-persistence.ts`) and the backend's start commands (`commands-registry-build.ts`, `build-pipeline/launch.ts`, `commands-registry-reviews.ts`, `commands-registry-controller-workflows.ts`). It was deleted with this task (`git show 0265e7882:packages/protocol/src/workflow-vocabulary.ts`); the same maps, read the other way, are now the storage migration `apps/backend/src/core/storage-workflow-vocabulary-upgrade.ts`. `normalizeActionDefaults` reads a saved `addressFindings` key as `fixReviewIssues`.
+**Context.** Stage one's `packages/protocol/src/workflow-vocabulary.ts` held the complete map of new name to current name, one map per workflow, because "fix" is Rework in a build pipeline and Address Findings in a Multi Review. Stage-one builds ran it wherever a snapshot or start request entered the build: the renderer's stores and hydration (`buildPipelineStore.ts`, `build-pipeline-persistence.ts`, `multiReviewStore.ts`, `multi-review-persistence.ts`) and the backend's start commands (`commands-registry-build.ts`, `build-pipeline/launch.ts`, `commands-registry-reviews.ts`, `commands-registry-controller-workflows.ts`). It was deleted with this task (`git show 0265e7882:packages/protocol/src/workflow-vocabulary.ts`); the same maps, read the other way, are now the storage migration `apps/backend/src/core/storage/workflow-vocabulary-upgrade.ts`. `normalizeActionDefaults` reads a saved `addressFindings` key as `fixReviewIssues`.
 
 **Investigation.** An older renderer throws "Invalid backend build pipeline snapshot" on an unknown phase (`isBuildPipeline`, `buildPipelineStore.ts`), and `isMultiReviewWorkflow` also refuses unknown fields through `hasOnlyKeys`, so writing old and new fields side by side breaks an older Multi Review reader too. There is no version handshake (`version-compatibility.md`), so a backend cannot choose a vocabulary per client. Session keys embed the phase (`build-pipeline/service-supervisor.ts`, `review/service.ts`), transcript paths are a hash of the session key, and worker mail tab ids derive from it: rewriting a stored key would orphan its transcripts.
 
 **Decisions.**
 
 - **How to change what is stored?**
-  - **One-way migration with a schema bump (recommended).** Add a migration in `storage-record-upgrades.ts` that rewrites `build-pipelines` and `multi-reviews`.
+  - **One-way migration with a schema bump (recommended).** Add a migration in `storage/record-upgrades.ts` that rewrites `build-pipelines` and `multi-reviews`.
     - Pros: readers carry no legacy branch; a stage-one backend refuses the newer database, which is the documented downgrade fence.
     - Cons: no downgrade after it runs without restoring a backup.
   - **Keep translating at load and save.**
@@ -151,7 +151,7 @@ still replays rather than conflicting.
 ### Task 1: one migration, session keys kept (2026-11-17)
 
 Chosen: a one-way migration with a schema bump (version 11,
-`storage-workflow-vocabulary-upgrade.ts`), as recommended. It walks
+`storage/workflow-vocabulary-upgrade.ts`), as recommended. It walks
 `build-pipelines` and `multi-reviews` snapshots with the stage-one maps read
 the other way, renames values only in the fields that hold them (with `step`
 and `author` added to stage one's list, for `pendingCodeRewind.step` and key
@@ -162,7 +162,7 @@ because they embed the phase. Multi Review's deterministic key
 `multi-review:<id>:fix` and tab id `multi-review-fix:<id>` are unchanged,
 because records without a stored key are looked up by them. A record already
 holding both names keeps the current one. Tested on a seeded store opened at
-version 10 (`storage-workflow-vocabulary-upgrade.test.ts`), never on the real
+version 10 (`storage/workflow-vocabulary-upgrade.test.ts`), never on the real
 data directory.
 
 ### Task 1: package preparation stays under Rework (2026-11-17)
@@ -205,7 +205,7 @@ Chosen names, applied with no dual names or translators: the coordinator tools `
 
 ### Task 3: stored data is migrated, not read twice (2026-11-18)
 
-Storage migration 13 (`storage-graph-vocabulary-upgrade.ts`) rewrites user graph templates, "Describe a graph" drafts, saved launch defaults, scheduled graph launches, workflow result entries and slots, and graph runs with their artifacts. Graph runs (the to-do's open question): a run freezes its plan behind `plan.digest` and its artifact ids hash type and producer, so a run is rewritten consistently, digests and ids recomputed and every reference following, with each session key pinned to the key it had so transcripts and provider sessions stay attached; a run that would not validate after the rewrite is left as it was. Project templates live in their repositories and are not rewritten. Migration 14 (`storage-coordinator-receipt-vocabulary-upgrade.ts`) renames stored coordinator receipts from `custom-fix` to `custom-address`; without it the coordinators store would drop them on read and a retried pre-rename request would run again. Launch receipts hashed with the former field names now refuse a retry as a different payload, which is the accepted cost of a request key from before the rename. A running agent that still holds `submit_fix_result` from earlier in its conversation is refused once, and the reminder names the new tool.
+Storage migration 13 (`storage/graph-vocabulary-upgrade.ts`) rewrites user graph templates, "Describe a graph" drafts, saved launch defaults, scheduled graph launches, workflow result entries and slots, and graph runs with their artifacts. Graph runs (the to-do's open question): a run freezes its plan behind `plan.digest` and its artifact ids hash type and producer, so a run is rewritten consistently, digests and ids recomputed and every reference following, with each session key pinned to the key it had so transcripts and provider sessions stay attached; a run that would not validate after the rewrite is left as it was. Project templates live in their repositories and are not rewritten. Migration 14 (`storage/coordinator-receipt-vocabulary-upgrade.ts`) renames stored coordinator receipts from `custom-fix` to `custom-address`; without it the coordinators store would drop them on read and a retried pre-rename request would run again. Launch receipts hashed with the former field names now refuse a retry as a different payload, which is the accepted cost of a request key from before the rename. A running agent that still holds `submit_fix_result` from earlier in its conversation is refused once, and the reminder names the new tool.
 
 ### Task 3: two backend command names kept (2026-11-18)
 
@@ -213,7 +213,7 @@ The backend commands behind the renamed coordinator tools were renamed too, but 
 
 ### Task 4: preparation has its own phases (2026-11-18)
 
-The dedicated preparation session is stored as `package-preparation` and the pipeline as `preparing-package` while it or the validation run it planned is in progress, in every round; `REVIEW_PACKAGE_SESSION_LABEL` is display text only and every label check became a phase check. Round 1 did run as `reworking` before (the "Needs verification" item, answered from the code path, not a live run), and a validation restart in round 1 could leave `building`. Restarts of preparation stay `review-package` requests and skips cannot name it; `implementationPhase` now comes from the round. Without a configured preparation step, preparation keeps running under the Address Findings step's settings (`stepKeyForSessionPhase`). Migration 12 (`storage-package-preparation-phase-upgrade.ts`) moves stored sessions and pipeline phase fields, keyed on the label older builds wrote, and leaves session keys, restart and skip requests, rewinds and key information authors as written. Multi Review already had its own `preparing` phase and needed nothing.
+The dedicated preparation session is stored as `package-preparation` and the pipeline as `preparing-package` while it or the validation run it planned is in progress, in every round; `REVIEW_PACKAGE_SESSION_LABEL` is display text only and every label check became a phase check. Round 1 did run as `reworking` before (the "Needs verification" item, answered from the code path, not a live run), and a validation restart in round 1 could leave `building`. Restarts of preparation stay `review-package` requests and skips cannot name it; `implementationPhase` now comes from the round. Without a configured preparation step, preparation keeps running under the Address Findings step's settings (`stepKeyForSessionPhase`). Migration 12 (`storage/package-preparation-phase-upgrade.ts`) moves stored sessions and pipeline phase fields, keyed on the label older builds wrote, and leaves session keys, restart and skip requests, rewinds and key information authors as written. Multi Review already had its own `preparing` phase and needed nothing.
 
 ### Task 5: what retired and what stays (2026-11-18)
 
@@ -226,7 +226,7 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 ## Constraints and rationale
 
 - `version-compatibility.md`: a persisted format changes additively with a recorded downgrade behaviour. The user approved an exception to the window's timing for task 1; the downgrade fence still applies. On 2026-11-14 the user's legacy-retirement decision (one sweep; all machines and clients update together) removed the window waits for tasks 1, 3 and 5 as well; see Assumptions and decisions.
-- `apps/backend/src/core/storage-record-upgrades.ts`: an older shape is upgraded once by a migration.
+- `apps/backend/src/core/storage/record-upgrades.ts`: an older shape is upgraded once by a migration.
 - "fix" must not be replaced globally. It means Rework in a pipeline and Address Findings in a Multi Review, and `fix-result`, `fixModel` and `fixer` all mean Address Findings.
 
 ## Needs verification

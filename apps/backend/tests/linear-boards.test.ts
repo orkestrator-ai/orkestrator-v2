@@ -14,7 +14,7 @@ import {
   linearKeyFingerprint,
 } from "../src/core/linear-boards";
 import { linearBoardIssueFilter } from "../src/core/linear";
-import { StorageService } from "../src/core/storage";
+import { StorageService } from "../src/core/storage/service";
 import { createCommandFixtures } from "./command-fixtures";
 
 const { createCommandRegistry, createContext, createEnvironment } = await createCommandFixtures();

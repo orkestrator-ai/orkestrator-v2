@@ -9,7 +9,7 @@ import {
   stopEnvironmentExecWorkers,
 } from "../public-api/exec-control.js";
 import { createPublicApiHarness, type PublicApiHarness } from "../public-api/test-support.js";
-import { createEnvironment } from "../storage.js";
+import { createEnvironment } from "../storage/service.js";
 import { stopEnvironmentOnce } from "../commands-environment.js";
 import { deleteEnvironmentTask } from "../commands-servers.js";
 

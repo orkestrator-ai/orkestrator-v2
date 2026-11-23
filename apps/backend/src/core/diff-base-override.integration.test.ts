@@ -7,7 +7,7 @@ import {
   listDiffBaseBranches,
   resolveDiffBaseOverride,
 } from "./diff-base-override.js";
-import { createEnvironment } from "./storage.js";
+import { createEnvironment } from "./storage/service.js";
 import { createPublicApiHarness, headCommit } from "./public-api/test-support.js";
 import { environmentBaselineCommit } from "@orkestrator/protocol/diff-stats";
 import { discardedRuntimeSetupUpdates } from "./commands-environment.js";

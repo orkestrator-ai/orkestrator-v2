@@ -20,7 +20,7 @@ import {
 import { environmentStateDirectories } from "./state-paths.js";
 import type { Environment } from "../models.js";
 import { CommandFailedError, runCommand } from "../shell.js";
-import { StorageService } from "../storage.js";
+import { StorageService } from "../storage/service.js";
 import { dockerOwnerNamespace } from "../containers/ownership.js";
 
 /** A UUID environment id and the branch created for it (its namespace is `e1a2b3c4d5e6`). */

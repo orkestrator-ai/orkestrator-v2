@@ -12,7 +12,7 @@ import { BackendRuntime } from "./backend-runtime.js";
 import * as agentBridges from "./commands-servers.js";
 import { persistHostCatalog } from "./host-model-catalog-seed.js";
 import type { HostCatalog } from "./host-model-catalog-refresh.js";
-import { seedStore, withTemporaryStorage } from "./storage-test-support.js";
+import { seedStore, withTemporaryStorage } from "./storage/test-support.js";
 
 afterEach(() => mock.restore());
 

@@ -41,8 +41,8 @@ import { reconcileContainerOperations } from "../src/core/containers/lifecycle-s
 import type { Environment } from "../src/core/models";
 import { openRegistryWriter, type RegistryWriter } from "../src/core/registry-writer-lease";
 import { runCommand } from "../src/core/shell";
-import { StorageService } from "../src/core/storage";
-import { readStoredValue } from "../src/core/storage-test-support";
+import { StorageService } from "../src/core/storage/service";
+import { readStoredValue } from "../src/core/storage/test-support";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
 import { startRuntime } from "./container-live-start";

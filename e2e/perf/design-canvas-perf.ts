@@ -206,6 +206,8 @@ function exportRevision(rev: string, workDir: string): string {
   if (archive.status !== 0) throw new Error(`git archive ${rev} failed`);
   const tar = spawnSync("tar", ["-x", "-C", root], { input: archive.stdout });
   if (tar.status !== 0) throw new Error("tar -x failed");
+  // The archived HTML chooses the entry. Only overlay the app and benchmark
+  // fixture so revisions that predate browser-entry.ts can still build.
   for (const file of ["e2e/fixture/DesignLibraryPerfFixture.tsx", "e2e/fixture/main.tsx"])
     copyFileSync(path.join(repositoryRoot, file), path.join(root, file));
   for (const file of ["package.json", "tsconfig.json"])

@@ -89,7 +89,6 @@ import { PipelineFlowFixture } from "./PipelineFlowFixture";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { StrictMode, Suspense, lazy, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { installFixtureModules } from "./fixture-modules";
 import {
   CommandNodeScopeProvider,
   WindowScopeProvider,
@@ -2516,7 +2515,6 @@ const launchBaseState = new URLSearchParams(window.location.search).get("launchB
 if (window.location.pathname === "/" && launchBaseState) installLaunchBaseFixture(launchBaseState);
 // The app's window scope and command scope, as `App.tsx` mounts them: a
 // per-node store hook outside a provider throws in a development renderer.
-installFixtureModules();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <WindowScopeProvider>

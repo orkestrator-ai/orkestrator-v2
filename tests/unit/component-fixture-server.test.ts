@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import {
+  FIXTURE_OUT_DIR_ENV,
+  FIXTURE_PREVIEW_IDENTITY_ENV,
+} from "../../e2e/fixture-server-identity";
 import { FIXTURE_SERVER_ENV, fixtureServerMode } from "../../e2e/fixture-server-mode";
 
 // The component suite builds its fixture page and serves the build, because
@@ -53,15 +57,17 @@ describe("the component suite's fixture server", () => {
   test("a run builds the fixture in development mode and never reuses a server", () => {
     const server = webServerFor({ [FIXTURE_SERVER_ENV]: "", CI: "" });
     expect(server.command).toMatch(
-      /^bunx vite build \.\.\/\.\.\/e2e\/fixture --config vite\.fixture\.config\.ts --outDir "[^"]+" --emptyOutDir && bunx vite preview /,
+      /^bunx vite build \.\.\/\.\.\/e2e\/fixture --config vite\.fixture\.config\.ts --emptyOutDir && bunx vite preview /,
     );
     expect(server.command).toContain("--strictPort");
     // A dev server would serve React's development build; so must the build.
-    expect(server.env).toEqual({ NODE_ENV: "development" });
+    expect(server.env?.NODE_ENV).toBe("development");
+    expect(server.env?.[FIXTURE_PREVIEW_IDENTITY_ENV]).toStartWith("build-");
     // Reusing a server could serve another checkout's build, or a stale one.
     expect(server.reuseExistingServer).toBe(false);
     // Built into the runner's private TMPDIR, never a directory runs share.
-    const outDir = /--outDir "([^"]+)"/.exec(server.command)![1]!;
+    const outDir = server.env![FIXTURE_OUT_DIR_ENV]!;
+    expect(server.command).not.toContain(outDir);
     expect(path.basename(path.dirname(outDir))).toStartWith("ork-test-tmp-");
   });
 

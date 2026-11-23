@@ -1,9 +1,11 @@
 import { defineConfig } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { reviewValidationRunOptions } from "../tests/playwright-review-validation";
 import { installPlaywrightRunnerSigterm } from "../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../tests/private-tmpdir";
+import { FIXTURE_OUT_DIR_ENV, FIXTURE_PREVIEW_IDENTITY_ENV } from "./fixture-server-identity";
 import { fixtureServerMode } from "./fixture-server-mode";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
@@ -18,6 +20,7 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..");
 // Override to run beside another run or checkout that holds the default port.
 const port = Number.parseInt(process.env.ORKESTRATOR_E2E_PORT ?? "1422", 10);
 const baseURL = `http://127.0.0.1:${port}`;
+const fixturePreviewIdentity = `build-${randomUUID()}`;
 // Opt-in engine override for qualification runs, e.g. `webkit` for Safari's
 // engine, which has no `moveBefore`. The project names keep naming the layout
 // profile (phone or desktop viewport), whichever engine runs them. Specs that
@@ -71,18 +74,19 @@ function fixtureWebServer() {
   }
   // In the runner's private TMPDIR: two runs in one checkout never serve each
   // other's build, and the build goes when the directory does.
-  const outDir = JSON.stringify(path.join(os.tmpdir(), "component-fixture"));
   return {
     ...common,
     command:
-      `bunx vite build ${fixture} --config ${config} --outDir ${outDir} --emptyOutDir` +
-      ` && bunx vite preview ${fixture} --config ${config} --outDir ${outDir}` +
+      `bunx vite build ${fixture} --config ${config} --emptyOutDir` +
+      ` && bunx vite preview ${fixture} --config ${config}` +
       ` --host 127.0.0.1 --port ${port} --strictPort`,
     // React's development build, which the fixtures' retry paths need, even
     // when the shell set `NODE_ENV=production`.
-    env: { NODE_ENV: "development" },
-    // Always this run's own build. A server already on the port fails the run
-    // rather than serving another checkout's build, or a stale one.
+    env: {
+      NODE_ENV: "development",
+      [FIXTURE_OUT_DIR_ENV]: path.join(os.tmpdir(), "component-fixture"),
+      [FIXTURE_PREVIEW_IDENTITY_ENV]: fixturePreviewIdentity,
+    },
     reuseExistingServer: false,
   };
 }
@@ -112,10 +116,10 @@ export default defineConfig({
   // Review validation streams one line per test and stops the run before its
   // deadline (tests/playwright-review-validation.ts).
   ...reviewValidationRunOptions("line"),
-  // Checks a reused dev server belongs to this checkout, then ends the run if
-  // the fixture server stops answering (Playwright watches it only while it
-  // starts).
+  // Prove the listener is the expected dev server or this run's preview before
+  // workers start, then watch for it to stop answering.
   globalSetup: "./fixture-server-setup.ts",
+  metadata: { fixturePreviewIdentity },
   outputDir: path.join(repositoryRoot, "output/playwright/test-results"),
   webServer: fixtureWebServer(),
   use: {

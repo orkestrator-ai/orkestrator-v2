@@ -1,7 +1,35 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Connect, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import {
+  FIXTURE_IDENTITY_HEADER,
+  FIXTURE_IDENTITY_PATH,
+  FIXTURE_OUT_DIR_ENV,
+  FIXTURE_PREVIEW_IDENTITY_ENV,
+  fixtureDevIdentity,
+} from "../../e2e/fixture-server-identity";
+
+function fixtureServerIdentity(): Plugin {
+  function identify(middlewares: Connect.Server, identity: string) {
+    middlewares.use((request, response, next) => {
+      if (request.url !== FIXTURE_IDENTITY_PATH) return next();
+      response.setHeader(FIXTURE_IDENTITY_HEADER, identity);
+      response.setHeader("Cache-Control", "no-store");
+      response.writeHead(204).end();
+    });
+  }
+  return {
+    name: "orkestrator-fixture-server-identity",
+    configureServer(server) {
+      identify(server.middlewares, fixtureDevIdentity(server.config.root));
+    },
+    configurePreviewServer(server) {
+      const identity = process.env[FIXTURE_PREVIEW_IDENTITY_ENV];
+      if (identity) identify(server.middlewares, identity);
+    },
+  };
+}
 
 /**
  * The component suite's fixture page (`e2e/fixture`), which the suite builds
@@ -24,7 +52,7 @@ import path from "path";
  */
 export default defineConfig({
   base: "/",
-  plugins: [react(), tailwindcss({ optimize: false })],
+  plugins: [fixtureServerIdentity(), react(), tailwindcss({ optimize: false })],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "./src"),
@@ -33,6 +61,7 @@ export default defineConfig({
   clearScreen: false,
   logLevel: "warn",
   build: {
+    outDir: process.env[FIXTURE_OUT_DIR_ENV],
     minify: false,
     cssMinify: false,
     reportCompressedSize: false,

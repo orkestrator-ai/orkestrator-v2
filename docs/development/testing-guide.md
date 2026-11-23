@@ -174,14 +174,15 @@ Tailwind's CSS unoptimized and nothing minified.
   that patches `portalStore` patches the store the page reads.
   `tests/unit/component-fixture-server.test.ts` fails on a `/@fs` path in a
   component spec.
-- The build is never reused. A server already on the port fails the run with
-  Playwright's "is already used" error, which the loopback wrapper retries on
-  fresh ports in review validation. Set `ORKESTRATOR_E2E_PORT` to run beside
-  another run.
+- The build is never reused. Playwright refuses an occupied port at launch.
+  Before any spec runs, global setup also checks the preview's per-run
+  identity in case another listener took the port during the build. The
+  loopback wrapper retries these collisions on fresh ports in review
+  validation. Set `ORKESTRATOR_E2E_PORT` to run beside another run.
 - `ORKESTRATOR_E2E_FIXTURE_SERVER=dev` serves the page through the dev server
-  instead, reused across runs outside CI after a check that it belongs to this
-  checkout. That suits iterating on a fixture with hot reload. It runs about
-  twice as slowly.
+  instead. Outside CI, runs can reuse a dev server that identifies itself as
+  serving this checkout. That suits iterating on a fixture with hot reload.
+  It runs about twice as slowly.
 
 ### Component suite workers
 

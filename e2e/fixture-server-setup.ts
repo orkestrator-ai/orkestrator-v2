@@ -1,7 +1,10 @@
 import type { FullConfig } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import path from "node:path";
-import { fixtureServerMode } from "./fixture-server-mode";
+import {
+  FIXTURE_IDENTITY_HEADER,
+  FIXTURE_IDENTITY_PATH,
+  fixtureDevIdentity,
+} from "./fixture-server-identity";
+import { fixtureServerMode, type FixtureServerMode } from "./fixture-server-mode";
 import {
   fixtureServerProbeIntervalMs,
   watchFixtureServer,
@@ -14,8 +17,12 @@ export default async function fixtureServerSetup(
 ): Promise<(() => Promise<void>) | undefined> {
   const baseURL = config.projects[0]?.use.baseURL;
   if (!baseURL) return undefined;
-  // A build is always this run's own: the config never reuses a server for it.
-  if (fixtureServerMode() === "dev") await assertFixtureServerOwner(baseURL);
+  const mode = fixtureServerMode();
+  const identity = mode === "dev" ? fixtureDevIdentity() : config.metadata.fixturePreviewIdentity;
+  if (typeof identity !== "string" || !identity) {
+    throw new Error("Missing fixture preview identity in the Playwright config.");
+  }
+  await assertFixtureServerOwner(baseURL, identity, mode);
   // Playwright stops watching the `webServer` once it has started, so a server
   // that exits mid-run would leave every later case failing with
   // ERR_CONNECTION_REFUSED. The watch ends the run instead, saying why
@@ -28,17 +35,27 @@ export default async function fixtureServerSetup(
   };
 }
 
-// Outside CI the dev server mode reuses whatever already listens on the fixture port, and
-// every worktree uses the same port. A fixture server started by another
-// checkout would then serve that checkout's sources, and the run would test
-// code other than this one. Vite only serves `/@fs/` paths inside its own
-// workspace, so asking for one of this checkout's files tells the two apart.
-async function assertFixtureServerOwner(baseURL: string): Promise<void> {
-  const fixtureEntry = realpathSync(path.join(import.meta.dirname, "fixture/main.tsx"));
-  const response = await fetch(new URL(`/@fs${fixtureEntry}`, baseURL));
-  if (response.ok) return;
+// Playwright's URL readiness can be satisfied by another listener, even if
+// reuse is off and that listener took the port during the build.
+async function assertFixtureServerOwner(
+  baseURL: string,
+  identity: string,
+  mode: FixtureServerMode,
+): Promise<void> {
+  const response = await fetch(new URL(FIXTURE_IDENTITY_PATH, baseURL), {
+    method: "HEAD",
+    redirect: "manual",
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (response.status === 204 && response.headers.get(FIXTURE_IDENTITY_HEADER) === identity) return;
+  // Keep the same collision wording as Vite so loopback-network.ts can retry
+  // a build on a new port when the wrapper picked this one.
+  const expected =
+    mode === "dev"
+      ? "the fixture dev server for this checkout"
+      : "the fixture preview for this run";
   throw new Error(
-    `The fixture server at ${baseURL} does not serve ${fixtureEntry} (HTTP ${response.status}). ` +
-      "It belongs to another checkout. Stop it, or set ORKESTRATOR_E2E_PORT to a free port.",
+    `Port ${new URL(baseURL).port} is already in use at ${baseURL}. Expected ${expected}. ` +
+      "Stop the listener, or set ORKESTRATOR_E2E_PORT to a free port.",
   );
 }

@@ -46,7 +46,7 @@ Linear workspace.
 **Problem.** The label lookup, creation and `issueAddLabel` calls have only
 run against a fake that mimics Linear's GraphQL answers
 (`apps/backend/src/core/linear-merged-label.test.ts`,
-`environment-delete-tickets.test.ts`). Field names (`isGroup`,
+`environments/delete-tickets.test.ts`). Field names (`isGroup`,
 `eqIgnoreCase`, `issueAddLabel`) were taken from Linear's published schema,
 not from a live call.
 

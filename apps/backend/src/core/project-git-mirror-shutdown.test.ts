@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "./index.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { refreshProjectGitMirror } from "./project-git-mirror.js";
 import { runCommand } from "./shell.js";
 import { openRegistryWriter } from "./registry-writer-lease.js";

@@ -52,7 +52,7 @@ import {
   writeContainerReviewPackage,
   type EnvironmentCommandRunner,
 } from "./commands-review.js";
-import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "./environments/index.js";
 import { GraphStorageError } from "./graph-run-errors.js";
 import type { Environment } from "./models.js";
 import { removeConfinedDirectory, writeConfinedFile } from "./path-safety.js";

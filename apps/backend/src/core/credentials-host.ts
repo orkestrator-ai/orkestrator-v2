@@ -26,7 +26,7 @@ import type { Environment, PersistedNativeAgentSession } from "./models.js";
 import { resolveEnvironmentExecutionPolicy } from "./native-agent/index.js";
 import { paneLayoutLeaves } from "./storage-shared-pane-layout.js";
 import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
-import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environments/index.js";
 
 /**
  * The credential service's view of the backend (credentials/context.ts):

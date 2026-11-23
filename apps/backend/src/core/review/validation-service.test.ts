@@ -1,7 +1,7 @@
 import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,
   environmentIsolationVariables,
-} from "../environment-isolation.js";
+} from "../environments/isolation.js";
 import { expect, test } from "bun:test";
 import { BackendRuntime } from "../backend-runtime.js";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";

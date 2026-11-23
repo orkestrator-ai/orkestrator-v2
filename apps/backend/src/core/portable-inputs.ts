@@ -31,7 +31,7 @@ import { SHARED_SKILLS_INPUT } from "@orkestrator/protocol/container-recovery";
 import { readLocationIndex } from "./capabilities/native-ownership.js";
 import { CAPABILITY_LOCATION_INDEX, CAPABILITY_MARKER_FILE } from "./capabilities/security.js";
 import { claudeContainerConfig } from "./claude-container-config.js";
-import { environmentStateDirectory } from "./environment-state-paths.js";
+import { environmentStateDirectory } from "./environments/index.js";
 import { platformDescriptorClone, type DescriptorClone } from "./portable-inputs-clone.js";
 
 /**

@@ -36,7 +36,7 @@ backend code was identical to the base.
 
 | Owning file | Aggregate failures | Alone on the branch | Base (`origin/main` sources) |
 | --- | --- | --- | --- |
-| `apps/backend/src/core/environment-move.test.ts` | Moves, submodule re-links, copy rollback and recovery cases; `git … cannot change to '/private/tmp/ork-env-move-…'` | 5 passed, 33 failed | Not rerun; same failures recorded on the base in [1101](1101-codex-typed-prompts-0211-validation.md) |
+| `apps/backend/src/core/environments/move.test.ts` | Moves, submodule re-links, copy rollback and recovery cases; `git … cannot change to '/private/tmp/ork-env-move-…'` | 5 passed, 33 failed | Not rerun; same failures recorded on the base in [1101](1101-codex-typed-prompts-0211-validation.md) |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | Real-Git snapshot cases | 0 passed, 2 failed | 1 passed, 3 failed |
 | `apps/backend/tests/staged-input-relay.test.ts` | Four relay cases (mode `448` expected) | 5 passed, 4 failed | 5 passed, 4 failed |
 | `apps/backend/tests/docker-image.test.ts` | Two `--add-host host.docker.internal:…` expectations | 19 passed, 2 failed | 19 passed, 2 failed |

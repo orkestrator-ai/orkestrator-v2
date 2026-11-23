@@ -42,7 +42,7 @@ Two complete-owner reruns on this branch, using Bun 1.4.4 on macOS arm64:
 A name-filtered rerun of the reset case plus the two newly registered move
 cases passed all three, 15.7 s, using one worker:
 
-`mise run test:logged -- --name review-0247-three-names -- bun test --cwd apps/backend ./src/core/environment-move.test.ts ./src/core/diff-stats-tracking.test.ts --parallel=1 -t 'reports provider failure and retries migration and source cleanup after restart|a raw-path write admitted first blocks copying until its acknowledged edit is present|a successful reset to creation clears the advanced baseline and retargets scans' --reporter=junit --reporter-outfile=/tmp/review-0247-three.xml`
+`mise run test:logged -- --name review-0247-three-names -- bun test --cwd apps/backend ./src/core/environments/move.test.ts ./src/core/diff-stats-tracking.test.ts --parallel=1 -t 'reports provider failure and retries migration and source cleanup after restart|a raw-path write admitted first blocks copying until its acknowledged edit is present|a successful reset to creation clears the advanced baseline and retargets scans' --reporter=junit --reporter-outfile=/tmp/review-0247-three.xml`
 
 The reset case took 4248.58 ms. The same filtered command in a disposable
 detached checkout of the exact pinned base `863b57821` (name

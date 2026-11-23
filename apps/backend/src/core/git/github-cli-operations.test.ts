@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { detectEnvironmentPullRequest } from "../commands-pr-monitor.js";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { createEnvironmentCommandRunner, createLocalGhRunner } from "../commands-review.js";
 import { GitHubCliSelection } from "./github-cli-binary.js";
 import type { GitHubCliConfigSource } from "./github-credentials.js";

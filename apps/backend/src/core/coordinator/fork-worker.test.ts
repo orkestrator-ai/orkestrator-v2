@@ -15,7 +15,7 @@ import { CoordinatorService } from "./service.js";
 import { ControlMcpServer } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { CoordinatorRequestFlights } from "./request-flights.js";
 import { runCommand } from "../shell.js";
 import { StorageService, createEnvironment, createProject } from "../storage.js";

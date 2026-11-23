@@ -12,7 +12,7 @@ import type {
 import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-profile-status";
 
 import type { CommandContext } from "./commands-context.js";
-import { retainedContainerIds, storageVolumeNames } from "./environment-cleanup.js";
+import { retainedContainerIds, storageVolumeNames } from "./environments/cleanup.js";
 import type { Environment } from "./models.js";
 import { GIT_MIRROR_NAME, GIT_MIRRORS_DIR, gitMirrorMountNames } from "./project-git-mirror.js";
 import { containerSize, volumeSizes } from "./recovery-copies.js";

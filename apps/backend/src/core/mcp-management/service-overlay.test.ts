@@ -9,7 +9,7 @@ import {
   type McpOverlayAction,
 } from "@orkestrator/protocol/mcp-management";
 
-import { environmentStateDirectory } from "../environment-state-paths.js";
+import { environmentStateDirectory } from "../environments/state-paths.js";
 import { OVERLAY_DIVERGED_REASON, OVERLAY_UNREADABLE_REASON } from "./overlay-service.js";
 import {
   SENTINEL,

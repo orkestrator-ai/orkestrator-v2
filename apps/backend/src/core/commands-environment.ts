@@ -187,8 +187,6 @@ import {
   logEnvironmentLifecycleFailure,
   setupScriptFailedError,
 } from "./commands-error-text.js";
-import { startFailureRemedy } from "./environment-start-remedy.js";
-import type { EnvironmentSetupStartResult } from "./environment-operations.js";
 import type { CommandContext } from "./commands-context.js";
 import {
   startContainerWithAgentAccounts,
@@ -203,8 +201,10 @@ import {
 import {
   formatEnvironmentIsolationNotice,
   localEnvironmentIsolationEnv,
+  startFailureRemedy,
   withEnvironmentIsolation,
-} from "./environment-isolation.js";
+  type EnvironmentSetupStartResult,
+} from "./environments/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 

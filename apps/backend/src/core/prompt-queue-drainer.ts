@@ -7,7 +7,7 @@ import {
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
-import { isGeneratedEnvironmentName } from "./environment-name.js";
+import { isGeneratedEnvironmentName } from "./environments/index.js";
 import { promptQueueHeadHeldByEdit } from "@orkestrator/protocol/prompt-queue-edit";
 import { composeDraftHoldsQueue } from "./compose-draft-occupancy.js";
 import { recurringWorkMetrics } from "./recurring/index.js";

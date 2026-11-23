@@ -16,7 +16,7 @@ import {
 } from "@orkestrator/protocol/claude-background-commands";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 import { existsSync } from "node:fs";
-import { deleteEnvironmentTask } from "./environment-delete.js";
+import { deleteEnvironmentTask } from "./environments/delete.js";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -59,7 +59,6 @@ import {
   resolveManagedAcpBinary,
   resolveBunBinary,
 } from "./commands-agent-support.js";
-import { environmentStateDirectory } from "./environment-state-paths.js";
 import { ensureBridgeRuntime, onDemandBridgeRuntime } from "./bridge-runtime-install.js";
 import { getHostPort } from "./commands-container-exec.js";
 import {
@@ -134,7 +133,11 @@ import {
   type PreparedOpenCodeHostLaunch,
 } from "./opencode2/index.js";
 import { coordinatorRoleCapabilities } from "./control-mcp/tools.js";
-import { withEnvironmentIsolation, localEnvironmentIsolationEnv } from "./environment-isolation.js";
+import {
+  environmentStateDirectory,
+  withEnvironmentIsolation,
+  localEnvironmentIsolationEnv,
+} from "./environments/index.js";
 import {
   activeAgentAccountShellEnvironment,
   applyActiveAgentAccountEnvironment,
@@ -1538,7 +1541,7 @@ export function stopLocalServer(
   );
 }
 
-export { deleteEnvironment, deleteEnvironmentTask } from "./environment-delete.js";
+export { deleteEnvironment, deleteEnvironmentTask } from "./environments/delete.js";
 
 /**
  * The Claude configuration directory a local tmux launch exports: the active

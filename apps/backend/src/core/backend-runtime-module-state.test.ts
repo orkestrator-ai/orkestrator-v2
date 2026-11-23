@@ -12,7 +12,7 @@ import {
   withEnvironmentDraining,
 } from "./containers/readiness.js";
 import { withCoordinatorReceipt } from "./coordinator/action-scope.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { gitHubCli } from "./git/index.js";
 import { GraphSystemActionMemory } from "./graph-system-action.js";
 import { applyGhChannel } from "./host-maintenance-tasks.js";

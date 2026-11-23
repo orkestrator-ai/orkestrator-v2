@@ -13,7 +13,7 @@
 - **Aggregate result:** failed after 1653.8 s with only the workspace group
   failing (root, bridges and the Codex protocol lockfile passed). Five
   backend failures, all in files the change does not touch:
-  - `apps/backend/src/core/environment-move.test.ts`: `restart recovery
+  - `apps/backend/src/core/environments/move.test.ts`: `restart recovery
     re-links submodules of an adopted or abandoned copy` (5115.78 ms; see
     [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md)).
   - `apps/backend/src/core/multi-review-service.test.ts`: `native follow-up

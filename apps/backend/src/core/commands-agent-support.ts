@@ -12,7 +12,7 @@ import { createLogger, formatLogError, type LogEventOf } from "@orkestrator/prot
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { homePath, runCommand } from "./shell.js";
-import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environment-agent-skills.js";
+import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "./environments/index.js";
 import type { Environment } from "./models.js";
 import type { AgentSkillProvider } from "./agent-skills.js";
 import type { AgentExtensionId, ExtensionCommandRunner } from "./extension-discovery.js";

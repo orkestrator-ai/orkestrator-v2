@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Data } from "effect";
 import { isEnvironmentReadyForAgents as isSharedEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 import type { NativeSessionInvalidationCause } from "@orkestrator/protocol/native-agent-observation";
-import type { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "../environments/index.js";
 import type { UsageLimitStops } from "./usage-limit-resend.js";
 import type { OpenCode2ServerConnection } from "../opencode2/index.js";
 import type { PlanUsageState } from "../plan-usage/index.js";
@@ -1013,7 +1013,7 @@ export {
   COMPACT_TIMESTAMP_ENVIRONMENT_NAME,
   isGeneratedEnvironmentName,
   LEGACY_TIMESTAMP_ENVIRONMENT_NAME,
-} from "../environment-name.js";
+} from "../environments/index.js";
 
 export { nativeAgentSessionStorageKey } from "./session-key.js";
 

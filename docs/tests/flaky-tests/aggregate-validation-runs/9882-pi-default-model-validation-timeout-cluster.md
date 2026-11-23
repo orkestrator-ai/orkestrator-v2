@@ -18,7 +18,7 @@ None of the failing owner files, or the code they test, is touched by the change
 | `apps/backend/src/core/public-api/public-api-projects.test.ts` | `settings > partial edits preserve unrelated fields and conflict on stale revisions` and `settings > rejects unknown keys, bad types and null-as-unset` timed out. | Passed (combined backend rerun below). |
 | `apps/backend/src/core/storage-agent-mail.test.ts` | `refuses a mailbox whose 200-message backlog has no settled eviction candidate` timed out. | Passed. |
 | `apps/backend/src/core/terminal-history.test.ts` | `pages fixed history backwards and rejects a cursor for another history` timed out. | Passed. |
-| `apps/backend/src/core/environment-move.test.ts` | `a failed submodule re-link restores the original checkout` and `restart recovery re-links submodules of an adopted or abandoned copy` timed out. | Passed. |
+| `apps/backend/src/core/environments/move.test.ts` | `a failed submodule re-link restores the original checkout` and `restart recovery re-links submodules of an adopted or abandoned copy` timed out. | Passed. |
 | `tests/unit/runtime-env-wiring.test.ts` | `Grok setup copies portable inputs while leaving its runtime home writable` timed out. | Passed. |
 | `tests/unit/disk-report.test.ts` | Child status was null and the case timed out. | Passed. |
 
@@ -41,7 +41,7 @@ Existing related cases: [environment move 0621](../environments-and-containers/0
 | `apps/backend/src/core/terminal-history.test.ts` | `normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages` timed out (5,009.71 ms). | Passed. |
 | `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | `executable document policy in firefox > popups, new-window links and top navigation reach the sink zero times` timed out (11,396.84 ms). | Passed. |
 | `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | `the external watchdog ends a blocked render within the deadline and the browser is gone` timed out (5,621.97 ms). | Passed. |
-| `apps/backend/src/core/environment-move.test.ts` | `moves a worktree with nested submodules (same disk)` timed out (5,057.24 ms). | Passed. |
+| `apps/backend/src/core/environments/move.test.ts` | `moves a worktree with nested submodules (same disk)` timed out (5,057.24 ms). | Passed. |
 
 The four owners were rerun together from `apps/backend` with `bun test --preload ../../tests/setup-node.ts <four files> --parallel=1`: 114 passed, 0 failed (195.8 s). Related cases: [terminal history 0213](../backend-services-and-tooling/0213-terminal-history-aggregate-timeout.md), [environment move 0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md), [Mermaid watchdog 9866](../design-canvas-and-artifacts/9866-mermaid-watchdog-aggregate-deadline.md) and [artifact engine 0507](../design-canvas-and-artifacts/0507-artifact-engine-chromium-hook-timeout.md).
 

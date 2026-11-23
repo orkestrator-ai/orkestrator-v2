@@ -222,7 +222,7 @@ export interface Environment extends Omit<
   pendingRenamePrompt?: string;
   /**
    * First port of the host port block reserved for this local environment
-   * (`environment-isolation.ts`). Assigned on first use and kept until the
+   * (`environments/isolation.ts`). Assigned on first use and kept until the
    * environment is deleted, so restarts keep the same ports.
    */
   isolationPortBase?: number;

@@ -193,7 +193,7 @@ export class StorageService {
   readonly suborks: SuborksStorage;
   readonly clientState: ClientStateStorage;
   readonly setupApprovals: SetupApprovalsStorage;
-  /** Local environments' port blocks (`environment-isolation.ts`). */
+  /** Local environments' port blocks (`environments/isolation.ts`). */
   readonly environmentIsolation: EnvironmentIsolationStorage;
   readonly watchedPullRequests: WatchedPullRequestsStorage;
   /** This machine's load history (`machine-load.ts`, #2287). */

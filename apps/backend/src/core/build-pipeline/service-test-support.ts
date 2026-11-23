@@ -34,7 +34,7 @@ import type {
   ProviderStatus,
 } from "./provider.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
-import type { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import type { EnvironmentGit } from "./code-rewind.js";
 import type { WorkspaceWriters } from "../workspace-writers.js";
 import type { AgentToolConnection } from "../agent-tools.js";

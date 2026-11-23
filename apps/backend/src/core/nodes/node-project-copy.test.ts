@@ -11,7 +11,7 @@ import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import { createCommandRegistry } from "../commands.js";
 import { createLocalWorktree } from "../commands-environment.js";
-import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage.js";
 import { NodeFileTransfer } from "./node-file-transfer.js";

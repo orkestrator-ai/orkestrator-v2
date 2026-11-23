@@ -137,7 +137,7 @@ import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
 import { ensureProjectHomeEnvironment, readCheckoutBranch } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-service.js";
 import { validateWorktreeLocation } from "./worktrees/index.js";
-import { moveEnvironmentTask } from "./environment-move.js";
+import { moveEnvironmentTask } from "./environments/move.js";
 import {
   describeEnvironmentSetupApproval,
   localSetupWorktree,

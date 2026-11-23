@@ -35,7 +35,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { environmentStateDirectory } from "../../apps/backend/src/core/environment-state-paths";
+import { environmentStateDirectory } from "../../apps/backend/src/core/environments/state-paths";
 import {
   LOCK_FILE_NAME,
   readHostFakeEntryLock,

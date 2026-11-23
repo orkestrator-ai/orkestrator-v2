@@ -48,13 +48,13 @@ const { openBackendDatabase } = await import(path.join(core, "storage-stores.ts"
 const { createCommandRegistry } = await import(path.join(core, "commands.ts"));
 const { BackendRuntime } = await import(path.join(core, "backend-runtime.ts"));
 const { EnvironmentLifecycleTaskTracker } = await import(
-  path.join(core, "environment-lifecycle-tasks.ts")
+  path.join(core, "environments/lifecycle-tasks.ts")
 );
 const { closeEnvironmentCleanupStorage, environmentCleanupLedger } = await import(
-  path.join(core, "environment-cleanup-ledger.ts")
+  path.join(core, "environments/cleanup-ledger.ts")
 );
 const { reconcileEnvironmentCleanup } = await import(
-  path.join(core, "environment-cleanup-reconciler.ts")
+  path.join(core, "environments/cleanup-reconciler.ts")
 );
 const { createTranscriptArtifactService } = await import(
   path.join(core, "transcript-artifacts/runtime-wiring.ts")

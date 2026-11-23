@@ -184,7 +184,7 @@ interface RootSpec {
   /**
    * Codex and OpenCode load skills from any depth beneath their roots
    * (`~/.agents/skills/team/review/SKILL.md`); Claude reads only the top level.
-   * This must stay in step with `rootPlan` in `environment-agent-skills.ts`,
+   * This must stay in step with `rootPlan` in `environments/agent-skills.ts`,
    * which scans the same layouts from inside an environment.
    */
   recursive?: boolean;

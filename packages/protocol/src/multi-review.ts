@@ -1,3 +1,4 @@
+import { isExcusedValidationFailures, type ReviewAddressFindingsResult } from "./review-results.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import type { AgentPlatform } from "./agent-platforms.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
@@ -63,7 +64,15 @@ export const MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION =
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION;
 export const MULTI_REVIEW_ADDRESS_USER_INSTRUCTION =
   "Please address all the issues and coverage gaps.";
-export const MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT = `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`;
+/**
+ * The Address Findings request sent to the reused consolidation session, which
+ * already holds the findings. `validationInstruction` is the backend's
+ * recorded-validation instruction for the round (empty when the review has no
+ * review package); it shares the system-instructions frame.
+ */
+export function multiReviewAddressFindingsPrompt(validationInstruction: string): string {
+  return `${MULTI_REVIEW_ADDRESS_USER_INSTRUCTION}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION, validationInstruction)}`;
+}
 export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
 export const MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE = "Address Findings";
@@ -76,15 +85,20 @@ export const MULTI_REVIEW_FORMER_FIX_TAB_TITLE = "Fix";
 export const MULTI_REVIEW_REPLACED_ADDRESS_FINDINGS_SESSION_NOTICE =
   "The original consolidation conversation was no longer available. A fresh Address Findings session was created and seeded with the consolidated findings.";
 
-/** Build the complete prompt for a fresh custom Address Findings session. */
+/**
+ * Build the complete prompt for a fresh custom Address Findings session.
+ * `validationInstruction` is the backend's recorded-validation instruction for
+ * the round (empty when the review has no review package).
+ */
 export function multiReviewCustomAddressFindingsPrompt(
   report: StructuredReviewReport,
   instruction: string,
+  validationInstruction: string,
 ): string {
   return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}
 ${instruction}
 
-${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}
+${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION, validationInstruction)}
 
 ${wrapSystemInstructions(STRUCTURED_REVIEW_FINDINGS_FRAME_INSTRUCTION)}
 
@@ -509,14 +523,7 @@ export interface MultiReviewWorkflow {
   consolidatedReport?: StructuredReviewReport;
   /** Reviewer overlap in {@link consolidatedReport}; written and cleared with it. */
   consolidationOverlap?: ReviewPanelOverlapV1;
-  addressFindingsResult?: {
-    complete: boolean;
-    summary: string;
-    filesChanged: string[];
-    commandsRun: Array<{ command: string; result: "passed" | "failed"; summary: string }>;
-    notes: string[];
-    limitations: string[];
-  };
+  addressFindingsResult?: ReviewAddressFindingsResult;
   /** The interactive address prompt still needs durable backend dispatch. */
   addressPromptPending?: boolean;
   /** Logical native-agent key reserved for the pending interactive handoff. */
@@ -986,11 +993,13 @@ function isAddressFindingsResult(value: unknown): boolean {
     value.commandsRun.every(
       (entry) =>
         record(entry) &&
-        hasOnlyKeys(entry, ["command", "result", "summary"]) &&
+        hasOnlyKeys(entry, ["command", "result", "summary", "excusedFailures"]) &&
         nonBlank(entry.command, 16_384) &&
         (entry.result === "passed" || entry.result === "failed") &&
         typeof entry.summary === "string" &&
-        entry.summary.length <= 100_000,
+        entry.summary.length <= 100_000 &&
+        (entry.excusedFailures === undefined ||
+          (entry.result === "failed" && isExcusedValidationFailures(entry.excusedFailures))),
     ) &&
     Array.isArray(value.notes) &&
     value.notes.length <= 512 &&

@@ -7,6 +7,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { GraphRun, NodeActivation } from "@orkestrator/protocol/graphs/run";
 import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import { loadGraphAgentInputs } from "../graph-agent-prompt.js";
+import { graphBuiltInPromptText } from "../graph-agent-builtins.js";
+import { GraphArtifactStore } from "../graph-artifacts.js";
 import { multiReviewAddressFindingsIdentity } from "./address-findings-identity.js";
 import {
   graphReviewGap,
@@ -115,6 +118,74 @@ describe("auto-fix and auto-PR on the graph engine", () => {
     expect(run.plan.nodes.find((node) => node.id === "pr")?.kind).toBe("system");
     const agentStarts = w.fakes.callsOf("start").filter((call) => call.kind === "agent");
     expect(agentStarts.map((call) => call.nodeId)).not.toContain("pr");
+  });
+
+  test("the automatic repair consumes the verified round package and keeps an excused rerun failed", async () => {
+    const w = await world(true);
+    const command = "cd '.' && bun test affected.test.ts";
+    w.fakes.referenceContents = (value) =>
+      Buffer.from(
+        JSON.stringify({
+          ...(value as object),
+          validation: [{ command, status: "failed", stdoutPath: null, stderrPath: null }],
+        }),
+      );
+    const rerun = {
+      command,
+      result: "failed" as const,
+      summary: "The regression passed. The unrelated fixture still failed.",
+      excusedFailures: [
+        {
+          failure: "Fixture requires a local service",
+          reason: "environmental" as const,
+          evidence: "The rerun reported the fixture service executable was missing.",
+        },
+      ],
+    };
+    w.fakes.scripts.set("address-findings", ({ port }) =>
+      port === "result"
+        ? {
+            complete: true,
+            summary: "Fixed the branch regression.",
+            filesChanged: ["src/a.ts"],
+            commandsRun: [rerun],
+            notes: [],
+            limitations: [],
+          }
+        : undefined,
+    );
+    const { settled } = await settleWatchingPr(
+      w,
+      (
+        await w.start({
+          autoAddressFindings: true,
+          autoPr: true,
+        })
+      ).id,
+    );
+    const run = await w.run(settled);
+    const activation = only(run, "address-findings");
+    expect(activation.inputs.package).toBe(only(run, "package").outputs.package);
+    const node = run.plan.nodes.find((entry) => entry.id === activation.nodeId);
+    if (node?.kind !== "agent") throw new Error("Expected the repair agent");
+    const artifacts = new GraphArtifactStore({
+      storage: w.fixture.storage,
+      fence: { beginMutation: () => () => undefined },
+    });
+    const inputs = await loadGraphAgentInputs(run, node, activation, artifacts);
+    const prompt = graphBuiltInPromptText({
+      builtIn: "address-findings",
+      inputs: inputs.builtInInputs!,
+      outputs: { report: "result", code: "code" },
+      targetBranch: "main",
+      reportsValidationExcuses: true,
+    });
+    expect(prompt).toContain(".orkestrator/graph-artifacts/");
+    expect(prompt).toContain("bun test affected.test.ts");
+    expect(prompt).toContain("rerun that exact command");
+    expect(prompt).toContain("excusedFailures");
+    expect(settled.addressFindingsResult?.commandsRun).toEqual([rerun]);
+    expect(settled.autoPrLaunch?.state).toBe("launched");
   });
 
   test("an Address Findings run that does not complete fails the review and queues no pull request", async () => {

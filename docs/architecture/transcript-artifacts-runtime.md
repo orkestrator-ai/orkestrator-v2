@@ -349,7 +349,12 @@ with preparation available, so the artifact card and draft inspector show
 prepared by an earlier version. Preparing again builds the shipped context
 and switches to `container` without a restart; the next start uses it
 directly. An explicit `container` setting keeps running the outdated image,
-with a warning and the same `outdated` flag. The backend never rebuilds on
+with a warning and the same `outdated` flag. A successful Mermaid preview
+requires the worker to report a matching identity for the Mermaid and DOMPurify
+bundles it loaded and verified. A container result with a missing or different
+identity asks the user to rebuild the worker, and produces no receipt.
+Previously issued Mermaid receipts without this verification require a new
+preview before publication. The backend never rebuilds on
 its own, because a build can take minutes and pulls the base image. A shipped
 context that cannot be hashed cannot prove an image stale, so the image is
 used as before. A source checkout ships no context, and staging one costs a
@@ -561,7 +566,7 @@ container (any other container id is `policy_denied`), or
 (its inline `data:` bytes). Files over 20 MiB (or over the reader's own
 10 MiB binary limit), or without a `%PDF-` signature, are refused with
 metadata before a worker starts. A `pdf-thumbnail` job then runs the pinned
-`pdfjs-dist@6.4.299` (`pdf.min.mjs` and `pdf.worker.min.mjs` in
+`pdfjs-dist@6.5.438` (`pdf.min.mjs` and `pdf.worker.min.mjs` in
 `RENDERER_BUNDLES`, Apache-2.0, sha256-verified at load and shipped in
 `dist/artifact-runtime/` and the image) inside the worker's isolated page:
 the modules load from in-memory sources, the worker module runs on the page's

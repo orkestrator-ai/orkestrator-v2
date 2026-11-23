@@ -60,6 +60,7 @@ import type {
 import { GraphTypeLibrary, type GraphValueType } from "@orkestrator/protocol/graphs/types";
 import { graphPlanScopeParams, graphPlanSubgraph } from "@orkestrator/protocol/graphs/subgraphs";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
+import type { AddressFindingsValidationCheck } from "./review/index.js";
 import {
   graphBuiltInPromptText,
   graphReviewCoverageGapIds,
@@ -341,15 +342,21 @@ export async function loadGraphAgentInputs(
   activation: Readonly<NodeActivation>,
   artifacts: Pick<GraphArtifactStore, "verify">,
 ): Promise<GraphAgentInputs> {
-  const verified = async (id: string, port: string): Promise<GraphArtifact> => {
+  const validationChecks = new Map<string, AddressFindingsValidationCheck[]>();
+  const verified = async (id: string, port: string, validation = false): Promise<GraphArtifact> => {
     // A node's branches share one sealed-file permit (item 301): a reviewer
     // panel hashes the shared package once, not once per reviewer.
-    const verification = await artifacts.verify(run.id, id, { permit: node.id });
+    const verification = await artifacts.verify(
+      run.id,
+      id,
+      validation ? { validation } : { permit: node.id },
+    );
     if (!verification.ok) {
       throw new GraphAgentPromptError(
         `Input ${port} could not be verified (${verification.code}): ${verification.message}`,
       );
     }
+    if (verification.validationChecks) validationChecks.set(id, verification.validationChecks);
     return verification.artifact;
   };
   const inputs: Record<string, unknown> = {};
@@ -375,7 +382,13 @@ export async function loadGraphAgentInputs(
     // An `items` branch sees one item on the port it replicates over (item 401).
     const perItem = binding?.port === port.name;
     for (const id of ids) {
-      const artifact = await verified(id, port.name);
+      const artifact = await verified(
+        id,
+        port.name,
+        "builtIn" in node.prompt &&
+          node.prompt.builtIn === "address-findings" &&
+          parseGraphTypeRef(port.type)?.name === "review-package",
+      );
       list.push(artifact);
       consumed.push(id);
       readable.set(id, { port: port.name, artifact });
@@ -460,7 +473,7 @@ export async function loadGraphAgentInputs(
     ...(inputWorkspace ? { inputWorkspace } : {}),
   };
   if ("builtIn" in node.prompt) {
-    result.builtInInputs = builtInInputs(run, node, loaded, binding);
+    result.builtInInputs = builtInInputs(run, node, loaded, validationChecks, binding);
   }
   return result;
 }
@@ -469,6 +482,7 @@ function builtInInputs(
   run: Readonly<GraphRun>,
   node: GraphPlanAgentNode,
   loaded: ReadonlyMap<string, GraphArtifact[]>,
+  validationChecks: ReadonlyMap<string, AddressFindingsValidationCheck[]>,
   binding?: { port: string; item: GraphFanOutItem },
 ): Record<string, GraphBuiltInPromptInputValue | GraphBuiltInPromptInputValue[]> {
   const prompt = node.prompt as { builtIn: string };
@@ -511,6 +525,9 @@ function builtInInputs(
         type: artifact.type,
         artifactId: artifact.id,
         ...(value !== undefined ? { value } : {}),
+        ...(validationChecks.has(artifact.id)
+          ? { validationChecks: validationChecks.get(artifact.id)! }
+          : {}),
         ...("file" in artifact.body ? { file: { ...artifact.body.file } } : {}),
         ...(itemIds.length > 0 ? { itemIds } : {}),
         ...(gapIds.length > 0 ? { coverageGapIds: gapIds } : {}),
@@ -617,6 +634,9 @@ export function renderGraphAgentPrompt(input: GraphAgentPromptInput): string {
       inputs: input.inputs.builtInInputs ?? {},
       outputs,
       targetBranch: input.targetBranch,
+      reportsValidationExcuses: node.outputs.some(
+        ({ type }) => type === "address-findings-result@2",
+      ),
       validationPlan: input.validationPlan,
       ...(input.notes ? { notes: input.notes } : {}),
       ...(lens ? { lens } : {}),

@@ -19,6 +19,8 @@ test.use({ actionTimeout: 15_000 });
 test.beforeEach(async ({ page }) => {
   const withoutDocker = page.getByRole("button", { name: "Continue Without Docker", exact: true });
   await page.addLocatorHandler(withoutDocker, (button) => button.click());
+  const withoutClaude = page.getByRole("button", { name: "Continue without Claude", exact: true });
+  await page.addLocatorHandler(withoutClaude, (button) => button.click());
   await acknowledgeDockerReachabilityWarning(page);
 });
 
@@ -71,6 +73,14 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
   delete projectTemplate.engine;
   projectTemplate.id = "qa-project-review";
   projectTemplate.name = "QA project review";
+  // Give fitView a graph wider than the canvas but still above the readable
+  // zoom floor, with run inputs and outputs on either side.
+  projectTemplate.layout = Object.fromEntries(
+    projectTemplate.nodes.map(({ id }: { id: string }, index: number) => [
+      id,
+      { x: (index % 3) * 280, y: Math.floor(index / 3) * 230 },
+    ]),
+  );
   const graphsDirectory = join(status.testProject, ".orkestrator", "graphs");
   await mkdir(graphsDirectory, { recursive: true });
   await writeFile(
@@ -121,7 +131,8 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     // View a built-in: the canvas draws its nodes and loop, and it compiles cleanly.
     await builtIns.getByText("Build pipeline", { exact: true }).click();
     await expect(designer.locator('[data-graph-node-id="review"]')).toBeVisible();
-    await expect(designer.locator("[data-graph-loop]")).toBeVisible();
+    await expect(designer.locator('[data-graph-loop="rounds"]')).toBeVisible();
+    await expect(designer.locator('[data-graph-loop="publication"]')).toBeVisible();
     await expect(designer.locator(".react-flow__edge").first()).toBeAttached();
     await expect(designer.locator("[data-graph-compile-clean]")).toBeVisible();
     await expect(designer.locator("[data-graph-cost]")).toContainText("Sessions");
@@ -171,8 +182,15 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     await expect(
       designer.locator('[data-graph-node-id="prepare"][data-graph-diagnostics]'),
     ).toBeVisible();
+    const edge = designer.locator('.react-flow__edge[data-id="build-prepare"]');
+    const edgeLayer = () =>
+      edge.evaluate((element) => getComputedStyle(element.closest("svg")!).zIndex);
+    const unselectedLayer = await edgeLayer();
     await diagnostic.click();
     await expect(inspector.getByRole("heading", { name: "Edge build-prepare" })).toBeVisible();
+    await expect(edge).toHaveClass(/\bselected\b/);
+    await expect(edge.locator(".react-flow__edge-path")).toHaveCSS("stroke-width", "3px");
+    expect(await edgeLayer()).toBe(unselectedLayer);
     // Selecting the diagnostic brings both ends of the edge into view.
     const canvasBox = (await designer.locator("[data-graph-canvas]").boundingBox())!;
     for (const end of ["build", "prepare"]) {
@@ -212,6 +230,41 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     await expect(projectRows.locator('[data-graph-trust="untrusted"]')).toBeVisible();
     await projectRows.getByRole("button", { name: "Approve" }).click();
     await expect(projectRows.locator('[data-graph-trust="trusted"]')).toBeVisible();
+    await page.setViewportSize({ width: 1920, height: 1200 });
+    await projectRows.getByText("QA project review", { exact: true }).click();
+    await expect(designer.locator("[data-graph-designer-title]")).toHaveText("QA project review");
+    const flow = designer.locator(".react-flow");
+    const marginPercent = () =>
+      flow.evaluate((element) => {
+        const canvas = element.getBoundingClientRect();
+        const nodes = Array.from(element.querySelectorAll(".react-flow__node"), (node) =>
+          node.getBoundingClientRect(),
+        );
+        return {
+          left: ((Math.min(...nodes.map((node) => node.left)) - canvas.left) / canvas.width) * 100,
+          right:
+            ((canvas.right - Math.max(...nodes.map((node) => node.right))) / canvas.width) * 100,
+        };
+      });
+    await expect(async () => {
+      const margins = await marginPercent();
+      expect(margins.left).toBeCloseTo(5.4, 0);
+      expect(margins.right).toBeCloseTo(5.4, 0);
+    }).toPass({ timeout: 10_000 });
+
+    // React Flow's forced mode wins even inside a light-themed ancestor.
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = "light";
+    });
+    await expect(flow).toHaveCSS("color-scheme", "dark");
+    const controls = flow.locator(".react-flow__controls");
+    await expect(controls).toHaveCSS("margin-left", "15px");
+    const nodeBackground = await flow
+      .locator("[data-graph-node-id]")
+      .first()
+      .evaluate((element) => getComputedStyle(element).backgroundColor);
+    await expect(controls.locator("button").first()).toHaveCSS("background-color", nodeBackground);
+    await page.screenshot({ path: testInfo.outputPath("03-fitted-canvas.png") });
 
     // Duplicate a built-in into an editable user template.
     await builtIns.getByText("Multi Review", { exact: true }).click();
@@ -227,7 +280,7 @@ test("Graphs designer shows built-ins, imports JSON and pins diagnostics", async
     // A narrow viewport stacks the panes and keeps them reachable.
     await page.setViewportSize({ width: 820, height: 1000 });
     await expect(designer.locator("[data-graph-canvas]")).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("03-narrow.png") });
+    await page.screenshot({ path: testInfo.outputPath("04-narrow.png") });
   } finally {
     for (const id of created) {
       await invoke("graph_template_delete", { id }).catch(() => undefined);
@@ -343,7 +396,7 @@ test("switching graphs off persists across reload and keeps an open designer usa
     await expect(designer.locator('[data-graph-node-id="review"]')).toBeVisible();
     await expect(page.getByRole("button", { name: "Graphs", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Run graph…", exact: true })).toHaveCount(0);
-    await designer.locator('.react-flow__node[data-id="build"]').click();
+    await designer.getByRole("button", { name: /^Build, agent/ }).press("Enter");
     await expect(
       designer
         .locator("[data-graph-inspector]")

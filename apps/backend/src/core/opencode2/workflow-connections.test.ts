@@ -29,6 +29,7 @@ function setup(workerMailbox?: OpenCode2WorkerMailbox) {
   server = new FakeOpenCode2Server();
   provider = new OpenCode2Provider(server.client(), {
     monitorEvents: false,
+    stopSettleMs: 250,
     mcp: { connectTimeoutMs: 50, sleep: () => Bun.sleep(1) },
     ...(workerMailbox ? { workerMailbox } : {}),
   });

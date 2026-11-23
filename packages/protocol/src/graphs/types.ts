@@ -22,6 +22,7 @@ import {
 import type { GitHubPullRequestChecksState } from "../github-pull-requests.js";
 import { reviewPackageArtifactPath } from "../review-artifacts.js";
 import {
+  GRAPH_ADDRESS_FINDINGS_RESULT_V2_SCHEMA,
   REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
   REVIEW_PR_RESULT_JSON_SCHEMA,
 } from "../review-results.js";
@@ -403,6 +404,33 @@ interface BuiltInSpec {
   formatter?: GraphTypeFormatter;
 }
 
+const ADDRESS_FINDINGS_RESULT_V1: BuiltInSpec = {
+  name: "address-findings-result",
+  version: 1,
+  label: "Address Findings result",
+  description: "What a fixing or building node changed and validated, and whether it finished.",
+  family: "report",
+  schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+  budgets: { maxBytes: VALUE_CAP, maxItems: 10_000 },
+  render: {
+    markdown:
+      "**Complete:** {{complete}}\n\n{{summary}}\n\n{{#commandsRun}}- `{{command}}`: {{result}}\n{{/commandsRun}}",
+    summary: ["complete", "summary"],
+  },
+  example: {
+    complete: true,
+    summary: "Fixed the off-by-one in exportCsv and added a three-row test.",
+    filesChanged: ["src/reports/export.ts", "src/reports/export.test.ts"],
+    commandsRun: [
+      { command: "bun test src/reports", result: "passed", summary: "13 tests passed." },
+    ],
+    notes: [],
+    limitations: [],
+  },
+  validator: "address-findings-result",
+  resultKind: "address-findings-result",
+};
+
 const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
   {
     name: "text",
@@ -750,31 +778,28 @@ const BUILT_IN_SPECS: readonly BuiltInSpec[] = [
     validator: "verification-verdict",
     resultKind: "verification-result",
   },
+  ADDRESS_FINDINGS_RESULT_V1,
   {
-    name: "address-findings-result",
-    version: 1,
-    label: "Address Findings result",
-    description: "What a fixing or building node changed and validated, and whether it finished.",
-    family: "report",
-    schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
-    budgets: { maxBytes: VALUE_CAP, maxItems: 10_000 },
-    render: {
-      markdown:
-        "**Complete:** {{complete}}\n\n{{summary}}\n\n{{#commandsRun}}- `{{command}}`: {{result}}\n{{/commandsRun}}",
-      summary: ["complete", "summary"],
-    },
+    ...ADDRESS_FINDINGS_RESULT_V1,
+    version: 2,
+    description: "A Multi Review repair result with evidence for any excused validation failures.",
+    schema: GRAPH_ADDRESS_FINDINGS_RESULT_V2_SCHEMA,
     example: {
       complete: true,
-      summary: "Fixed the off-by-one in exportCsv and added a three-row test.",
-      filesChanged: ["src/reports/export.ts", "src/reports/export.test.ts"],
+      summary: "Fixed the export regression.",
+      filesChanged: ["src/reports/export.ts"],
       commandsRun: [
-        { command: "bun test src/reports", result: "passed", summary: "13 tests passed." },
+        {
+          command: "bun test src/reports",
+          result: "passed",
+          summary: "13 tests passed.",
+          excusedFailures: null,
+        },
       ],
       notes: [],
       limitations: [],
     },
-    validator: "address-findings-result",
-    resultKind: "address-findings-result",
+    validator: "multi-review-address-findings-result",
   },
   {
     name: "pr-result",

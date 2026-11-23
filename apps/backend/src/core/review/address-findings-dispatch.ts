@@ -1,9 +1,9 @@
 import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
 import {
-  MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT,
   MULTI_REVIEW_ADDRESS_FINDINGS_TAB_TITLE,
   MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION,
   MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+  multiReviewAddressFindingsPrompt,
   multiReviewCustomAddressFindingsPrompt,
   type MultiReviewAddressFindingsSession,
   type MultiReviewWorkflow,
@@ -13,9 +13,16 @@ import {
   NativeAgentProviderSessionMissingError,
   type NativeAgentService,
 } from "../native-agent/service.js";
-import { addressFindingsReportPrompt } from "../build-pipeline/index.js";
+import {
+  addressFindingsReportPrompt,
+  multiReviewAddressFindingsValidationInstruction,
+} from "../build-pipeline/index.js";
 import { MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS } from "./steps.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  verifyAddressFindingsValidation,
+  type AddressFindingsPackageVerifier,
+} from "./address-findings-validation.js";
 
 const log = createLogger("review");
 
@@ -60,6 +67,31 @@ type AddressFindingsNativeAgents = Pick<
   "adoptSession" | "ensureSession" | "dispatchIntent"
 >;
 
+/**
+ * The round's recorded validation and the pipeline's rule for repairing it,
+ * judged against this branch's changes (Multi Review has no ticket). Empty for
+ * a review persisted without a package. `includeRerunRule` is false only for
+ * {@link addressFindingsReportPrompt}, whose tail already says which recorded
+ * commands to rerun.
+ */
+async function validationInstruction(
+  workflow: MultiReviewWorkflow,
+  includeRerunRule: boolean,
+  verify: AddressFindingsPackageVerifier | undefined,
+): Promise<string> {
+  const checks = await verifyAddressFindingsValidation(
+    workflow.environmentId,
+    workflow.reviewPackage,
+    verify,
+  );
+  return multiReviewAddressFindingsValidationInstruction(
+    workflow.reviewPackage,
+    workflow.targetBranch,
+    includeRerunRule,
+    checks,
+  );
+}
+
 function replacementRequestId(workflow: MultiReviewWorkflow, providerSessionId: string): string {
   const replacement = createHash("sha256").update(providerSessionId).digest("hex").slice(0, 24);
   return `multi-review-address-replacement:${workflow.id}:${replacement}`;
@@ -73,6 +105,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
   nativeAgents: AddressFindingsNativeAgents,
   workflow: MultiReviewWorkflow,
   replacement: MultiReviewAddressFindingsSessionReplacement,
+  verifyPackage?: AddressFindingsPackageVerifier,
 ): Promise<MultiReviewAddressFindingsDispatchResult> {
   const session = workflow.addressFindingsSession;
   if (
@@ -92,6 +125,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
       "The Multi Review Address Findings session replacement targeted an unexpected tab",
     );
   }
+  const validation = await validationInstruction(workflow, false, verifyPackage);
   const interactiveSessionKeyPrefix = `multi-review:${workflow.id}:interactive`;
   const logicalSessionKey =
     workflow.addressSessionKey ??
@@ -127,7 +161,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
   const requestId = replacementRequestId(workflow, replacement.replacementProviderSessionId);
   const outcome = await nativeAgents.dispatchIntent({
     ...identity,
-    prompt: `${addressFindingsReportPrompt(workflow.consolidatedReport)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
+    prompt: `${addressFindingsReportPrompt(workflow.consolidatedReport, validation)}\n\n${wrapSystemInstructions(MULTI_REVIEW_INTERACTIVE_RESPONSE_INSTRUCTION)}`,
     requestId,
     mode: MULTI_REVIEW_INTERACTIVE_ADDRESS_FINDINGS.mode,
   });
@@ -168,6 +202,7 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
   workflow: MultiReviewWorkflow,
   tabs?: AddressFindingsTabPublisher,
   activateTab = false,
+  verifyPackage?: AddressFindingsPackageVerifier,
 ): Promise<MultiReviewAddressFindingsDispatchResult> {
   const session = workflow.addressFindingsSession;
   const selection = workflow.customAddressFindingsModel ?? workflow.addressFindingsModel;
@@ -178,6 +213,11 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
       "The consolidated review report is missing from the Address Findings request",
     );
   }
+  const validation = await validationInstruction(
+    workflow,
+    customAddressFindings || !createsFreshAddressFindingsSession,
+    verifyPackage,
+  );
   const logicalSessionKey = workflow.addressSessionKey ?? `multi-review:${workflow.id}:interactive`;
   const model = selection.model === "default" ? undefined : selection.model;
   const identity = {
@@ -229,10 +269,11 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
     ? multiReviewCustomAddressFindingsPrompt(
         workflow.consolidatedReport!,
         workflow.customAddressFindingsInstruction!,
+        validation,
       )
     : createsFreshAddressFindingsSession
-      ? addressFindingsReportPrompt(workflow.consolidatedReport!)
-      : MULTI_REVIEW_ADDRESS_FINDINGS_PROMPT;
+      ? addressFindingsReportPrompt(workflow.consolidatedReport!, validation)
+      : multiReviewAddressFindingsPrompt(validation);
   const preparedSession: MultiReviewAddressFindingsSession | undefined =
     createsFreshAddressFindingsSession
       ? {

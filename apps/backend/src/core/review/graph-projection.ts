@@ -68,7 +68,7 @@ import {
 import { graphReviewCoverageGapIds } from "../graph-agent-builtins.js";
 import { graphAgentSessionKey } from "../graph-agent-state.js";
 import { multiReviewAddressFindingsIdentity } from "./address-findings-identity.js";
-import { parseAddressFindingsResult } from "./prompts.js";
+import { parseMultiReviewAddressFindingsResult } from "@orkestrator/protocol/review-results";
 import {
   attributeReportFindings,
   consolidationOverlap,
@@ -414,7 +414,7 @@ async function readAddressFindingsResult(
 ): Promise<ReviewAddressFindingsResult | undefined> {
   const value = artifactValue(await read(artifactId));
   try {
-    return parseAddressFindingsResult(value);
+    return parseMultiReviewAddressFindingsResult(value);
   } catch {
     return undefined;
   }

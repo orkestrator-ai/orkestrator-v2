@@ -17,7 +17,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 All versions are exact pins. Do not change them to ranges or `latest`.
 Verified against upstream stable releases on 2026-11-17. The MCP client
 (`@modelcontextprotocol/client`, used by the backend and the Cursor and Pi
-bridges) is pinned at `2.4.0` and the support tool `gh` at `2.104.0`.
+bridges) is pinned at `2.4.0` and the support tool `gh` at `2.105.0`.
 
 ## What is enforced, and what is not
 

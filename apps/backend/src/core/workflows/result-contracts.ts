@@ -23,6 +23,10 @@ import { validateGraphProvenance } from "@orkestrator/protocol/graphs/provenance
 import { SUBORK_RESULT_KIND } from "@orkestrator/protocol/suborks";
 import { validateWorkflowJsonSchema } from "@orkestrator/protocol/workflow-json-schema";
 import {
+  MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+  parseMultiReviewAddressFindingsResult,
+} from "@orkestrator/protocol/review-results";
+import {
   WORKFLOW_RESULT_KINDS,
   WORKFLOW_RESULT_VALIDATION_TOOL_NAME,
   workflowResultToolName,
@@ -251,8 +255,17 @@ function finalAddressFindingsResult(
     inspectTextArray(issues, value.limitations, "$.limitations");
     if (Array.isArray(value.commandsRun)) {
       value.commandsRun.forEach((entry, index) => {
-        if (record(entry))
-          inspectFinalText(issues, entry.summary, `$.commandsRun[${index}].summary`);
+        if (!record(entry)) return;
+        const path = `$.commandsRun[${index}]`;
+        inspectFinalText(issues, entry.summary, `${path}.summary`);
+        if (Array.isArray(entry.excusedFailures)) {
+          entry.excusedFailures.forEach((failure, failureIndex) => {
+            if (!record(failure)) return;
+            const failurePath = `${path}.excusedFailures[${failureIndex}]`;
+            inspectFinalText(issues, failure.failure, `${failurePath}.failure`);
+            inspectFinalText(issues, failure.evidence, `${failurePath}.evidence`);
+          });
+        }
       });
     }
   });
@@ -449,7 +462,7 @@ const STORY_REFINEMENT_SCHEMA = {
  */
 function builtInKind(
   kind: Exclude<WorkflowResultKind, "graph-output" | "graph-template">,
-  schema: () => JsonSchema,
+  schema: WorkflowResultKindDefinition["schema"],
   checks: Omit<
     WorkflowResultKindDefinition,
     "kind" | "schema" | "toolName" | "validationToolName" | "label"
@@ -558,10 +571,23 @@ const BUILT_IN_KINDS: readonly WorkflowResultKindDefinition[] = [
         ? validateReconciliationContext(value, slot.context)
         : [],
   }),
-  builtInKind("address-findings-result", () => REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA, {
-    validator: parses(parseAddressFindingsResult),
-    finalContent: finalAddressFindingsResult,
-  }),
+  builtInKind(
+    "address-findings-result",
+    (slot) =>
+      slot.context?.type === "multi-review-address-findings"
+        ? MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA
+        : REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+    {
+      anySlotSchema: () => MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+      validator: (value, slot) =>
+        parses(
+          slot.context?.type === "multi-review-address-findings"
+            ? parseMultiReviewAddressFindingsResult
+            : parseAddressFindingsResult,
+        )(value),
+      finalContent: finalAddressFindingsResult,
+    },
+  ),
   builtInKind("verification-result", () => VERIFICATION_VERDICT_SCHEMA, {
     // Keep the old two-field shape compatible. The consumer records every
     // omitted snapshot criterion as not checked, including on current turns.

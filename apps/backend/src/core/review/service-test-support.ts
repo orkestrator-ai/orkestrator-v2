@@ -38,13 +38,26 @@ import {
 } from "../build-pipeline/provider.js";
 import { type ProviderDispatchStatus } from "../agent-provider-contract.js";
 import { codexConnection, httpProvider } from "../agent-provider-test-support.js";
-import {
-  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
-  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
-} from "./prompts.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./prompts.js";
+import { MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "@orkestrator/protocol/review-results";
+import type { ReviewPackage } from "@orkestrator/protocol/review-workflow";
+import type {
+  AddressFindingsPackageVerifier,
+  AddressFindingsValidationCheck,
+} from "./address-findings-validation.js";
 import { StorageService } from "../storage/service.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./service.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
+
+/** Verifies a synthetic package produced by a service fixture. */
+export function fixtureAddressFindingsVerifier(
+  validation: AddressFindingsValidationCheck[] = [],
+): AddressFindingsPackageVerifier {
+  return async (_environmentId, _reference, accept) => {
+    accept({ validation } as ReviewPackage);
+    return { valid: true };
+  };
+}
 
 export const REVIEW_HEAD = "1111111111111111111111111111111111111111";
 export const REVIEW_FINGERPRINT = "a".repeat(64);
@@ -335,7 +348,7 @@ export class Provider implements BuildPipelineProvider {
       sent.options.schema === REVIEW_VALIDATION_PLAN_SCHEMA
     )
       return { ok: true, provider: "claude", requestId, value: this.preparationResult as T };
-    if (sent.options.schema === REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA) {
+    if (sent.options.schema === MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA) {
       if (this.addressFindingsStructuredFailure) {
         const code = this.addressFindingsStructuredFailure;
         this.addressFindingsStructuredFailure = null;
@@ -865,6 +878,7 @@ export async function withService(
   const workflowResults = options.toolMode ? new WorkflowResultService(dataDir) : undefined;
   const service = new MultiReviewService(storage, options.invoke ?? stableReviewInvoker, {
     autoAdvance: false,
+    verifyAddressFindingsPackage: fixtureAddressFindingsVerifier(),
     provider: options.createProvider ?? (async () => provider),
     ...(workflowResults
       ? {

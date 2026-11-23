@@ -19,3 +19,11 @@ produce exit status 0 after the buffer overflows. Whether the child was
 signalled and whether the trap ran were not captured. The earlier product
 failure in [case 10001](10001-network-churn-partial-unzip-output.md) was a
 truncated report being counted after that fixture check.
+
+## Recurrence (2026-11-23)
+
+- **Branch base:** `ce2aabba08f9588a7cd5d5f035d964d059e1b303`
+- **Target parent:** `5239d8a334bcc51828a347b9176c8779197f41e9`
+- **Command:** `mise run test` after a frozen dependency install. Bun 1.4.4 ran the root and agent-support group with one worker slot alongside the other default-tier groups.
+- **Failure:** The stand-in returned `status: null` where the test expected exit status 0 at line 103. The case took 7.73 ms. The group reported 5,053 passed, one failed and one skipped.
+- **Isolated rerun:** `env -u NODE_ENV mise run test:logged -- --name merge-network-churn-rerun -- bun test ./e2e/agent-testing/network-churn-report.test.ts --parallel=1 --only-failures` passed. The failure again occurred in the fixture before the report assertion.

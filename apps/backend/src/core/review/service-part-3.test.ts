@@ -38,7 +38,7 @@ import type {
 } from "@orkestrator/protocol/review-workflow";
 import { AmbiguousPromptDispatchError } from "../build-pipeline/provider.js";
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
-import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "./prompts.js";
+import { MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "@orkestrator/protocol/review-results";
 import { StorageService } from "../storage/service.js";
 import { createCommandRegistry } from "../commands-registry.js";
 import type { CommandContext } from "../commands-context.js";
@@ -312,7 +312,7 @@ test("MultiReviewService asks the Address Findings model to correct an invalid f
     expect(completed?.addressFindingsSession?.requestIds).toHaveLength(3);
     const repair = [...provider.sends.values()].find(
       (sent) =>
-        sent.options.schema === REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA &&
+        sent.options.schema === MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA &&
         sent.prompt.includes("repair attempt 1 of 3"),
     );
     expect(repair?.prompt).toContain("Address Findings result");

@@ -108,6 +108,8 @@ export interface WorkerResult {
   probeResults?: ArtifactProbeResultV1[];
   runtimeErrors?: number;
   // mermaid
+  /** Worker identity for the verified bundles that produced this SVG. */
+  rendererBundleHash?: string;
   svg?: string;
   diagramType?: string;
   svgElements?: number;

@@ -34,7 +34,7 @@
     "typecheck": "bun check -p tsconfig.json"
   },
   "dependencies": {
-    "playwright-core": "1.65.0",
+    "playwright-core": "1.65.1",
     "sharp": "0.35.5"
   },
   "devDependencies": {

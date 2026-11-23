@@ -126,12 +126,27 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
       return box;
     };
     const dragNodeBy = async (id: string, dx: number, dy: number) => {
-      const box = await stableBox(node(id).locator("[data-graph-node-title]"));
+      const title = node(id).locator("[data-graph-node-title]");
+      const box = await stableBox(title);
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.down();
-      await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 10 });
-      await page.mouse.up();
+      try {
+        await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, {
+          steps: 10,
+        });
+        // The controlled position changes before the drop commits the layout.
+        await expect
+          .poll(async () => (await title.boundingBox())!.x - box.x)
+          .toBeGreaterThan(dx / 2);
+      } finally {
+        await page.mouse.up();
+      }
     };
+    const position = (id: string) =>
+      node(id).evaluate((element) => {
+        const transform = new DOMMatrixReadOnly(getComputedStyle(element).transform);
+        return { x: transform.m41, y: transform.m42 };
+      });
     /** The keyboard path: "Connect to…" on the selected node, then From and To. */
     const connect = async (from: string, to: string) => {
       await inspector.getByRole("button", { name: /Connect to/ }).click();
@@ -148,7 +163,10 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     await commit(inspector.getByLabel("Template id"), "qa-bake-off");
     await inspector.getByLabel("Template name").fill("QA design bake-off");
     await inspector.getByRole("button", { name: /Add run input/ }).click();
+    const inputsHeight = () => node("$inputs").evaluate((element) => element.clientHeight);
+    const oneInputHeight = await inputsHeight();
     await inspector.getByRole("button", { name: /Add run input/ }).click();
+    await expect.poll(inputsHeight).toBeGreaterThan(oneInputHeight);
     await commit(inspector.locator('[data-graph-run-input="input"]').getByLabel("Name"), "target");
     await inspector.getByRole("button", { name: /Add type/ }).click();
     const typeForm = inspector.locator("[data-graph-type-form]");
@@ -219,7 +237,14 @@ test("Graphs designer builds the design bake-off on the canvas, compiles it clea
     // ---- Judge: fans the briefs in (a list), picks one lens key.
     await add(/Agent/, "judge", "Judge");
     // Moving a node writes every position to the template's layout.
+    const initialJudgePosition = await position("judge");
     await dragNodeBy("judge", 320, 40);
+    const droppedJudgePosition = await position("judge");
+    expect(droppedJudgePosition.x).toBeGreaterThan(initialJudgePosition.x);
+    await page.keyboard.press("Control+z");
+    await expect.poll(() => position("judge")).toEqual(initialJudgePosition);
+    await page.keyboard.press("Control+Shift+z");
+    await expect.poll(() => position("judge")).toEqual(droppedJudgePosition);
     // Undo and redo the next connection with the keyboard.
     await connect("design|out:brief", "judge|in:+");
     const withBriefs = await draftEdgeCount();

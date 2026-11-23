@@ -255,6 +255,7 @@ anonymous shapes transforms produce.
 | `review-package@2` | package | sealed review package (a reference artifact) |
 | `review-report@1`, `finding@1` | report | structured review report (items `issues` of `finding@1`); one issue |
 | `verification-verdict@1`, `address-findings-result@1` | report | per-criterion verdict; what Address Findings (or a build) changed and validated |
+| `address-findings-result@2` | report | Multi Review repair result with evidence for any excused validation failures |
 | `pr-description@1`, `pr-result@1` | text, report | title and body for a system-opened PR; the PR a run opened |
 | `check-summary@1` | report | rolled-up CI state |
 | `decision@1` | decision | `{choice, rationale}`; `choice` narrowed by the port's `choices` |

@@ -11,6 +11,7 @@
  *   each consumer reads them: on the host by streaming the file, in a
  *   container with `realpath`, `stat` and `sha256sum` inside it. Review-package
  *   verification also reads the bounded JSON to verify its linked diff files.
+ *   Address Findings requests a fresh check that covers validation logs too.
  *
  * Every artifact is checked against its type from the run's frozen plan
  * (budgets, schema, domain validator) before it is stored, so a consumer
@@ -57,7 +58,10 @@ import { GraphStorageError } from "./graph-run-errors.js";
 import type { Environment } from "./models.js";
 import { removeConfinedDirectory, writeConfinedFile } from "./path-safety.js";
 import {
+  addressFindingsValidationChecks,
   hashEnvironmentWorkspaceFile,
+  verifyValidationArtifacts,
+  type AddressFindingsValidationCheck,
   MAX_REVIEW_DIFF_ARTIFACT_BYTES,
   WorkspaceFileHashError,
   type WorkspaceFileHashFailure,
@@ -86,7 +90,7 @@ export type GraphArtifactVerificationCode =
   | WorkspaceFileHashFailure;
 
 export type GraphArtifactVerification =
-  | { ok: true; artifact: GraphArtifact }
+  | { ok: true; artifact: GraphArtifact; validationChecks?: AddressFindingsValidationCheck[] }
   | { ok: false; code: GraphArtifactVerificationCode; message: string };
 
 export class GraphArtifactVerificationError extends Error {
@@ -449,6 +453,8 @@ export class GraphArtifactStore {
        * artifact's sealed file (see `filePermits`). Absent: always hash.
        */
       permit?: string;
+      /** A writable repair turn needs a fresh check of the package and its validation logs. */
+      validation?: boolean;
     } = {},
   ): Promise<GraphArtifactVerification> {
     const artifact = await this.runs.getGraphArtifact(runId, artifactId);
@@ -472,18 +478,22 @@ export class GraphArtifactStore {
     }
     const run = await this.runs.getGraphRun(runId);
     // A mock run's files are never written (`putMockReference`).
-    if (run?.mock) return { ok: true, artifact };
+    if (run?.mock)
+      return { ok: true, artifact, ...(options.validation ? { validationChecks: [] } : {}) };
     const permitKey =
-      options.permit !== undefined ? `${runId}\0${artifactId}\0${options.permit}` : undefined;
+      !options.validation && options.permit !== undefined
+        ? `${runId}\0${artifactId}\0${options.permit}`
+        : undefined;
     const granted = permitKey === undefined ? undefined : this.filePermits.get(permitKey);
     if (granted !== undefined && this.now().getTime() - granted < GRAPH_FILE_PERMIT_MAX_AGE_MS) {
       return { ok: true, artifact };
     }
-    const verifyEvidence = () => this.verifyArtifactEvidence(run ?? null, artifact, file);
+    const verifyEvidence = () =>
+      this.verifyArtifactEvidence(run ?? null, artifact, file, options.validation);
     if (permitKey === undefined) {
       const verified = await verifyEvidence();
       if (!verified.ok) this.revokeFilePermits(runId, artifactId);
-      return verified.ok ? { ok: true, artifact } : verified;
+      return verified.ok ? { ...verified, artifact } : verified;
     }
     let flight = this.filePermitFlights.get(permitKey);
     if (!flight) {
@@ -527,7 +537,11 @@ export class GraphArtifactStore {
     run: GraphRun | null,
     artifact: GraphArtifact,
     file: { path: string; sha256: string; bytes: number },
-  ): Promise<{ ok: true } | Extract<GraphArtifactVerification, { ok: false }>> {
+    validation = false,
+  ): Promise<
+    | Omit<Extract<GraphArtifactVerification, { ok: true }>, "artifact">
+    | Extract<GraphArtifactVerification, { ok: false }>
+  > {
     const verified = await this.verifySealedFile(run, file);
     if (!verified.ok) return verified;
     const reference = "value" in artifact.body ? artifact.body.value : undefined;
@@ -577,11 +591,17 @@ export class GraphArtifactStore {
           return { ok: false, code: "hash-mismatch", message: "Review diff evidence changed" };
         }
       }
+      if (validation) {
+        await verifyValidationArtifacts(environment, runner, pkg.validation);
+        return { ok: true, validationChecks: addressFindingsValidationChecks(pkg.validation) };
+      }
     } catch (error) {
       return {
         ok: false,
         code: error instanceof WorkspaceFileHashError ? error.failure : "unavailable",
-        message: "Review diff evidence could not be verified",
+        message: validation
+          ? "Review package or validation evidence could not be verified"
+          : "Review diff evidence could not be verified",
       };
     }
     return { ok: true };

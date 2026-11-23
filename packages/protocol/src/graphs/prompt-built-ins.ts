@@ -210,13 +210,14 @@ const DEFINITIONS: readonly GraphBuiltInPromptDefinition[] = [
         render: "json-frame",
         description: "The findings to address (a review report, findings, or a diagnosis).",
       },
+      recordedValidationInput,
       workspaceInput(false),
     ],
     outputs: [addressFindingsResultOutput(true), workspaceOutput(false)],
     profiles: ["builder"],
     backend:
-      "addressFindingsReportPrompt (build-pipeline/prompts.ts) as Multi Review's Address Findings sends it; multiReviewCustomAddressFindingsPrompt (protocol multi-review.ts) with a user instruction",
-    textMaxBytes: 8 * KIB,
+      "addressFindingsPrompt with multiReviewAddressFindingsValidationInstruction (build-pipeline/prompts.ts); custom instructions use the Multi Review custom fix frame",
+    textMaxBytes: 16 * KIB,
   },
   {
     id: "pipeline-address-findings",

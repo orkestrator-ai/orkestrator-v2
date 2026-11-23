@@ -32,7 +32,11 @@ import {
 import { staticHtmlDocumentText } from "@orkestrator/protocol/static-html-document-text";
 import type { ArtifactDiagnostic } from "@orkestrator/protocol/transcript-artifacts";
 
-import { RENDERER_BUNDLES, loadPinnedBundle } from "./dependency-manifest.js";
+import {
+  RENDERER_BUNDLES,
+  loadPinnedBundle,
+  mermaidRendererBundleHash,
+} from "./dependency-manifest.js";
 import { runProbes } from "./preview-probes.js";
 import {
   JobFailure,
@@ -806,5 +810,7 @@ async function runMermaid(
   result.preSanitize = output.preSanitize;
   result.svgElements = output.finalElements;
   result.edges = output.edges;
+  // Both bundles injected above passed this worker's pinned SHA-256 checks.
+  result.rendererBundleHash = mermaidRendererBundleHash();
   result.ok = true;
 }

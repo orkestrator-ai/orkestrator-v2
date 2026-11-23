@@ -5,6 +5,8 @@ import {
   type AgentModelCatalogReader,
   connectionDefaultsFor,
   createAgentModelCatalogReader,
+  multiReviewAddressFindingsValidationInstruction,
+  MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING,
   type PipelineWorkerMailbox,
   resolveFastMode,
   structuredReportRepairPrompt,
@@ -133,10 +135,10 @@ import {
 } from "../build-pipeline/provider.js";
 import { CONSOLIDATED_REVIEW_SUBMISSION_JSON_SCHEMA } from "./consolidation-scope.js";
 import {
-  parseReviewPreparationResult,
-  REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
-  parseAddressFindingsResult,
-} from "./prompts.js";
+  MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+  parseMultiReviewAddressFindingsResult,
+} from "@orkestrator/protocol/review-results";
+import { parseReviewPreparationResult } from "./prompts.js";
 import { parseReviewPackageReference } from "./package.js";
 import { resolveEnvironmentExecutionPolicy } from "../native-agent/index.js";
 import {
@@ -263,6 +265,11 @@ import {
   type InteractiveAddressFindingsTurnOutcome,
 } from "./auto-pr.js";
 import type { ReviewPackageVerification } from "../commands-review.js";
+import {
+  StaleAddressFindingsEvidenceError,
+  verifyAddressFindingsValidation,
+  type AddressFindingsPackageVerifier,
+} from "./address-findings-validation.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("review");
@@ -668,6 +675,7 @@ export interface MultiReviewServiceOptions extends Omit<
   artifactDispatch?: ArtifactTurnDispatch;
   /** Publication ledger; reviewer transcripts place each publication beside its call. */
   artifactLedger?: ArtifactLedgerSource;
+  verifyAddressFindingsPackage?: AddressFindingsPackageVerifier;
   /**
    * Delivers the durable interactive handoff after {@link address} records it.
    * The supervisor, not a mounted renderer, retries this callback until it
@@ -1791,7 +1799,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           workflow.phase = "ready";
           // A failed Address Findings may have superseded the clean report's pending PR.
           // Restoring that report restores its intent under the same request id.
-          queueCleanReviewAutoPr(workflow);
+          queueCleanReviewAutoPr(
+            workflow,
+            await this.cleanReviewValidationNeedsAttention(workflow),
+          );
           reviewSession(workflow)!.status = "idle";
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;
@@ -3410,7 +3421,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       const nextError = errorMessage(error).slice(0, 4_096);
       const attempts = (workflow.addressPromptAttempts ?? 0) + 1;
       const missingSession = error instanceof MissingMultiReviewAddressFindingsSessionError;
-      const invalidState = error instanceof InvalidMultiReviewAddressFindingsStateError;
+      const staleEvidence = error instanceof StaleAddressFindingsEvidenceError;
+      const invalidState =
+        error instanceof InvalidMultiReviewAddressFindingsStateError || staleEvidence;
       if (missingSession || invalidState || attempts >= this.maxAddressFindingsDispatchAttempts()) {
         // A definitive miss cannot recover under the old provider id. Other
         // persistent failures stop after a bounded budget so activity and user
@@ -3431,6 +3444,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             .catch(() => undefined);
         }
         workflow.phase = "failed";
+        if (staleEvidence) workflow.reviewSnapshotStale = true;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
         clearPendingAddressFindingsIdentity(workflow);
@@ -3540,18 +3554,31 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             launch.requestId,
             interactiveAddressFindingsSettled ? authorize : undefined,
           );
-        outcome =
-          interactiveAddressFindingsSettled &&
-          this.options.withInteractiveAddressFindingsSessionFence
-            ? await this.options.withInteractiveAddressFindingsSessionFence(
-                workflow,
-                workflow.addressFindingsSession!,
-                deliver,
-              )
-            : await deliver();
+        if (cleanReviewReady && (await this.cleanReviewValidationNeedsAttention(workflow))) {
+          outcome = {
+            kind: "skipped",
+            message:
+              "Recorded validation still needs Address Findings, so no PR agent was launched.",
+          };
+        } else {
+          await this.assertFence(workflow.id, token);
+          outcome =
+            interactiveAddressFindingsSettled &&
+            this.options.withInteractiveAddressFindingsSessionFence
+              ? await this.options.withInteractiveAddressFindingsSessionFence(
+                  workflow,
+                  workflow.addressFindingsSession!,
+                  deliver,
+                )
+              : await deliver();
+        }
       } catch (error) {
+        if (error instanceof ControllerFenceError) throw error;
         // A follow-up failure must never fail the review that already finished.
-        outcome = { kind: "retry", message: errorMessage(error) };
+        outcome = {
+          kind: error instanceof StaleAddressFindingsEvidenceError ? "skipped" : "retry",
+          message: errorMessage(error),
+        };
       }
       await this.assertFence(workflow.id, token);
       if (outcome.kind === "pending") {
@@ -4822,7 +4849,25 @@ export class MultiReviewService implements KeyedWorkflowOwner {
               }),
           });
         } else {
-          prompt = addressFindingsReportPrompt(workflow.consolidatedReport!);
+          const checks = await verifyAddressFindingsValidation(
+            workflow.environmentId,
+            workflow.reviewPackage,
+            this.options.verifyAddressFindingsPackage,
+          );
+          prompt = addressFindingsReportPrompt(
+            workflow.consolidatedReport!,
+            [
+              multiReviewAddressFindingsValidationInstruction(
+                workflow.reviewPackage,
+                workflow.targetBranch,
+                false,
+                checks,
+              ),
+              workflow.reviewPackage ? MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING : "",
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          );
         }
       }
       await this.assertFence(workflow.id, token);
@@ -4831,7 +4876,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           ? REVIEW_VALIDATION_PLAN_SCHEMA
           : request.kind === "consolidate"
             ? (STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema)
-            : REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA;
+            : MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA;
       const resultKind: WorkflowResultKind = multiReviewStepResultKind(request.kind);
       const stage = `Multi Review ${modelLabel} step`;
       let agentMcp: AgentToolConnection | undefined;
@@ -4855,7 +4900,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                   workflow.validationRun?.plan,
                 ),
               }
-            : {}),
+            : request.kind === "address-findings"
+              ? { context: { type: "multi-review-address-findings" } }
+              : {}),
         });
       }
       // Same reason as the reviewer dispatch: pay the cold start before the
@@ -5356,17 +5403,19 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       }
       workflow.consolidatedReport = provenance.report;
       workflow.consolidationOverlap = consolidationOverlap(parsed.data, workflow.reviewers);
+      const validationNeedsAttention = await this.cleanReviewValidationNeedsAttention(workflow);
+      await this.assertFence(workflow.id, token);
       if (workflow.restartAddressFindingsAfterConsolidation) {
         delete workflow.restartAddressFindingsAfterConsolidation;
         queueRestartedAddressFindings(workflow);
-      } else if (multiReviewAutoAddressFindingsDue(workflow)) {
+      } else if (multiReviewAutoAddressFindingsDue(workflow, validationNeedsAttention)) {
         // Save the report and fix intent atomically, so a restart cannot lose
         // the handoff or send it twice. The supervisor owns delivery.
         queueDefaultAddressFindings(workflow);
       } else {
         workflow.phase = "ready";
         // Nothing to fix, so auto-PR moves straight on to the PR.
-        queueCleanReviewAutoPr(workflow);
+        queueCleanReviewAutoPr(workflow, validationNeedsAttention);
       }
       session.status = "idle";
       session.completedAt = nowIso();
@@ -5378,7 +5427,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.release(workflow, token);
       return;
     }
-    let fixed: ReturnType<typeof parseAddressFindingsResult>;
+    let fixed: ReturnType<typeof parseMultiReviewAddressFindingsResult>;
     if (
       !result.ok &&
       result.error.code !== "schema_retry_exhausted" &&
@@ -5392,7 +5441,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           typeof result.error.details?.path === "string" ? result.error.details.path : "$";
         throw new FixResultValidationError(result.error.message, path, result.error.details);
       }
-      fixed = parseAddressFindingsResult(result.value);
+      fixed = parseMultiReviewAddressFindingsResult(result.value);
     } catch (error) {
       const diagnostic =
         error instanceof FixResultValidationError
@@ -5469,7 +5518,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           }
         : request.kind === "address-findings"
           ? {
-              schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
+              schema: MULTI_REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
               resultLabel: "Address Findings result",
               workLabel: "fix work",
               stageLabel: "Address Findings stage",
@@ -5612,7 +5661,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     delete workflow.pausedStep;
     workflow.error = errorMessage(error).slice(0, 4_096);
     delete workflow.validationStopRequested;
-    if (error instanceof ReviewSnapshotChangedError) {
+    if (
+      error instanceof ReviewSnapshotChangedError ||
+      error instanceof StaleAddressFindingsEvidenceError
+    ) {
       workflow.reviewSnapshotStale = true;
     }
     if (failedDuringReview) {
@@ -5863,6 +5915,33 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       this.evidencePermits.invalidate(workflow.id);
       throw error;
     }
+  }
+
+  private async cleanReviewValidationNeedsAttention(
+    workflow: MultiReviewWorkflow,
+  ): Promise<boolean> {
+    if (
+      !workflow.reviewPackage ||
+      !consolidatedReportIsClean(workflow) ||
+      (!workflow.autoPr && !workflow.autoAddressFindings)
+    )
+      return false;
+    const run = workflow.validationRun;
+    if (
+      "kind" in workflow.reviewPackage &&
+      run?.id === workflow.reviewPackage.id &&
+      run.plan.headRef === workflow.reviewPackage.headRef
+    ) {
+      return validationPreparation(run, { allowCancelled: true }).validation.some(
+        ({ status }) => status === "failed" || status === "incomplete",
+      );
+    }
+    const checks = await verifyAddressFindingsValidation(
+      workflow.environmentId,
+      workflow.reviewPackage,
+      this.options.verifyAddressFindingsPackage,
+    );
+    return checks.length > 0;
   }
 
   private async assertReviewPackageIntegrity(

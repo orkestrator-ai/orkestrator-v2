@@ -43,6 +43,7 @@ import {
   cleanReport,
   completedAddressFindings,
   consolidatedReport,
+  fixtureAddressFindingsVerifier,
   mutateStoredWorkflow,
   orderedAutoFlow,
   seedLegacyFixingWorkflow,
@@ -267,6 +268,49 @@ test("MultiReviewService does not auto-fix a clean consolidated report", async (
   );
 });
 
+test.each(["failed", "incomplete"] as const)(
+  "MultiReviewService dispatches one repair before Auto-PR for a clean report with %s validation",
+  async (status) => {
+    const provider = new Provider();
+    provider.consolidationReport = cleanReport;
+    const events: string[] = [];
+    const flow = orderedAutoFlow(events);
+    await withService(
+      `env-clean-report-validation-${status}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        const queued = await advanceUntil(
+          service,
+          snapshot,
+          started.id,
+          (workflow) => workflow.addressPromptPending === true,
+        );
+        expect(queued.consolidatedReport).toMatchObject({ issues: [], testCoverageGaps: [] });
+        expect(queued.autoPrLaunch).toBeUndefined();
+        expect(events).toEqual([]);
+        await service.advanceNow(started.id);
+        expect(events).toEqual(["fix-dispatch"]);
+        expect((await snapshot(started.id))?.autoPrLaunch).toBeUndefined();
+      },
+      {
+        autoAddressFindings: true,
+        autoPr: true,
+        packageFlow: true,
+        invoke: flow.invoke,
+        serviceOptions: {
+          verifyAddressFindingsPackage: fixtureAddressFindingsVerifier([
+            { command: "bun test", status },
+          ]),
+          dispatchAddressFindingsPrompt: async () => {
+            events.push("fix-dispatch");
+          },
+        },
+      },
+    );
+  },
+);
+
 test.each([true, false])(
   "MultiReviewService opens the PR straight after a clean consolidated report (auto-fix %s)",
   async (autoAddressFindings) => {
@@ -319,7 +363,12 @@ test.each([true, false])(
         autoPr: true,
         packageFlow: true,
         invoke: flow.invoke,
-        serviceOptions: { dispatchAddressFindingsPrompt: flow.dispatchAddressFindingsPrompt },
+        serviceOptions: {
+          verifyAddressFindingsPackage: fixtureAddressFindingsVerifier([
+            { command: "bun test", status: "passed" },
+          ]),
+          dispatchAddressFindingsPrompt: flow.dispatchAddressFindingsPrompt,
+        },
       },
     );
   },
@@ -401,6 +450,7 @@ test("restores a pending clean-review PR and retries its delivery without a rend
       await service.shutdown();
       const replacement = new MultiReviewService(storage, pr.invoke, {
         autoAdvance: false,
+        verifyAddressFindingsPackage: fixtureAddressFindingsVerifier(),
         provider: async () => provider,
         addressFindingsDispatchRetryMs: 0,
       });
@@ -417,6 +467,7 @@ test("restores a pending clean-review PR and retries its delivery without a rend
       }
       const background = new MultiReviewService(storage, pr.invoke, {
         autoAdvance: true,
+        verifyAddressFindingsPackage: fixtureAddressFindingsVerifier(),
         pollIntervalMs: 5,
         provider: async () => provider,
         addressFindingsDispatchRetryMs: 0,

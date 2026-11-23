@@ -18,7 +18,12 @@ const identity = {
   logicalSessionKey: "env-env-1:tab-opencode-stop",
 };
 
-function openCodeProvider(server: FakeOpenCode2Server) {
+/**
+ * A short stop settle window keeps each stop from waiting out the production
+ * three seconds. `null` keeps the production window, for the cases whose
+ * assertions are about polling across it while every read is slow.
+ */
+function openCodeProvider(server: FakeOpenCode2Server, stopSettleMs: number | null = 250) {
   return createNativeAgentProvider(
     { agent: "opencode", baseUrl: server.baseUrl, authToken: "pw", directory: "/work" },
     {
@@ -29,7 +34,11 @@ function openCodeProvider(server: FakeOpenCode2Server) {
           directory: "/work",
           generation: "g1",
         }),
-        createProvider: () => new OpenCode2Provider(server.client(), { monitorEvents: false }),
+        createProvider: () =>
+          new OpenCode2Provider(server.client(), {
+            monitorEvents: false,
+            ...(stopSettleMs === null ? {} : { stopSettleMs }),
+          }),
       },
     },
   );
@@ -51,7 +60,7 @@ describe("OpenCode stop with a pending-request reject the server refuses", () =>
       const server = new FakeOpenCode2Server(async () => {
         if (delayed && stopping) await Bun.sleep(90);
       });
-      const provider = openCodeProvider(server);
+      const provider = openCodeProvider(server, delayed ? null : 250);
       const calls: string[] = [];
       let polls = 0;
       provider.status = async () => {

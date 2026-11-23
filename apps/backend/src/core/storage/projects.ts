@@ -1551,7 +1551,7 @@ export class ProjectsRepository {
         }
         if (updates.pendingAgentLaunch && !environment.pendingAgentLaunch) {
           environment.startupLaunchGeneration = (environment.startupLaunchGeneration ?? 0) + 1;
-          environment.startupAgentSession = undefined;
+          delete environment.startupAgentSession;
         }
         environment.pendingAgentLaunch = updates.pendingAgentLaunch;
       }
@@ -1639,7 +1639,7 @@ export class ProjectsRepository {
       }
       if ("startupAgentSession" in updates) {
         if (updates.startupAgentSession == null) {
-          environment.startupAgentSession = undefined;
+          delete environment.startupAgentSession;
         } else if (isStartupAgentSession(updates.startupAgentSession)) {
           environment.startupAgentSession = updates.startupAgentSession;
         } else {

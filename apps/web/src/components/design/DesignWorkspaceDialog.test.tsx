@@ -238,12 +238,24 @@ describe("DesignWorkspaceDialog", () => {
       const submit = screen.getByRole("button", {
         name: "Create design workspace",
       }) as HTMLButtonElement;
+      expect(submit.disabled).toBe(false);
       act(() => {
         dispatchImagePaste(brief());
         fireEvent.submit(submit.closest("form")!);
       });
       expect(submit.disabled).toBe(true);
       await settlePaste();
+      expect(submit.disabled).toBe(true);
+      expect(
+        invokeMock.mock.calls.filter(([command]) => command === "write_local_file"),
+      ).toHaveLength(1);
+      const requestSubmit = spyOn(submit.form!, "requestSubmit");
+      try {
+        fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+        expect(requestSubmit).not.toHaveBeenCalled();
+      } finally {
+        requestSubmit.mockRestore();
+      }
       expect(createTab).not.toHaveBeenCalled();
       expect(invokeMock.mock.calls.some(([command]) => command === "design_action")).toBe(false);
       await act(async () => write.resolve("/tmp/wt/shot.png"));
@@ -1318,7 +1330,28 @@ describe("DesignWorkspaceDialog", () => {
       expect(createTab).not.toHaveBeenCalled();
     });
 
-    test("a create in progress is not started twice", async () => {
+    test("an empty required name triggers form constraint validation", async () => {
+      const createTab = addingCreateTab();
+      mount(createTab);
+      await flush();
+      const name = screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+      const invalid = mock(() => {});
+      const submit = mock(() => {});
+      name.addEventListener("invalid", invalid);
+      name.form!.addEventListener("submit", submit);
+      fireEvent.change(name, { target: { value: "" } });
+
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+
+      expect(name.validity.valueMissing).toBe(true);
+      expect(invalid).toHaveBeenCalledTimes(1);
+      expect(submit).not.toHaveBeenCalled();
+      await flush();
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(createTab).not.toHaveBeenCalled();
+    });
+
+    test("a held shortcut on Initial frame keeps the menu closed and creates once", async () => {
       const pending = deferred<DesignCanvas>();
       invokeMock.mockImplementation(async (command: string, args?: unknown) => {
         if (command === "enqueue_prompt_queue_message") return {};
@@ -1330,9 +1363,13 @@ describe("DesignWorkspaceDialog", () => {
       const createTab = addingCreateTab();
       mount(createTab);
       await flush();
-      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+      const frame = screen.getByRole("combobox", { name: "Initial frame" });
+      act(() => frame.focus());
+      fireEvent.keyDown(frame, { key: "Enter", metaKey: true });
       await flush();
       expect(screen.getByRole("button", { name: "Opening…" })).toBeTruthy();
+      fireEvent.keyDown(frame, { key: "Enter", metaKey: true, repeat: true });
+      expect(frame.getAttribute("aria-expanded")).toBe("false");
       fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
       fireEvent.keyDown(brief(), { key: "Enter", ctrlKey: true });
       await flush();
@@ -1364,7 +1401,31 @@ describe("DesignWorkspaceDialog", () => {
       await act(async () => useHostPathPickerStore.getState().settle(null));
     });
 
-    test("on Saved designs, which has no single primary action, nothing happens", async () => {
+    test("on Open design without an environment the shortcut does not open the picker", async () => {
+      renderInAppCommandScope(
+        <DesignWorkspaceDialog
+          open
+          onOpenChange={() => {}}
+          environmentId=""
+          createTab={() => true}
+          loadReadiness={async () => ready}
+        />,
+      );
+      await flush();
+      await switchTo("Open design");
+      const chooseFile = screen.getByRole("button", {
+        name: "Choose .orkdes file…",
+      }) as HTMLButtonElement;
+      expect(chooseFile.disabled).toBe(true);
+      const tab = screen.getByRole("tab", { name: "Open design" });
+      const event = createEvent.keyDown(tab, { key: "Enter", ctrlKey: true });
+      fireEvent(tab, event);
+      await flush();
+      expect(event.defaultPrevented).toBe(true);
+      expect(useHostPathPickerStore.getState().request ?? null).toBe(null);
+    });
+
+    test("on Saved designs the shortcut keeps Sort designs closed and plain Enter opens it", async () => {
       invokeMock.mockImplementation(async (command) => {
         if (command === "design_library")
           return {
@@ -1390,16 +1451,20 @@ describe("DesignWorkspaceDialog", () => {
       await switchTo("Saved designs");
       await flush();
       const before = invokeMock.mock.calls.length;
-      const event = createEvent.keyDown(screen.getByRole("dialog", { name: "Design workspace" }), {
-        key: "Enter",
-        metaKey: true,
-      });
-      fireEvent(screen.getByRole("dialog", { name: "Design workspace" }), event);
+      const sort = screen.getByRole("combobox", { name: "Sort designs" });
+      act(() => sort.focus());
+      for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+        const event = createEvent.keyDown(sort, { key: "Enter", ...modifier });
+        fireEvent(sort, event);
+        expect(event.defaultPrevented).toBe(true);
+        expect(sort.getAttribute("aria-expanded")).toBe("false");
+      }
       await flush();
-      expect(event.defaultPrevented).toBe(false);
       expect(invokeMock.mock.calls.length).toBe(before);
       expect(createTab).not.toHaveBeenCalled();
       expect(useHostPathPickerStore.getState().request ?? null).toBe(null);
+      fireEvent.keyDown(sort, { key: "Enter" });
+      expect(screen.getByRole("listbox")).toBeTruthy();
     });
   });
 });

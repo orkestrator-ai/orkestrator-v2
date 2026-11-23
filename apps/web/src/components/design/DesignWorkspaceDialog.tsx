@@ -609,14 +609,13 @@ export function DesignWorkspaceDialog({
   const openDisabled = busy || !environmentId;
 
   // Cmd+Enter (Ctrl+Enter off macOS) from anywhere in the dialog does what the
-  // current tab's primary button does, and nothing while that button is
-  // disabled. Captured so a focused Select trigger does not open on it instead.
-  // Saved designs has no single primary action, so its rows keep the key.
+  // current tab's primary button does when enabled. Consume the chord even
+  // on repeats and Saved designs so it cannot open a focused Select.
   const handleDialogKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || event.repeat || !isSubmitShortcut(event)) return;
-    if (mode === "saved") return;
+    if (event.defaultPrevented || !isSubmitShortcut(event)) return;
     event.preventDefault();
     event.stopPropagation();
+    if (event.repeat || mode === "saved") return;
     if (mode === "new") {
       // Through the form, so the Name field's constraints apply as on a click.
       if (!createDisabled) newDesignFormRef.current?.requestSubmit();

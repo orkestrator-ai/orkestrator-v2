@@ -2795,7 +2795,7 @@ bridge assumes it does). Record each when it is first checked live.
 3. Mirror the version into `ANTIGRAVITY_CLI_VERSION` and the linux digests
    into the `ANTIGRAVITY_SHA` literals in `docker/Dockerfile`, and the
    version into `PROVIDER_STATE_TRACED_VERSIONS` in
-   `apps/backend/src/core/container-state-layout.ts`.
+   `apps/backend/src/core/containers/state-layout.ts`.
 4. Re-run the `initialize` probe above (`agy acp --process-per-session` with
    a throwaway `HOME`), compare it with the list, and check that
    `AGY_CLI_DISABLE_AUTO_UPDATE` is still honoured.

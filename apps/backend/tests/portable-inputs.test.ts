@@ -22,7 +22,7 @@ import {
   selectedInputProviders,
 } from "../src/core/portable-input-status";
 import { writeLocationIndex } from "../src/core/capabilities/native-ownership";
-import { environmentStateDirectory } from "../src/core/environment-state-paths";
+import { environmentStateDirectory } from "../src/core/environments/state-paths";
 import {
   CURSOR_MCP_STAGED_INPUTS_VERSION,
   IMAGE_CAPABILITIES,

@@ -143,7 +143,7 @@ A request changed by the agent (`update_interaction`) or by a user revision
 bumps its revision; a submission against an older revision is `stale`, and
 the draft is kept. Superseded and expired requests refuse submissions.
 Deleting an environment removes its requests, retired request IDs, receipts,
-drafts and deliverable metadata (owner sweep in `environment-delete.ts`).
+drafts and deliverable metadata (owner sweep in `environments/delete.ts`).
 
 ## Budgets
 

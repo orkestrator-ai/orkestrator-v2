@@ -18,7 +18,7 @@ suites failed before they tested the change.
 
 ## What each local environment gets
 
-`environment-isolation.ts` (backend) gives every local environment:
+`environments/isolation.ts` (backend) gives every local environment:
 
 | Variable | Value |
 | --- | --- |
@@ -146,7 +146,7 @@ user commands, bridges, coordinator and bug-report runtimes, and review workers.
 The worker tests exercise both successful and failed reservations and verify that
 status and cancel do not allocate blocks.
 
-`environment-isolation.integration.test.ts` keeps a listener alive after deleting
+`environments/isolation.integration.test.ts` keeps a listener alive after deleting
 its environment, then allocates an id with the same hash start. It also checks
 IPv6-only occupancy and reuse after the listener stops.
 `tmux/environment-isolation.integration.test.ts` launches two fixture Claude
@@ -162,6 +162,6 @@ It removes only its own Compose resources and temporary storage:
 
 ```bash
 ORKESTRATOR_ISOLATION_COMPOSE_SMOKE=1 mise run test:logged -- --name isolation-compose -- \
-  bun test --cwd apps/backend ./src/core/environment-isolation-compose.integration.test.ts \
+  bun test --cwd apps/backend ./src/core/environments/isolation-compose.integration.test.ts \
   --parallel=1 --only-failures
 ```

@@ -40,7 +40,7 @@ connect wordings as `reason=network-failed`.
 ## The HTTPS remedy
 
 After a local start fails with the SSH connect message or the remote
-timeout, `startFailureRemedy` (`environment-start-remedy.ts`) checks whether
+timeout, `startFailureRemedy` (`environments/start-remedy.ts`) checks whether
 HTTPS would work, and records `lifecycleRemedy: "use-https"` only when:
 
 - the checkout's raw `remote.origin.url` is a GitHub SSH remote

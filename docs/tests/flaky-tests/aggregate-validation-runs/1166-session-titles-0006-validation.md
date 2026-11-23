@@ -41,7 +41,7 @@ branch's `node_modules` linked in (`/tmp/ork-0006/base`, since removed).
 | `apps/backend/src/core/public-api/public-api-project-init-cascade.test.ts` | `project.init > initializes a local repository …` (9.7 s) | 11 pass | not run |
 | `apps/backend/src/core/review-validation-worker.test.ts` | `cooperative parallel groups do not multiply queue or execution deadlines` (2.0 s) | 50 pass | not run |
 | `apps/backend/src/core/transcript-artifacts/content-server.engines.test.ts` | `executable document policy in firefox` (5.0 s) | 39 pass | not run |
-| `apps/backend/src/core/environment-move.test.ts` | Nested-submodule moves, failed re-link, restart re-link, move failure boundaries (five-second deadlines) | 38 pass (`--timeout 60000`) | not run |
+| `apps/backend/src/core/environments/move.test.ts` | Nested-submodule moves, failed re-link, restart re-link, move failure boundaries (five-second deadlines) | 38 pass (`--timeout 60000`) | not run |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | Explicit/configured roots; alias retarget (five-second deadlines) | 8 pass, 1 fail | 7 pass, 2 fail |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | `real Git through the shared owner` (five-second deadlines) | 0 pass, 1 fail | 1 pass, 4 fail |
 | `apps/backend/tests/commands-integration.test.ts` | Git excludes, diff-statistics scan caches (8–16 s) | 52 pass, 3 fail | 53 pass, 2 fail; 1 fail on a second run |

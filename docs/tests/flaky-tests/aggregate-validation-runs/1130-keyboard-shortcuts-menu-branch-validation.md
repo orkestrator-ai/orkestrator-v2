@@ -22,7 +22,7 @@ Each command was `mise exec -- bun test --preload ../../tests/setup-node.ts <fil
 
 | Owning file | Branch alone | Main alone | Disposition |
 | --- | --- | --- | --- |
-| `apps/backend/src/core/environment-move.test.ts` | 32 passed, 6 failed (five-second deadlines) | 15 passed, 23 failed (load average about 117) | Load-dependent; reproduces on main. |
+| `apps/backend/src/core/environments/move.test.ts` | 32 passed, 6 failed (five-second deadlines) | 15 passed, 23 failed (load average about 117) | Load-dependent; reproduces on main. |
 | `apps/backend/tests/commands-integration.test.ts` | 53 passed, 2 failed (artifact excludes, scan caches) | same two failed | Reproduces on main; see 0162, 0300. |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | 1 passed, 3 failed (five-second deadlines) | 0 passed, 2 failed | Reproduces on main; see 0947, 0957. |
 | `apps/backend/tests/worktree-watcher.test.ts` | `observes a real file write` failed | same case failed | Reproduces on main; see 0091. |
@@ -106,7 +106,7 @@ uses the root configuration):
 | --- | --- | --- |
 | `tests/unit/migrate-copy.test.ts` | 10 passed, 2 failed; same extract-status mismatch (1.8 s) | `orkestrator-test-run.Mw4fFX` |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | 20 passed, 2 failed; same macOS `keychainWarning` expectation mismatch (0.9 s) | `orkestrator-test-run.tXqBUq` |
-| `apps/backend/src/core/environment-move.test.ts` | 21 passed, 17 failed, 13 errors; Git/submodule timeouts and cascading removed-fixture errors (163.3 s) | `orkestrator-test-run.9T3sUq` |
+| `apps/backend/src/core/environments/move.test.ts` | 21 passed, 17 failed, 13 errors; Git/submodule timeouts and cascading removed-fixture errors (163.3 s) | `orkestrator-test-run.9T3sUq` |
 | `apps/backend/tests/commands-registry-environments.test.ts` | 66 passed, 2 failed, 1 error; Git/worktree test and following cleanup hook deadlines (41.6 s) | `orkestrator-test-run.NMDyaH` |
 | `apps/backend/tests/commands-integration.test.ts` | 54 passed, 1 failed, 1 error; artifact-exclude status-read timeout and removed fixture (29.0 s) | `orkestrator-test-run.1z6jE2` |
 | `apps/backend/tests/docker-image.test.ts` | 19 passed, 2 failed; same host-address argument expectations (1.8 s) | `orkestrator-test-run.VVqtsA` |

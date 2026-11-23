@@ -4,7 +4,7 @@ import type {
 } from "@orkestrator/protocol/container-recovery";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { MAX_CLEANUP_CANDIDATES, type ProtectionSnapshot } from "./cleanup-inventory.js";
-import { mapWithConcurrency } from "../environment-process-usage.js";
+import { mapWithConcurrency } from "../environments/process-usage.js";
 import { inspectRuntimeShape, legacyExposures } from "../legacy-runtime-shape.js";
 
 /**

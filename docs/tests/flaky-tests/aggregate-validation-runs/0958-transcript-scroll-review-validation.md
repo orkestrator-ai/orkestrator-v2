@@ -9,7 +9,7 @@
 in 708.2 s. Web reported 9,845 passed, 10 skipped and zero failed. All other
 workspace packages except backend passed, as did bridges and the protocol
 lockfile. Backend reported 11,785 passed, 97 skipped and two failures in
-`apps/backend/src/core/environment-move.test.ts`, both five-second timeouts:
+`apps/backend/src/core/environments/move.test.ts`, both five-second timeouts:
 
 - `move_environment > a failed submodule re-link restores the original checkout`
   (5,049.66 ms).
@@ -18,7 +18,7 @@ lockfile. Backend reported 11,785 passed, 97 skipped and two failures in
   [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md).
 
 The complete unchanged backend owner passed with one worker in 41.2 s:
-`mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+`mise run test:logged -- --name environment-move-owner -- bun test --cwd apps/backend ./src/core/environments/move.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
 No backend implementation, assertion, timeout or skip changed.
 
 The original root group exercised an intermediate scroll implementation and
@@ -78,4 +78,4 @@ directory. No native-picker code, assertion, timeout or skip changed.
 
 ## Triage (2026-11-15)
 
-Left open. `apps/backend/src/core/environment-move.test.ts` calls `setDefaultTimeout(30_000)`, smaller than the shared 60 s default in `tests/default-test-timeout.ts`, so that default does not govern the two submodule-move timeouts; [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) own them. The root-group and browser items in this case are not default-budget failures.
+Left open. `apps/backend/src/core/environments/move.test.ts` calls `setDefaultTimeout(30_000)`, smaller than the shared 60 s default in `tests/default-test-timeout.ts`, so that default does not govern the two submodule-move timeouts; [0248](../environments-and-containers/0248-move-restart-recovery-submodule-timeout.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md) own them. The root-group and browser items in this case are not default-budget failures.

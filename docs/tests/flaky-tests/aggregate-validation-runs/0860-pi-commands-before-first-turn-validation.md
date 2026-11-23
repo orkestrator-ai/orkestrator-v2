@@ -9,7 +9,7 @@
   - `apps/backend/tests/codex-subagent-cards.test.ts`: `each child keeps one card, its transcript and status across a fresh backend and a cold restart` (31164.83 ms).
   - `apps/backend/src/core/looped-review-scheduling.test.ts`: `retained history is enumerated only by the safety scan` (5003.31 ms).
   - `apps/backend/src/core/transcript-artifacts/content-server.browser.test.ts`: `served executable document in Chromium` (5003.24 ms).
-  - `apps/backend/src/core/environment-move.test.ts`: `moves a worktree with nested submodules (same disk)` (5057.29 ms); see [0820](0820-multi-review-scale-cost-validation.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md).
+  - `apps/backend/src/core/environments/move.test.ts`: `moves a worktree with nested submodules (same disk)` (5057.29 ms); see [0820](0820-multi-review-scale-cost-validation.md) and [0291](../environments-and-containers/0291-environment-move-submodule-aggregate-timeout.md).
 - **Owner reruns:** each complete unchanged owner run alone with `bun test <file>` from `apps/backend`: codex-subagent-cards 1 passed, looped-review-scheduling 7 passed, content-server browser 1 passed. environment-move alternated over three runs: 36/1 (`restart recovery re-links submodules of an adopted or abandoned copy`, 5076.41 ms), 37/0, 36/1 (`a failed submodule re-link restores the original checkout`, 5057.48 ms), each failure a five-second timeout on a different submodule case, with the worktree on an external volume.
 - **Evidence:** `orkestrator-test-run.EmUGIL/` under the host temporary directory.
 

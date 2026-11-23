@@ -41,7 +41,7 @@ afterwards.
 | `apps/backend/tests/standalone-ready.test.ts` | `escalates SIGTERM to SIGKILL after the grace period` | 6 passed | not needed | [0491](../backend-services-and-tooling/0491-standalone-ready-sigkill-escalation-aggregate.md) (open) |
 | `apps/backend/tests/worktree-watcher.test.ts` | `observes a real file write` | 34 passed | not needed | [0091](../environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md) (open) |
 | `apps/backend/tests/commands-registry-environments.test.ts` | two lifecycle cases (7 s each) | 67 passed, 1 failed | 68 passed | comes and goes on identical files, as in [1101](1101-codex-typed-prompts-0211-validation.md) |
-| `apps/backend/src/core/environment-move.test.ts` | 20 move and recovery cases, five-second deadlines | 33 passed, 5 failed | 34 passed, 4 failed | [1101](1101-codex-typed-prompts-0211-validation.md) and its linked cases |
+| `apps/backend/src/core/environments/move.test.ts` | 20 move and recovery cases, five-second deadlines | 33 passed, 5 failed | 34 passed, 4 failed | [1101](1101-codex-typed-prompts-0211-validation.md) and its linked cases |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | two `real Git through the shared owner` cases (5 s) | 1 passed, 3 failed | 1 passed, 3 failed | [0180](../environments-and-containers/0180-worktree-tracked-edit-cache-hit.md), [1101](1101-codex-typed-prompts-0211-validation.md) |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | three worktree-root cases (20–23 s) | 8 passed, 1 failed | 8 passed, 1 failed | [1101](1101-codex-typed-prompts-0211-validation.md) |
 | `apps/backend/tests/docker-image.test.ts` | two `pinned image identity` cases | 19 passed, 2 failed | 19 passed, 2 failed | recorded here; fails on the base too |
@@ -99,7 +99,7 @@ owner):
 | Owner | Isolated result | Duration |
 | --- | --- | --- |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | 20 pass, 2 fail; the same unexpected `keychainWarning` assertions as 1100 | 1.9 s |
-| `apps/backend/src/core/environment-move.test.ts` | 15 pass, 23 fail, 21 errors; deadlines and teardown errors, so this recurrence is not newly classified as flaky | 236.3 s |
+| `apps/backend/src/core/environments/move.test.ts` | 15 pass, 23 fail, 21 errors; deadlines and teardown errors, so this recurrence is not newly classified as flaky | 236.3 s |
 | `apps/backend/tests/commands-registry-environments.test.ts` | 66 pass, 2 fail, 1 error; fetched-base deadline plus suffix-case hook deadline | 65.8 s |
 | `apps/backend/tests/commands-integration.test.ts` | 54 pass, 1 fail, 1 error; scan-cache deadline; the original artifact-excludes case passed | 53.2 s |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | 16 pass, 5 fail, 4 errors; deadlines and missing fixture directories after teardown | 88.2 s |

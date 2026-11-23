@@ -12,7 +12,7 @@ import {
   switchOriginToHttps,
   USE_HTTPS_REMOTE_ERRORS,
 } from "./ssh-transport.js";
-import { startFailureRemedy } from "../environment-start-remedy.js";
+import { startFailureRemedy } from "../environments/start-remedy.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   gitSshUnreachableMessage,

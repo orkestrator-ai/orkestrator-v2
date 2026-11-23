@@ -11,7 +11,7 @@ import {
   isEnvironmentCleanupExhausted,
   MAX_ENVIRONMENT_CLEANUP_ATTEMPTS,
   parseEnvironmentCleanupLedger,
-} from "../apps/backend/src/core/environment-cleanup-ledger";
+} from "../apps/backend/src/core/environments/cleanup-ledger";
 import { pruneProfiles } from "../apps/desktop/scripts/dev/profile-cleanup";
 import { defaultRuntimeProfileRoots } from "../packages/protocol/src/node/runtime-profile-status";
 import { readStorageDatabaseStore } from "../packages/protocol/src/node/storage-database";

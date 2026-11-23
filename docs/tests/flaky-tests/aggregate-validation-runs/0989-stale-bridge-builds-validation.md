@@ -19,7 +19,7 @@
     ([0192](../environments-and-containers/0192-firewall-bootstrap-shell-timeout.md))
     and `policy 3 allowlist example.com:443/udp chooses blocked HTTPS probe
     example.com` ([0632](../environments-and-containers/0632-firewall-policy-probe-budget.md)).
-  - `apps/backend/src/core/environment-move.test.ts`: `moves a worktree with
+  - `apps/backend/src/core/environments/move.test.ts`: `moves a worktree with
     nested submodules (same disk)`
     ([0621](../environments-and-containers/0621-environment-move-nested-submodules-aggregate-timeout.md)),
     `(copy)`, and `a failed submodule re-link restores the original checkout`

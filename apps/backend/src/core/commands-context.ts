@@ -6,7 +6,7 @@ import type {
 } from "./agent-tools.js";
 import type { BuildPipelineService } from "./build-pipeline/service.js";
 import type { BackendRuntime } from "./backend-runtime.js";
-import type { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import type { EnvironmentLifecycleTaskTracker } from "./environments/index.js";
 import type { JsonRecord, StorageService } from "./storage.js";
 import type { MultiReviewService } from "./review/service.js";
 import type { NativeAgentSuborkService } from "./native-agent/suborks.js";

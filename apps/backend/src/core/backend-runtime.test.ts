@@ -14,7 +14,7 @@ import { OrkestratorBackend } from "./index.js";
 import { dockerOwnerNamespace } from "./containers/ownership.js";
 import type { CommandContext } from "./commands-context.js";
 import { createCommandRegistry } from "./commands-registry.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import type { PtyProcess } from "./pty.js";
 import type { StorageService } from "./storage.js";
 import type { DockerCleanupGrant } from "./containers/cleanup-grants.js";

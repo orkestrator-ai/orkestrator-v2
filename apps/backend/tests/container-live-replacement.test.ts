@@ -771,10 +771,10 @@ describe("C19 deletion interrupted between runtime and volume removal", () => {
     async () => {
       const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } =
-        await import("../src/core/environment-cleanup");
-      const { environmentCleanupLedger } = await import("../src/core/environment-cleanup-ledger");
+        await import("../src/core/environments/cleanup");
+      const { environmentCleanupLedger } = await import("../src/core/environments/cleanup-ledger");
       const { reconcileEnvironmentCleanup } =
-        await import("../src/core/environment-cleanup-reconciler");
+        await import("../src/core/environments/cleanup-reconciler");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c19");
       const migrated = await replaceRuntimePreservingState(
         { environmentId, expectedContainerId: containerId },

@@ -12,7 +12,7 @@ import {
 } from "./commands-projects.js";
 import { createLocalWorktree } from "./commands-environment.js";
 import { createCommandRegistry, type CommandContext } from "./commands.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import type { Project } from "./models.js";
 import { CommandFailedError, runCommand as shellRunCommand } from "./shell.js";
 import { createProject, StorageService } from "./storage.js";

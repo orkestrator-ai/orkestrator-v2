@@ -56,7 +56,7 @@ import {
   READY_BOOT_RECORD,
 } from "./container-lifecycle-fixtures";
 
-import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
+import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks";
 import { BackendRuntime, type BackendRuntimeOptions } from "../src/core/backend-runtime";
 import { terminateProcessTree } from "../src/core/process-tree";
 
@@ -247,9 +247,10 @@ export async function createCommandFixtures() {
   const { setAgentSkillsHomeForTesting } = await import("../src/core/agent-skills");
 
   const { cancelScheduledEnvironmentCleanup } =
-    await import("../src/core/environment-cleanup-reconciler");
+    await import("../src/core/environments/cleanup-reconciler");
 
-  const { closeEnvironmentCleanupStorage } = await import("../src/core/environment-cleanup-ledger");
+  const { closeEnvironmentCleanupStorage } =
+    await import("../src/core/environments/cleanup-ledger");
 
   const tempDirs: string[] = [];
 

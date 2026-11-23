@@ -4,7 +4,7 @@ import {
 } from "@orkestrator/protocol/container-lifecycle";
 import { copyOutBounded, extractSingleTarFile } from "./copy-out.js";
 import { COPY_REFUSED_REMEDY } from "./copy-refusal.js";
-import type { EnvironmentOperations } from "../environment-operations.js";
+import type { EnvironmentOperations } from "../environments/index.js";
 import { isDockerDaemonUnreachable } from "./cli-errors.js";
 import { CommandFailedError, runCommand } from "../shell.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./scripts.js";

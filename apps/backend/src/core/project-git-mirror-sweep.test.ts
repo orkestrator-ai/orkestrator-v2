@@ -5,8 +5,8 @@ import path from "node:path";
 import {
   sweepPreLedgerDiskState,
   ORPHANED_STATE_MIN_AGE_MS,
-} from "./environment-cleanup-reconciler.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+} from "./environments/cleanup-reconciler.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { StorageService } from "./storage.js";
 import { seedStore } from "./storage-test-support.js";

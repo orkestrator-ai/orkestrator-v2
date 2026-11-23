@@ -6,8 +6,8 @@ import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/proto
 import { BackendRuntime } from "./backend-runtime.js";
 import { scheduleMergeCleanupRecovery } from "./commands-servers.js";
 import type { CommandContext } from "./commands.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
-import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
+import { closeEnvironmentCleanupStorage } from "./environments/cleanup-ledger.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
 

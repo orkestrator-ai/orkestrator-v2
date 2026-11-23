@@ -3,7 +3,7 @@
 Status: Living — `apps/backend/src/core/backend-runtime.ts`,
 `terminals/runtime.ts`, `terminals/history.ts`, `local-server-runtime.ts`,
 `opencode2/host-server-state.ts`, `pi-catalog-probes.ts`,
-`environment-operations.ts`, `environment-replacement-fence.ts`,
+`environments/operations.ts`, `environments/replacement-fence.ts`,
 `git/pr-monitor-runtime.ts`, `containers/container-state-cache.ts`,
 `diff-stats-tracking.ts`, `tmux/runtime.ts`, `agent-accounts/runtime.ts`,
 `agent-accounts/last-usage.ts`, `plan-usage/cache.ts`, `cursor-sdk-login.ts`,
@@ -282,9 +282,9 @@ declaration:
 | `containers/lifecycle-service.ts` | `ownedByLabel` | A bounded memo of a container's owner label, which is immutable; a hit counts only for the owner the caller asks with. |
 | `containers/network-owner.ts` | `networkOwners` | A container's network mode, a fact about the daemon. |
 | `containers/readiness.ts` | `drainingContainers` | A container id names one Docker container: new work into a container that is stopping is refused whichever backend asks. The draining environments are on `runtime.environments`. |
-| `environment-cleanup-ledger.ts` | `connections`, `ledgers`, `sweepStates` | Keyed by the resolved data directory; backends that share one share its database too. |
-| `environment-cleanup-reconciler.ts` | `exhaustedWarnings`, `loggedSweepFailures` | Only de-duplicate log lines. |
-| `environment-cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
+| `environments/cleanup-ledger.ts` | `connections`, `ledgers`, `sweepStates` | Keyed by the resolved data directory; backends that share one share its database too. |
+| `environments/cleanup-reconciler.ts` | `exhaustedWarnings`, `loggedSweepFailures` | Only de-duplicate log lines. |
+| `environments/cleanup-reconciler.ts` | `reportedStrayWithContent`, `scheduled` | Keyed by the resolved data directory. |
 | `bug-report-service.ts` | `filingFlights` | Keyed by data directory and report id. |
 | `git/fsmonitor.ts` | `fsmonitorMigrations` | Keyed by worktree path: the migration edits that worktree's config file on the host. |
 | `packages/protocol/src/node/command-capture.ts` | `commandInvocations`, `commandObservers`, `commandCaptureMetrics` | Count this process's own subprocesses for benchmarks and recurring-work metrics; `runCommand` has no backend in reach. |

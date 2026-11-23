@@ -30,7 +30,7 @@
 //   below the modules this file re-exports: the storage layer
 //   (`storage-agent-accounts.ts`, `storage-config.ts`), `commands-servers.ts`,
 //   the host model catalogue, `permission-rules/`, `mcp-management/`,
-//   `capabilities/`, `environment-move-sessions.ts`,
+//   `capabilities/`, `environments/move-sessions.ts`,
 //   `codex-host-login-refresh.ts` and `coordinator/notice-router.ts`. The
 //   modules this file re-exports (`active.ts`, `containers.ts`, …) reach most
 //   of those importers back (the storage layer, `permission-rules/`,

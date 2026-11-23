@@ -20,10 +20,7 @@ import {
 import { quoteShell, resolveBunBinary, validateGitRefName } from "../commands-agent-support.js";
 import { runCommand } from "../shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./validation-worker.js";
-import {
-  localEnvironmentIsolationEnv,
-  withEnvironmentIsolation,
-} from "../environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "../environments/index.js";
 import type { ReviewPreparationResult } from "./prompts.js";
 
 /**
@@ -347,7 +344,7 @@ async function controlReviewValidationOnce(
   const args = ["-e", REVIEW_VALIDATION_CONTROL, payload, REVIEW_VALIDATION_WORKER];
   // A start launches the worker, which hands its environment to every planned
   // command: the worktree's own Compose project and port block, as its
-  // terminals and agents get (`environment-isolation.ts`).
+  // terminals and agents get (`environments/isolation.ts`).
   const isolation =
     action === "start" ? await localEnvironmentIsolationEnv(environment, context.storage) : {};
   const { stdout } =

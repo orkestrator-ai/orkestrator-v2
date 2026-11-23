@@ -2,7 +2,7 @@ import { FAKE_BRIDGE_STARTUP } from "../../tests/fake-bridge-startup.js";
 import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,
   environmentIsolationVariables,
-} from "./environment-isolation.js";
+} from "./environments/isolation.js";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";

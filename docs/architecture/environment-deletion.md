@@ -19,10 +19,10 @@ Paths below are relative to `apps/backend/src/core/`.
 | File | Purpose |
 | --- | --- |
 | `commands-servers.ts` | `deleteEnvironment` and `deleteEnvironmentTask` (the queued entry point, also used by merge cleanup) |
-| `environment-cleanup-ledger.ts` | `EnvironmentCleanupLedger`, `ENVIRONMENT_CLEANUP_STEPS`, sweep state |
-| `environment-cleanup.ts` | `buildEnvironmentCleanupEntry`, step runners, `cleanupEnvironmentBranch`, error redaction |
-| `environment-cleanup-reconciler.ts` | Reconciler, retry scheduling and every orphan sweep |
-| `environment-state-paths.ts` | The per-environment data-directory roots and their key scheme |
+| `environments/cleanup-ledger.ts` | `EnvironmentCleanupLedger`, `ENVIRONMENT_CLEANUP_STEPS`, sweep state |
+| `environments/cleanup.ts` | `buildEnvironmentCleanupEntry`, step runners, `cleanupEnvironmentBranch`, error redaction |
+| `environments/cleanup-reconciler.ts` | Reconciler, retry scheduling and every orphan sweep |
+| `environments/state-paths.ts` | The per-environment data-directory roots and their key scheme |
 | `commands-terminal.ts`, `pty.ts` | `terminateTerminalSessionsForEnvironment` and the PTY handle's `terminate()` |
 | `watch-host.ts` | Directory watches on macOS, held in a helper process so they cannot block the event loop |
 
@@ -159,7 +159,7 @@ Inside the local-server queue:
 A successful deletion then schedules a reconcile pass for whatever earlier
 deletions left pending.
 
-`deleteEnvironment` lives in `environment-delete.ts`. As it reaches each stage
+`deleteEnvironment` lives in `environments/delete.ts`. As it reaches each stage
 it records which one on the environment record (`deletionStep`):
 `stopping-work` (with the tombstone), `terminals`, `workspace-files`,
 `container`, `local-servers`, `worktree` and `records`
@@ -168,7 +168,7 @@ record write is best-effort: a failed one never stops the delete.
 
 The two stages whose work runs in child processes, `container` (the drain and
 the `container`, `volumes` and `network` steps) and `worktree` (the `worktree`
-and `branch` steps), have a deadline (`environment-deletion-steps.ts`): 10 and
+and `branch` steps), have a deadline (`environments/deletion-steps.ts`): 10 and
 20 minutes. When one fires, the stage's signal kills every command it is
 running, including the confined-removal helper, and starts no new one. The
 command runner uses `waitForTermination` and `waitForDescendants` for these
@@ -528,7 +528,7 @@ environment creation or shutdown draining.
   versions were recorded are re-armed once by the first backend that reads
   them. The re-arm is logged; a failure the upgrade did not fix logs the
   "still failing" line again when the cycle ends. The cap and its predicate,
-  `isEnvironmentCleanupExhausted`, live in `environment-cleanup-ledger.ts`;
+  `isEnvironmentCleanupExhausted`, live in `environments/cleanup-ledger.ts`;
   `disk:report` reads the store read-only through `parseEnvironmentCleanupLedger`
   and shows those entries in its `environment cleanup ledger` row (count,
   pending steps, redacted `lastError`, first environment ids), skipping

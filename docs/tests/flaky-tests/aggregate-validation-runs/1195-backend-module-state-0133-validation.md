@@ -35,7 +35,7 @@ Owner reruns used `mise run test:logged -- --name <label> -- bun test --cwd
 | Owning file | Aggregate failures | Owner alone on the branch | Base | Registry |
 | --- | --- | --- | --- | --- |
 | `apps/backend/src/core/host-suspend-detector.test.ts` | `the process-wide registry carries both production signal sources` | Real regression: the poll source now registers per `BackendRuntime`. Test rewritten to build a runtime and check registration and removal; 8 pass | n/a | Not a flake |
-| `apps/backend/src/core/environment-move.test.ts` | 26 cases, five-second deadlines | 26 fail at the default deadline; all 38 pass long (396 s) | Same deadlines on `origin/main` | [1101](1101-codex-typed-prompts-0211-validation.md) and the environment cases it links |
+| `apps/backend/src/core/environments/move.test.ts` | 26 cases, five-second deadlines | 26 fail at the default deadline; all 38 pass long (396 s) | Same deadlines on `origin/main` | [1101](1101-codex-typed-prompts-0211-validation.md) and the environment cases it links |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | `real Git through the shared owner` | Staging in a linked worktree and shared-ref baseline fail even long (15 s) | Same cases fail on `origin/main` | [1101](1101-codex-typed-prompts-0211-validation.md), [0180](../environments-and-containers/0180-worktree-tracked-edit-cache-hit.md) |
 | `apps/backend/tests/worktree-watcher.test.ts` | `observes a real file write` | Fails alone and long | Fails on `origin/main` | [0091](../environments-and-containers/0091-startworktreewatcher-observes-a-real-file-write.md) |
 | `apps/backend/tests/staged-input-relay.test.ts` | Four `staged input relay` cases (relay directory mode 0755, not 0700; an earlier relay not removed) | Fail alone, deterministic | Same four fail | Recorded here; host-dependent, not a flake |
@@ -133,7 +133,7 @@ parallel-only flake.
 
 The unchanged environment-move owner also remained non-green alone:
 `bun test --cwd apps/backend --preload ../../tests/setup-node.ts
-./src/core/environment-move.test.ts --parallel=1 --only-failures` through
+./src/core/environments/move.test.ts --parallel=1 --only-failures` through
 `test:logged` returned 18 passed, 20 failed and 18 between-test errors in
 267.8 seconds (`orkestrator-test-run.3ss5D3`). Tests and hooks exceeded their
 five-second deadlines; ensuing continuations encountered removed fixture

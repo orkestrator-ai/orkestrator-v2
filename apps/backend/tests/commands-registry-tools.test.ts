@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 
 import * as agentSupport from "../src/core/commands-agent-support";
 import { homePath } from "../src/core/shell";
-import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "../src/core/environment-agent-skills";
+import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "../src/core/environments/agent-skills";
 import { createCommandFixtures, type CommandContext } from "./command-fixtures";
 
 const {

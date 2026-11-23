@@ -40,7 +40,7 @@ Backend failures (exact names and observed durations):
 | Owning file under apps/backend/ | Failure |
 | --- | --- |
 | `src/core/opencode-host-start.test.ts` | (fail) local OpenCode server starts on one host > shutdown between database-lock attempts prevents a retry spawn [540.42ms] |
-| `src/core/environment-move.test.ts` | (fail) restart recovery re-links submodules of an adopted or abandoned copy [5040.52ms] |
+| `src/core/environments/move.test.ts` | (fail) restart recovery re-links submodules of an adopted or abandoned copy [5040.52ms] |
 | `src/core/transcript-artifacts/content-server.engines.test.ts` | (fail) executable document policy in firefox > (unnamed) [5000.53ms] |
 | `src/core/coordinator-service.test.ts` | (fail) project coordinator > Git status permits confirmed dirty branch switches and detects external context changes [5048.10ms] |
 | `src/core/coordinator-service.test.ts` | (fail) project coordinator > fetch force, fast-forward sync, remote switching, and divergence stay safe [5071.17ms] |
@@ -65,7 +65,7 @@ Backend owners were run separately, one file per command, using `mise run test:l
 | `src/core/transcript-artifacts/preview-interactive.test.ts` | Pass |
 | `src/core/opencode-host-start.test.ts` | Pass; `final-opencode-start-owner`, 13.7 s |
 | `tests/recurring-baseline.test.ts` | Pass; `final-recurring-baseline-owner`, 12.2 s |
-| `src/core/environment-move.test.ts` | Failed: 34 passed, three timeouts and three cleanup errors (75.3 s); see 0248 and 0249. The complete unchanged file did not pass alone. |
+| `src/core/environments/move.test.ts` | Failed: 34 passed, three timeouts and three cleanup errors (75.3 s); see 0248 and 0249. The complete unchanged file did not pass alone. |
 
 The confirmed separate-file passes establish intermittence for those aggregate failures. Environment move and the artifact engine owner remain non-green; they are not classified as newly confirmed flakes by this run. No existing production implementation, assertion, deadline or skip was changed to accommodate these failures.
 

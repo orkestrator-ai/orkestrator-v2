@@ -47,7 +47,7 @@ import {
   enqueueEnvironmentLifecycleOperation,
   renameEnvironmentFromPrompt,
 } from "./commands-helpers.js";
-import { isGeneratedEnvironmentName } from "./environment-name.js";
+import { isGeneratedEnvironmentName } from "./environments/index.js";
 import {
   PendingRenameFailureLog,
   pendingRenameRetryDelayMs,

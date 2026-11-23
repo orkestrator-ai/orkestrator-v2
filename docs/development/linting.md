@@ -279,7 +279,8 @@ new.
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
-    `native-agent/`, `recurring/`, `tmux/`, `terminals/`, `containers/`) are
+    `native-agent/`, `recurring/`, `tmux/`, `terminals/`, `containers/`,
+    `environments/`) are
     reached only
     through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
@@ -370,6 +371,23 @@ new.
     pattern has two exceptions, `containers/network.ts` (for
     `firewall-refresh.test.ts`) and `containers/replacement.ts` (for the two
     `migrate-copy*.test.ts` files).
+
+    The `environments/` boundary has five exceptions for runtime cycles, none
+    of them re-exported by `environments/index.ts`. `environments/cleanup.ts`,
+    `cleanup-reconciler.ts`, `delete.ts` and `move.ts` import
+    `commands-environment.ts`, which takes `environments/isolation.ts` and
+    `start-remedy.ts` from `environments/index.ts`, and
+    `environments/process-usage.ts` imports `local-server-reaper.ts`, which
+    reaches `tmux/session-manager.ts` (an `environments/index.ts` importer)
+    through `tmux/index.ts`. Their importers (`index.ts`, `disk-usage.ts`,
+    `commands-servers.ts`, `commands-registry-environments.ts`,
+    `commands-registry-system.ts` and `containers/cleanup-legacy-runtimes.ts`)
+    import them directly. `commands-helpers.ts` re-exports
+    `environments/operations.ts`'s exports by name through
+    `environments/index.ts` rather than with `export *`. Its `tests/unit/**`
+    pattern has no exceptions, and its `apps/backend/src/**` pattern also
+    skips `@orkestrator/protocol/contract/domains/environments/*`, the
+    protocol's environments contract folder, which is not the backend domain.
 
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import

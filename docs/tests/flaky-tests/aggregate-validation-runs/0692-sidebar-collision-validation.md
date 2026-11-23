@@ -18,7 +18,7 @@ Production implementations and the failing owning test files were unchanged. Eve
 | --- | --- | --- |
 | `apps/web/src/components/chat/rich-transcript.long-fixture.test.tsx` | 20-cycle case exceeded 120 seconds, followed by an asynchronous missing Details button error. The first owner rerun also exceeded 120 seconds while browser validation remained active. | After the component browser run ended, `transcript-owner-after-browser` passed all three cases in 15.0 s. |
 | `packages/toolchain/src/manager.test.ts` | Codex executable probe reported an unexpected version with no output. | `toolchain-probe-owner` passed in 2.1 s. |
-| `apps/backend/src/core/environment-move.test.ts` | Nested-submodule same-disk and copy cases exceeded five seconds. | `environment-move-owner` passed in 17.4 s. |
+| `apps/backend/src/core/environments/move.test.ts` | Nested-submodule same-disk and copy cases exceeded five seconds. | `environment-move-owner` passed in 17.4 s. |
 | `tests/unit/pi-bridge-vendor.test.ts` | SDK runtime staging exceeded 30 seconds. | `pi-vendor-owner` passed in 13.0 s. |
 | `tests/unit/disk-report.test.ts` | Child status was null and the case exceeded five seconds. | `disk-report-owner` passed in 1.5 s. |
 | `e2e/AgentUsage.spec.ts` | Mobile subagent and task-group cases exceeded 30 seconds. | Both viewport cases for every test passed in the one-worker browser owner run below. |

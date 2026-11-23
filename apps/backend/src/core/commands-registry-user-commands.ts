@@ -17,7 +17,7 @@ import {
   stripInheritedAgentCredentials,
 } from "./agent-accounts/index.js";
 import { envWithManagedBinaries } from "./commands-agent-support.js";
-import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
+import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environments/index.js";
 import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";

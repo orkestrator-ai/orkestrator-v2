@@ -43,7 +43,7 @@ import {
 } from "../src/core/commands-review";
 import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
-import { EnvironmentMutationFence } from "../src/core/environment-replacement-fence";
+import { EnvironmentMutationFence } from "../src/core/environments/replacement-fence";
 import {
   parseReviewWorktreeFingerprint,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,

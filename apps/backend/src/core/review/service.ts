@@ -28,7 +28,7 @@ import {
 } from "./code-rewind.js";
 import { probeReviewWorktree } from "./worktree-probe.js";
 import { multiReviewDeleteRefusal, multiReviewStartRefusal } from "./refusals.js";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/index.js";
 import {
   isPipelineQualifiedAgent,
   MAX_CODE_REWIND_PREVIEW_PATHS,

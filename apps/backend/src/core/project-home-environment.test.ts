@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { EnvironmentOperations } from "./environment-operations.js";
+import { EnvironmentOperations } from "./environments/operations.js";
 import type { Environment, Project } from "./models.js";
 import {
   PROJECT_HOME_DETACHED_BRANCH,

@@ -25,7 +25,7 @@ The unchanged owner pass confirms intermittence. No implementation, assertion, t
 
 ## Plugin enablement regressions — 2026-10-26
 
-`mise run test:logged -- --name backend-settings-final -- bun test --cwd apps/backend ./tests/portable-inputs.test.ts ./src/core/agent-skills.test.ts ./src/core/environment-agent-skills.test.ts --parallel=3 --only-failures`
+`mise run test:logged -- --name backend-settings-final -- bun test --cwd apps/backend ./tests/portable-inputs.test.ts ./src/core/agent-skills.test.ts ./src/core/environments/agent-skills.test.ts --parallel=3 --only-failures`
 reported the same fixture hook timeout (6860.69 ms), with 131 passes and one
 failure across three files. Other worktrees' aggregate validations and a Docker
 image build were active on the host. Evidence: the host temporary directory's

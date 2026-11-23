@@ -60,7 +60,7 @@ Every non-OpenCode failing Bun owner ultimately passed unchanged with `--paralle
 | `apps/backend/src/core/environment-move.test.ts` | move_environment > moves a worktree with nested submodules (copy) (5075.98 ms) | Passed unchanged (58.2 s). |
 | `apps/backend/src/core/coordinator/service.test.ts` | project coordinator > Git status permits confirmed dirty branch switches and detects external context changes (5401.21 ms) | Passed unchanged (44.5 s). |
 | `apps/backend/src/core/terminal-history.test.ts` | terminal history > normalizes lines, CRLF, Unicode, and ANSI across transport chunks and pages (5006.14 ms) | Passed unchanged (16.0 s). |
-| `apps/backend/src/core/container-git-fetch-git.test.ts` | container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (5093.33 ms) | Passed unchanged (11.7 s). |
+| `apps/backend/src/core/containers/git-fetch-git.test.ts` | container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches (5093.33 ms) | Passed unchanged (11.7 s). |
 | `apps/backend/src/core/transcript-artifacts/mermaid-render.test.ts` | mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone (9702.50 ms) | Passed unchanged (24.5 s). |
 | `apps/backend/tests/container-replacement.test.ts` | replacement admission > migrate rootless budget refusal precedes source stop (failedCapacity=false) (5007.33 ms) | Passed unchanged (15.2 s). |
 | `apps/backend/src/core/agent-accounts.test.ts` | agent accounts > the same login cannot be added twice (305.22 ms) | Passed unchanged (6.4 s). |
@@ -99,7 +99,7 @@ Each line is a separate logged suite. The disk-report final retry supplements it
 - `mise run test:logged -- --name design-links-owner-backend-standalone -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/standalone.test.ts --parallel=1 --only-failures` → exit 0, 132.4 s.
 - `mise run test:logged -- --name design-links-owner-coordinator -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` → exit 0, 44.5 s.
 - `mise run test:logged -- --name design-links-owner-terminal-history -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures` → exit 0, 16.0 s.
-- `mise run test:logged -- --name design-links-owner-container-fetch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-git-fetch-git.test.ts --parallel=1 --only-failures` → exit 0, 11.7 s.
+- `mise run test:logged -- --name design-links-owner-container-fetch -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/containers/git-fetch-git.test.ts --parallel=1 --only-failures` → exit 0, 11.7 s.
 - `mise run test:logged -- --name design-links-owner-mermaid -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/mermaid-render.test.ts --parallel=1 --only-failures` → exit 0, 24.5 s.
 - `mise run test:logged -- --name design-links-owner-replacement -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-replacement.test.ts --parallel=1 --only-failures` → exit 0, 15.2 s.
 - `mise run test:logged -- --name design-links-owner-agent-accounts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/agent-accounts.test.ts --parallel=1 --only-failures` → exit 0, 6.4 s.

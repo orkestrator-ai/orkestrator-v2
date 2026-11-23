@@ -12,8 +12,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { restartRuntime, startRuntime } from "./container-live-start";
@@ -126,7 +126,7 @@ function policy0(policy: { enforcement?: string }): string | undefined {
 /**
  * What the host reachability check must answer before C22 creates anything:
  * reachable on a Linux host, and its fixed `not-linux` answer elsewhere
- * (`container-host-reachability.ts`), so the case still runs on Docker Desktop.
+ * (`containers/host-reachability.ts`), so the case still runs on Docker Desktop.
  */
 function expectedHostReachability(platform: NodeJS.Platform): {
   status: string;
@@ -145,7 +145,7 @@ describe("C22 environment networks and narrow host access", () => {
   // answers on a host that is not Linux, so C22 runs on Docker Desktop.
   test("off Linux the expected reachability is the check's own answer", async () => {
     const { ContainerHostReachabilityService } =
-      await import("../src/core/container-host-reachability");
+      await import("../src/core/containers/host-reachability");
     for (const platform of ["darwin", "win32"] as const) {
       const service = new ContainerHostReachabilityService({
         servicePort: () => 4100,
@@ -170,10 +170,10 @@ describe("C22 environment networks and narrow host access", () => {
     "a restricted runtime reaches only the backend service port and not its siblings",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
       const { environmentNetworkPolicy, removeEnvironmentNetwork, environmentNetworkName } =
-        await import("../src/core/container-network");
+        await import("../src/core/containers/network");
       const signLoopbackProbe = createAgentToolsLoopbackSigner();
       const servicePort = hostListener(signLoopbackProbe);
       const otherPort = hostListener();
@@ -184,7 +184,7 @@ describe("C22 environment networks and narrow host access", () => {
       const sibling = lifecycleEnvironment({ id: `env-${RUN}-b`, networkAccessMode: "full" });
       const { context } = networkContext([restricted, sibling], servicePort);
       const { ContainerHostReachabilityService } =
-        await import("../src/core/container-host-reachability");
+        await import("../src/core/containers/host-reachability");
       const reachability = new ContainerHostReachabilityService({
         servicePort: () => servicePort,
         signLoopbackProbe,
@@ -234,7 +234,7 @@ describe("C22 environment networks and narrow host access", () => {
       await startRuntime(containerId);
       await waitForContainerBoot(containerId);
       // The namespace owner: the egress gateway on a gateway image.
-      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const { networkOwnerContainer } = await import("../src/core/containers/network-owner");
       const firewall = await networkOwnerContainer(containerId);
 
       // Each environment has its own labelled network; neither is the default bridge.
@@ -371,13 +371,13 @@ describe("C24 resource budgets are enforced and reported as applied", () => {
     "limits are applied, pressure stays inside the container, and a live update is read back",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const {
         environmentResourcePolicy,
         sampleContainerUsage,
         updateEnvironmentResources,
         resetResourceCaches,
-      } = await import("../src/core/container-resources");
+      } = await import("../src/core/containers/resources");
       resetResourceCaches();
       const limited = lifecycleEnvironment({
         id: `env-${RUN}-limited`,
@@ -461,9 +461,9 @@ describe("C24 one environment at its CPU limit leaves another usable", () => {
     "a CPU-saturated environment stays inside its budget while a sibling answers promptly",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const { sampleContainerUsage, resetResourceCaches } =
-        await import("../src/core/container-resources");
+        await import("../src/core/containers/resources");
       resetResourceCaches();
       const busy = lifecycleEnvironment({
         id: `env-${RUN}-busy`,
@@ -534,10 +534,10 @@ describe("C26 bounded logs", () => {
     "new runtimes use the bounded local driver, bridge output rotates and followers stop",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
-      const { ContainerLogService } = await import("../src/core/container-log-service");
-      const { boundedBackgroundLaunch } = await import("../src/core/container-log-bounds");
-      const { resetResourceCaches } = await import("../src/core/container-resources");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
+      const { ContainerLogService } = await import("../src/core/containers/log-service");
+      const { boundedBackgroundLaunch } = await import("../src/core/containers/log-bounds");
+      const { resetResourceCaches } = await import("../src/core/containers/resources");
       resetResourceCaches();
       const environment = lifecycleEnvironment({
         id: `env-${RUN}-logs`,

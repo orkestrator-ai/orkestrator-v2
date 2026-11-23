@@ -138,7 +138,7 @@ writers on one `.jsonl`. When touching the prompt path:
   bare "retry" (`requiredServerRefusal`); it never repeats the CLI's own error
   text or anything in the URL beyond scheme, host and path. The backend
   preflights container Multi Review turns so a review fails up front instead
-  ([container-lifecycle.md](../../docs/architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
+  ([container-lifecycle.md](../../docs/architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts)).
 
 ## The policy caps the permission mode
 

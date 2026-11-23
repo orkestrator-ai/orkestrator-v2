@@ -9,13 +9,13 @@ import { ROOTLESSKIT_HOST_LOOPBACK_ADDRESSES } from "@orkestrator/protocol/conta
 import {
   CONTAINER_HOST_PROBE_IMAGE,
   ContainerHostReachabilityService,
-} from "../src/core/container-host-reachability.js";
+} from "../src/core/containers/host-reachability.js";
 import {
   ensureEnvironmentNetwork,
   removeEnvironmentNetwork,
-} from "../src/core/container-network.js";
+} from "../src/core/containers/network.js";
 import { DOCKER_LABEL_OWNER } from "../src/core/constants.js";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { runCommand } from "../src/core/shell.js";
 import { StorageService } from "../src/core/storage.js";
 import {

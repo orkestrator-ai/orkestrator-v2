@@ -104,7 +104,7 @@ HTTPS only keeps the port and the name check simple.
 only when, at creation, the runtime is restricted, behind an egress gateway,
 from an image with `apt-packages=1`, **and** its project declares packages
 setup would install (`projectDeclaresAptPackages`,
-`apps/backend/src/core/container-apt-packages.ts`, through
+`apps/backend/src/core/containers/apt-packages.ts`, through
 `aptPackagesNeedArchive`): a list with a refused name, or a field setup
 refuses, never reaches the archive, so it opens nothing. The launchers still
 warn about such a list. The declaration is read from the host checkout's

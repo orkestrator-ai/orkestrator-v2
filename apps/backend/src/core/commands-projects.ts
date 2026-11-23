@@ -1,5 +1,5 @@
 import { claudeModelCatalogUpdatedEvent } from "@orkestrator/protocol/contract/domains/events";
-import { containerCredentialMode } from "./container-credential-mode.js";
+import { containerCredentialMode } from "./containers/credential-mode.js";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
 import {
   gitHubCli,

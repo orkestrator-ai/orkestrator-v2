@@ -115,7 +115,7 @@ const SIGNALS = new Set([
   "SIGXFSZ",
 ]);
 const PROVIDERS = new Set(["claude", "codex", "opencode", "cursor", "grok", "acp", "pi"]);
-/** `container-bridge-listener.ts`'s refusal reasons. */
+/** `containers/bridge-listener.ts`'s refusal reasons. */
 const BRIDGE_LISTENER_REASONS = new Set([
   "different-socket",
   "several-sockets",

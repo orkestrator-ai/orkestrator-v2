@@ -1,5 +1,5 @@
 import { eventSink } from "../src/core/backend-emit.js";
-import * as credentialModes from "../src/core/container-credential-mode.js";
+import * as credentialModes from "../src/core/containers/credential-mode.js";
 import {
   afterAll,
   afterEach,
@@ -19,10 +19,10 @@ import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks";
-import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { resetDockerTopologyCache } from "../src/core/containers/image";
 import { imageManifestArchive } from "./container-lifecycle-fixtures";
-import { ContainerHostReachabilityService } from "../src/core/container-host-reachability";
+import { ContainerHostReachabilityService } from "../src/core/containers/host-reachability";
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
 import { AUTH_SECRET_CANARIES } from "../../../tests/helpers/auth-secret-canaries.js";

@@ -43,26 +43,28 @@ import { dockerExec, getHostPort, isContainerRunning } from "../commands-contain
 import { isHttpServerReachable, waitForHttpServerExit } from "../commands-server-health.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import {
+  assertContainerNotDraining,
+  boundDiagnosticTail,
+  boundedTailCommand,
   containerBridgeOperationId,
   enqueueContainerBridgeOperation,
-} from "../container-bridge-operations.js";
+  ensureCurrentBootReady,
+  networkOwnerContainer,
+  readImageManifest,
+} from "../containers/index.js";
 import {
   launchContainerScript,
   readContainerBridgeToken,
   readContainerOpenCodeCredential,
   recheckContainerOpenCodeListener,
   removeContainerBridgeCredential,
-} from "../container-bridge-credential.js";
-import { openCodeListenerRecheckFetch, type OpenCodeListenerRecheck } from "./listener-recheck.js";
+} from "../containers/bridge-credential.js";
 import {
   containerOpenCode2Mode,
   type OpenCode2ContainerMode,
-} from "../container-credential-mode.js";
-import { currentRuntimeIdentity } from "../container-lifecycle-service.js";
-import { boundDiagnosticTail, boundedTailCommand } from "../container-log-bounds.js";
-import { networkOwnerContainer } from "../container-network-owner.js";
-import { assertContainerNotDraining, ensureCurrentBootReady } from "../container-readiness.js";
-import { readImageManifest } from "../docker-image.js";
+} from "../containers/credential-mode.js";
+import { currentRuntimeIdentity } from "../containers/lifecycle-service.js";
+import { openCodeListenerRecheckFetch, type OpenCodeListenerRecheck } from "./listener-recheck.js";
 import { retryableBridgeStartupError } from "../local-server-runtime.js";
 import type { Environment } from "../models.js";
 import { OpenCode2Client } from "./client.js";

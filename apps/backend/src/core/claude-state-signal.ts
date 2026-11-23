@@ -6,8 +6,8 @@ import {
   ensureContainerHostServicePorts,
 } from "./commands-environment.js";
 import { findEnvironmentByContainerId } from "./commands-review.js";
-import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
-import { readImageManifest } from "./docker-image.js";
+import { readImageManifest } from "./containers/index.js";
+import { currentRuntimeIdentity } from "./containers/lifecycle-service.js";
 import { runCommand } from "./shell.js";
 import {
   TMUX_HOOK_SIGNAL_CONFIG_PATH,

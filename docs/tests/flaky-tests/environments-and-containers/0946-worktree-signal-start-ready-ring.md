@@ -4,7 +4,8 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-25
 - **Test:** `orkestrator-worktree-signal > start writes a private config from stdin and launches the watcher`
-- **File:** `apps/backend/src/core/container-worktree-signal-install.test.ts:319`
+- **File at observation:** `apps/backend/src/core/container-worktree-signal-install.test.ts:319`
+- **Current test:** [worktree-signal-install.test.ts](../../../../apps/backend/src/core/containers/worktree-signal-install.test.ts#L398)
 - **Original command:** `mise run test:logged -- --name full-0048 -- mise run test` on `todo-0048-recurring-work-qualification-dbe14f8256cc` (storage read path, recurring-work harness and scripts only), macOS 27.0 arm64, Bun 1.4.4, standard worker leases; host load average 50 to 55.
 - **Failure:** after 792.46 ms, `expect(rings(dir)).toEqual(["lost", "ready"])` received only `["lost"]`. The fake watcher (`echo 'Watches established.' >&2; exit 1`) ran under a fake `setsid`, and the `ready` ring was missing when the assertion read the ring file.
 - **Isolated rerun:** `mise run test:logged -- --name owners-0048 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts ./src/core/coordinator-service.test.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures`: this case passed (113 passed, 1 failed, the failure being case [0248](0248-move-restart-recovery-submodule-timeout.md); 176.81 s). Evidence: `orkestrator-test-run.fSNcim/owners-0048.log.gz` under the host temporary directory.
@@ -45,9 +46,9 @@ The aggregate repeated the missing `ready` ring (81.74 ms). The complete unchang
   rings are independent HTTP requests, and a `ready` that arrives after
   `lost` is refused because the demotion on `lost` revokes the credential
   (`ContainerWorktreeSignals.demote` in
-  `apps/backend/src/core/container-worktree-signal.ts`).
+  `apps/backend/src/core/containers/worktree-signal.ts`).
 - **Fix:** the fixture's `run` helper in
-  `apps/backend/src/core/container-worktree-signal-install.test.ts` passes
+  `apps/backend/src/core/containers/worktree-signal-install.test.ts` passes
   `waitForDescendants: true`, so it returns only once every process in the
   script's group, every ring included, has exited. No assertion or deadline
   changed.

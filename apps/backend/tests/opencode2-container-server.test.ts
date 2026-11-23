@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ProviderUnavailableError } from "../src/core/agent-provider-contract";
 import { OPENCODE2_SERVER_PORT } from "../src/core/constants";
-import { containerCredentialFile } from "../src/core/container-bridge-credential";
+import { containerCredentialFile } from "../src/core/containers/bridge-credential";
 import {
   containerRunsOpenCode2,
   ensureOpenCode2ContainerServer,

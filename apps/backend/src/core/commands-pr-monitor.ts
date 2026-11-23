@@ -23,7 +23,7 @@ import {
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
 import type { KanbanStorage, StorageService } from "./storage.js";
-import { withContainerRuntimeCredential } from "./container-scripts.js";
+import { withContainerRuntimeCredential } from "./containers/index.js";
 import { quoteShell } from "./commands-agent-support.js";
 import {
   parsePrCheckSummary,

@@ -1,9 +1,9 @@
 import { describe, expect, mock, spyOn, test, setDefaultTimeout } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
-import * as dockerImage from "../src/core/docker-image";
+import * as dockerImage from "../src/core/containers/image";
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
-import * as githubCredential from "../src/core/container-github-credential";
+import * as githubCredential from "../src/core/containers/github-credential";
 import { lowPriorityCommand } from "../src/core/process-priority";
 import * as shell from "../src/core/shell";
 

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { resetDockerTopologyCache } from "../src/core/docker-image";
-import { resetResourceCaches } from "../src/core/container-resources";
+import { resetDockerTopologyCache } from "../src/core/containers/image";
+import { resetResourceCaches } from "../src/core/containers/resources";
 import { groupRecoveryCopies } from "../src/core/recovery-copy-model";
 import {
   discardRecoveryCopy,
@@ -13,15 +13,15 @@ import {
   classifyVolume,
   executeDockerCleanup,
   previewDockerCleanup,
-} from "../src/core/docker-cleanup-preview";
-import { loadProtection } from "../src/core/docker-cleanup-inventory";
+} from "../src/core/containers/cleanup-preview";
+import { loadProtection } from "../src/core/containers/cleanup-inventory";
 import { buildEnvironmentCleanupEntry } from "../src/core/environment-cleanup";
-import { subscribeDockerNetworkChanges } from "../src/core/docker-network-changes";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { subscribeDockerNetworkChanges } from "../src/core/containers/network-changes";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {
   assertRuntimeGeneration,
   resetContainerOwnershipCache,
-} from "../src/core/container-lifecycle-service";
+} from "../src/core/containers/lifecycle-service";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

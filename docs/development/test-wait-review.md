@@ -97,7 +97,7 @@ fix in the backend.
 | --- | --- | --- | --- | --- |
 | `backend/tests/account-switch-resend-live.test.ts` (slow) | not measured; 561 s median | Each scenario ends in `await Bun.sleep(SETTLE_MS)` with `SETTLE_MS = 20_000` (`account-switch-stack-host.ts:232`), to prove no second resend happens. The file is `describe.each(["claude","codex"])` over several scenarios (about 20 runs in total), run serially | Each scenario already has its own temp root, HOME, data dir, `port: 0` and host process. Split by platform or scenario, or run groups with `Promise.all`; build the bridge once, not per file | ~500 s |
 | `backend/tests/gateway-keep-alive-live.test.ts` (slow) | 98.7 s / 1.2 s | Idle sleeps of 6.5 + 85 + 6.5 s; the 85 s case guards Bun's runtime timer | Keep the 85 s case; run the other two beside it | ~13 s |
-| `backend/src/core/container-worktree-signal-install.test.ts` | 69.3 s / 1.3 s | One test runs a real script for 62 s (155 x `sleep 0.4`); `min_gap_us` is hard-coded | Make the gap injectable; split the rest off | ~6 s |
+| `backend/src/core/containers/worktree-signal-install.test.ts` | 69.3 s / 1.3 s | One test runs a real script for 62 s (155 x `sleep 0.4`); `min_gap_us` is hard-coded | Make the gap injectable; split the rest off | ~6 s |
 | `backend/src/core/review-validation-worker.test.ts` | 43.3 s / 8.8 s | 66 tests each doing `git init` and 3-5 `bun` spawns, plus ~22 s of real waits | Split into 2-4 files so `--parallel` spreads them | ~25 s wall |
 | `cli/tests/cli-client.test.ts` | not measured | Six real backend boots, each with its own root and port, run serially | Split or `Promise.all` | ~15 s |
 | `backend/tests/standalone.test.ts` | not measured | About 16 cold boots of the built backend, serially | Split | 15-18 s |
@@ -236,7 +236,7 @@ unverified. The default suite was not re-timed per file.
 | `backend/src/core/commands-state-sync.test.ts` | 9.3 | ~3 | Fake clock |
 | `backend/src/preview-publication.test.ts` | 5.5 | 1.6 | PKI generated once per process; `days` option replaces a 1.1 s sleep |
 | `backend/tests/commands-local-bridge-reuse.test.ts` | 17.9 | 2.3 | `ORKESTRATOR_TEST_LOCAL_SERVER_POLL_MS` caps `waitForHealth` and the exit/unhealthy pollers; the fixtures set it to 20 ms. Most of the time was the 500 ms reuse-retry delay |
-| `backend/src/core/container-worktree-signal-install.test.ts` | 69.3 | 16.5 | `ORKESTRATOR_WORKTREE_SIGNAL_MIN_GAP_US` in `docker/orkestrator-worktree-signal.sh` (default unchanged); the soak runs 4x compressed with times stretched back. A real-time test pins the one-second default gap |
+| `backend/src/core/containers/worktree-signal-install.test.ts` | 69.3 | 16.5 | `ORKESTRATOR_WORKTREE_SIGNAL_MIN_GAP_US` in `docker/orkestrator-worktree-signal.sh` (default unchanged); the soak runs 4x compressed with times stretched back. A real-time test pins the one-second default gap |
 | `backend/tests/account-switch-resend-live` | 561 | 32 (20 scenarios, two files, `--parallel=2`) | Split into `account-switch-claude-live` and `account-switch-codex-live`; scenarios run with `test.concurrent`. The 20 s settle window is unchanged |
 | `backend/tests/gateway-keep-alive-live` | 98.9 | 85.7 with spare workers | Split into three `-live` files so the two short cases overlap the 85 s one |
 | `backend/src/core/public-api/public-api-exec.test.ts` | 12.7 | 2.3 | Real-process tests moved to `public-api-exec-processes.test.ts` and run concurrently; `ORKESTRATOR_TEST_EXEC_HEARTBEAT_MS` shortens the worker's cancel poll |

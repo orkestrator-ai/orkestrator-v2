@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { IMAGE_CAPABILITIES } from "@orkestrator/protocol/image-manifest";
-import { containerNetworkPolicy } from "./container-network.js";
+import { containerNetworkPolicy } from "./containers/network.js";
 import { egressEnforcement } from "./egress-gateway.js";
 
 /**

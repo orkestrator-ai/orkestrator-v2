@@ -67,7 +67,7 @@ Prebuilt bridge servers, so a container never builds them at runtime:
 - `/run/orkestrator-bridge` holds each bridge's token, mode 700 root
   (`bridge-credential=1`), and with `bridge-launch=1` the private half of its
   authority key. Only the backend's root exec reads it; a bridge gets a hash and
-  a public key (`apps/backend/src/core/container-bridge-credential.ts`). Never
+  a public key (`apps/backend/src/core/containers/bridge-credential.ts`). Never
   read a `node`-writable path as root to look for one: `node` can make it a
   symlink.
 - `/usr/local/bin/orkestrator-bridge-launch` (`bridge-launch=1`) starts a bridge
@@ -156,7 +156,7 @@ Users and isolation:
   (security report H2). Keep these four rules when adding a root path:
   - Every root `docker exec` or `docker run` the backend makes passes
     `CONTAINER_ROOT_USER_ARGS` (`--env PATH=/usr/sbin:/usr/bin:/sbin:/bin
-    --user root`, `apps/backend/src/core/container-scripts.ts`), and a root
+    --user root`, `apps/backend/src/core/containers/scripts.ts`), and a root
     terminal gets the same PATH. The image `ENV PATH` puts `node`-writable
     `npm-global/bin` and `~/.opencode/bin` first, and every exec inherits it.
     `tests/unit/container-root-boundary.test.ts` fails on a bare

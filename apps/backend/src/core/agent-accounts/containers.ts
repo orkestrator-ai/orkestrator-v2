@@ -1,4 +1,10 @@
-import { CONTAINER_ROOT_USER_ARGS } from "../container-scripts.js";
+import {
+  CONTAINER_ROOT_USER_ARGS,
+  containerBridgeOperationId,
+  containerBridgeOperationIdIn,
+  enqueueContainerBridgeOperation,
+  startDockerContainer,
+} from "../containers/index.js";
 import {
   SYNC_OPENCODE2_CONTAINER_CREDENTIALS,
   openCode2ContainerCredentialPayload,
@@ -7,7 +13,6 @@ import {
   deliverRuntimeSeedBeforeBoot,
   prepareEgressGatewayWithSeed,
 } from "../git/github-ranges-seed-delivery.js";
-import { startDockerContainer } from "../container-start.js";
 import { createHash } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
@@ -46,11 +51,6 @@ import {
   type InputSourceRoots,
 } from "../portable-inputs.js";
 import { containerLabel, providerCredentialsAllowed } from "../portable-input-status.js";
-import {
-  containerBridgeOperationId,
-  containerBridgeOperationIdIn,
-  enqueueContainerBridgeOperation,
-} from "../container-bridge-operations.js";
 import { agentAccountHome, prepareAgentAccountHome } from "./homes.js";
 import { claudeContainerConfig } from "../claude-container-config.js";
 import {
@@ -86,8 +86,8 @@ const log = createLogger("agent-accounts");
  * (`accessOnlyLoginText`). All five are re-read from the host before every
  * start. Claude, Grok, OpenCode and Pi are also pushed before every bridge
  * start. While containers run, Claude is kept current by
- * `container-claude-login-keeper.ts` and the other three by
- * `container-login-file-watcher.ts`.
+ * `containers/claude-login-keeper.ts` and the other three by
+ * `containers/login-file-watcher.ts`.
  */
 
 const ACCOUNT_MARKER: Record<AgentAccountPlatform, string> = {

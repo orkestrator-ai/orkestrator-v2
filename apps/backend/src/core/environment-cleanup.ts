@@ -20,7 +20,8 @@ import {
   type EnvironmentCleanupStep,
 } from "./environment-cleanup-ledger.js";
 import { environmentStateDirectories } from "./environment-state-paths.js";
-import { removeEnvironmentNetwork } from "./container-network.js";
+import { dockerOwnerNamespace } from "./containers/index.js";
+import { removeEnvironmentNetwork } from "./containers/network.js";
 import { removeEnvironmentEgressGateways } from "./egress-gateway.js";
 import type { Environment, Project } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
@@ -29,7 +30,6 @@ import { removeConfinedDirectory } from "./path-safety.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { DOCKER_LABEL_ENVIRONMENT_ID, DOCKER_LABEL_OWNER } from "./constants.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 
 export type EnvironmentCleanupContext = Pick<

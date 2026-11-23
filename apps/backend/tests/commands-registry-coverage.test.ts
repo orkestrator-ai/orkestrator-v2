@@ -8,8 +8,8 @@ import type { AddressInfo } from "node:net";
 import type { CommandContext } from "../src/core/commands";
 import type { Environment } from "../src/core/models";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { resetContainerOwnershipCache } from "../src/core/containers/lifecycle-service";
 
 const { createCommandRegistry } = await import("../src/core/commands");
 const { BackendRuntime } = await import("../src/core/backend-runtime");

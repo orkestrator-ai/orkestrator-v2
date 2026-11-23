@@ -15,7 +15,7 @@ import {
   copyIntoContainer,
   isDockerCopyBusyError,
   isDockerCopyRefusedError,
-} from "../docker-copy-refusal.js";
+} from "../containers/index.js";
 import { runCommand } from "../shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";

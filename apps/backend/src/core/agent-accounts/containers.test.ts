@@ -13,8 +13,8 @@ import {
 import { registerDockerCommands } from "../commands-registry-docker.js";
 import type { CommandHandler } from "../commands-context.js";
 import type { RegistryDependencies } from "../commands-registry-types.js";
-import { dockerOwnerNamespace } from "../docker-ownership.js";
-import { resetImageManifestCache } from "../docker-image.js";
+import { dockerOwnerNamespace } from "../containers/ownership.js";
+import { resetImageManifestCache } from "../containers/image.js";
 import { revokeProviderCredentials } from "../portable-input-status.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import {

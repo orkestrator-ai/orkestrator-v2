@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseCopyOutput } from "../../apps/backend/src/core/container-replacement";
+import { parseCopyOutput } from "../../apps/backend/src/core/containers/replacement.js";
 import { read, withCallerPath } from "./firewall-test-support";
 import { gnuToolPath, missingGnuTools, titleWithSkip } from "./gnu-shell-tools";
 

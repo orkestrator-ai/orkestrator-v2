@@ -4,7 +4,7 @@ import {
   DIAGNOSTIC_TAIL_MAX_LINES,
   boundDiagnosticTail,
   boundedTailCommand,
-} from "../src/core/container-log-bounds";
+} from "../src/core/containers/log-bounds";
 import { AUTH_SECRET_CANARIES } from "../../../tests/helpers/auth-secret-canaries.js";
 
 const { anthropicApiKey, cursorApiKey, refreshToken, xaiApiKey } = AUTH_SECRET_CANARIES;

@@ -6,7 +6,7 @@ import {
 import * as containerAccounts from "../src/core/agent-accounts/containers";
 import type { AgentAccountStore } from "../src/core/agent-accounts/store";
 import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminals/runtime";
-import { CONTAINER_INTERACTIVE_SHELL_COMMAND } from "../src/core/container-scripts";
+import { CONTAINER_INTERACTIVE_SHELL_COMMAND } from "../src/core/containers/scripts";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { OPENCODE2_CONTAINER_CLI_PATH } from "../src/core/opencode2/container-server";
 import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
@@ -1552,7 +1552,7 @@ exit 1
   });
 
   test("container status reads follow the fetch policy, not the read cadence", async () => {
-    const { formatContainerFetchResponse } = await import("../src/core/container-git-fetch");
+    const { formatContainerFetchResponse } = await import("../src/core/containers/git-fetch");
     const environment = createEnvironment({
       id: "env-container-fetch-policy",
       environmentType: "containerized",

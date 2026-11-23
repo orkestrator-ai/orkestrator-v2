@@ -15,8 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { startRuntime } from "./container-live-start";
@@ -100,7 +100,7 @@ async function createLegacyEnvironment(
   options: StagedProviders & { populate?: (containerId: string) => Promise<void> } = {},
 ) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
-  const { resolveDockerImage } = await import("../src/core/docker-image");
+  const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}-${name}`,
     networkAccessMode: "full",
@@ -158,7 +158,7 @@ describe("C14 legacy migration preserves the workspace and provider state", () =
   live(
     "migrates a legacy writable layer onto verified volumes and keeps the source",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c14");
       const before = await exec(containerId, WORKSPACE_SNAPSHOT);
       const databasesBefore = await sqliteSnapshot(containerId, false);
@@ -225,7 +225,7 @@ describe("C14 legacy migration with staged provider inputs", () => {
   live(
     "migrates a runtime whose Codex inputs were staged and whose ~/.codex holds no databases",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       // The host's Codex home: only allowlisted inputs are staged from it.
       const codexHome = path.join(dataDir, "host-codex");
       await fs.mkdir(codexHome, { recursive: true });
@@ -330,7 +330,7 @@ describe("C14 restricted rebuild behind an egress gateway", () => {
   live(
     "the candidate gets its own gateway on the fixed host port the source's gateway released",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { egressGatewayOf, removeRuntimeContainer } =
         await import("../src/core/egress-gateway");
       const { getHostPort } = await import("../src/core/commands-container-exec");
@@ -386,7 +386,7 @@ describe("C14 volume rebuild copies the storage set before replacing the runtime
   live(
     "rebuilds a volume-backed runtime and retains the previous storage set",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c14b");
       const migrated = await replaceRuntimePreservingState(
         { environmentId, expectedContainerId: containerId },
@@ -449,7 +449,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   live(
     "a rebuild cancelled during copy removes the candidate and keeps the source",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c15");
       const before = await exec(containerId, WORKSPACE_SNAPSHOT);
       const emit = fixture.context.emit;
@@ -499,7 +499,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   live(
     "a copy that fails verification rolls back the candidate and keeps the source",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c16c");
       // Docker does not follow a symlink at a copied root, so this session
       // directory would arrive empty; the helper must refuse it.
@@ -531,8 +531,8 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   live(
     "running out of inodes or bytes mid-copy rolls back and keeps the source (C16)",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
-      const { setStorageVolumeOptionsForTest } = await import("../src/core/container-storage");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
+      const { setStorageVolumeOptionsForTest } = await import("../src/core/containers/storage");
       for (const [label, options, populate] of [
         [
           "c16i",
@@ -582,8 +582,8 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   live(
     "a candidate name held by another container fails without touching either (C16)",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
-      const { dockerContainerRuntimeName } = await import("../src/core/docker-ownership");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
+      const { dockerContainerRuntimeName } = await import("../src/core/containers/ownership");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c16n");
       const before = await exec(containerId, WORKSPACE_SNAPSHOT);
       // Something else already holds the name the candidate would get.
@@ -622,7 +622,7 @@ describe("C15/C16 cancellation, refusal and corrupt sources leave the original a
   live(
     "a runtime that changed after review is refused before anything stops",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c15b");
       await expect(
         replaceRuntimePreservingState(
@@ -642,7 +642,7 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
   live(
     "restoring a copy keeps newer work as another copy and can be reversed",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { listRecoveryCopies, restoreRecoveryCopy, discardRecoveryCopy } =
         await import("../src/core/recovery-copies");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c17");
@@ -726,9 +726,9 @@ describe("C17/C18 recovery copies and reviewed cleanup", () => {
     "cleanup offers only unreferenced volumes and removes only the reviewed ones",
     async () => {
       const { previewDockerCleanup, executeDockerCleanup } =
-        await import("../src/core/docker-cleanup-preview");
+        await import("../src/core/containers/cleanup-preview");
       const { fixture, environmentId, containerId } = await createLegacyEnvironment("c18");
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       await replaceRuntimePreservingState(
         { environmentId, expectedContainerId: containerId },
         fixture.context,
@@ -769,7 +769,7 @@ describe("C19 deletion interrupted between runtime and volume removal", () => {
   live(
     "the ledger resumes and removes volumes, recovery copies and the network exactly once",
     async () => {
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } =
         await import("../src/core/environment-cleanup");
       const { environmentCleanupLedger } = await import("../src/core/environment-cleanup-ledger");

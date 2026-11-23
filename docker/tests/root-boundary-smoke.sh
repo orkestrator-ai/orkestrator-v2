@@ -14,7 +14,7 @@
 # - a trusted mise.toml and a git fsmonitor in /workspace.
 #
 # Root processes, started as the backend starts them (CONTAINER_ROOT_PATH in
-# apps/backend/src/core/container-scripts.ts): a uid-0 `orkroot` terminal
+# apps/backend/src/core/containers/scripts.ts): a uid-0 `orkroot` terminal
 # (interactive zsh behind a pseudo-terminal), the host repair, project-files
 # and provider-stop shells, update-firewall.sh, the declared-package installer
 # and the stop drain. The drain, firewall script and installer also run once
@@ -211,7 +211,7 @@ harness test -s /root/root-boundary/terminal-path \
 echo "ran  root terminal (orkroot)"
 
 # Closing that terminal: the backend's exact close script
-# (container-scripts.ts, CONTAINER_TERMINAL_CLOSE_SCRIPT), as the terminal's
+# (containers/scripts.ts, CONTAINER_TERMINAL_CLOSE_SCRIPT), as the terminal's
 # own user, removes the record the shell left.
 CLOSE_SCRIPT='token="$1"
 case "$token" in ""|*[!0-9a-f-]*) exit 0 ;; esac

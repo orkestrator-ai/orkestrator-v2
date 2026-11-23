@@ -12,13 +12,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ContainerLogService, LOG_LIMITS, recordCut } from "../src/core/container-log-service";
+import { ContainerLogService, LOG_LIMITS, recordCut } from "../src/core/containers/log-service";
 import {
   boundedBackgroundLaunch,
   boundedLaunchWithPrivateEnv,
   CONTAINER_LOG_MAX_BYTES,
   CONTAINER_LOG_WRITER,
-} from "../src/core/container-log-bounds";
+} from "../src/core/containers/log-bounds";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -222,7 +222,7 @@ describe("container log service", () => {
         writeFileSync(path.join(root, "docker"), '#!/bin/sh\necho "$$"\nexec sleep 30\n', {
           mode: 0o755,
         });
-        const modulePath = path.join(import.meta.dir, "../src/core/container-log-service.ts");
+        const modulePath = path.join(import.meta.dir, "../src/core/containers/log-service.ts");
         backend = Bun.spawn(
           [
             process.execPath,

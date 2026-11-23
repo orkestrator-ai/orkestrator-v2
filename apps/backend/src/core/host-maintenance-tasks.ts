@@ -12,7 +12,7 @@ import {
   getImageStatus,
   resetImageManifestCache,
   resolveDockerImage,
-} from "./docker-image.js";
+} from "./containers/index.js";
 import { HostMaintenanceError, type HostMaintenanceService } from "./host-maintenance.js";
 import { readImageStatus, releaseImageReference } from "./host-maintenance-readers.js";
 import { runCommand } from "./shell.js";

@@ -6,7 +6,7 @@ import {
   CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS,
   CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS,
   ContainerWorktreeSignals,
-} from "./container-worktree-signal.js";
+} from "./containers/worktree-signal.js";
 import {
   CONTAINER_SAFETY_NET_INTERVAL_MS,
   CONTAINER_TREE_MAX_AGE_MS,

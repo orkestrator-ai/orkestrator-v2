@@ -19,15 +19,15 @@ import {
   replaceRuntimePreservingState,
   replacementCopyPlan,
   rollbackCandidate,
-} from "../src/core/container-replacement";
-import { reconcileContainerOperation } from "../src/core/container-lifecycle-service";
-import { planStorageSet } from "../src/core/container-storage";
-import { PROVIDER_STATE_LAYOUT } from "../src/core/container-state-layout";
-import { isDockerRunStoppedFromOutside } from "../src/core/docker-cli-errors";
+} from "../src/core/containers/replacement";
+import { reconcileContainerOperation } from "../src/core/containers/lifecycle-service";
+import { planStorageSet } from "../src/core/containers/storage";
+import { PROVIDER_STATE_LAYOUT } from "../src/core/containers/state-layout";
+import { isDockerRunStoppedFromOutside } from "../src/core/containers/cli-errors";
 import { CommandFailedError } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetResourceCaches } from "../src/core/container-resources";
-import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { resetResourceCaches } from "../src/core/containers/resources";
+import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

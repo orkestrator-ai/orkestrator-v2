@@ -2601,7 +2601,7 @@ eval "$opencode_setup"
     const backend = [
       read("apps/backend/src/core/commands-registry-servers.ts"),
       read("apps/backend/src/core/commands-servers.ts"),
-      read("apps/backend/src/core/container-scripts.ts"),
+      read("apps/backend/src/core/containers/scripts.ts"),
       read("apps/backend/src/core/commands-containers.ts"),
     ].join("\n");
 

@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { dockerOwnerNamespace } from "../docker-ownership.js";
+import { dockerOwnerNamespace } from "../containers/ownership.js";
 import type { Environment, PortMapping } from "../models.js";
 import { PreviewRuntime } from "./runtime.js";
 import type { DockerRunner } from "./target-resolver.js";

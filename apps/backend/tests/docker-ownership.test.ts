@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
 
 const { countPrunedDockerResources, dockerOwnerMatches, parseDockerByteSize } = (
   await import("../src/core/commands")

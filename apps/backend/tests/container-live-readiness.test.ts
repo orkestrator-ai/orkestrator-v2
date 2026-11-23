@@ -35,7 +35,7 @@ import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { IMAGE_MANIFEST_PATH } from "@orkestrator/protocol/image-manifest";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {
   BOOT_STATUS_PATH,
   ContainerInitializationError,
@@ -43,7 +43,7 @@ import {
   observeContainerBoot,
   waitForContainerBoot,
   type BootObservation,
-} from "../src/core/container-readiness";
+} from "../src/core/containers/readiness";
 import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error-text";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
@@ -497,7 +497,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
       expect(await docker(["inspect", "-f", "{{.State.StartedAt}}", containerId])).toStartWith(
         "0001-01-01",
       );
-      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const { networkOwnerContainer } = await import("../src/core/containers/network-owner");
       const gateway = await networkOwnerContainer(containerId);
       expect(gateway).not.toBe(containerId);
       expect(
@@ -514,7 +514,7 @@ describe("C09/readiness failure injection at the lifecycle boundary", () => {
     "C09/readiness: a DNS-broken network fails the firewall bootstrap closed, never network-ready",
     async () => {
       const { NETWORK_ROLE, environmentNetworkName } =
-        await import("../src/core/container-network");
+        await import("../src/core/containers/network");
       const scene = await scenario({});
       const environment = launchingEnvironment(`env-${RUN}-dns`);
       const fixture = readinessContext(scene, environment, {
@@ -899,8 +899,8 @@ describe("C23/readiness firewall failure after boot", () => {
     "C23/readiness: a firewall re-run that loses DNS fails closed with no allow-all interval",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
-      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
+      const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const scene = await scenario();
       const environment = lifecycleEnvironment({ id: `env-${RUN}-rerun` });
       const image = await inContainerFirewallImage();
@@ -1143,9 +1143,9 @@ describe("C22 live host-service reply", () => {
         ContainerHostReachabilityService,
         classifyProbeOutput,
         containerAgentToolsUrl,
-      } = await import("../src/core/container-host-reachability");
+      } = await import("../src/core/containers/host-reachability");
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const scene = await scenario();
       // The real agent tools server, bound as the backend binds it.
       const storage = new StorageService(path.join(scene.root, "agent-tools"));

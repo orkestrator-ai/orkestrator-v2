@@ -22,9 +22,9 @@ import {
   sampleContainerUsage,
   sharedMemoryMiB,
   updateEnvironmentResources,
-} from "../src/core/container-resources";
-import { detectDockerTopology, resetDockerTopologyCache } from "../src/core/docker-image";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+} from "../src/core/containers/resources";
+import { detectDockerTopology, resetDockerTopologyCache } from "../src/core/containers/image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import type { Environment } from "../src/core/models";
 import {
   lifecycleEnvironment,

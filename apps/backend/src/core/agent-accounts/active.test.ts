@@ -722,7 +722,7 @@ test("a due Codex coordinator renews its owning login on reuse and moves only wh
 });
 
 test("real keeper refreshes the 4m30s handoff gap before a coordinator starts", async () => {
-  const { ContainerClaudeLoginKeeper } = await import("../container-claude-login-keeper.js");
+  const { ContainerClaudeLoginKeeper } = await import("../containers/claude-login-keeper.js");
   const now = Date.now();
   const clock = spyOn(Date, "now").mockReturnValue(now);
   await activate("claude");
@@ -803,7 +803,7 @@ test.skipIf(process.platform !== "darwin")(
 );
 
 test("keeper reads the real active added-account path to renew a loginless local bridge", async () => {
-  const { ContainerClaudeLoginKeeper } = await import("../container-claude-login-keeper.js");
+  const { ContainerClaudeLoginKeeper } = await import("../containers/claude-login-keeper.js");
   await activate("claude");
   context.runtimeFlavor = undefined;
   const home = accountHome("claude");
@@ -845,7 +845,7 @@ test("keeper reads the real active added-account path to renew a loginless local
 });
 
 test("keeper's local default path reads host credentials only outside agent-test profiles", async () => {
-  const { ContainerClaudeLoginKeeper } = await import("../container-claude-login-keeper.js");
+  const { ContainerClaudeLoginKeeper } = await import("../containers/claude-login-keeper.js");
   const host = spyOn(commandFiles, "readRuntimeHostClaudeCredentials").mockResolvedValue(
     JSON.stringify({
       claudeAiOauth: { accessToken: "host", expiresAt: Date.now() + 8 * 3600_000 },

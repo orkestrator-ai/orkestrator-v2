@@ -41,7 +41,7 @@ import {
   OPENCODE2_LAUNCH_CACHE_HOME,
   OPENCODE2_LAUNCH_CONFIG_DIR,
 } from "../agent-credential-files.js";
-import { CONTAINER_BRIDGE_LAUNCHER } from "../container-bridge-credential.js";
+import { CONTAINER_BRIDGE_LAUNCHER } from "../containers/bridge-credential.js";
 import { quoteShell } from "../commands-agent-support.js";
 
 /** At most this many packages are installed per start. */

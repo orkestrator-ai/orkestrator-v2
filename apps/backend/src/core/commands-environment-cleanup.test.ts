@@ -25,7 +25,7 @@ import { environmentStateDirectories } from "./environment-state-paths.js";
 import { setupTerminalSessionId } from "./commands-terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { runCommand } from "./shell.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { dockerOwnerNamespace } from "./containers/ownership.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { deleteEnvironmentTask } from "./environment-delete.js";
 

@@ -12,11 +12,11 @@ import {
   ContainerGitFetchPolicy,
   containerRepoId,
   formatContainerFetchResponse,
-} from "../src/core/container-git-fetch.js";
+} from "../src/core/containers/git-fetch.js";
 import { PrMonitorService, type PrMonitorTarget } from "../src/core/git/pr-monitor.js";
 import { ClaudeStatePollManager } from "../src/core/tmux/poll.js";
 import type { WorktreeSignalReason } from "../src/core/agent-tools.js";
-import { ContainerWorktreeSignals } from "../src/core/container-worktree-signal.js";
+import { ContainerWorktreeSignals } from "../src/core/containers/worktree-signal.js";
 import { RecurringWorkMetrics } from "../src/core/recurring/work-metrics.js";
 import { ManualTime } from "../src/core/recurring/test-support.js";
 import {
@@ -88,7 +88,7 @@ export const PHYSICAL_COST = {
    */
   claudeStateSignalInstallDockerExecs: 4,
   /**
-   * Arming the worktree watcher (`container-worktree-signal-install.ts`): the
+   * Arming the worktree watcher (`containers/worktree-signal-install.ts`): the
    * same host alias (2) and service-port (1) preparation, then the
    * `orkestrator-worktree-signal start` exec (1). Once per tracking lineage.
    */

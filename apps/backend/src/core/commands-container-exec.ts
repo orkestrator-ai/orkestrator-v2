@@ -1,5 +1,5 @@
 import { runCommand } from "./shell.js";
-import { networkOwnerContainer } from "./container-network-owner.js";
+import { networkOwnerContainer } from "./containers/index.js";
 import type { EnvironmentStatus } from "./models.js";
 
 /**

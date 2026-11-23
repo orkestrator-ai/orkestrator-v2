@@ -1,7 +1,7 @@
 import { createLogger } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { DOCKER_LABEL_OWNER } from "./constants.js";
-import { subscribeDockerNetworkChanges } from "./docker-network-changes.js";
+import { subscribeDockerNetworkChanges } from "./containers/index.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
 const log = createLogger("docker.reachability");

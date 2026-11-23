@@ -34,8 +34,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, writeGithubRangesSeedFixture } from "./container-lifecycle-fixtures";
 import { agentToolsStandIn, hostServiceContext } from "./container-live-host-service-context";
@@ -181,10 +181,10 @@ describe("rootful daemon with no host firewall", () => {
     "a full runtime reaches gateways bound to host addresses but not loopback; a restricted runtime reaches only the named service port",
     async () => {
       const { ContainerHostReachabilityService } =
-        await import("../src/core/container-host-reachability");
+        await import("../src/core/containers/host-reachability");
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
-      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
+      const { networkOwnerContainer } = await import("../src/core/containers/network-owner");
 
       const service = listener("0.0.0.0", "service-ok");
       const other = listener("0.0.0.0", "other-ok");

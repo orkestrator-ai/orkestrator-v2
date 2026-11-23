@@ -449,7 +449,7 @@ while the old version is still supported. Codex's equivalent is step 7 of
 
 A preserving container rebuild keeps `/workspace` and only the provider paths
 listed in `PROVIDER_STATE_LAYOUT`
-(`apps/backend/src/core/container-state-layout.ts`). Everything else in a
+(`apps/backend/src/core/containers/state-layout.ts`). Everything else in a
 provider home is dropped with the old runtime. An upgrade that moves session
 state to a new file or database makes a rebuild lose it, and no ordinary test
 notices. So every agent bump re-checks the layout against the new version.

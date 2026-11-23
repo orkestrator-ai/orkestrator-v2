@@ -17,9 +17,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { networkOwnerContainer } from "../src/core/container-network-owner";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { networkOwnerContainer } from "../src/core/containers/network-owner";
 import { stopRuntimeContainer } from "../src/core/egress-gateway";
 import { startContainerWithAgentAccounts } from "../src/core/agent-accounts/containers";
 import {
@@ -110,7 +110,7 @@ describe("7549 the GitHub ranges seed is bound, not copied", () => {
     "a restricted boot reads the bound seed, and a restart reads it as last refreshed",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const environment = lifecycleEnvironment({
         id: `seed-${RUN}`,
         networkAccessMode: "restricted",

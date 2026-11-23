@@ -3,15 +3,20 @@ import {
   ContainerLifecycleError,
   type ContainerLifecycleErrorCode,
 } from "@orkestrator/protocol/container-lifecycle";
-import type { NetworkPolicyVersion } from "./container-network.js";
+import {
+  boundedWaitScript,
+  CONTAINER_ROOT_USER_ARGS,
+  egressGatewayOf,
+  forgetNetworkOwner,
+  PROBE_WINDOW_MS,
+  probeIterations,
+  startDockerContainer,
+} from "./containers/index.js";
+import type { NetworkPolicyVersion } from "./containers/network.js";
 import { runCommand } from "./shell.js";
-import { egressGatewayOf, forgetNetworkOwner } from "./container-network-owner.js";
-import { startDockerContainer } from "./container-start.js";
-import { PROBE_WINDOW_MS, boundedWaitScript, probeIterations } from "./container-readiness.js";
 import { githubRangesSeedMountArguments } from "./git/index.js";
-import { CONTAINER_ROOT_USER_ARGS } from "./container-scripts.js";
 
-export { egressGatewayOf, networkOwnerContainer } from "./container-network-owner.js";
+export { egressGatewayOf, networkOwnerContainer } from "./containers/index.js";
 
 /**
  * External egress enforcement (`egress-gateway=1`).

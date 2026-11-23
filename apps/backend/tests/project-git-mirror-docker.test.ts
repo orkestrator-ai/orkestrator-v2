@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import {
   gitMirrorContainerArguments,
   refreshProjectGitMirror,

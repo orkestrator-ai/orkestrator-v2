@@ -92,10 +92,10 @@ Analysed 2026-10-27 against `main` at `863b5782`.
 
 **Problem.** Warm start on x64 went from 1.52 s to 2.14 s with 0109, over the 2 s target. Fresh-to-ready on x64 is over 3 s.
 
-**Context.** 0022's analysis attributed the rise to `startDockerContainer`'s extra inspection and network check (`apps/backend/src/core/container-start.ts:185`).
+**Context.** 0022's analysis attributed the rise to `startDockerContainer`'s extra inspection and network check (`apps/backend/src/core/containers/start.ts:185`).
 
 **Investigation.** That attribution does not hold on the success path.
-- `startDockerContainer` issues one `docker start` and returns (`container-start.ts:197-203`). It inspects only after an address-in-use failure (`:204-240`). In the benchmark only the gateway goes through it (`egress-gateway.ts:369`); the runtime gets a bare `docker start`.
+- `startDockerContainer` issues one `docker start` and returns (`containers/start.ts:197-203`). It inspects only after an address-in-use failure (`:204-240`). In the benchmark only the gateway goes through it (`egress-gateway.ts:369`); the runtime gets a bare `docker start`.
 - The rise is in the boot phase on both architectures: x64 `startToReady` 2.64 to 2.98 s and warm start 1.52 to 2.14 s; arm64 2.40 to 2.66 s and 1.63 to 1.90 s (weekly run against the two 0109 runs). Storage and create phases did not move.
 - x64 fresh-to-ready was already 3.04 s on the weekly `main` run and 3.35 s on the 0058 run, so that miss predates 0109; 0109 took it to 3.40 to 3.41 s.
 - A likely cause is the image, not the backend: `relay_staged_inputs` (`docker/network-policy-entrypoint.sh:165-196`) runs on every boot. The benchmark stages a small Claude home for every runtime (`container-benchmarks.test.ts:71`, `:103`). On a GitHub runner the host user is not uid 1000, so `node` cannot read the staged mount and the relay copies it on every start. On a uid-1000 host it only runs the readability checks. So the rise may be specific to hosts like CI. Unconfirmed.
@@ -167,7 +167,7 @@ reachable (task 5). The cause was found on Docker Desktop instead.
 - **Calls.** Two cuts remove 1 + k calls from every fresh start, giving
   16 + k + R:
   - `createDockerContainer` records the runtime's network owner
-    (`rememberNetworkOwner`, `container-network-owner.ts`), so the first
+    (`rememberNetworkOwner`, `containers/network-owner.ts`), so the first
     start does not inspect its network mode.
   - `waitForEgressGatewayFirewall` inspects the gateway only when its exec
     fails: an exec that ran proves the gateway runs.

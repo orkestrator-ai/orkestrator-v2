@@ -19,7 +19,7 @@ import {
   parseExitedBootRecord,
   waitForContainerBoot,
   withEnvironmentDraining,
-} from "../src/core/container-readiness";
+} from "../src/core/containers/readiness";
 import { EnvironmentOperations } from "../src/core/environment-operations";
 import { tempDir, withDockerScript } from "./container-lifecycle-fixtures";
 

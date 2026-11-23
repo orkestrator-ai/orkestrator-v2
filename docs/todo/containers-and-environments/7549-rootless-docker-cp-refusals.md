@@ -50,10 +50,10 @@ the project seed binds, all under Orkestrator's data directory, so a data
 directory on such a filesystem (a separately mounted `/home` with
 `nosuid,nodev`, or a tmpfs) breaks every `docker cp` the backend runs
 against its runtimes: the exited-boot record (`readExitedBootFailure` in
-`container-readiness.ts`, which then reports `container-exited` instead of
+`containers/readiness.ts`, which then reports `container-exited` instead of
 the recorded code), project files (`commands-project-files.ts`), project
-seed files (`container-project-seed-files.ts`), the rebuild copy
-(`pipeContainerPath` in `container-replacement.ts`) and the GitHub seed
+seed files (`containers/project-seed-files.ts`), the rebuild copy
+(`pipeContainerPath` in `containers/replacement.ts`) and the GitHub seed
 (`copyGithubRangesSeed`). None of these errors is classified as a topology
 problem today.
 
@@ -67,7 +67,7 @@ out normally. The live readiness suite hit it through the git mirror bind
 when `TMPDIR` was `/tmp`: "a missing firewall script" and "a DNS-broken
 network" got `container-exited` instead of `firewall-missing` and
 `firewall-failed`, and both passed with `TMPDIR` on the home filesystem.
-`bindMountRefusedError` (`container-start.ts`) would match this message
+`bindMountRefusedError` (`containers/start.ts`) would match this message
 (`remount` plus "operation not permitted") but only the start path calls it.
 
 On 2026-11-10 on beelink (kernel 7.1.8, disposable rootless Engine 29.9.2)
@@ -81,7 +81,7 @@ on an affected container and answers `Could not find the file` on a healthy
 one.
 
 What was built (see "Assumptions and decisions"): every copy path above now
-classifies the refusal. `docker-copy-refusal.ts` matches the daemon's
+classifies the refusal. `containers/copy-refusal.ts` matches the daemon's
 message and, when the CLI hid it, asks the daemon once with that probe.
 Project seed files and configured project files fail creation with
 `unsupported-topology` and the remedy; a rebuild's copy step reports
@@ -365,7 +365,7 @@ Steps:
 What was built (see "Assumptions and decisions"): when the daemon is
 rootless, container creation (`commands-containers.ts`) passes every
 automatic loopback mapping through `chooseBackendHostPorts`
-(`container-host-ports.ts`), which binds `127.0.0.1:0` on the host for each,
+(`containers/host-ports.ts`), which binds `127.0.0.1:0` on the host for each,
 keeps them all bound until every port is chosen, releases them and
 publishes them as fixed ports, with the `orkestrator-backend-host-ports`
 label on the container that owns the namespace (the gateway when there is
@@ -373,7 +373,7 @@ one). `startDockerContainer` reads the label: a collision on a labelled
 port is retried on the same port after 1, 2 and 4 s
 (`PORT_HOLD_RETRY_DELAYS_MS`); a port the user fixed is still never
 retried, and Docker's own automatic ports keep the fresh-port retry.
-`container-host-ports.test.ts` and `container-start.test.ts` cover the
+`containers/host-ports.test.ts` and `containers/start.test.ts` cover the
 choice, the label and both retry kinds. Live, on a disposable rootless
 daemon: with the seven ports after Docker's next automatic port held, a
 container with Docker's automatic mapping failed past the retries while the
@@ -609,7 +609,7 @@ copied into an overlay2 instance.
 
 ### Retry a busy copy twice, then fail with a typed error (task 2)
 
-Chose: `copyIntoContainer` (`docker-copy-refusal.ts`) runs the seed-file,
+Chose: `copyIntoContainer` (`containers/copy-refusal.ts`) runs the seed-file,
 project-file and GitHub-seed copies; when the daemon answers `failed to mount
 … device or resource busy` it retries after 1 and 3 s
 (`COPY_BUSY_RETRY_DELAYS_MS`), and a copy still busy fails with an

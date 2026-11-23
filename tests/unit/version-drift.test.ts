@@ -1203,7 +1203,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // it is capped at half the limit, because shared memory is charged to it.
     const containers = read("apps/backend/src/core/commands-containers.ts");
     expect(containers).toMatch(/"--shm-size",\s*`\$\{sharedMemoryMiB\(/);
-    const resources = read("apps/backend/src/core/container-resources.ts");
+    const resources = read("apps/backend/src/core/containers/resources.ts");
     const size = resources.match(/DEFAULT_SHARED_MEMORY_MIB = (\d+);/);
     expect(size).not.toBeNull();
     expect(Number(size![1])).toBeGreaterThanOrEqual(512);

@@ -8,9 +8,9 @@ import type { PtyExitEvent, PtyProcess } from "../src/core/pty";
 import {
   formatProjectSeedRefusals,
   readProjectSeedRefusals,
-} from "../src/core/container-project-seed-files";
-import { resetResourceCaches } from "../src/core/container-resources";
-import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
+} from "../src/core/containers/project-seed-files";
+import { resetResourceCaches } from "../src/core/containers/resources";
+import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
 import {
   FIXTURE_IMAGE_ID,
   imageManifestArchive,

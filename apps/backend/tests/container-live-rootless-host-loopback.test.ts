@@ -54,8 +54,8 @@ import { IMAGE_MANIFEST_PATH } from "@orkestrator/protocol/image-manifest";
 import { runCommand } from "../src/core/shell";
 import { AgentToolsServer } from "../src/core/agent-tools";
 import { StorageService } from "../src/core/storage";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, writeGithubRangesSeedFixture } from "./container-lifecycle-fixtures";
 import { agentToolsStandIn, hostServiceContext } from "./container-live-host-service-context";
@@ -296,10 +296,10 @@ describe("rootless daemon with host loopback enabled", () => {
     "only the named service port is reachable from restricted runtimes; full runtimes reach every loopback listener as 127.0.0.1",
     async () => {
       const { ContainerHostReachabilityService } =
-        await import("../src/core/container-host-reachability");
+        await import("../src/core/containers/host-reachability");
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
-      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
+      const { networkOwnerContainer } = await import("../src/core/containers/network-owner");
 
       storage = new StorageService(dataDir);
       await storage.init();

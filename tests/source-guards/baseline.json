@@ -137,7 +137,7 @@
     "apps/backend/src/core/change-tracking/service-environment.test.ts": 1,
     "apps/backend/src/core/commands-registry-teardown.test.ts": 1,
     "apps/backend/src/core/compatibility-path-usage.test.ts": 1,
-    "apps/backend/src/core/container-login-file-watcher.test.ts": 1,
+    "apps/backend/src/core/containers/login-file-watcher.test.ts": 1,
     "apps/backend/src/core/environment-cleanup-reconciler.test.ts": 1,
     "apps/backend/src/core/git/pr-merge-tab-notices.test.ts": 1,
     "apps/backend/src/core/graph-node-agent.test.ts": 1,

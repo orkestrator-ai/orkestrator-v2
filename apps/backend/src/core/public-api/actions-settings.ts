@@ -17,7 +17,7 @@ import {
   type PublicSettingsSnapshot,
   type PublicSettingValue,
 } from "@orkestrator/protocol/public-api-resources";
-import { applyEnvironmentAllowedDomains } from "../container-network.js";
+import { applyEnvironmentAllowedDomains } from "../containers/network.js";
 import type { AppConfig, Environment, PortMapping, RepositoryConfig } from "../models.js";
 import { defaultRepositoryConfig, isPortMapping } from "../storage-shared.js";
 import { requireEnvironment, requireProject } from "./actions-discovery.js";

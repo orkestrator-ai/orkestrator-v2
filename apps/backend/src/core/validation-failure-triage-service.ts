@@ -30,7 +30,7 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentCommandRunner } from "./commands-review.js";
 import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
-import { withContainerRuntimeCredential } from "./container-scripts.js";
+import { withContainerRuntimeCredential } from "./containers/index.js";
 import {
   environmentIsolationVariables,
   withEnvironmentIsolation,

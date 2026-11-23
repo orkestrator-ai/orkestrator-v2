@@ -9,9 +9,9 @@ import {
   storageMountArguments,
   storageVolumeName,
   verifyStorageSet,
-} from "../src/core/container-storage";
-import { PROVIDER_STATE_LAYOUT } from "../src/core/container-state-layout";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+} from "../src/core/containers/storage";
+import { PROVIDER_STATE_LAYOUT } from "../src/core/containers/state-layout";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

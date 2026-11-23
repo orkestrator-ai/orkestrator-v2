@@ -36,8 +36,11 @@ import { createHash } from "node:crypto";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import { CONTAINER_GITHUB_CREDENTIAL_FILE } from "../agent-credential-files.js";
 import { quoteShell } from "../commands-agent-support.js";
-import { boundedLaunchWithPrivateEnv, keepPreviousLogCommand } from "../container-log-bounds.js";
-import { persistentStateExports } from "../container-state-layout.js";
+import {
+  boundedLaunchWithPrivateEnv,
+  keepPreviousLogCommand,
+  persistentStateExports,
+} from "../containers/index.js";
 import {
   OPENCODE2_CREDENTIAL_PLUGIN_ID,
   OPENCODE2_FLAGS,

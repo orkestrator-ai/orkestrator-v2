@@ -72,7 +72,15 @@ import {
 import type { CommandContext } from "./commands-context.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 import type { Environment } from "./models.js";
-import { assertContainerNotDraining } from "./container-readiness.js";
+import {
+  assertContainerNotDraining,
+  CONTAINER_INTERACTIVE_SHELL_COMMAND,
+  CONTAINER_SAFE_BASE64_READER,
+  CONTAINER_TERMINAL_SESSION_ENV,
+  containerTerminalUserArgs,
+  newContainerTerminalToken,
+  runContainerWrite,
+} from "./containers/index.js";
 import {
   containerGitBlobReadCommand,
   decodeGitBatchOutput,
@@ -131,7 +139,6 @@ import {
   runCommand,
   writeFileBase64,
 } from "./shell.js";
-import { runContainerWrite } from "./container-write.js";
 import {
   INITIAL_PROMPT_STAGING_DIRECTORY,
   MAX_TOTAL_ATTACHMENT_BYTES,
@@ -148,10 +155,6 @@ import {
   resolveViewSnapshotOutcome,
 } from "@orkestrator/protocol/view-sync";
 import {
-  CONTAINER_INTERACTIVE_SHELL_COMMAND,
-  CONTAINER_SAFE_BASE64_READER,
-  CONTAINER_TERMINAL_SESSION_ENV,
-  containerTerminalUserArgs,
   asString,
   asRecord,
   asOptionalString,
@@ -226,13 +229,12 @@ import {
   applyActiveAgentAccountsForContainerTerminal,
   stripInheritedAgentCredentials,
 } from "./agent-accounts/index.js";
-import { newContainerTerminalToken } from "./container-terminal-shell.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./environment-isolation.js";
 
 /**
  * Starts a container terminal's `docker exec -it` shell, marked with a fresh
  * token so that closing the PTY can end the shell in the container as well
- * (`container-terminal-shell.ts`). An already running PTY is left as it is.
+ * (`containers/terminal-shell.ts`). An already running PTY is left as it is.
  */
 /** Resolve even legacy terminals that were opened with only a container id. */
 async function assertContainerCheckoutAvailable(

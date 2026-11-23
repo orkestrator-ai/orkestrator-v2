@@ -78,7 +78,7 @@ export type CommandContext = {
     servicePort?(): number | null;
     /** Doorbell credential for the Claude terminal state signal. */
     issueStateSignal?(onSignal: () => void): StateSignalCredential | null;
-    /** Doorbell credential for a container worktree watcher (`container-worktree-signal.ts`). */
+    /** Doorbell credential for a container worktree watcher (`containers/worktree-signal.ts`). */
     issueWorktreeSignal?(
       onSignal: (reason: WorktreeSignalReason) => void,
     ): StateSignalCredential | null;
@@ -86,7 +86,7 @@ export type CommandContext = {
     issueTmuxHookSignal?(onSignal: () => void): StateSignalCredential | null;
   };
   /** Container → host agent tools reachability checks (startup, bridges, preflight). */
-  containerHostReachability?: import("./container-host-reachability.js").ContainerHostReachabilityService;
+  containerHostReachability?: import("./containers/index.js").ContainerHostReachabilityService;
   buildPipelines?: BuildPipelineService;
   /** Set only by the build supervisor's in-process Kanban invoker. */
   buildKanbanWrite?: { admissionPipelineId?: string };

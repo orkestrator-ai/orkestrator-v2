@@ -25,14 +25,14 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { networkOwnerContainer } from "../src/core/container-network-owner";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { networkOwnerContainer } from "../src/core/containers/network-owner";
 import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/egress-gateway";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
-import { parseBackendHostPortsLabel } from "../src/core/container-host-ports";
+import { parseBackendHostPortsLabel } from "../src/core/containers/host-ports";
 import { DOCKER_LABEL_BACKEND_HOST_PORTS } from "../src/core/constants";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
@@ -124,7 +124,7 @@ async function createRestricted(
   context: ReturnType<typeof conditionsContext>["context"];
 }> {
   const { createDockerContainer } = await import("../src/core/commands-containers");
-  const { resolveDockerImage } = await import("../src/core/docker-image");
+  const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({ id: `${id}-${RUN}`, allowedDomains });
   const { context } = conditionsContext([environment]);
   const resolved = await resolveDockerImage(IMAGE);
@@ -300,7 +300,7 @@ describe("IPv6 on the environment network", () => {
         "registry.npmjs.org",
       ]);
       const { environmentNetworkName, environmentNetworkPolicy } =
-        await import("../src/core/container-network");
+        await import("../src/core/containers/network");
       let network = environmentNetworkName(owner, `ipv6-${RUN}`);
       const daemonIpv6 = await docker(["network", "inspect", "-f", "{{.EnableIPv6}}", network]);
       if (daemonIpv6 !== "true") {

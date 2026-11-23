@@ -1,0 +1,743 @@
+import { createLogger } from "@orkestrator/protocol/logger";
+import { detectDockerTopology } from "./image.js";
+import {
+  UNRESTRICTED_LIMITS,
+  builtInResourceDefault,
+  unenforceableAxes,
+  type ContainerResourceLimits,
+  type ContainerUsageSample,
+  type ContainerUsageSnapshot,
+  type DockerCapacity,
+  type EnvironmentResourcePolicy,
+  type ResourceAxis,
+  type ResourceEnforcement,
+} from "@orkestrator/protocol/container-resources";
+import {
+  DOCKER_LABEL_APP,
+  DOCKER_LABEL_APP_VALUE,
+  DOCKER_LABEL_ENVIRONMENT_ID,
+  DOCKER_LABEL_OWNER,
+} from "../constants.js";
+import { dockerOwnerNamespace } from "./ownership.js";
+import { runCommand } from "../shell.js";
+import type { CommandContext } from "../commands-context.js";
+import type { AppConfig, Environment } from "../models.js";
+import {
+  ContainerLifecycleError,
+  currentRuntimeIdentity,
+  runContainerOperation,
+} from "./lifecycle-service.js";
+import { parseDockerPsSize } from "./cleanup-inventory.js";
+
+const resourcesLog = createLogger("docker");
+
+/**
+ * Resource budgets and usage telemetry (containers plan step 10).
+ *
+ * A new runtime gets the environment's override, else the budget set in
+ * Settings → Container, else the built-in default for this daemon
+ * (`builtInResourceDefault`: no CPU cap, memory capped at a fraction of the
+ * daemon, a PID ceiling), chosen from measured workloads. An explicit budget
+ * whose limits are all `null` is unrestricted. The budget is resolved only
+ * when a runtime is created, so an existing container keeps what it was
+ * created with until it is rebuilt or updated on purpose. A requested budget
+ * is written into the Docker specification and read back from `docker
+ * inspect`; the applied value, not the request, is what is reported. Usage
+ * comes from one bounded, deduplicated sampler over this installation's
+ * containers, and capacity from the daemon (on Docker Desktop, its VM — never
+ * the backend host).
+ */
+
+const MIB = 1024 * 1024;
+
+export function resolveResourceLimits(
+  environment: Pick<Environment, "containerResourceLimits">,
+  global: Pick<AppConfig["global"], "containerResourceLimits">,
+  daemon: ResourceEnforcement,
+): {
+  limits: ContainerResourceLimits;
+  source: EnvironmentResourcePolicy["source"];
+  /** Built-in default axes this daemon cannot enforce, left off. */
+  unenforced: ResourceAxis[];
+} {
+  if (environment.containerResourceLimits) {
+    return {
+      limits: { ...UNRESTRICTED_LIMITS, ...environment.containerResourceLimits },
+      source: "environment",
+      unenforced: [],
+    };
+  }
+  if (global.containerResourceLimits) {
+    return {
+      limits: { ...UNRESTRICTED_LIMITS, ...global.containerResourceLimits },
+      source: "global",
+      unenforced: [],
+    };
+  }
+  // Never refused: an axis this daemon cannot enforce is dropped and
+  // reported instead, so a rootless daemon without delegation still creates.
+  const { limits, unenforced } = builtInResourceDefault(daemon);
+  return { limits, source: "default", unenforced };
+}
+
+/** Docker create/update arguments. Swap is disabled by pinning it to memory. */
+/** `/dev/shm` for Chromium: 1 GiB, or half the memory limit when that is smaller. */
+export const DEFAULT_SHARED_MEMORY_MIB = 1024;
+
+export function sharedMemoryMiB(limits: ContainerResourceLimits): number {
+  return limits.memoryMiB === null
+    ? DEFAULT_SHARED_MEMORY_MIB
+    : Math.min(DEFAULT_SHARED_MEMORY_MIB, Math.floor(limits.memoryMiB / 2));
+}
+
+export function resourceArguments(limits: ContainerResourceLimits): string[] {
+  const args: string[] = [];
+  if (limits.cpus !== null) args.push("--cpus", String(limits.cpus));
+  if (limits.memoryMiB !== null) {
+    args.push("--memory", `${limits.memoryMiB}m`, "--memory-swap", `${limits.memoryMiB}m`);
+  }
+  if (limits.pids !== null) args.push("--pids-limit", String(limits.pids));
+  return args;
+}
+
+/**
+ * Arguments that lift a limit on `docker update`. Docker cannot remove a
+ * memory limit from an existing container; that applies on the next runtime,
+ * and the read-back applied value says so.
+ */
+function clearingArguments(limits: ContainerResourceLimits): string[] {
+  const args: string[] = [];
+  if (limits.cpus === null) args.push("--cpus", "0");
+  if (limits.pids === null) args.push("--pids-limit", "-1");
+  return args;
+}
+
+export function parseAppliedLimits(line: string): ContainerResourceLimits | null {
+  const [nano = "", memory = "", pids = ""] = line.trim().split("\t");
+  const nanoCpus = Number(nano);
+  const memoryBytes = Number(memory);
+  // An unset PidsLimit is a nil pointer: `<nil>` or, from Docker 29's
+  // templates, `<no value>`.
+  const pidsLimit = pids === "<nil>" || pids === "<no value>" || pids === "" ? 0 : Number(pids);
+  if (![nanoCpus, memoryBytes, pidsLimit].every(Number.isFinite)) return null;
+  return {
+    cpus: nanoCpus > 0 ? Math.round((nanoCpus / 1e9) * 100) / 100 : null,
+    memoryMiB: memoryBytes > 0 ? Math.round(memoryBytes / MIB) : null,
+    pids: pidsLimit > 0 ? pidsLimit : null,
+  };
+}
+
+export async function inspectAppliedLimits(
+  containerId: string,
+): Promise<ContainerResourceLimits | null> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "inspect",
+        "-f",
+        "{{.HostConfig.NanoCpus}}\t{{.HostConfig.Memory}}\t{{.HostConfig.PidsLimit}}",
+        containerId,
+      ],
+      { timeoutMs: 10_000 },
+    );
+    return parseAppliedLimits(stdout);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Capacity
+// ---------------------------------------------------------------------------
+
+const CAPACITY_TTL_MS = 60_000;
+const DISK_TTL_MS = 5 * 60_000;
+let capacityCache: { at: number; value: DockerCapacity } | null = null;
+let diskCache: { at: number; value: DockerCapacity["disk"] } | null = null;
+
+/**
+ * Test seam. Capacity and disk describe the Docker daemon, not one backend,
+ * so they stay process-wide: two backends on one daemon read the same
+ * figures. The usage sample is per backend (`ContainerUsageSampler`).
+ */
+export function resetResourceCaches(): void {
+  capacityCache = null;
+  diskCache = null;
+  warnedRootlessLiveRestore = false;
+}
+
+function number(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+export function parseDockerInfo(text: string): Omit<DockerCapacity, "disk"> {
+  let info: Record<string, unknown> = {};
+  try {
+    info = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    info = {};
+  }
+  const security = Array.isArray(info.SecurityOptions)
+    ? info.SecurityOptions.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const bool = (value: unknown) => (typeof value === "boolean" ? value : null);
+  return {
+    scope: "docker-daemon",
+    cpus: number(info.NCPU),
+    memoryBytes: number(info.MemTotal),
+    operatingSystem:
+      typeof info.OperatingSystem === "string" ? info.OperatingSystem.slice(0, 128) : null,
+    rootless: security.some((entry) => /name=rootless/.test(entry)),
+    cgroupVersion: typeof info.CgroupVersion === "string" ? info.CgroupVersion.slice(0, 8) : null,
+    support: {
+      cpuQuota: bool(info.CpuCfsQuota),
+      memoryLimit: bool(info.MemoryLimit),
+      pidsLimit: bool(info.PidsLimit),
+    },
+    logDrivers: (() => {
+      const plugins = info.Plugins as { Log?: unknown } | undefined;
+      return Array.isArray(plugins?.Log)
+        ? plugins.Log.filter((entry): entry is string => typeof entry === "string").slice(0, 32)
+        : [];
+    })(),
+  };
+}
+
+/** Docker's container stdout/stderr bound for new runtimes. */
+export const CONTAINER_LOG_OPTIONS = { driver: "local", maxSize: "10m", maxFiles: 3 } as const;
+
+/** Every Docker daemon ships it, and it takes the same size and file bounds. */
+export const CONTAINER_LOG_FALLBACK_DRIVER = "json-file";
+
+let warnedUnboundedLogDriver = false;
+
+/**
+ * `--log-driver local` with size and file bounds when the daemon offers it,
+ * else `json-file` with the same bounds, so a daemon whose default is an
+ * uncapped `json-file` still gets a bounded log. That overrides a daemon's
+ * own default driver (`journald`, say) for these containers only. A daemon
+ * that lists neither (an empty list is a failed probe) keeps its default and
+ * is warned about once: naming a driver it may not have would fail the
+ * create. An existing container keeps its driver until it is rebuilt; the
+ * daemon's own configuration is never changed.
+ */
+export function logDriverArguments(logDrivers: readonly string[]): string[] {
+  const driver = [CONTAINER_LOG_OPTIONS.driver, CONTAINER_LOG_FALLBACK_DRIVER].find((name) =>
+    logDrivers.includes(name),
+  );
+  if (!driver) {
+    if (logDrivers.length > 0 && !warnedUnboundedLogDriver) {
+      warnedUnboundedLogDriver = true;
+      resourcesLog.warn("log-driver.unbounded");
+    }
+    return [];
+  }
+  return [
+    "--log-driver",
+    driver,
+    "--log-opt",
+    `max-size=${CONTAINER_LOG_OPTIONS.maxSize}`,
+    "--log-opt",
+    `max-file=${CONTAINER_LOG_OPTIONS.maxFiles}`,
+  ];
+}
+
+/** `docker system df` sizes by type; shared image layers are counted once. */
+export function parseSystemDf(text: string): DockerCapacity["disk"] {
+  const disk: DockerCapacity["disk"] = {
+    imagesBytes: null,
+    containersBytes: null,
+    volumesBytes: null,
+    buildCacheBytes: null,
+    measuredAt: new Date().toISOString(),
+  };
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let row: Record<string, unknown>;
+    try {
+      row = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const bytes = parseDockerPsSize(row.Size);
+    switch (row.Type) {
+      case "Images":
+        disk.imagesBytes = bytes;
+        break;
+      case "Containers":
+        disk.containersBytes = bytes;
+        break;
+      case "Local Volumes":
+        disk.volumesBytes = bytes;
+        break;
+      case "Build Cache":
+        disk.buildCacheBytes = bytes;
+        break;
+    }
+  }
+  return disk;
+}
+
+let warnedRootlessLiveRestore = false;
+
+/**
+ * Warns once per process when a rootless daemon has `live-restore` on. A
+ * rootless restart replaces RootlessKit, its namespaces, containerd and the
+ * shims, so the new daemon reports every container exited while the old
+ * containers' processes keep running, unreachable by Docker and with no
+ * network, on the same volumes the restarted containers then mount (#2142,
+ * 2026-11-11). Nothing in the backend can stop them, so the
+ * user is told to turn the setting off; the backend restarts containers as
+ * it does for any daemon whose live-restore is off.
+ */
+export function warnRootlessLiveRestore(infoText: string, rootless: boolean): void {
+  if (warnedRootlessLiveRestore || !rootless) return;
+  let info: Record<string, unknown>;
+  try {
+    info = JSON.parse(infoText) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  if (info.LiveRestoreEnabled !== true) return;
+  warnedRootlessLiveRestore = true;
+  resourcesLog.warn("daemon.rootless-live-restore");
+}
+
+export async function dockerCapacity(options: { refresh?: boolean } = {}): Promise<DockerCapacity> {
+  const now = Date.now();
+  if (!options.refresh && capacityCache && now - capacityCache.at < CAPACITY_TTL_MS) {
+    return { ...capacityCache.value, disk: await dockerDisk() };
+  }
+  let base: Omit<DockerCapacity, "disk">;
+  try {
+    const { stdout } = await runCommand("docker", ["info", "--format", "{{json .}}"], {
+      timeoutMs: 15_000,
+    });
+    base = parseDockerInfo(stdout.trim());
+    warnRootlessLiveRestore(stdout.trim(), base.rootless);
+  } catch {
+    const topology = await detectDockerTopology();
+    base = { ...parseDockerInfo("{}"), rootless: topology.rootless };
+  }
+  const value = { ...base, disk: await dockerDisk(), builtInDefault: builtInResourceDefault(base) };
+  capacityCache = { at: now, value };
+  return value;
+}
+
+/** Admission must preserve known rootless topology even when capacity probing fails. */
+export async function dockerAdmissionCapacity(topology?: {
+  rootless: boolean;
+}): Promise<DockerCapacity> {
+  const knownTopology = topology ?? (await detectDockerTopology());
+  const capacity = await dockerCapacity();
+  const rootless = capacity.rootless || knownTopology.rootless;
+  return {
+    ...capacity,
+    rootless,
+    builtInDefault: builtInResourceDefault({ ...capacity, rootless }),
+  };
+}
+
+async function dockerDisk(): Promise<DockerCapacity["disk"]> {
+  const now = Date.now();
+  if (diskCache && now - diskCache.at < DISK_TTL_MS) return diskCache.value;
+  try {
+    const { stdout } = await runCommand("docker", ["system", "df", "--format", "{{json .}}"], {
+      timeoutMs: 60_000,
+    });
+    diskCache = { at: now, value: parseSystemDf(stdout) };
+  } catch {
+    diskCache = {
+      at: now,
+      value: {
+        imagesBytes: null,
+        containersBytes: null,
+        volumesBytes: null,
+        buildCacheBytes: null,
+        measuredAt: null,
+      },
+    };
+  }
+  return diskCache.value;
+}
+
+// ---------------------------------------------------------------------------
+// Usage sampler
+// ---------------------------------------------------------------------------
+
+const MAX_SAMPLED_CONTAINERS = 128;
+
+/** `1.5GiB` / `512MiB` / `12kB` → bytes (binary for *iB, decimal otherwise). */
+export function parseMemorySize(value: string): number | null {
+  const match = /^\s*([0-9]+(?:\.[0-9]+)?)\s*([kKmMgGtT]?i?B)\s*$/.exec(value);
+  if (!match) return null;
+  const unit = match[2]!.toLowerCase();
+  const scale: Record<string, number> = {
+    b: 1,
+    kb: 1e3,
+    mb: 1e6,
+    gb: 1e9,
+    tb: 1e12,
+    kib: 1024,
+    mib: 1024 ** 2,
+    gib: 1024 ** 3,
+    tib: 1024 ** 4,
+  };
+  const factor = scale[unit];
+  return factor === undefined ? null : Math.round(Number(match[1]) * factor);
+}
+
+export function parseStatsLine(line: string): {
+  id: string;
+  cpuCores: number | null;
+  memoryBytes: number | null;
+  memoryLimitBytes: number | null;
+  pids: number | null;
+} | null {
+  let row: Record<string, unknown>;
+  try {
+    row = JSON.parse(line) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const id =
+    typeof row.ID === "string" ? row.ID : typeof row.Container === "string" ? row.Container : "";
+  if (!id) return null;
+  const cpu = typeof row.CPUPerc === "string" ? Number(row.CPUPerc.replace("%", "")) : Number.NaN;
+  const [used = "", limit = ""] =
+    typeof row.MemUsage === "string" ? row.MemUsage.split("/").map((part) => part.trim()) : [];
+  const pids = typeof row.PIDs === "string" ? Number(row.PIDs) : Number.NaN;
+  return {
+    id,
+    // Docker reports 100% per core; do not clamp a multi-core figure.
+    cpuCores: Number.isFinite(cpu) ? Math.round((cpu / 100) * 100) / 100 : null,
+    memoryBytes: parseMemorySize(used),
+    memoryLimitBytes: parseMemorySize(limit),
+    pids: Number.isFinite(pids) ? pids : null,
+  };
+}
+
+async function sampleNow(
+  context: Pick<CommandContext, "storage" | "runtime">,
+): Promise<ContainerUsageSnapshot> {
+  const owner = dockerOwnerNamespace(context.storage.getDataDir());
+  const sampledAt = new Date().toISOString();
+  let listing: string;
+  try {
+    ({ stdout: listing } = await runCommand(
+      "docker",
+      [
+        "ps",
+        "-a",
+        "--no-trunc",
+        "--filter",
+        `label=${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+        "--filter",
+        `label=${DOCKER_LABEL_OWNER}=${owner}`,
+        "--format",
+        `{{.ID}}\t{{.State}}\t{{.Label "${DOCKER_LABEL_ENVIRONMENT_ID}"}}`,
+      ],
+      { timeoutMs: 15_000 },
+    ));
+  } catch {
+    return {
+      scope: "installation",
+      sampledAt: null,
+      stale: true,
+      containers: [],
+      error: "docker-unavailable",
+    };
+  }
+  const rows = listing
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .filter((parts) => parts[0])
+    .slice(0, MAX_SAMPLED_CONTAINERS);
+  const samples = new Map<string, ContainerUsageSample>();
+  for (const [id = "", state = "", environmentId = ""] of rows) {
+    samples.set(id, {
+      containerId: id,
+      environmentId: environmentId || null,
+      state,
+      cpuCores: null,
+      memoryBytes: null,
+      memoryLimitBytes: null,
+      pids: null,
+      oomKilled: null,
+      oomEvents: context.runtime.containerOom.count(id),
+      exitCode: null,
+    });
+  }
+  const running = rows.filter((parts) => parts[1] === "running").map((parts) => parts[0]!);
+  if (running.length > 0) {
+    try {
+      const { stdout } = await runCommand(
+        "docker",
+        ["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}", ...running],
+        { timeoutMs: 20_000 },
+      );
+      for (const line of stdout.split("\n")) {
+        const parsed = parseStatsLine(line);
+        if (!parsed) continue;
+        const sample = [...samples.values()].find((entry) =>
+          entry.containerId.startsWith(parsed.id),
+        );
+        if (!sample) continue;
+        sample.cpuCores = parsed.cpuCores;
+        sample.memoryBytes = parsed.memoryBytes;
+        sample.memoryLimitBytes = parsed.memoryLimitBytes;
+        sample.pids = parsed.pids;
+      }
+    } catch {
+      // Usage stays unknown (null) rather than becoming zero.
+    }
+  }
+  const ids = [...samples.keys()];
+  if (ids.length > 0) {
+    try {
+      const { stdout } = await runCommand(
+        "docker",
+        ["inspect", "-f", "{{.Id}}\t{{.State.OOMKilled}}\t{{.State.ExitCode}}", ...ids],
+        { timeoutMs: 15_000 },
+      );
+      for (const line of stdout.split("\n")) {
+        const [id = "", oom = "", exit = ""] = line.trim().split("\t");
+        const sample = samples.get(id);
+        if (!sample) continue;
+        sample.oomKilled = oom === "true" ? true : oom === "false" ? false : null;
+        const code = Number(exit);
+        sample.exitCode = sample.state === "running" || !Number.isFinite(code) ? null : code;
+      }
+    } catch {
+      // OOM evidence stays unknown.
+    }
+  }
+  return {
+    scope: "installation",
+    sampledAt,
+    stale: false,
+    containers: [...samples.values()],
+    error: null,
+  };
+}
+
+/** This backend's shared usage sample (`ContainerUsageSampler`). */
+export function sampleContainerUsage(
+  context: Pick<CommandContext, "storage" | "runtime">,
+): Promise<ContainerUsageSnapshot> {
+  return context.runtime.containerUsage.sample(() => sampleNow(context));
+}
+
+// ---------------------------------------------------------------------------
+// Policy view and live update
+// ---------------------------------------------------------------------------
+
+function unsupportedAxes(
+  limits: ContainerResourceLimits,
+  capacity: Pick<DockerCapacity, "support" | "rootless">,
+): Array<keyof ContainerResourceLimits> {
+  const out: Array<keyof ContainerResourceLimits> = [];
+  if (limits.cpus !== null && capacity.support.cpuQuota === false) out.push("cpus");
+  if (limits.memoryMiB !== null && capacity.support.memoryLimit === false) out.push("memoryMiB");
+  if (limits.pids !== null && capacity.support.pidsLimit === false) out.push("pids");
+  return out;
+}
+
+const AXIS_NAMES: Record<keyof ContainerResourceLimits, string> = {
+  cpus: "CPU",
+  memoryMiB: "memory",
+  pids: "process (PID)",
+};
+
+/**
+ * Refuses a budget the daemon says it cannot enforce, before Docker sees it.
+ * A rootless daemon without delegated cgroups (cgroup driver `none`) accepts
+ * `--cpus`, `--memory` and `--pids-limit` without a warning and records them
+ * in `HostConfig`, so the inspect read-back shows them as applied, yet it
+ * enforces none of them; with partial delegation Docker drops an axis with
+ * only a warning. Support Docker did not report (`null`) is refused only on a
+ * rootless daemon, the one case where the read-back cannot reveal it.
+ */
+export function refuseUnenforceableLimits(
+  limits: ContainerResourceLimits,
+  capacity: Pick<DockerCapacity, "support" | "rootless">,
+  outcome: string,
+): void {
+  if (
+    capacity.rootless &&
+    ((limits.cpus !== null && capacity.support.cpuQuota === null) ||
+      (limits.memoryMiB !== null && capacity.support.memoryLimit === null) ||
+      (limits.pids !== null && capacity.support.pidsLimit === null))
+  ) {
+    throw new ContainerLifecycleError(
+      "daemon-unavailable",
+      `Docker runs rootless and did not report whether it can enforce the environment's budget. ${outcome} Retry once Docker responds.`,
+    );
+  }
+  const axes = unsupportedAxes(limits, capacity);
+  if (axes.length === 0) return;
+  const names = axes.map((axis) => AXIS_NAMES[axis]).join(", ");
+  const [limit, them] = axes.length > 1 ? ["limits", "them"] : ["limit", "it"];
+  const remedy = capacity.rootless
+    ? "run rootless Docker on cgroup v2 with the systemd cgroup driver and the cpu, memory and pids controllers delegated to its user."
+    : `use a Docker engine whose cgroups support ${them}.`;
+  throw new ContainerLifecycleError(
+    "unsupported-topology",
+    `This Docker engine${capacity.rootless ? " (rootless)" : ""} cannot enforce the ${names} ${limit} in the environment's budget. ${outcome} Remove ${them} from the budget (Settings → Container, or the environment's resources), or ${remedy}`,
+  );
+}
+
+/**
+ * The axes of a budget this daemon would refuse at create
+ * ({@link refuseUnenforceableLimits}). Empty when Docker did not say, which a
+ * create on an unreachable daemon refuses for its own reason.
+ */
+export async function unenforceableOnThisDaemon(
+  limits: ContainerResourceLimits,
+): Promise<ResourceAxis[]> {
+  try {
+    return unenforceableAxes(limits, await dockerAdmissionCapacity());
+  } catch {
+    return [];
+  }
+}
+
+/** {@link refuseUnenforceableLimits} for the budget a new runtime of `environment` would get. */
+export async function assertEnvironmentBudgetEnforceable(
+  environment: Pick<Environment, "containerResourceLimits">,
+  context: Pick<CommandContext, "storage">,
+  outcome: string,
+  topology?: { rootless: boolean },
+): Promise<void> {
+  const config = await context.storage.loadConfig();
+  const capacity = await dockerAdmissionCapacity(topology);
+  refuseUnenforceableLimits(
+    resolveResourceLimits(environment, config.global, capacity).limits,
+    capacity,
+    outcome,
+  );
+}
+
+export async function environmentResourcePolicy(
+  environmentId: string,
+  context: Pick<CommandContext, "storage">,
+): Promise<EnvironmentResourcePolicy> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const config = await context.storage.loadConfig();
+  const capacity = await dockerAdmissionCapacity();
+  const { limits, source, unenforced } = resolveResourceLimits(
+    environment,
+    config.global,
+    capacity,
+  );
+  const applied =
+    environment.containerId && environment.environmentType === "containerized"
+      ? await inspectAppliedLimits(environment.containerId)
+      : null;
+  // A runtime can carry a limit the daemon records but does not enforce (one
+  // created before this check, or under another daemon); flag it too.
+  const unsupported = new Set([
+    ...unenforced,
+    ...unsupportedAxes(limits, capacity),
+    ...(applied ? unsupportedAxes(applied, capacity) : []),
+  ]);
+  return {
+    environmentId,
+    requested: limits,
+    source,
+    applied,
+    unsupported: (["cpus", "memoryMiB", "pids"] as const).filter((axis) => unsupported.has(axis)),
+    daemonRootless: capacity.rootless,
+  };
+}
+
+export interface ResourceUpdateRequest {
+  environmentId: string;
+  /** `undefined` clears the override (inherit the global default). */
+  limits: ContainerResourceLimits | undefined;
+  /** Apply to the current runtime now (`docker update`). */
+  applyNow: boolean;
+  /** Allow a memory limit below the runtime's current use. */
+  allowBelowUsage?: boolean;
+}
+
+/**
+ * Stores an environment's budget and, when asked, applies it to the current
+ * runtime through `docker update` as one lifecycle operation. The applied
+ * value is read back; a failed update leaves the reported applied value
+ * unchanged. A memory limit below current use is refused unless allowed,
+ * because the kernel would reclaim or kill processes to meet it.
+ */
+export async function updateEnvironmentResources(
+  request: ResourceUpdateRequest,
+  context: CommandContext,
+): Promise<EnvironmentResourcePolicy> {
+  const environment = await context.storage.getEnvironment(request.environmentId);
+  if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
+  const config = await context.storage.loadConfig();
+  const capacity = await dockerAdmissionCapacity();
+  const next = resolveResourceLimits(
+    { containerResourceLimits: request.limits },
+    config.global,
+    capacity,
+  ).limits;
+  // Refused even when only stored: the next runtime could not be created with it.
+  refuseUnenforceableLimits(next, capacity, "Nothing was changed.");
+  if (next.cpus !== null && capacity.cpus !== null && next.cpus > capacity.cpus) {
+    throw new ContainerLifecycleError(
+      "resource-exhausted",
+      `Docker has ${capacity.cpus} CPUs; a limit of ${next.cpus} cannot be met.`,
+    );
+  }
+  if (
+    next.memoryMiB !== null &&
+    capacity.memoryBytes !== null &&
+    next.memoryMiB * MIB > capacity.memoryBytes
+  ) {
+    throw new ContainerLifecycleError(
+      "resource-exhausted",
+      `Docker has ${Math.floor(capacity.memoryBytes / MIB)} MiB of memory; the limit exceeds it.`,
+    );
+  }
+  const containerId =
+    request.applyNow && environment.environmentType === "containerized"
+      ? environment.containerId
+      : null;
+  if (containerId && next.memoryMiB !== null && !request.allowBelowUsage) {
+    const usage = (await sampleContainerUsage(context)).containers.find(
+      (sample) => sample.containerId === containerId,
+    );
+    if (usage?.memoryBytes && usage.memoryBytes > next.memoryMiB * MIB * 0.9) {
+      throw new ContainerLifecycleError(
+        "confirmation-required",
+        "The container is using nearly that much memory now. Lowering the limit could stop its processes; stop it first or confirm.",
+      );
+    }
+  }
+  if (!containerId) {
+    await context.storage.updateEnvironment(environment.id, {
+      containerResourceLimits: request.limits,
+    });
+    return environmentResourcePolicy(environment.id, context);
+  }
+  await runContainerOperation(
+    context,
+    environment.id,
+    "update-resources",
+    {},
+    () =>
+      runCommand(
+        "docker",
+        ["update", ...resourceArguments(next), ...clearingArguments(next), containerId],
+        { timeoutMs: 30_000 },
+      ),
+    { source: currentRuntimeIdentity(environment, context) },
+  );
+  // Stored only after Docker accepted it; the applied value is read back.
+  await context.storage.updateEnvironment(environment.id, {
+    containerResourceLimits: request.limits,
+  });
+  return environmentResourcePolicy(environment.id, context);
+}

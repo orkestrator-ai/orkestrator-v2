@@ -15,7 +15,7 @@ import {
   PROVIDER_STATE_LAYOUT,
   PROVIDER_STATE_TRACED_VERSIONS,
   persistentStateExports,
-} from "../src/core/container-state-layout";
+} from "../src/core/containers/state-layout";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 

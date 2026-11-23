@@ -556,6 +556,30 @@
                   "!@orkestrator/protocol/contract/domains/terminals/*"
                 ],
                 "message": "Import the terminals domain through terminals/index.js."
+              },
+              {
+                "group": [
+                  "**/containers/*",
+                  "!**/containers/index.js",
+                  "!**/containers/apt-packages.js",
+                  "!**/containers/bridge-credential.js",
+                  "!**/containers/claude-login-keeper.js",
+                  "!**/containers/cleanup-inventory.js",
+                  "!**/containers/cleanup-preview.js",
+                  "!**/containers/credential-mode.js",
+                  "!**/containers/git-fetch.js",
+                  "!**/containers/github-credential.js",
+                  "!**/containers/lifecycle-events.js",
+                  "!**/containers/lifecycle-service.js",
+                  "!**/containers/login-file-watcher.js",
+                  "!**/containers/network.js",
+                  "!**/containers/project-seed-files.js",
+                  "!**/containers/replacement.js",
+                  "!**/containers/resources.js",
+                  "!**/containers/sign-in-guidance.js",
+                  "!**/containers/worktree-signal-install.js"
+                ],
+                "message": "Import the containers domain through containers/index.js."
               }
             ]
           }
@@ -768,6 +792,15 @@
                   "!**/backend/src/core/terminals/index.js"
                 ],
                 "message": "Import the terminals domain through terminals/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/containers/*",
+                  "!**/backend/src/core/containers/index.js",
+                  "!**/backend/src/core/containers/network.js",
+                  "!**/backend/src/core/containers/replacement.js"
+                ],
+                "message": "Import the containers domain through containers/index.js."
               }
             ]
           }

@@ -15,11 +15,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StorageService } from "../src/core/storage.js";
 import { claudeStateSignalSupport } from "../src/core/claude-state-signal.js";
-import { readImageManifest } from "../src/core/docker-image.js";
+import { readImageManifest } from "../src/core/containers/image.js";
 import { CLAUDE_STATE_POLL_INTERVAL_MS, ClaudeStatePollManager } from "../src/core/tmux/poll.js";
 import { ManualTime } from "../src/core/recurring/test-support.js";
 import { runCommand } from "../src/core/shell.js";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures.js";
 
 // Build this checkout with `mise run docker:build:dev`; never use `latest`.

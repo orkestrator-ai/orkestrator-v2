@@ -107,7 +107,7 @@ the profile's exact-owner volumes and networks. Profile handling is in
 `qualify-session-resume.sh` plants a codeword in a session, rebuilds the
 environment onto a new runtime generation and checks the resumed session
 repeats it: exit 0 pass, 1 fail, 2 setup error. A provider that passes is
-added to `RESUME_QUALIFIED_PROVIDERS` (`container-replacement.ts`); until then
+added to `RESUME_QUALIFIED_PROVIDERS` (`containers/replacement.ts`); until then
 the rebuild preview marks its resume unverified. `QUALIFY_MODEL` and
 `QUALIFY_REASONING` pick a model the login accepts (Codex and Pi defaults are
 refused for a ChatGPT-account login), `QUALIFY_REQUEST_TIMEOUT` (default
@@ -328,7 +328,7 @@ enabled was reported `blocked`. The initial implementation added it as the
 third candidate (after `10.0.2.2` and `10.0.2.1`) and used HTTP 405 for
 candidate selection. The subsequent review fix requires a signed challenge
 from the backend on both probe networks before selecting a candidate
-([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
+([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts)).
 Run in worktree `orkestrator-v2-20261118-010826-536a339f5f4d` from `main` at
 `b2c91abb9` with the change applied.
 
@@ -2338,7 +2338,7 @@ RUN_LIVE_DOCKER_TESTS=1 ORKESTRATOR_QUALIFICATION_IMAGE=orkestrator-v2:q5510-c6d
   - A full container reaches every service bound to the host's loopback, and
     arrives as `127.0.0.1`. That is the trade the rootless remediation
     already describes (todo 0109 decision 4, retired on 2026-11-10; now in
-    [container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)). The gateway still needs its credential. Its Host check
+    [container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts)). The gateway still needs its credential. Its Host check
     refused the alias, but a client that writes its own Host header gets
     past it, as the check's own comment says.
   - Two gateway paths trust a loopback peer. The agent-test bootstrap
@@ -3933,7 +3933,7 @@ hold when the host user maps to container root?
   | Backend's named service port, by `host.docker.internal` | Exit 7 | Exit 7 |
 
   Host loopback is off on this daemon, which is the documented rootless limit
-  ([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts); todo 0109, retired on 2026-11-10);
+  ([container lifecycle](../architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts); todo 0109, retired on 2026-11-10);
   the named port there cannot serve as a positive control. The `full` column is
   the control: everything it reached, the restricted container could not. The
   gateway's `OUTPUT` `REJECT` counter rose from 2 to 14 over these probes.

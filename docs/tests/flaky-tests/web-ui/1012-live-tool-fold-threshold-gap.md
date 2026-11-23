@@ -518,3 +518,22 @@ A private-port rerun of `e2e/HoverWashes.spec.ts` and
 and 11 px on desktop. With one worker on the detached target parent, the
 exact case also failed on both viewports, at 12 px on mobile and 95 px on
 desktop. The recurrence check confirmed the case was open at the branch base.
+
+## Antigravity branch validation on 2026-11-23
+
+On branch `implement-antigravity-9e7cf43c6d05-r1` (head `ba2775723`, base
+`307d193174299a7464d948bb4c49a8d975fd0f2b`), the five-worker
+`mise run test:browser` run failed the desktop no-preference case at
+line 170 with an 8 px gap. Run alone, it failed on both projects
+at 4 px (desktop, line 170) and 57 px (mobile, line 195):
+
+```sh
+env -u NODE_ENV bun scripts/loopback-network.ts --free-port ORKESTRATOR_E2E_PORT -- \
+  bunx playwright test --config e2e/playwright.config.ts e2e/ToolGroupFold.spec.ts \
+  -g "crossing the fold threshold" --repeat-each=3
+```
+
+The same command, run twice each and back to back, failed 4 of 12 and 4 of 12
+on the branch, and 5 of 12 and 3 of 12 on a detached `origin/main`
+(`307d19317`). The branch does not touch tool groups. `mise run flaky:recurrence -- 1012`
+reported the case open.

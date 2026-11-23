@@ -82,3 +82,16 @@ env -u NODE_ENV mise run test:logged -- --name merge-browser-LinearBoardDrag -- 
 ```
 
 All six owning cases passed with one worker in 23.6 seconds. The recurrence check confirmed case 9991 is open on the target base.
+
+## Antigravity branch validation on 2026-11-23
+
+On branch `implement-antigravity-9e7cf43c6d05-r1` (head `ba2775723`, base
+`307d193174299a7464d948bb4c49a8d975fd0f2b`), the five-worker
+`mise run test:browser` run timed out the mobile case
+`scrolling during drag keeps the pointer's before placement` at line 41 with
+scroll offset 76 against a threshold of more than 200. The branch does not
+touch the Linear board. Rerun alone with `--repeat-each=3` alongside
+`CoordinatorActivity` and `NativeChatShellDockNotice`, every
+`LinearBoardDrag` case passed on both projects. `mise run flaky:recurrence -- 9991`
+reported the case open. See also
+[10016](../aggregate-validation-runs/10016-antigravity-branch-browser-validation.md).

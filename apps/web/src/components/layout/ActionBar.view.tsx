@@ -1619,8 +1619,13 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
               WORKSPACE_BAR_HEIGHT_CLASS,
             )}
           >
+            {/* The end padding gives the last tab room to scroll fully into view:
+                Chromium scrolls in whole pixels, so a fractional tab row that
+                ended flush with the scrollport stayed a fraction of a pixel
+                under the machine switcher. */}
             <div
-              className="flex min-w-0 flex-1 overflow-x-auto [&::-webkit-scrollbar]:hidden"
+              data-testid="project-navigation-scroller"
+              className="flex min-w-0 flex-1 overflow-x-auto pe-1 [&::-webkit-scrollbar]:hidden"
               style={{ scrollbarWidth: "none" }}
             >
               {projectTabs}

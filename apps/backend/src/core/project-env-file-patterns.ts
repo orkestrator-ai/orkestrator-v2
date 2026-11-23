@@ -6,7 +6,7 @@ import path from "node:path";
  * found for copying into a new environment.
  *
  * This module only *finds* candidates. Every candidate is then read through
- * the seed-file reader (`container-project-seed-files.ts`), which refuses a
+ * the seed-file reader (`containers/project-seed-files.ts`), which refuses a
  * link, anything but a regular file, a real path outside the project and a
  * file over 1 MiB. The rules here (security review in to-do 8106 (retired),
  * recorded in `docs/architecture/container-lifecycle.md`):

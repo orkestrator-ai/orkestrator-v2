@@ -19,7 +19,7 @@
       "onDemand": {
         "when": [
           "docker/**",
-          "apps/backend/src/core/container-*",
+          "apps/backend/src/core/containers/**",
           "apps/backend/src/core/commands-container*",
           "apps/backend/src/core/egress-gateway*",
           "e2e/agent-testing/**",

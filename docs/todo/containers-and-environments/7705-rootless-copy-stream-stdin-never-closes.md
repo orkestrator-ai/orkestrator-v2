@@ -18,7 +18,7 @@ Tasks 1 and 2 acted on 2026-11-13 against `main` at `17d28238c`, on beelink2
 **Problem.** A legacy-to-volume migration on `docker:disposable`'s rootless
 daemon hung in one copy step. The step pipes `docker cp <source>:<path> -`
 into `docker run --rm -i … copy-stream <target> 1`
-(`pipeContainerPath` in `apps/backend/src/core/container-replacement.ts`).
+(`pipeContainerPath` in `apps/backend/src/core/containers/replacement.ts`).
 The `docker cp` producer had exited, but inside the helper `tee` was still
 blocked reading the container's stdin 14 minutes later, so the step would
 only have ended at `COPY_TIMEOUT_MS` (60 minutes) as a failure.

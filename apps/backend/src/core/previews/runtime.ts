@@ -12,7 +12,7 @@ import {
 } from "@orkestrator/protocol/preview-services";
 
 import { runCommand } from "../shell.js";
-import { dockerOwnerNamespace } from "../docker-ownership.js";
+import { dockerOwnerNamespace } from "../containers/index.js";
 import type { Environment } from "../models.js";
 import { PreviewMetrics } from "../../preview-metrics.js";
 import { PreviewRelaySupervisor, type RelayProcess } from "../../preview-relay-supervisor.js";

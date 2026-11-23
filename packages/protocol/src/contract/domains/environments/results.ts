@@ -154,7 +154,7 @@ export const EnvironmentNetworkPolicySchema = Schema.Struct({
   effective: Schema.NullOr(effectiveNetworkPolicy),
 }).annotate({ identifier: "EnvironmentNetworkPolicy" });
 
-/** `AllowedDomainsApplyResult` (`container-network.ts`). */
+/** `AllowedDomainsApplyResult` (`apps/backend/src/core/containers/network.ts`). */
 export const AllowedDomainsApplyResultSchema = Schema.Struct({
   kind: Schema.Literals(["applied", "not-applicable", "rebuild-required", "not-running", "failed"]),
   policy: EnvironmentNetworkPolicySchema,

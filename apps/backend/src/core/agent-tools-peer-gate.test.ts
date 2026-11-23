@@ -8,14 +8,14 @@ import {
   AGENT_TOOLS_LOOPBACK_PROBE_PATH,
   AGENT_TOOLS_LOOPBACK_PROOF_HEADER,
 } from "./agent-tools-loopback-proof.js";
-import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "./container-host-reachability.js";
+import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "./containers/host-reachability.js";
 import { startEvidenceListener } from "../../scripts/agent-tools-peer-evidence-support.js";
 import {
   AgentToolsPeerFilter,
   type AgentToolsPeerGate,
   type PeerVerdict,
 } from "./agent-tools-peer-filter.js";
-import { reportDockerNetworkChange } from "./docker-network-changes.js";
+import { reportDockerNetworkChange } from "./containers/network-changes.js";
 import { StorageService } from "./storage.js";
 
 /**

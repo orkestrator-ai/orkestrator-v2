@@ -18,14 +18,14 @@ import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { commandInvocationCount, observeCommandInvocations, runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { egressGatewayOf } from "../src/core/container-network-owner";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { egressGatewayOf } from "../src/core/containers/network-owner";
 import {
   deliverRuntimeSeedBeforeBoot,
   prepareEgressGatewayWithSeed,
 } from "../src/core/git/github-ranges-seed-delivery";
-import { startDockerContainer } from "../src/core/container-start";
+import { startDockerContainer } from "../src/core/containers/start";
 import {
   attributeCalls,
   collectBreakdowns,
@@ -231,9 +231,9 @@ async function writeReport(): Promise<void> {
 
 async function freshRuntime(id: string, mode: "restricted" | "full", attribute = false) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
-  const { resolveDockerImage } = await import("../src/core/docker-image");
+  const { resolveDockerImage } = await import("../src/core/containers/image");
   const { ensureStorageVolumes, initializeStorageSet, planStorageSet } =
-    await import("../src/core/container-storage");
+    await import("../src/core/containers/storage");
   const environment = lifecycleEnvironment({ id, networkAccessMode: mode });
   const fixture = benchContext([environment]);
   const resolved = await resolveDockerImage(IMAGE);
@@ -303,10 +303,10 @@ describe("container baselines", () => {
     "fresh environment, warm stop/start, rebuild, sampler and observer churn",
     async () => {
       const { inspectAppliedLimits, resetResourceCaches, sampleContainerUsage } =
-        await import("../src/core/container-resources");
-      const { drainContainerProcesses } = await import("../src/core/container-readiness");
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
-      const { ContainerLogService } = await import("../src/core/container-log-service");
+        await import("../src/core/containers/resources");
+      const { drainContainerProcesses } = await import("../src/core/containers/readiness");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
+      const { ContainerLogService } = await import("../src/core/containers/log-service");
 
       // Fresh environments (per-environment cold: new network, volumes, staged
       // inputs; the image and Docker's global caches are left alone).

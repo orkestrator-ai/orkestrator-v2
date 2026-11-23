@@ -13,7 +13,7 @@
 // shared terminal's size. `history-test-support.ts` is the history tests'
 // harness. The terminal command handlers (`commands-terminal*.ts`,
 // `commands-registry-terminal.ts`), the PTY wrapper (`pty.ts`), the container
-// shell (`container-terminal-shell.ts`) and the setup terminal
+// shell (`containers/terminal-shell.ts`) and the setup terminal
 // (`setup-terminal-attempt.ts`) stay with their own groups, and the claude-tmux
 // pane terminal is in `tmux/`.
 //

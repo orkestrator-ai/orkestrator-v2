@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { copyProjectSeedFilesIntoContainer } from "./container-project-seed-files.js";
+import { copyProjectSeedFilesIntoContainer } from "./containers/project-seed-files.js";
 import { withDockerScript } from "../../tests/container-lifecycle-fixtures.js";
 import {
   copyConfiguredProjectFilesToDirectory,

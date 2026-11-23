@@ -65,7 +65,7 @@ import type { WorkAdmissionPool } from "./work-admission.js";
  *    {@link LOCAL_SCAN_MIN_GAP_MS} between them, with one trailing scan.
  *  - **Container environments** cannot be watched from the host without paying
  *    the same `docker exec` a scan costs. On an image with the worktree
- *    signal (`container-worktree-signal.ts`) a watcher inside the container
+ *    signal (`containers/worktree-signal.ts`) a watcher inside the container
  *    rings instead, and `startContainerWatcher` turns the rings into the same
  *    hints a local watcher sends, with a one-minute safety scan. Without it
  *    they keep an interval - but one interval for the whole application
@@ -232,7 +232,7 @@ export interface DiffStatsServiceOptions {
   cancelDelay?: (timer: unknown) => void;
   startWatcher?: typeof startWorktreeWatcher;
   /**
-   * Watches a container target (`container-worktree-signal.ts`). Absent, or a
+   * Watches a container target (`containers/worktree-signal.ts`). Absent, or a
    * watcher that never becomes qualified, leaves the container on the
    * unwatched bounds.
    */

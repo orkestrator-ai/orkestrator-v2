@@ -12,7 +12,7 @@
  * Reports one JSON object per stdout line.
  */
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { replaceRuntimePreservingState } from "../src/core/container-replacement";
+import { replaceRuntimePreservingState } from "../src/core/containers/replacement";
 import { openRegistryWriter } from "../src/core/registry-writer-lease";
 import { StorageService } from "../src/core/storage";
 import { durableLifecycleContext } from "./container-live-rebuild-fixtures";

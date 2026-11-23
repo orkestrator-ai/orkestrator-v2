@@ -9,7 +9,7 @@ import {
   parseIpv4,
   parseIpv4Subnet,
 } from "./agent-tools-peer-filter.js";
-import { reportDockerNetworkChange } from "./docker-network-changes.js";
+import { reportDockerNetworkChange } from "./containers/network-changes.js";
 import { CommandFailedError, type runCommand } from "./shell.js";
 
 function deferred<T>() {

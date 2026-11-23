@@ -112,7 +112,7 @@ now records this.
 
 ### 2. Run it on rootless Docker with host loopback
 
-**Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts); the gvisor-tap-vsock gap is [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md)). The peer address the server then sees has not been observed.
+**Problem.** A rootless daemon reaches the host through RootlessKit's host loopback (`10.0.2.2`, [agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts); the gvisor-tap-vsock gap is [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md)). The peer address the server then sees has not been observed.
 
 **Context.** slirp4netns (and pasta) connect to the host from a process in the host's network namespace, so the peer should be `127.0.0.1`, which the gate admits without reading Docker. If it is instead an address in RootlessKit's namespace, the gate refuses it, because no Docker network of the rootless daemon is visible from the host's namespace in that form.
 
@@ -173,7 +173,7 @@ found its host loopback at `10.0.2.1`, seen by the host as `127.0.0.1` with
 host loopback on and timing out with it off; `10.0.2.2` timed out either
 way. So the gate would admit that driver's peer too, but the backend never
 probed `10.0.2.1`: to-do 7548, done 2026-11-10 (the check now probes it after
-`10.0.2.2`; [container lifecycle](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)).
+`10.0.2.2`; [container lifecycle](../../architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts)).
 
 ### 3. Run the C22 live qualification case on Linux CI
 
@@ -382,6 +382,6 @@ outstanding live topology evidence.
 
 - [Who may connect](../../architecture/container-lifecycle.md#who-may-connect)
 - Security index, L15 (`git show 413bd6219:docs/reports/security/0000-index.md`)
-- [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts) (decided in the retired to-do 0109)
+- [Agent tools reachability](../../architecture/container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts) (decided in the retired to-do 0109)
 - [7548](7548-rootless-gvisor-tap-vsock-host-loopback.md) (rootless gvisor-tap-vsock host loopback)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, the evidence script on Docker Desktop for Linux) moved there on 2026-11-10.

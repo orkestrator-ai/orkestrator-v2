@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentToolsServer } from "../src/core/agent-tools.js";
 import { StorageService } from "../src/core/storage.js";
-import { containerWorktreeSignalInstaller } from "../src/core/container-worktree-signal-install.js";
+import { containerWorktreeSignalInstaller } from "../src/core/containers/worktree-signal-install.js";
 import { DiffStatsTracking } from "../src/core/diff-stats-tracking.js";
 import type { DiffScanEvent } from "../src/core/diff-stats-service.js";
 import { runCommand } from "../src/core/shell.js";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures.js";
 
 // Build this checkout with `mise run docker:build:dev`; never use `latest`.

@@ -1,4 +1,4 @@
-import * as credentialModes from "../src/core/container-credential-mode.js";
+import * as credentialModes from "../src/core/containers/credential-mode.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { withheldGitHubCredentialEnvironment } from "@orkestrator/protocol/native-agent";
 

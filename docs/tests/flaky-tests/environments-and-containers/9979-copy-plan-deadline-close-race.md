@@ -47,7 +47,7 @@ at the deadline, but by the other path. The behaviour under test (the step
 fails within the deadline) held: the duration assertion did not fail.
 
 Not reproduced deterministically. The code under test
-(`apps/backend/src/core/container-replacement.ts`, `pipeContainerPath`) is
+(`apps/backend/src/core/containers/replacement.ts`, `pipeContainerPath`) is
 not changed by the observing branch; that branch only changed the OpenCode
 `select` list of `replacementCopyPlan` and its expectation in the same test
 file.

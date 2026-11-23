@@ -18,10 +18,10 @@ import {
   parseFirewallReport,
   parseFirewallStatus,
   removeEnvironmentNetwork,
-} from "../src/core/container-network";
-import { subscribeDockerNetworkChanges } from "../src/core/docker-network-changes";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetImageManifestCache } from "../src/core/docker-image";
+} from "../src/core/containers/network";
+import { subscribeDockerNetworkChanges } from "../src/core/containers/network-changes";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { resetImageManifestCache } from "../src/core/containers/image";
 import {
   BlockedRegistryWriter,
   RegistrySchemaBlockedError,

@@ -13,7 +13,7 @@ import {
   SHARED_SKILLS_STAGED_INPUTS_VERSION,
   imageCopiesSharedSkills,
 } from "@orkestrator/protocol/image-manifest";
-import * as dockerImage from "../src/core/docker-image";
+import * as dockerImage from "../src/core/containers/image";
 import { environmentInputStatus } from "../src/core/portable-input-status";
 import {
   INPUT_LIMITS,

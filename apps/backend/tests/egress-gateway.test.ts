@@ -6,7 +6,7 @@ import {
   parseNetworkModeOwner,
   rememberNetworkOwner,
   resetNetworkOwnerCache,
-} from "../src/core/container-network-owner";
+} from "../src/core/containers/network-owner";
 import {
   createEgressGateway,
   egressEnforcement,

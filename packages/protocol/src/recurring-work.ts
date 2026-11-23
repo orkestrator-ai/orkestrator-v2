@@ -204,7 +204,7 @@ export const RECURRING_JOB_CATALOGUE: Readonly<Record<RecurringJobKind, Recurrin
   "git-fetch-local": backend("B05", "read", "discovery", 300_000, "join", "next-tick"),
   // Step 04: consulted by every container status scan but separate from it;
   // 5 min attempt cooldown per container generation + clone + ref, joined in
-  // flight, immutable local baselines never fetch (`container-git-fetch.ts`).
+  // flight, immutable local baselines never fetch (`containers/git-fetch.ts`).
   "git-fetch-container": backend("F02", "read", "discovery", 300_000, "join", "next-tick"),
   // Boundary and provisional snapshot captures: one per WorktreeIdentity at a
   // time inside the shared git-docker-scan pool; fresh boundaries outrank

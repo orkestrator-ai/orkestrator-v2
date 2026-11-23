@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { OPENCODE2_LAUNCH_CONFIG_DIR } from "../agent-credential-files.js";
-import { OPENCODE2_DB_PATH, OPENCODE2_LEGACY_DB_PATH } from "../container-state-layout.js";
+import { OPENCODE2_DB_PATH, OPENCODE2_LEGACY_DB_PATH } from "../containers/state-layout.js";
 import {
   OPENCODE2_CONTAINER_CLI_PATH,
   OPENCODE2_CONTAINER_CONFIG_DIR,

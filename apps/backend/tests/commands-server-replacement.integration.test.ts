@@ -1,4 +1,4 @@
-import * as credentialModes from "../src/core/container-credential-mode.js";
+import * as credentialModes from "../src/core/containers/credential-mode.js";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";

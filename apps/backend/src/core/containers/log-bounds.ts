@@ -1,0 +1,130 @@
+import { LOG_FORMAT_ENV, LOG_LEVEL_ENV } from "@orkestrator/protocol/node/logger-environment";
+import { redactBridgeLogLine } from "../bridge-output-redaction.js";
+
+/**
+ * Bounds for diagnostic output read from containers.
+ *
+ * A bridge log can grow without limit and one enormous line defeats a
+ * line-count-only limit, so a tail is bounded twice: by bytes at the source
+ * (`tail -c`) and by bytes and lines again on the host.
+ */
+export const DIAGNOSTIC_TAIL_MAX_BYTES = 64 * 1024;
+export const DIAGNOSTIC_TAIL_MAX_LINES = 200;
+
+/** Shell that prints at most the bounded tail of `file` (quoted by the caller). */
+export function boundedTailCommand(file: string): string {
+  return `tail -c ${DIAGNOSTIC_TAIL_MAX_BYTES} ${file} 2>/dev/null | tail -n ${DIAGNOSTIC_TAIL_MAX_LINES} || true`;
+}
+
+/** Where a relaunch keeps the log of the run before it. */
+export function previousContainerLogFile(file: string): string {
+  return file.replace(/\.log$/, ".prev.log");
+}
+
+/**
+ * Shell run before a relaunch, in place of deleting the log: the log that
+ * explains a crash is needed exactly then. A rename keeps the file's 0600 mode.
+ * An empty log has nothing to keep and must not displace one that does, and
+ * every outcome leaves the new run a clean log and exit status 0 where `rm -f`
+ * would have, because keeping old output must never stop a bridge starting.
+ */
+export function keepPreviousLogCommand(file: string): string {
+  return `if [ -s ${file} ]; then mv -f ${file} ${previousContainerLogFile(file)} 2>/dev/null || rm -f ${file}; fi`;
+}
+
+/**
+ * Host-side second bound. Keeps the end of the text (the most recent output),
+ * and says so when anything was dropped.
+ *
+ * Every container log tail the backend returns or puts in an error passes
+ * through here. Recognized JSON log records are decoded and their strings
+ * scrubbed, as in the local relay; other lines get raw-text redaction.
+ * Byte cuts before and after redaction bound input and replacement growth.
+ * A token a cut has split has lost its prefix and is not caught.
+ */
+export function boundDiagnosticTail(text: string): string {
+  const source = keepLastBytes(text);
+  const redacted = keepLastBytes(source.text.split("\n").map(redactBridgeLogLine).join("\n"));
+  let bounded = redacted.text;
+  let truncated = source.cut || redacted.cut;
+  const lines = bounded.split("\n");
+  if (lines.length > DIAGNOSTIC_TAIL_MAX_LINES + 1) {
+    bounded = lines.slice(-(DIAGNOSTIC_TAIL_MAX_LINES + 1)).join("\n");
+    truncated = true;
+  }
+  return truncated ? `[earlier output truncated]\n${bounded}` : bounded;
+}
+
+/** The last `DIAGNOSTIC_TAIL_MAX_BYTES` of `text`, never starting mid-character. */
+function keepLastBytes(text: string): { text: string; cut: boolean } {
+  if (Buffer.byteLength(text, "utf8") <= DIAGNOSTIC_TAIL_MAX_BYTES) return { text, cut: false };
+  const kept = Buffer.from(text, "utf8")
+    .subarray(-DIAGNOSTIC_TAIL_MAX_BYTES)
+    .toString("utf8")
+    .replace(/^\uFFFD+/, "");
+  return { text: kept, cut: true };
+}
+
+/**
+ * Exports a container bridge's logging settings. Nothing reads its stdio there:
+ * lines go straight to its log file with no tee to stamp them, so it writes JSON
+ * lines, which alone keep each entry's time and level. The level is the one this
+ * backend was started with, as a local bridge inherits it. Read when a bridge
+ * launches, so a value here never outlives the launch.
+ */
+export function bridgeLogEnvironmentExports(env: NodeJS.ProcessEnv = process.env): string {
+  const level = env[LOG_LEVEL_ENV];
+  return [
+    `export ${LOG_FORMAT_ENV}=json`,
+    ...(level ? [`export ${LOG_LEVEL_ENV}=${shellQuote(level)}`] : []),
+  ].join("\n");
+}
+
+/** In-image rotating writer (`bounded-logs=1`). */
+export const CONTAINER_LOG_WRITER = "/usr/local/bin/orkestrator-log-writer";
+
+/** The writer's default file size, and the cap on an image without it. */
+export const CONTAINER_LOG_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Shell that starts `command` detached with its output in `logFile`. Where the
+ * image ships the rotating writer, output goes through it (5 MiB, 3 files).
+ * An older image has no writer, so its output is cut at the same 5 MiB with
+ * no rotation: `head` keeps the start and `cat` drains the rest, so the
+ * producer never writes into a closed pipe. The whole pipeline is `setsid`,
+ * so whatever drains it outlives the exec session exactly like the process.
+ */
+export function boundedBackgroundLaunch(command: string, logFile: string): string {
+  const pipeline = `${command} 2>&1 | ${CONTAINER_LOG_WRITER} ${logFile}`;
+  const capped = `${command} 2>&1 | { head -c ${CONTAINER_LOG_MAX_BYTES}; cat >/dev/null; }`;
+  return [
+    `if [ -x ${CONTAINER_LOG_WRITER} ]; then`,
+    `  setsid sh -c ${shellQuote(pipeline)} >/dev/null 2>&1 &`,
+    "else",
+    `  setsid sh -c ${shellQuote(capped)} > ${logFile} 2>&1 &`,
+    "fi",
+  ].join("\n");
+}
+
+/**
+ * {@link boundedBackgroundLaunch} for a server that compares a plain secret. The
+ * `sh -c` wrapper and the writer run as long as the server does and nothing
+ * protects their environments, so neither may inherit `secretEnv`: the script
+ * un-exports it, starts the writer first, and hands it to `command` alone. For
+ * an image with the writer, which every `bridge-credential=1` image has.
+ */
+export function boundedLaunchWithPrivateEnv(
+  command: string,
+  logFile: string,
+  secretEnv: string,
+): string {
+  return [
+    `exec 3> >(setsid ${CONTAINER_LOG_WRITER} ${logFile} >/dev/null 2>&1)`,
+    `${secretEnv}="$${secretEnv}" setsid ${command} >&3 2>&3 3>&- &`,
+    "exec 3>&-",
+  ].join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}

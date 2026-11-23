@@ -4,10 +4,10 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { createDockerContainer } from "../src/core/commands-containers";
-import { replaceRuntimePreservingState } from "../src/core/container-replacement";
-import { resetResourceCaches } from "../src/core/container-resources";
-import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { replaceRuntimePreservingState } from "../src/core/containers/replacement";
+import { resetResourceCaches } from "../src/core/containers/resources";
+import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

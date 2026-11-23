@@ -5,7 +5,7 @@ import { establishCreatedFromCommit } from "../src/core/commands-local-server-li
 import {
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
-} from "../src/core/container-scripts";
+} from "../src/core/containers/scripts";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

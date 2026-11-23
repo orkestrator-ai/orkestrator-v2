@@ -19,14 +19,14 @@ import {
   SharedWatcherRegistry,
 } from "./change-tracking/index.js";
 import { startWorktreeWatcher, worktreeTargetKey, type WorktreeLookup } from "./worktrees/index.js";
-import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./container-git-fetch.js";
-import { recurringDiagnosticsRegistry } from "./recurring/index.js";
-import { localGitScanCacheGauges } from "./local-git-scan-caches.js";
 import {
-  ContainerWorktreeSignals,
   type ContainerWorktreeSignalContext,
   type ContainerWorktreeSignalInstaller,
-} from "./container-worktree-signal.js";
+  ContainerWorktreeSignals,
+} from "./containers/index.js";
+import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./containers/git-fetch.js";
+import { recurringDiagnosticsRegistry } from "./recurring/index.js";
+import { localGitScanCacheGauges } from "./local-git-scan-caches.js";
 import {
   buildContainerFetchScript,
   buildFileTree,
@@ -118,7 +118,7 @@ export type DiffStatsTrackingOptions = {
   /** Every settled scan, for the change-tracking environment projector. */
   onScanEvent?: (event: DiffScanEvent) => void;
   /**
-   * Arms container worktree signals (`container-worktree-signal-install.ts`).
+   * Arms container worktree signals (`containers/worktree-signal-install.ts`).
    * Absent in tests and fixtures: every container keeps the unwatched bounds.
    */
   worktreeSignal?: ContainerWorktreeSignalInstaller | null;
@@ -150,7 +150,7 @@ export class DiffStatsTracking {
    */
   readonly gitFetchScheduler: GitFetchScheduler;
   /**
-   * Remote freshness for container clones (`container-git-fetch.ts`): status
+   * Remote freshness for container clones (`containers/git-fetch.ts`): status
    * scans read local refs, and fetches follow this policy instead of the scan
    * cadence. Fetches share the `git-docker-scan` pool under each container's
    * scan target key, so a fetch and a scan of one container never overlap.

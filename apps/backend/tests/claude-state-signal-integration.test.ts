@@ -1,4 +1,4 @@
-import { resetNetworkOwnerCache } from "../src/core/container-network-owner";
+import { resetNetworkOwnerCache } from "../src/core/containers/network-owner";
 import { expect, test, describe } from "bun:test";
 import {
   backendClaudeStateSignal,
@@ -7,7 +7,7 @@ import {
 } from "../src/core/claude-state-signal.js";
 import { ManualTime, flushMicrotasks } from "../src/core/recurring/test-support.js";
 import type { ClaudeStateSignalSupport } from "../src/core/tmux/poll.js";
-import type { ManifestRead } from "../src/core/docker-image.js";
+import type { ManifestRead } from "../src/core/containers/image.js";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

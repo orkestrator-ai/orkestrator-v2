@@ -8,7 +8,7 @@ import { CLAUDE_HOST_REFRESH_MODEL, refreshHostClaudeLogin } from "./claude-host
 import {
   ContainerClaudeLoginKeeper,
   CLAUDE_HOST_REFRESH_RETRY_MS,
-} from "./container-claude-login-keeper.js";
+} from "./containers/claude-login-keeper.js";
 import { CommandFailedError } from "./shell.js";
 import { AgentAccountsRuntime } from "./agent-accounts/runtime.js";
 import type { CommandContext } from "./commands-context.js";

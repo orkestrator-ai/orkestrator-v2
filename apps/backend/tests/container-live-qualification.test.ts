@@ -17,14 +17,14 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { removeLabelledResources } from "./container-live-cleanup";
 import {
   ContainerInitializationError,
   drainContainerProcesses,
   observeContainerBoot,
   waitForContainerBoot,
-} from "../src/core/container-readiness";
+} from "../src/core/containers/readiness";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -274,8 +274,8 @@ describe("C12 persistent workspace survives stop/start and runtime replacement",
       const { memoryLifecycleContext, lifecycleEnvironment } =
         await import("./container-lifecycle-fixtures");
       const { ensureStorageVolumes, initializeStorageSet, planStorageSet, storageMountArguments } =
-        await import("../src/core/container-storage");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+        await import("../src/core/containers/storage");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const { context } = memoryLifecycleContext(
         [lifecycleEnvironment({ id: `env-${RUN}` })],
         dataDir,
@@ -364,10 +364,10 @@ describe("C12 backend-created runtime on persistent storage", () => {
       const { memoryLifecycleContext, lifecycleEnvironment } =
         await import("./container-lifecycle-fixtures");
       const { ensureStorageVolumes, initializeStorageSet, planStorageSet } =
-        await import("../src/core/container-storage");
-      const { PROVIDER_STATE_LAYOUT } = await import("../src/core/container-state-layout");
+        await import("../src/core/containers/storage");
+      const { PROVIDER_STATE_LAYOUT } = await import("../src/core/containers/state-layout");
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const environment = lifecycleEnvironment({
         id: `env-${RUN}-created`,
         networkAccessMode: "full",
@@ -441,7 +441,7 @@ describe("C20 staged portable inputs", () => {
       const { memoryLifecycleContext, lifecycleEnvironment } =
         await import("./container-lifecycle-fixtures");
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const fixtureHome = path.join(dataDir, "fixture-home");
       const SENTINEL = `ORKSENTINEL${RUN}`;
       const write = async (file: string, content: string) => {
@@ -540,7 +540,7 @@ describe("C20 staged portable inputs", () => {
         ]);
         await docker(["start", containerId]);
         await waitForContainerBoot(containerId);
-        const { detectDockerTopology } = await import("../src/core/docker-image");
+        const { detectDockerTopology } = await import("../src/core/containers/image");
         if ((await detectDockerTopology()).rootless) {
           // No substituted user: qualify the actual namespace UID mapping and
           // the root bootstrap's owner-only relay before node imports anything.

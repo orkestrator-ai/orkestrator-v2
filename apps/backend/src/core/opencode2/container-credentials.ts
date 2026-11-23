@@ -1,8 +1,11 @@
 /** Credential updates run as root inside the owning container; secrets travel only on stdin. */
-import { CONTAINER_ROOT_PATH } from "../container-scripts.js";
+import {
+  CONTAINER_ROOT_PATH,
+  OPENCODE2_DB_PATH,
+  OPENCODE2_LEGACY_DB_PATH,
+} from "../containers/index.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import { quoteShell } from "../commands-agent-support.js";
-import { OPENCODE2_DB_PATH, OPENCODE2_LEGACY_DB_PATH } from "../container-state-layout.js";
 import { openCode2CredentialFromLegacy } from "./credentials.js";
 
 export function openCode2ContainerCredentialPayload(payload: string): string {

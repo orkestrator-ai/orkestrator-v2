@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { cleanupEvidenceContainers } from "./rootless-budget-evidence-cleanup.js";
 import type { ContainerResourceLimits } from "@orkestrator/protocol/container-resources";
-import { CONTAINER_HOST_PROBE_IMAGE } from "../src/core/container-host-reachability.js";
+import { CONTAINER_HOST_PROBE_IMAGE } from "../src/core/containers/host-reachability.js";
 import {
   dockerAdmissionCapacity,
   environmentResourcePolicy,
@@ -9,7 +9,7 @@ import {
   refuseUnenforceableLimits,
   resolveResourceLimits,
   resourceArguments,
-} from "../src/core/container-resources.js";
+} from "../src/core/containers/resources.js";
 import type { CommandContext } from "../src/core/commands-context.js";
 import type { Environment } from "../src/core/models.js";
 import { runCommand } from "../src/core/shell.js";

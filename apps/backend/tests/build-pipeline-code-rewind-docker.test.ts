@@ -41,8 +41,8 @@ import {
   createPipelineEnvironmentGit,
   parseGitPorcelainPaths,
 } from "../src/core/commands-review";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { EnvironmentMutationFence } from "../src/core/environment-replacement-fence";
 import {
   parseReviewWorktreeFingerprint,

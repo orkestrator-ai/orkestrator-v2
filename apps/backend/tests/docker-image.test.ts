@@ -19,11 +19,11 @@ import {
   resetDockerTopologyCache,
   resetImageManifestCache,
   resolveDockerImage,
-} from "../src/core/docker-image";
-import { egressGatewayOf, resetNetworkOwnerCache } from "../src/core/container-network-owner";
+} from "../src/core/containers/image";
+import { egressGatewayOf, resetNetworkOwnerCache } from "../src/core/containers/network-owner";
 import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
 import { githubRangesSeedDirectory } from "../src/core/git/github-ranges-cache";
-import { extractSingleTarFile } from "../src/core/docker-copy-out";
+import { extractSingleTarFile } from "../src/core/containers/copy-out";
 import { resolveOperationImage } from "../src/core/commands-environment";
 import { shouldAddDockerHostGatewayAlias } from "../src/core/commands-container-exec";
 import {
@@ -396,7 +396,7 @@ esac
       }),
     });
     const { createDockerContainer } = await import("../src/core/commands-containers");
-    const { resetResourceCaches } = await import("../src/core/container-resources");
+    const { resetResourceCaches } = await import("../src/core/containers/resources");
     // A rootless daemon without delegated cgroups (driver `none`) would accept
     // these limits, record them in HostConfig and enforce none of them.
     const info = JSON.stringify({
@@ -469,7 +469,7 @@ esac
       }),
     });
     const { createDockerContainer } = await import("../src/core/commands-containers");
-    const { resetResourceCaches } = await import("../src/core/container-resources");
+    const { resetResourceCaches } = await import("../src/core/containers/resources");
     const daemon = (extra: Record<string, unknown>) =>
       JSON.stringify({
         OSType: "linux",
@@ -1090,7 +1090,7 @@ describe("manifest versions come from the installed binaries", () => {
 
 describe("storage formats an image may write", () => {
   test("volume storage needs the image to declare it writes every role's current version", async () => {
-    const { imageWritesVolumeStorage } = await import("../src/core/docker-image");
+    const { imageWritesVolumeStorage } = await import("../src/core/containers/image");
     const both = { read: [1], write: [1] };
     expect(imageWritesVolumeStorage({ workspace: both, "provider-state": both })).toBe(true);
     expect(imageWritesVolumeStorage({ workspace: both })).toBe(false);

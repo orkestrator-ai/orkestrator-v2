@@ -24,7 +24,7 @@ import {
   launchContainerScript,
   readContainerBridgeToken,
   removeContainerBridgeCredential,
-} from "../src/core/container-bridge-credential";
+} from "../src/core/containers/bridge-credential";
 import { startContainerClaudeServer, startContainerServer } from "../src/core/commands-containers";
 import { createCommandFixtures } from "./command-fixtures";
 

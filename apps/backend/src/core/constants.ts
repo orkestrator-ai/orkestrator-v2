@@ -40,7 +40,7 @@ export const DOCKER_LABEL_CAPABILITIES_DIGEST = "orkestrator-capabilities-digest
 export const DOCKER_LABEL_PROJECT_SEED_REFUSED = "orkestrator-project-seed-refused";
 /**
  * Host ports the backend chose for a rootless daemon's automatic mappings, as
- * comma-separated numbers (`container-host-ports.ts`). Published as fixed
+ * comma-separated numbers (`containers/host-ports.ts`). Published as fixed
  * ports, but not ports the user fixed, so the start path may retry them.
  */
 export const DOCKER_LABEL_BACKEND_HOST_PORTS = "orkestrator-backend-host-ports";
@@ -48,7 +48,7 @@ export const DOCKER_LABEL_BACKEND_HOST_PORTS = "orkestrator-backend-host-ports";
 export const DOCKER_LABEL_RESOURCE_ROLE = "orkestrator-resource-role";
 /**
  * Kind of backend that made a host-reachability probe resource
- * (`<runtime flavor>/<temporary|persistent>`, `container-host-reachability-creator.ts`).
+ * (`<runtime flavor>/<temporary|persistent>`, `containers/host-reachability-creator.ts`).
  * Content-free: never a path or a name.
  */
 export const DOCKER_LABEL_CREATOR = "orkestrator-creator";

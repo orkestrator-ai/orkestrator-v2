@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { runCommand } from "../src/core/shell.js";
 import { LoopbackArtifactContentServer } from "../src/core/transcript-artifacts/content-server.js";
 import { syntheticWav } from "../src/core/transcript-artifacts/fixtures/synthetic-wav.js";

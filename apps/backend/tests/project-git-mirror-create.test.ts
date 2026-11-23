@@ -13,8 +13,8 @@ import {
   createDockerContainer,
   type CreateContainerIdentity,
 } from "../src/core/commands-containers";
-import { resetResourceCaches } from "../src/core/container-resources";
-import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
+import { resetResourceCaches } from "../src/core/containers/resources";
+import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
 import { formatGithubRangesSeed } from "../src/core/git/github-ranges-cache";
 import { CONTAINER_GIT_MIRROR_MOUNT } from "../src/core/project-git-mirror";
 import {

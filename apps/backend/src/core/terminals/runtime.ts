@@ -20,7 +20,7 @@ import {
 } from "../commands-terminal.js";
 import { TerminalHistory, type TerminalHistoryOptions } from "./history.js";
 import { TerminalSizeOwnership, type TerminalSizeOwnershipOptions } from "./size-ownership.js";
-import type { ContainerTerminalShell } from "../container-terminal-shell.js";
+import type { ContainerTerminalShell } from "../containers/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("terminal");

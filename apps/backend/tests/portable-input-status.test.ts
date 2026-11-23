@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
-import * as dockerImage from "../src/core/docker-image";
+import * as dockerImage from "../src/core/containers/image";
 import { environmentInputStatus } from "../src/core/portable-input-status";
 import { stagePortableInputs } from "../src/core/portable-inputs";
 import {

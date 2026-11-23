@@ -3,8 +3,8 @@ import { createCommandFixtures } from "./command-fixtures";
 
 const { createCommandRegistry } = await createCommandFixtures();
 import type { CommandContext } from "./command-fixtures";
-import { resetResourceCaches } from "../src/core/container-resources";
-import { resetDockerTopologyCache } from "../src/core/docker-image";
+import { resetResourceCaches } from "../src/core/containers/resources";
+import { resetDockerTopologyCache } from "../src/core/containers/image";
 import { withDockerScript } from "./container-lifecycle-fixtures";
 
 for (const limits of [null, { cpus: null, memoryMiB: null, pids: null }]) {

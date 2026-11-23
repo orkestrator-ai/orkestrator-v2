@@ -21,9 +21,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { networkOwnerContainer } from "../src/core/container-network-owner";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { networkOwnerContainer } from "../src/core/containers/network-owner";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
@@ -218,7 +218,7 @@ async function createRuntime(
   options: { image?: string; mode?: "restricted" | "full"; domains?: string[] } = {},
 ) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
-  const { resolveDockerImage } = await import("../src/core/docker-image");
+  const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}-${id}`,
     networkAccessMode: options.mode ?? "restricted",
@@ -250,7 +250,7 @@ describe("M12 name checks at the egress gateway", () => {
     "SNI, Host and DNS are checked against the allowlist, edits apply in place, and a dead daemon fails closed",
     async () => {
       const { environmentNetworkPolicy, applyEnvironmentAllowedDomains } =
-        await import("../src/core/container-network");
+        await import("../src/core/containers/network");
       const { environment, context, containerId, gateway } = await createRuntime("checks");
       expect(gateway).not.toBe(containerId);
       const fixture = await startFixture(gateway, "checks");
@@ -833,7 +833,7 @@ describe("M12 name checks at the egress gateway", () => {
   live(
     "the firewall report counts refused connections and queries since boot, and keeps no name",
     async () => {
-      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const { environment, context, containerId, gateway } = await createRuntime("refusals");
       expect(gateway).not.toBe(containerId);
       await startRuntime(containerId);
@@ -948,7 +948,7 @@ describe("M12 name checks at the egress gateway", () => {
   live(
     "a full-mode runtime has no gateway and no name checks",
     async () => {
-      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const { environment, context, containerId, gateway } = await createRuntime("full", {
         mode: "full",
       });
@@ -979,7 +979,7 @@ describe("M12 name checks at the egress gateway", () => {
   live(
     "the rollback switch creates a gateway without name checks, and it stays that way",
     async () => {
-      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const previous = process.env.ORKESTRATOR_EGRESS_FILTER;
       process.env.ORKESTRATOR_EGRESS_FILTER = "off";
       let created: Awaited<ReturnType<typeof createRuntime>>;
@@ -1020,7 +1020,7 @@ describe("M12 name checks at the egress gateway", () => {
   liveOlder(
     "an older image under this backend keeps address-only enforcement, and a start does not change it",
     async () => {
-      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const { environment, context, containerId, gateway } = await createRuntime("older", {
         image: OLDER_IMAGE,
       });

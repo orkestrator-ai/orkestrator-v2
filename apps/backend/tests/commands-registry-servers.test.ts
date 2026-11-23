@@ -1,11 +1,11 @@
-import * as credentialModes from "../src/core/container-credential-mode.js";
+import * as credentialModes from "../src/core/containers/credential-mode.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import os from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 
 import { bridgeRestarts } from "../src/core/bridge-restarts.js";
-import { enqueueContainerBridgeOperation } from "../src/core/container-bridge-operations.js";
-import { boundedBackgroundLaunch } from "../src/core/container-log-bounds.js";
+import { enqueueContainerBridgeOperation } from "../src/core/containers/bridge-operations.js";
+import { boundedBackgroundLaunch } from "../src/core/containers/log-bounds.js";
 import { buildRestrictContainerClaudeCredentialCommand } from "../src/core/agent-accounts/containers.js";
 
 import { DOCKER_LABEL_APP_VALUE } from "../src/core/constants";

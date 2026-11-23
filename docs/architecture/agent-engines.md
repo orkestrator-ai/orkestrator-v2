@@ -1603,7 +1603,7 @@ create/prompt/attach, which wins over the process env either way. `src/mcp.ts`
 turns it into `AgentOptions.mcpServers.orkestrator` (HTTP, bearer header); the
 token is never persisted. When the container cannot reach that URL, the
 Cursor SDK only reports "Tool call ended without a result"; see
-[agent tools reachability](container-lifecycle.md#agent-tools-reachability-container-host-reachabilityts)
+[agent tools reachability](container-lifecycle.md#agent-tools-reachability-containershost-reachabilityts)
 for the checks that surface the cause. Project `.cursor/mcp.json` is read only when the execution
 policy opts into project settings (containers). Native Cursor mail is on:
 `agentMailCapabilities("agent-native", "cursor")` is

@@ -688,7 +688,7 @@ run_project_root_setup() {
     # Root steps run only with full network access (run-root-setup.sh refuses
     # them otherwise). Say so plainly before trying, and print the reason
     # marker the backend turns into the environment's error message
-    # (SETUP_FAILURE_REASONS in apps/backend/src/core/container-scripts.ts).
+    # (SETUP_FAILURE_REASONS in apps/backend/src/core/containers/scripts.ts).
     # Without a recorded mode, the wrapper decides.
     local network_mode=""
     IFS= read -r network_mode 2>/dev/null < "$network_mode_file" || true
@@ -766,7 +766,7 @@ run_apt_install() {
 # Installs the "aptPackages" of orkestrator-ai.json ($1) before any other
 # setup step. Returns 0 when none are declared or all are installed, and
 # prints the setup failure reason marker (SETUP_FAILURE_REASONS in
-# apps/backend/src/core/container-scripts.ts) otherwise.
+# apps/backend/src/core/containers/scripts.ts) otherwise.
 run_project_apt_packages() {
     local config="$1"
     local listing

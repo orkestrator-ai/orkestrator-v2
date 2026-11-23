@@ -65,15 +65,16 @@ import {
   parseContainerMutationIdentity,
   parseRecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
-import { resolveNeedsAttentionOperation } from "./container-lifecycle-service.js";
-import { rebuildPreview } from "./container-replacement.js";
-import { listRecoveryCopies } from "./recovery-copies.js";
-import { applyEnvironmentAllowedDomains, environmentNetworkPolicy } from "./container-network.js";
+import { dockerOwnerNamespace } from "./containers/index.js";
+import { resolveNeedsAttentionOperation } from "./containers/lifecycle-service.js";
+import { applyEnvironmentAllowedDomains, environmentNetworkPolicy } from "./containers/network.js";
+import { rebuildPreview } from "./containers/replacement.js";
 import {
   environmentResourcePolicy,
   unenforceableOnThisDaemon,
   updateEnvironmentResources,
-} from "./container-resources.js";
+} from "./containers/resources.js";
+import { listRecoveryCopies } from "./recovery-copies.js";
 import {
   parseResourceLimits,
   type ContainerResourceLimits,
@@ -96,7 +97,6 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { withAsyncArgumentFailures } from "./commands-registry-async-args.js";
 import { createEnvironment, defaultEnvironmentName, sanitizeEnvironmentName } from "./storage.js";
 import { discoverAgentExtensions } from "./extension-discovery.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
 import type { Environment } from "./models.js";
 import {
   asString,

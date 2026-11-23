@@ -14,7 +14,7 @@ import {
   enqueueEnvironmentLifecycleOperation,
 } from "./commands-environment.js";
 import { stopLocalServersForEnvironmentUnlocked } from "./commands-local-server-lifecycle.js";
-import { drainContainerProcesses } from "./container-readiness.js";
+import { drainContainerProcesses } from "./containers/index.js";
 import { environmentCleanupLedger } from "./environment-cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./environment-cleanup.js";
 import { settleTicketsOfDeletedEnvironment } from "./build-pipeline/index.js";

@@ -23,7 +23,7 @@ import {
   SETUP_FAILED_OSC_SEQUENCE,
   SETUP_FAILURE_REASONS,
   setupFailureReasonOscSequence,
-} from "./container-scripts.js";
+} from "./containers/scripts.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
 import type { PtyExitEvent, PtyProcess } from "./pty.js";
 import { createPreviewHarness } from "./previews/test-support.js";
@@ -33,7 +33,7 @@ import {
   retireFinishedSetupTerminal,
   SetupTerminalStillRunningError,
 } from "./setup-terminal-attempt.js";
-import type { ContainerTerminalShell } from "./container-terminal-shell.js";
+import type { ContainerTerminalShell } from "./containers/terminal-shell.js";
 import { TerminalRuntime } from "./terminals/runtime.js";
 
 const ROOT_REASON = setupFailureReasonOscSequence("root-steps-need-full-network");

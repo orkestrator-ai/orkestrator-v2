@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { ContainerHostReachabilityService } from "./container-host-reachability.js";
+import type { ContainerHostReachabilityService } from "./containers/host-reachability.js";
 import { OrkestratorBackend } from "./index.js";
 
 /**

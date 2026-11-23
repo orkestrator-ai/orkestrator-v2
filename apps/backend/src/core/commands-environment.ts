@@ -16,7 +16,66 @@ import {
   resolveEnvironmentWorktreeRoot,
   validateWorktreeLocation,
 } from "./worktrees/index.js";
-import { withContainerAdmission } from "./container-admission.js";
+import {
+  assertContainerNotDraining,
+  assertEnvironmentNotDraining,
+  configuredImageRef,
+  CONTAINER_ROOT_USER_ARGS,
+  CONTAINER_TERMINAL_PID_RECORD_COMMAND,
+  CONTAINER_TERMINAL_SESSION_ENV,
+  CONTAINER_WORKSPACE_SETUP_COMMAND,
+  ContainerInitializationError,
+  containerStopWasForced,
+  detectDockerTopology,
+  dockerOwnerNamespace,
+  drainContainerProcesses,
+  type DrainResult,
+  ensureCurrentBootReady,
+  ensureStorageVolumes,
+  imageCapabilities,
+  initializeStorageSet,
+  networkOwnerContainer,
+  newContainerTerminalToken,
+  planStorageSet,
+  removeStorageVolumes,
+  resolveDockerImage,
+  selectStorageFormat,
+  SETUP_DONE_PRINTF_CMD,
+  SETUP_FAILED_PRINTF_CMD,
+  type SetupFailureReason,
+  storageHelperFailureMessage,
+  verifyStorageSet,
+  waitForContainerBoot,
+  withContainerAdmission,
+  withEnvironmentDraining,
+} from "./containers/index.js";
+import { syncRuntimeGitHubCredential } from "./containers/github-credential.js";
+import {
+  advanceContainerOperation,
+  beginContainerOperation,
+  completeContainerOperation,
+  type ContainerOwnershipOptions,
+  currentRuntimeIdentity,
+  nextRuntimeGeneration,
+  operationFailureCode,
+  releaseActiveContainerOperation,
+  resolveContainerOwnership,
+  runContainerOperation,
+} from "./containers/lifecycle-service.js";
+import { applyEnvironmentAllowedDomains } from "./containers/network.js";
+import {
+  filesLeftForConfiguredCopy,
+  formatProjectSeedRefusals,
+  PROJECT_ENV_DIRECT_NAMES,
+  projectSeedReadPlan,
+  type ProjectSeedRefusal,
+  readProjectSeedFiles,
+  readProjectSeedRefusals,
+  rememberWorktreeSeedRefusals,
+  takeWorktreeSeedRefusals,
+  writeProjectSeedFilesToWorktree,
+} from "./containers/project-seed-files.js";
+import { quiesceRuntime, replaceRuntimePreservingState } from "./containers/replacement.js";
 import {
   ContainerLifecycleError,
   isContainerLifecycleErrorCode,
@@ -27,41 +86,7 @@ import {
   type ContainerStorageIdentity,
   type RecreateEnvironmentRequest,
 } from "@orkestrator/protocol/container-lifecycle";
-import {
-  ensureStorageVolumes,
-  initializeStorageSet,
-  planStorageSet,
-  removeStorageVolumes,
-  selectStorageFormat,
-  storageHelperFailureMessage,
-  verifyStorageSet,
-} from "./container-storage.js";
-import {
-  ContainerInitializationError,
-  assertContainerNotDraining,
-  assertEnvironmentNotDraining,
-  containerStopWasForced,
-  drainContainerProcesses,
-  ensureCurrentBootReady,
-  waitForContainerBoot,
-  withEnvironmentDraining,
-  type DrainResult,
-} from "./container-readiness.js";
-import {
-  advanceContainerOperation,
-  beginContainerOperation,
-  completeContainerOperation,
-  currentRuntimeIdentity,
-  nextRuntimeGeneration,
-  operationFailureCode,
-  releaseActiveContainerOperation,
-  resolveContainerOwnership,
-  type ContainerOwnershipOptions,
-  runContainerOperation,
-} from "./container-lifecycle-service.js";
-import { quiesceRuntime, replaceRuntimePreservingState } from "./container-replacement.js";
 import { settleStoppedRuntimeAgents } from "./stopped-runtime-agents.js";
-import { applyEnvironmentAllowedDomains } from "./container-network.js";
 import {
   assertRecoveryCapacity,
   discardRecoveryCopy,
@@ -79,19 +104,6 @@ import path from "node:path";
 import { lowPriorityCommand } from "./process-priority.js";
 import { spawnPty } from "./pty.js";
 import { DOCKER_LABEL_APP, DOCKER_LABEL_APP_VALUE, DOCKER_LABEL_OWNER } from "./constants.js";
-import {
-  filesLeftForConfiguredCopy,
-  PROJECT_ENV_DIRECT_NAMES,
-  formatProjectSeedRefusals,
-  projectSeedReadPlan,
-  readProjectSeedFiles,
-  readProjectSeedRefusals,
-  rememberWorktreeSeedRefusals,
-  takeWorktreeSeedRefusals,
-  writeProjectSeedFilesToWorktree,
-  type ProjectSeedRefusal,
-} from "./container-project-seed-files.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { sanitizeBranchName, sanitizeEnvironmentName } from "./storage.js";
 import { CommandFailedError, pathExists, runCommand } from "./shell.js";
 import {
@@ -102,7 +114,6 @@ import {
   stopGitFsmonitorDaemon,
 } from "./git/index.js";
 import { removeRuntimeContainer, stopRuntimeContainer } from "./egress-gateway.js";
-import { networkOwnerContainer } from "./container-network-owner.js";
 import { shutdownClaudeStatePolling } from "./tmux/index.js";
 import { addLocalWorkspaceArtifactsToGitExclude } from "./commands-files.js";
 import { setupTerminalSessionId, isSetupTerminalSessionId } from "./commands-terminal.js";
@@ -134,15 +145,6 @@ import type { Environment, EnvironmentStatus } from "./models.js";
 import type { PtyExitEvent, PtyProcess } from "./pty.js";
 import type { TerminalRuntime } from "./terminals/index.js";
 import type { AgentToolConnection } from "./agent-tools.js";
-import {
-  CONTAINER_ROOT_USER_ARGS,
-  CONTAINER_TERMINAL_PID_RECORD_COMMAND,
-  CONTAINER_TERMINAL_SESSION_ENV,
-  CONTAINER_WORKSPACE_SETUP_COMMAND,
-  SETUP_DONE_PRINTF_CMD,
-  SETUP_FAILED_PRINTF_CMD,
-  type SetupFailureReason,
-} from "./container-scripts.js";
 import {
   quoteShell,
   validateGitRefName,
@@ -176,14 +178,7 @@ import {
   enableGitScanCaches,
   ensureContainerProjectFilesAccess,
 } from "./commands-files.js";
-import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
 import { AmbiguousContainerCreateError, createDockerContainer } from "./commands-containers.js";
-import {
-  configuredImageRef,
-  detectDockerTopology,
-  imageCapabilities,
-  resolveDockerImage,
-} from "./docker-image.js";
 import { ensureEnvironmentImage } from "./host-maintenance-tasks.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
@@ -205,7 +200,6 @@ import {
   retireFinishedSetupTerminal,
   SetupTerminalStillRunningError,
 } from "./setup-terminal-attempt.js";
-import { newContainerTerminalToken } from "./container-terminal-shell.js";
 import {
   formatEnvironmentIsolationNotice,
   localEnvironmentIsolationEnv,
@@ -809,7 +803,7 @@ export async function spawnSetupTerminal(
     );
     // Docker keeps an exec running after its client is gone, so the shell is
     // marked with a per-PTY token and records its PID the way a container
-    // terminal's does (`container-terminal-shell.ts`): a retry or a close then
+    // terminal's does (`containers/terminal-shell.ts`): a retry or a close then
     // ends the shell and its setup processes in the container as well. bash
     // records `$$` and execs zsh in place, so the recorded PID is the shell
     // that runs the setup and then stays at the prompt.

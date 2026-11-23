@@ -12,9 +12,9 @@ import {
 import { registerDockerCommands } from "../src/core/commands-registry-docker";
 import type { CommandHandler } from "../src/core/commands-context";
 import type { RegistryDependencies } from "../src/core/commands-registry-types";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { containerAdmissionSnapshot } from "../src/core/container-admission";
-import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { containerAdmissionSnapshot } from "../src/core/containers/admission";
+import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
 import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error-text";
 import { HostMaintenanceService } from "../src/core/host-maintenance";
 import { imageUpdateWaiterCount, startImageUpdate } from "../src/core/host-maintenance-tasks";

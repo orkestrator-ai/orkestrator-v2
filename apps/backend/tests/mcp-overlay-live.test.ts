@@ -22,14 +22,14 @@ import {
   readContainerMcpFile,
   writeContainerMcpFile,
 } from "../src/core/commands-registry-mcp";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { DOCKER_LABEL_INPUTS_REVISION } from "../src/core/constants";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {
   ensureStorageVolumes,
   initializeStorageSet,
   planStorageSet,
-} from "../src/core/container-storage";
+} from "../src/core/containers/storage";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { McpManagementService } from "../src/core/mcp-management/service";
 import { contentDigest } from "../src/core/mcp-management/source-store";
@@ -434,8 +434,8 @@ describe("a real rebuild re-stages the backend user's inputs", () => {
     "a rebuild creates its candidate from freshly staged inputs; in-container edits do not survive",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const codexHome = path.join(root, "host-codex");
       await fs.mkdir(codexHome, { recursive: true });
       const hostConfig = (version: string) => `[mcp_servers.host]\ncommand = "host-${version}"\n`;

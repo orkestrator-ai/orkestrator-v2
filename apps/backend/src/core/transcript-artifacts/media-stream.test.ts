@@ -19,7 +19,7 @@ import path from "node:path";
 import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
 
-import { CONTAINER_SAFE_BASE64_READER } from "../container-scripts.js";
+import { CONTAINER_SAFE_BASE64_READER } from "../containers/scripts.js";
 import type { CommandContext, CommandHandler } from "../commands-context.js";
 import { registerTranscriptArtifactCommands } from "./commands.js";
 import { LoopbackArtifactContentServer } from "./content-server.js";

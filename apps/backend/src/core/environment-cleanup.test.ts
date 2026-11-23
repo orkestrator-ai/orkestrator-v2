@@ -21,7 +21,7 @@ import { environmentStateDirectories } from "./environment-state-paths.js";
 import type { Environment } from "./models.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import { StorageService } from "./storage.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { dockerOwnerNamespace } from "./containers/ownership.js";
 
 /** A UUID environment id and the branch created for it (its namespace is `e1a2b3c4d5e6`). */
 const ENV_ID = "e1a2b3c4-d5e6-4f70-8899-aabbccddeeff";

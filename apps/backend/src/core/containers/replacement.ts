@@ -1,0 +1,1300 @@
+import { withContainerAdmission } from "./admission.js";
+import { startDockerContainer } from "./start.js";
+import {
+  MAX_RETAINED_STORAGE_SETS,
+  formatContainerLifecycleError,
+  parseContainerLifecycle,
+  type ContainerMutationIdentity,
+  type ContainerRuntimeIdentity,
+  type ContainerStorageIdentity,
+  type EnvironmentContainerLifecycle,
+  type RebuildPreview,
+  type RebuildUnavailableReason,
+} from "@orkestrator/protocol/container-lifecycle";
+import {
+  DOCKER_LABEL_APP,
+  DOCKER_LABEL_APP_VALUE,
+  DOCKER_LABEL_OWNER,
+  DOCKER_LABEL_RESOURCE_ROLE,
+} from "../constants.js";
+import {
+  dockerContainerExitEvidence,
+  dockerDaemonUnreachableNow,
+  isDockerCopyRemountRefused,
+  isDockerDaemonUnreachable,
+  isDockerPathNotFound,
+  isDockerRunStoppedFromOutside,
+} from "./cli-errors.js";
+import { COPY_REFUSED_REMEDY } from "./copy-refusal.js";
+import { dockerOwnerNamespace } from "./ownership.js";
+import { runCommand, spawnCommand } from "../shell.js";
+import {
+  prepareEgressGatewayForStart,
+  removeRuntimeContainer,
+  stopRuntimeContainer,
+} from "../egress-gateway.js";
+import { shutdownClaudeStatePolling } from "../tmux/index.js";
+import type { CommandContext } from "../commands-context.js";
+import type { Environment } from "../models.js";
+import {
+  ContainerLifecycleError,
+  advanceContainerOperation,
+  beginContainerOperation,
+  completeContainerOperation,
+  currentRuntimeIdentity,
+  findOperationContainers,
+  nextRuntimeGeneration,
+  operationFailureCode,
+  resolveContainerOwnership,
+} from "./lifecycle-service.js";
+import {
+  ensureStorageVolumes,
+  initializeStorageSet,
+  planStorageSet,
+  removeStorageVolumes,
+  replacementAdmissionPaused,
+  selectStorageFormat,
+  storageHelperFailureMessage,
+  STORAGE_HELPER_ROLE,
+} from "./storage.js";
+import { PROVIDER_PRESERVATION, PROVIDER_STATE_LAYOUT } from "./state-layout.js";
+import { groupRecoveryCopies } from "../recovery-copy-model.js";
+import {
+  containerStopWasForced,
+  drainContainerProcesses,
+  waitForContainerBoot,
+  withEnvironmentDraining,
+} from "./readiness.js";
+import {
+  configuredImageRef,
+  detectDockerTopology,
+  imageCapabilities,
+  resolveDockerImage,
+} from "./image.js";
+import { createDockerContainer } from "../commands-containers.js";
+import { imageWithoutStagedInputsMessage } from "../commands-error-text.js";
+import { imageDeclaresStagedInputs } from "@orkestrator/protocol/image-manifest";
+import { assertEnvironmentBudgetEnforceable } from "./resources.js";
+import { stopEnvironmentReviewValidation } from "../review/validation-service.js";
+import { stopEnvironmentExecWorkers } from "../public-api/exec-control.js";
+import { settleStoppedRuntimeAgents } from "../stopped-runtime-agents.js";
+import { parseDockerPsSize } from "./cleanup-inventory.js";
+import { CONTAINER_ROOT_USER_ARGS } from "./scripts.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+
+const log = createLogger("docker");
+
+/**
+ * Transactional runtime replacement that preserves the workspace and the
+ * declared provider state.
+ *
+ * Docker and backend storage cannot share a transaction, so replacement is a
+ * durable sequence of idempotent phases, each persisted before its effect.
+ * The only logical commit is one storage write that moves the runtime and
+ * storage pointers together. Before it, the original runtime and its data are
+ * untouched (only stopped) and any failure removes the incomplete candidate;
+ * after it, the candidate is authoritative and the original is kept stopped as
+ * a recovery copy until the user retires it.
+ *
+ * The candidate always gets a new storage set — a copy — so candidate setup can
+ * never corrupt the only pre-rebuild copy, and old and candidate workloads are
+ * never writers at the same time: the source is stopped before copying.
+ */
+
+export type ReplacementKind = "migrate" | "rebuild";
+
+export interface ReplacementRequest extends ContainerMutationIdentity {
+  environmentId: string;
+  /** The runtime the user reviewed; a different one conflicts. */
+  expectedContainerId: string;
+  /** Proceed even when free space on the daemon cannot be measured. */
+  allowUnknownCapacity?: boolean;
+}
+
+export const REPLACEMENT_PHASES = [
+  "requested",
+  "preflight",
+  "quiescing",
+  "source-stopped",
+  "copying",
+  "verified",
+  "candidate-prepared",
+  "candidate-healthy",
+  "committed",
+] as const;
+
+/** Largest amount of work one copy step may take. */
+const COPY_TIMEOUT_MS = 60 * 60_000;
+/** How long killed `docker` clients get to report closing before the step fails. */
+const PIPE_SETTLE_GRACE_MS = 5_000;
+/** How long `docker rm -f` of an abandoned copy helper may take. */
+const HELPER_REMOVE_TIMEOUT_MS = 30_000;
+/**
+ * How long the helper may keep running once the `docker cp` producer has
+ * closed: a base for its final checks (it waits up to 60 s for its own
+ * listings), time for the bytes it was sent at a slow extraction rate, and as
+ * long again as the stream itself took. On a rootless daemon a helper once
+ * never saw end of input after its producer exited and would have held the
+ * rebuild for the whole {@link COPY_TIMEOUT_MS} (to-do 7705); with this a
+ * stalled step fails in minutes. 5 GiB gets about 7.5 minutes plus its
+ * streaming time.
+ *
+ * The streaming term is what keeps a slow legitimate copy inside the window.
+ * The helper's work after its input ends (re-hashing the destination in
+ * batches, sorting and joining the manifests, `git fsck`) is cheaper than the
+ * work it does while the stream flows (a shell and a hash per member), and a
+ * loaded host slows both alike. The real helper's post-input time, measured
+ * against this window, is pinned by `tests/unit/migrate-copy-drain-window.test.ts`.
+ */
+export const COPY_DRAIN_BASE_MS = 2 * 60_000;
+export const COPY_DRAIN_BYTES_PER_SECOND = 16 * 1024 * 1024;
+
+/**
+ * The drain window for a step whose producer sent `bytes` over `streamedMs`
+ * (from spawning the producer to its close).
+ */
+export function copyDrainWindowMs(bytes: number, streamedMs = 0): number {
+  return (
+    COPY_DRAIN_BASE_MS +
+    Math.ceil((Math.max(0, bytes) / COPY_DRAIN_BYTES_PER_SECOND) * 1000) +
+    Math.max(0, Math.ceil(streamedMs))
+  );
+}
+/** Capacity headroom on top of the estimated copy size. */
+const CAPACITY_HEADROOM_BYTES = 512 * 1024 * 1024;
+
+class ReplacementCancelled extends Error {
+  /** Registered code `container-lifecycle` (`contract/ipc-error.ts`); the message keeps its marker. */
+  readonly code = "container-lifecycle" as const;
+  readonly details = { reason: "operation-unknown" } as const;
+
+  constructor() {
+    super(formatContainerLifecycleError("operation-unknown", "The rebuild was cancelled."));
+  }
+}
+
+function lifecycleError(
+  code: ConstructorParameters<typeof ContainerLifecycleError>[0],
+  message: string,
+) {
+  return new ContainerLifecycleError(code, message);
+}
+
+function readRecord(environment: Environment): EnvironmentContainerLifecycle {
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  if (!parsed.supported) {
+    throw lifecycleError(
+      "unsupported-format",
+      "This environment was changed by a newer version of Orkestrator.",
+    );
+  }
+  return parsed.record;
+}
+
+// ---------------------------------------------------------------------------
+// Copy plan
+// ---------------------------------------------------------------------------
+
+export interface CopyStep {
+  /** Path in a stopped legacy container, or a source volume role. */
+  source: { kind: "container-path"; path: string } | { kind: "volume"; role: string };
+  /** Destination role and directory inside the candidate volume. */
+  target: { role: "workspace" | "state"; subdir: string };
+  /** Wildcards selecting members (legacy relocations only). */
+  select?: string[];
+}
+
+/**
+ * What a replacement copies. A volume-backed source copies both whole volumes.
+ * A legacy source copies `/workspace` and every provider state path from the
+ * stopped container's filesystem, relocating the SQLite stores that the
+ * persistent layout moves out of their home roots.
+ */
+export function replacementCopyPlan(sourceFormat: ContainerStorageIdentity["format"]): CopyStep[] {
+  if (sourceFormat === "volume-v1") {
+    return [
+      { source: { kind: "volume", role: "workspace" }, target: { role: "workspace", subdir: "" } },
+      { source: { kind: "volume", role: "state" }, target: { role: "state", subdir: "" } },
+    ];
+  }
+  const steps: CopyStep[] = [
+    {
+      source: { kind: "container-path", path: "/workspace" },
+      target: { role: "workspace", subdir: "" },
+    },
+  ];
+  for (const entry of PROVIDER_STATE_LAYOUT) {
+    if (entry.subdir === "codex/sqlite") {
+      steps.push({
+        source: { kind: "container-path", path: "/home/node/.codex" },
+        target: { role: "state", subdir: entry.subdir },
+        select: [".codex/*.sqlite", ".codex/*.sqlite-wal", ".codex/*.sqlite-shm"],
+      });
+    } else if (entry.subdir === "opencode/db") {
+      steps.push({
+        source: { kind: "container-path", path: "/home/node/.local/share/opencode" },
+        target: { role: "state", subdir: entry.subdir },
+        // OpenCode 1.x's `opencode.db` is left behind: nothing reads it now.
+        select: ["opencode/opencode2.db", "opencode/opencode2.db-wal", "opencode/opencode2.db-shm"],
+      });
+    } else {
+      steps.push({
+        source: { kind: "container-path", path: entry.containerPath },
+        target: { role: "state", subdir: entry.subdir },
+      });
+    }
+  }
+  return steps;
+}
+
+export type CopyResult =
+  { ok: true; files: number; bytes: number; absent?: boolean } | { ok: false; reason: string };
+
+export function parseCopyOutput(output: string): CopyResult {
+  const match = /ORKESTRATOR_COPY status=([a-z-]+)((?: [a-z_]+=\S+)*)/.exec(output);
+  if (!match) return { ok: false, reason: "helper-failed" };
+  const fields = Object.fromEntries(
+    (match[2] ?? "")
+      .trim()
+      .split(" ")
+      .filter(Boolean)
+      .map((pair) => pair.split("=") as [string, string]),
+  );
+  if (match[1] !== "ok") {
+    return {
+      ok: false,
+      reason: fields.kind ? `${match[1]}:${fields.kind}` : (match[1] ?? "failed"),
+    };
+  }
+  return { ok: true, files: Number(fields.files ?? 0), bytes: Number(fields.bytes ?? 0) };
+}
+
+function helperArguments(
+  context: Pick<CommandContext, "storage">,
+  imageId: string,
+  mounts: string[],
+  script: string[],
+  interactive: boolean,
+  name?: string,
+): string[] {
+  const owner = dockerOwnerNamespace(context.storage.getDataDir());
+  return [
+    "run",
+    "--rm",
+    ...(interactive ? ["-i"] : []),
+    ...(name ? ["--name", name] : []),
+    "--network",
+    "none",
+    ...CONTAINER_ROOT_USER_ARGS,
+    "--label",
+    `${DOCKER_LABEL_APP}=${DOCKER_LABEL_APP_VALUE}`,
+    "--label",
+    `${DOCKER_LABEL_OWNER}=${owner}`,
+    "--label",
+    `${DOCKER_LABEL_RESOURCE_ROLE}=${STORAGE_HELPER_ROLE}`,
+    "--entrypoint",
+    "/usr/local/bin/orkestrator-migrate.sh",
+    ...mounts,
+    imageId,
+    ...script,
+  ];
+}
+
+/**
+ * Streams `docker cp <container>:<path> -` into a helper's stdin. This stays on
+ * live pipes, unlike one-shot captures, because the stream is a whole workspace
+ * and has to flow between the two children while they run. It is bounded by a
+ * deadline that settles the step as failed whether or not either child reports
+ * closing, so a lost completion event cannot hold a rebuild. Only the daemon's own "could not find the file" is an absent path
+ * (nothing to preserve): a CLI that reached no daemon (its socket gone) also
+ * says "no such file or directory", and that step copied nothing and must
+ * fail, or a rebuild during a daemon outage would commit an empty candidate.
+ * Either side saying it reached no daemon is reported as such, so the failure
+ * names the outage rather than the files.
+ */
+export interface PipeContainerPathOptions {
+  timeoutMs?: number;
+  settleGraceMs?: number;
+  /** Overrides {@link copyDrainWindowMs}; tests pass a short one. */
+  drainWindowMs?: (bytes: number, streamedMs: number) => number;
+  /** The helper container's name, removed when the step is abandoned. */
+  consumerContainer?: string;
+}
+
+export type PipeContainerPathResult =
+  | {
+      absent: true;
+      /** The abandoned helper could not be removed; it may still mount the destination. */
+      helperRemovalFailed?: boolean;
+    }
+  | {
+      absent: false;
+      output: string;
+      producerFailed: boolean;
+      daemonUnavailable: boolean;
+      /** The daemon refused the copy: a read-only bind it cannot remount (`copy-refusal.ts`). */
+      refused?: boolean;
+      /** The producer closed and the helper did not finish within the drain window. */
+      stalled?: boolean;
+      /** The abandoned helper could not be removed; it may still mount the destination. */
+      helperRemovalFailed?: boolean;
+    };
+
+/**
+ * Removes an abandoned copy helper, answering whether it is gone. One that is
+ * already gone (`--rm` removed it once its client was killed) counts as removed.
+ */
+async function removeCopyHelper(name: string): Promise<boolean> {
+  try {
+    await runCommand("docker", ["rm", "-f", name], { timeoutMs: HELPER_REMOVE_TIMEOUT_MS });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && /no such container/i.test(error.message)) return true;
+    log.warn("replacement.copy-helper-remove-failed", { helper: name });
+    return false;
+  }
+}
+
+export async function pipeContainerPath(
+  containerId: string,
+  sourcePath: string,
+  consumerArgs: string[],
+  options: PipeContainerPathOptions = {},
+): Promise<PipeContainerPathResult> {
+  return new Promise((resolve) => {
+    const streamStarted = Date.now();
+    const producer = spawnCommand("docker", ["cp", `${containerId}:${sourcePath}`, "-"]);
+    const consumer = spawnCommand("docker", consumerArgs);
+    let producerErr = "";
+    let consumerErr = "";
+    let output = "";
+    let producerCode: number | null = null;
+    let consumerCode: number | null = null;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    let bytes = 0;
+    let stalled = false;
+    let abandoned = false;
+    let settled = false;
+    // The abandoned helper's removal. The step settles only once it has
+    // finished: rollback removes the candidate's volumes next, and a helper
+    // still mounting one would make Docker keep it.
+    let helperRemoval: Promise<boolean> | undefined;
+    const settle = (result: PipeContainerPathResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(settleTimer);
+      clearTimeout(drainTimer);
+      void (helperRemoval ?? Promise.resolve(true)).then((removed) =>
+        resolve(removed ? result : { ...result, helperRemovalFailed: true }),
+      );
+    };
+    // What the producer itself said when it failed. Its own answer (nothing to
+    // copy, a refusal, no daemon) outranks a stall: the helper was only left
+    // waiting on a stream that had already failed.
+    const producerAnswer = () => {
+      const failed = producerCode !== null && producerCode !== 0;
+      return {
+        absent: failed && isDockerPathNotFound(producerErr),
+        daemonUnavailable:
+          (failed && isDockerDaemonUnreachable(producerErr)) ||
+          (consumerCode !== null && consumerCode !== 0 && isDockerDaemonUnreachable(consumerErr)),
+        refused: failed && isDockerCopyRemountRefused(producerErr),
+      };
+    };
+    const abandonedResult = (): PipeContainerPathResult => {
+      const answer = producerAnswer();
+      if (answer.absent) return { absent: true };
+      return {
+        absent: false,
+        output: "",
+        producerFailed: true,
+        daemonUnavailable: answer.daemonUnavailable,
+        ...(answer.refused ? { refused: true } : {}),
+        ...(stalled ? { stalled: true } : {}),
+      };
+    };
+    // Kill both clients and the helper container: killing `docker run` does
+    // not stop the container, whose input may never end. Settles as failed if
+    // neither client is seen to close.
+    const abandon = () => {
+      if (abandoned || settled) return;
+      abandoned = true;
+      // Called by the deadline or the drain window, never before both exist.
+      clearTimeout(timer);
+      clearTimeout(drainTimer);
+      producer.kill("SIGKILL");
+      consumer.kill("SIGKILL");
+      if (options.consumerContainer) {
+        helperRemoval = removeCopyHelper(options.consumerContainer);
+      }
+      settleTimer = setTimeout(
+        () => settle(abandonedResult()),
+        options.settleGraceMs ?? PIPE_SETTLE_GRACE_MS,
+      );
+    };
+    const timer = setTimeout(abandon, options.timeoutMs ?? COPY_TIMEOUT_MS);
+    producer.stdout.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+    });
+    producer.stdout.pipe(consumer.stdin);
+    // Once nothing reads the stream (the helper died, or its stdin broke),
+    // `pipe` leaves the producer's stdout paused with data unread. Discard the
+    // rest so it reaches EOF: a child "closes" only when its output has ended,
+    // and both sides losing the daemon at once would otherwise never settle.
+    const discardProducerOutput = () => {
+      producer.stdout.unpipe(consumer.stdin);
+      producer.stdout.resume();
+    };
+    consumer.stdin.on("error", discardProducerOutput);
+    producer.stderr.on("data", (chunk: Buffer) => {
+      if (producerErr.length < 4096) producerErr += chunk.toString();
+    });
+    consumer.stdout.on("data", (chunk: Buffer) => {
+      if (output.length < 16_384) output += chunk.toString();
+    });
+    consumer.stderr.on("data", (chunk: Buffer) => {
+      if (consumerErr.length < 4096) consumerErr += chunk.toString();
+    });
+    const finish = () => {
+      if (producerCode === null || consumerCode === null) return;
+      if (stalled) {
+        settle(abandonedResult());
+        return;
+      }
+      const answer = producerAnswer();
+      if (answer.absent) {
+        settle({ absent: true });
+        return;
+      }
+      settle({
+        absent: false,
+        output,
+        producerFailed: producerCode !== 0,
+        daemonUnavailable: answer.daemonUnavailable,
+        refused: answer.refused,
+      });
+    };
+    // Once the producer has closed, the helper has its whole input (or none
+    // is coming): give it the drain window to finish, then abandon the step.
+    const startDrain = () => {
+      // End the helper's input explicitly; `pipe` does once the stream ends,
+      // but not after an unpipe.
+      if (!consumer.stdin.destroyed && !consumer.stdin.writableEnded) consumer.stdin.end();
+      if (consumerCode !== null || drainTimer !== undefined || abandoned) return;
+      const streamedMs = Date.now() - streamStarted;
+      const windowMs = (options.drainWindowMs ?? copyDrainWindowMs)(bytes, streamedMs);
+      drainTimer = setTimeout(() => {
+        if (consumerCode !== null) return;
+        stalled = true;
+        log.warn("replacement.copy-helper-stalled", {
+          producerCode: producerCode ?? null,
+          bytes,
+          streamedMs,
+          drainMs: windowMs,
+        });
+        abandon();
+      }, windowMs);
+    };
+    producer.on("close", (code) => {
+      producerCode = code ?? 1;
+      startDrain();
+      finish();
+    });
+    consumer.on("close", (code) => {
+      consumerCode = code ?? 1;
+      discardProducerOutput();
+      if (producerCode === null) producer.kill("SIGKILL");
+      finish();
+    });
+    producer.on("error", () => {
+      producerCode = 1;
+      startDrain();
+      finish();
+    });
+    consumer.on("error", () => {
+      consumerCode = 1;
+      discardProducerOutput();
+      if (producerCode === null) producer.kill("SIGKILL");
+      finish();
+    });
+  });
+}
+
+function volumeNamed(storage: ContainerStorageIdentity, role: string): string {
+  const volume = storage.volumes?.find((entry) => entry.role === role);
+  if (!volume) throw lifecycleError("needs-attention", "The storage set is incomplete.");
+  return volume.name;
+}
+
+export async function runCopyStep(
+  context: Pick<CommandContext, "storage">,
+  imageId: string,
+  step: CopyStep,
+  source: { containerId: string; storage: ContainerStorageIdentity },
+  candidate: ContainerStorageIdentity,
+  /** Pipe timings for a streamed step; tests pass short ones. */
+  pipeTimings: Pick<PipeContainerPathOptions, "drainWindowMs" | "settleGraceMs"> = {},
+): Promise<CopyResult> {
+  const destinationVolume = volumeNamed(candidate, step.target.role);
+  const destination = `/storage/${step.target.role}${step.target.subdir ? `/${step.target.subdir}` : ""}`;
+  const destinationMount = [
+    "--mount",
+    `type=volume,src=${destinationVolume},dst=/storage/${step.target.role},volume-nocopy`,
+  ];
+  if (step.source.kind === "volume") {
+    const sourceVolume = volumeNamed(source.storage, step.source.role);
+    // Named so a helper stopped from outside can be looked up afterwards.
+    const volumeHelper = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;
+    const startedAt = Date.now();
+    let failure: unknown;
+    const { stdout } = await runCommand(
+      "docker",
+      helperArguments(
+        context,
+        imageId,
+        [
+          "--mount",
+          `type=volume,src=${sourceVolume},dst=/source,readonly,volume-nocopy`,
+          ...destinationMount,
+        ],
+        ["copy-volume", "/source", destination],
+        false,
+        volumeHelper,
+      ),
+      { timeoutMs: COPY_TIMEOUT_MS },
+    ).catch((error: unknown) => {
+      failure = error;
+      return { stdout: error instanceof Error ? error.message : "" };
+    });
+    const result = parseCopyOutput(stdout);
+    if (result.ok) return result;
+    if (isDockerDaemonUnreachable(stdout)) return DAEMON_UNAVAILABLE_COPY;
+    // A signal-only exit can hide a shutdown. Preserve a connection error
+    // from the event lookup even if the next availability probe would pass.
+    if (
+      result.reason === "helper-failed" &&
+      isDockerRunStoppedFromOutside(failure) &&
+      (await dockerContainerExitEvidence(volumeHelper, startedAt)) === "daemon-unavailable"
+    ) {
+      return DAEMON_UNAVAILABLE_COPY;
+    }
+    return result;
+  }
+  // Named so an abandoned step can remove the helper, whose input may never end.
+  const helperName = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;
+  const piped = await pipeContainerPath(
+    source.containerId,
+    step.source.path,
+    helperArguments(
+      context,
+      imageId,
+      destinationMount,
+      ["copy-stream", destination, "1", ...(step.select ?? [])],
+      true,
+      helperName,
+    ),
+    { ...pipeTimings, consumerContainer: helperName },
+  );
+  if (!piped.absent && piped.daemonUnavailable) return DAEMON_UNAVAILABLE_COPY;
+  // A helper left behind may still mount the candidate's volume: never treat
+  // that step as done, even when there was nothing to copy.
+  if (piped.helperRemovalFailed) return HELPER_REMOVE_FAILED;
+  if (piped.absent) return { ok: true, files: 0, bytes: 0, absent: true };
+  if (piped.refused) return COPY_REFUSED;
+  if (piped.stalled) return { ok: false, reason: "helper-input-stalled" };
+  if (piped.producerFailed) return { ok: false, reason: "source-read-failed" };
+  return parseCopyOutput(piped.output);
+}
+
+/** A copy step that failed because Docker went away, not because of the files. */
+const DAEMON_UNAVAILABLE_COPY = { ok: false, reason: "daemon-unavailable" } as const;
+/** A copy step Docker refused: the source container has a bind it cannot remount. */
+const COPY_REFUSED = { ok: false, reason: "source-copy-refused" } as const;
+/** An abandoned step whose helper container could not be removed. */
+const HELPER_REMOVE_FAILED = { ok: false, reason: "helper-remove-failed" } as const;
+
+/** Classify a failed copy before rollback, including a stream cut without daemon wording. */
+export async function replacementCopyFailure(
+  reason: string,
+  probeTimeoutMs?: number,
+): Promise<ContainerLifecycleError> {
+  // The daemon said why: no outage probe.
+  if (reason === COPY_REFUSED.reason) {
+    return lifecycleError(
+      "unsupported-topology",
+      `Docker refused to copy the environment's files out of its container (operation not permitted while remounting a read-only bind). The original container was kept unchanged. ${COPY_REFUSED_REMEDY}`,
+    );
+  }
+  if (
+    reason === DAEMON_UNAVAILABLE_COPY.reason ||
+    (await dockerDaemonUnreachableNow(probeTimeoutMs))
+  ) {
+    return lifecycleError(
+      "daemon-unavailable",
+      "Docker stopped responding while the environment's files were being copied. The original container was kept unchanged; rebuild again once Docker is running.",
+    );
+  }
+  if (reason === HELPER_REMOVE_FAILED.reason) {
+    return lifecycleError(
+      "needs-attention",
+      "A copy step stalled and its helper container could not be removed. The original container was kept unchanged; the new storage may be kept as a recovery copy while the helper still uses it.",
+    );
+  }
+  return lifecycleError(
+    "needs-attention",
+    `Copying the environment's files failed verification (${reason}). The original container was kept unchanged.`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Capacity
+// ---------------------------------------------------------------------------
+
+export interface CapacityCheck {
+  estimateBytes: number | null;
+  availableBytes: number | null;
+  /** Files, directories and links to copy; null when not measurable. */
+  estimateInodes?: number | null;
+  availableInodes?: number | null;
+}
+
+/** Inodes kept free beyond the estimate. */
+const CAPACITY_HEADROOM_INODES = 10_000;
+
+async function measureVolume(
+  context: Pick<CommandContext, "storage">,
+  imageId: string,
+  volume: string,
+): Promise<{
+  bytes: number | null;
+  available: number | null;
+  inodes: number | null;
+  inodesAvailable: number | null;
+}> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      helperArguments(
+        context,
+        imageId,
+        ["--mount", `type=volume,src=${volume},dst=/measure,readonly,volume-nocopy`],
+        ["measure", "/measure"],
+        false,
+      ),
+      { timeoutMs: 10 * 60_000 },
+    );
+    return parseMeasureOutput(stdout);
+  } catch {
+    return { bytes: null, available: null, inodes: null, inodesAvailable: null };
+  }
+}
+
+export function parseMeasureOutput(stdout: string): {
+  bytes: number | null;
+  available: number | null;
+  inodes: number | null;
+  inodesAvailable: number | null;
+} {
+  const field = (name: string) => {
+    const match = new RegExp(`(?:^| )${name}=(\\d+)(?: |$)`, "m").exec(stdout);
+    return match?.[1] ? Number(match[1]) : null;
+  };
+  return {
+    bytes: field("bytes"),
+    available: field("available"),
+    inodes: field("inodes"),
+    inodesAvailable: field("inodes_available"),
+  };
+}
+
+async function legacyWritableLayerBytes(containerId: string): Promise<number | null> {
+  try {
+    const { stdout } = await runCommand(
+      "docker",
+      [
+        "ps",
+        "-a",
+        "--size",
+        "--no-trunc",
+        "--filter",
+        `id=${containerId}`,
+        "--format",
+        "{{.Size}}",
+      ],
+      { timeoutMs: 120_000 },
+    );
+    return parseDockerPsSize(stdout.trim());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Free space is measured where the volumes live — on the daemon's filesystem
+ * (inside the VM for Docker Desktop) — never on the backend host.
+ */
+export function capacityVerdict(
+  check: CapacityCheck,
+  allowUnknown: boolean,
+): { ok: true } | { ok: false; message: string } {
+  if (check.estimateBytes === null || check.availableBytes === null) {
+    return allowUnknown
+      ? { ok: true }
+      : {
+          ok: false,
+          message:
+            "Free space on the Docker host could not be measured. Free space or confirm the rebuild explicitly.",
+        };
+  }
+  const required = Math.ceil(check.estimateBytes * 1.1) + CAPACITY_HEADROOM_BYTES;
+  if (check.availableBytes < required) {
+    return {
+      ok: false,
+      message: `The rebuild needs about ${Math.ceil(required / 1024 ** 2)} MiB free on the Docker host; ${Math.floor(check.availableBytes / 1024 ** 2)} MiB is available. Free space and retry.`,
+    };
+  }
+  // Inodes when both sides are known (a legacy layer's file count is not).
+  if (check.estimateInodes != null && check.availableInodes != null) {
+    const requiredInodes = Math.ceil(check.estimateInodes * 1.1) + CAPACITY_HEADROOM_INODES;
+    if (check.availableInodes < requiredInodes) {
+      return {
+        ok: false,
+        message: `The rebuild needs about ${requiredInodes} free inodes on the Docker host's filesystem; ${check.availableInodes} are available. Remove files or free space and retry.`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Rollback
+// ---------------------------------------------------------------------------
+
+/**
+ * Removes an uncommitted candidate: its container (found by the operation's
+ * exact label) and its storage set. A candidate volume that will not remove is
+ * kept referenced as a failed candidate rather than orphaned.
+ */
+export async function rollbackCandidate(
+  context: Pick<CommandContext, "storage" | "emit">,
+  environmentId: string,
+  operationId: string,
+  candidateStorage: ContainerStorageIdentity | undefined,
+): Promise<NonNullable<EnvironmentContainerLifecycle["retainedStorage"]>[number] | undefined> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  const parsed = parseContainerLifecycle(environment?.containerLifecycle);
+  if (parsed.supported) {
+    const record = parsed.record;
+    if (
+      record.runtime?.createdByOperationId === operationId ||
+      (candidateStorage?.storageSetId &&
+        record.storage.storageSetId === candidateStorage.storageSetId)
+    ) {
+      return undefined;
+    }
+  }
+  const search = await findOperationContainers(context, operationId);
+  const containerIds =
+    search.kind === "one"
+      ? [search.containerId]
+      : search.kind === "many"
+        ? search.containerIds
+        : [];
+  for (const id of containerIds) {
+    await removeRuntimeContainer(id, dockerOwnerNamespace(context.storage.getDataDir())).catch(
+      () => undefined,
+    );
+  }
+  if (!candidateStorage?.volumes?.length) return undefined;
+  const kept = await removeStorageVolumes(context, environmentId, candidateStorage);
+  if (!kept || kept.length === 0) return undefined;
+  return {
+    storageSetId: candidateStorage.storageSetId ?? "unknown",
+    workspaceGeneration: candidateStorage.workspaceGeneration,
+    volumes: kept,
+    retainedAt: new Date().toISOString(),
+    reason: "failed-candidate",
+    operationId,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Transaction
+// ---------------------------------------------------------------------------
+
+/**
+ * Fences and stops a runtime before its data is copied or swapped: review
+ * validation and exec workers are cancelled, previews detached, processes
+ * drained (graceful-shutdown images) under the draining fence, then the
+ * container is stopped. It is never restarted to export its files.
+ */
+export async function quiesceRuntime(
+  environmentId: string,
+  containerId: string,
+  imageId: string | undefined,
+  context: CommandContext,
+): Promise<{ forced: boolean }> {
+  await stopEnvironmentReviewValidation(environmentId, context);
+  await stopEnvironmentExecWorkers(environmentId, context);
+  context.previews?.registry.beforeEnvironmentTargetChange(environmentId);
+  await context.nativeAgents?.runtimeStopRequested(environmentId);
+  const capabilities = await imageCapabilities(imageId, context);
+  const drain = await withEnvironmentDraining(
+    context.runtime.environments,
+    environmentId,
+    containerId,
+    async () => {
+      const result = capabilities?.["graceful-shutdown"]
+        ? await drainContainerProcesses(containerId)
+        : null;
+      // The runtime, then its egress gateway: a candidate's gateway binds the
+      // same fixed host ports.
+      await stopRuntimeContainer(containerId);
+      return result;
+    },
+  );
+  shutdownClaudeStatePolling(context, containerId);
+  // The bridges stopped with the runtime, and their turns and parked requests
+  // with them. Before a commit too: a failed rebuild leaves it stopped.
+  await settleStoppedRuntimeAgents(environmentId, context);
+  return {
+    forced: (drain?.remaining ?? 0) > 0 || (await containerStopWasForced(containerId)) === true,
+  };
+}
+
+/**
+ * A candidate that cannot bind a published host port says so: the original
+ * is restored by the rollback, and the user frees the port or changes the
+ * mapping before rebuilding again.
+ */
+export function candidateStartError(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/port is already allocated|address already in use|bind for .* failed/i.test(message)) {
+    return lifecycleError(
+      "port-conflict",
+      "A host port this environment publishes is in use by another program. The original container was kept; free the port or change the environment's port mappings, then rebuild again.",
+    );
+  }
+  return error;
+}
+
+export interface ReplacementOutcome {
+  kind: ReplacementKind;
+  containerId: string;
+  runtimeGeneration: number;
+  files: number;
+  bytes: number;
+}
+
+/**
+ * Replaces an environment's runtime, preserving its workspace and declared
+ * provider state. Must run inside the environment's lifecycle queue.
+ */
+export async function replaceRuntimePreservingState(
+  request: ReplacementRequest,
+  context: CommandContext,
+): Promise<ReplacementOutcome | undefined> {
+  // No agent prompt reaches this environment while its runtime is replaced.
+  // At most a few copies run at once across environments; the fence holds
+  // while this one waits for a slot.
+  return context.runtime.environments.fence.withReplacement(request.environmentId, () =>
+    withContainerAdmission("copy", () => replaceRuntimePreservingStateUnfenced(request, context)),
+  );
+}
+
+async function replaceRuntimePreservingStateUnfenced(
+  request: ReplacementRequest,
+  context: CommandContext,
+): Promise<ReplacementOutcome | undefined> {
+  const environment = await context.storage.getEnvironment(request.environmentId);
+  if (!environment) throw new Error(`Environment not found: ${request.environmentId}`);
+  if (request.operationId) {
+    const parsed = readRecord(environment);
+    const replay = parsed.outcomes.find((entry) => entry.operationId === request.operationId);
+    if (replay) {
+      if (replay.status !== "succeeded") {
+        throw lifecycleError("operation-unknown", "The earlier rebuild did not succeed.");
+      }
+      return undefined;
+    }
+  }
+  if (replacementAdmissionPaused()) {
+    throw lifecycleError(
+      "capability-unavailable",
+      "New rebuilds and migrations are paused on this installation. Recovery copies can still be restored or discarded.",
+    );
+  }
+  if (environment.environmentType !== "containerized" || !environment.containerId) return undefined;
+  if (environment.containerId !== request.expectedContainerId) {
+    throw lifecycleError(
+      "runtime-changed",
+      "The container changed after it was reviewed. Review the environment again before rebuilding it.",
+    );
+  }
+  const record = readRecord(environment);
+  const sourceContainerId = environment.containerId;
+  const ownership = await resolveContainerOwnership(sourceContainerId, context);
+  if (ownership.verdict !== "owned") {
+    throw lifecycleError(
+      ownership.verdict === "unknown" ? "daemon-unavailable" : "not-owned",
+      "The container cannot be rebuilt because its ownership could not be confirmed.",
+    );
+  }
+  if (groupRecoveryCopies(record).length >= MAX_RETAINED_STORAGE_SETS) {
+    throw lifecycleError(
+      "resource-exhausted",
+      "This environment already keeps the maximum number of recovery copies. Review and discard old copies before rebuilding again.",
+    );
+  }
+  const kind: ReplacementKind = record.storage.format === "volume-v1" ? "rebuild" : "migrate";
+  const source: ContainerRuntimeIdentity = currentRuntimeIdentity(environment, context) ?? {
+    containerId: sourceContainerId,
+    runtimeGeneration: record.lastRuntimeGeneration,
+    owner: dockerOwnerNamespace(context.storage.getDataDir()),
+  };
+  const admission = await beginContainerOperation(context, environment.id, kind, {
+    ...request,
+    source,
+    details: { expectedContainerId: request.expectedContainerId },
+  });
+  if (admission.kind === "replayed") return undefined;
+  const { operationId } = admission.operation;
+  const checkCancelled = () => {
+    if (context.runtime.environments.isReplacementCancellationRequested(operationId)) {
+      throw new ReplacementCancelled();
+    }
+  };
+  const phase = (name: (typeof REPLACEMENT_PHASES)[number], patch = {}) =>
+    advanceContainerOperation(context, environment.id, operationId, { phase: name, ...patch });
+
+  let candidateStorage: ContainerStorageIdentity | undefined;
+  let sourceStopped = false;
+  let committed = false;
+  try {
+    // Preflight: read-only checks before anything is touched.
+    await phase("preflight");
+    const image = await resolveDockerImage(configuredImageRef(context));
+    if (image.kind !== "present") {
+      throw lifecycleError("capability-unavailable", "The environment image is not available.");
+    }
+    const topology = await detectDockerTopology();
+    if (topology.kind === "remote" || topology.kind === "unavailable") {
+      throw lifecycleError(
+        "unsupported-topology",
+        "A preserving rebuild needs a reachable local Docker engine. The original container was not changed.",
+      );
+    }
+    const capabilities = await imageCapabilities(image.imageId, context);
+    const decision = selectStorageFormat(capabilities, topology);
+    if (decision.format !== "volume-v1") {
+      throw lifecycleError(
+        "capability-unavailable",
+        `A preserving rebuild needs an image and Docker Engine that support persistent storage (${decision.reason}). The original container was not changed.`,
+      );
+    }
+    // The candidate is created with the environment's budget; refuse here,
+    // before the source is stopped, rather than after the copy.
+    await assertEnvironmentBudgetEnforceable(
+      environment,
+      context,
+      "The original container was not changed.",
+      topology,
+    );
+    // The candidate would be refused at creation; say so before the source stops.
+    if (!imageDeclaresStagedInputs(capabilities)) {
+      throw lifecycleError(
+        "capability-unavailable",
+        `${imageWithoutStagedInputsMessage(image.imageRef)} The original container was not changed.`,
+      );
+    }
+    const sum = (values: Array<number | null>) =>
+      values.some((value) => value === null)
+        ? null
+        : values.reduce<number>((total, value) => total + (value ?? 0), 0);
+    const sourceMeasures =
+      kind === "migrate"
+        ? null
+        : await Promise.all(
+            (record.storage.volumes ?? []).map((volume) =>
+              measureVolume(context, image.imageId, volume.name),
+            ),
+          );
+    const estimate =
+      kind === "migrate"
+        ? await legacyWritableLayerBytes(sourceContainerId)
+        : sum(sourceMeasures!.map((measure) => measure.bytes));
+    const estimateInodes = sourceMeasures
+      ? sum(sourceMeasures.map((measure) => measure.inodes))
+      : null;
+    candidateStorage = planStorageSet(
+      environment.id,
+      dockerOwnerNamespace(context.storage.getDataDir()),
+      record.storage.workspaceGeneration,
+    );
+    await phase("preflight", {
+      candidateStorage,
+      details: { imageId: image.imageId, estimateBytes: estimate },
+    });
+    await ensureStorageVolumes(context, environment.id, candidateStorage);
+    const target = await measureVolume(
+      context,
+      image.imageId,
+      volumeNamed(candidateStorage, "workspace"),
+    );
+    const capacity = capacityVerdict(
+      {
+        estimateBytes: estimate,
+        availableBytes: target.available,
+        estimateInodes,
+        availableInodes: target.inodesAvailable,
+      },
+      request.allowUnknownCapacity === true,
+    );
+    if (!capacity.ok) throw lifecycleError("resource-exhausted", capacity.message);
+    const initialized = await initializeStorageSet(
+      context,
+      image.imageId,
+      environment.id,
+      candidateStorage,
+    );
+    if (!initialized.ok)
+      throw lifecycleError("needs-attention", storageHelperFailureMessage(initialized));
+    checkCancelled();
+
+    // Quiesce: fence new work, drain what runs, stop the source. The source is
+    // never restarted to export it; stopped-container files are copied.
+    await phase("quiescing", { boot: { phase: "draining" } });
+    const { forced } = await quiesceRuntime(
+      environment.id,
+      sourceContainerId,
+      source.imageId,
+      context,
+    );
+    sourceStopped = true;
+    await phase("source-stopped", {
+      boot: { phase: "stopped" },
+      environment: { status: "stopped" },
+      details: { forced },
+    });
+    checkCancelled();
+
+    // Copy and verify every step against the stopped source.
+    await phase("copying");
+    let files = 0;
+    let bytes = 0;
+    for (const step of replacementCopyPlan(record.storage.format)) {
+      const copied = await runCopyStep(
+        context,
+        image.imageId,
+        step,
+        { containerId: sourceContainerId, storage: record.storage },
+        candidateStorage,
+      );
+      if (!copied.ok) {
+        throw await replacementCopyFailure(copied.reason);
+      }
+      files += copied.files;
+      bytes += copied.bytes;
+      checkCancelled();
+    }
+    await phase("verified", { details: { files, bytes } });
+
+    // Candidate: a new runtime generation from the pinned image, with the
+    // copied storage. The source is stopped, so fixed host ports are free.
+    const current = (await context.storage.getEnvironment(environment.id)) ?? environment;
+    const runtimeGeneration = nextRuntimeGeneration(current);
+    const candidateId = await createDockerContainer(current, context, {
+      operationId,
+      runtimeGeneration,
+      imageId: image.imageId,
+      storage: candidateStorage,
+      reusesWorkspace: true,
+    });
+    const candidate: ContainerRuntimeIdentity = {
+      containerId: candidateId,
+      runtimeGeneration,
+      owner: dockerOwnerNamespace(context.storage.getDataDir()),
+      imageRef: image.imageRef,
+      imageId: image.imageId,
+      ...(image.registryDigest ? { registryDigest: image.registryDigest } : {}),
+      createdByOperationId: operationId,
+    };
+    await phase("candidate-prepared", { candidate });
+    checkCancelled();
+
+    // Health without dispatch: current-boot readiness and a mounted workspace.
+    // No setup, agent launch or queued prompt runs before the commit.
+    await prepareEgressGatewayForStart(candidateId).catch((error: unknown) => {
+      throw candidateStartError(error);
+    });
+    await startDockerContainer(candidateId).catch((error: unknown) => {
+      throw candidateStartError(error);
+    });
+    const bootId = await waitForContainerBoot(candidateId);
+    await runCommand("docker", ["exec", candidateId, "sh", "-c", "mountpoint -q /workspace"], {
+      timeoutMs: 30_000,
+    });
+    // Stopped again before commit: the normal start path launches setup and
+    // agent servers against the committed runtime, never against a candidate.
+    await stopRuntimeContainer(candidateId);
+    await phase("candidate-healthy", {
+      candidate: { ...candidate, ...(bootId ? { bootId } : {}) },
+    });
+    checkCancelled();
+
+    // Commit: runtime and storage pointers move together, and the original
+    // runtime (and storage set, for a rebuild) are kept as recovery copies.
+    await completeContainerOperation(context, environment.id, operationId, "succeeded", {
+      phase: "committed",
+      runtime: { ...candidate, ...(bootId ? { bootId } : {}) },
+      storage: candidateStorage,
+      retainRuntime: {
+        ...source,
+        ...(record.storage.storageSetId ? { storageSetId: record.storage.storageSetId } : {}),
+        retainedAt: new Date().toISOString(),
+        retainedByOperationId: operationId,
+        retainedReason: kind === "migrate" ? "migrate-source" : "rebuild-source",
+      },
+      ...(kind === "rebuild" && record.storage.storageSetId
+        ? {
+            retainStorage: {
+              storageSetId: record.storage.storageSetId,
+              workspaceGeneration: record.storage.workspaceGeneration,
+              volumes: record.storage.volumes ?? [],
+              retainedAt: new Date().toISOString(),
+              reason: "rebuild-source" as const,
+              operationId,
+            },
+          }
+        : {}),
+      boot: { phase: "stopped" },
+      environment: { containerId: candidateId, status: "stopped", lifecycleError: null },
+    });
+    committed = true;
+    // The old generation's handles must not connect to the replacement.
+    await context.storage
+      .clearBackendTerminalSessionIds?.(environment.id)
+      .catch((error: unknown) => {
+        log.error("replacement.clear-terminals-failed", {
+          environmentId: environment.id,
+          error: formatLogError(error, { message: false }),
+        });
+      });
+    context.runtime.diffStats.containerGitFetchPolicy.forgetContainer(sourceContainerId);
+    context.runtime.environments.forgetReplacementCancellation(operationId);
+    return { kind, containerId: candidateId, runtimeGeneration, files, bytes };
+  } catch (error) {
+    context.runtime.environments.forgetReplacementCancellation(operationId);
+    if (committed) throw error;
+    const failedCandidate = await rollbackCandidate(
+      context,
+      environment.id,
+      operationId,
+      candidateStorage,
+    ).catch(() => undefined);
+    // Before commit the original is authoritative and untouched apart from
+    // being stopped. The caller restarts it through the normal start path.
+    await completeContainerOperation(
+      context,
+      environment.id,
+      operationId,
+      error instanceof ReplacementCancelled ? "cancelled" : "failed",
+      {
+        failureCode:
+          error instanceof ReplacementCancelled ? undefined : operationFailureCode(error),
+        ...(failedCandidate ? { retainStorage: failedCandidate } : {}),
+        environment: sourceStopped ? { status: "stopped" } : {},
+      },
+    ).catch(() => undefined);
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Preview
+// ---------------------------------------------------------------------------
+
+const NOT_PRESERVED = [
+  "Tools and packages installed outside /workspace (setup runs again on the new container)",
+  "Running processes, terminal sessions and servers (they restart)",
+  "Provider configuration and credentials in the container (refreshed from the host)",
+];
+
+/**
+ * Read-only description of a preserving rebuild. The decisive checks are
+ * repeated by the operation itself; this only lets the user see, before
+ * confirming, what survives and whether it is possible at all.
+ */
+/**
+ * Providers qualified for resuming a conversation after a preserving rebuild
+ * (C13): the native session recalled its pre-rebuild context on a new runtime
+ * generation, at least twice each. Claude on 2026-09-27; Codex (including its
+ * relocated runtime databases), OpenCode, Cursor and Pi on 2026-10-23, where
+ * a prompt whose dispatch was unknown when the runtime was replaced also
+ * stayed unresolved and unsent (Codex, Cursor, Pi). Grok is unqualified until
+ * the same script passes for it against an authorized, unexpired login.
+ */
+export const RESUME_QUALIFIED_PROVIDERS: ReadonlySet<string> = new Set([
+  "claude",
+  "codex",
+  "opencode",
+  "cursor",
+  "pi",
+]);
+
+export async function rebuildPreview(
+  environmentId: string,
+  context: Pick<CommandContext, "storage" | "dockerImage">,
+): Promise<RebuildPreview> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const parsed = parseContainerLifecycle(environment.containerLifecycle);
+  const record = parsed.supported ? parsed.record : undefined;
+  const retainedCopies = record ? groupRecoveryCopies(record).length : 0;
+  const preview: RebuildPreview = {
+    environmentId,
+    containerId: environment.containerId ?? null,
+    available: false,
+    kind: record?.storage.format === "volume-v1" ? "rebuild" : "migrate",
+    preservedPaths: [
+      "/workspace — tracked, untracked and ignored files, Git history and unpushed commits",
+      ...PROVIDER_STATE_LAYOUT.map((entry) => `${entry.containerPath} — ${entry.holds}`),
+    ],
+    notPreserved: NOT_PRESERVED,
+    providers: Object.entries(PROVIDER_PRESERVATION).map(([provider, entry]) => ({
+      provider,
+      level: entry.level,
+      limitations: entry.limitations,
+      // Only providers whose native session was resumed with its history
+      // after a real rebuild (scripts/qualify-session-resume.sh, C13).
+      resumeQualified: RESUME_QUALIFIED_PROVIDERS.has(provider),
+    })),
+    retainedCopies,
+    retainedCopyLimit: MAX_RETAINED_STORAGE_SETS,
+  };
+  const refuse = (reason: RebuildUnavailableReason): RebuildPreview => ({
+    ...preview,
+    unavailableReason: reason,
+  });
+  if (!record) return refuse("unsupported-format");
+  if (environment.environmentType !== "containerized") return refuse("not-containerized");
+  if (!environment.containerId) return refuse("no-container");
+  if (record.operation) return refuse("operation-in-progress");
+  if (retainedCopies >= MAX_RETAINED_STORAGE_SETS) return refuse("retention-limit");
+  if (replacementAdmissionPaused()) return refuse("admission-paused");
+  const topology = await detectDockerTopology();
+  if (topology.kind === "remote" || topology.kind === "unavailable") {
+    return refuse("unsupported-topology");
+  }
+  const image = await resolveDockerImage(configuredImageRef(context));
+  if (image.kind !== "present") return refuse("image-unavailable");
+  const capabilities = await imageCapabilities(image.imageId, context);
+  const decision = selectStorageFormat(capabilities, topology);
+  if (decision.format !== "volume-v1") return refuse(decision.reason);
+  // Published images declare both or neither; a hand-built manifest gets the
+  // same "update the image" answer rather than a failure after the copy.
+  if (!imageDeclaresStagedInputs(capabilities)) return refuse("image-without-storage-contract");
+  return { ...preview, available: true };
+}

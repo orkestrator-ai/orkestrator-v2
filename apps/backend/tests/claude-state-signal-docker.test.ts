@@ -11,7 +11,7 @@ import {
 } from "../src/core/tmux/poll.js";
 import { ManualTime } from "../src/core/recurring/test-support.js";
 import { runCommand } from "../src/core/shell.js";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures.js";
 
 // Build this checkout with `mise run docker:build:dev`; never use `latest`.

@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { allowedDomainsRevision } from "../../apps/backend/src/core/container-network";
+import { allowedDomainsRevision } from "../../apps/backend/src/core/containers/network.js";
 import {
   fixtureScript,
   read,

@@ -5,7 +5,7 @@
 - **Date observed:** 2026-10-25
 - **Change under test:** todo 0022. The built-in default container budget
   (`packages/protocol/src/container-resources.ts`,
-  `apps/backend/src/core/container-resources.ts`, `commands-containers.ts`),
+  `apps/backend/src/core/containers/resources.ts`, `commands-containers.ts`),
   the `setContainerResourceLimits` storage setter, the Settings and
   environment resources UI, and the benchmark and workload harnesses.
 - **Original command:** `mise run test` (default reservations). It waited

@@ -17,7 +17,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { runCommand } from "../src/core/shell.js";
 import { TmuxBackend } from "../src/core/tmux/backend.js";
 import { TmuxSession } from "../src/core/tmux/session-manager.js";

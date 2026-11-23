@@ -10,7 +10,7 @@ import {
   DIAGNOSTIC_TAIL_MAX_BYTES,
   DIAGNOSTIC_TAIL_MAX_LINES,
   previousContainerLogFile,
-} from "./container-log-bounds.js";
+} from "./containers/index.js";
 import type { DiagnosticsTextSource } from "./diagnostics-bundle.js";
 import { LOCAL_SERVER_KINDS, type LocalServerKind } from "./local-server-runtime.js";
 import type { Environment } from "./models.js";

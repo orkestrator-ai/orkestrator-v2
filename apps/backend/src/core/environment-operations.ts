@@ -193,7 +193,7 @@ export class EnvironmentOperations {
     return next;
   }
 
-  // Stop drains (`container-readiness.ts` fences the container itself)
+  // Stop drains (`containers/readiness.ts` fences the container itself)
 
   isDraining(environmentId: string): boolean {
     return this.draining.has(environmentId);

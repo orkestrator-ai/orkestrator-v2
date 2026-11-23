@@ -26,7 +26,7 @@ import {
   rememberWorktreeSeedRefusals,
   takeWorktreeSeedRefusals,
   writeProjectSeedFilesToWorktree,
-} from "./container-project-seed-files.js";
+} from "./containers/project-seed-files.js";
 import {
   ENV_FILE_PATTERN_LIMITS,
   findEnvFilePatternCandidates,

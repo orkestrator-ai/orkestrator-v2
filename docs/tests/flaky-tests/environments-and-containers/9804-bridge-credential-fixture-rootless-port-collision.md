@@ -28,7 +28,7 @@ bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
   ./tests/bridge-credential-docker.test.ts --parallel=1
 ```
 
-**Cause.** The one recorded in [container-host-ports.ts](../../../../apps/backend/src/core/container-host-ports.ts)
+**Cause.** The one recorded in [container-host-ports.ts](../../../../apps/backend/src/core/containers/host-ports.ts)
 and to-do 7549 task 4: a rootless dockerd draws automatic ports in sequence
 from a range in RootlessKit's namespace and cannot see host sockets, so
 RootlessKit's host bind collides with whatever host socket holds the port.

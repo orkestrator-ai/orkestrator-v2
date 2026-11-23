@@ -20,7 +20,7 @@ import {
 } from "./agent-tools-loopback-proof.js";
 import { closeListeners, listenAgentTools } from "./agent-tools-listen.js";
 import { createLogger } from "@orkestrator/protocol/logger";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
+import { dockerOwnerNamespace } from "./containers/index.js";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { Schema } from "effect";

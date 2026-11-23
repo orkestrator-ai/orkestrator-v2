@@ -46,16 +46,16 @@ import { quoteShell } from "../commands-agent-support.js";
 import { dockerExec } from "../commands-container-exec.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import {
-  launchContainerScript,
-  type ContainerScriptLaunch,
-} from "../container-bridge-credential.js";
-import { keepPreviousLogCommand } from "../container-log-bounds.js";
-import { CONTAINER_ROOT_USER_ARGS } from "../container-scripts.js";
-import {
+  CONTAINER_ROOT_USER_ARGS,
+  keepPreviousLogCommand,
+  OPENCODE_DB_DIRECTORY,
   OPENCODE2_DB_PATH,
   OPENCODE2_LEGACY_DB_PATH,
-  OPENCODE_DB_DIRECTORY,
-} from "../container-state-layout.js";
+} from "../containers/index.js";
+import {
+  type ContainerScriptLaunch,
+  launchContainerScript,
+} from "../containers/bridge-credential.js";
 import {
   OPENCODE2_LISTENER_RECORD,
   recordOpenCodeListenerScript,

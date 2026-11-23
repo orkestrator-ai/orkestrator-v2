@@ -18,8 +18,8 @@ import {
   resolveContainerOwnership,
   resolveNeedsAttentionOperation,
   runContainerOperation,
-} from "../src/core/container-lifecycle-service";
-import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/docker-ownership";
+} from "../src/core/containers/lifecycle-service";
+import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { recreateEnvironmentOnce, startEnvironmentOnce } from "../src/core/commands-environment";
 import { deleteEnvironmentTask } from "../src/core/commands-servers";
 import {
@@ -35,7 +35,7 @@ import {
 import {
   currentRuntimeIdentity,
   nextRuntimeGeneration,
-} from "../src/core/container-lifecycle-service";
+} from "../src/core/containers/lifecycle-service";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,
@@ -395,7 +395,7 @@ describe("restart recovery table", () => {
     });
     // Simulate the process exit: the next process has no active operation.
     const { releaseActiveContainerOperation } =
-      await import("../src/core/container-lifecycle-service");
+      await import("../src/core/containers/lifecycle-service");
     releaseActiveContainerOperation(context, operationId);
     let results: Awaited<ReturnType<typeof reconcileContainerOperations>> = [];
     await withDockerScript(dockerScript.replaceAll("{{OP}}", operationId), async () => {
@@ -507,7 +507,7 @@ exit 1
       environment: { containerId: "committed-runtime" },
     });
     const { releaseActiveContainerOperation } =
-      await import("../src/core/container-lifecycle-service");
+      await import("../src/core/containers/lifecycle-service");
     releaseActiveContainerOperation(context, operationId);
     await withDockerScript("#!/bin/sh\nexit 0\n", async () => {
       await reconcileContainerOperations(context);
@@ -648,7 +648,7 @@ describe("registry writer lease", () => {
       details: { generation: 1 },
     });
     const { releaseActiveContainerOperation } =
-      await import("../src/core/container-lifecycle-service");
+      await import("../src/core/containers/lifecycle-service");
     releaseActiveContainerOperation(context, operationId);
     const leasePath = path.join(dir, REGISTRY_WRITER_LEASE_FILE);
     await fs.writeFile(
@@ -761,7 +761,7 @@ describe("runtime generation binding", () => {
   });
   test("a handle for a replaced runtime conflicts instead of connecting", async () => {
     const dir = await dataDir();
-    const { assertRuntimeGeneration } = await import("../src/core/container-lifecycle-service");
+    const { assertRuntimeGeneration } = await import("../src/core/containers/lifecycle-service");
     const { context } = memoryLifecycleContext(
       [
         lifecycleEnvironment({

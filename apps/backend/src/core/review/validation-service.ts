@@ -1,5 +1,5 @@
 import { defaultPrTargetBranch } from "@orkestrator/protocol/git-workflow-prompts";
-import { withContainerRuntimeCredential } from "../container-scripts.js";
+import { withContainerRuntimeCredential } from "../containers/index.js";
 import {
   isReviewValidationRun,
   newReviewValidationRun,

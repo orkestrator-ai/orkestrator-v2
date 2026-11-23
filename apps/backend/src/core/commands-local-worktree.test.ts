@@ -14,7 +14,7 @@ import { setupTerminalSessionId } from "./commands-terminal.js";
 import {
   rememberWorktreeSeedRefusals,
   takeWorktreeSeedRefusals,
-} from "./container-project-seed-files.js";
+} from "./containers/project-seed-files.js";
 import type { Environment } from "./models.js";
 import { createEnvironment } from "./storage-shared-core.js";
 import type { StorageService } from "./storage.js";

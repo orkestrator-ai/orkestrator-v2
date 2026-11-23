@@ -4,7 +4,7 @@ import { quoteShell } from "../commands-agent-support.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import { buildOpenCode2ContainerUserConfigScript } from "./user-config.js";
 import { CONTAINER_GITHUB_CREDENTIAL_FILE } from "../agent-credential-files.js";
-import { OPENCODE2_DB_PATH, OPENCODE_DB_PATH } from "../container-state-layout.js";
+import { OPENCODE2_DB_PATH, OPENCODE_DB_PATH } from "../containers/state-layout.js";
 import {
   OPENCODE2_CONTAINER_CLI_PATH,
   OPENCODE2_CONTAINER_CONFIG_DIR,

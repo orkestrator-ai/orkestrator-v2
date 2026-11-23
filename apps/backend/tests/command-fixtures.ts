@@ -48,8 +48,8 @@ import type { CommandContext } from "../src/core/commands";
 
 import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetImageManifestCache } from "../src/core/docker-image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { resetImageManifestCache } from "../src/core/containers/image";
 import {
   FIXTURE_IMAGE_ID,
   imageManifestArchive,

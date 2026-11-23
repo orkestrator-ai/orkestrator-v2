@@ -1,16 +1,28 @@
 import { initialContainerHostReachability } from "@orkestrator/protocol/container-host-reachability";
-import { createSharedContainerLogReader } from "./container-log-snapshots.js";
-import { detectDockerTopology, getImageStatus } from "./docker-image.js";
-import { ensureEnvironmentImage } from "./host-maintenance-tasks.js";
+import {
+  createSharedContainerLogReader,
+  detectDockerTopology,
+  dockerOwnerNamespace,
+  getImageStatus,
+  isDockerDaemonUnreachable,
+} from "./containers/index.js";
 import {
   classify,
   loadProtection,
   parseLabels,
   readContainerLabels,
   removeUnclaimedContainer,
-} from "./docker-cleanup-inventory.js";
-import { executeDockerCleanup, previewDockerCleanup } from "./docker-cleanup-preview.js";
-import { dockerCapacity, sampleContainerUsage } from "./container-resources.js";
+} from "./containers/cleanup-inventory.js";
+import { executeDockerCleanup, previewDockerCleanup } from "./containers/cleanup-preview.js";
+import { syncRuntimeGitHubCredential } from "./containers/github-credential.js";
+import {
+  advanceContainerOperation,
+  nextRuntimeGeneration,
+  probeContainer,
+  runContainerOperation,
+} from "./containers/lifecycle-service.js";
+import { dockerCapacity, sampleContainerUsage } from "./containers/resources.js";
+import { ensureEnvironmentImage } from "./host-maintenance-tasks.js";
 import { createLogger, type LogFields } from "@orkestrator/protocol/logger";
 import {
   checkContainerHostReachabilityCommand,
@@ -62,12 +74,6 @@ import {
   ContainerLifecycleError,
   parseContainerMutationIdentity,
 } from "@orkestrator/protocol/container-lifecycle";
-import {
-  advanceContainerOperation,
-  nextRuntimeGeneration,
-  probeContainer,
-  runContainerOperation,
-} from "./container-lifecycle-service.js";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import type {
   DockerAvailability,
@@ -83,9 +89,6 @@ import {
   DOCKER_LABEL_ENVIRONMENT_NAME,
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
-import { syncRuntimeGitHubCredential } from "./container-github-credential.js";
-import { isDockerDaemonUnreachable } from "./docker-cli-errors.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { resolveContainerGitHubToken } from "./git/index.js";
 import { createEnvironment } from "./storage.js";
 import {
@@ -313,7 +316,7 @@ export function registerDockerCommands(
     return getDockerStatus(id);
   });
   // Initialization views in every client poll this once a second; equivalent
-  // tails join and share a short-lived snapshot (container-log-snapshots.ts).
+  // tails join and share a short-lived snapshot (containers/log-snapshots.ts).
   const readContainerLogs = createSharedContainerLogReader({
     read: async (containerId, tail) =>
       (await runCommand("docker", ["logs", "--tail", tail, containerId], { timeoutMs: 30_000 }))

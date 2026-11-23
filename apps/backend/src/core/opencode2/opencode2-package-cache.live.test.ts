@@ -19,7 +19,7 @@ import {
   OPENCODE2_LAUNCH_CONFIG_DIR,
   OPENCODE2_LAUNCH_ROOT,
 } from "../agent-credential-files.js";
-import { CONTAINER_BRIDGE_LAUNCHER } from "../container-bridge-credential.js";
+import { CONTAINER_BRIDGE_LAUNCHER } from "../containers/bridge-credential.js";
 import { openCodePackageCacheScript } from "./package-cache.js";
 import { OPENCODE_HOST_CONFIG_INPUT, openCode2LaunchConfigScript } from "./container-launch.js";
 import { startOpenCode2OnFreePort } from "./live-server.test-support.js";

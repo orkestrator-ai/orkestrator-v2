@@ -188,6 +188,15 @@ export function agentMailRetryDelayMs(attempt: number): number {
   ]!;
 }
 
+/**
+ * Longest wait before a held delivery is offered again: 2 s, doubling, then
+ * every minute. A hold the session's presence cannot see (a Claude CLI still
+ * running background work refuses a prompt while its turn reads idle) has no
+ * activity edge to end it, so this wait is the only thing between retries.
+ * Edges still clear it at once (`resetAgentMailInjectBackoff`).
+ */
+export const AGENT_MAIL_HELD_BACKOFF_MAX_MS = 60_000;
+
 /** Inconclusive journal checks before an ambiguous dispatch is given up as failed. */
 export const AGENT_MAIL_MAX_VERIFY_ATTEMPTS = 8;
 
@@ -975,8 +984,8 @@ export class AgentMailInjects {
         const previousReason = pendingEntry?.lastHoldReason;
         message.placement = "pending-inject";
         message.placementReason = reason;
-        const attempts = Math.min(5, (pendingEntry?.attempts ?? 0) + 1);
-        const delayMs = Math.min(30_000, 2_000 * 2 ** (attempts - 1));
+        const attempts = Math.min(6, (pendingEntry?.attempts ?? 0) + 1);
+        const delayMs = Math.min(AGENT_MAIL_HELD_BACKOFF_MAX_MS, 2_000 * 2 ** (attempts - 1));
         const next = {
           mailboxId,
           messageId,

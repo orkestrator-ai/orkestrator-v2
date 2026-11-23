@@ -111,6 +111,30 @@ export class AgentMailService {
   private lastHourlyReleaseAt = 0;
   /** Last skip reason logged per pending message, so a waiting message logs once per change. */
   private readonly skipReasons = new Map<string, string>();
+  /**
+   * Mailboxes whose last dispatch was held `busy` although presence read
+   * `idle` or `unknown`: the session refused what its presence said it would take (a
+   * Claude CLI still running background work answers 409 while its turn is
+   * idle). Reading `idle` again is then no news, so it must not clear the
+   * backoff the way an idle reading after a busy one does; only a real
+   * presence change or a settled delivery does (`recordPresence`, `settle`).
+   */
+  private readonly refusedAtRest = new Set<string>();
+  /**
+   * Per mailbox, the held reason last logged as `inject.dispatched` and how
+   * many identical holds followed it unlogged. A refusal that repeats every
+   * backoff for hours logs once, and the line that ends it says how many.
+   */
+  private readonly heldLogs = new Map<string, { key: string; repeats: number }>();
+  /**
+   * This service's own dispatches per mailbox: how many are in flight, and a
+   * sequence number moved at every start and end. A dispatch's durable
+   * `pendingDispatch` row reads as `working`; a presence pass that read during
+   * one would record our own send as a session change and wipe the backoff.
+   */
+  private readonly dispatchesInFlight = new Map<string, number>();
+  private readonly dispatchMarks = new Map<string, number>();
+  private dispatchSequence = 0;
 
   constructor(
     private readonly storage: StorageService,
@@ -186,8 +210,33 @@ export class AgentMailService {
     const previous = this.presence.get(mailboxId)?.presence;
     this.presence.set(mailboxId, { presence, at: Date.now() });
     if (previous && previous !== presence && !idleFreshnessFlip(previous, presence)) {
+      this.refusedAtRest.delete(mailboxId);
       await this.storage.resetAgentMailInjectBackoff(mailboxId);
     }
+  }
+
+  /** Run one of this service's dispatches into `mailboxId`, marked for `presenceReadOverlapped`. */
+  private async markDispatch<T>(mailboxId: string, work: () => Promise<T>): Promise<T> {
+    if (this.dispatchMarks.size >= AGENT_MAIL_MAX_PENDING_INJECTS) this.dispatchMarks.clear();
+    this.dispatchesInFlight.set(mailboxId, (this.dispatchesInFlight.get(mailboxId) ?? 0) + 1);
+    this.dispatchMarks.set(mailboxId, ++this.dispatchSequence);
+    try {
+      return await work();
+    } finally {
+      const left = (this.dispatchesInFlight.get(mailboxId) ?? 1) - 1;
+      if (left > 0) this.dispatchesInFlight.set(mailboxId, left);
+      else this.dispatchesInFlight.delete(mailboxId);
+      this.dispatchMarks.set(mailboxId, ++this.dispatchSequence);
+    }
+  }
+
+  /**
+   * Whether a presence read that began at `mark` (`dispatchMarks` then) may
+   * have seen one of our own dispatches. Such a read is dropped rather than
+   * recorded; the next pass reads again.
+   */
+  private presenceReadOverlapped(mailboxId: string, mark: number | undefined): boolean {
+    return this.dispatchesInFlight.has(mailboxId) || this.dispatchMarks.get(mailboxId) !== mark;
   }
 
   async init(): Promise<void> {
@@ -331,6 +380,8 @@ export class AgentMailService {
   async shutdown(): Promise<void> {
     for (const timer of this.syncTimers.values()) clearTimeout(timer);
     this.syncTimers.clear();
+    this.refusedAtRest.clear();
+    this.heldLogs.clear();
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.storage.setAgentMailRuntimeProvider(null);
@@ -428,6 +479,7 @@ export class AgentMailService {
           const known = environments.has(mailbox.environmentId)
             ? { environment: await environments.get(mailbox.environmentId) }
             : {};
+          const mark = this.dispatchMarks.get(mailbox.mailboxId);
           if (mailbox.kind === "native" && mailbox.agent) {
             const logicalSessionKey =
               mailbox.logicalSessionKey ?? `env-${mailbox.environmentId}:${mailbox.tabId}`;
@@ -448,18 +500,18 @@ export class AgentMailService {
               : activity === "idle" || activity === "working" || activity === "waiting"
                 ? activity
                 : "unknown";
+            if (this.presenceReadOverlapped(mailbox.mailboxId, mark)) return;
             await this.recordPresence(mailbox.mailboxId, presence);
           } else if (mailbox.kind === "tmux" && this.tmux.mailInjectPresence) {
-            await this.recordPresence(
-              mailbox.mailboxId,
-              await this.tmux.mailInjectPresence(
-                {
-                  environmentId: mailbox.environmentId,
-                  tabId: mailbox.tabId,
-                },
-                known,
-              ),
+            const presence = await this.tmux.mailInjectPresence(
+              {
+                environmentId: mailbox.environmentId,
+                tabId: mailbox.tabId,
+              },
+              known,
             );
+            if (this.presenceReadOverlapped(mailbox.mailboxId, mark)) return;
+            await this.recordPresence(mailbox.mailboxId, presence);
           }
         }),
       );
@@ -863,6 +915,8 @@ export class AgentMailService {
       // gate does not repeat those reads (#1667, BG-15).
       let tmuxPresenceRead:
         Awaited<ReturnType<PromptQueueDrainer["mailInjectPresence"]>> | undefined;
+      // The presence this dispatch was attempted under, for `refusedAtRest`.
+      let attemptPresence: MailboxPresence | undefined;
       if (mailbox.kind === "native" && mailbox.agent) {
         const activity = this.nativeAgents.sessionActivitySnapshot(
           mailbox.environmentId,
@@ -879,9 +933,16 @@ export class AgentMailService {
             ? activity
             : "unknown";
         await this.recordPresence(mailbox.mailboxId, nativePresence);
+        attemptPresence = nativePresence;
         if (steerRequested && STEERABLE_PRESENCES.has(nativePresence)) {
           steerRequestId = randomUUID();
         } else if (deferredUntil) {
+          // Refused while it read idle, and nothing has changed since: idle
+          // now is the same reading the refusal already answered.
+          if (this.refusedAtRest.has(mailbox.mailboxId)) {
+            this.noteSkip(message, mailbox, "backoff:refused");
+            continue;
+          }
           if (nativePresence !== "idle") {
             this.noteSkip(message, mailbox, `backoff:${nativePresence}`);
             continue;
@@ -949,7 +1010,12 @@ export class AgentMailService {
           : undefined;
         const tmuxPresence = tmuxPresenceRead ?? "idle";
         await this.recordPresence(mailbox.mailboxId, tmuxPresence);
+        attemptPresence = tmuxPresence;
         if (deferredUntil) {
+          if (this.refusedAtRest.has(mailbox.mailboxId)) {
+            this.noteSkip(message, mailbox, "backoff:refused");
+            continue;
+          }
           if (tmuxPresence !== "idle") {
             this.noteSkip(message, mailbox, `backoff:${tmuxPresence}`);
             continue;
@@ -1089,6 +1155,21 @@ export class AgentMailService {
         }
         if (mailbox.kind === "pipeline" && result.outcome === "held")
           await this.storage.synchronizeAgentMailboxes();
+        if (result.outcome !== "held") this.refusedAtRest.delete(mailbox.mailboxId);
+        // An identical hold, again and again, is one state: log it once, and
+        // let the line that ends it say how many repeats it absorbed.
+        const heldKey = result.outcome === "held" ? `${via}:${result.reason}` : undefined;
+        const lastHeld = this.heldLogs.get(mailbox.mailboxId);
+        if (heldKey && lastHeld?.key === heldKey) {
+          lastHeld.repeats += 1;
+          return;
+        }
+        if (heldKey) {
+          if (this.heldLogs.size >= AGENT_MAIL_MAX_PENDING_INJECTS) this.heldLogs.clear();
+          this.heldLogs.set(mailbox.mailboxId, { key: heldKey, repeats: 0 });
+        } else {
+          this.heldLogs.delete(mailbox.mailboxId);
+        }
         log.info("inject.dispatched", () => ({
           messageIds: batched.map((entry) => entry.id).join(","),
           toEnvironmentId: mailbox.environmentId,
@@ -1096,6 +1177,7 @@ export class AgentMailService {
           outcome: result.outcome,
           reason: "reason" in result ? result.reason : null,
           via,
+          ...(lastHeld?.repeats ? { previousHoldRepeats: lastHeld.repeats } : {}),
         }));
       };
       if (steerRequestId) {
@@ -1151,15 +1233,15 @@ export class AgentMailService {
         | Awaited<ReturnType<PromptQueueDrainer["dispatchMailInject"]>>
         | Awaited<ReturnType<NativeAgentService["dispatchMailInject"]>>;
       try {
-        outcome =
+        outcome = await this.markDispatch<typeof outcome>(mailbox.mailboxId, () =>
           mailbox.kind === "tmux"
-            ? await this.tmux.dispatchMailInject({
+            ? this.tmux.dispatchMailInject({
                 environmentId: mailbox.environmentId,
                 tabId: mailbox.tabId,
                 text: carrier,
                 ...(tmuxPresenceRead ? { presence: tmuxPresenceRead } : {}),
               })
-            : await this.nativeAgents.dispatchMailInject({
+            : this.nativeAgents.dispatchMailInject({
                 environmentId: mailbox.environmentId,
                 agent: mailbox.agent!,
                 logicalSessionKey,
@@ -1167,7 +1249,8 @@ export class AgentMailService {
                 prompt: carrier,
                 requestId,
                 allowProviderCommands: false,
-              });
+              }),
+        );
       } catch {
         await settle(ambiguous());
         continue;
@@ -1175,6 +1258,17 @@ export class AgentMailService {
       if (outcome.outcome === "accepted") {
         await settle({ outcome: "accepted" });
       } else if (outcome.outcome === "held") {
+        // Presence said it would take this and the session said busy: until
+        // presence changes, its idle is no reason to cut the backoff short.
+        // (A `parked` or `queue` hold reads `working` until it clears, so
+        // the edge out of it already ends the backoff.)
+        if (
+          outcome.reason === "busy" &&
+          (attemptPresence === "idle" || attemptPresence === "unknown")
+        ) {
+          if (this.refusedAtRest.size >= AGENT_MAIL_MAX_PENDING_INJECTS) this.refusedAtRest.clear();
+          this.refusedAtRest.add(mailbox.mailboxId);
+        }
         await settle({ outcome: "held", reason: outcome.reason });
       } else if (outcome.outcome === "unknown") {
         await settle(ambiguous());

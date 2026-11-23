@@ -59,7 +59,7 @@ import {
   ensureWorkspaceArtifactIsGitExcluded,
   type EnvironmentCommandRunner,
 } from "./commands-review.js";
-import type { EnvironmentMutationFence } from "./environment-replacement-fence.js";
+import type { EnvironmentMutationFence } from "./environments/index.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment } from "./models.js";
 import { removeConfinedDirectory } from "./path-safety.js";

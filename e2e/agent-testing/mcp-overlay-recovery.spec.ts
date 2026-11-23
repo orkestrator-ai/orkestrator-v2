@@ -8,7 +8,7 @@ import type {
   McpManagementSnapshot,
   McpManagementTarget,
 } from "@orkestrator/protocol/mcp-management";
-import { environmentStateDirectory } from "../../apps/backend/src/core/environment-state-paths";
+import { environmentStateDirectory } from "../../apps/backend/src/core/environments/state-paths";
 import { writableSourcePath } from "./mcp-apply-live-safety";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 import { acknowledgeDockerReachabilityWarning } from "../docker-reachability-warning";

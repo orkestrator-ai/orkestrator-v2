@@ -44,7 +44,7 @@ import { StorageService } from "../storage.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import { failEnvironmentSetup } from "../commands-environment.js";
 import { createCommandRegistry, type CommandContext } from "../commands.js";
-import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { AgentMailService } from "../agent-mail-service.js";
 import { httpProvider } from "../agent-provider-test-support.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";

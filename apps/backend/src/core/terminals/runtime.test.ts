@@ -8,7 +8,7 @@ import {
 import { BackendRuntime } from "../backend-runtime.js";
 import type { CommandContext } from "../commands-context.js";
 import { setupTerminalSessionId } from "../commands-terminal.js";
-import { EnvironmentLifecycleTaskTracker } from "../environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { createEnvironment, type StorageService } from "../storage.js";
 import type { ContainerTerminalShell } from "../containers/terminal-shell.js";
 import type { PtyProcess, PtyTerminateOptions } from "../pty.js";

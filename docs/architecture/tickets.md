@@ -940,7 +940,7 @@ again.
 
 **Verification.** Every path has deterministic tests with real storage and a
 faked Linear API and node link (`linear-boards.test.ts`, `linear.test.ts`,
-`linear-merged-label.test.ts`, `environment-delete-tickets.test.ts`,
+`linear-merged-label.test.ts`, `environments/delete-tickets.test.ts`,
 `commands-registry-linear.test.ts`, `nodes/node-linear-sync.test.ts`,
 `control-mcp/linear-tools*.test.ts`), and `linear-two-machines.test.ts` runs
 the whole two-machine sequence through the real command handlers and the
@@ -981,7 +981,7 @@ in `linear-issue-labels.ts`.
   (`PrMonitorRuntime.resumeTerminalEffects`), the build finding its pull
   request already merged (`persistPullRequest`, through the pipeline option
   `onPullRequestMerged`), environment deletion when the environment recorded a
-  merge (`environment-delete.ts`, before the pipeline records go), and a sweep
+  merge (`environments/delete.ts`, before the pipeline records go), and a sweep
   at backend startup that queues merges recorded on environments that
   still hold a Linear build and restarts the drain for records an earlier
   process left pending. Failed environment reads or enqueues do not skip the

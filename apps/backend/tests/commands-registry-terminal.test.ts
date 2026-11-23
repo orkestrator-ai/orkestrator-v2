@@ -80,7 +80,7 @@ describe("Electron backend command registry", () => {
 
   test("container setup drops inherited isolation and does not print a local isolation notice", async () => {
     const { ENVIRONMENT_ISOLATION_ENV_NAMES, environmentIsolationVariables } =
-      await import("../src/core/environment-isolation");
+      await import("../src/core/environments/isolation");
     const { spawnSetupTerminal } = await import("../src/core/commands-environment");
     const inherited = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
       (name) => [name, process.env[name]] as const,
@@ -122,7 +122,7 @@ describe("Electron backend command registry", () => {
     "local terminal %s allocation replaces inherited isolation",
     async (kind) => {
       const { environmentIsolationVariables, ENVIRONMENT_ISOLATION_ENV_NAMES } =
-        await import("../src/core/environment-isolation");
+        await import("../src/core/environments/isolation");
       const saved = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
         (name) => [name, process.env[name]] as const,
       );
@@ -3796,7 +3796,7 @@ printf '["exists","missing"]'
 
   test("starts container terminal sessions through docker exec in a PTY", async () => {
     const { ENVIRONMENT_ISOLATION_ENV_NAMES, environmentIsolationVariables } =
-      await import("../src/core/environment-isolation");
+      await import("../src/core/environments/isolation");
     const inherited = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
       (name) => [name, process.env[name]] as const,
     );

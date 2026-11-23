@@ -31,10 +31,7 @@ import type { CommandContext } from "./commands-context.js";
 import type { EnvironmentCommandRunner } from "./commands-review.js";
 import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
 import { withContainerRuntimeCredential } from "./containers/index.js";
-import {
-  environmentIsolationVariables,
-  withEnvironmentIsolation,
-} from "./environment-isolation.js";
+import { environmentIsolationVariables, withEnvironmentIsolation } from "./environments/index.js";
 import { gitHubCli, gitHubCliEnv } from "./git/index.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";

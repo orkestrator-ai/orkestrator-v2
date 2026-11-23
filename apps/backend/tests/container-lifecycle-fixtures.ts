@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands-context.js";
 import type { Environment } from "../src/core/models.js";
-import { EnvironmentLifecycleTaskTracker } from "../src/core/environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";
 import { githubRangesSeedFile } from "../src/core/git/github-ranges-cache.js";
 

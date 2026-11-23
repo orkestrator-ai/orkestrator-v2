@@ -14,7 +14,7 @@
  * Writers: the PR monitor's terminal follow-up (`git/pr-monitor-runtime.ts`), the
  * build finding its pull request already merged (`persistPullRequest`),
  * environment deletion when the environment recorded a merge
- * (`environment-delete.ts`), and the startup sweep, retried after incomplete
+ * (`environments/delete.ts`), and the startup sweep, retried after incomplete
  * reads, which restarts the drain for records an earlier process left pending.
  *
  * Only builds whose source is a Linear issue are queued; a Kanban or GitHub

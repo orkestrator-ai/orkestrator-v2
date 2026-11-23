@@ -9,7 +9,7 @@ import type { ClientEnvironment, Environment, PersistedMultiReviewWorkflow } fro
 import type {
   EnvironmentSetupStartResult,
   ClientEnvironmentSetupStartResult,
-} from "./environment-operations.js";
+} from "./environments/index.js";
 import type { TerminalOutputBuffer, TerminalSessionConfig } from "./terminals/index.js";
 import { createLogger, type LogEventOf, type LogFields } from "@orkestrator/protocol/logger";
 

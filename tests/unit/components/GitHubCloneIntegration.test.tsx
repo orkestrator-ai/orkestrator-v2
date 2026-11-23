@@ -13,7 +13,7 @@ import {
   createCommandRegistry,
   type CommandContext,
 } from "../../../apps/backend/src/core/commands";
-import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environment-lifecycle-tasks";
+import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environments/index.js";
 import { runCommand } from "../../../apps/backend/src/core/shell";
 import { StorageService } from "../../../apps/backend/src/core/storage";
 import { BackendRuntime } from "../../../apps/backend/src/core/backend-runtime";

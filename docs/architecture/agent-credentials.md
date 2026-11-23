@@ -49,7 +49,7 @@ sequenceDiagram
 | Shared types, limits, validators | `packages/protocol/src/agent-credentials.ts` |
 | Commands (the person's side) | `packages/protocol/src/contract/domains/config/credential-commands.ts`, `apps/backend/src/core/commands-registry-credentials.ts` |
 | Service | `apps/backend/src/core/credentials/`: `service.ts` (facade, sweep), `connections.ts` (saved credentials), `access.ts` (requests, approval, grants, lifecycle), `operations.ts` (authorization and each use), `runner.ts` (command runs), `http-operation.ts` (trusted HTTP), `redaction.ts` (output boundary), `vault.ts` (value storage), `records.ts` + `layout.ts` (database rows), `tools.ts` (agent MCP tools) |
-| Backend wiring | `apps/backend/src/core/credentials-host.ts` (sessions, runtimes, launch), `index.ts` (`startCredentials`, writer-startup reconciliation, shutdown), `environment-delete.ts`, `commands-registry-teardown.ts` (tab close), `control-mcp/server.ts` (coordinator deny list), `agent-tools.ts` (registration) |
+| Backend wiring | `apps/backend/src/core/credentials-host.ts` (sessions, runtimes, launch), `index.ts` (`startCredentials`, writer-startup reconciliation, shutdown), `environments/delete.ts`, `commands-registry-teardown.ts` (tab close), `control-mcp/server.ts` (coordinator deny list), `agent-tools.ts` (registration) |
 | Renderer | `apps/web/src/components/native-agent/CredentialRequestCard.tsx`, `apps/web/src/hooks/useCredentialSnapshot.ts`, `apps/web/src/components/settings/CredentialsSettings.tsx`, `apps/web/src/lib/backend/credentials.ts` |
 
 ## Model

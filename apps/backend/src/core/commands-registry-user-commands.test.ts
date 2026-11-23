@@ -6,7 +6,7 @@ import path from "node:path";
 import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
 import { resolveLocalShellPath } from "./commands-terminal.js";
 import { lowPriorityCommand } from "./process-priority.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { runCommand } from "./shell.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { StorageService, createEnvironment, createProject } from "./storage.js";
@@ -228,7 +228,7 @@ test.each(["reserved", "failed", "coordinator", "container"])(
   "%s user command replaces inherited worktree isolation at the spawn boundary",
   async (kind) => {
     const { environmentIsolationVariables, ENVIRONMENT_ISOLATION_ENV_NAMES } =
-      await import("./environment-isolation.js");
+      await import("./environments/isolation.js");
     const inherited = environmentIsolationVariables("parent", 20_000);
     const saved = ENVIRONMENT_ISOLATION_ENV_NAMES.map((name) => [name, process.env[name]] as const);
     Object.assign(process.env, inherited);

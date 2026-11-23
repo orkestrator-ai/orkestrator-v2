@@ -25,7 +25,7 @@ switched back.
 | Owning file | Aggregate failures | Owner alone on the branch | `origin/main` alone |
 | --- | --- | --- | --- |
 | `tests/unit/test-suite-ownership.test.ts` | Root tests importing backend sources: the branch's new `tests/unit/preview-worker-pin.test.ts` and an import in `ci-workflows.test.ts`. | A real defect of the branch, fixed: the pin-writer test moved to `apps/backend/src/core/transcript-artifacts/preview-worker-pin-writer.test.ts` and the workflow test uses the label literal. 4 passed after the fix. | Not applicable |
-| `apps/backend/src/core/environment-move.test.ts` | 18 move, recovery and failure-boundary cases, deadlines of 6–33 s | Not rerun (unchanged owner) | 33 passed, 5 failed |
+| `apps/backend/src/core/environments/move.test.ts` | 18 move, recovery and failure-boundary cases, deadlines of 6–33 s | Not rerun (unchanged owner) | 33 passed, 5 failed |
 | `apps/backend/tests/commands-registry-environments.test.ts` | 4 local-worktree creation cases, 14–34 s | Not rerun | 67 passed, 1 failed |
 | `apps/backend/tests/commands-integration.test.ts` | Git-excludes injection, Git scan caches | Not rerun | 53 passed, 2 failed |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | 7 retarget and candidate cases, 15–35 s | 18 passed, 3 failed | 20 passed, 1 failed |

@@ -1,4 +1,4 @@
-import type { EnvironmentOperations } from "./environment-operations.js";
+import type { EnvironmentOperations } from "./environments/index.js";
 import type { Environment, Project } from "./models.js";
 import { runCommand } from "./shell.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";

@@ -35,7 +35,12 @@ export {
 } from "./containers/index.js";
 export * from "./agent-credential-files.js";
 export * from "./local-server-runtime.js";
-export * from "./environment-operations.js";
+export {
+  EnvironmentOperations,
+  type ClientEnvironmentSetupStartResult,
+  type EnvironmentSetupSession,
+  type EnvironmentSetupStartResult,
+} from "./environments/index.js";
 export * from "./commands-pr-monitor.js";
 export * from "./commands-validation.js";
 export * from "./commands-agent-support.js";

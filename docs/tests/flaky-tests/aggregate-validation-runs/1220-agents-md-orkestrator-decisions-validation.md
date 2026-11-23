@@ -38,7 +38,7 @@ directory, one at a time, in this worktree and in a fresh clone of
 | `apps/backend/tests/staged-input-relay.test.ts` | Four `staged input relay` cases | 4 failed | 4 failed, the same cases | 1170, 1190 |
 | `apps/backend/tests/docker-image.test.ts` | Two `pinned image identity` cases | 2 failed | 2 failed, the same cases | 1170, 1190 |
 | `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write` | 1 failed | 1 failed | 0091 |
-| `apps/backend/src/core/environment-move.test.ts` | `move_environment`, `interrupted move recovery`, `move failure boundaries` (real-Git 5 s deadlines) | 17 failed | 12 failed | 1101, 0692, 0790 |
+| `apps/backend/src/core/environments/move.test.ts` | `move_environment`, `interrupted move recovery`, `move failure boundaries` (real-Git 5 s deadlines) | 17 failed | 12 failed | 1101, 0692, 0790 |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `retargeting an accepted alias…`, `start uses and persists both explicit and configured roots…` | 2 failed | 2 failed, the same cases | 1101 |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | `a worker that takes in newer target history is retargeted…` | 5 failed | 3 failed (overlapping candidate cases) | 0962, 1101 |
 | `apps/backend/src/core/change-tracking/acceptance-sharing.test.ts` | `V09: environments aliasing one checkout share one watcher and scan…` | Failed 3 of 3 full-file runs (8–16 s); its describe block alone passed (4 pass) | Failed 1 of 3 full-file runs (13.2 s) | 1170 |
@@ -144,7 +144,7 @@ none changes assertions, skips or deadlines.
 
 | Owner | Owning-file command after wrapper | Result |
 | --- | --- | --- |
-| Environment move | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts --parallel=1 --only-failures` | 32 passed, 6 failed, 5 errors; 93.8 s; same real-Git deadline/cleanup class recorded above |
+| Environment move | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts --parallel=1 --only-failures` | 32 passed, 6 failed, 5 errors; 93.8 s; same real-Git deadline/cleanup class recorded above |
 | Coordinator service | `bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/coordinator-service.test.ts --parallel=1 --only-failures` | Passed, 49.2 s; case 0165 updated |
 | Profile cleanup | `bun test --cwd apps/desktop ./scripts/dev/profile-cleanup.test.ts --parallel=1 --only-failures` | 20 passed, 2 failed; unexpected keychainWarning fields, 3.1 s |
 | Copy helper | `bun test ./tests/unit/migrate-copy.test.ts --parallel=1 --only-failures` | 10 passed, 2 failed; extract status 2 instead of 0, 9.0 s |

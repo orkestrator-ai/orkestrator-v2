@@ -100,7 +100,7 @@ ignored files. The project home cannot be moved.
   local agent bridges are stopped first and start again on demand in the new
   folder.
 - Agents key their saved conversations by folder, so that state moves too,
-  before any bridge restarts (`environment-move-sessions.ts`): Claude
+  before any bridge restarts (`environments/move-sessions.ts`): Claude
   transcripts move to the new folder's `~/.claude/projects/<slug>` with a
   `relocated` line appended (what Claude Code does itself) and the
   `~/.claude.json` project entry is copied; the Codex bridge's registry and

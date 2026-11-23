@@ -187,7 +187,7 @@ builds, bridges and agent CLIs would outlive whatever stopped them.
 - **Process identity** relies on `ps`, `/proc` and `lsof`:
   - `process-identity.ts`;
   - `shell-process-state.ts:113`;
-  - `environment-process-usage.ts:262`;
+  - `environments/process-usage.ts:262`;
   - `previews/listener-ownership.ts:253`.
 
   The orphan reaper's safety checks (`ppid == 1`, `pgid == pid`) have no

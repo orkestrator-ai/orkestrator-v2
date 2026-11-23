@@ -1,11 +1,14 @@
-import { environmentPortBlockAvailable } from "./environment-port-probe.js";
-import { chooseEnvironmentPortBase, isEnvironmentPortBase } from "./environment-isolation.js";
+import {
+  chooseEnvironmentPortBase,
+  environmentPortBlockAvailable,
+  isEnvironmentPortBase,
+} from "./environments/index.js";
 import type { Environment } from "./models.js";
 import type { StorageContext } from "./storage-context.js";
 import type { StorageRepositories } from "./storage-repositories.js";
 
 /**
- * Port blocks of local environments (`environment-isolation.ts`), kept on the
+ * Port blocks of local environments (`environments/isolation.ts`), kept on the
  * environment record as `isolationPortBase`.
  *
  * The block is chosen and written under the environment store's lease, which

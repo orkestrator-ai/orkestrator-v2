@@ -9,7 +9,7 @@ import { runCommand } from "../shell.js";
 import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,
   environmentIsolationVariables,
-} from "../environment-isolation.js";
+} from "../environments/isolation.js";
 import type { CommandContext } from "../commands-context.js";
 
 test("two Claude panes on an existing tmux server replace its inherited project and ports", async () => {

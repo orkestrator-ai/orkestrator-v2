@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
+  GITHUB_RANGES_FETCH_TOKEN_ENV,
   GITHUB_RANGES_RETRY_AFTER_FAILURE_MS,
+  GITHUB_RANGES_SEED_FILENAME,
   LEGACY_GITHUB_RANGES_FILE,
   copyGithubRangesSeed,
   formatGithubRangesSeed,
@@ -117,7 +119,15 @@ describe("GitHub ranges seed", () => {
     // After an hour it refreshes; a failure keeps serving the previous seed.
     up = false;
     now += 2 * 60 * 60_000;
-    expect(await githubRangesSeed(dir, { fetcher, now: () => now })).toBe(first);
+    const logs = captureLogs();
+    try {
+      expect(await githubRangesSeed(dir, { fetcher, now: () => now, token: "" })).toBe(first);
+    } finally {
+      logs.restore();
+    }
+    expect(
+      logs.records().filter((record) => record.event === "github-ranges.fetch-failed"),
+    ).toMatchObject([{ fields: { outcome: "http-4xx", status: 403, servingPrevious: true } }]);
     expect(calls).toBe(2);
     // Past a week, a seed that cannot be refreshed is not offered.
     now += 8 * 24 * 60 * 60_000;
@@ -207,6 +217,167 @@ describe("GitHub ranges seed", () => {
       await githubRangesSeed(failing, { fetcher: async () => new Response(META), now: () => now }),
     ).toBe(githubRangesSeedFile(failing));
     expect(failures).toBe(1);
+  });
+
+  test("fetches anonymously unless the qualification token is set, and sends it only then", async () => {
+    const seen: (Record<string, string> | undefined)[] = [];
+    const fetcher = async (_url: string, init: { headers?: Record<string, string> }) => {
+      seen.push(init.headers);
+      return new Response(META);
+    };
+    const saved = process.env[GITHUB_RANGES_FETCH_TOKEN_ENV];
+    try {
+      delete process.env[GITHUB_RANGES_FETCH_TOKEN_ENV];
+      const anonymous = await tempDir("ork-gh-seed-anon-");
+      cleanup.push(anonymous);
+      expect(await githubRangesSeed(anonymous, { fetcher })).toBe(githubRangesSeedFile(anonymous));
+      expect(seen).toEqual([undefined]);
+
+      process.env[GITHUB_RANGES_FETCH_TOKEN_ENV] = "  fixture-job-token \n";
+      const opted = await tempDir("ork-gh-seed-auth-");
+      cleanup.push(opted);
+      expect(await githubRangesSeed(opted, { fetcher })).toBe(githubRangesSeedFile(opted));
+      expect(seen[1]).toEqual({ authorization: "Bearer fixture-job-token" });
+
+      // A blank opt-in is no opt-in.
+      process.env[GITHUB_RANGES_FETCH_TOKEN_ENV] = " ";
+      const blank = await tempDir("ork-gh-seed-blank-");
+      cleanup.push(blank);
+      await githubRangesSeed(blank, { fetcher });
+      expect(seen[2]).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env[GITHUB_RANGES_FETCH_TOKEN_ENV];
+      else process.env[GITHUB_RANGES_FETCH_TOKEN_ENV] = saved;
+    }
+  });
+
+  test("a fetch that yields no seed writes one line naming its class, never the body or token", async () => {
+    const cases: {
+      name: string;
+      fetcher: () => Promise<Response>;
+      fields: Record<string, unknown>;
+    }[] = [
+      {
+        name: "spent allowance",
+        fetcher: async () =>
+          new Response("API rate limit exceeded for 203.0.113.9", {
+            status: 403,
+            headers: { "x-ratelimit-remaining": "0" },
+          }),
+        fields: { outcome: "rate-limited", status: 403 },
+      },
+      {
+        name: "refused",
+        fetcher: async () => new Response("Forbidden body", { status: 403 }),
+        fields: { outcome: "http-4xx", status: 403 },
+      },
+      {
+        name: "server error",
+        fetcher: async () => new Response("oops body", { status: 502 }),
+        fields: { outcome: "http-5xx", status: 502 },
+      },
+      {
+        name: "redirect",
+        fetcher: async () => new Response(null, { status: 302 }),
+        fields: { outcome: "http-other", status: 302 },
+      },
+      {
+        name: "malformed",
+        fetcher: async () => new Response('{"web":"not a list body"}'),
+        fields: { outcome: "malformed" },
+      },
+      {
+        name: "JSON null",
+        fetcher: async () => new Response("null"),
+        fields: { outcome: "malformed" },
+      },
+      {
+        name: "network",
+        fetcher: async () => {
+          throw new TypeError("connect ECONNREFUSED body");
+        },
+        fields: { outcome: "network-error" },
+      },
+    ];
+    for (const entry of cases) {
+      const dir = await tempDir("ork-gh-seed-log-");
+      cleanup.push(dir);
+      const logs = captureLogs();
+      try {
+        expect(
+          await githubRangesSeed(dir, { fetcher: entry.fetcher, token: "fixture-secret-token" }),
+        ).toBeNull();
+      } finally {
+        logs.restore();
+      }
+      const records = logs.records().filter((r) => r.event === "github-ranges.fetch-failed");
+      expect(records, entry.name).toHaveLength(1);
+      expect(records[0]!.fields, entry.name).toEqual({
+        ...entry.fields,
+        authenticated: true,
+        servingPrevious: false,
+      });
+      const written = JSON.stringify(logs.records());
+      expect(written).not.toContain("fixture-secret-token");
+      expect(written).not.toContain("body");
+    }
+  });
+
+  test("a seed write failure logs the outcome and keeps serving the previous seed", async () => {
+    const dir = await tempDir("ork-gh-seed-write-failed-");
+    cleanup.push(dir);
+    const seed = githubRangesSeedFile(dir);
+    const previous = formatGithubRangesSeed(["192.30.252.0/22"], Date.now());
+    await fs.mkdir(githubRangesSeedDirectory(dir));
+    await fs.writeFile(seed, previous);
+    const { mtimeMs } = await fs.stat(seed);
+    // A directory at the staging path makes writeFile fail even as root.
+    await fs.mkdir(path.join(dir, `.${GITHUB_RANGES_SEED_FILENAME}.${process.pid}.tmp`));
+    const logs = captureLogs();
+    try {
+      expect(
+        await githubRangesSeed(dir, {
+          fetcher: async () => new Response(META),
+          now: () => mtimeMs + 2 * 60 * 60_000,
+          token: "",
+        }),
+      ).toBe(seed);
+    } finally {
+      logs.restore();
+    }
+    expect(await fs.readFile(seed, "utf8")).toBe(previous);
+    const records = logs
+      .records()
+      .filter((record) => record.event === "github-ranges.fetch-failed");
+    expect(records).toHaveLength(1);
+    expect(records[0]?.fields).toEqual({
+      outcome: "write-failed",
+      authenticated: false,
+      servingPrevious: true,
+    });
+  });
+
+  test("a fetch that times out is logged as a timeout", async () => {
+    const dir = await tempDir("ork-gh-seed-timeout-");
+    cleanup.push(dir);
+    const fetcher = (_url: string, init: { signal: AbortSignal }) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal.addEventListener("abort", () =>
+          reject(new DOMException("aborted", "AbortError")),
+        );
+      });
+    const logs = captureLogs();
+    try {
+      expect(await githubRangesSeed(dir, { fetcher, token: "", timeoutMs: 5 })).toBeNull();
+    } finally {
+      logs.restore();
+    }
+    expect(logs.records()).toMatchObject([
+      {
+        event: "github-ranges.fetch-failed",
+        fields: { outcome: "timeout", authenticated: false },
+      },
+    ]);
   });
 
   test("a new container's bind is the directory, even when no seed could be fetched", async () => {

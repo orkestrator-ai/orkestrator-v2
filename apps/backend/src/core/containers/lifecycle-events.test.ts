@@ -1,7 +1,7 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { CommandContext } from "../commands-context.js";
 import { ContainerLifecycleReactor, containerIdsMatch } from "./lifecycle-events.js";
-import { EnvironmentOperations } from "../environment-operations.js";
+import { EnvironmentOperations } from "../environments/operations.js";
 import type { Environment } from "../models.js";
 
 const FULL = "f".repeat(64);
@@ -151,8 +151,8 @@ test("failed inspect keeps diff/PR fenced, retries once, and a rejected diff syn
 });
 
 test("a queued replacement cannot be overwritten by a delayed observation of the old container", async () => {
-  const { EnvironmentOperations } = await import("../environment-operations.js");
-  const { EnvironmentLifecycleTaskTracker } = await import("../environment-lifecycle-tasks.js");
+  const { EnvironmentOperations } = await import("../environments/operations.js");
+  const { EnvironmentLifecycleTaskTracker } = await import("../environments/lifecycle-tasks.js");
   const h = harness({ operations: new EnvironmentOperations() });
   h.context.environmentLifecycleTasks = new EnvironmentLifecycleTaskTracker();
   let release!: () => void;

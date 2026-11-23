@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-11-10
 - **Test:** `environment cleanup steps > logs a kept branch once, though a step can run again`
-- **File:** `apps/backend/src/core/environment-cleanup.test.ts:353`
+- **File:** `apps/backend/src/core/environments/cleanup.test.ts:353`
 
 ## Observation (2026-11-10)
 
@@ -18,7 +18,7 @@
   `captureLogs()` diverts it into the test's array.
 - **Other runs:** the same test passed in the ten other `Tests (backend)` runs
   of PRs #2028–#2037 inspected on 2026-11-10, and passed alone on this host
-  (`bun test --preload ../../tests/setup-node.ts src/core/environment-cleanup.test.ts`,
+  (`bun test --preload ../../tests/setup-node.ts src/core/environments/cleanup.test.ts`,
   39 pass). On a heavily loaded macOS host other cases of the same file hit
   the 5 s per-test timeout; that is load, not this case.
 
@@ -53,5 +53,5 @@
   for the cross-capture mechanism without relying on a timed-out predecessor.
 - Focused validation: `mise run test:logged -- --name findings-backend -- bun
   test --cwd apps/backend --preload ../../tests/setup-node.ts
-  ./tests/github-ranges-cache.test.ts ./src/core/environment-cleanup.test.ts
+  ./tests/github-ranges-cache.test.ts ./src/core/environments/cleanup.test.ts
   --parallel=1 --only-failures` passed (5.4 s).

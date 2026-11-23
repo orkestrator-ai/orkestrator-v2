@@ -28,7 +28,7 @@ import {
   readEnvironmentProcessUsage as defaultReadEnvironmentProcessUsage,
   type EnvironmentProcessUsageSnapshot,
   type ProcessUsageEnvironment,
-} from "./environment-process-usage.js";
+} from "./environments/process-usage.js";
 import {
   createSystemUsageReader,
   hostRamReader,

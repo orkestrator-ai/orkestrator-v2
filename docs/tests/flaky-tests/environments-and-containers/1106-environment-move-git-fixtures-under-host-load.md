@@ -3,7 +3,7 @@
 - **ID:** 1106
 - **Status:** resolved
 - **Date observed:** 2026-10-26
-- **Owning file:** `apps/backend/src/core/environment-move.test.ts`
+- **Owning file:** `apps/backend/src/core/environments/move.test.ts`
 - **Tests (none registered before):**
   - `move_environment > moves every file and re-points git (rename)` and `(copy)`
   - `move_environment > move with an absent socket (never started)`
@@ -25,7 +25,7 @@
   - `move failure boundaries > reports provider failure and retries migration and source cleanup after restart` (added 2026-10-27, pinned-review reconciliation)
   - `a raw-path write admitted first blocks copying until its acknowledged edit is present` (added 2026-10-27, pinned-review reconciliation)
 - **Tested revisions:** `1a1ef24f9` to `8268be981` on branch `test-temp-directory-4cd0548cf2b5-r1`, and the unchanged `main` at `ce205ad34` in a second checkout, macOS 27.0 arm64, Bun 1.4.4, checkout on an external volume. The branch changes only this file's teardown (it also settles terminal history) and its temporary-directory names.
-- **Commands:** the 0247 qualification sweep (`TMPDIR=<empty private dir> mise exec -- bun run --cwd apps/backend test:workspace`, two workers), and the owner alone with `mise run test:logged -- --name rerun-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts`, and the same `bun test` in the `main` checkout.
+- **Commands:** the 0247 qualification sweep (`TMPDIR=<empty private dir> mise exec -- bun run --cwd apps/backend test:workspace`, two workers), and the owner alone with `mise run test:logged -- --name rerun-environment-move -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts`, and the same `bun test` in the `main` checkout.
 - **Failures:** each run failed a different subset, every one at Bun's five-second deadline (5,008 to 11,103 ms), usually alongside the registered [0248](0248-move-restart-recovery-submodule-timeout.md), [0291](0291-environment-move-submodule-aggregate-timeout.md) and [0621](0621-environment-move-nested-submodules-aggregate-timeout.md) cases. Host load average was 3 to 37 across the session, from other worktrees' suites; `fseventsd` held a full core.
 - **Passing runs:** the owner alone passed 38 of 38 in 39.3 s on this branch earlier the same evening (before the teardown change); the sweep at `8268be981` failed none of these names (only the registered submodule cases and 0947). At the same moment and load, the unchanged `main` owner took 84.7 s and failed three of them, and this branch's owner took 82.9 s and failed five; the failures are not caused by the branch.
 - **Evidence:** `orkestrator-test-run.mzrksI`, `orkestrator-test-run.Iusk8s` and later `rerun-environment-move` artifacts under `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/`; the sweep logs under `.../T/ork0247-qual/logs/backend.log` and `.../T/ork0247-qual2/logs/backend.log`.
@@ -36,7 +36,7 @@
 ## 0247 review-follow-up qualification — 2026-10-27
 
 `mise run test:logged -- --name review-environment-move -- bun test --cwd
-apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+apps/backend ./src/core/environments/move.test.ts --parallel=1 --only-failures`
 remained non-green: 34 passed, four deadline failures and four between-test
 errors, 66.0 s (`orkestrator-test-run.ClEvNo` under the host temporary directory).
 The failures were `moves every file and re-points git (copy)` (5015.19 ms),
@@ -69,7 +69,7 @@ these cases passed on the branch (`verify-branch-environment-move-extra-cases`,
 5.8 s). A further owner rerun of just these three names on this branch
 (`5702c8255` plus the then-uncommitted bridge and preview fixes of
 `8e5990c5e`, none of which touch this file or `environment-move.ts`),
-`mise run test:logged -- --name env-move-1106-extra -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts -t "an incomplete copy rollback never asks recovery|rejected path commit clears the journal and preserves subsequent edits|source cleanup failure retains a committed copy"`,
+`mise run test:logged -- --name env-move-1106-extra -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts -t "an incomplete copy rollback never asks recovery|rejected path commit clears the journal and preserves subsequent edits|source cleanup failure retains a committed copy"`,
 passed in 12.0 s at host load average 81. They are added to the list above;
 no assertion, timeout or skip was changed.
 
@@ -86,7 +86,7 @@ after publishing the path never rolls it back` and `an incomplete copy
 rollback never asks recovery to adopt its partially removed destination`, and
 one new name, `abandons a final copy without a copied-phase record and
 repairs the original`. That case alone,
-`mise run test:logged -- --name env-move-1106-abandons -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts -t "abandons a final copy without a copied-phase record"`,
+`mise run test:logged -- --name env-move-1106-abandons -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts -t "abandons a final copy without a copied-phase record"`,
 passed in 2.7 s at load average 161. Added to the list above; nothing
 changed.
 
@@ -104,7 +104,7 @@ outlived their fixtures. The other five command/preview owners then passed
 together in 22.3 s.
 
 The complete owner rerun,
-`mise run test:logged -- --name review-environment-move-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`,
+`mise run test:logged -- --name review-environment-move-owner -- bun test --cwd apps/backend ./src/core/environments/move.test.ts --parallel=1 --only-failures`,
 also failed: 13 passed, 25 failed and 23 between-test errors across 38 tests in
 289.8 s. This is a retained validation failure, not a new flake classification
 or proof of an idle-host pass. Evidence: `orkestrator-test-run.CUD1YR` and
@@ -121,7 +121,7 @@ Its artifact names were not handed over, so those results are as reported.
 Owner reruns of just that case on this branch at `90c9e205a`, host load
 average 173 to 228 from other worktrees' suites:
 
-- `mise run test:logged -- --name env-move-admission-0247 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environment-move.test.ts -t "move admission waits for already admitted mutations to settle"`
+- `mise run test:logged -- --name env-move-admission-0247 -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/environments/move.test.ts -t "move admission waits for already admitted mutations to settle"`
   failed once at Bun's five-second deadline (5,024.49 ms, load 173), followed
   by a between-test `fatal: cannot change to '.../ork-env-move-43967-GsYRHU/app'`
   from `repairWorktree` as the move outlived its removed fixture
@@ -152,7 +152,7 @@ migrate-copy failures recorded separately.
 The complete owning file was rerun, without changing its assertions or
 deadline:
 
-`mise run test:logged -- --name review-0247-env-owner -- bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`
+`mise run test:logged -- --name review-0247-env-owner -- bun test --cwd apps/backend ./src/core/environments/move.test.ts --parallel=1 --only-failures`
 
 It retained deadline and follow-on fixture errors: 25 passed, 13 failed,
 11 between-test errors, 148.9 s; artifact
@@ -164,7 +164,7 @@ A name-filtered rerun of both cases and the diff-stats reset case passed
 all three on this branch (15.7 s; the move cases took 2993 / 8029 ms
 including teardown):
 
-`mise run test:logged -- --name review-0247-three-names -- bun test --cwd apps/backend ./src/core/environment-move.test.ts ./src/core/diff-stats-tracking.test.ts --parallel=1 -t 'reports provider failure and retries migration and source cleanup after restart|a raw-path write admitted first blocks copying until its acknowledged edit is present|a successful reset to creation clears the advanced baseline and retargets scans' --reporter=junit --reporter-outfile=/tmp/review-0247-three.xml`
+`mise run test:logged -- --name review-0247-three-names -- bun test --cwd apps/backend ./src/core/environments/move.test.ts ./src/core/diff-stats-tracking.test.ts --parallel=1 -t 'reports provider failure and retries migration and source cleanup after restart|a raw-path write admitted first blocks copying until its acknowledged edit is present|a successful reset to creation clears the advanced baseline and retargets scans' --reporter=junit --reporter-outfile=/tmp/review-0247-three.xml`
 
 The same filtered command (`review-0247-base-three`) in a disposable detached
 checkout of the pinned base `863b57821`, using Bun 1.4.4, reproduced the
@@ -196,7 +196,7 @@ Failed in the `Tests (backend)` shard on `main` at
 (225.91 ms) and at `b7f41b692` (178.68 ms), with `ENOENT` at
 `environment-move.test.ts:1158`. These are not five-second deadlines, unlike the
 rest of this case. The owning file passed alone on 2026-11-04 at `a44641cbc` plus
-this change's edits (`bun test --cwd apps/backend ./src/core/environment-move.test.ts --parallel=1 --only-failures`,
+this change's edits (`bun test --cwd apps/backend ./src/core/environments/move.test.ts --parallel=1 --only-failures`,
 exit zero, 11.3 s). The cause was not investigated.
 
 ## Investigation — 2026-11-06
@@ -205,7 +205,7 @@ exit zero, 11.3 s). The cause was not investigated.
 above predates `beb1ec4c8` (2026-10-28), which gave the owner
 `setDefaultTimeout(30_000)` and moved it to the slow tier. On 2026-11-06 the
 owner passed with `mise run test:logged -- --name env-move-stress -- bun
---cwd=apps/backend test ./src/core/environment-move.test.ts --parallel=1
+--cwd=apps/backend test ./src/core/environments/move.test.ts --parallel=1
 --rerun-each=2` (PASS, 46.4 s, load average about 22). The registered
 deadline cases 0248, 0291, 0621, 0695, 0866 and 0935 were resolved on the
 same evidence.
@@ -237,7 +237,7 @@ qualify it on ext4.
 ## Resolution (2026-11-15)
 
 - **Root cause:** Each run failed a different subset at Bun's 5 s default while the host load was 3 to 37; the unchanged `main` failed the same way, so the work is load-bound rather than racing.
-- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. `apps/backend/src/core/environment-move.test.ts` sets 60 s (equal to the preload); its fixture hooks set no smaller budget.
+- **Fix:** `tests/default-test-timeout.ts`, imported by both shared preloads (`tests/setup-node.ts`, `tests/setup.ts`), makes 60 s the default per-test and hook budget, a hang watchdog only. `apps/backend/src/core/environments/move.test.ts` sets 60 s (equal to the preload); its fixture hooks set no smaller budget.
 - **Reproduced:** no — the recorded deadline was Bun's default budget on a loaded host; the failing body is fast alone, and a 5 s exhaustion was not re-created per case here.
 - **Stress:** `mise run test:logged -- --name ec-stress-b -- bash -c 'cd apps/backend && bun ../../scripts/test-under-contention.ts --core 13 --burners 6 -- bun test --preload ../../tests/setup-node.ts <seventeen container, pipeline, move, worktree and native-agent owners, this one included> --rerun-each=2 --parallel=1'` at host load about 80: 1,139 passed, 1 failed — `git fsmonitor > fixture repositories inherit fsmonitor off from the test preload` on its second rerun, which fails the same way without contention and with the unchanged file (`git-fsmonitor.test.ts` is not rerun-safe).
 - **Base:** `a8b89f154` (working tree; flake sweep of 2026-11-15).

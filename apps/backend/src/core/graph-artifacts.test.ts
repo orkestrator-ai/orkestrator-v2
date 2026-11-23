@@ -11,8 +11,8 @@ import {
 import { createCommandRegistry, type CommandContext } from "./commands.js";
 import type { EnvironmentCommandRunner } from "./commands-review.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { closeEnvironmentCleanupStorage } from "./environment-cleanup-ledger.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { closeEnvironmentCleanupStorage } from "./environments/cleanup-ledger.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { GraphArtifactStore, removeEnvironmentGraphArtifactFiles } from "./graph-artifacts.js";
 import { GraphStorageError } from "./graph-run-errors.js";
 import { graphEnvironmentFixture, graphRunFixture } from "./graph-run-test-support.js";

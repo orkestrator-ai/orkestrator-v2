@@ -2,7 +2,7 @@ import { expect, test, type Page, type TestInfo } from "./browser-test";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { environmentStateDirectory } from "../../apps/backend/src/core/environment-state-paths";
+import { environmentStateDirectory } from "../../apps/backend/src/core/environments/state-paths";
 import { loadAppWithDevRetry } from "./dev-startup-retry";
 
 /**

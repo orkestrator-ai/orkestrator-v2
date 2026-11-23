@@ -18,6 +18,7 @@ type Workflow = {
       "runs-on"?: string;
       permissions?: Record<string, string>;
       outputs?: Record<string, string>;
+      env?: Record<string, string>;
       strategy?: {
         matrix: {
           runner?: string[];
@@ -410,6 +411,14 @@ describe("CI workflow contracts", () => {
       (step) => step.name === "Live firewall without workflow seed",
     );
     expect(unseeded?.env?.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED).toBe("");
+    // The backend's own fetch authenticates on this step only (to-do 8322).
+    expect(unseeded?.env?.ORKESTRATOR_QUALIFICATION_GITHUB_META_TOKEN).toBe("${{ github.token }}");
+    expect(
+      (parsed.jobs.engine?.steps ?? []).filter(
+        (step) => step.env?.ORKESTRATOR_QUALIFICATION_GITHUB_META_TOKEN !== undefined,
+      ),
+    ).toHaveLength(1);
+    expect(parsed.jobs.engine?.env?.ORKESTRATOR_QUALIFICATION_GITHUB_META_TOKEN).toBeUndefined();
     expect(unseeded?.run).toContain("./tests/container-live-firewall.test.ts --parallel=1");
     expect(unseeded?.run).toContain(
       "--test-name-pattern 'restricted boot fetches GitHub ranges without a workflow seed'",

@@ -24,7 +24,7 @@ import {
   SETUP_FAILURE_REASONS,
   setupFailureReasonOscSequence,
 } from "./containers/scripts.js";
-import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
+import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import type { PtyExitEvent, PtyProcess } from "./pty.js";
 import { createPreviewHarness } from "./previews/test-support.js";
 import {
@@ -448,7 +448,7 @@ test.each(["reserved", "failed"])(
       ENVIRONMENT_ISOLATION_ENV_NAMES,
       environmentIsolationVariables,
       formatEnvironmentIsolationNotice,
-    } = await import("./environment-isolation.js");
+    } = await import("./environments/isolation.js");
     const { quoteShell } = await import("./commands-agent-support.js");
     const harness = await createPreviewHarness();
     const runtime = new BackendRuntime({ emit: () => undefined, terminals: FAST_TERMINATE });

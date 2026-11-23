@@ -15,7 +15,7 @@ import {
   previewDockerCleanup,
 } from "../src/core/containers/cleanup-preview";
 import { loadProtection } from "../src/core/containers/cleanup-inventory";
-import { buildEnvironmentCleanupEntry } from "../src/core/environment-cleanup";
+import { buildEnvironmentCleanupEntry } from "../src/core/environments/cleanup";
 import { subscribeDockerNetworkChanges } from "../src/core/containers/network-changes";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {

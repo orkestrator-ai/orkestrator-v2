@@ -32,7 +32,7 @@ changes no dependency), then switched back.
 
 | Owning file | Aggregate failures | Owner alone on the branch | Base `863b57821` alone | Registry |
 | --- | --- | --- | --- | --- |
-| `apps/backend/src/core/environment-move.test.ts` | 29 `move_environment`, `interrupted move recovery` and `move failure boundaries` cases | 14 failed, 614.4 s | Failed, 191.2 s | 1101, 0692, 0790 (open) |
+| `apps/backend/src/core/environments/move.test.ts` | 29 `move_environment`, `interrupted move recovery` and `move failure boundaries` cases | 14 failed, 614.4 s | Failed, 191.2 s | 1101, 0692, 0790 (open) |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | Two hook timeouts (`(unnamed)`) | 0 passed, 2 failed | Failed | 0957, 0180 (open) |
 | `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write` | Failed (no change seen) | Failed | 0091 (open) |
 | `apps/backend/src/core/commands-environment-worktree-location.test.ts` | Two location cases | 1 failed (`retargeting an accepted alias…`) | Failed | 1101 |

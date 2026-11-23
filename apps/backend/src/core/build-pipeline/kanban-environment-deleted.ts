@@ -2,7 +2,7 @@
  * The Kanban side of deleting an environment that holds build pipelines.
  *
  * Environment deletion removes its pipeline records outright
- * (`environment-delete.ts`, `deleteBuildPipelinesByEnvironment`): the
+ * (`environments/delete.ts`, `deleteBuildPipelinesByEnvironment`): the
  * container or worktree is already gone, so no pipeline can run its own
  * terminal step. Before this, the ticket of a build that had not finished was
  * left where the build put it (In progress) for good, and one whose pull

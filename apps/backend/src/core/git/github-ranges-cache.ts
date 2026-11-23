@@ -71,15 +71,17 @@ export function validIpv4Cidr(value: string): boolean {
 
 /** Extracts the IPv4 web/api/git ranges from a `/meta` answer, or null. */
 export function parseGithubMeta(text: string): string[] | null {
-  let value: Record<string, unknown>;
+  let value: unknown;
   try {
-    value = JSON.parse(text) as Record<string, unknown>;
+    value = JSON.parse(text);
   } catch {
     return null;
   }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const metadata = value as Record<string, unknown>;
   const ranges: string[] = [];
   for (const key of ["web", "api", "git"]) {
-    const list = value[key];
+    const list = metadata[key];
     if (!Array.isArray(list)) return null;
     for (const entry of list) {
       if (typeof entry === "string" && validIpv4Cidr(entry)) ranges.push(entry);
@@ -94,7 +96,62 @@ export function formatGithubRangesSeed(ranges: readonly string[], fetchedAt: num
   return `# github-ranges ${new Date(fetchedAt).toISOString()}\n${ranges.join("\n")}\n`;
 }
 
-type Fetcher = (url: string, init: { signal: AbortSignal }) => Promise<Response>;
+type Fetcher = (
+  url: string,
+  init: { signal: AbortSignal; headers?: Record<string, string> },
+) => Promise<Response>;
+
+/**
+ * Opt-in token for the backend's own `/meta` fetch, for the Container live
+ * qualification workflow only: its unseeded C23 step proves the backend
+ * fetches and writes the seed itself, and a hosted runner's shared address
+ * has usually spent the anonymous allowance (to-do 8322 task 1). The workflow
+ * sets it to the job token on that one step. Nothing else sets it, so
+ * production fetches anonymously (to-do 7549 task 2).
+ */
+export const GITHUB_RANGES_FETCH_TOKEN_ENV = "ORKESTRATOR_QUALIFICATION_GITHUB_META_TOKEN";
+
+interface SeedOptions {
+  now?: () => number;
+  fetcher?: Fetcher;
+  /** Overrides {@link GITHUB_RANGES_FETCH_TOKEN_ENV}; tests pass it. */
+  token?: string;
+  /** How long the fetch may take; 15 s unless a test shortens it. */
+  timeoutMs?: number;
+}
+
+/** Why a fetch produced no seed: a class, never the answer's body. */
+type FetchOutcome =
+  | "http-4xx"
+  | "http-5xx"
+  | "http-other"
+  | "rate-limited"
+  | "timeout"
+  | "network-error"
+  | "malformed"
+  | "write-failed";
+
+class FetchFailure extends Error {
+  constructor(
+    readonly outcome: FetchOutcome,
+    readonly status?: number,
+  ) {
+    super(outcome);
+  }
+}
+
+function httpOutcome(response: Response): FetchOutcome {
+  // GitHub answers a spent allowance with 403 or 429 and no remaining requests.
+  if (
+    (response.status === 403 || response.status === 429) &&
+    response.headers.get("x-ratelimit-remaining") === "0"
+  ) {
+    return "rate-limited";
+  }
+  if (response.status >= 400 && response.status < 500) return "http-4xx";
+  if (response.status >= 500 && response.status < 600) return "http-5xx";
+  return "http-other";
+}
 
 /**
  * Creates the seed directory (world-readable: the container's root reads it,
@@ -138,7 +195,7 @@ const lastFailedFetch = new Map<string, number>();
  */
 export function githubRangesSeed(
   dataDir: string,
-  options: { now?: () => number; fetcher?: Fetcher } = {},
+  options: SeedOptions = {},
 ): Promise<string | null> {
   const file = githubRangesSeedFile(dataDir);
   const pending = inFlight.get(file);
@@ -153,7 +210,7 @@ export function githubRangesSeed(
 async function refreshGithubRangesSeed(
   dataDir: string,
   file: string,
-  options: { now?: () => number; fetcher?: Fetcher },
+  options: SeedOptions,
 ): Promise<string | null> {
   const now = options.now ?? Date.now;
   if (!(await ensureGithubRangesSeedDirectory(dataDir))) return null;
@@ -169,31 +226,50 @@ async function refreshGithubRangesSeed(
     const since = now() - failedAt;
     if (since >= 0 && since < GITHUB_RANGES_RETRY_AFTER_FAILURE_MS) return fallback;
   }
+  const token = (options.token ?? process.env[GITHUB_RANGES_FETCH_TOKEN_ENV] ?? "").trim();
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
     let text: string;
     try {
       const response = await (options.fetcher ?? fetch)("https://api.github.com/meta", {
         signal: controller.signal,
+        ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}),
+      }).catch(() => {
+        throw new FetchFailure(controller.signal.aborted ? "timeout" : "network-error");
       });
-      if (!response.ok) throw new Error(`status ${response.status}`);
-      text = await response.text();
+      if (!response.ok) throw new FetchFailure(httpOutcome(response), response.status);
+      text = await response.text().catch(() => {
+        throw new FetchFailure(controller.signal.aborted ? "timeout" : "network-error");
+      });
     } finally {
       clearTimeout(timer);
     }
     const ranges = parseGithubMeta(text.slice(0, 1024 * 1024));
-    if (!ranges) throw new Error("malformed");
+    if (!ranges) throw new FetchFailure("malformed");
     // Written beside the bound directory, not in it, so a container never
     // sees a partial file; the rename into it is atomic on one filesystem.
     const temporary = path.join(dataDir, `.${GITHUB_RANGES_SEED_FILENAME}.${process.pid}.tmp`);
-    await writeFile(temporary, formatGithubRangesSeed(ranges, now()), { mode: 0o644 });
-    await chmod(temporary, 0o644);
-    await rename(temporary, file);
+    try {
+      await writeFile(temporary, formatGithubRangesSeed(ranges, now()), { mode: 0o644 });
+      await chmod(temporary, 0o644);
+      await rename(temporary, file);
+    } catch {
+      throw new FetchFailure("write-failed");
+    }
     lastFailedFetch.delete(file);
     return file;
-  } catch {
+  } catch (error) {
     lastFailedFetch.set(file, now());
+    // One line per fetch that produced no seed, so a CI log says why. The
+    // class and status only: the body can be anything and the token is secret.
+    const failure = error instanceof FetchFailure ? error : new FetchFailure("network-error");
+    log.warn("github-ranges.fetch-failed", {
+      outcome: failure.outcome,
+      ...(failure.status !== undefined ? { status: failure.status } : {}),
+      authenticated: token.length > 0,
+      servingPrevious: fallback !== null,
+    });
     return fallback;
   }
 }
@@ -214,7 +290,7 @@ export function githubRangesSeedMountArguments(directory: string): string[] {
  */
 export async function prepareGithubRangesSeedBind(
   dataDir: string,
-  options: { now?: () => number; fetcher?: Fetcher } = {},
+  options: SeedOptions = {},
 ): Promise<string | null> {
   await githubRangesSeed(dataDir, options);
   return ensureGithubRangesSeedDirectory(dataDir);

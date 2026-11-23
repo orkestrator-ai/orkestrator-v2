@@ -580,6 +580,19 @@
                   "!**/containers/worktree-signal-install.js"
                 ],
                 "message": "Import the containers domain through containers/index.js."
+              },
+              {
+                "group": [
+                  "**/environments/*",
+                  "!**/environments/index.js",
+                  "!**/environments/cleanup.js",
+                  "!**/environments/cleanup-reconciler.js",
+                  "!**/environments/delete.js",
+                  "!**/environments/move.js",
+                  "!**/environments/process-usage.js",
+                  "!@orkestrator/protocol/contract/domains/environments/*"
+                ],
+                "message": "Import the environments domain through environments/index.js."
               }
             ]
           }
@@ -801,6 +814,13 @@
                   "!**/backend/src/core/containers/replacement.js"
                 ],
                 "message": "Import the containers domain through containers/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/environments/*",
+                  "!**/backend/src/core/environments/index.js"
+                ],
+                "message": "Import the environments domain through environments/index.js."
               }
             ]
           }

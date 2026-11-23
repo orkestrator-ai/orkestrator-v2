@@ -1,6 +1,6 @@
 import { stripUserCommandContext } from "@orkestrator/protocol/user-commands";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
-import { EnvironmentMutationFence } from "../environment-replacement-fence.js";
+import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { describe, expect, mock, test } from "bun:test";
 
 import { promises as fs } from "node:fs";

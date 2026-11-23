@@ -19,9 +19,13 @@
  * `--core` reads the storage code from another tree, so two versions can be
  * compared on one host:
  *
- *   git archive <commit> apps/backend/package.json apps/backend/src/core \
+ *   git archive <commit> apps/backend/package.json apps/backend/src \
  *     | tar -x -C output/benchmarks/store-before
  *   bun scripts/benchmark-store-writes.ts --core=output/benchmarks/store-before/apps/backend/src/core
+ *
+ * Make the archived backend's dependencies available before running the benchmark.
+ * For revisions with the same dependencies, link its apps/backend/node_modules
+ * to an absolute path to the current backend's node_modules.
  *
  *   bun scripts/benchmark-store-writes.ts [--runs=50] [--core=<dir>] [--json]
  */

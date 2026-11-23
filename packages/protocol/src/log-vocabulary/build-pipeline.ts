@@ -22,6 +22,13 @@ export const BUILD_PIPELINE_LOG_AREAS = defineLogAreas({
         "Migrating or sweeping stage transcripts failed; the next start retries.",
       "restore.skipped": "A pipeline could not be restored at startup and was skipped.",
       "criteria.record-failed": "Acceptance criteria results could not be recorded on the ticket.",
+      "long-check.start-failed":
+        "Starting a long check on the environment's validation worker failed; the supervisor retries the start.",
+      "long-check.poll-failed":
+        "Reading a long check's status failed; repeated failures settle it as an error.",
+      "long-check.cancel-failed": "A long check could not be cancelled when its pipeline stopped.",
+      "long-check.comment-failed":
+        "A settled long check's result could not be written on the ticket; it is retried a few times.",
       "network-preference.save-failed":
         "The network access chosen for a new build could not be remembered for its project; the build still runs.",
       "completion-notes.publish-failed":

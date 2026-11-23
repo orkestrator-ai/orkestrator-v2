@@ -145,8 +145,11 @@ project.
   saved before leaves were read keep matching. A signal's evidence names the
   machines it was seen on (`machines=Desk, VPS`).
   - Fleet rates use occurrences per machine-day of observed source exposure.
-    Uncovered machines contribute no hours. For crashes, each machine uses the
-    health summary or the essential-log fallback that supplied its counts.
+    Uncovered machines contribute no hours. Crashes use each machine's health
+    summary or essential-log fallback. Host restarts use detection hours from
+    that source: health runs with boot metadata on their own or their first
+    successor's start, or log intervals whose startup declares support for
+    detection or whose end was reported as a host restart.
   - Fix verdicts compare the machines that saw the baseline fault. If an
     affected leaf is unavailable when a ticket moves to Done, its last known
     version also contributes to the inferred fix boundary. Each machine must
@@ -289,9 +292,22 @@ runs. Ids of environments, sessions and processes are left out on purpose:
 | Throttled faults | the site's signature, counting `throttle.suppressed` | `tmux:poll.snapshot-failed:EACCES` |
 | Renderer failures | `renderer-errors:<class>:<boundary>:<fingerprint>` | `renderer-errors:TypeError:message-row:0badf00d` |
 | A process that died | `logging:writer-died:<owner>` | `logging:writer-died:desktop` |
-| Health rows | `backend:crashed`, `backend:rss-growth`, `backend:rss-peak`, `backend:cpu`, `backend:event-loop-stalls`, `recurring:<kind>:failed`, `recurring:<kind>:busy` | `recurring:git-scan:failed` |
+| Health rows | `backend:crashed`, `backend:host-restarted`, `backend:rss-growth`, `backend:rss-peak`, `backend:cpu`, `backend:event-loop-stalls`, `recurring:<kind>:failed`, `recurring:<kind>:busy` | `recurring:git-scan:failed` |
 | Database | `storage:slow:<db>:<op>:<table>`, `storage:lease-timeout:<family>`, `storage:lease-wait:<family>`, `storage:busy`, `storage:wal-large` | `storage:slow:main:select:sessions` |
 | Conversation themes | `insight:<theme>` | `insight:use-mise-not-npm` |
+
+`backend:crashed` counts ended backend runs with no clean exit and no applicable
+reboot evidence. The first backend start at or after the old run's last row
+can establish a host restart if it records a newer boot. With two boot IDs,
+the IDs must differ. With only boot times for both runs, their boot estimates
+must be at least five minutes apart. An older run with no boot metadata can
+still be classified from its immediate successor's newer boot time. If that
+successor has no boot evidence, the run stays in the crash count.
+
+`backend:host-restarted` is a `warning`. A power loss, freeze or forced restart
+can stop the backend before it can write an exit marker. In essential-log-only
+bundles, the `previous-run` event credits the version from the preceding
+startup, or `unknown` when that startup has expired.
 
 Each signal's category has a weight:
 
@@ -304,7 +320,7 @@ Each signal's category has a weight:
 | `insight` | 30 | Conversation themes, ranked also by their severity |
 | `performance` | 20 | Stalls, slow SQLite operations, long lease waits |
 | `resource` | 15 | Memory growth or peak, CPU, busy recurring jobs, a large WAL |
-| `warning` | 8 | Other `warn` lines |
+| `warning` | 8 | Other `warn` lines; `backend:host-restarted`, a run the machine stopped under |
 
 The score is `weight × (1 + log10(1 + per day)) × (1 + min(active days, 7) / 7)`.
 
@@ -415,4 +431,11 @@ fix, the run waits for the next release before judging it.
 - When you change a prompt or schema in `insights/analyze.ts`, also run one
   real call: real models can refuse a schema a fake accepts.
 - A signature format change orphans existing ledger entries. Avoid it, or
-  migrate `ledger.json` in the same change.
+  migrate `ledger.json` in the same change. To say more about a signal without
+  splitting it, count a label as evidence instead (`EVIDENCE_COUNT_FIELDS` in
+  `signals.ts`, which keeps a backend exit's `exitCause` and `error.signal` as
+  `exitCause.killed=1` and the like), and name the field something that is not
+  a qualifier (`kind`, `reason`, …).
+  Fleet digests sum backend exit cause, signal and crash-report counts across
+  machines. They report the largest sampled `oomKills` delta and `ranForMs`
+  across those exits. Cgroup deltas can cover overlapping process lifetimes.

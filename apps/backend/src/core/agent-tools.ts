@@ -67,7 +67,9 @@ import type { GraphActivationToolHost } from "./graph-agent-tools.js";
 import {
   authenticatePipelineWorkerMailCapability,
   type BuildPipelineKeyInformationHost,
+  type BuildPipelineLongCheckHost,
   pipelineWorkerTabForResultKey,
+  registerLongCheckTools,
 } from "./build-pipeline/index.js";
 import { registerKeyInformationTools } from "./build-pipeline/key-information-tools.js";
 import {
@@ -720,6 +722,7 @@ async function createAgentToolServer(
     goalTools = null,
     suborkTools = null,
     keyInformation = null,
+    longChecks = null,
     autoPipelineTools = null,
     credentialTools = null,
     interactionTools = null,
@@ -729,6 +732,7 @@ async function createAgentToolServer(
     goalTools?: GoalToolHost | null;
     suborkTools?: SuborkToolHost | null;
     keyInformation?: BuildPipelineKeyInformationHost | null;
+    longChecks?: BuildPipelineLongCheckHost | null;
     autoPipelineTools?: AutoPipelineToolHost | null;
     credentialTools?: CredentialToolHost | null;
     interactionTools?: RichInteractionService | null;
@@ -818,6 +822,7 @@ async function createAgentToolServer(
     );
     if (keyInformation)
       await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
+    if (longChecks) await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
     return server;
   }
   if (scope.workflowResultKey) {
@@ -861,6 +866,10 @@ async function createAgentToolServer(
     // key information tools the stage prompts ask for.
     if (keyInformation && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
       await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
+    }
+    // And the long check tools, so a stage can hand a slow run to the pipeline.
+    if (longChecks && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
+      await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
     }
     if (workerTabId) {
       registerAgentMessagingTools(
@@ -1063,6 +1072,8 @@ async function createAgentToolServer(
   if (keyInformation)
     await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
 
+  if (longChecks) await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
+
   return server;
 }
 
@@ -1135,6 +1146,7 @@ export class AgentToolsServer {
   private scheduledJobs: ScheduledJobService | null = null;
   private graphActivationToolHost: GraphActivationToolHost | null = null;
   private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
+  private longCheckHost: BuildPipelineLongCheckHost | null = null;
   private autoPipelineToolHost: AutoPipelineToolHost | null = null;
   private credentialToolHost: CredentialToolHost | null = null;
   private readonly peerFilter: AgentToolsPeerGate;
@@ -1464,6 +1476,14 @@ export class AgentToolsServer {
    */
   setKeyInformationToolHost(host: BuildPipelineKeyInformationHost | null): void {
     this.keyInformationHost = host;
+  }
+
+  /**
+   * Installs (or removes, with null) the build pipelines' long check host,
+   * listed on the same credentials as the key information tools.
+   */
+  setLongCheckToolHost(host: BuildPipelineLongCheckHost | null): void {
+    this.longCheckHost = host;
   }
 
   /** Installs the scheduler behind the agents' schedule tools. */
@@ -1818,6 +1838,7 @@ export class AgentToolsServer {
                   goalTools: this.goalToolHost,
                   suborkTools: this.suborkToolHost,
                   keyInformation: this.keyInformationHost,
+                  longChecks: this.longCheckHost,
                   autoPipelineTools: this.autoPipelineToolHost,
                   credentialTools: this.credentialToolHost,
                   interactionTools: this.richInteractionService,

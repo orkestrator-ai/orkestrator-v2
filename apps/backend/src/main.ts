@@ -117,7 +117,7 @@ await leaseActivatedToolchainSet(options.dataDir, options.toolchainBinDir);
 // Before anything logs at a level the settings may turn off. The backend's log
 // policy service keeps this live from here on.
 applyLogDetail(readApplicationLogPolicy(options.dataDir).detail);
-log.info("starting", { version: APP_VERSION });
+log.info("starting", { version: APP_VERSION, hostRestartDetection: true });
 startupProgress("host-environment");
 await logGatewayPortPolicy(options, process.env, liveInstanceIn);
 const sshAgentSocket = await configureSshAgentSocketEnvironment({

@@ -10,6 +10,7 @@ import { adoptCompletedBuild, type CompletedBuildAttempt } from "./completed-bui
 import { DEFAULT_BUILD_PIPELINE_ITERATIONS, buildPhaseForSessionPhase } from "./stages.js";
 import { createHash, randomUUID } from "node:crypto";
 import { buildPipelineKanbanUpdate } from "./kanban-lifecycle.js";
+import { BuildPipelineLongChecks } from "./long-checks.js";
 import {
   BUILD_CANCELLED_ERROR,
   type BuildPipeline,
@@ -1222,6 +1223,12 @@ export class BuildPipelineLifecycle {
       // as it is now, later rounds' commits included.
       const iteration = named ? named.iteration : candidate.iteration;
       const rewindsRound = iteration < candidate.iteration;
+      if (candidate.longChecks?.some((check) => check.status === "running")) {
+        rejection = new Error(
+          "Wait for the detached long check to settle before restarting or rewinding this stage.",
+        );
+        return;
+      }
       const previousFeedback = candidate.verificationFeedback;
       // Every refusal is behind us, so the new selection cannot outlive a
       // restart that did not happen.
@@ -1471,6 +1478,12 @@ export class BuildPipelineLifecycle {
   async skipStep(pipelineId: string, stageId: string): Promise<BuildPipeline> {
     let rejection: Error | undefined;
     await this.ctx.mutate(pipelineId, async (candidate) => {
+      if (candidate.longChecks?.some((check) => check.status === "running")) {
+        rejection = new Error(
+          "Wait for the detached long check to settle before skipping this stage.",
+        );
+        return;
+      }
       const phase =
         candidate.phase === "paused" ? candidate.pausedFromPhase : resumablePhase(candidate.phase);
       const stagePhase = phase ? sessionPhaseFor(phase) : null;
@@ -1812,6 +1825,11 @@ export class BuildPipelineLifecycle {
           run: pipeline.validationRun,
         });
       }
+      // Long checks outlive turns and pauses, not a cancelled pipeline.
+      await new BuildPipelineLongChecks({
+        invoke: (command, args) => this.ctx.invoke(command, args),
+        save: async () => {},
+      }).cancelAll(pipeline);
 
       if (pipeline.reviewFanout) {
         abortErrors = await this.agents.abandonReviewFanout(pipeline, "idle");
@@ -1906,9 +1924,14 @@ export class BuildPipelineLifecycle {
       !deleted &&
       record &&
       isBuildPipeline(record.snapshot) &&
-      (isActiveBuildPhase(record.snapshot.phase) || record.snapshot.reviewFanout !== undefined)
+      (isActiveBuildPhase(record.snapshot.phase) ||
+        record.snapshot.reviewFanout !== undefined ||
+        record.snapshot.longChecks?.some((check) => check.status === "running"))
     ) {
-      await this.cancel(pipelineId);
+      const cancelled = await this.cancel(pipelineId);
+      if (cancelled.longChecks?.some((check) => check.status === "running")) {
+        throw new Error("Removal is pending until the detached long check stops.");
+      }
     }
     if (!deleted) await this.ctx.storage.deleteBuildPipeline(pipelineId);
     if (record && isBuildPipeline(record.snapshot)) {

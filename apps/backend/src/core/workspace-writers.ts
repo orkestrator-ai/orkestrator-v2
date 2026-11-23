@@ -103,6 +103,7 @@ function strongest(left: WorkspaceUse | null, right: WorkspaceUse | null): Works
  */
 export function buildPipelineWorkspaceUse(snapshot: unknown): WorkspaceUse | null {
   if (!isBuildPipeline(snapshot)) return null;
+  if (snapshot.longChecks?.some((check) => check.status === "running")) return "write";
   let use: WorkspaceUse | null = null;
   if (isActiveBuildPhase(snapshot.phase)) {
     if (SETUP_WRITES.has(snapshot.phase)) use = "write";

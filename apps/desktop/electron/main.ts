@@ -25,6 +25,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
+import { logBackendExit } from "./backend-exit-diagnosis.js";
 import { BACKEND_EXIT_WAIT_MS, registerBackendShutdown } from "./backend-lifecycle.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
@@ -1490,19 +1491,15 @@ async function startApplication(): Promise<void> {
         liveLogPolicy.onEvent(event, payload);
         if (connectionManager) connectionManager.handleLocalEvent(event, payload);
       },
-      onUnexpectedExit: (error) => {
+      onUnexpectedExit: (error, exit) => {
         connectionManager?.markLocalBackendUnavailable();
         emitToConnection("local", "local-backend-unavailable", { message: error.message });
         publishConnectionLists();
         // Shortly after a remote-requested update, relaunch instead of a modal
         // nobody may answer, so the remote client gets its backend back.
-        if (recoverRemoteBackendFailure(dataDir, relaunchingApp)) {
-          desktopLog.error("backend.exited-recovering", {
-            error: formatLogError(error, { stack: false }),
-          });
-          return;
-        }
-        desktopLog.error("backend.exited", { error: formatLogError(error, { stack: false }) });
+        const recovering = recoverRemoteBackendFailure(dataDir, relaunchingApp);
+        logBackendExit(error, exit, recovering);
+        if (recovering) return;
         showNonBlockingError(
           `${productName} backend stopped`,
           `${error.message}\n\nLocal work is unavailable. Remote windows remain connected; restart the application to recover Local.`,
@@ -1516,9 +1513,9 @@ async function startApplication(): Promise<void> {
     // local execution backend cannot start. Without any, there is nothing to
     // show and startup fails as before.
     const saved = await catalogueStore.load().catch(() => null);
+    desktopLog.error("backend.start-failed", { error: formatLogError(error) });
     if (isAgentTest || !saved || saved.backends.length === 0) throw error;
     localStartError = error instanceof Error ? error : new Error(String(error));
-    desktopLog.error("backend.start-failed", { error: formatLogError(error) });
   }
   sshPrompts = new SshPromptBroker(() => {
     const context = focusedContext();

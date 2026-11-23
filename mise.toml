@@ -209,15 +209,26 @@ raw_args = true
 run = "bun scripts/qa-remote-goal-hold.ts"
 
 [tasks.setup]
-description = "Install dependencies and build every native bridge"
+description = "Install dependencies, register the repository's merge drivers and build every native bridge"
 run = [
   "bun install",
+  "bun scripts/merge-drivers/install.ts",
   "mise run build:claude-bridge",
   "mise run build:codex-bridge",
   "mise run build:acp-bridge",
   "mise run build:pi-bridge",
   "mise run build:cursor-bridge",
 ]
+
+[tasks."git:merge-drivers"]
+description = "Register the merge drivers .gitattributes names (folder indexes, contract manifest) in this clone's Git config"
+raw_args = true
+run = "bun scripts/merge-drivers/install.ts"
+
+[tasks."number:next"]
+description = "Print the number for a new to-do or flake case: above every one in use here and on origin's branches (docs/number-claims/README.md)"
+raw_args = true
+run = "bun scripts/number-claims.ts next"
 
 [tasks."pack:cli"]
 description = "Pack the CLI workspace"

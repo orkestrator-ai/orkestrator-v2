@@ -264,6 +264,17 @@ test.each([1, true, null, { name: "TypeError", errno: -2 }])(
 );
 
 describe("backend previous-run", () => {
+  test("persists whether the reporting backend supports host-restart detection", () => {
+    const start = record("backend", "starting", "info", {
+      version: "2.40.0",
+      hostRestartDetection: true,
+    });
+    expect(projectEssentialRecord(start, TS)?.fields).toEqual({
+      version: "2.40.0",
+      hostRestartDetection: true,
+    });
+  });
+
   test("keeps its outcome and numbers, and refuses any other outcome", () => {
     const entry = (outcome: string) =>
       record("backend", "previous-run", "warn", {
@@ -277,6 +288,9 @@ describe("backend previous-run", () => {
       ranForMs: 5,
       lastSeenAgoMs: 6,
     });
+    expect(projectEssentialRecord(entry("host-restarted"), TS)?.fields?.outcome).toBe(
+      "host-restarted",
+    );
     expect(projectEssentialRecord(entry("/home/someone"), TS)?.fields?.outcome).toBeUndefined();
   });
 });

@@ -273,14 +273,27 @@ export class FakeGraphShell implements GraphEnvironmentShell {
   readonly files = new Map<string, Buffer>();
   /** `ancestor>descendant` pairs `git merge-base --is-ancestor` answers yes for (a commit is its own). */
   readonly ancestry = new Set<string>();
+  readonly conflictingBases = new Set<string>();
+  readonly resolvedHeads = new Set<string>();
+  afterPush?: () => void;
+  failFetch = false;
 
   constructor(head: string) {
     this.head = head;
     this.commits.add(head);
+    for (const branch of ["main", "dev", "release/2"]) this.remote.set(branch, "b".repeat(40));
   }
 
   async git(_environment: Environment, args: string[]): Promise<string> {
     this.calls.push(["git", ...args]);
+    if (args[0] === "check-ref-format") return "";
+    if (args[0] === "remote" && args[1] === "get-url")
+      return `https://github.com/${SYSTEM_REPO}.git`;
+    if (args[2] === "orkestrator-pr-merge-check") {
+      return this.conflictingBases.has(args[3]!) && !this.resolvedHeads.has(args[4]!)
+        ? "conflict"
+        : "clean";
+    }
     if (args[0] === "rev-parse" && args.at(-1) === "HEAD^{commit}") return `${this.head}\n`;
     if (args[0] === "rev-parse" && args.at(-1)?.startsWith("refs/remotes/origin/")) {
       const value = this.tracking.get(args.at(-1)!.slice("refs/remotes/origin/".length));
@@ -308,9 +321,13 @@ export class FakeGraphShell implements GraphEnvironmentShell {
   ): Promise<string> {
     this.calls.push(["git", command, ...args]);
     if (command === "ls-remote") {
-      const branch = args[1]!.slice("refs/heads/".length);
+      const branch = args.at(-1)!.slice("refs/heads/".length);
       const sha = this.remote.get(branch);
       return sha ? `${sha}\trefs/heads/${branch}\n` : "";
+    }
+    if (command === "fetch") {
+      if (this.failFetch) throw new Error("remote fetch failed");
+      return "";
     }
     if (command === "push") {
       this.pushes.push(args);
@@ -326,6 +343,7 @@ export class FakeGraphShell implements GraphEnvironmentShell {
       this.remote.set(branch, sha!);
       this.tracking.set(branch, sha!);
       this.diverged = false;
+      this.afterPush?.();
       return "";
     }
     throw new Error(`unexpected git ${command}`);
@@ -352,6 +370,8 @@ export class FakeGraphShell implements GraphEnvironmentShell {
       mergeStateStatus: "CLEAN",
       isDraft: false,
       baseRefName: pull.base,
+      headRefName: pull.head,
+      isCrossRepository: false,
     });
   }
 

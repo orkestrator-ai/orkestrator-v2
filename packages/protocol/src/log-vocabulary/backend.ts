@@ -23,9 +23,10 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
     description: "The backend process: startup, background notices and shutdown.",
     events: {
       starting: {
-        description: "The backend process is starting.",
+        description:
+          "The backend process is starting. `hostRestartDetection` marks support for classifying a previous run as stopped by a host reboot.",
         essential: true,
-        fields: { version: "label" },
+        fields: { version: "label", hostRestartDetection: "boolean" },
       },
       "ssh-socket.resolved": "An SSH agent socket was found.",
       "ssh-socket.missing": "No usable SSH agent socket was found.",
@@ -52,7 +53,7 @@ export const BACKEND_LOG_AREAS = defineLogAreas({
       "artifacts.live-unavailable": "Live interactive artifacts are unavailable.",
       "previous-run": {
         description:
-          "This start read how the previous run ended: `outcome` is `clean` when it reached the end of shutdown and `crashed` when it did not, `ranForMs` its length and `lastSeenAgoMs` the time since its last health row.",
+          "This start read how the previous run ended: `outcome` is `clean` when it reached the end of shutdown, `host-restarted` when it did not and the host booted after its last health row (a power loss, freeze or forced restart), and `crashed` otherwise; `ranForMs` is its length and `lastSeenAgoMs` the time since its last health row.",
         essential: true,
         fields: { outcome: "label", ranForMs: "number", lastSeenAgoMs: "number" },
       },

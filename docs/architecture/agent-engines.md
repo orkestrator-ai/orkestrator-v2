@@ -1995,7 +1995,10 @@ the first submission the normal path:
   each path, the fields allowed beside an unknown one, and the type received.
 - The consolidation prompt carries a complete shape template of the report
   (`review/consolidation-example.ts`), checked against the contract by its
-  test, and names the misses that most often cost a resend.
+  test, and names the misses that most often cost a resend. One of them is
+  derived from the template's key order: the last array (`testCoverageGaps`)
+  is followed by more keys inside the same object, so no `}` belongs after its
+  `]`. That stray `}` was the usual fault in a failed first submission.
 - A pipeline session's result turn runs its Claude CLI with fine-grained tool
   streaming off (`CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=0`,
   `buffersToolInput` in `bridges/claude-bridge/src/services/runtime-env.ts`).
@@ -2136,6 +2139,19 @@ broker's `validate_workflow_result`) lets a string through its input check
   at its own position. `JSON.parse` gives no position under Bun, so a
   small scanner of its own finds the fault, and runs only on text
   `JSON.parse` already refused.
+- Eligible built-in result kinds can recover from one extra closing bracket,
+  including a premature root close, a trailing bracket, or a closer that
+  does not match the open container. The common consolidation failure closed
+  the root after `testCoverageGaps`, before `verdict`. The tool removes the
+  bracket named by the scanner and checks the result against an acceptance
+  schema that refuses undeclared fields at every level
+  (`acceptsOnlyDeclaredFields`). If the candidate fails that check, the tool
+  returns the positioned JSON refusal with the candidate's field errors.
+  Graph outputs always retain the positioned refusal because closed custom
+  schemas can admit multiple repairs with different values.
+- OpenCode broker validation advertises a generic object schema. After
+  authenticating the capability and checking the key, it applies the same
+  kind-specific repair rules as the corresponding submission tool.
 
 **Refused calls are counted.** A call refused before validation (by the input
 check, or as unparseable text) never reaches `validate`/`submit`, so the slot

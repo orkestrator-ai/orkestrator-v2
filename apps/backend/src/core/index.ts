@@ -1748,6 +1748,12 @@ export class OrkestratorBackend {
         setKeyInformationToolHost?: AgentToolsServer["setKeyInformationToolHost"];
       }
     ).setKeyInformationToolHost?.(this.buildPipelines.keyInformationHost());
+    // And hand slow checks to the pipeline rather than run them in a turn.
+    (
+      this.agentTools as {
+        setLongCheckToolHost?: AgentToolsServer["setLongCheckToolHost"];
+      }
+    ).setLongCheckToolHost?.(this.buildPipelines.longCheckHost());
     this.multiReviews = new MultiReviewService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {

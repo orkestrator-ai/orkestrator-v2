@@ -1,4 +1,5 @@
 import { AUTO_SWITCH_REASONS } from "./agent-account-auto-switch.js";
+import { isBackendExitCause } from "./backend-exit.js";
 import { LOG_VOCABULARY, type LogAreaSpec } from "./log-vocabulary/index.js";
 import {
   isRendererErrorBoundary,
@@ -250,7 +251,7 @@ export function isEssentialLabel(
   if (field === "source" || (area === "local-server" && field === "key")) return SOURCE.test(value);
   if (area === "backend" && event === "starting" && field === "version") return VERSION.test(value);
   if (area === "backend" && event === "previous-run" && field === "outcome")
-    return value === "clean" || value === "crashed";
+    return value === "clean" || value === "crashed" || value === "host-restarted";
   if (area === "local-server" && event === "bridge.orphans-reaped" && field === "result")
     return value === "stopped" || value === "survived";
   if (area === "docker" && field === "reason") {
@@ -304,6 +305,12 @@ export function isEssentialLabel(
     if (field === "route") return isRendererErrorRoute(value);
     if (field === "fingerprint") return isRendererErrorFingerprint(value);
   }
+  if (
+    area === "desktop" &&
+    (event === "backend.exited" || event === "backend.exited-recovering") &&
+    field === "exitCause"
+  )
+    return isBackendExitCause(value);
   if (area === "desktop" && event === "startup.failed" && field === "step")
     return value === "gateway";
   return false;

@@ -17,7 +17,9 @@
  */
 import {
   compareVersions,
+  EVIDENCE_COUNT_FIELDS,
   type ExtractedSignals,
+  HOST_RESTARTED_SIGNATURE,
   type ObservedHours,
   scoreSignal,
   type Signal,
@@ -26,11 +28,12 @@ import {
 } from "./signals.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SOURCES: readonly SignalSource[] = [
+const SOURCES: readonly (keyof ObservedHours)[] = [
   "essential-log",
   "health-summary",
   "database",
   "insights",
+  "host-restart-detection",
 ];
 
 export interface MachineSignals {
@@ -43,14 +46,23 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-export function observedSourceHours(extracted: ExtractedSignals, source: SignalSource): number {
+export function observedSourceHours(
+  extracted: ExtractedSignals,
+  source: keyof ObservedHours,
+): number {
   return Object.values(extracted.observedHours[source] ?? {}).reduce(
     (sum, value) => sum + value,
     0,
   );
 }
 
-export function diagnosticSource(signature: string, source: SignalSource, machine: MachineSignals) {
+/** Run endings come from the health rows, or the essential log when a bundle has none. */
+export function diagnosticSource(
+  signature: string,
+  source: SignalSource,
+  machine: MachineSignals,
+): keyof ObservedHours {
+  if (signature === HOST_RESTARTED_SIGNATURE) return "host-restart-detection";
   return signature === "backend:crashed" ? (machine.extracted.crashSource ?? source) : source;
 }
 
@@ -58,10 +70,11 @@ function mergeObservedHours(machines: readonly MachineSignals[]): ObservedHours 
   const merged = Object.fromEntries(SOURCES.map((source) => [source, {}])) as ObservedHours;
   for (const machine of machines) {
     for (const source of SOURCES) {
+      const combined = (merged[source] ??= {});
       for (const [version, hours] of Object.entries(
         machine.extracted.observedHours[source] ?? {},
       )) {
-        merged[source][version] = round((merged[source][version] ?? 0) + hours);
+        combined[version] = round((combined[version] ?? 0) + hours);
       }
     }
   }
@@ -86,6 +99,32 @@ function mergeWindow(machines: readonly MachineSignals[]): ExtractedSignals["win
         : Math.max(...machines.map((machine) => machine.extracted.window.days), 1 / 24),
     ),
   };
+}
+
+const EXIT_COUNT_PREFIXES = [...EVIDENCE_COUNT_FIELDS, "crashReport"].map((field) => `${field}.`);
+
+function mergeEvidence(lead: Signal, signals: readonly Signal[]): Signal["evidence"] {
+  const parts = lead.signature.split(":");
+  if (
+    parts[0] !== "desktop" ||
+    (parts[1] !== "backend.exited" && parts[1] !== "backend.exited-recovering")
+  ) {
+    return lead.evidence;
+  }
+  const evidence = { ...lead.evidence };
+  const counts: Record<string, number> = {};
+  for (const signal of signals) {
+    for (const [field, value] of Object.entries(signal.evidence)) {
+      if (typeof value !== "number") continue;
+      if (EXIT_COUNT_PREFIXES.some((prefix) => field.startsWith(prefix))) {
+        counts[field] = (counts[field] ?? 0) + value;
+      } else if (field === "oomKills" || field === "ranForMs") {
+        const previous = evidence[field];
+        evidence[field] = typeof previous === "number" ? Math.max(previous, value) : value;
+      }
+    }
+  }
+  return { ...evidence, ...counts };
 }
 
 function mergeGroup(
@@ -148,7 +187,10 @@ function mergeGroup(
     measure: { ...lead.measure, value: round(value) },
     versions,
     evidence: {
-      ...lead.evidence,
+      ...mergeEvidence(
+        lead,
+        group.map(({ signal }) => signal),
+      ),
       machines: ordered.map(({ machine }) => machine.name).join(", "),
     },
     score: 0,

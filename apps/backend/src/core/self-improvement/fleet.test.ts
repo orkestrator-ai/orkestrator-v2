@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { mergeMachineSignals, newestVersion } from "./fleet.js";
+import { diagnosticSource, mergeMachineSignals, newestVersion } from "./fleet.js";
 import { insightsDir, loadNotes, loadThemes, runInsights, saveThemes } from "./insights/analyze.js";
 import { type ModelCall, type ModelRunner, NOTES_MODEL } from "./insights/model.js";
 import {
@@ -116,6 +116,68 @@ describe("signals from several machines", () => {
     expect(disk.score).toBe(alone.score);
   });
 
+  test.each(["backend.exited", "backend.exited-recovering"])(
+    "merges %s evidence even when the lead machine has only historical exits",
+    (event) => {
+      const from = NOW - DAY;
+      const exited = (fields: EssentialLine["fields"], count: number) =>
+        repeat(from, count, HOUR, {
+          level: "error",
+          area: "desktop",
+          event,
+          fields: { "error.name": "Error", ...fields },
+        });
+      const killed = { exitCause: "killed", "error.signal": "SIGKILL", crashReport: false };
+      const merged = mergeMachineSignals([
+        {
+          nodeId: "a",
+          name: "Desk",
+          extracted: extractSignals(bundleData(machine("2.30.0", exited({}, 5)), "a")),
+        },
+        {
+          nodeId: "b",
+          name: "VPS",
+          extracted: extractSignals(
+            bundleData(machine("2.31.0", exited({ ...killed, oomKills: 3, ranForMs: 8 }, 2)), "b"),
+          ),
+        },
+        {
+          nodeId: "c",
+          name: "Laptop",
+          extracted: extractSignals(
+            bundleData(
+              machine("2.31.0", [
+                ...exited({ ...killed, oomKills: 0 }, 1),
+                ...exited(
+                  {
+                    exitCause: "crashed",
+                    "error.signal": "SIGABRT",
+                    crashReport: true,
+                    ranForMs: 15,
+                  },
+                  1,
+                ),
+              ]),
+              "c",
+            ),
+          ),
+        },
+      ]);
+      const exits = merged.signals.find((signal) => signal.signature === `desktop:${event}:Error`);
+      expect(exits?.count).toBe(9);
+      expect(exits?.evidence).toMatchObject({
+        "exitCause.killed": 3,
+        "exitCause.crashed": 1,
+        "error.signal.SIGKILL": 3,
+        "error.signal.SIGABRT": 1,
+        "crashReport.false": 3,
+        "crashReport.true": 1,
+        oomKills: 3,
+        ranForMs: 15,
+      });
+    },
+  );
+
   test("rates use only the hours of machines that observed their source", () => {
     const watched = extractSignals(
       bundleData({
@@ -146,6 +208,88 @@ describe("signals from several machines", () => {
     expect(
       merged.signals.find((signal) => signal.signature === "recurring:poll:failed")?.measure.value,
     ).toBe(4);
+  });
+
+  test("crashes use the run-ending source and host restarts use detection hours", () => {
+    const fallback = {
+      nodeId: "log",
+      name: "Log",
+      extracted: extractSignals(bundleData(machine("2.31.0"))),
+    };
+    expect(fallback.extracted.crashSource).toBe("essential-log");
+    expect(diagnosticSource("backend:crashed", "health-summary", fallback)).toBe("essential-log");
+    expect(diagnosticSource("backend:host-restarted", "health-summary", fallback)).toBe(
+      "host-restart-detection",
+    );
+    expect(diagnosticSource("backend:rss-peak", "health-summary", fallback)).toBe("health-summary");
+  });
+
+  test("legacy health and log histories do not dilute the host-restart rate", () => {
+    const start = NOW - DAY - HOUR;
+    const watched = extractSignals(
+      bundleData({
+        createdAt: NOW,
+        appVersion: "2.40.0",
+        health: [
+          ...healthRun({ pid: 1, startedAt: start, hours: 24, clean: false, bootAt: start - HOUR }),
+          ...healthRun({ pid: 2, startedAt: NOW, hours: 0, clean: false, bootAt: NOW - HOUR / 2 }),
+        ],
+      }),
+    );
+    const legacyHealth = extractSignals(
+      bundleData({
+        createdAt: NOW,
+        appVersion: "2.39.0",
+        health: healthRun({ pid: 1, startedAt: NOW - DAY, hours: 24, clean: false }),
+      }),
+    );
+    const legacyLog = extractSignals(
+      bundleData({
+        createdAt: NOW,
+        appVersion: "2.39.0",
+        essential: [starting(NOW - DAY, "2.39.0")],
+      }),
+    );
+    const merged = mergeMachineSignals([
+      { nodeId: "watched", name: "Watched", extracted: watched },
+      { nodeId: "legacy-health", name: "Legacy health", extracted: legacyHealth },
+      { nodeId: "legacy-log", name: "Legacy log", extracted: legacyLog },
+    ]);
+    expect(
+      merged.signals.find((signal) => signal.signature === "backend:host-restarted"),
+    ).toMatchObject({
+      count: 1,
+      measure: { value: 1 },
+    });
+    expect(merged.observedHours["host-restart-detection"]).toEqual({ "2.40.0": 24 });
+  });
+
+  test("a log-only machine advertising detection contributes hours even with no restarts", () => {
+    const capableStart = (at: number) => ({
+      ...starting(at, "2.40.0"),
+      fields: { version: "2.40.0", hostRestartDetection: true },
+    });
+    const extract = (essential: EssentialLine[]) =>
+      extractSignals(bundleData({ createdAt: NOW, appVersion: "2.40.0", essential }));
+    const restarted = extract([
+      capableStart(NOW - DAY),
+      capableStart(NOW - 200),
+      {
+        at: NOW - 100,
+        area: "backend",
+        event: "previous-run",
+        fields: { outcome: "host-restarted" },
+      },
+    ]);
+    const quiet = extract([starting(NOW - 2 * DAY, "2.39.0"), capableStart(NOW - DAY)]);
+    const merged = mergeMachineSignals([
+      { nodeId: "restarted", name: "Restarted", extracted: restarted },
+      { nodeId: "quiet", name: "Quiet", extracted: quiet },
+    ]);
+    expect(merged.observedHours["host-restart-detection"]).toEqual({ "2.40.0": 48 });
+    expect(
+      merged.signals.find((signal) => signal.signature === "backend:host-restarted")?.measure.value,
+    ).toBe(0.5);
   });
 
   test("health and fallback crash counts use each machine's own source hours", () => {

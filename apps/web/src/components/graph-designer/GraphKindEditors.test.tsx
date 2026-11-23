@@ -111,7 +111,7 @@ describe("GraphSystemEditor", () => {
       labels: ["a", "b"],
     });
     expect(container.querySelector("[data-graph-system-param-issues]")!.textContent).toBe(
-      "open-pull-request takes no parameter labels (it takes targetBranch, draft)",
+      "open-pull-request takes no parameter labels (it takes targetBranch, prePublicationResolution, draft)",
     );
     fireEvent.change(text, { target: { value: '{"Bad-Key": 1}' } });
     expect(screen.getByRole("alert").textContent).toContain("identifier");

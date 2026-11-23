@@ -452,7 +452,7 @@ describe("Multi Review template ↔ multi-review-service", () => {
 
 describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
   const { plan, stages, template } = builtIn("build-pipeline");
-  const loop = plan.loops[0]!;
+  const loop = plan.loops.find(({ id }) => id === "rounds")!;
   const panel: Pick<BuildPipeline, "reviewers" | "steps" | "agentType" | "reviewPreparation"> = {
     agentType: "claude",
     reviewers: [{ agent: "claude" }, { agent: "codex" }],
@@ -632,7 +632,15 @@ describe("Build Pipeline template ↔ build-pipeline supervisor", () => {
   test("routing after Ship: conflicts open conflict resolution", () => {
     expect(
       (template.types ?? []).find((type) => type.name === "pull-request-state")!.schema,
-    ).toMatchObject({ properties: { state: { enum: [...PULL_REQUEST_DETECTION_STATES] } } });
+    ).toMatchObject({
+      properties: { state: { enum: [...PULL_REQUEST_DETECTION_STATES, "unpublished"] } },
+    });
+    const publication = plan.loops.find((item) => item.id === "publication");
+    expect(publication).toMatchObject({
+      members: ["pr", "has-conflicts", "resolve"],
+      maxIterations: 3,
+      until: { path: "pr.state.state", op: "neq", value: "unpublished" },
+    });
     const passed = { complete: true, rationale: "ok", acceptanceCriteria: [] };
     for (const hasMergeConflicts of [true, false, null]) {
       const ran = route(plan, {

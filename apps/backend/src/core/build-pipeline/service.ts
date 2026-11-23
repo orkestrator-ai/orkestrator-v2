@@ -1,3 +1,5 @@
+import type { ReviewValidationRun } from "@orkestrator/protocol/review-workflow";
+import { assertDetachedLongCheckPolicy } from "../native-agent/index.js";
 /**
  * Backend-owned build pipeline service.
  *
@@ -52,6 +54,11 @@ import { BuildPipelineUserMessages } from "./service-user-messages.js";
 import { BuildPipelineRecovery } from "./service-recovery.js";
 import { BuildPipelineSupervisor } from "./service-supervisor.js";
 import { BuildPipelineWorkerMail } from "./worker-mail.js";
+import {
+  applyLongCheckRun,
+  createBuildPipelineLongCheckHost,
+  type BuildPipelineLongCheckHost,
+} from "./long-checks.js";
 import {
   createBuildPipelineKeyInformationHost,
   type BuildPipelineKeyInformationHost,
@@ -311,6 +318,40 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
       listPipelines: (scope) =>
         this.context.storage.listBuildPipelinesForEnvironment(scope.projectId, scope.environmentId),
       mutate: (pipelineId, mutation) => this.context.mutate(pipelineId, mutation),
+    });
+  }
+
+  /**
+   * Where the stage agents' long check tools start and read checks: the
+   * pipeline that owns the caller's environment, recorded under its lock
+   * before the environment's validation worker is asked to run them.
+   */
+  longCheckHost(): BuildPipelineLongCheckHost {
+    return createBuildPipelineLongCheckHost({
+      assertExecutionAllowed: async (environmentId) => {
+        const environment = await this.context.storage.getEnvironment(environmentId);
+        if (!environment) throw new Error("Pipeline environment no longer exists");
+        assertDetachedLongCheckPolicy(environment);
+      },
+      listPipelines: (scope) =>
+        this.context.storage.listBuildPipelinesForEnvironment(scope.projectId, scope.environmentId),
+      mutate: (pipelineId, mutation) => this.context.mutate(pipelineId, mutation),
+      invoke: (command, args) => this.context.invoke(command, args),
+    });
+  }
+
+  /** Store an environment stop's confirmed outcomes before its worker goes offline. */
+  async recordStoppedLongChecks(
+    pipelineId: string,
+    environmentId: string,
+    runs: readonly ReviewValidationRun[],
+  ): Promise<void> {
+    await this.context.mutate(pipelineId, (pipeline) => {
+      if (pipeline.environmentId !== environmentId) return;
+      for (const run of runs) {
+        const check = pipeline.longChecks?.find((candidate) => candidate.id === run.id);
+        if (check) applyLongCheckRun(check, run);
+      }
     });
   }
 

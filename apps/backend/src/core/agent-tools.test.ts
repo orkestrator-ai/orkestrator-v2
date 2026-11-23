@@ -848,6 +848,97 @@ describe("agent Kanban tools", () => {
     expect(seen).toHaveLength(2);
   });
 
+  test("long checks follow authenticated pipeline tool scopes across MCP transports", async () => {
+    await server.stop();
+    const results = workflowResultService();
+    server = new AgentToolsServer(storage, "127.0.0.1", results);
+    await server.start();
+    const admissions: unknown[] = [];
+    server.setLongCheckToolHost({
+      owns: async ({ environmentId }) => environmentId === "env-1",
+      list: async () => ({ pipelineId: "pipeline", checks: [] }),
+      start: async (scope) => {
+        admissions.push(scope);
+        throw new Error("The detached execution policy refused this check.");
+      },
+    });
+    const request = {
+      name: "start_long_check",
+      arguments: { name: "smoke", commands: [{ command: "true" }] },
+    };
+    const listed = async ({ url, token }: { url: string; token: string }) =>
+      (await rpc(url, token, "tools/list")).body.result?.tools?.map(({ name }) => name);
+    const worker = server.connection("env-1", "project-1", "host", "worker-tab");
+    const foreign = server.connection("env-other", "project-1", "host", "worker-tab");
+    expect(await listed(worker)).toContain("start_long_check");
+    expect(await listed(foreign)).not.toContain("start_long_check");
+    expect((await rpc(worker.url, worker.token, "tools/call", request)).rawText).toContain(
+      "execution policy refused",
+    );
+    expect(admissions).toEqual([
+      { environmentId: "env-1", projectId: "project-1", tabId: "worker-tab" },
+    ]);
+    for (const [provider, kind] of [
+      ["opencode", "verification-result"],
+      ["codex", "verification-result"],
+      ["codex", "graph-output"],
+      ["codex", "subork-answer"],
+    ] as const) {
+      const resultKey = crypto.randomUUID();
+      await results.prepare({
+        resultKey,
+        kind,
+        environmentId: "env-1",
+        projectId: "project-1",
+        provider,
+      });
+      const connection = server.workflowResultConnection(
+        "env-1",
+        "project-1",
+        "host",
+        resultKey,
+        provider,
+      );
+      if (kind !== "verification-result") {
+        expect(await listed(connection)).not.toContain("get_long_checks");
+        expect(await listed(connection)).not.toContain("start_long_check");
+        continue;
+      }
+      expect(await listed(connection)).toContain("start_long_check");
+      expect(
+        (
+          await rpc(connection.url, connection.token, "tools/call", {
+            name: "get_long_checks",
+            arguments: {},
+          })
+        ).body.result?.structuredContent,
+      ).toEqual({ pipelineId: "pipeline", checks: [] });
+      if (provider === "opencode") {
+        expect(
+          (await rpc(connection.url, connection.token, "tools/call", request)).body.result?.isError,
+        ).toBe(true);
+      }
+      const capability = results.capabilityToken(
+        { environmentId: "env-1", projectId: "project-1" },
+        resultKey,
+      );
+      expect(
+        (
+          await rpc(connection.url, connection.token, "tools/call", {
+            ...request,
+            arguments: { ...request.arguments, capability },
+          })
+        ).rawText,
+      ).toContain("execution policy refused");
+      expect(admissions.at(-1)).toEqual({
+        environmentId: "env-1",
+        projectId: "project-1",
+        workflowResultKey: resultKey,
+      });
+    }
+    expect(admissions).toHaveLength(3);
+  });
+
   test("advertises one typed submission tool for every workflow result kind", async () => {
     await server.stop();
     const workflowResults = workflowResultService();

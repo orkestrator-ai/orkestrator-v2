@@ -11,6 +11,7 @@ import {
   REVIEW_VALIDATION_ENVIRONMENT_CHANGES_MAX,
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
+import { longCheckStatusFromRun } from "@orkestrator/protocol/build-pipeline-long-checks";
 import { REVIEW_VALIDATION_WORKER } from "./validation-worker.js";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { controlReviewValidation, validationPreparation } from "./validation-service.js";
@@ -884,3 +885,70 @@ test.each(["clean", "missing-setup", "drift"] as const)(
     }
   },
 );
+
+test("an explicit long check runs the changed command to settlement before the general command", async () => {
+  const general = "test -f .orkestrator/changed-done";
+  const { root, run, git } = await fixture([
+    command("general", general, { scope: "general", weight: 2 }),
+    command("change", "sleep 0.3; touch .orkestrator/changed-done; exit 1", {
+      scope: "changed",
+      weight: 2,
+    }),
+  ]);
+  await writeFile(
+    path.join(root, ".orkestrator-test-scheduler.json"),
+    JSON.stringify({
+      version: 1,
+      cooperativeCommands: [],
+      commandProfiles: { [general]: { onDemand: { when: ["no-trigger/**"] } } },
+    }),
+  );
+  const scheduler = createHostTestScheduler({
+    directory: path.join(root, ".orkestrator", "scheduler"),
+    workers: 2,
+    memoryMiB: 4096,
+  });
+  const blocker = scheduler.enqueue({ owner: "b".repeat(64), workers: 2, memoryMiB: 128 });
+  try {
+    expect(scheduler.poll(blocker).state).toBe("running");
+    await control(
+      root,
+      run,
+      "start",
+      {
+        ORKESTRATOR_TEST_HOST_WORKERS: "2",
+        ORKESTRATOR_TEST_HOST_MEMORY_MIB: "4096",
+      },
+      undefined,
+      REVIEW_VALIDATION_WORKER,
+      git("rev-parse", "HEAD"),
+      true,
+    );
+    const waiting = await observeUntil(
+      root,
+      run,
+      (next) => next.results[1]?.status === "queued",
+      12_000,
+    );
+    expect(waiting.results[0]?.status).toBe("pending");
+    scheduler.release(blocker);
+    const final = await observeUntil(root, run, (next) => next.status === "completed", 12_000);
+    expect(final.results.map(({ status }) => status)).toEqual(["passed", "failed"]);
+  } finally {
+    scheduler.release(blocker);
+    scheduler.close();
+  }
+});
+
+test("a commit during a long check invalidates its results", async () => {
+  const { root, run, git } = await fixture([
+    command("check", "while [ ! -e .orkestrator/finish ]; do sleep 0.05; done"),
+  ]);
+  await control(root, run, "start", {}, undefined, REVIEW_VALIDATION_WORKER, undefined, true);
+  await observeUntil(root, run, (next) => next.results[0]?.status === "running", 12_000);
+  git("commit", "--allow-empty", "-m", "moved head");
+  await writeFile(path.join(root, ".orkestrator", "finish"), "");
+  const final = await observeUntil(root, run, (next) => next.status === "failed", 12_000);
+  expect(final.error).toContain("HEAD changed during validation");
+  expect(longCheckStatusFromRun(final)).toBe("error");
+});

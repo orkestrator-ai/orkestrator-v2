@@ -1,0 +1,6 @@
+# Merge drivers for files every parallel branch edits. Register them once per
+# clone with `mise run git:merge-drivers` (`mise run setup` does it too);
+# without that, Git uses its ordinary line merge. scripts/merge-drivers/.
+docs/todo/**/0000-index.md merge=orkestrator-index
+docs/tests/flaky-tests/**/0000-index.md merge=orkestrator-index
+packages/protocol/contracts/manifest.json merge=orkestrator-contract-manifest

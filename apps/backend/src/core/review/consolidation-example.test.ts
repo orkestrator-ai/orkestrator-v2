@@ -91,4 +91,16 @@ describe("consolidated review example", () => {
     expect(prompt).toContain(section);
     expect(prompt.endsWith(section)).toBe(true);
   });
+
+  test.each([false, true])(
+    "the section names the keys after the last array, where the stray brace went (scope filled: %p)",
+    (scopeFilledByBackend) => {
+      const section = consolidatedReviewExampleSection({ scopeFilledByBackend });
+      expect(section).toContain(
+        "`testCoverageGaps` is not the last key: `verdict`, `summaryOfChange` and `reviewSummary` follow it inside the same top-level object",
+      );
+      expect(section).toContain('followed by `,"verdict":` with no `}` between them');
+      expect(section.endsWith("and the text no longer parses.")).toBe(true);
+    },
+  );
 });

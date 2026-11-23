@@ -21,7 +21,11 @@ import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
-import { githubRangesSeedFile, readGithubRangesSeed } from "../src/core/git/github-ranges-cache";
+import {
+  githubRangesSeed,
+  githubRangesSeedFile,
+  readGithubRangesSeed,
+} from "../src/core/git/github-ranges-cache";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const ENABLED = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE.length > 0;
@@ -96,6 +100,75 @@ async function probe(containerId: string, url: string): Promise<number> {
   ]);
   return Number(out.split("\n").at(-1));
 }
+
+async function expectGithubReachable(containerId: string, execDocker = docker): Promise<void> {
+  // The seed assertion already proves the backend's metadata fetch worked.
+  // A quota response still proves HTTPS reached GitHub. A curl transport error
+  // makes docker exec fail before we check the HTTP status.
+  const status = await execDocker([
+    "exec",
+    "-u",
+    "node",
+    containerId,
+    "curl",
+    "-q",
+    "-sS",
+    "--max-time",
+    "6",
+    "--output",
+    "/dev/null",
+    "--write-out",
+    "%{http_code}",
+    "https://api.github.com/meta",
+  ]);
+  expect(status).toMatch(/^(?:2\d{2}|403|429)$/);
+}
+
+test("the unseeded C23 reachability check accepts quota responses after seed creation", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-firewall-seed-probe-"));
+  const seed = githubRangesSeedFile(dir);
+  try {
+    expect(await readGithubRangesSeed(seed)).toBeNull();
+    const ranges = ["192.30.252.0/22"];
+    expect(
+      await githubRangesSeed(dir, {
+        token: "qualification-fixture",
+        fetcher: async () => Response.json({ web: ranges, api: [], git: [] }),
+      }),
+    ).toBe(seed);
+    expect((await readGithubRangesSeed(seed))?.ranges).toEqual(ranges);
+
+    for (const status of ["200", "403", "429"]) {
+      await expectGithubReachable("fixture-container", async (args) => {
+        expect(args).toEqual([
+          "exec",
+          "-u",
+          "node",
+          "fixture-container",
+          "curl",
+          "-q",
+          "-sS",
+          "--max-time",
+          "6",
+          "--output",
+          "/dev/null",
+          "--write-out",
+          "%{http_code}",
+          "https://api.github.com/meta",
+        ]);
+        return status;
+      });
+    }
+    await expect(expectGithubReachable("fixture-container", async () => "502")).rejects.toThrow();
+    await expect(
+      expectGithubReachable("fixture-container", async () => {
+        throw new Error("curl: (6) Could not resolve host");
+      }),
+    ).rejects.toThrow("Could not resolve host");
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
 
 /**
  * Opens one keep-alive HTTP connection to example.com as node, answers a
@@ -179,7 +252,7 @@ async function refresherPids(containerId: string): Promise<string[]> {
 
 describe("C23 allowlist edits, refresh and revocation", () => {
   // The workflow runs this case separately with its seed variable cleared.
-  // The usual seeded run skips it, keeping the unauthenticated fetch to one
+  // The usual seeded run skips it, keeping the backend fetch to one
   // deliberate qualification request per architecture.
   (ENABLED && !process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim() ? test : test.skip)(
     "restricted boot fetches GitHub ranges without a workflow seed",
@@ -204,7 +277,7 @@ describe("C23 allowlist edits, refresh and revocation", () => {
       await startRuntime(containerId);
       const policy = await environmentNetworkPolicy(environment.id, context);
       expect(policy.domains).toBe("applied");
-      expect(await probe(containerId, "https://api.github.com/meta")).toBe(0);
+      await expectGithubReachable(containerId);
       expect(await probe(containerId, "https://example.com/")).not.toBe(0);
     },
     LIVE_TIMEOUT_MS,

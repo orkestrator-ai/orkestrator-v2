@@ -63,12 +63,16 @@ export const DOCKER_LOG_AREAS = defineLogAreas({
         "A rebuild copy step's helper was still running when its drain window after the `docker cp` producer closed ran out, so the step was abandoned and the helper removed. Fields: the producer's exit code, the bytes it sent, how long it streamed and the window.",
       "replacement.copy-helper-remove-failed":
         "An abandoned rebuild copy step's helper container (`helper`, its name) could not be removed, so the step failed rather than settle while the helper may still mount the new storage.",
+      "replacement.copy-helper-unreported":
+        "A rebuild's volume copy helper ended without reporting a result. Fields: the attached run's `exitCode` and `timedOut`, `daemon` (whether the daemon start read before the copy differs from the one answering now: `restarted`, `same`, `unreachable` or `unknown`), `exitEvidence` (the helper's `die` event lookup, asked only when the start is `unknown`) and the `outcome`, `daemon-unavailable` or `helper-failed`.",
       "replacement.clear-terminals-failed":
         "Terminal sessions could not be cleared after a container replacement.",
       "recovery.clear-terminals-failed":
         "Terminal sessions could not be cleared after a recovery restore.",
       "github-ranges.seed-not-copied":
         "The GitHub ranges seed could not be copied into a container created before the seed directory was bound, so its firewall fetches them.",
+      "github-ranges.fetch-failed":
+        "The backend's fetch of GitHub's address ranges (`api.github.com/meta`) produced no seed, so the previous seed is served while it is under a week old and otherwise the firewall fetches them itself. `outcome` is `http-4xx`, `http-5xx`, `http-other`, `rate-limited`, `timeout`, `network-error`, `malformed` or `write-failed`; `status` the HTTP status when there was one; `authenticated` whether the qualification-only token was sent; `servingPrevious` whether an older seed is still served. Never the answer's body or the token.",
       "github-ranges.seed-copied-before-boot":
         "A container created before the GitHub ranges seed directory was bound was given a fresh copy of the seed before it booted.",
       "github-ranges.seed-directory-unavailable":

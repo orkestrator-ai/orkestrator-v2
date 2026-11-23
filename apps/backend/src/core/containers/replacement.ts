@@ -19,7 +19,10 @@ import {
 } from "../constants.js";
 import {
   dockerContainerExitEvidence,
+  dockerDaemonRestartBetween,
+  dockerDaemonStart,
   dockerDaemonUnreachableNow,
+  type DockerDaemonStart,
   isDockerCopyRemountRefused,
   isDockerDaemonUnreachable,
   isDockerPathNotFound,
@@ -27,7 +30,7 @@ import {
 } from "./cli-errors.js";
 import { COPY_REFUSED_REMEDY } from "./copy-refusal.js";
 import { dockerOwnerNamespace } from "./ownership.js";
-import { runCommand, spawnCommand } from "../shell.js";
+import { CommandFailedError, runCommand, spawnCommand } from "../shell.js";
 import {
   prepareEgressGatewayForStart,
   removeRuntimeContainer,
@@ -547,6 +550,9 @@ export async function runCopyStep(
     const sourceVolume = volumeNamed(source.storage, step.source.role);
     // Named so a helper stopped from outside can be looked up afterwards.
     const volumeHelper = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;
+    // Which daemon start the copy began on, so a restart during it is seen
+    // even when nothing reports one (to-do 8322 task 2).
+    const daemonBefore = await dockerDaemonStart();
     const startedAt = Date.now();
     let failure: unknown;
     const { stdout } = await runCommand(
@@ -571,16 +577,8 @@ export async function runCopyStep(
     const result = parseCopyOutput(stdout);
     if (result.ok) return result;
     if (isDockerDaemonUnreachable(stdout)) return DAEMON_UNAVAILABLE_COPY;
-    // A signal-only exit can hide a shutdown. Preserve a connection error
-    // from the event lookup even if the next availability probe would pass.
-    if (
-      result.reason === "helper-failed" &&
-      isDockerRunStoppedFromOutside(failure) &&
-      (await dockerContainerExitEvidence(volumeHelper, startedAt)) === "daemon-unavailable"
-    ) {
-      return DAEMON_UNAVAILABLE_COPY;
-    }
-    return result;
+    if (result.reason !== "helper-failed") return result;
+    return unreportedVolumeHelperFailure(volumeHelper, startedAt, daemonBefore, failure);
   }
   // Named so an abandoned step can remove the helper, whose input may never end.
   const helperName = `orkestrator-copy-${crypto.randomUUID().slice(0, 12)}`;
@@ -606,6 +604,42 @@ export async function runCopyStep(
   if (piped.stalled) return { ok: false, reason: "helper-input-stalled" };
   if (piped.producerFailed) return { ok: false, reason: "source-read-failed" };
   return parseCopyOutput(piped.output);
+}
+
+/**
+ * A volume helper that ended without reporting. Engine 28.0.4 restarts
+ * gracefully under `systemctl restart docker`: the attached run ends with the
+ * helper's signal status and no connection wording, socket activation hands
+ * the next request to the new daemon, and that daemon's event history no
+ * longer holds the helper's `die`. So the daemon start read before the copy
+ * is compared with the one answering now: a different start, or no answer,
+ * is an outage. The same start is a helper that failed on its own. Only when
+ * the start cannot be read is the helper's exit history asked, as before.
+ */
+async function unreportedVolumeHelperFailure(
+  helper: string,
+  startedAt: number,
+  daemonBefore: DockerDaemonStart,
+  failure: unknown,
+): Promise<CopyResult> {
+  const daemon = dockerDaemonRestartBetween(daemonBefore, await dockerDaemonStart());
+  let exitEvidence: Awaited<ReturnType<typeof dockerContainerExitEvidence>> | "not-asked" =
+    "not-asked";
+  if (daemon === "unknown" && isDockerRunStoppedFromOutside(failure)) {
+    // A signal-only exit can hide a shutdown. Preserve a connection error
+    // from the event lookup even if the next availability probe would pass.
+    exitEvidence = await dockerContainerExitEvidence(helper, startedAt);
+  }
+  const outage =
+    daemon === "restarted" || daemon === "unreachable" || exitEvidence === "daemon-unavailable";
+  log.warn("replacement.copy-helper-unreported", {
+    exitCode: failure instanceof CommandFailedError ? failure.exitCode : null,
+    timedOut: failure instanceof CommandFailedError ? failure.timedOut : false,
+    daemon,
+    exitEvidence,
+    outcome: outage ? "daemon-unavailable" : "helper-failed",
+  });
+  return outage ? DAEMON_UNAVAILABLE_COPY : { ok: false, reason: "helper-failed" };
 }
 
 /** A copy step that failed because Docker went away, not because of the files. */

@@ -54,7 +54,7 @@ ignores `apps/backend/tests/**`, so a repository-root path matches no file.
 | Bridge credential (H4) | same command, `./tests/bridge-credential-docker.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `bridge-credential`, and `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line | All five bridges start from the root-only token with a verifier; `node` finds the token nowhere, including `/proc`, and its ptrace seize of each bridge is refused; what it can read gets 401 from the approval routes and the backend's token passes; planted `bunfig.toml` and `/opt` writes do nothing; a wider policy is refused live and taken after a restart; an older backend's unprefixed bridge keeps working. The topology line: whether the daemon is rootless, the container's uid map, Yama's scope, root's capabilities and ptrace result, and what the runner's host user reaches of the bridge directory and a bridge's memory. On a rootless daemon the fixture chooses its host ports as the backend does. No credentials and no provider turns |
 | Live replacement | same command, `./tests/container-live-replacement.test.ts` | C14–C19 |
 | Live network | same command, `./tests/container-live-network.test.ts` | C22, C24, C26; on a gateway image C22 runs behind the egress gateway |
-| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall |
+| Live firewall | same command, `./tests/container-live-firewall.test.ts` | C23 and the policy 3 tuples; on a gateway image also root tampering from the runtime, published ports through the gateway and a gateway restart. Point `ORKESTRATOR_QUALIFICATION_IMAGE` at an image that does not declare `egress-gateway` for the in-container firewall. Its unseeded case ("restricted boot fetches GitHub ranges without a workflow seed") runs only without `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED`; CI gives that step `ORKESTRATOR_QUALIFICATION_GITHUB_META_TOKEN` (the job token) so the backend's own fetch does not depend on the runner's spent anonymous quota, and a fetch that writes no seed logs `github-ranges.fetch-failed` with its outcome class ([8322](../todo/containers-and-environments/8322-container-live-qualification-ci-red.md) task 1) |
 | Live GitHub ranges seed bind | same command, `./tests/container-live-github-seed.test.ts`; `ORKESTRATOR_LIVE_GITHUB_RANGES_SEED=<file>` supplies the ranges, otherwise the backend fetches them once | The firewall container binds the seed directory read-only, its boot reports `githubRanges: seed`, and after a stop and a rename of a refreshed seed into the directory the next boot through the start path loads the new range, with no `extract-to-dir` event on the container ([7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md) task 2) |
 | Live egress conditions | same command, `./tests/container-live-egress-conditions.test.ts` | Gateway IPv6 (the daemon's IPv6 default, or with `ORKESTRATOR_LIVE_IPV6_NETWORK=1` an IPv6 network the test attaches), DNS rotation through a controlled resolver, and with `ORKESTRATOR_LIVE_DAEMON_RESTART_COMMAND` a Docker daemon restart (on a rootless daemon with `live-restore` on, the containers' surviving processes are counted, probed and killed before the backend restarts them). Point that command only at a disposable daemon. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep the restart's observations. |
 | Live egress name checks (M12) | same command, `./tests/container-live-egress-filter.test.ts`; set `ORKESTRATOR_QUALIFICATION_OLDER_IMAGE` to add an image without `egress-filter` | The gateway's TLS SNI, HTTP Host and DNS checks: an allowed name, a foreign SNI on its address, a Host check on a named port against a local fixture, bodies both ways, a server-first protocol, GitHub SSH, DNS refusals over UDP, TCP and straight to an outside resolver, a live edit, the daemon killed and restarted, a restart, a full-mode runtime, the rollback switch and an older image. Set `ORKESTRATOR_QUALIFICATION_EVIDENCE=<file>` to keep its topology line: whether the daemon is rootless, how Docker names its DNS upstreams in the gateway, and the gateway's nat redirections. Outside traffic only to registry.npmjs.org, nodejs.org and GitHub |
@@ -1665,6 +1665,38 @@ current availability probe and copy failure classification. Unit tests in
 `tests/container-replacement.test.ts` cover those responses. A graceful
 restart that completes before the lookup and leaves no connection error
 can still surface as `helper-failed`.
+
+**Daemon start check (2026-11-23).** That last gap is closed by comparing
+daemon starts instead of reading history
+([8322](../todo/containers-and-environments/8322-container-live-qualification-ci-red.md)
+task 2). Docker publishes no daemon start time, but every daemon start
+deletes and recreates the default `bridge` network when no container
+survives the restart (moby `configureNetworking`, "Clear stale bridge
+network"), so that network's ID and creation time identify the start
+(`dockerDaemonStart`, `containers/cli-errors.ts`). The volume copy step reads
+it before running its helper and, when the helper ends without reporting
+(`helper-failed`, whatever its exit status), again afterwards:
+
+- a different start, or no answer at all afterwards, is an outage:
+  `daemon-unavailable`, and the original set is kept as for any failed copy;
+- the same start is a helper that failed on its own, still `helper-failed`,
+  and no history is asked;
+- only when either read named no start (no default bridge, as with
+  `--bridge=none`, or an unparseable answer) does a signal exit fall back to
+  the `die` event lookup above.
+
+Each such failure logs `replacement.copy-helper-unreported` with the run's
+exit status, the start comparison, whether the history was asked and the
+outcome. The cost is one `docker network inspect` per volume step, and one
+more when it fails. Live-restore with surviving containers keeps the bridge,
+so a restart there reads as the same start; it also keeps the helper
+running, so the copy does not fail that way. Streamed (legacy layout) steps
+are unchanged. Unit tests in `tests/container-replacement.test.ts` simulate a
+changed start (exits 143, 137, 125 and 1), the same start, a daemon gone
+afterwards and an unreadable first read. The bridge recreation is taken from
+moby's source; it was not observed on this branch, since restarting a daemon
+is not allowed on the host it was built on, and the next C15 run on GitHub's
+runners is its live check.
 
 **Also run.** The whole readiness file on the rootful daemon: 9/10, the
 tenth being the C22 host-service reply, which reports itself INCOMPLETE

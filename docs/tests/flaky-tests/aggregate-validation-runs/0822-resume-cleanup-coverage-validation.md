@@ -29,7 +29,7 @@ error across 162 files (515.96 s).
 | Disk report exceeded five seconds and produced a between-test error | Passed in 5.4 s; [0259](../environments-and-containers/0259-disk-report-aggregate-timeout.md). |
 | Mermaid watchdog measured 6,135 ms against `< 5,000 ms` | Failed again at 7,281 ms; 12 passed, one failed. See [9858](../design-canvas-and-artifacts/9858-mermaid-watchdog-elapsed-under-load.md). |
 | `apps/backend/tests/container-log-service.test.ts`: `bounded bridge output > the writer stays bounded on output without a single newline` and `the writer rotates by size, keeps N files and cuts oversize lines` found no log files | Both failed again, nine passed and two failed in 7.02 s. |
-| `apps/backend/src/core/containers/worktree-signal-install.test.ts`: `orkestrator-worktree-signal > start writes a private config from stdin and launches the watcher` expected `lost, ready`, received only `lost` (1,505.45 ms) | Complete unchanged owner passed (exit 0, 80.1 s); confirms an intermittent failure without establishing its cause. |
+| `apps/backend/src/core/container-worktree-signal-install.test.ts`: `orkestrator-worktree-signal > start writes a private config from stdin and launches the watcher` expected `lost, ready`, received only `lost` (1,505.45 ms) | Complete unchanged owner passed (exit 0, 80.1 s); confirms an intermittent failure without establishing its cause. |
 
 The first aggregate also loaded an earlier adapter implementation before the
 agent-lifecycle regression was added during editing. That regression failed in
@@ -41,7 +41,7 @@ Additional owner commands:
 
 ```sh
 mise run test:logged -- --name cleanup-container-log-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./tests/container-log-service.test.ts --parallel=1 --only-failures
-mise run test:logged -- --name cleanup-worktree-signal-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/containers/worktree-signal-install.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name cleanup-worktree-signal-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/container-worktree-signal-install.test.ts --parallel=1 --only-failures
 ```
 
 ## Component browsers

@@ -9,7 +9,7 @@ import { syncContainerClaudeLogin } from "../src/core/agent-accounts/containers.
 import {
   ContainerClaudeLoginKeeper,
   CLAUDE_HOST_REFRESH_LEAD_MS,
-} from "../src/core/container-claude-login-keeper.js";
+} from "../src/core/containers/claude-login-keeper.js";
 import { refreshHostClaudeLogin } from "../src/core/claude-host-login-refresh.js";
 import type { CommandContext } from "../src/core/commands-context.js";
 import { runCommand } from "../src/core/shell.js";

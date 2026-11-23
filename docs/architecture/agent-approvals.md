@@ -20,7 +20,7 @@ its environment at start (`loadBridgeAuthority`,
 `packages/protocol/src/node/bridge-authority.ts`). The private key stays with
 the backend: in memory for a host bridge, and beside the token in the
 root-only `/run/orkestrator-bridge/<kind>-authority` for a container's
-(`container-bridge-credential.ts`). The backend keeps the key by token
+(`containers/bridge-credential.ts`). The backend keeps the key by token
 (`bridge-authority-keys.ts`), so whatever reads a token back reads its key with
 it.
 
@@ -281,7 +281,7 @@ The verifier and the public key are not secret (both are in the launcher
 wrapper's argv), so a process running as the agent's uid can kill its bridge and
 start one of its own on the same port, through the launcher or not. That bridge
 accepts the token the backend reads from root's file. So the token belongs to a
-socket, not to a port (`container-bridge-listener.ts`):
+socket, not to a port (`containers/bridge-listener.ts`):
 
 - **Writing a new token marks the record pending.** Beside the token,
   `/run/orkestrator-bridge/<kind>-listener` holds `pending` from the moment a

@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { promises as fs, existsSync } from "node:fs";
 import path from "node:path";
-import { syncRuntimeGitHubCredential } from "../src/core/container-github-credential";
+import { syncRuntimeGitHubCredential } from "../src/core/containers/github-credential";
 import type { Environment } from "../src/core/models";
 import { withDockerScript } from "./container-lifecycle-fixtures";
 import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";

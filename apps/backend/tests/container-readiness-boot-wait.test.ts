@@ -14,7 +14,7 @@ import {
   bootProbeScript,
   parseBootProbe,
   waitForContainerBoot,
-} from "../src/core/container-readiness";
+} from "../src/core/containers/readiness";
 import { tempDir, withDockerScript } from "./container-lifecycle-fixtures";
 
 // Each case starts real `sh` probes; the wall-clock bounds the tests assert

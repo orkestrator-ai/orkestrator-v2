@@ -57,10 +57,9 @@ import {
   DOCKER_LABEL_INPUTS_REVISION,
   DOCKER_LABEL_NETWORK_POLICY,
 } from "./constants.js";
-import { currentRuntimeIdentity } from "./container-lifecycle-service.js";
-import { containerAllowedDomains, containerNetworkPolicy } from "./container-network.js";
-import { observeContainerBoot } from "./container-readiness.js";
-import { imageCapabilities } from "./docker-image.js";
+import { imageCapabilities, observeContainerBoot } from "./containers/index.js";
+import { currentRuntimeIdentity } from "./containers/lifecycle-service.js";
+import { containerAllowedDomains, containerNetworkPolicy } from "./containers/network.js";
 import { containerLabel } from "./portable-input-status.js";
 import { portableInputRevisionDirectory, replaceStagedInputFile } from "./portable-inputs.js";
 import type { Environment } from "./models.js";

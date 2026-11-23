@@ -5,7 +5,7 @@ import { agentAccountLoginKey } from "./agent-accounts/store.js";
 import { LocalServerRuntime } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
 import * as containerExec from "./commands-container-exec.js";
-import * as containerCredentials from "./container-bridge-credential.js";
+import * as containerCredentials from "./containers/bridge-credential.js";
 import type { CodexModelCatalogEntry, Environment } from "./models.js";
 import { fetchCodexBridgeModels, fetchCodexBridgeModelsAt } from "./codex-live-model-catalog.js";
 

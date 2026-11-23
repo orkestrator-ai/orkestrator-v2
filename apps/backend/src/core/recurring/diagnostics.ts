@@ -7,7 +7,7 @@ import {
 } from "../native-session-invalidation-metrics.js";
 import type { RecurringSchedulerStatus } from "./scheduler.js";
 import type { AdmissionPoolStatus } from "../work-admission.js";
-import type { ContainerGitFetchStatus } from "../container-git-fetch.js";
+import type { ContainerGitFetchStatus } from "../containers/git-fetch.js";
 
 /**
  * The one read-only surface for recurring-work diagnostics, shared by the

@@ -3,7 +3,7 @@ import { parseContainerLifecycleError } from "@orkestrator/protocol/container-li
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { sshConnectFailure, type SshConnectFailure } from "./git/index.js";
-import { SETUP_FAILURE_REASONS, type SetupFailureReason } from "./container-scripts.js";
+import { SETUP_FAILURE_REASONS, type SetupFailureReason } from "./containers/index.js";
 
 const log = createLogger("environment");
 

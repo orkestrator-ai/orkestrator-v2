@@ -160,7 +160,7 @@ setsid sh -c '
         env -i PATH=/usr/bin:/bin /usr/local/bin/orkestrator-log-writer "$log"
 ' orkestrator-bridge "$log" "$entry" "$extra" "$snapshot" "$keys" "$@" </dev/null >/dev/null 2>&1 &
 # The bridge's session, for the backend to record its socket only while a
-# bridge in it lives (container-bridge-listener.ts). dash gives a background
+# bridge in it lives (containers/bridge-listener.ts). dash gives a background
 # job no process group of its own, so setsid calls setsid(2) in place rather
 # than forking, and the job's pid is the session's id. No process can join
 # that session later.

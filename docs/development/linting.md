@@ -279,7 +279,8 @@ new.
     `permission-rules/`, `self-improvement/`, `opencode2/`, `control-mcp/`,
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
-    `native-agent/`, `recurring/`, `tmux/`, `terminals/`) are reached only
+    `native-agent/`, `recurring/`, `tmux/`, `terminals/`, `containers/`) are
+    reached only
     through their
     `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
@@ -345,6 +346,31 @@ new.
     `transcript-*` prefix moved into `native-agent/` instead and are
     re-exported from `native-agent/index.ts`, with no new exception.
 
+    The `containers/` boundary has seventeen exceptions for runtime cycles,
+    none of them re-exported by `containers/index.ts`. The domain depends on
+    root files that import `containers/index.ts` for its other modules, so
+    each of the seventeen reaches one of them at runtime:
+    `egress-gateway.ts` (`containers/lifecycle-service.ts`,
+    `replacement.ts` and `cleanup-inventory.ts`, and through them
+    `network.ts`, `resources.ts` and `cleanup-preview.ts`), the command layer
+    (`bridge-credential.ts` and `apt-packages.ts` through
+    `commands-container-exec.ts`, `claude-login-keeper.ts` and
+    `github-credential.ts` through `commands-files.ts`,
+    `lifecycle-events.ts` through `commands-environment.ts`,
+    `project-seed-files.ts` through `commands-project-files.ts`),
+    `claude-state-signal.ts` (`credential-mode.ts`,
+    `worktree-signal-install.ts`), `portable-input-status.ts`
+    (`login-file-watcher.ts`, `sign-in-guidance.ts`), and `git/`
+    (`git-fetch.ts`, through `worktrees/index.ts`). Keeping those root files
+    deep instead does not shrink the set, because each imports several other
+    container modules. The root files that re-export container symbols
+    (`egress-gateway.ts`, `commands-servers.ts`, and `commands-helpers.ts`,
+    which lists `containers/scripts.ts`'s exports by name rather than with
+    `export *`) do it through `containers/index.ts`. Its `tests/unit/**`
+    pattern has two exceptions, `containers/network.ts` (for
+    `firewall-refresh.test.ts`) and `containers/replacement.ts` (for the two
+    `migrate-copy*.test.ts` files).
+
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import
     `previews/test-support.ts`, `public-api/test-provider.ts` imports
@@ -357,9 +383,12 @@ new.
     test needs it and no production importer outside the folder uses it.
     The exceptions include `review/validation-prompts.ts`,
     `build-pipeline/handoff.ts` and `build-pipeline/service-helpers.ts` (for
-    `user-prompt-display-contract.test.ts`), and
+    `user-prompt-display-contract.test.ts`),
     `native-agent/service-projection-test-support.ts` (for
-    `native-agent-deferred-normalization.test.ts`). Write those specifiers
+    `native-agent-deferred-normalization.test.ts`), and
+    `containers/network.ts` and `containers/replacement.ts` (for
+    `firewall-refresh.test.ts` and the `migrate-copy*.test.ts` files, whose
+    modules `containers/index.ts` cannot re-export). Write those specifiers
     with the `.js` extension: the exceptions name `.js` paths, so an
     extensionless specifier is reported.
 

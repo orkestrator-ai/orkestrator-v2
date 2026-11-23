@@ -47,7 +47,7 @@ import {
   type ReviewPackageReference,
   type ReviewValidationPlan,
 } from "@orkestrator/protocol/review-workflow";
-import { withContainerRuntimeCredential } from "./container-scripts.js";
+import { withContainerRuntimeCredential } from "./containers/index.js";
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { isEnvironmentOwnedBranch } from "@orkestrator/protocol/environment-branch";

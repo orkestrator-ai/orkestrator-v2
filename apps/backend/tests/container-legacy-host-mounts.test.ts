@@ -13,12 +13,12 @@ import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
 } from "../src/core/commands-error-text";
-import { resetResourceCaches } from "../src/core/container-resources";
-import { rebuildPreview } from "../src/core/container-replacement";
-import { previewDockerCleanup } from "../src/core/docker-cleanup-preview";
+import { resetResourceCaches } from "../src/core/containers/resources";
+import { rebuildPreview } from "../src/core/containers/replacement";
+import { previewDockerCleanup } from "../src/core/containers/cleanup-preview";
 import { legacyExposures } from "../src/core/legacy-runtime-shape";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/docker-image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
 import { environmentInputStatus } from "../src/core/portable-input-status";
 import {
   FIXTURE_IMAGE_ID,

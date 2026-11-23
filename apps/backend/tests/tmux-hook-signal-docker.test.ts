@@ -19,8 +19,8 @@ import {
   tmuxHookSignalInstallCommand,
   tmuxHookSignalSupport,
 } from "../src/core/claude-state-signal.js";
-import { readImageManifest } from "../src/core/docker-image.js";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership.js";
+import { readImageManifest } from "../src/core/containers/image.js";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership.js";
 import { runCommand } from "../src/core/shell.js";
 import { TmuxBackend } from "../src/core/tmux/backend.js";
 import type { TmuxHookDoorbell } from "../src/core/tmux/hook-signal.js";

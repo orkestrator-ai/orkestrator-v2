@@ -15,7 +15,7 @@ emitted, and a remounted client rehydrates from the environment snapshot.
 Every container mutation runs as one **durable operation** recorded in the
 environment's `containerLifecycle` record
 (`packages/protocol/src/container-lifecycle.ts`,
-`apps/backend/src/core/container-lifecycle-service.ts`):
+`apps/backend/src/core/containers/lifecycle-service.ts`):
 
 | Field | Meaning |
 | --- | --- |
@@ -205,7 +205,7 @@ Linux host (RootlessKit with slirp4netns) on 2026-10-26 and again on
 2026-11-10; [evidence](../development/container-qualification.md#gvisor-tap-vsock-host-loopback-7548)) and
 [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)
 (`docker cp` refusals and a second port collision). A resource budget axis the daemon reports it cannot enforce is
-refused (see [Resource budgets](#resource-budgets-and-usage-container-resourcests)),
+refused (see [Resource budgets](#resource-budgets-and-usage-containersresourcests)),
 and a restricted firewall that cannot be applied fails the boot closed. The
 evidence and what each run covered are in
 [container-qualification.md](../development/container-qualification.md).
@@ -300,7 +300,7 @@ a token in `ORKESTRATOR_TERMINAL_SESSION`: a process-wide backend instance UUID,
 (`CONTAINER_TERMINAL_PID_RECORD_COMMAND`). Whenever the PTY goes away, closed
 by the user, superseded, reaped as an orphan or exited, the backend runs
 `CONTAINER_TERMINAL_CLOSE_SCRIPT` in the container as the terminal's own user
-(`container-terminal-shell.ts`). The script removes the record, sends SIGHUP to
+(`containers/terminal-shell.ts`). The script removes the record, sends SIGHUP to
 the recorded shell's process group once `/proc/<pid>/environ` proves the PID
 still carries the token, then to other processes carrying it in the recorded session, because zsh
 gives each job its own process group. Detached sessions (including tmux) survive;
@@ -418,7 +418,7 @@ Rules:
 
 ### Provider state
 
-`PROVIDER_STATE_LAYOUT` (`container-state-layout.ts`) lists every
+`PROVIDER_STATE_LAYOUT` (`containers/state-layout.ts`) lists every
 resume-critical path; each is mounted from its own `state` sub-directory at
 exactly that path, so the rest of a provider home stays in the container
 layer. The container user is `node` (`HOME=/home/node`) and no launcher sets a
@@ -475,7 +475,7 @@ Docker administrator can still remove them.
 
 `recreate_environment` with intent `preserve` and the reviewed
 `expectedContainerId` replaces the runtime without losing the workspace
-(`container-replacement.ts`). A legacy source is a `migrate`, a volume-backed
+(`containers/replacement.ts`). A legacy source is a `migrate`, a volume-backed
 source a `rebuild`; both always copy into a **new** storage set, so candidate
 setup can never damage the only pre-rebuild copy. A preserving request without
 a reviewed container id is still refused `preservation-required`.
@@ -551,7 +551,7 @@ verification. A step that failed without saying so asks the daemon directly
 (a bounded `docker version`), because a `docker cp` cut off mid-stream
 reports its broken stream rather than the outage. Any other failure still
 reads `needs-attention: … failed verification (<reason>)`. The wording is classified in one place
-(`docker-cli-errors.ts`) for the copy steps, operation failure codes and the
+(`containers/cli-errors.ts`) for the copy steps, operation failure codes and the
 availability check, and the image manifest probe applies the same strict
 "could not find the file" rule, so a daemon lost between the probe's create
 and its copy reads as unavailable (not cached) rather than as a legacy image.
@@ -582,7 +582,7 @@ with the original authoritative — qualified live with tmpfs-backed volumes.
 ### Admission limits
 
 The lifecycle queue serializes one environment's operations; across
-environments `container-admission.ts` bounds the expensive ones. Four
+environments `containers/admission.ts` bounds the expensive ones. Four
 container starts (through readiness) and two preserving rebuilds or
 migrations run at once; further requests wait in arrival order, and one
 beyond the wait bound (64 starts, 32 copies) is refused `resource-exhausted`
@@ -1138,7 +1138,7 @@ the earlier ones in to-do 1202, task 15 (retired 2026-11-10).
 The files the **Environment files** setting (`envFilePatterns`, by default
 `.env` and `.env.local`) matches in the project folder, and the project's
 `opencode.json`, are copied into every new container
-(`container-project-seed-files.ts`, matching in
+(`containers/project-seed-files.ts`, matching in
 `project-env-file-patterns.ts`), where `workspace-setup.sh` moves them into
 `/workspace`. They are repository content, so a branch can commit any of
 them as a link to a host path, and Docker resolves a bind source on the host
@@ -1234,7 +1234,7 @@ checkout, so this is accepted. The live check on a real daemon is in the
 ## Environment networks (`network-policy=2`)
 
 A capable image's runtime joins its own bridge network
-(`container-network.ts`): `ork-<owner>-<digest>-net`, labelled with owner,
+(`containers/network.ts`): `ork-<owner>-<digest>-net`, labelled with owner,
 environment and role, created before the container and adopted only with
 exactly those labels. A creation failure is an explicit error (`resource-exhausted`
 when Docker's address pools are full) and never falls back to the shared
@@ -1305,7 +1305,7 @@ running, is
 [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md).
 
 Every start of a runtime, rebuild candidate or egress gateway goes through
-`startDockerContainer` (`container-start.ts`). A read-only bind Docker refuses
+`startDockerContainer` (`containers/start.ts`). A read-only bind Docker refuses
 to remount (`remount-ro … operation not permitted`) becomes an
 `unsupported-topology` error naming the source and target. Rootless dockerd
 picks an automatic host port inside RootlessKit's namespace, which cannot see
@@ -1330,7 +1330,7 @@ a port the user fixed, is the existing `port-conflict`.
 Each failed start moves rootless dockerd on by one port, so no retry count
 gets past a held run longer than itself. On a rootless daemon the backend
 therefore chooses every automatic host port itself when it creates a
-runtime or gateway (`container-host-ports.ts`): it binds `127.0.0.1:0` on
+runtime or gateway (`containers/host-ports.ts`): it binds `127.0.0.1:0` on
 the host, where the kernel sees every socket and prefers odd ports for
 `bind` (outbound `connect` prefers even ones), publishes the result as a
 fixed port and lists it in the `orkestrator-backend-host-ports` label. A
@@ -1353,7 +1353,7 @@ container with a read-only bind whose source filesystem is mounted
 `nosuid`/`nodev`, running or stopped, while start and `exec` work: the
 daemon's archive path remounts the bind without the locked flags
 (`remount-ro … flags: 0x1021: operation not permitted`). A refused copy is
-classified (`docker-copy-refusal.ts`) rather than reported as a generic
+classified (`containers/copy-refusal.ts`) rather than reported as a generic
 failure: configured project files and project seed files fail creation
 with `unsupported-topology` and the remedy (move Orkestrator's data
 directory or run Docker rootful), a rebuild's copy step likewise, the
@@ -1384,7 +1384,7 @@ The backend starts those containers again as it does after any restart with
 `live-restore` off, and cannot find or stop the orphans, so it warns once per
 process when a rootless daemon reports `live-restore` on (`docker`
 `daemon.rootless-live-restore`, from the capacity probe in
-`container-resources.ts`); the remedy is `"live-restore": false` in that
+`containers/resources.ts`); the remedy is `"live-restore": false` in that
 daemon's `daemon.json`.
 
 With `live-restore` off, a rootless daemon restart is qualified on all four
@@ -1519,7 +1519,7 @@ and the Network section says whether a root terminal can change the rules.
   root entrypoint records once with the rest of the policy.
 - **Namespace owner.** Published ports, the firewall report, live edits,
   `--host-ports` and the network endpoint belong to the gateway.
-  `container-network-owner.ts` resolves a runtime's owner from its
+  `containers/network-owner.ts` resolves a runtime's owner from its
   immutable network mode (cached, and recorded when the backend creates the
   runtime, so its first start does not inspect it), and `getHostPort`, the network status,
   `applyEnvironmentAllowedDomains`, `ensureContainerHostServicePorts`, the
@@ -1717,7 +1717,7 @@ These were decided while building network and credential isolation (to-do
   gates staging and syncs. Never promise that removal retracts a credential a
   workload already read, and never revoke an account-wide key.
 
-## Agent tools reachability (`container-host-reachability.ts`)
+## Agent tools reachability (`containers/host-reachability.ts`)
 
 Container agents reach the backend's agent tools server (workflow results,
 mail, tickets) at `http://host.docker.internal:<port>/mcp`. A host firewall
@@ -1901,7 +1901,7 @@ label=orkestrator-owner=<owner>` and one `docker network inspect` per network
 (at most 256 networks and 512 subnets). It follows network creation and
 removal: `ensureEnvironmentNetwork`, `removeEnvironmentNetwork`, the probe
 network's create and removal, the stale-probe reap and reviewed cleanup
-report each change (`docker-network-changes.ts`), which marks the list stale
+report each change (`containers/network-changes.ts`), which marks the list stale
 and reloads it at once. A request that arrives while a reload is running
 waits for the entire refresh chain, including changes reported during a read.
 Every non-loopback peer, including cached members, reloads the list once 15 s
@@ -1967,7 +1967,7 @@ The C22 live qualification case passes its scene's owner
 to the filter, because its server's data directory differs from the one that
 owns its environment network.
 
-## Resource budgets and usage (`container-resources.ts`)
+## Resource budgets and usage (`containers/resources.ts`)
 
 A new runtime gets `environment.containerResourceLimits`, else
 `global.containerResourceLimits` (Settings → Container), else the built-in
@@ -2065,7 +2065,7 @@ disk, image count, creation time) and Settings → Docker shows them as
 unknown; it refreshes every five seconds while shown and marks a sample older
 than fifteen seconds stale. `/dev/shm` is 1 GiB, or half the memory limit
 when that is smaller, because shared memory is charged to the limit.
-`container-oom-events.ts` follows Docker's `oom` events for this owner — a
+`containers/oom-events.ts` follows Docker's `oom` events for this owner — a
 killed child process leaves `State.OOMKilled` false — replaying from its last
 event after a restart without double-counting; samples carry `oomEvents`
 (null while not following). The same follower reports `start`, `die`, `stop` and
@@ -2644,10 +2644,10 @@ Not yet qualified:
 
 ## Container lifecycle events
 
-The backend's `docker events` follower (`container-oom-events.ts`) reports
+The backend's `docker events` follower (`containers/oom-events.ts`) reports
 `start`, `die`, `stop` and `destroy` for its own containers. Each event
 invalidates the shared `docker ps` snapshot, and `ContainerLifecycleReactor`
-(`container-lifecycle-events.ts`) acts on it:
+(`containers/lifecycle-events.ts`) acts on it:
 
 - On `die`, `stop` or `destroy`, the loops keyed by the container retire at
   once: its Claude state poll and tmux hook doorbell, and every tmux tab in it,
@@ -2665,7 +2665,7 @@ second reconciliation and nothing more.
 
 A bridge shares the agent's uid, so it holds no secret: the backend gives it the
 SHA-256 of its token and keeps the token where only root in the container can
-read it (`container-bridge-credential.ts`). The rules for bridges are in
+read it (`containers/bridge-credential.ts`). The rules for bridges are in
 [`bridges/AGENTS.md`](../../bridges/AGENTS.md).
 
 | Where | What it holds | Who reads it |
@@ -2777,7 +2777,7 @@ numstat.
 | Step | What happens | Where |
 | --- | --- | --- |
 | Lineage | `DiffStatsService` starts one watcher per tracking lineage (a container start, a retarget, a resume after a pause, a backend start, a replacement container) through `startContainerWatcher`; a pause, untrack or retarget closes it, aborts in-flight host preparation or installation and revokes its credential | `DiffStatsService.attachContainerWatcher` |
-| Arm | If the image declares the capability: issue a credential for `/worktree-signal`, prepare the host alias and service port, then `docker exec -i --user node <id> orkestrator-worktree-signal start` with the curl config on stdin (0600, never argv). The script stops a previous lineage's watcher (pid file plus `/proc/<pid>/cmdline` check, since `/tmp` survives a restart) and starts a new one. Installs are serialized per container | `container-worktree-signal-install.ts` |
+| Arm | If the image declares the capability: issue a credential for `/worktree-signal`, prepare the host alias and service port, then `docker exec -i --user node <id> orkestrator-worktree-signal start` with the curl config on stdin (0600, never argv). The script stops a previous lineage's watcher (pid file plus `/proc/<pid>/cmdline` check, since `/tmp` survives a restart) and starts a new one. Installs are serialized per container | `containers/worktree-signal-install.ts` |
 | Confirm | Until the `ready` ring arrives the entry keeps the unwatched bounds. The ring marks it qualified and rescans both views once, because nothing before it was announced | `ContainerWorktreeSignals.ring` |
 | Ring | Each ring hints the file list and the tree, forwarded at most once per 2 s (trailing), so constant writes cost at most one status exec per 2 s | `CONTAINER_WORKTREE_SIGNAL_MIN_HINT_GAP_MS` |
 | Miss | A safety scan whose list changed although nothing advanced the entry's epoch from the previous scan through this scan's completion reports `unannouncedChange`; unless a ring arrives within 3 s (one still settling in the container) the lineage is demoted | `CONTAINER_WORKTREE_SIGNAL_MISS_GRACE_MS` |

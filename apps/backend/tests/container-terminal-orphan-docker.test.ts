@@ -41,8 +41,8 @@ test.skipIf(!image)(
         `
 import { BackendRuntime } from ${modulePath("backend-runtime.ts")};
 import { spawnPty } from ${modulePath("pty.ts")};
-import { newContainerTerminalToken } from ${modulePath("container-terminal-shell.ts")};
-import { CONTAINER_TERMINAL_PID_RECORD_COMMAND } from ${modulePath("container-scripts.ts")};
+import { newContainerTerminalToken } from ${modulePath("containers/terminal-shell.ts")};
+import { CONTAINER_TERMINAL_PID_RECORD_COMMAND } from ${modulePath("containers/scripts.ts")};
 const runtime = new BackendRuntime({ emit: () => undefined });
 process.on("SIGTERM", () => { runtime.shutdown(); process.exit(0); });
 const open = () => {

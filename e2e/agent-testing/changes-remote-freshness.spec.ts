@@ -50,7 +50,7 @@ import {
 } from "./container-wiring-support";
 
 const LIVE = process.env.ORKESTRATOR_AGENT_TEST_REMOTE_FRESHNESS === "1";
-/** An explicit refresh within 15 s of the last attempt joins it (`container-git-fetch.ts`). */
+/** An explicit refresh within 15 s of the last attempt joins it (`containers/git-fetch.ts`). */
 const EXPLICIT_MIN_INTERVAL_MS = 16_000;
 
 test.describe.configure({ mode: "serial" });

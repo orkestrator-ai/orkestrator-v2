@@ -57,19 +57,16 @@ import {
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_CREDENTIAL_DIR,
 } from "./agent-credential-files.js";
-import {
-  CONTAINER_ROOT_USER_ARGS,
-  CONTAINER_UNTRACKED_STATS_SCANNER,
-} from "./container-scripts.js";
+import { CONTAINER_ROOT_USER_ARGS, CONTAINER_UNTRACKED_STATS_SCANNER } from "./containers/index.js";
 import {
   CONTAINER_FETCH_STDERR_BYTES,
   CONTAINER_REPO_IDENTITY_SNIPPET,
   CONTAINER_REPO_MARKER,
   CONTAINER_REPO_PROBE_SCRIPT,
+  type ContainerGitFetchPolicy,
   containerRepoId,
   parseContainerRepoProbe,
-  type ContainerGitFetchPolicy,
-} from "./container-git-fetch.js";
+} from "./containers/git-fetch.js";
 import type { WorkAdmissionPool } from "./work-admission.js";
 import { worktreeTargetKey } from "./worktrees/index.js";
 import {
@@ -559,7 +556,7 @@ const CONTAINER_MAINTAIN_GIT_EXCLUDE = `
  * commit the base resolved to is the one it compares against.
  *
  * It reads local Git state only. Fetching is the container fetch policy's job
- * (`container-git-fetch.ts`, script: {@link buildContainerFetchScript}); this
+ * (`containers/git-fetch.ts`, script: {@link buildContainerFetchScript}); this
  * program reports which clone it read (a framed identity) and how the baseline
  * resolved — through `origin/<ref>` (`tracking`) or the local `<ref>`
  * (`local`), in exactly the order the combined script used — so the policy can
@@ -2438,7 +2435,7 @@ export async function syncContainerGitHubCredential(
  * var: an env var is readable from `docker inspect` and `/proc/1/environ` for
  * the life of the container, and would go stale the first time the OAuth token
  * refreshed. The backend re-syncs on every start, every bridge start and every
- * host renewal (`container-claude-login-keeper.ts`).
+ * host renewal (`containers/claude-login-keeper.ts`).
  */
 export function buildSyncContainerClaudeCredentialCommand(
   credentialFile = CONTAINER_CLAUDE_CREDENTIAL_FILE,

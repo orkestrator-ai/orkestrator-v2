@@ -3,8 +3,8 @@ import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecyc
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { CONTAINER_GIT_CREDENTIAL_HELPER } from "../src/core/commands-files";
-import { syncRuntimeGitHubCredential } from "../src/core/container-github-credential";
-import type { readImageManifest } from "../src/core/docker-image";
+import { syncRuntimeGitHubCredential } from "../src/core/containers/github-credential";
+import type { readImageManifest } from "../src/core/containers/image";
 import type { AppConfig } from "../src/core/models";
 
 import { createCommandFixtures } from "./command-fixtures";

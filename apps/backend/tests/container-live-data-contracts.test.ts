@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { parseCopyOutput } from "../src/core/container-replacement";
+import { parseCopyOutput } from "../src/core/containers/replacement";
 
 const IMAGE = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim() ?? "";
 const live = process.env.RUN_LIVE_DOCKER_TESTS === "1" && IMAGE ? test : test.skip;

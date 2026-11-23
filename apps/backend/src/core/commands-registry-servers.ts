@@ -33,18 +33,26 @@ import {
   stopPiServerCommand,
 } from "@orkestrator/protocol/contract/domains/agent-servers";
 import { bridgeDebugEnvValue } from "@orkestrator/protocol/log-policy";
-import { containerBridgeOperationId } from "./container-bridge-operations.js";
+import {
+  boundDiagnosticTail,
+  boundedTailCommand,
+  bridgeLogEnvironmentExports,
+  containerBridgeOperationId,
+  keepPreviousLogCommand,
+  persistentStateExports,
+  previousContainerLogFile,
+} from "./containers/index.js";
+import {
+  type ContainerBridgeKind,
+  containerBridgeLaunch,
+  readContainerBridgeToken,
+  removeContainerBridgeCredential,
+  stopContainerBridgeProcess,
+} from "./containers/bridge-credential.js";
+import { containerCredentialMode } from "./containers/credential-mode.js";
 import { acpContainerUnavailableReason, acpProviderLaunchRecord } from "./acp-provider-launch.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
-import {
-  boundedTailCommand,
-  boundDiagnosticTail,
-  bridgeLogEnvironmentExports,
-  keepPreviousLogCommand,
-  previousContainerLogFile,
-} from "./container-log-bounds.js";
-import { persistentStateExports } from "./container-state-layout.js";
 import type {
   CommandRegistrar,
   CommandTarget,
@@ -100,20 +108,12 @@ import {
   conciseError,
   refreshClaudeModelCatalog,
 } from "./commands-helpers.js";
-import { containerCredentialMode } from "./container-credential-mode.js";
 import {
   openCodeContainerServerStatus,
   startOpenCodeContainerServer,
   stopOpenCodeContainerServer,
 } from "./opencode2/container-server-lifecycle.js";
 import { OPENCODE2_CONTAINER_LOG } from "./opencode2/index.js";
-import {
-  type ContainerBridgeKind,
-  containerBridgeLaunch,
-  readContainerBridgeToken,
-  removeContainerBridgeCredential,
-  stopContainerBridgeProcess,
-} from "./container-bridge-credential.js";
 import {
   type ContainerBridgeControl,
   reconcileContainerAgentAccount,

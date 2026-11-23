@@ -7,10 +7,10 @@ import {
   localServerPort,
 } from "./commands-servers.js";
 import {
+  type ContainerBridgeKind,
   isContainerBridgeKind,
   readContainerBridgeToken,
-  type ContainerBridgeKind,
-} from "./container-bridge-credential.js";
+} from "./containers/bridge-credential.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { BridgeLogPolicyTarget } from "./log-policy-service.js";
 

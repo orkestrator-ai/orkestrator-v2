@@ -178,7 +178,7 @@ export interface WorktreeWatcher {
   /**
    * The owner's safety scan found a change that no hint since its previous
    * scan announced. Container watchers use it to stop being trusted
-   * (`container-worktree-signal.ts`), and so do local ones: unless an event
+   * (`containers/worktree-signal.ts`), and so do local ones: unless an event
    * arrives within {@link WATCH_MISS_GRACE_MS}, a local watcher withdraws
    * qualified coverage until it delivers an event again, at least
    * {@link WATCH_DISTRUST_MS} after its latest miss. Owners also report the

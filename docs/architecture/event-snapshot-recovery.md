@@ -335,7 +335,7 @@ are invalidations only; the file list and tree are re-read with
   quiet watched worktree the backend answers it from valid watched state.
 - Container states carry an optional `remote`:
   `{ state: not-required | current | stale | unknown, lastSuccessAt?,
-  failure? }` from the container fetch policy (`container-git-fetch.ts`).
+  failure? }` from the container fetch policy (`containers/git-fetch.ts`).
   Container status scans read local refs only; a background fetch that moves
   `origin/<ref>` calls `invalidateBaseline`, so the rescan's file-list
   revision (if the list changed) is what tells clients to re-read. A fetch

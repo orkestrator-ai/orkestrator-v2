@@ -12,9 +12,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { networkOwnerContainer } from "../src/core/container-network-owner";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { networkOwnerContainer } from "../src/core/containers/network-owner";
 import { getHostPort } from "../src/core/commands-container-exec";
 import { OPENCODE2_SERVER_PORT } from "../src/core/constants";
 import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/egress-gateway";
@@ -185,8 +185,8 @@ describe("C23 allowlist edits, refresh and revocation", () => {
     "restricted boot fetches GitHub ranges without a workflow seed",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
-      const { environmentNetworkPolicy } = await import("../src/core/container-network");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
+      const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const environment = lifecycleEnvironment({ id: `unseeded-${RUN}` });
       const { context } = firewallContext([environment]);
       const seed = githubRangesSeedFile(dataDir);
@@ -214,9 +214,9 @@ describe("C23 allowlist edits, refresh and revocation", () => {
     "an edit applies in place, revokes removed addresses, survives a restart and never widens on failure",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const { applyEnvironmentAllowedDomains, environmentNetworkPolicy } =
-        await import("../src/core/container-network");
+        await import("../src/core/containers/network");
       const environment = lifecycleEnvironment({
         id: `env-${RUN}`,
         networkAccessMode: "restricted",
@@ -522,9 +522,9 @@ describe("policy 3 kernel tuple qualification", () => {
     "TCP and UDP match separately and removing a port revokes only its established connection",
     async () => {
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
       const { applyEnvironmentAllowedDomains, environmentNetworkPolicy } =
-        await import("../src/core/container-network");
+        await import("../src/core/containers/network");
       const entries = [
         "firewall-peer.test:18080",
         "firewall-peer.test:18081",

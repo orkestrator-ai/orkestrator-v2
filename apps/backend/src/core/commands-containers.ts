@@ -1,9 +1,63 @@
 import {
-  boundedTailCommand,
+  assertContainerNotDraining,
+  backendHostPortLabelArguments,
   boundDiagnosticTail,
-  keepPreviousLogCommand,
+  boundedTailCommand,
   bridgeLogEnvironmentExports,
-} from "./container-log-bounds.js";
+  chooseBackendHostPorts,
+  configuredImageRef,
+  detectDockerTopology,
+  dockerContainerRuntimeName,
+  dockerOwnerNamespace,
+  ensureCurrentBootReady,
+  imageStateFormats,
+  imageWritesVolumeStorage,
+  keepPreviousLogCommand,
+  listOwnedBackendHostPorts,
+  readImageManifest,
+  rememberNetworkOwner,
+  storageMountArguments,
+} from "./containers/index.js";
+import {
+  projectDeclaresAptPackages,
+  runtimeInstallsAptPackages,
+} from "./containers/apt-packages.js";
+import {
+  containerBridgeLaunch,
+  type ContainerCredentialMode,
+  type ContainerScriptLaunch,
+  isContainerBridgeKind,
+  launchContainerScript,
+  readContainerBridgeToken,
+  recordLaunchedContainerBridge,
+  stopContainerBridgeProcess,
+} from "./containers/bridge-credential.js";
+import {
+  ContainerLifecycleError,
+  findOperationContainers,
+} from "./containers/lifecycle-service.js";
+import {
+  allowedDomainsArgument,
+  containerAllowedDomains,
+  containerNetworkPolicy,
+  ensureEnvironmentNetwork,
+  ingressPorts,
+} from "./containers/network.js";
+import {
+  copyProjectSeedFilesIntoContainer,
+  filesLeftForConfiguredCopy,
+  projectSeedReadPlan,
+  projectSeedRefusalLabel,
+  readProjectSeedFiles,
+} from "./containers/project-seed-files.js";
+import {
+  dockerAdmissionCapacity,
+  logDriverArguments,
+  refuseUnenforceableLimits,
+  resolveResourceLimits,
+  resourceArguments,
+  sharedMemoryMiB,
+} from "./containers/resources.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { bridgeRestarts } from "./bridge-restarts.js";
 import { mkdir, writeFile, rm } from "node:fs/promises";
@@ -29,17 +83,9 @@ import {
   OPENCODE2_SERVER_PORT,
   PI_BRIDGE_PORT,
 } from "./constants.js";
-import { dockerContainerRuntimeName, dockerOwnerNamespace } from "./docker-ownership.js";
 import { defaultRepositoryConfig } from "./storage.js";
 import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "./agent-tools.js";
 import { pathExists, runCommand } from "./shell.js";
-import {
-  copyProjectSeedFilesIntoContainer,
-  filesLeftForConfiguredCopy,
-  projectSeedReadPlan,
-  projectSeedRefusalLabel,
-  readProjectSeedFiles,
-} from "./container-project-seed-files.js";
 import type {
   Environment,
   ClaudeEffortLevel,
@@ -55,16 +101,6 @@ import {
   CLAUDE_GITHUB_ENV_FINGERPRINT,
 } from "./agent-credential-files.js";
 import { retryableBridgeStartupError } from "./local-server-runtime.js";
-import {
-  containerBridgeLaunch,
-  launchContainerScript,
-  isContainerBridgeKind,
-  readContainerBridgeToken,
-  recordLaunchedContainerBridge,
-  stopContainerBridgeProcess,
-  type ContainerCredentialMode,
-  type ContainerScriptLaunch,
-} from "./container-bridge-credential.js";
 import { OPENCODE2_CONTAINER_LOG } from "./opencode2/index.js";
 import { resolveAnthropicApiKey } from "./commands-validation.js";
 import { imageWithoutStagedInputsMessage, imageUnreadableMessage } from "./commands-error-text.js";
@@ -93,15 +129,6 @@ import {
 } from "./commands-server-health.js";
 import type { LocalServerKind } from "./local-server-runtime.js";
 import type { CommandContext } from "./commands-context.js";
-import { ContainerLifecycleError, findOperationContainers } from "./container-lifecycle-service.js";
-import {
-  configuredImageRef,
-  detectDockerTopology,
-  imageStateFormats,
-  imageWritesVolumeStorage,
-  readImageManifest,
-} from "./docker-image.js";
-import { storageMountArguments } from "./container-storage.js";
 import { readSeedManifest, seedFilesDir } from "./nodes/index.js";
 import {
   gitMirrorContainerArguments,
@@ -109,15 +136,7 @@ import {
   scheduleProjectGitMirrorRefresh,
 } from "./project-git-mirror.js";
 import { resolveGitMirrorAccess } from "./project-git-mirror-access.js";
-import {
-  allowedDomainsArgument,
-  containerAllowedDomains,
-  containerNetworkPolicy,
-  ensureEnvironmentNetwork,
-  ingressPorts,
-} from "./container-network.js";
 import { githubRangesSeedMountArguments, prepareGithubRangesSeedBind } from "./git/index.js";
-import { rememberNetworkOwner } from "./container-network-owner.js";
 import {
   DOCKER_LABEL_EGRESS_GATEWAY,
   createEgressGateway,
@@ -126,18 +145,6 @@ import {
   egressGatewayName,
   removeRuntimeContainer,
 } from "./egress-gateway.js";
-import {
-  projectDeclaresAptPackages,
-  runtimeInstallsAptPackages,
-} from "./container-apt-packages.js";
-import {
-  dockerAdmissionCapacity,
-  logDriverArguments,
-  refuseUnenforceableLimits,
-  resolveResourceLimits,
-  resourceArguments,
-  sharedMemoryMiB,
-} from "./container-resources.js";
 import {
   SHARED_SKILLS_INPUT,
   STAGED_INPUT_RELAY_DIR,
@@ -155,15 +162,9 @@ import {
   imageRelaysStagedInputs,
   type ImageManifest,
 } from "@orkestrator/protocol/image-manifest";
-import { assertContainerNotDraining, ensureCurrentBootReady } from "./container-readiness.js";
 import { activeAgentAccountInputRoots } from "./agent-accounts/index.js";
 import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import {
-  backendHostPortLabelArguments,
-  chooseBackendHostPorts,
-  listOwnedBackendHostPorts,
-} from "./container-host-ports.js";
 
 const dockerLog = createLogger("docker");
 
@@ -889,7 +890,7 @@ export function containerServerLogFile(processName: LocalServerKind): string {
 /**
  * Starts the in-container Claude bridge behind a per-container auth token, with
  * the same persistence and recovery contract as `start_codex_server`: the token
- * stays in the container (`container-bridge-credential.ts`) so later starts can
+ * stays in the container (`containers/bridge-credential.ts`) so later starts can
  * return it, and a healthy bridge without a readable token (from before
  * per-process authentication) is replaced rather than served unauthenticated.
  *

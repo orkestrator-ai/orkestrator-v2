@@ -214,7 +214,7 @@ W5).
 
 **Context.** Narrowed on 2026-10-25 (decision 6): every new container records its creation commit and compares against it, so a "branch-baseline container" cannot come from normal creation.
 
-**Investigation.** Still accurate. `establishCreatedFromCommit` is at `apps/backend/src/core/commands-local-server-lifecycle.ts:87`, `resolveComparisonRef` at `packages/protocol/src/diff-stats.ts:194`, and the cooldowns at `apps/backend/src/core/container-git-fetch.ts:97` (5 min) and `:99` (30 min). The routine path therefore serves a shrinking population that new users never reach.
+**Investigation.** Still accurate. `establishCreatedFromCommit` is at `apps/backend/src/core/commands-local-server-lifecycle.ts:87`, `resolveComparisonRef` at `packages/protocol/src/diff-stats.ts:194`, and the cooldowns at `apps/backend/src/core/containers/git-fetch.ts:97` (5 min) and `:99` (30 min). The routine path therefore serves a shrinking population that new users never reach.
 
 **Decisions.**
 
@@ -1524,7 +1524,7 @@ owners: the child's exit is the signal.
 | Codex app-server JSONL (`jsonl-rpc-client.ts`) | stdio child | stream end; 60 s request timeouts | supervisor 250 ms to 10 s with jitter and a circuit breaker | Not applicable (child exit) |
 | ACP agent (`acp-context.ts`) and Claude SDK frames | stdio child | exit and stream errors; Claude's runtime idle detach | reattach on demand | Not applicable |
 | Cursor SDK run stream (`cursor-bridge/src/prompt.ts`) | in-process SDK | the turn's `PROMPT_TIMEOUT_MS` | none | Another layer: the Cursor SDK; not a reconnect owner |
-| Docker events (`container-oom-events.ts`) and container log followers | `docker` stdio | exit | events: 1 to 60 s doubling, one per backend | Not applicable |
+| Docker events (`containers/oom-events.ts`) and container log followers | `docker` stdio | exit | events: 1 to 60 s doubling, one per backend | Not applicable |
 | Gateway preview proxy (`gateway-proxy.ts`) | HTTP or SSE pass-through | body idle timer | none | Not applicable (the end client reconnects) |
 | CLI `--follow` (`packages/cli`) | polling | n/a | n/a | Not applicable |
 | iOS wrapper | WKWebView | n/a | n/a | Another layer: it hosts the web client |

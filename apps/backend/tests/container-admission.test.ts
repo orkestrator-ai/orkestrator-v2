@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CONTAINER_ADMISSION_LIMITS,
   createAdmissionPoolForTest,
-} from "../src/core/container-admission";
+} from "../src/core/containers/admission";
 
 function deferred() {
   let resolve!: () => void;

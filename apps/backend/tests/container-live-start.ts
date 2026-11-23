@@ -1,5 +1,5 @@
 import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/egress-gateway";
-import { startDockerContainer } from "../src/core/container-start";
+import { startDockerContainer } from "../src/core/containers/start";
 
 /**
  * Starts a runtime the way the backend's start path does: a restricted

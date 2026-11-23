@@ -9,9 +9,9 @@ import {
   SETUP_DONE_OSC_SEQUENCE,
   SETUP_FAILED_OSC_SEQUENCE,
   SETUP_FAILURE_REASONS,
-  setupFailureReasonOscSequence,
   type SetupFailureReason,
-} from "./container-scripts.js";
+  setupFailureReasonOscSequence,
+} from "./containers/index.js";
 import { SETUP_TERMINAL_STILL_RUNNING_MESSAGE } from "./commands-error-text.js";
 import type { PtyProcess } from "./pty.js";
 import type { TerminalRuntime } from "./terminals/index.js";

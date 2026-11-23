@@ -154,7 +154,7 @@ The aggregate failed this owner and its unchanged owning file passed with one wo
 ## Recurrence 2026-10-21 (idle-observation qualification branch)
 
 - **Command:** `mise run test` on `3ebece08` (macOS 27.0, Apple Silicon, host running other agent workloads). The workspace group failed on three known flakes (0291, 0248, 0175): `move_environment > a failed submodule re-link restores the original checkout`, `restart recovery re-links submodules of an adopted or abandoned copy` and `a branch baseline follows origin/<ref> only when the policy fetches`, each at the 5-second default (5060 to 5098 ms).
-- **Isolated rerun:** `bun test ./src/core/environment-move.test.ts ./src/core/container-git-fetch-git.test.ts` from `apps/backend` passed 43 of 43 (40.05 s). The branch did not change either owning file or the code they test.
+- **Isolated rerun:** `bun test ./src/core/environment-move.test.ts ./src/core/containers/git-fetch-git.test.ts` from `apps/backend` passed 43 of 43 (40.05 s). The branch did not change either owning file or the code they test.
 
 ## Cold-restart qualification — 2026-10-21
 

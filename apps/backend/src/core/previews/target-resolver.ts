@@ -1,4 +1,4 @@
-import { parseNetworkModeOwner } from "../container-network-owner.js";
+import { parseNetworkModeOwner } from "../containers/index.js";
 import { connect } from "node:net";
 
 import {

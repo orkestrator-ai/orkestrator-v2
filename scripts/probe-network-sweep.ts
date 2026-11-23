@@ -2,8 +2,8 @@ import {
   DOCKER_LABEL_CREATOR,
   DOCKER_LABEL_RESOURCE_ROLE,
 } from "../apps/backend/src/core/constants";
-import { HOST_REACHABILITY_PROBE_ROLE } from "../apps/backend/src/core/container-host-reachability";
-import { PROBE_CREATOR_PATTERN } from "../apps/backend/src/core/container-host-reachability-creator";
+import { HOST_REACHABILITY_PROBE_ROLE } from "../apps/backend/src/core/containers/host-reachability";
+import { PROBE_CREATOR_PATTERN } from "../apps/backend/src/core/containers/host-reachability-creator";
 
 /**
  * Host-reachability probe networks of any owner (rules in

@@ -6,7 +6,7 @@ A restricted runtime's start waits twice by polling: for its egress gateway's
 firewall report (`waitForEgressGatewayFirewall`,
 `apps/backend/src/core/egress-gateway.ts`) and for its own entrypoint's
 boot status (`waitForContainerBoot`,
-`apps/backend/src/core/container-readiness.ts:197-231`). Each poll is one
+`apps/backend/src/core/containers/readiness.ts:197-231`). Each poll is one
 `docker exec` followed by a 250 ms sleep. So each wait finishes up to one
 poll period (the sleep plus one exec) after the container actually got
 there, and every poll is one more Docker call. A boot that is 50 ms slower
@@ -20,7 +20,7 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 ### Tasks
 
-1. **Bound the waits inside the container**: one exec waits for the state itself, up to a bounded window, instead of one exec per 250 ms. Status: done 2026-10-30 (`container-readiness.ts`, `egress-gateway.ts`; deterministic tests, and probe timings in the real image).
+1. **Bound the waits inside the container**: one exec waits for the state itself, up to a bounded window, instead of one exec per 250 ms. Status: done 2026-10-30 (`containers/readiness.ts`, `egress-gateway.ts`; deterministic tests, and probe timings in the real image).
 2. **Re-qualify the readiness faults**: the C09 fault cases and the gateway-cannot-apply case pass with the new wait. Status: done on Linux amd64, 2026-10-30. All nine live readiness cases passed in one run, plus four C09 stale-record and active-exec interruption checks. Explicit unused subnets bypassed the exhausted default pools without removing other runs' resources; fixture repairs and host prerequisites are recorded in the qualification evidence below.
 3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: blocked (waits on 7568: 0241 task 1, the probe-network sweep on omarchy-hp, and on the next Container live qualification CI run on both architectures). Task 2 is qualified locally; repeated reference-host and CI measurements are still needed.
 
@@ -28,7 +28,7 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 **Problem.** Both waits are quantised to the poll period, and their call count tracks how long the boot takes, not what the start does.
 
-**Context.** `observeContainerBoot` (`container-readiness.ts:132-170`) reads the boot status file once per exec. When the exec fails it backs off by up to 4× (`:227-229`), so an unreachable container polls more slowly still. The gateway wait now spends one call per unfinished poll (0729). `ensureCurrentBootReady` (`:238-246`) uses the same probe before dispatching work.
+**Context.** `observeContainerBoot` (`containers/readiness.ts:132-170`) reads the boot status file once per exec. When the exec fails it backs off by up to 4× (`:227-229`), so an unreachable container polls more slowly still. The gateway wait now spends one call per unfinished poll (0729). `ensureCurrentBootReady` (`:238-246`) uses the same probe before dispatching work.
 
 **Investigation.** From 0729's attributed benchmark runs (Docker Desktop 29.9.2 arm64, 18 CPUs, loaded host, 2026-10-28):
 - In a fresh restricted start, boot readiness took 7 of 25 Docker calls, all `exec` polls, and the gateway firewall wait took 3.

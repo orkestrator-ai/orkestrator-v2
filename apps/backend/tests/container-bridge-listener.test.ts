@@ -14,7 +14,7 @@ import {
   stopBridgeListenerScript,
   writeBridgeListenerRecordCommand,
   type BridgeListenerScan,
-} from "../src/core/container-bridge-listener";
+} from "../src/core/containers/bridge-listener";
 import { runCommand } from "../src/core/shell";
 
 setDefaultTimeout(30_000);

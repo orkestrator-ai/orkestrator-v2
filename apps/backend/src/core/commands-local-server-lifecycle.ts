@@ -6,9 +6,9 @@ import type { CoordinatorConversation } from "@orkestrator/protocol/coordinator"
 import {
   CONTAINER_WORKSPACE_PREPARE_COMMAND,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
-  CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_SUPPORT_COMMAND,
-} from "./container-scripts.js";
+  CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
+} from "./containers/index.js";
 import { LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
 import { noteGitMirrorCloneOutcome } from "./project-git-mirror.js";
 import type { LocalServerKind } from "./local-server-runtime.js";

@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { startAssignedContainerRuntimeTask } from "../src/core/commands-environment";
-import { resetContainerOwnershipCache } from "../src/core/container-lifecycle-service";
-import { resetImageManifestCache } from "../src/core/docker-image";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
+import { resetContainerOwnershipCache } from "../src/core/containers/lifecycle-service";
+import { resetImageManifestCache } from "../src/core/containers/image";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import {
   lifecycleEnvironment,
   memoryLifecycleContext,

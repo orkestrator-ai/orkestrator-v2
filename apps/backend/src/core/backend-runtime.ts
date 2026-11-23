@@ -3,21 +3,21 @@ import {
   AgentAccountsRuntime,
   type AgentAccountsRuntimeOptions,
 } from "./agent-accounts/runtime.js";
-import { ContainerLogService, type ContainerLogServiceOptions } from "./container-log-service.js";
 import {
-  ContainerOomEvents,
   type ContainerLifecycleListener,
+  ContainerLogService,
+  type ContainerLogServiceOptions,
+  ContainerOomEvents,
   type ContainerOomEventsOptions,
-} from "./container-oom-events.js";
-import { ContainerUsageSampler } from "./container-usage-sampler.js";
-import { CoordinatorRequestFlights } from "./coordinator/index.js";
-import { DiffStatsTracking } from "./diff-stats-tracking.js";
-import { DockerCleanupGrants } from "./docker-cleanup-grants.js";
-import {
+  ContainerUsageSampler,
+  type ContainerWorktreeSignalInstaller,
   DockerAvailabilityCache,
   type DockerAvailabilityCacheOptions,
-} from "./docker-availability-cache.js";
-import { DockerContainerStateCache } from "./docker-container-state-cache.js";
+  DockerCleanupGrants,
+  DockerContainerStateCache,
+} from "./containers/index.js";
+import { CoordinatorRequestFlights } from "./coordinator/index.js";
+import { DiffStatsTracking } from "./diff-stats-tracking.js";
 import { EnvironmentOperations } from "./environment-operations.js";
 import { FeatureBuildTasks } from "./features/index.js";
 import { GitHubCliSelection } from "./git/index.js";
@@ -30,7 +30,6 @@ import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminals/index.
 import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux/index.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
 import type { BackendEmit } from "./commands-context.js";
-import type { ContainerWorktreeSignalInstaller } from "./container-worktree-signal.js";
 
 export type BackendRuntimeOptions = {
   /** Read at emit time, so a caller may pass a closure over a gateway that does not exist yet. */

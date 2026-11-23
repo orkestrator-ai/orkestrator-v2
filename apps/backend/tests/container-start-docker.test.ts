@@ -7,12 +7,12 @@ import { parseContainerLifecycleError } from "@orkestrator/protocol/container-li
 import {
   backendHostPortLabelArguments,
   chooseBackendHostPorts,
-} from "../src/core/container-host-ports";
+} from "../src/core/containers/host-ports";
 import {
   PORT_COLLISION_RETRIES,
   PORT_HOLD_RETRY_DELAYS_MS,
   startDockerContainer,
-} from "../src/core/container-start";
+} from "../src/core/containers/start";
 import { createServer, type Server } from "node:net";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { runCommand } from "../src/core/shell";

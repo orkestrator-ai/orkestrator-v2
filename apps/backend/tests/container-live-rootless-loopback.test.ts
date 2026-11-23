@@ -21,8 +21,8 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { lifecycleEnvironment } from "./container-lifecycle-fixtures";
 import { agentToolsStandIn, hostServiceContext } from "./container-live-host-service-context";
 import { startRuntime } from "./container-live-start";
@@ -79,10 +79,10 @@ describe("rootless daemon with host loopback refused", () => {
     "host discovery reports blocked with the rootless remediation, and a gateway runtime cannot reach the host",
     async () => {
       const { ContainerHostReachabilityService } =
-        await import("../src/core/container-host-reachability");
+        await import("../src/core/containers/host-reachability");
       const { createDockerContainer } = await import("../src/core/commands-containers");
-      const { resolveDockerImage } = await import("../src/core/docker-image");
-      const { networkOwnerContainer } = await import("../src/core/container-network-owner");
+      const { resolveDockerImage } = await import("../src/core/containers/image");
+      const { networkOwnerContainer } = await import("../src/core/containers/network-owner");
 
       const servicePort = hostListener();
       const reachability = new ContainerHostReachabilityService({

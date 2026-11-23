@@ -32,9 +32,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runCommand } from "../src/core/shell";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { networkOwnerContainer } from "../src/core/container-network-owner";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { networkOwnerContainer } from "../src/core/containers/network-owner";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
 import { startRuntime } from "./container-live-start";
@@ -344,7 +344,7 @@ async function write(containerId: string, file: string, content: string): Promis
 
 async function createRuntime(allowedDomains: string[]) {
   const { createDockerContainer } = await import("../src/core/commands-containers");
-  const { resolveDockerImage } = await import("../src/core/docker-image");
+  const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}`,
     networkAccessMode: "restricted",

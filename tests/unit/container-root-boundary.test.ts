@@ -9,7 +9,7 @@ import {
   CONTAINER_TERMINAL_CLOSE_SCRIPT,
   containerTerminalUserArgs,
   isContainerRootUser,
-} from "../../apps/backend/src/core/container-scripts";
+} from "../../apps/backend/src/core/containers/index.js";
 
 /**
  * Security report finding H2: the container's node user must not get code run
@@ -44,7 +44,7 @@ describe("root execs", () => {
   test("no backend docker call names the root user without the fixed PATH", () => {
     const offenders = backendSources()
       // The helper itself defines CONTAINER_ROOT_USER_ARGS.
-      .filter((file) => !file.endsWith("/container-scripts.ts"))
+      .filter((file) => !file.endsWith("/containers/scripts.ts"))
       .filter((file) => /"(?:--user|-u)",\s*"(?:root|orkroot|0)"/.test(readFileSync(file, "utf8")));
     expect(offenders).toEqual([]);
   });
@@ -71,7 +71,7 @@ describe("root execs", () => {
     expect(terminal).not.toContain('dockerArgs.push("--user", config.user)');
     // Every container terminal starts through spawnContainerTerminal.
     expect(terminal.match(/containerTerminalUserArgs\(config\.user\)/g)).toHaveLength(1);
-    const close = read("apps/backend/src/core/container-terminal-shell.ts");
+    const close = read("apps/backend/src/core/containers/terminal-shell.ts");
     expect(close.match(/containerTerminalUserArgs\(shell\.user\)/g)).toHaveLength(1);
   });
 });

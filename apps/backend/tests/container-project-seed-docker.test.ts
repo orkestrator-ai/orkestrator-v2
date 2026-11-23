@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { copyProjectSeedFilesIntoContainer } from "../src/core/container-project-seed-files";
+import { copyProjectSeedFilesIntoContainer } from "../src/core/containers/project-seed-files";
 import { runCommand } from "../src/core/shell";
 
 // Opt-in: uses only a disposable container, no mounts, credentials or network.

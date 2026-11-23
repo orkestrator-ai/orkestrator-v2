@@ -13,38 +13,39 @@ import {
   DOCKER_LABEL_ENVIRONMENT_ID,
   DOCKER_LABEL_OWNER,
 } from "./constants.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
-import { runCommand } from "./shell.js";
-import { removeRuntimeContainer } from "./egress-gateway.js";
-import type { CommandContext } from "./commands-context.js";
-import type { Environment } from "./models.js";
 import {
-  ContainerLifecycleError,
+  configuredImageRef,
+  dockerOwnerNamespace,
+  inspectVolume,
+  removeStorageVolumes,
+  resolveDockerImage,
+  storageHelperFailureMessage,
+  verifyStorageSet,
+} from "./containers/index.js";
+import { parseDockerPsSize } from "./containers/cleanup-inventory.js";
+import {
+  advanceContainerOperation,
   beginContainerOperation,
   completeContainerOperation,
+  ContainerLifecycleError,
   currentRuntimeIdentity,
   nextRuntimeGeneration,
   operationFailureCode,
   probeContainer,
-  advanceContainerOperation,
   resolveContainerOwnership,
-} from "./container-lifecycle-service.js";
-import {
-  inspectVolume,
-  removeStorageVolumes,
-  storageHelperFailureMessage,
-  verifyStorageSet,
-} from "./container-storage.js";
-import { configuredImageRef, resolveDockerImage } from "./docker-image.js";
-import { assertEnvironmentBudgetEnforceable, parseMemorySize } from "./container-resources.js";
+} from "./containers/lifecycle-service.js";
+import { quiesceRuntime, rollbackCandidate } from "./containers/replacement.js";
+import { assertEnvironmentBudgetEnforceable, parseMemorySize } from "./containers/resources.js";
+import { runCommand } from "./shell.js";
+import { removeRuntimeContainer } from "./egress-gateway.js";
+import type { CommandContext } from "./commands-context.js";
+import type { Environment } from "./models.js";
 import { createDockerContainer } from "./commands-containers.js";
-import { quiesceRuntime, rollbackCandidate } from "./container-replacement.js";
 import {
   groupRecoveryCopies,
   describeRecoveryCopy,
   type RecoveryCopyGroup,
 } from "./recovery-copy-model.js";
-import { parseDockerPsSize } from "./docker-cleanup-inventory.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("docker");

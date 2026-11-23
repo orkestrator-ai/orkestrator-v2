@@ -79,7 +79,7 @@ import {
   bridgeAuthorityKeyEnv,
   mintBridgeAuthorityKeyPair,
 } from "@orkestrator/protocol/node/bridge-authority";
-import { readContainerBridgeToken } from "./container-bridge-credential.js";
+import { readContainerBridgeToken } from "./containers/bridge-credential.js";
 import { rememberBridgeAuthorityKey } from "./bridge-authority-keys.js";
 import {
   applyClaudeHostCredentialEnvironment,
@@ -446,7 +446,7 @@ export async function prepareBridgePath(
   return ensureBridgeRuntime(runtime, { bun: resolveBunBinary(context) });
 }
 
-export { enqueueContainerBridgeOperation } from "./container-bridge-operations.js";
+export { enqueueContainerBridgeOperation } from "./containers/index.js";
 
 export function assertLocalServerStartAllowed(
   context: CommandContext,

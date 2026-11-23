@@ -4,7 +4,7 @@ import { boundedUtf8Tail, NATIVE_AGENT_GOAL_LIMITS } from "@orkestrator/protocol
 import { abortableSleep } from "../abortable-timing.js";
 import type { CommandContext } from "../commands-context.js";
 import { quoteShell } from "../commands-agent-support.js";
-import { withContainerRuntimeCredential } from "../container-scripts.js";
+import { withContainerRuntimeCredential } from "../containers/index.js";
 import type { Environment } from "../models.js";
 import type { GoalCheckRun } from "./goal-service.js";
 import { control, execDirectory, workspaceRoot, type ExecState } from "../public-api/index.js";

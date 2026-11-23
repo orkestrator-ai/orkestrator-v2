@@ -35,9 +35,9 @@ import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import type { Subprocess } from "bun";
-import { dockerOwnerNamespace } from "../src/core/docker-ownership";
-import { waitForContainerBoot } from "../src/core/container-readiness";
-import { reconcileContainerOperations } from "../src/core/container-lifecycle-service";
+import { dockerOwnerNamespace } from "../src/core/containers/ownership";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
+import { reconcileContainerOperations } from "../src/core/containers/lifecycle-service";
 import type { Environment } from "../src/core/models";
 import { openRegistryWriter, type RegistryWriter } from "../src/core/registry-writer-lease";
 import { runCommand } from "../src/core/shell";
@@ -154,7 +154,7 @@ interface LiveEnvironment {
  */
 async function createLegacyEnvironment(label: string, bigFileMiB = 0): Promise<LiveEnvironment> {
   const { createDockerContainer } = await import("../src/core/commands-containers");
-  const { resolveDockerImage } = await import("../src/core/docker-image");
+  const { resolveDockerImage } = await import("../src/core/containers/image");
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-rebuild-faults-"));
   dataDirs.push(dataDir);
   const owner = dockerOwnerNamespace(dataDir);
@@ -229,7 +229,7 @@ async function rebuild(
   expectedContainerId: string,
   dockerHost = endpoint,
 ): Promise<{ outcome?: { containerId: string }; error?: Error }> {
-  const { replaceRuntimePreservingState } = await import("../src/core/container-replacement");
+  const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
   return withDockerHost(dockerHost, () =>
     replaceRuntimePreservingState(
       { environmentId: env.environmentId, expectedContainerId },

@@ -8,7 +8,7 @@ import {
   buildMergeContainerClaudeCredentialCommand,
   buildRestrictContainerClaudeCredentialCommand,
 } from "../src/core/agent-accounts/containers";
-import { ContainerLoginFileWatcher } from "../src/core/container-login-file-watcher";
+import { ContainerLoginFileWatcher } from "../src/core/containers/login-file-watcher";
 import { runCommand } from "../src/core/shell";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 

@@ -16,7 +16,7 @@ import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecy
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "../src/core/agent-credential-files";
 import { refreshStagedAgentAccountLogins } from "../src/core/agent-accounts/containers";
 import { CLAUDE_CONTAINER_CONFIG_KEYS } from "../src/core/claude-container-config";
-import { waitForContainerBoot } from "../src/core/container-readiness";
+import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { stagePortableInputs, stagedInputMountArguments } from "../src/core/portable-inputs";
 import { runCommand } from "../src/core/shell";
 

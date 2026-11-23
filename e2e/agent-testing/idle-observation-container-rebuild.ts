@@ -23,7 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { isEnvironmentReadyForAgents } from "@orkestrator/protocol/environment-readiness";
 
-/** The container path of OpenCode 2.x's database (`container-state-layout.ts`). */
+/** The container path of OpenCode 2.x's database (`containers/state-layout.ts`). */
 export const CONTAINER_OPENCODE2_DB =
   "/home/node/.local/share/opencode/orkestrator-db/opencode2.db";
 

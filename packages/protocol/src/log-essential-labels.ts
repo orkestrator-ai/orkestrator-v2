@@ -124,7 +124,7 @@ const PROVIDERS = new Set([
   "pi",
   "antigravity",
 ]);
-/** `container-bridge-listener.ts`'s refusal reasons. */
+/** `containers/bridge-listener.ts`'s refusal reasons. */
 const BRIDGE_LISTENER_REASONS = new Set([
   "different-socket",
   "several-sockets",

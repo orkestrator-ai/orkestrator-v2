@@ -3,7 +3,7 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { ContainerResourceLimits } from "@orkestrator/protocol/container-resources";
-import { resourceArguments, sharedMemoryMiB } from "../src/core/container-resources.js";
+import { resourceArguments, sharedMemoryMiB } from "../src/core/containers/resources.js";
 
 /**
  * Realistic workloads with and without a resource budget, on whatever Docker

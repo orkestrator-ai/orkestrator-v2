@@ -24,7 +24,19 @@ import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-tes
 import { multiReviewEfficiencyOption } from "./agent-test-fanout-stats.js";
 import { CONTAINER_TREE_MAX_AGE_MS } from "./diff-stats-service.js";
 import { agentTestTiming, timingValue, type AgentTestTiming } from "./agent-test-timing.js";
-import { closeContainerTerminalShell } from "./container-terminal-shell.js";
+import {
+  cleanupStaleManifestProbes,
+  closeContainerTerminalShell,
+  ContainerHostReachabilityService,
+  dockerOwnerNamespace,
+  probeCreator,
+} from "./containers/index.js";
+import { ContainerClaudeLoginKeeper } from "./containers/claude-login-keeper.js";
+import { ContainerLifecycleReactor } from "./containers/lifecycle-events.js";
+import { reconcileContainerOperations } from "./containers/lifecycle-service.js";
+import { ContainerLoginFileWatcher } from "./containers/login-file-watcher.js";
+import { containerSignInGuidance } from "./containers/sign-in-guidance.js";
+import { containerWorktreeSignalInstaller } from "./containers/worktree-signal-install.js";
 import { combineWorkerMailPorts } from "./build-pipeline/worker-mail.js";
 import { stopProjectGitMirrorRefreshes } from "./project-git-mirror.js";
 import type { InstalledApplicationLogging } from "@orkestrator/protocol/node/application-logging";
@@ -123,11 +135,8 @@ import {
   type ProvisionalFindingSink,
 } from "./review/index.js";
 import { checkDockerAvailability } from "./commands-registry-docker.js";
-import { cleanupStaleManifestProbes } from "./docker-image.js";
-import { dockerOwnerNamespace } from "./docker-ownership.js";
 import { openRegistryWriter, type RegistryWriter } from "./registry-writer-lease.js";
 import { registryWriterStartup } from "./registry-writer-startup.js";
-import { reconcileContainerOperations } from "./container-lifecycle-service.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
 import { DesignService } from "./design/index.js";
 import { PreviewRuntime } from "./previews/index.js";
@@ -148,13 +157,9 @@ import {
 import { BackendActivityJobs, type BackendActivityJob } from "./backend-activity-jobs.js";
 import { HostSuspendDetector } from "./host-suspend-detector.js";
 import { MachineLoadSampler } from "./machine-load.js";
-import { ContainerClaudeLoginKeeper } from "./container-claude-login-keeper.js";
-import { ContainerLoginFileWatcher } from "./container-login-file-watcher.js";
-import { containerSignInGuidance } from "./container-sign-in-guidance.js";
 import { refreshHostClaudeLogin } from "./claude-host-login-refresh.js";
 import { backendClaudeStateSignal, backendTmuxHookSignal } from "./claude-state-signal.js";
 import { backendClaudeStateSettler } from "./claude-terminal-settle.js";
-import { ContainerLifecycleReactor } from "./container-lifecycle-events.js";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { Effect } from "effect";
 import {
@@ -218,7 +223,6 @@ import {
 import { claudeTmuxRuntimeRootPrefix } from "./tmux/index.js";
 import { StorageService } from "./storage.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
-import { containerWorktreeSignalInstaller } from "./container-worktree-signal-install.js";
 import { AgentToolsServer } from "./agent-tools.js";
 import {
   attachTranscriptArtifactRuntime,
@@ -227,8 +231,6 @@ import {
   type TranscriptArtifactService,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
-import { ContainerHostReachabilityService } from "./container-host-reachability.js";
-import { probeCreator } from "./container-host-reachability-creator.js";
 import {
   prepareContainerAgentToolsRoute,
   ensureContainerHostServicePorts,
@@ -485,7 +487,7 @@ export class OrkestratorBackend {
   private credentials: CredentialService | null = null;
   /** Experimental self-improvement runs; idle while its switch is off. */
   private readonly selfImprovement: SelfImprovementService;
-  /** Unsubscribes the container lifecycle reactor (`container-lifecycle-events.ts`). */
+  /** Unsubscribes the container lifecycle reactor (`containers/lifecycle-events.ts`). */
   private removeContainerLifecycleListener: (() => void) | null = null;
   /** Writes agent voice chat replies for Control MCP; created with the command context. */
   private agentVoiceChatReplier: AgentVoiceChatReplier | null = null;

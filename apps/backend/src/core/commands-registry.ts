@@ -52,7 +52,7 @@ import {
   PendingRenameFailureLog,
   pendingRenameRetryDelayMs,
 } from "./pending-rename-failure-log.js";
-import { assertRuntimeGeneration } from "./container-lifecycle-service.js";
+import { assertRuntimeGeneration } from "./containers/lifecycle-service.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { CommandRegistryOptions, RegistryDependencies } from "./commands-registry-types.js";
 import {

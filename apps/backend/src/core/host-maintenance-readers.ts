@@ -12,7 +12,7 @@ import type {
 import { resolveManagedBinary } from "./commands-agent-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { APP_VERSION } from "./constants.js";
-import { configuredImageRef, getImageStatus, resolveDockerImage } from "./docker-image.js";
+import { configuredImageRef, getImageStatus, resolveDockerImage } from "./containers/index.js";
 import { runCommand } from "./shell.js";
 
 /** The published image whose tag matches this backend (`publish-container.yml`). */

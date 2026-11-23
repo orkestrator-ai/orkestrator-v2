@@ -137,7 +137,7 @@ Documented in [declared-system-packages.md](../../architecture/declared-system-p
 ## Related
 
 - [declared-system-packages.md](../../architecture/declared-system-packages.md).
-- `docker/orkestrator-apt-install.sh`, `docker/workspace-setup.sh` (`run_project_apt_packages`), `apps/backend/src/core/container-apt-packages.ts`.
+- `docker/orkestrator-apt-install.sh`, `docker/workspace-setup.sh` (`run_project_apt_packages`), `apps/backend/src/core/containers/apt-packages.ts`.
 - `docker/AGENTS.md`, "Users and isolation" and "Network isolation".
 
 ## Assumptions and decisions

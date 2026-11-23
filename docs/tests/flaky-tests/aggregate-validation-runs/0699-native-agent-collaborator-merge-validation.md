@@ -47,7 +47,7 @@ Backend failures (exact names and observed durations):
 | `src/core/transcript-artifacts/mermaid-render.test.ts` | (fail) mermaid rendering > the external watchdog ends a blocked render within the deadline and the browser is gone [13012.69ms] |
 | `src/core/change-tracking/review-regressions.test.ts` | (fail) untracked inventory caps publish non-exact Git scope totals [5726.86ms] |
 | `src/core/change-tracking/review-regressions.test.ts` | (fail) advancing provisional endpoints releases obsolete thread-latest pins for collection [777.79ms] |
-| `src/core/container-git-fetch-git.test.ts` | (fail) container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches [5249.03ms] |
+| `src/core/containers/git-fetch-git.test.ts` | (fail) container status and fetch scripts against a local remote > a branch baseline follows origin/<ref> only when the policy fetches [5249.03ms] |
 | `src/core/transcript-artifacts/preview-interactive.test.ts` | (fail) interactive preview in Chromium > infinite loops before and after ready are killed, the browser is gone and capacity recovers [28622.56ms] |
 | `tests/recurring-baseline.test.ts` | (fail) driven native observation baseline (step 07) > is deterministic, content-free, and sharing drops reads without losing edges [5061.15ms] |
 
@@ -61,7 +61,7 @@ Backend owners were run separately, one file per command, using `mise run test:l
 | `src/core/coordinator-service.test.ts` | Pass |
 | `src/core/transcript-artifacts/mermaid-render.test.ts` | Pass |
 | `src/core/change-tracking/review-regressions.test.ts` | Pass |
-| `src/core/container-git-fetch-git.test.ts` | Pass |
+| `src/core/containers/git-fetch-git.test.ts` | Pass |
 | `src/core/transcript-artifacts/preview-interactive.test.ts` | Pass |
 | `src/core/opencode-host-start.test.ts` | Pass; `final-opencode-start-owner`, 13.7 s |
 | `tests/recurring-baseline.test.ts` | Pass; `final-recurring-baseline-owner`, 12.2 s |

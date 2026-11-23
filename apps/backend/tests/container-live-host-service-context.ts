@@ -9,7 +9,7 @@ import {
   agentToolsLoopbackProof,
 } from "../src/core/agent-tools-loopback-proof";
 import type { Environment } from "../src/core/models";
-import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "../src/core/container-host-reachability";
+import { AGENT_TOOLS_PROBE_HTTP_STATUS } from "../src/core/containers/host-reachability";
 import { memoryLifecycleContext } from "./container-lifecycle-fixtures";
 
 /**

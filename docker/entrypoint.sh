@@ -18,7 +18,7 @@ BOOT_STATUS_DIR=/run/orkestrator
 BOOT_STATUS_FILE="$BOOT_STATUS_DIR/boot-status.json"
 rm -f "$BOOT_STATUS_FILE"
 # Container terminal shell records (CONTAINER_TERMINAL_PID_RECORD_COMMAND in
-# apps/backend/src/core/container-scripts.ts) name processes of an earlier
+# apps/backend/src/core/containers/scripts.ts) name processes of an earlier
 # boot; none of them is alive now. Each shell start also sweeps its own uid's.
 rm -rf "/tmp/orkestrator-terminals-$(id -u)"
 mkdir -p "$BOOT_STATUS_DIR/processes"

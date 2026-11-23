@@ -9,7 +9,7 @@
 # 2.x's default database is `opencode.db`, the file OpenCode 1.x left behind,
 # which 2.x would migrate in place. The container's 2.x server keeps its own
 # (`opencode2.db`, on the persistent mount when the runtime has one; see
-# apps/backend/src/core/container-state-layout.ts), and so does a command run
+# apps/backend/src/core/containers/state-layout.ts), and so does a command run
 # here unless the caller chose a database: sessions and the sign-ins
 # Orkestrator stores there are the same ones the server sees.
 if [ -z "${OPENCODE_DB:-}" ]; then

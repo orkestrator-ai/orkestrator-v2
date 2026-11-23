@@ -4,7 +4,7 @@ import { PassThrough } from "node:stream";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ContainerOomEvents, OomEventWatcher } from "../src/core/container-oom-events";
+import { ContainerOomEvents, OomEventWatcher } from "../src/core/containers/oom-events";
 import { spawnParentBoundCommand } from "../src/core/shell";
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 

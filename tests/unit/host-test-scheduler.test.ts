@@ -875,24 +875,40 @@ test("cooperative admission continues on a dirty worktree and still refuses a mo
   const head = git("rev-parse", "HEAD").trim();
   writeFileSync(path.join(worktree, "dirty.txt"), "changed\n");
   const notes: string[] = [];
+  const channel = path.join(directory, "channel.json");
+  let wall = 1_000;
   const admission = createTestAdmission(
     worktree,
     {
       ORKESTRATOR_TEST_SCHEDULER_DIR: directory,
       ORKESTRATOR_VALIDATION_HEAD_REF: head,
-      ORKESTRATOR_VALIDATION_SCHEDULER_STATE: path.join(directory, "channel.json"),
+      ORKESTRATOR_VALIDATION_SCHEDULER_STATE: channel,
     },
-    (line) => notes.push(line),
+    (line) => {
+      notes.push(line);
+      // This diagnostic comes from the post-admission repository checks.
+      if (line.includes("worktree is dirty")) wall += 2_000;
+    },
+    { now: () => wall, clock: () => wall },
   );
   const group = { name: "fixture", command: "unused", args: [], exclusive: true };
-  expect((await admission.run(group, async () => ({ status: 0 }))).status).toBe(0);
-  expect(notes.some((line) => line.includes("worktree is dirty"))).toBe(true);
-  git("add", "dirty.txt");
-  git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "moved");
-  const stale = await admission.run(group, async () => ({ status: 0 }));
-  expect(stale).toMatchObject({ status: 75, infrastructureError: true });
-  expect(String(stale.output)).toContain("Repository changed while queued");
-  admission.close();
+  try {
+    const result = await admission.run(group, async () => ({ status: 0 }));
+    expect(result).toMatchObject({ status: 0, queuedMs: 0 });
+    expect(notes.some((line) => line.includes("worktree is dirty"))).toBe(true);
+    expect(JSON.parse(readFileSync(channel, "utf8"))).toMatchObject({
+      queuedMs: 0,
+      executionMs: 2_000,
+    });
+
+    git("add", "dirty.txt");
+    git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "moved");
+    const stale = await admission.run(group, async () => ({ status: 0 }));
+    expect(stale).toMatchObject({ status: 75, infrastructureError: true });
+    expect(String(stale.output)).toContain("Repository changed while queued");
+  } finally {
+    admission.close();
+  }
 });
 
 // Learned group CPU, adaptive reservations and the experimental pressure gate.

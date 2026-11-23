@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -203,7 +203,30 @@ async function installAsync(
   return { code, stderr };
 }
 
-describe.skipIf(!flockAvailable)("orkestrator-apt-install after its argument checks", () => {
+const skipInstallerPlan = process.platform !== "linux" && !flockAvailable;
+describe.skipIf(skipInstallerPlan)("orkestrator-apt-install after its argument checks", () => {
+  beforeAll(() => {
+    if (!flockAvailable) {
+      throw new Error(
+        "Installer-plan tests require util-linux flock on /usr/sbin:/usr/bin:/sbin:/bin",
+      );
+    }
+  });
+
+  test("passes each distinct package once to the simulated and real installs", () => {
+    const box = sandbox({ archive: ["hello", "cowsay"] });
+    box.setRecords(GATEWAY);
+
+    expect(install(box, "hello", "cowsay", "hello", "cowsay").code).toBe(0);
+    expect(box.installed()).toEqual(["hello", "cowsay"]);
+    expect(
+      box
+        .aptGetCalls()
+        .filter((call) => call.includes(" install "))
+        .map((call) => call.split(" -- ")[1]),
+    ).toEqual(["hello cowsay", "hello cowsay"]);
+  });
+
   test("installs a real package behind a verified gateway, with --no-remove", () => {
     const box = sandbox({ archive: ["hello"] });
     box.setRecords(GATEWAY);

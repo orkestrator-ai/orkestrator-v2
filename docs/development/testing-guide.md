@@ -1605,8 +1605,9 @@ On success, raw logs are deleted and only `summary.json` remains. On failure,
 the runner prints a unique `orkestrator-test-run.*` directory below the
 platform temporary directory. It compresses each group's log and keeps a small
 JSON summary. Each group's `elapsedMs` includes the time it waited for host
-admission, recorded on its own as `queuedMs`, so `elapsedMs - queuedMs` is how
-long it ran; a measured, undisturbed group on Linux also records
+admission, recorded on its own as `queuedMs`. The wait ends when the scheduler
+grants its ticket. `elapsedMs - queuedMs` includes post-admission repository
+checks and command execution. A measured, undisturbed group on Linux also records
 `reservedSlots` and `observedCores`. Inspect the printed directory rather than
 rerunning merely to recover output:
 

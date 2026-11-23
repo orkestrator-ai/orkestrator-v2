@@ -382,13 +382,19 @@ export function createTestAdmission(
         const queuedAt = now();
         const { deadline } = group;
         let lastReason: string | undefined;
-        let granted = workers;
+        let granted: number;
+        let queuedMs: number;
         while (true) {
           const status = scheduler.poll(id);
           const job = jobs.get(id)!;
           job.queueReason = status.queueReason;
           if (status.state === "running") {
+            queuedMs = Math.max(0, Math.floor(now() - queuedAt));
             granted = status.workers;
+            advanceClock();
+            job.state = "running";
+            delete job.queueReason;
+            publish();
             break;
           }
           if (status.queueReason !== lastReason) {
@@ -471,18 +477,10 @@ export function createTestAdmission(
           if (status.stdout.replaceAll("\0", "").trim())
             log("NOTE worktree is dirty while queued; continuing with recorded environment drift");
         }
-        const job = jobs.get(id);
-        if (job) {
-          advanceClock();
-          job.state = "running";
-          delete job.queueReason;
-        }
-        publish();
         log(
-          `RUNNING ${group.name} (${granted} worker slots; waited ${((now() - queuedAt) / 1000).toFixed(1)}s${learned !== undefined ? `; adaptive: learned ${learned} of ${planned} planned` : ""})`,
+          `RUNNING ${group.name} (${granted} worker slots; waited ${(queuedMs / 1000).toFixed(1)}s${learned !== undefined ? `; adaptive: learned ${learned} of ${planned} planned` : ""})`,
         );
         const ticket = id;
-        const queuedMs = Math.max(0, Math.floor(now() - queuedAt));
         const executed = await execute({
           ...group,
           timeoutMs,

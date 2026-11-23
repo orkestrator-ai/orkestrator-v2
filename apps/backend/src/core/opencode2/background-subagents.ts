@@ -46,6 +46,7 @@
  * (`GET /api/experimental/job`).
  */
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { runtimeTimeoutTimers, type TimeoutTimers } from "@orkestrator/protocol/timers";
 import { asRecord } from "../agent-provider-runtime.js";
 import { OpenCode2RequestError, type OpenCode2Client } from "./client.js";
 import { openCode2BackgroundReport, openCode2ShellReportMetadata } from "./transcript.js";
@@ -93,6 +94,7 @@ export interface OpenCode2BackgroundWorkDependencies {
   now(): number;
   monotonicNow?(): number;
   sleep?(ms: number): Promise<void>;
+  timers?: TimeoutTimers;
   /**
    * The stop's settle window ({@link OPENCODE2_STOP_SETTLE_MS} by default).
    * Tests whose assertions do not depend on the window's length shorten it so
@@ -226,7 +228,8 @@ export class OpenCode2BackgroundWork {
     const monotonicNow = this.deps.monotonicNow ?? (() => performance.now());
     const settleMs = this.deps.stopSettleMs ?? OPENCODE2_STOP_SETTLE_MS;
     const settleUntil = monotonicNow() + settleMs;
-    const timeout = setTimeout(
+    const timers = this.deps.timers ?? runtimeTimeoutTimers;
+    const timeout = timers.setTimeout(
       () => controller.abort(),
       settleMs + (OPENCODE2_STOP_CLEANUP_MS - OPENCODE2_STOP_SETTLE_MS),
     );
@@ -294,7 +297,7 @@ export class OpenCode2BackgroundWork {
       if (signal.aborted) return false;
       throw error;
     } finally {
-      clearTimeout(timeout);
+      timers.clearTimeout(timeout);
       this.stops.delete(controller);
     }
   }

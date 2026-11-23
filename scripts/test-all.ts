@@ -91,9 +91,9 @@ export interface CommandResult {
   /** Slots the group held while it ran, set together with {@link observedCores}. */
   reservedSlots?: number;
   /**
-   * How long the group waited for host admission before its command started.
+   * How long the group waited for the host scheduler to grant its ticket.
    * A group's `elapsedMs` includes this wait, so `elapsedMs - queuedMs` is the
-   * time it actually ran.
+   * time spent after admission, including repository verification.
    */
   queuedMs?: number;
 }

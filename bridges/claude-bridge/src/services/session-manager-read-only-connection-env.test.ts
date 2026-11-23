@@ -63,10 +63,10 @@ describe("a read-only turn reaches the model the user settings name (#2133)", ()
   test("a changed connection is a different launch, so a warm CLI on the old one is not joined", () => {
     const before = claudeLaunchResourceProfile([], { ANTHROPIC_BASE_URL: "http://a" });
     const after = claudeLaunchResourceProfile([], { ANTHROPIC_BASE_URL: "http://b" });
-    expect(after.credentials).not.toBe(before.credentials);
+    expect(after.modelConnection).not.toBe(before.modelConnection);
     expect(JSON.stringify(after)).not.toContain("http://b");
-    expect(claudeLaunchResourceProfile([], { PATH: "/a" }).credentials).toBe(
-      claudeLaunchResourceProfile([], { PATH: "/b" }).credentials,
+    expect(claudeLaunchResourceProfile([], { PATH: "/a" }).modelConnection).toBe(
+      claudeLaunchResourceProfile([], { PATH: "/b" }).modelConnection,
     );
   });
 

@@ -11,8 +11,7 @@ import { cleanupSessionHarnesses, setActivity, setup } from "./test-provider.js"
 
 afterEach(cleanupSessionHarnesses);
 
-const BUSY =
-  "claude prompt dispatch is temporarily unavailable (HTTP 503): The session's preferences are busy, so the prompt was not sent. Try again.";
+const BUSY = "The session's preferences are busy, so the prompt was not sent. Try again.";
 
 describe("transient prompt refusals in the public API", () => {
   test("session.prompt: retryable, replayed under the same key, and a new key runs", async () => {

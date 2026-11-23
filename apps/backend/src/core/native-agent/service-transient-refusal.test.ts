@@ -24,8 +24,7 @@ const base = {
   prompt: "Do the work",
 };
 const key = nativeAgentSessionStorageKey(base.environmentId, base.agent, base.logicalSessionKey);
-const busyRefusal =
-  "claude prompt dispatch is temporarily unavailable (HTTP 503): The session's preferences are busy, so the prompt was not sent. Try again.";
+const busyRefusal = "The session's preferences are busy, so the prompt was not sent. Try again.";
 
 describe("transient prompt refusals", () => {
   test("a 503 refusal is transient, parks nothing, and a new id runs once it clears", async () => {

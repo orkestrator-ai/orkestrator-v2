@@ -18,6 +18,9 @@ import {
 import {
   MAX_RUNTIME_TOOL_OWNERS,
   claudeLaunchConflict,
+  claudeLaunchResourceProfile,
+  claudeLaunchRotated,
+  claudeRuntimeBusyRefusalMessage,
   recordClaudeToolOwner,
   routeClaudeFrame,
   type ClaudeLaunchProfile,
@@ -371,9 +374,10 @@ describe("one CLI per session", () => {
           { type: "local", path: "/test/locally-enabled-plugin" },
         ]);
       } else {
-        // Simulate a resource digest changed by credential rotation, independently
-        // of the credential-file reader covered by the runtime regressions.
-        oldRuntime.launch.credentials = "previous-credential-digest";
+        // Simulate a token rotated since launch, independently of the
+        // credential-file reader covered by the runtime regressions: a warm
+        // CLI is retired so the next launch takes the new token.
+        oldRuntime.launch.githubToken = "previous-token-digest";
       }
       mockGetPluginsForSdk.mockClear();
       const second = sendPrompt(session.id, "follow-up");
@@ -538,5 +542,38 @@ describe("runtime routing", () => {
         settingSources: '["user","project","local"]',
       }),
     ).toBe("settings sources");
+  });
+});
+
+describe("GitHub credential in the launch profile", () => {
+  const profile = (env: NodeJS.ProcessEnv) => claudeLaunchResourceProfile([], env);
+  const base = { cwd: "/w", boundary: "{}", outputSchema: null } as unknown as ClaudeLaunchProfile;
+
+  test("a rotated token is not a conflict, only a rotation", () => {
+    const launched = { ...base, ...profile({ GH_TOKEN: "token-a" }) };
+    const rotated = { ...base, ...profile({ GH_TOKEN: "token-b" }) };
+    expect(claudeLaunchConflict(launched, rotated)).toBeUndefined();
+    expect(claudeLaunchRotated(launched, rotated)).toBe(true);
+    expect(claudeLaunchRotated(launched, { ...base, ...profile({ GH_TOKEN: "token-a" }) })).toBe(
+      false,
+    );
+    expect(JSON.stringify(rotated)).not.toContain("token-b");
+  });
+
+  test("signing in or out is a conflict named as the GitHub sign-in", () => {
+    const launched = { ...base, ...profile({ GH_TOKEN: "token-a" }) };
+    expect(claudeLaunchConflict(launched, { ...base, ...profile({}) })).toBe("GitHub sign-in");
+    expect(claudeLaunchConflict({ ...base, ...profile({}) }, launched)).toBe("GitHub sign-in");
+  });
+
+  test("the refusal names what changed outside the prompt and how to get past it", () => {
+    const external = claudeRuntimeBusyRefusalMessage("GitHub sign-in");
+    expect(external).toContain("GitHub sign-in available to it changed");
+    expect(external).toContain("still running background work");
+    expect(external).toContain("Stop the background work");
+    expect(external).not.toContain("a prompt that changes");
+    const fromPrompt = claudeRuntimeBusyRefusalMessage("Chrome setting");
+    expect(fromPrompt).toContain("it needs a different Chrome setting");
+    expect(fromPrompt).toContain("still running background work");
   });
 });

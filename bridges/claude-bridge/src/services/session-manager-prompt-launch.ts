@@ -40,6 +40,7 @@ import {
   assertClaudeRuntimeAccepts,
   claudeLaunchConflict,
   claudeLaunchedProfile,
+  claudeLaunchRotated,
   claudeLaunchProfile,
   claudeLaunchResourceProfile,
   claudeRuntimeOwesWork,
@@ -222,17 +223,22 @@ async function prepareJoin(turn: TurnState, plan: QueryPlan, running: ClaudeRunt
   const required = mcpServers[AGENT_MCP_SERVER_NAME]
     ? [AGENT_MCP_SERVER_NAME, ...(options?.agentMcp?.design ? ["orkestrator-design"] : [])]
     : [];
+  const resources = claudeLaunchResourceProfile(plugins, queryEnvironment);
   // Launch-only settings may have changed while this turn was preparing.
   await assertClaudeRuntimeAccepts(
     session,
     options,
     {
-      ...claudeLaunchResourceProfile(plugins, queryEnvironment),
+      ...resources,
       settingSources: JSON.stringify(plan.settingSources),
       repositoryInstructions: plan.repositoryInstructions ?? "",
     },
     plan.readOnlyCommandSandbox,
   );
+  // Only a CLI that owes work is joined across a rotation (`joinableRuntime`);
+  // it keeps the token it launched with until it is next replaced.
+  if (claudeLaunchRotated(running.launch, resources))
+    log.info("runtime.github-token-rotation-deferred", { sessionId: session.id });
   // Held from here so the process is not closed as unused while the
   // settings below are applied.
   session.queryControl = running.control;
@@ -433,9 +439,11 @@ function markQueryStarted(turn: TurnState, testHooks: PromptTestHooks | undefine
  * The running CLI this turn joins, or undefined when it launches one.
  *
  * A warm CLI that owes nothing and was launched with other launch-only
- * settings is retired rather than refused: `prepareLaunch` closes its input and
- * waits for it to exit before the new one starts. One that still owes work is
- * returned, and joining it answers 409 (`assertClaudeRuntimeAccepts`).
+ * settings, or with a GitHub token since rotated, is retired rather than
+ * refused: `prepareLaunch` closes its input and waits for it to exit before
+ * the new one starts. One that still owes work is returned; a launch-only
+ * change then answers 409 (`assertClaudeRuntimeAccepts`), while a rotated
+ * token joins it (`claudeLaunchRotated`).
  */
 function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | undefined {
   const running = openClaudeRuntime(turn.session);
@@ -446,7 +454,10 @@ function joinableRuntime(turn: TurnState, plan: QueryPlan): ClaudeRuntime | unde
     repositoryInstructions: plan.repositoryInstructions ?? "",
     ...claudeLaunchResourceProfile(plan.plugins, plan.queryEnvironment),
   };
-  return claudeLaunchConflict(running.launch, requested) ? undefined : running;
+  return claudeLaunchConflict(running.launch, requested) ||
+    claudeLaunchRotated(running.launch, requested)
+    ? undefined
+    : running;
 }
 
 /**

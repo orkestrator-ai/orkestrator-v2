@@ -266,6 +266,17 @@ describe("acpClientMethodGrant", () => {
     networkAccess: "full",
   };
 
+  test("Antigravity never gets client writes or terminals, whatever the policy", () => {
+    // agy would replace its native diff edits with whole-file client writes.
+    for (const policy of [undefined, base]) {
+      expect(acpClientMethodGrant(policy, "antigravity")).toEqual({
+        writeTextFile: false,
+        terminal: false,
+      });
+    }
+    expect(acpClientMethodGrant(base, "grok")).toEqual({ writeTextFile: true, terminal: true });
+  });
+
   test("an ordinary worker keeps both, as does a probe with no policy", () => {
     expect(acpClientMethodGrant(undefined)).toEqual({ writeTextFile: true, terminal: true });
     expect(acpClientMethodGrant(base)).toEqual({ writeTextFile: true, terminal: true });

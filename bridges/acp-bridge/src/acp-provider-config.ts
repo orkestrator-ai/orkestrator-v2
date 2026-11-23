@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SystemPrompt } from "@agentclientprotocol/sdk";
+import { antigravitySystemPromptMeta } from "./antigravity-acp.js";
 import {
   withheldGitHubCredentialEnvironment,
   type AgentConversationMode,
@@ -47,6 +48,50 @@ const GROK_PROVIDER: AcpProviderConfig = {
 };
 
 /**
+ * Google Antigravity's `agy acp` (docs/architecture/agent-engines.md,
+ * "Antigravity"). `--process-per-session` serves each session from its own
+ * worker, which is what makes agy advertise `mcpCapabilities.http` (absent
+ * without it on 1.5.12), so Orkestrator's HTTP MCP connection can be handed
+ * over in `session/new`. There is no model or effort flag: both are session
+ * config options. `requiresAuthenticate` is false on purpose: agy's
+ * `authenticate` starts an interactive browser sign-in, while a session
+ * request without a login fails at once with `Authentication required`, which
+ * the bridge reports as sign-in required (`acp-context.ts`).
+ */
+const ANTIGRAVITY_PROVIDER: AcpProviderConfig = {
+  id: "antigravity",
+  name: "Antigravity",
+  executable: "agy",
+  argv: ["acp", "--process-per-session"],
+  env: {},
+  requiresAuthenticate: false,
+  authMethodEnv: "ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD",
+  modeMap: { default: "build", plan: "plan" },
+  extensionPrefixes: [],
+  acknowledgedExtensionMethods: [],
+  modelUpdateMethods: [],
+  sessionUpdateMethods: [],
+};
+
+const BUILT_IN_PROVIDERS: Readonly<Record<string, AcpProviderConfig>> = {
+  grok: GROK_PROVIDER,
+  antigravity: ANTIGRAVITY_PROVIDER,
+};
+
+/**
+ * Providers that reattach a session the bridge still holds a transcript for
+ * with `session/resume` instead of `session/load`, when the agent advertises
+ * `sessionCapabilities.resume`. Resume restores the conversation without
+ * replaying it, so the bridge's rows are not rebuilt or duplicated. Keyed by
+ * provider id: Grok keeps its verified `session/load` path.
+ */
+const SESSION_RESUME_PREFERRED: ReadonlySet<string> = new Set(["antigravity"]);
+
+export function prefersSessionResume(providerId: string): boolean {
+  return SESSION_RESUME_PREFERRED.has(providerId);
+}
+
+/**
  * Prompt content a provider is known to accept although its `initialize`
  * answer does not declare it.
  *
@@ -90,15 +135,16 @@ export function loadAcpProviderConfig(
   const serialized = environment.ACP_PROVIDER_CONFIG?.trim();
   if (serialized) return parseProviderConfig(serialized);
 
-  const id = environment.ACP_PROVIDER?.trim();
-  if (id && id !== "grok") {
+  const id = environment.ACP_PROVIDER?.trim() || "grok";
+  const builtIn = Object.hasOwn(BUILT_IN_PROVIDERS, id) ? BUILT_IN_PROVIDERS[id] : undefined;
+  if (!builtIn) {
     throw new Error(
-      "ACP_PROVIDER_CONFIG is required for ACP providers other than grok (ACP_PROVIDER=grok is built in)",
+      "ACP_PROVIDER_CONFIG is required for ACP providers other than grok and antigravity (both are built in)",
     );
   }
   return {
-    ...GROK_PROVIDER,
-    executable: environment.ACP_AGENT_PATH?.trim() || GROK_PROVIDER.executable,
+    ...builtIn,
+    executable: environment.ACP_AGENT_PATH?.trim() || builtIn.executable,
   };
 }
 
@@ -195,7 +241,7 @@ const SESSION_RULES_META_FIELD: Readonly<Record<string, string>> = {
 };
 
 /** Where one session lifecycle request carries the session instructions, if anywhere. */
-export type SessionInstructionsCarrier = "rules-meta" | "system-prompt";
+export type SessionInstructionsCarrier = "rules-meta" | "system-prompt" | "antigravity-meta";
 
 /**
  * Pick the carrier before reading the instructions, so a request that carries
@@ -204,13 +250,25 @@ export type SessionInstructionsCarrier = "rules-meta" | "system-prompt";
  */
 export function sessionInstructionsCarrier(
   config: AcpProviderConfig,
-  options: { lifecycle: "new" | "load"; systemPromptSupported: boolean },
+  options: {
+    lifecycle: "new" | "load" | "resume";
+    systemPromptSupported: boolean;
+    /** `initialize` declared `_meta.antigravity.systemPrompt.append` (`antigravity-acp.ts`). */
+    antigravitySystemPromptAppend?: boolean;
+  },
 ): SessionInstructionsCarrier | undefined {
   if (Object.hasOwn(SESSION_RULES_META_FIELD, config.id)) {
     // Grok keeps `_meta.rules` with the session, so a load needs none.
     return options.lifecycle === "new" ? "rules-meta" : undefined;
   }
-  return options.systemPromptSupported ? "system-prompt" : undefined;
+  // The standard carrier wins wherever it is advertised, so an agy release
+  // that adopts it cannot receive the instructions twice. agy 1.5.12
+  // advertises only its own, which T3 sends on every session setup request.
+  if (options.systemPromptSupported) return "system-prompt";
+  if (config.id === "antigravity" && options.antigravitySystemPromptAppend) {
+    return "antigravity-meta";
+  }
+  return undefined;
 }
 
 /** The fields a `session/new` or `session/load` adds for these instructions. */
@@ -218,8 +276,11 @@ export function sessionInstructionsParams(
   config: AcpProviderConfig,
   carrier: SessionInstructionsCarrier | undefined,
   instructions: string | undefined,
-): { _meta: Record<string, string> } | { systemPrompt: SystemPrompt } | Record<string, never> {
+): { _meta: Record<string, unknown> } | { systemPrompt: SystemPrompt } | Record<string, never> {
   if (!carrier || !instructions) return {};
+  if (carrier === "antigravity-meta") {
+    return { _meta: antigravitySystemPromptMeta(instructions) };
+  }
   if (carrier === "rules-meta") {
     const field = SESSION_RULES_META_FIELD[config.id];
     return field ? { _meta: { [field]: instructions } } : {};
@@ -258,6 +319,11 @@ export function sessionInstructionsParams(
  */
 const POLICY_ENV: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   grok: { GROK_WORKTREE_INHERITS_MAIN_APPROVALS: "false", GROK_STORAGE_MODE: "local" },
+  // agy updates itself in place by default; the managed binary is pinned and
+  // hash-verified, so a self-update would run a version the manifest does not
+  // declare (variable observed in T3's launch environment; to be re-checked on
+  // every bump, docs/development/upgrade-agents.md).
+  antigravity: { AGY_CLI_DISABLE_AUTO_UPDATE: "1" },
 };
 
 function projectTrust(config: AcpProviderConfig, trustProject: boolean | undefined) {

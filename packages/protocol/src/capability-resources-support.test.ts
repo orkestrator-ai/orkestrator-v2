@@ -13,7 +13,12 @@ import {
 
 describe("shared locations", () => {
   test("every provider at once needs two physical copies and leaks to nobody", () => {
-    const plan = planCapabilityLocations("skill", [...AGENT_PLATFORMS]);
+    // Antigravity reads no qualified skill location yet, so it stays uncovered.
+    expect(planCapabilityLocations("skill", ["antigravity"]).uncovered).toEqual(["antigravity"]);
+    const plan = planCapabilityLocations(
+      "skill",
+      AGENT_PLATFORMS.filter((platform) => platform !== "antigravity"),
+    );
     expect(plan.uncovered).toEqual([]);
     expect(plan.isolated).toBe(true);
     expect(plan.locations.map((entry) => entry.id).sort()).toEqual([

@@ -145,6 +145,11 @@ const MENU_ITEMS: SettingsMenuItem<GlobalSettingsSection>[] = [
     icon: <AgentPlatformIcon platform="pi" accent className="h-4 w-4" />,
   },
   {
+    id: "antigravity",
+    label: globalSettingsLabel("antigravity"),
+    icon: <AgentPlatformIcon platform="antigravity" accent className="h-4 w-4" />,
+  },
+  {
     id: "capabilities",
     label: globalSettingsLabel("capabilities"),
     icon: <Sparkles className="h-4 w-4" />,
@@ -245,6 +250,7 @@ export function SettingsScopeBanner({
     "grok",
     "opencode",
     "pi",
+    "antigravity",
   ].includes(section);
   const fleet = section === "capabilities";
   const ownerName = section === "machines" || inherited || fleet ? commandNode.name : workspaceName;

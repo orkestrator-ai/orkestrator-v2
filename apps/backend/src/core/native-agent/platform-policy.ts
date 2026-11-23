@@ -49,6 +49,7 @@ const POLICIES: Readonly<Record<BuildPipelineAgent, NativeAgentPlatformPolicy>> 
   // messages; 2.x sessions report their runs' outcomes themselves.
   opencode: Object.freeze({ infersComposerSelection: true }),
   pi: NO_POLICY,
+  antigravity: NO_POLICY,
 });
 
 export function nativeAgentPlatformPolicy(agent: BuildPipelineAgent): NativeAgentPlatformPolicy {

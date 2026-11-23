@@ -4,18 +4,21 @@ import { claudeCliReasoningSelection } from "./claude-model-catalog.js";
 export type TerminalAgentTabType = AgentPlatform | "plain";
 
 /**
- * PTY-backed tab types `launch_terminal_job` can start a shell for. Cursor has
- * no terminal mode, and `claude-tmux` tabs are started by tmux rather than a
+ * PTY-backed tab types `launch_terminal_job` can start a shell for. Cursor and
+ * Antigravity have no terminal mode, and `claude-tmux` tabs are started by tmux rather than a
  * PTY, so neither is listed. The backend validates against this predicate and
  * the renderer uses it to decide which launched tabs it may restart, so a new
  * agent platform becomes restartable everywhere at once.
  */
-export type LaunchableTerminalJobTabType = Exclude<AgentPlatform, "cursor"> | "plain";
+export type LaunchableTerminalJobTabType =
+  Exclude<AgentPlatform, "cursor" | "antigravity"> | "plain";
 
 export function isLaunchableTerminalJobTabType(
   value: unknown,
 ): value is LaunchableTerminalJobTabType {
-  return value === "plain" || (isAgentPlatform(value) && value !== "cursor");
+  return (
+    value === "plain" || (isAgentPlatform(value) && value !== "cursor" && value !== "antigravity")
+  );
 }
 
 /**
@@ -173,7 +176,7 @@ export function buildTerminalAgentLaunchCommand(options: {
     return args.join(" ");
   }
 
-  if (tabType === "cursor") return null;
+  if (tabType === "cursor" || tabType === "antigravity") return null;
   if (tabType === "grok") return "grok";
   return null;
 }

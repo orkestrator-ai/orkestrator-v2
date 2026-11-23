@@ -125,7 +125,10 @@ describe("isLaunchableTerminalTabType", () => {
   // edit here: the renderer and launch_terminal_job share one predicate.
   test("matches launch_terminal_job's own rule for every platform", () => {
     for (const platform of AGENT_PLATFORMS) {
-      expect(isLaunchableTerminalTabType(platform)).toBe(platform !== "cursor");
+      // Cursor and Antigravity have no terminal mode.
+      expect(isLaunchableTerminalTabType(platform)).toBe(
+        platform !== "cursor" && platform !== "antigravity",
+      );
     }
     expect(isLaunchableTerminalTabType("plain")).toBe(true);
     expect(isLaunchableTerminalTabType("claude-tmux")).toBe(false);

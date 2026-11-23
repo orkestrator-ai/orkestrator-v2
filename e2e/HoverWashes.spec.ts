@@ -28,14 +28,21 @@ function renderedFill(row: Locator) {
   });
 }
 
-async function hoverAndSettle(row: Locator) {
-  await row.hover();
-  await row.evaluate(async (element) => {
+function settle(row: Locator) {
+  return row.evaluate(async (element) => {
     await Promise.all(element.getAnimations().map((animation) => animation.finished));
   });
 }
 
+async function hoverAndSettle(row: Locator) {
+  await row.hover();
+  await settle(row);
+}
+
 async function expectQuieterBlueHover(selected: Locator, neighbour: Locator) {
+  // A row selected by clicking it is still fading out of its own hover wash;
+  // sample its fill once that transition has finished, not part-way through.
+  await settle(selected);
   const selectedFill = await fill(selected);
   const idle = await renderedFill(neighbour);
   await hoverAndSettle(neighbour);

@@ -37,6 +37,8 @@ import {
   MAX_PIPELINE_ROUND_REVIEW_REPORTS,
   MAX_PIPELINE_VALIDATION_HISTORY,
   MAX_PIPELINE_VALIDATION_SUMMARY_TEXT_LENGTH,
+  isPipelineQualifiedAgent,
+  unqualifiedPipelineAgent,
 } from "./build-pipeline.js";
 import type { StructuredReviewReport } from "./structured-review.js";
 import {
@@ -2389,6 +2391,7 @@ describe("execution mode policy", () => {
 
   test("publishes one agent list that the guard is built from", () => {
     expect([...BUILD_PIPELINE_AGENTS].sort()).toEqual([
+      "antigravity",
       "claude",
       "codex",
       "cursor",
@@ -2402,6 +2405,26 @@ describe("execution mode policy", () => {
     for (const agent of BUILD_PIPELINE_AGENTS) {
       expect(isBuildStepConfigs({ build: { agent } })).toBe(true);
     }
+  });
+
+  test("a native platform is not a pipeline agent until it is qualified", () => {
+    expect(isPipelineQualifiedAgent("antigravity")).toBe(false);
+    expect(isPipelineQualifiedAgent("grok")).toBe(true);
+    expect(isPipelineQualifiedAgent("gemini")).toBe(false);
+    expect(unqualifiedPipelineAgent({ agentType: "claude" })).toBeUndefined();
+    expect(unqualifiedPipelineAgent({ agentType: "antigravity" })).toBe("antigravity");
+    expect(
+      unqualifiedPipelineAgent({
+        agentType: "codex",
+        steps: { review: { agent: "claude" }, verify: { agent: "antigravity" } },
+      }),
+    ).toBe("antigravity");
+    expect(
+      unqualifiedPipelineAgent({ agentType: "codex", reviewers: [{ agent: "antigravity" }] }),
+    ).toBe("antigravity");
+    expect(
+      unqualifiedPipelineAgent({ agentType: "codex", reviewPreparation: { agent: "antigravity" } }),
+    ).toBe("antigravity");
   });
 });
 

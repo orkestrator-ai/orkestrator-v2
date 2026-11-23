@@ -43,6 +43,10 @@ export const PROVIDER_STATE_TRACED_VERSIONS: Record<AgentPlatform, string> = {
   pi: "1.5.2",
   cursor: "1.4.1",
   grok: "1.0.88",
+  // Nothing of Antigravity's is preserved (it has no container bridge yet,
+  // `acp-provider-launch.ts`), so there is no layout to re-trace; the pin is
+  // recorded so a bump is still noticed here.
+  antigravity: "1.5.12",
 };
 
 /** Codex runtime databases on persistent storage (`CODEX_SQLITE_HOME`). */
@@ -198,6 +202,11 @@ export const PROVIDER_PRESERVATION: Record<
     level: "partial",
     limitations:
       "Session histories, the search index and the bridge session map are preserved. Grok's own worktree registry (worktrees.db) and opt-in memory-v2 directory are not preserved; provider resume after a rebuild is pending qualification.",
+  },
+  antigravity: {
+    level: "partial",
+    limitations:
+      "Antigravity does not run in containers yet, so none of its state is kept on a container's persistent storage.",
   },
 };
 

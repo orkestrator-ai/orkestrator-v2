@@ -14,6 +14,7 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
   grok: "1.0.88",
   opencode2: "2.3.1",
   pi: "1.5.2",
+  antigravity: "1.5.12",
 } as const;
 
 /**
@@ -176,8 +177,42 @@ export const CODEX_RELEASE_BASE =
   `https://github.com/openai/codex/releases/download/rust-v${PINNED_TOOLCHAIN_VERSIONS.codex}` as const;
 export const PI_RELEASE_BASE =
   `https://github.com/earendil-works/pi/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.pi}` as const;
+export const ANTIGRAVITY_RELEASE_BASE =
+  `https://github.com/google-antigravity/antigravity-cli/releases/download/${PINNED_TOOLCHAIN_VERSIONS.antigravity}` as const;
 export const GH_RELEASE_BASE =
   `https://github.com/cli/cli/releases/download/v${PINNED_SUPPORT_TOOL_VERSIONS.gh}` as const;
+
+/**
+ * Google's official Antigravity CLI release (`google-antigravity/antigravity-cli`
+ * on GitHub). Each archive holds one `antigravity` executable; `agy` is the
+ * documented command name, so it is exposed as an activation alias. Digests
+ * were computed from the 1.5.12 release assets, whose published `sha256`
+ * digests the archive values match.
+ */
+function antigravityArtifact(
+  platform: ToolchainPlatform,
+  architecture: ToolchainArchitecture,
+  asset: string,
+  archive: { size: number; sha256: string },
+  executable: { size: number; sha256: string },
+): ToolchainArtifact {
+  return {
+    name: "antigravity",
+    version: PINNED_TOOLCHAIN_VERSIONS.antigravity,
+    platform,
+    architecture,
+    archive: {
+      format: "tar.gz",
+      url: `${ANTIGRAVITY_RELEASE_BASE}/agy_cli_${asset}.tar.gz`,
+      entryPath: "antigravity",
+      size: archive.size,
+      sha256: archive.sha256,
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    activationAliases: ["agy"],
+    executable: { fileName: "antigravity", size: executable.size, sha256: executable.sha256 },
+  };
+}
 
 export const CODEX_CODE_MODE_HOST_FILE_NAME = "codex-code-mode-host";
 
@@ -722,6 +757,58 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       sha256: "6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57",
     },
   },
+  antigravityArtifact(
+    "darwin",
+    "arm64",
+    "mac_arm64",
+    {
+      size: 85_295_784,
+      sha256: "fa2bb0e6646db70e6610ed41382f9ff23e260b8f649427c4ef1361aaa8a8dbcb",
+    },
+    {
+      size: 226_575_952,
+      sha256: "ef265356c3e5d3c6c241509cf71187bae086ac935ef5c5c037dadf62d5876835",
+    },
+  ),
+  antigravityArtifact(
+    "darwin",
+    "x64",
+    "mac_x64",
+    {
+      size: 90_841_040,
+      sha256: "934b7023768637cd2f827bcb76b0c38875a8beb3502845ef1daa2f125cf458f0",
+    },
+    {
+      size: 235_589_664,
+      sha256: "e68e771e3e8ca4f7811e95f9494a10b9a87c09931b644833c688d5184ad40233",
+    },
+  ),
+  antigravityArtifact(
+    "linux",
+    "arm64",
+    "linux_arm64",
+    {
+      size: 91_394_923,
+      sha256: "594046de1b91561f7fe16476365e3843038ecca56f5f59af45cf9d3091e43bd4",
+    },
+    {
+      size: 253_055_664,
+      sha256: "f8bb8d22dfb676ac0a69effe534283274f860095bfdca62a7caa69de459784ed",
+    },
+  ),
+  antigravityArtifact(
+    "linux",
+    "x64",
+    "linux_x64",
+    {
+      size: 100_322_406,
+      sha256: "0f0cb851cdc9fbedd50432570aa6ae9c4c398b9ea3f1e23e7776f707643c5b3e",
+    },
+    {
+      size: 269_443_784,
+      sha256: "94104f028e6962fa2f71d393a7ae27d835ceba1c4898422a103e22c6a5fd6828",
+    },
+  ),
   ghArtifact(
     "darwin",
     "arm64",

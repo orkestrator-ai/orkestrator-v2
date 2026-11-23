@@ -726,12 +726,12 @@ export class StorageService {
   ): Promise<AgentModelCatalogCache>;
 
   cacheAgentModelCatalog(
-    agent: "cursor" | "grok" | "pi",
+    agent: "cursor" | "grok" | "pi" | "antigravity",
     models: AgentModel[],
   ): Promise<AgentModelCatalogCache>;
 
   cacheAgentModelCatalog(
-    agent: "claude" | "codex" | "cursor" | "grok" | "pi",
+    agent: "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity",
     models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[] | AgentModel[],
   ): Promise<AgentModelCatalogCache> {
     return this.repos.config.cacheAgentModelCatalog(agent, models);

@@ -111,6 +111,7 @@ export const AGENT_INTERACTION_PROVIDERS = [
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ] as const;
 export type AgentInteractionProvider = (typeof AGENT_INTERACTION_PROVIDERS)[number];
 

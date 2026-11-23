@@ -64,11 +64,11 @@ const LocalArgs = Schema.Struct({ environmentId: Schema.String });
 
 // --- Container bridges ----------------------------------------------------
 
-function containerServerStart<const A extends AgentServerKind>(agent: A) {
+function containerServerStart<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `start_${agent}_server`,
-    since: 1,
+    since,
     access: "workspace",
     read: false,
     args: ContainerArgs,
@@ -77,11 +77,11 @@ function containerServerStart<const A extends AgentServerKind>(agent: A) {
   });
 }
 
-function containerServerStop<const A extends AgentServerKind>(agent: A) {
+function containerServerStop<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `stop_${agent}_server`,
-    since: 1,
+    since,
     access: "workspace",
     read: false,
     args: ContainerArgs,
@@ -90,11 +90,11 @@ function containerServerStop<const A extends AgentServerKind>(agent: A) {
   });
 }
 
-function containerServerStatus<const A extends AgentServerKind>(agent: A) {
+function containerServerStatus<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `get_${agent}_server_status`,
-    since: 1,
+    since,
     access: "workspace",
     read: true,
     args: ContainerArgs,
@@ -104,11 +104,11 @@ function containerServerStatus<const A extends AgentServerKind>(agent: A) {
 }
 
 /** A container bridge's bounded, redacted log tail; `previous` reads the run before. */
-function containerServerLog<const A extends AgentServerKind>(agent: A) {
+function containerServerLog<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `get_${agent}_server_log`,
-    since: 1,
+    since,
     access: "workspace",
     read: true,
     args: Schema.Struct({ containerId: Schema.String, previous: optionalUnknown }),
@@ -142,14 +142,19 @@ export const startPiServerCommand = containerServerStart("pi");
 export const stopPiServerCommand = containerServerStop("pi");
 export const getPiServerStatusCommand = containerServerStatus("pi");
 export const getPiServerLogCommand = containerServerLog("pi");
+// Antigravity's bridge commands arrived with `agent-servers` version 2.
+export const startAntigravityServerCommand = containerServerStart("antigravity", 2);
+export const stopAntigravityServerCommand = containerServerStop("antigravity", 2);
+export const getAntigravityServerStatusCommand = containerServerStatus("antigravity", 2);
+export const getAntigravityServerLogCommand = containerServerLog("antigravity", 2);
 
 // --- Local bridges --------------------------------------------------------
 
-function localServerStart<const A extends AgentServerKind>(agent: A) {
+function localServerStart<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `start_local_${agent}_server_cmd`,
-    since: 1,
+    since,
     access: "workspace",
     read: false,
     args: LocalArgs,
@@ -158,11 +163,11 @@ function localServerStart<const A extends AgentServerKind>(agent: A) {
   });
 }
 
-function localServerStop<const A extends AgentServerKind>(agent: A) {
+function localServerStop<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `stop_local_${agent}_server_cmd`,
-    since: 1,
+    since,
     access: "workspace",
     read: false,
     args: LocalArgs,
@@ -171,11 +176,11 @@ function localServerStop<const A extends AgentServerKind>(agent: A) {
   });
 }
 
-function localServerStatus<const A extends AgentServerKind>(agent: A) {
+function localServerStatus<const A extends AgentServerKind>(agent: A, since = 1) {
   return defineCommand({
     domain: agentServersDomain,
     name: `get_local_${agent}_server_status`,
-    since: 1,
+    since,
     access: "workspace",
     read: true,
     args: LocalArgs,
@@ -202,6 +207,9 @@ export const getLocalGrokServerStatusCommand = localServerStatus("grok");
 export const startLocalPiServerCommand = localServerStart("pi");
 export const stopLocalPiServerCommand = localServerStop("pi");
 export const getLocalPiServerStatusCommand = localServerStatus("pi");
+export const startLocalAntigravityServerCommand = localServerStart("antigravity", 2);
+export const stopLocalAntigravityServerCommand = localServerStop("antigravity", 2);
+export const getLocalAntigravityServerStatusCommand = localServerStatus("antigravity", 2);
 
 /**
  * A no-op kept from the Tauri era (stale local servers are reaped at startup
@@ -525,6 +533,10 @@ export const AGENT_SERVERS_COMMANDS = [
   stopPiServerCommand,
   getPiServerStatusCommand,
   getPiServerLogCommand,
+  startAntigravityServerCommand,
+  stopAntigravityServerCommand,
+  getAntigravityServerStatusCommand,
+  getAntigravityServerLogCommand,
   startLocalOpencodeServerCommand,
   stopLocalOpencodeServerCommand,
   getLocalOpencodeServerStatusCommand,
@@ -543,6 +555,9 @@ export const AGENT_SERVERS_COMMANDS = [
   startLocalPiServerCommand,
   stopLocalPiServerCommand,
   getLocalPiServerStatusCommand,
+  startLocalAntigravityServerCommand,
+  stopLocalAntigravityServerCommand,
+  getLocalAntigravityServerStatusCommand,
   cleanupStaleLocalServersCommand,
   awaitBridgeReadyCommand,
   peekLocalAgentBridgeCommand,

@@ -62,6 +62,8 @@ const PROVIDER_BINARIES: Record<AgentPlatform, string | null> = {
   grok: "grok",
   opencode: "opencode2",
   pi: "pi",
+  // The managed `antigravity` toolchain entry (`agy`).
+  antigravity: "antigravity",
 };
 
 function mcpRequestId(key: string): string {

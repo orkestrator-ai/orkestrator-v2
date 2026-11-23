@@ -3,7 +3,7 @@ import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
-import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import {
@@ -28,7 +28,12 @@ import {
   waitForLocalServerStartup,
 } from "./commands-servers.js";
 import { bearerBridgeHeaders, claudeBridgeAuthHeaders } from "./commands-server-health.js";
-import type { LocalServerKind, LocalServerRuntime } from "./local-server-runtime.js";
+import type {
+  AcpLocalServerKind,
+  LocalServerKind,
+  LocalServerRuntime,
+} from "./local-server-runtime.js";
+import { acpBridgeProviderArgument, acpProviderLaunchEnv } from "./acp-provider-launch.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
@@ -52,14 +57,14 @@ const log = createLogger("models");
 
 type RefreshableAgent = Extract<
   AgentPlatform,
-  "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi"
+  "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi" | "antigravity"
 >;
 
 export type HostCatalog =
   | { agent: "claude"; models: Awaited<ReturnType<typeof fetchClaudeBridgeModelCatalog>>["models"] }
   | { agent: "codex"; models: unknown[]; accountLoginKey: string }
   | { agent: "opencode"; models: AgentModel[] }
-  | { agent: "cursor" | "grok" | "pi"; models: AgentModel[] };
+  | { agent: "cursor" | "grok" | "pi" | "antigravity"; models: AgentModel[] };
 
 export type BridgeProbe = {
   kind: LocalServerKind;
@@ -233,7 +238,7 @@ async function refreshCodex(
 
 async function refreshAcp(
   context: CommandContext,
-  agent: "cursor" | "grok",
+  agent: "cursor" | AcpLocalServerKind,
   dependencies: HostRefreshDependencies,
 ): Promise<HostCatalog> {
   const useCursorSdk = agent === "cursor";
@@ -256,34 +261,21 @@ async function refreshAcp(
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
     else delete env.CURSOR_API_KEY;
   } else {
-    const executable = resolveManagedAcpBinary(context, "grok");
+    const executable = resolveManagedAcpBinary(context, agent);
     if (!executable) {
-      throw new Error("Grok Build is not installed yet");
+      throw new Error(`${AGENT_PLATFORM_LABELS[agent]} is not installed yet`);
     }
     env.ACP_BRIDGE_TOKEN = token;
-    env.ACP_PROVIDER = agent;
-    env.ACP_AGENT_PATH = executable;
-    env.ACP_PROVIDER_CONFIG = JSON.stringify({
-      id: agent,
-      name: "Grok",
-      executable,
-      argv: ["--always-approve", "agent", "{{model}}", "{{effort}}", "stdio"],
-      env: {},
-      requiresAuthenticate: true,
-      authMethodEnv: "GROK_AUTH_METHOD_ID",
-      modeMap: { agent: "build", build: "build", plan: "plan", ask: "plan" },
-      extensionPrefixes: ["x.ai/", "_x.ai/"],
-      acknowledgedExtensionMethods: [],
-      modelUpdateMethods: ["x.ai/models/update", "_x.ai/models/update"],
-      sessionUpdateMethods: ["x.ai/session/update", "_x.ai/session/update"],
-    });
+    // The same launcher record a session's bridge gets (`acp-provider-launch.ts`).
+    // No state directory: the probe's bridge keeps nothing.
+    Object.assign(env, acpProviderLaunchEnv(agent, { executable, appVersion: APP_VERSION }));
   }
   const models = await withShortLivedBridge(
     context.runtime.localServers,
     {
       kind: agent,
       command: resolveBunBinary(context),
-      args: [entrypoint],
+      args: useCursorSdk ? [entrypoint] : [entrypoint, acpBridgeProviderArgument(agent)],
       cwd,
       token,
       headers: bearerBridgeHeaders(token),
@@ -354,7 +346,7 @@ function createHostModelCatalogRefresher(
     const refresh = (async () => {
       if (agent === "claude") return refreshClaude(context, dependencies);
       if (account) return refreshCodex(context, account);
-      if (agent === "cursor" || agent === "grok") {
+      if (agent === "cursor" || agent === "grok" || agent === "antigravity") {
         return refreshAcp(context, agent, dependencies);
       }
       if (agent === "pi") {

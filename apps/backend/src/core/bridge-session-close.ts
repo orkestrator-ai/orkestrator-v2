@@ -14,6 +14,7 @@ const BRIDGE_LABELS: Readonly<Record<HttpBridgeAgent, string>> = {
   cursor: "Cursor",
   grok: "Grok",
   pi: "Pi",
+  antigravity: "Antigravity",
 };
 
 /** Close could not be confirmed; the caller must keep its intent and retry. */

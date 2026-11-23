@@ -64,6 +64,7 @@ const HINTS: Record<AgentPlatform, string> = {
   grok: "Open a terminal and run grok login.",
   opencode: "Sign each model provider in under Provider sign-in.",
   pi: "Open a Pi terminal tab and run /login.",
+  antigravity: "Open a terminal and run agy acp --login.",
 };
 
 function fixture(platform: AgentPlatform, state: NativeAgentAuthState): NativeAgentAuthStatus {

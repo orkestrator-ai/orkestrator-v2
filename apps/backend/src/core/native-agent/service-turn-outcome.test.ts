@@ -980,7 +980,8 @@ test.each([false, true])(
   },
 );
 
-test.each(AGENT_PLATFORMS)(
+// Antigravity is not goal-qualified, so it has no goal continuations.
+test.each(AGENT_PLATFORMS.filter((agent) => agent !== "antigravity"))(
   "%s goal continuations retain Plan through real queue dispatch",
   async (agent) => {
     const stub = providerStub(agent);

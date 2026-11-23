@@ -22,7 +22,7 @@ import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { asRecord, nonEmptyString } from "../agent-provider-runtime.js";
 import { assertOk, assertOkWithErrorDetail, boundedJson, bridgeFetch } from "./transport.js";
 
-export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi";
+export type HttpBridgeAgent = "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity";
 
 const log = createLogger("native-agent");
 

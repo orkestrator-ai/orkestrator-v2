@@ -166,6 +166,11 @@ describe("StorageService core coverage", () => {
       name: "renamed",
       branch: "renamed-branch",
     });
+    // Compare against the stored record, not `populated`: the update that set
+    // `pendingAgentLaunch` clears `startupAgentSession` by assigning
+    // `undefined`, which the returned object keeps as a key and a reload drops.
+    const persisted = await storage.getEnvironment(environment.id);
+    if (!persisted) throw new Error("environment missing after update");
 
     const unchanged = await storage.updateEnvironment(environment.id, {
       name: 42,
@@ -202,7 +207,7 @@ describe("StorageService core coverage", () => {
       worktreePath: false,
     });
 
-    expect(unchanged).toMatchObject(populated);
+    expect(unchanged).toEqual(persisted);
 
     // `agentSettings` is written wholesale by the settings panes, so it is not
     // one of the ignore-invalid-values probes above: a block whose every value

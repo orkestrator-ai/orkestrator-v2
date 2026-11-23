@@ -214,3 +214,40 @@ code (`namesLimitOrLogin`). See
   merges into its last attempt, not the summed turn.
   Reset partial structured output and cancel parked interactions before a
   continuation; an ended attempt cannot own a later attempt's interaction.
+
+## Antigravity
+
+The bridge also runs Google's `agy acp` as provider `antigravity`, a separate
+process from Grok's with its own state. Its quirks live in
+`src/antigravity-acp.ts`, keyed by provider id like Grok's; the launcher
+record is the backend's `acp-provider-launch.ts`
+([agent-engines.md](../../docs/architecture/agent-engines.md#antigravity)).
+
+- **No `authenticate` for the Google login.** agy's `authenticate` starts an
+  interactive browser sign-in and waits; a session request without a login
+  fails at once with `Authentication required`. `AcpProcess.request` maps that
+  (and an abandoned sign-in, and the stdout login banner, which is never
+  recorded or logged) to a `CredentialError` with fixed text and records the
+  refusal for `ANTIGRAVITY_SIGN_IN_RECHECK_MS`. Readiness reads that record;
+  there is no file to check, because the login is in the OS keyring. A
+  `session/new` refused that way gives the deferred session Grok's file check
+  gives. `authenticate` runs only for a method the backend names.
+- **Questions before approvals.** A permission request whose tool-call id
+  starts `interaction_` is a person's question. `onPermission` parks it
+  (`parkAntigravityQuestion`) before every policy branch, so no policy answers
+  it; a malformed one is cancelled. It returns exactly one native option id.
+- **Client method ceiling.** `ACP_CLIENT_METHOD_CEILINGS` withholds
+  `fs/write_text_file` and `terminal/*` whatever the policy grants, so agy
+  keeps its native edits. Enforce any new ceiling in the handlers as well as
+  in what is advertised.
+- **Resume, not replay.** `prefersSessionResume` reattaches a session with a
+  retained transcript through `session/resume`; `session/load` is only for
+  hydrating an empty one.
+- **Instructions** ride `_meta.antigravity.systemPrompt.append` on new, load and
+  resume (`sessionInstructionsCarrier`); the standard carrier wins when
+  advertised.
+- **Not inherited from Grok:** the policy-denial continuation, the read-only
+  agent profile and its coordinator note, folder trust, network flags, the
+  question timeout, x.ai extensions and Grok's MCP inventory. Add any of them
+  for Antigravity only with evidence from the pinned binary.
+

@@ -27,6 +27,8 @@ import { sweepAgentHandoffs } from "./agent-handoffs.js";
 import {
   fenceRetainingCloseSessionId,
   isNativeTabTeardownKind,
+  nativeTabTeardownAgent,
+  nativeTabTeardownKind,
   unfenceTabTeardownSessionId,
   isTabTeardownKind,
 } from "@orkestrator/protocol/tab-teardown";
@@ -236,20 +238,7 @@ export function registerTeardownCommands(
       }
       return;
     }
-    const agent =
-      intent.kind === "claude-native"
-        ? "claude"
-        : intent.kind === "codex-native"
-          ? "codex"
-          : intent.kind === "opencode-native"
-            ? "opencode"
-            : intent.kind === "cursor-native"
-              ? "cursor"
-              : intent.kind === "grok-native"
-                ? "grok"
-                : intent.kind === "pi-native"
-                  ? "pi"
-                  : null;
+    const agent = nativeTabTeardownAgent(intent.kind);
     if (!agent) return;
     // Intents written by this release carry the downgrade fence; older ones do
     // not. Both are replayed with the same non-destructive close.
@@ -558,18 +547,9 @@ export function registerTeardownCommands(
           continue;
         const startedAt = Date.parse(startup.startedAt ?? "");
         if (!Number.isFinite(startedAt) || now - startedAt < graceMs) continue;
-        const kind =
-          startup.agent === "claude"
-            ? "claude-native"
-            : startup.agent === "codex"
-              ? "codex-native"
-              : startup.agent === "cursor"
-                ? "cursor-native"
-                : startup.agent === "grok"
-                  ? "grok-native"
-                  : startup.agent === "pi"
-                    ? "pi-native"
-                    : "opencode-native";
+        // Exhaustive by construction: an unlisted platform must not be closed
+        // as another platform's session.
+        const kind = nativeTabTeardownKind(startup.agent);
         await teardownTab(
           {
             environmentId: environment.id,
@@ -596,18 +576,7 @@ export function registerTeardownCommands(
         if (!environment || environment.tabTeardownIntents?.[tabId]) continue;
         const updatedAt = Date.parse(session.updatedAt);
         if (!Number.isFinite(updatedAt) || now - updatedAt < graceMs) continue;
-        const kind =
-          session.agent === "claude"
-            ? "claude-native"
-            : session.agent === "codex"
-              ? "codex-native"
-              : session.agent === "cursor"
-                ? "cursor-native"
-                : session.agent === "grok"
-                  ? "grok-native"
-                  : session.agent === "pi"
-                    ? "pi-native"
-                    : "opencode-native";
+        const kind = nativeTabTeardownKind(session.agent);
         log.info("orphan-session.reaped", { environmentId: session.environmentId, tabId });
         await teardownTab(
           {

@@ -110,7 +110,10 @@ import {
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
+  type FeatureBuildStepSelection,
+  resolveFeatureBuildStep,
 } from "@/lib/feature-build-launch";
+import { isPipelineQualifiedAgent } from "@orkestrator/protocol/build-pipeline";
 import { buildPipelineLauncherDefaults } from "@/lib/build-launch-options";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
@@ -399,6 +402,7 @@ export function CreateEnvironmentDialog({
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
+  const antigravityModels = useAgentModelCatalogStore((state) => state.antigravityModels);
   const piCatalogSeedAttemptedRef = useRef(false);
   const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
   useEffect(() => {
@@ -491,6 +495,7 @@ export function CreateEnvironmentDialog({
       cursorModels,
       grokModels,
       piModels,
+      antigravityModels,
     });
     const catalog =
       cachedOpenCodeModels.length > 0
@@ -568,6 +573,7 @@ export function CreateEnvironmentDialog({
     favoriteModels,
     grokModels,
     piModels,
+    antigravityModels,
   ]);
 
   const configuredAgentDefaults = useMemo(
@@ -736,7 +742,41 @@ export function CreateEnvironmentDialog({
   // Held as null until the panel is first shown so that reopening the dialog,
   // or a catalogue arriving late, re-resolves the defaults instead of pinning
   // whatever was known on first render.
-  const effectiveFeatureModels = featureModels ?? defaultFeatureModels;
+  const featurePlatforms = useMemo(
+    () => enabledAgentPlatforms.filter(isPipelineQualifiedAgent),
+    [enabledAgentPlatforms],
+  );
+  const constrainFeatureModels = useCallback(
+    (selections: FeatureBuildModelState) => {
+      const fallback = featurePlatforms[0];
+      if (!fallback) return selections;
+      const eligible = (selection: FeatureBuildStepSelection) =>
+        isPipelineQualifiedAgent(selection.agent) && featurePlatforms.includes(selection.agent)
+          ? selection
+          : resolveFeatureBuildStep({ agent: fallback }, modelCatalog);
+      return {
+        build: eligible(selections.build),
+        reviewers: selections.reviewers.map((reviewer) => ({
+          ...reviewer,
+          ...eligible(reviewer),
+        })),
+        reviewPreparation: eligible(selections.reviewPreparation),
+        address: eligible(selections.address),
+        verify: eligible(selections.verify),
+        pr: eligible(selections.pr),
+        resolve: eligible(selections.resolve),
+      };
+    },
+    [featurePlatforms, modelCatalog],
+  );
+  const effectiveFeatureModels = constrainFeatureModels(featureModels ?? defaultFeatureModels);
+  const startupPlatforms = enabledAgentPlatforms.filter((platform) =>
+    buildIntent === "feature"
+      ? isPipelineQualifiedAgent(platform)
+      : environmentType !== "containerized" || platform !== "antigravity",
+  );
+  const startupAgentBlocked =
+    buildIntent !== "feature" && launchAgent && !startupPlatforms.includes(agentType);
   /**
    * The task text, shared by both intents: it is the prompt's "Initial prompt"
    * and the feature's "Description". Switching intent keeps what was typed, so
@@ -1344,6 +1384,17 @@ export function CreateEnvironmentDialog({
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
     modelsForAgent(modelCatalog, platform).map((option) => toPickerModel(platform, option)),
   );
+  const featurePickerFallback =
+    buildIntent === "feature" &&
+    featurePlatforms.length > 0 &&
+    !startupPlatforms.includes(agentType)
+      ? effectiveFeatureModels.build
+      : undefined;
+  const featurePickerFallbackLabel = featurePickerFallback
+    ? modelsForAgent(modelCatalog, featurePickerFallback.agent).find(
+        (candidate) => candidate.id === featurePickerFallback.model,
+      )?.name
+    : undefined;
   const selectedModel = availableModels.find((candidate) => candidate.id === model);
   const availableReasoningEfforts =
     availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
@@ -1731,7 +1782,12 @@ export function CreateEnvironmentDialog({
     async (e: React.FormEvent) => {
       e.preventDefault();
 
-      if (activeAttachmentOperationIdsRef.current.size > 0 || grokTerminalConflict) return;
+      if (
+        activeAttachmentOperationIdsRef.current.size > 0 ||
+        grokTerminalConflict ||
+        startupAgentBlocked
+      )
+        return;
 
       if (environmentType === "containerized" && !dockerAvailable) return;
       if (environmentType === "local" && !localEnvironmentAvailable) return;
@@ -1747,11 +1803,14 @@ export function CreateEnvironmentDialog({
           if (
             !projectId ||
             !onCreateFeatureBuild ||
+            featurePlatforms.length === 0 ||
             (!featureName.trim() && !initialPrompt.trim())
           ) {
             return;
           }
-          const requestModels = featureAttemptModelsRef.current ?? effectiveFeatureModels;
+          const requestModels = featureAttemptModelsRef.current
+            ? constrainFeatureModels(featureAttemptModelsRef.current)
+            : effectiveFeatureModels;
           const buildRequest = (requestId: string) =>
             featureBuildRequest({
               projectId,
@@ -1843,6 +1902,9 @@ export function CreateEnvironmentDialog({
       }
     },
     [
+      constrainFeatureModels,
+      featurePlatforms.length,
+      startupAgentBlocked,
       dockerAvailable,
       grokTerminalConflict,
       environmentType,
@@ -1885,6 +1947,7 @@ export function CreateEnvironmentDialog({
 
   const submitDisabled =
     grokTerminalConflict ||
+    startupAgentBlocked ||
     isLoading ||
     pendingAttachmentOperations > 0 ||
     (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
@@ -1892,7 +1955,9 @@ export function CreateEnvironmentDialog({
     // A blank name is generated from the description by the backend.
     // At least one must be present so the ticket is identifiable.
     (buildIntent === "feature" &&
-      (!onCreateFeatureBuild || (!featureName.trim() && !initialPrompt.trim())));
+      (!onCreateFeatureBuild ||
+        featurePlatforms.length === 0 ||
+        (!featureName.trim() && !initialPrompt.trim())));
 
   // Plain Enter never submits: multi-line fields take it as a newline, and a
   // single-line field (the name, ports) would otherwise submit the form
@@ -2287,28 +2352,48 @@ export function CreateEnvironmentDialog({
                   <AgentModelPicker
                     id="agent-model"
                     ariaLabel="Agent, model and reasoning"
-                    models={pickerModels}
-                    enabledPlatforms={enabledAgentPlatforms}
-                    selectedPlatform={agentType}
-                    favorites={favoriteModels}
+                    models={pickerModels.filter((option) =>
+                      startupPlatforms.includes(option.platform),
+                    )}
+                    enabledPlatforms={startupPlatforms}
+                    selectedPlatform={featurePickerFallback?.agent ?? agentType}
+                    favorites={favoriteModels.filter((favorite) =>
+                      startupPlatforms.includes(favorite.platform),
+                    )}
                     onPlatformChange={selectAgent}
                     onToggleFavorite={toggleFavoriteModel}
                     onReorderFavorites={reorderFavorites}
-                    selectedModelId={model}
-                    selectedModelLabel={selectedModel?.name ?? "Select model"}
+                    selectedModelId={featurePickerFallback?.model ?? model}
+                    selectedModelLabel={
+                      (featurePickerFallback ? featurePickerFallbackLabel : selectedModel?.name) ??
+                      "Select model"
+                    }
                     onModelChange={selectModel}
                     onModelSelect={selectAgentModel}
-                    reasoningOptions={reasoningOptions}
-                    selectedReasoningId={reasoningEffort}
+                    reasoningOptions={featurePickerFallback ? [] : reasoningOptions}
+                    selectedReasoningId={featurePickerFallback?.reasoningEffort ?? reasoningEffort}
                     selectedReasoningLabel={
-                      reasoningOptions.find((option) => option.id === reasoningEffort)?.label
+                      featurePickerFallback?.reasoningEffort
+                        ? effortLabel(featurePickerFallback.reasoningEffort)
+                        : !featurePickerFallback
+                          ? reasoningOptions.find((option) => option.id === reasoningEffort)?.label
+                          : undefined
                     }
                     onReasoningChange={selectReasoningEffort}
-                    speedCapable={speedCapable}
-                    fastModeAvailable={speedAvailable}
-                    fastModeEnabled={speedAvailable ? (fastMode ?? false) : false}
-                    onFastModeChange={speedAvailable ? setFastMode : undefined}
-                    disabled={isLoading || (!launchAgent && buildIntent !== "feature")}
+                    speedCapable={!featurePickerFallback && speedCapable}
+                    fastModeAvailable={!featurePickerFallback && speedAvailable}
+                    fastModeEnabled={
+                      featurePickerFallback?.fastMode ??
+                      (speedAvailable ? (fastMode ?? false) : false)
+                    }
+                    onFastModeChange={
+                      !featurePickerFallback && speedAvailable ? setFastMode : undefined
+                    }
+                    disabled={
+                      isLoading ||
+                      startupPlatforms.length === 0 ||
+                      (!launchAgent && buildIntent !== "feature")
+                    }
                     title="Choose agent, model, and reasoning"
                     className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}
                   />
@@ -2519,8 +2604,8 @@ export function CreateEnvironmentDialog({
                 deliveryPolicy={featureDeliveryPolicy}
                 onDeliveryPolicyChange={setFeatureDeliveryPolicy}
                 catalog={modelCatalog}
-                enabledPlatforms={enabledAgentPlatforms}
-                disabled={isLoading}
+                enabledPlatforms={featurePlatforms}
+                disabled={isLoading || featurePlatforms.length === 0}
                 featureAttachments={
                   <div className="space-y-1.5">
                     <Label className="text-sm">Reference images</Label>
@@ -2588,6 +2673,24 @@ export function CreateEnvironmentDialog({
           onRefresh={launchBase.refresh}
           disabled={isLoading}
         />
+        {startupAgentBlocked && (
+          <p
+            className="shrink-0 border-t border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
+            role="status"
+          >
+            {agentType === "antigravity" && environmentType === "containerized"
+              ? "Antigravity is available in local environments only. Choose another agent to launch in this container."
+              : "Choose an enabled agent to launch in this environment."}
+          </p>
+        )}
+        {buildIntent === "feature" && featurePlatforms.length === 0 && (
+          <p
+            className="shrink-0 border-t border-divider px-4 py-2 text-sm text-muted-foreground sm:px-6"
+            role="status"
+          >
+            Enable a pipeline-compatible agent in Settings to start a feature build.
+          </p>
+        )}
         <DialogFooter className="m-0 grid shrink-0 grid-cols-2 border-t border-divider px-4 py-2.5 sm:m-0 sm:flex sm:flex-row sm:px-6">
           <Button
             type="button"

@@ -76,6 +76,7 @@ function localAgentPorts(environment: Environment): number[] {
     environment.localCursorPort,
     environment.localGrokPort,
     environment.localPiPort,
+    environment.localAntigravityPort,
   ].filter((port): port is number => typeof port === "number" && port > 0);
 }
 

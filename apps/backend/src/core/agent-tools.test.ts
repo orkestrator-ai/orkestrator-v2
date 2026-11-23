@@ -1136,7 +1136,10 @@ describe("agent Kanban tools", () => {
   });
 
   test("all native private-connection mailboxes reject shared claims", async () => {
-    for (const platform of AGENT_PLATFORMS.filter((agent) => agent !== "opencode")) {
+    // Antigravity tabs have no mailbox at all (mail is not qualified there).
+    for (const platform of AGENT_PLATFORMS.filter(
+      (agent) => agent !== "opencode" && agent !== "antigravity",
+    )) {
       const environmentId = `env-private-${platform}`;
       await addMessagingEnvironment(environmentId, "project-mail", [
         { id: "native-tab", platform },

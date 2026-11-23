@@ -80,6 +80,7 @@ export function useSettingsModelCatalog() {
       cursorModels: cache?.cursor?.models ?? [],
       grokModels: cache?.grok?.models ?? [],
       piModels: cache?.pi?.models ?? [],
+      antigravityModels: cache?.antigravity?.models ?? [],
     });
     const models = current?.openCode?.projectId === catalogProjectId ? current.openCode.models : [];
     const mapped = models.length

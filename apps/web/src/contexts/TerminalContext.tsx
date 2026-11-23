@@ -3,8 +3,10 @@ import { createContext, useContext, useCallback, useMemo, useState, ReactNode } 
 import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 
 // Terminal-specific tab types
+// `cursor` and `antigravity` name a platform's tab but are always created
+// native: neither has a terminal mode.
 export type TerminalTabType =
-  "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "root";
+  "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "antigravity" | "root";
 export type CreatableTabType =
   | TerminalTabType
   | "agent-native"

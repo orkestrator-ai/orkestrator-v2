@@ -363,7 +363,9 @@ for (const presentation of ["bar", "grid"] as const) {
     await page.goto(`/coordinator-activity?presentation=${presentation}`);
     const tab = coordinatorTab(page);
     const list = page.getByRole("tablist", { name: "Project navigation" });
-    const scrollport = presentation === "bar" ? page.getByTestId("project-navigation-bar") : list;
+    // The bar scrolls its tabs in an inner row so the machine switcher stays put.
+    const scrollport =
+      presentation === "bar" ? page.getByTestId("project-navigation-scroller") : list;
     const outline = tab.getByTestId("coordinator-working-outline");
     await expect(outline).toBeVisible();
     if (presentation === "bar") {

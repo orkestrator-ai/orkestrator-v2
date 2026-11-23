@@ -39,6 +39,8 @@ import {
 } from "@orkestrator/protocol/contract/domains/accounts";
 
 import type { AnyCommandDef } from "@orkestrator/protocol/contract/command";
+import { peekLocalAgentBridge } from "./commands-servers.js";
+import { HttpBridgeProvider } from "./http-bridge/index.js";
 import type { CommandContext } from "./commands-context.js";
 import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./commands-registry-async-decode.js";
 import type {
@@ -137,6 +139,39 @@ export function registerAgentAccountCommands(
     const { readAgentSignInStatus } = await import("./agent-sign-in-status.js");
     return readAgentSignInStatus(platform, {
       listAccounts: () => listAgentAccounts(context),
+      antigravityStatus: async () => {
+        const environments = await context.storage.loadEnvironments();
+        const local = environments.filter((environment) => environment.environmentType === "local");
+        const bridges = await Promise.all(
+          local.map((environment) =>
+            peekLocalAgentBridge(environment.id, context, "antigravity").catch(() => null),
+          ),
+        );
+        const statuses = await Promise.all(
+          bridges.flatMap((bridge) =>
+            bridge
+              ? [
+                  new HttpBridgeProvider(
+                    {
+                      agent: "antigravity",
+                      baseUrl: `http://127.0.0.1:${bridge.port}`,
+                      authToken: bridge.authToken,
+                      requestTimeoutMs: 2_000,
+                    },
+                    fetch,
+                  )
+                    .authStatus()
+                    .then(
+                      ({ state }) => state,
+                      () => "unknown" as const,
+                    ),
+                ]
+              : [],
+          ),
+        );
+        if (statuses.includes("needs-auth")) return "needs-auth";
+        return statuses.includes("signed-in") ? "signed-in" : "unknown";
+      },
       cursorStatus: async () => {
         const { cursorSdkAuthStatus } = await import("./cursor-sdk-bridge.js");
         const config = await context.storage.loadConfig();

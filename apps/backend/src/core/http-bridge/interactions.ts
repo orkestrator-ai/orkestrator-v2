@@ -35,6 +35,8 @@ import {
   truncatedText,
 } from "../agent-provider-runtime.js";
 import { assertOk, boundedJson, bridgeFetch } from "./transport.js";
+import { acpBridgeLabel, isAcpBridgeAgent } from "./bridge-agents.js";
+import { acpQuestionAnswerRequest } from "./acp-question-answer.js";
 import type { HttpBridgeStateReads } from "./state-revision.js";
 import { acpRuleDetail, claudeRuleDetail, codexRuleDetail } from "../permission-rules/index.js";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -143,7 +145,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
   private readonly ruleDetails = new Map<string, PermissionRuleRequestDetail>();
 
   constructor(
-    readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi",
+    readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity",
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
   ) {}
@@ -677,6 +679,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
   }
 
   private mapGrokInteraction(sessionId: string, raw: unknown): AgentInteractionRequest {
+    const label = acpBridgeLabel(this.agent);
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.id);
     const requestedAt = request?.requestedAt;
@@ -687,7 +690,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       !Number.isSafeInteger(requestedAt) ||
       !Number.isSafeInteger(expiresAt)
     ) {
-      throw new ProviderUnavailableError("Grok returned a malformed interaction");
+      throw new ProviderUnavailableError(`${label} returned a malformed interaction`);
     }
     if (request.kind === "mcp-form" || request.kind === "mcp-url") {
       return this.mapServerElicitation(sessionId, providerRequestId, request, request.kind, {
@@ -721,7 +724,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       return mapped;
     }
     if (request.kind !== "question" || !Array.isArray(request.questions)) {
-      throw new ProviderUnavailableError("Grok returned an unknown interaction kind");
+      throw new ProviderUnavailableError(`${label} returned an unknown interaction kind`);
     }
     const questions: AgentInteractionQuestion[] = request.questions.map(
       (candidate, questionIndex) => {
@@ -730,11 +733,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
         const prompt = nonEmptyString(question?.question);
         const options = question?.options;
         if (!id || !prompt || !Array.isArray(options)) {
-          throw new ProviderUnavailableError("Grok returned a malformed question");
+          throw new ProviderUnavailableError(`${label} returned a malformed question`);
         }
         return {
           id: boundedText(id, id, AGENT_INTERACTION_LIMITS.maxIdLength),
-          prompt: boundedText(prompt, "Grok needs input"),
+          prompt: boundedText(prompt, `${label} needs input`),
           required: true,
           multiple: question?.multiple === true,
           secret: false,
@@ -742,13 +745,13 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
           options: options.map((rawOption, optionIndex) => {
             const option = asRecord(rawOption);
             const providerValue = nonEmptyString(option?.id);
-            const label = nonEmptyString(option?.label);
-            if (!providerValue || !label) {
-              throw new ProviderUnavailableError("Grok returned a malformed question option");
+            const optionLabel = nonEmptyString(option?.label);
+            if (!providerValue || !optionLabel) {
+              throw new ProviderUnavailableError(`${label} returned a malformed question option`);
             }
             return {
               id: opaqueOptionId(questionIndex, optionIndex),
-              label: boundedText(label, label),
+              label: boundedText(optionLabel, optionLabel),
               providerValue: boundedText(
                 providerValue,
                 providerValue,
@@ -764,7 +767,7 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
     );
     return this.interactionRequest(sessionId, providerRequestId, "question", request, {
       kind: "question",
-      presentation: { title: "Grok needs input", questions },
+      presentation: { title: `${label} needs input`, questions },
       createdAt: requestedAt as number,
       updatedAt: requestedAt as number,
       expiresAt: expiresAt as number,
@@ -1026,11 +1029,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       for (const request of claudeInteractions) {
         mapRequest(request, (raw) => this.mapClaudeInteraction(sessionId, raw));
       }
-    } else if (this.agent === "cursor" || this.agent === "grok") {
+    } else if (this.agent === "cursor" || isAcpBridgeAgent(this.agent)) {
       for (const request of firstRequests) {
         mapRequest(request, (raw) => this.mapAcpApproval(sessionId, raw));
       }
-      if (this.agent === "grok") {
+      if (isAcpBridgeAgent(this.agent)) {
         for (const request of secondRequests) {
           mapRequest(request, (raw) => this.mapGrokInteraction(sessionId, raw));
         }
@@ -1349,36 +1352,11 @@ export class HttpBridgeInteractionAdapter implements AgentInteractionProviderCap
       };
     }
 
-    if (this.agent === "grok" && request.kind === "question") {
-      const byQuestion = new Map(
-        resolution.answer?.answers.map((answer) => [answer.questionId, answer]),
-      );
-      const answers = Object.fromEntries(
-        request.presentation.questions.map((question) => {
-          const answer = byQuestion.get(question.id);
-          const options = new Map(
-            question.options.map((option) => [option.id, option.providerValue]),
-          );
-          return [
-            question.id,
-            [
-              ...(answer?.optionIds ?? []).map((id) => options.get(id)!),
-              ...(answer?.freeText === undefined ? [] : [answer.freeText]),
-            ],
-          ];
-        }),
-      );
-      return {
-        path: `${base}/interactions/${encodeURIComponent(providerRequestId)}`,
-        method: "POST",
-        body: JSON.stringify({
-          action: resolution.action === "answer" ? "accept" : "cancel",
-          ...(resolution.action === "answer" ? { answers } : {}),
-        }),
-      };
+    if (isAcpBridgeAgent(this.agent) && request.kind === "question") {
+      return acpQuestionAnswerRequest(base, providerRequestId, request, resolution);
     }
 
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "cursor" || isAcpBridgeAgent(this.agent)) {
       if (
         request.kind !== "permission" &&
         request.kind !== "command-approval" &&

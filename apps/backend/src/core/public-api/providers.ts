@@ -55,6 +55,10 @@ export const PROVIDER_COMPLETION: Readonly<
     support: "unqualified",
     note: "Not yet live-qualified through the public CLI; runs report unsupported instead of completion.",
   },
+  antigravity: {
+    support: "unqualified",
+    note: "Not yet live-qualified through the public CLI; runs report unsupported instead of completion.",
+  },
 });
 
 export function providerCapabilities(agent: AgentPlatform): PublicProviderCapabilities {

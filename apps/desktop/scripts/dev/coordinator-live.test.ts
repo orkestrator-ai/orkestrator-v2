@@ -127,9 +127,13 @@ async function checkout(): Promise<string> {
 }
 
 describe("live coordinator platforms", () => {
-  test("every agent platform is on the live list, and only Grok needs the advisory level", () => {
+  test("every coordinator-capable platform is on the live list, and only Grok needs the advisory level", () => {
+    // Antigravity is registered but not qualified to run a coordinator
+    // (`UNQUALIFIED_COORDINATOR_PLATFORMS` in the backend's
+    // `coordinator/providers.ts`), so the live suite has nothing to run for it.
+    const unqualified = new Set(["antigravity"]);
     expect(COORDINATOR_LIVE_PLATFORMS.map((entry) => entry.platform).toSorted()).toEqual(
-      [...AGENT_PLATFORMS].toSorted(),
+      AGENT_PLATFORMS.filter((platform) => !unqualified.has(platform)).toSorted(),
     );
     expect(
       COORDINATOR_LIVE_PLATFORMS.filter((entry) => entry.tierSetting === "advisory").map(

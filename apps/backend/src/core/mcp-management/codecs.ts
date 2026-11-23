@@ -1006,6 +1006,28 @@ export const piCodec: ProviderCodec = {
     "A Pi project server replaces the user server of the same name, even when it is disabled or cannot start.",
 };
 
+// ---------------------------------------------------------------------------
+// Antigravity: no native file is managed
+// ---------------------------------------------------------------------------
+
+export const ANTIGRAVITY_MCP_UNMANAGED_REASON =
+  "Antigravity's own MCP configuration has not been qualified against the pinned agy release, so Orkestrator does not edit it. Orkestrator's tools reach Antigravity sessions over the injected connection.";
+
+/**
+ * Antigravity lists only the injected Orkestrator connection: agy's own MCP
+ * file is not read or written (`ANTIGRAVITY_MCP_UNMANAGED_REASON`). The codec
+ * decodes like Cursor's JSON shape for completeness and refuses every write.
+ */
+export const antigravityCodec: ProviderCodec = {
+  advancedFields: [],
+  nameRule: GENERIC_NAME,
+  decode: (raw) => cursorCodec.decode(raw),
+  encode: (definition, previous) => cursorCodec.encode(definition, previous),
+  validate() {
+    return [{ field: "name", message: ANTIGRAVITY_MCP_UNMANAGED_REASON }];
+  },
+};
+
 export const PROVIDER_CODECS: Readonly<Record<AgentPlatform, ProviderCodec>> = Object.freeze({
   claude: claudeCodec,
   codex: codexCodec,
@@ -1013,4 +1035,5 @@ export const PROVIDER_CODECS: Readonly<Record<AgentPlatform, ProviderCodec>> = O
   cursor: cursorCodec,
   grok: grokCodec,
   pi: piCodec,
+  antigravity: antigravityCodec,
 });

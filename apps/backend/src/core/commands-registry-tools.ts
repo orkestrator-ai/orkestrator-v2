@@ -196,7 +196,8 @@ export function registerToolingCommands(register: CommandRegistrar): void {
       (await checkHostTool(context, "codex")) ||
       (await hasCursorSdkBridge(context)) ||
       (await hasManagedAcpBinary(context, "grok")) ||
-      (await checkHostTool(context, "pi")),
+      (await checkHostTool(context, "pi")) ||
+      (await hasManagedAcpBinary(context, "antigravity")),
   );
   register(getAvailableAiCliCommand, async (_args, context) =>
     (await checkHostTool(context, "claude"))
@@ -211,6 +212,8 @@ export function registerToolingCommands(register: CommandRegistrar): void {
               ? "grok"
               : (await checkHostTool(context, "pi"))
                 ? "pi"
-                : null,
+                : (await hasManagedAcpBinary(context, "antigravity"))
+                  ? "antigravity"
+                  : null,
   );
 }

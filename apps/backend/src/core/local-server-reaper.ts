@@ -51,7 +51,8 @@ import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failu
 
 const log = createLogger("local-server");
 
-export type LocalServerReapKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
+export type LocalServerReapKind =
+  "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi" | "antigravity";
 
 /**
  * claude-tmux is deliberately *not* in `REAPABLE_SERVERS`.
@@ -257,14 +258,16 @@ interface ReapableServer {
     | "codexBridgePid"
     | "cursorBridgePid"
     | "grokBridgePid"
-    | "piBridgePid";
+    | "piBridgePid"
+    | "antigravityBridgePid";
   portField:
     | "localOpencodePort"
     | "localClaudePort"
     | "localCodexPort"
     | "localCursorPort"
     | "localGrokPort"
-    | "localPiPort";
+    | "localPiPort"
+    | "localAntigravityPort";
   /**
    * Alternative marker sets. A process matches when *every* substring in *any
    * one* set appears in its command line.
@@ -276,7 +279,8 @@ interface ReapableServer {
    *   claude   → `<bun> <…>/claude-bridge/dist/index.js`
    *   codex    → `<bun> <…>/codex-bridge/dist/index.js`
    *   pi       → `<bun> <…>/pi-bridge/dist/index.js`
-   *   grok     → `<bun> <…>/acp-bridge/dist/index.js`
+   *   grok     → `<bun> <…>/acp-bridge/dist/index.js --provider=grok`
+   *   antigravity → `<bun> <…>/acp-bridge/dist/index.js --provider=antigravity`
    *   cursor   → `<bun> <…>/cursor-bridge/dist/index.js`
    *
    * A bare `"opencode"` was too weak on its own: it matches a hand-started
@@ -316,7 +320,19 @@ const REAPABLE_SERVERS: readonly ReapableServer[] = [
     kind: "grok",
     pidField: "grokBridgePid",
     portField: "localGrokPort",
-    markerSets: [["acp-bridge", "dist/index.js"]],
+    // A Grok bridge a backend before Antigravity started has no provider
+    // argument, so the bare entrypoint still matches. An Antigravity bridge
+    // never answers to a Grok record (`commandMatchesRecordedServer`).
+    markerSets: [
+      ["acp-bridge", "dist/index.js", "--provider=grok"],
+      ["acp-bridge", "dist/index.js"],
+    ],
+  },
+  {
+    kind: "antigravity",
+    pidField: "antigravityBridgePid",
+    portField: "localAntigravityPort",
+    markerSets: [["acp-bridge", "dist/index.js", "--provider=antigravity"]],
   },
   {
     kind: "pi",
@@ -342,6 +358,7 @@ export function commandMatchesRecordedServer(
   commandLine: string,
 ): boolean {
   const server = REAPABLE_SERVERS.find((entry) => entry.pidField === pidField);
+  if (server?.kind === "grok" && commandLine.includes("--provider=antigravity")) return false;
   return server !== undefined && matchesMarkers(server.markerSets, commandLine);
 }
 
@@ -577,7 +594,10 @@ export async function reapOrphanedLocalServers(
           record("skipped-unreadable");
           continue;
         }
-        if (identity === null || !matchesMarkers(server.markerSets, identity.commandLine)) {
+        if (
+          identity === null ||
+          !commandMatchesRecordedServer(server.pidField, identity.commandLine)
+        ) {
           // Dead, or a recycled PID now owned by a stranger. Either way the
           // record is stale and must not be trusted again.
           await clearRecord();

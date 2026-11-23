@@ -5,7 +5,11 @@ import {
 } from "@orkestrator/protocol/ticket-sections";
 import { DeliveryPolicySelect } from "@/components/tickets/DeliveryPolicySelect";
 import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { BuildStepConfig, BuildStepKey } from "@orkestrator/protocol/build-pipeline";
+import {
+  isPipelineQualifiedAgent,
+  type BuildStepConfig,
+  type BuildStepKey,
+} from "@orkestrator/protocol/build-pipeline";
 import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
 import {
   Container,
@@ -829,8 +833,18 @@ export function BuildLaunchDialog({
   returnFocusRef,
   onConfirm,
 }: BuildLaunchDialogProps) {
-  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
-    useAgentModelFavorites();
+  const {
+    favorites,
+    enabledPlatforms: enabledAgentPlatforms,
+    toggleFavorite,
+    reorderFavorites,
+  } = useAgentModelFavorites();
+  // A pipeline step runs only on a pipeline-qualified platform: Antigravity
+  // is enabled for interactive tabs but not offered here.
+  const enabledPlatforms = useMemo<LaunchAgent[]>(
+    () => enabledAgentPlatforms.filter(isPipelineQualifiedAgent),
+    [enabledAgentPlatforms],
+  );
   const ownDockerAvailable = useDockerAvailability();
   const models = useMemo(() => flatCatalog(catalog, enabledPlatforms), [catalog, enabledPlatforms]);
   const pickerFavorites = useMemo(

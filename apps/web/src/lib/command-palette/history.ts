@@ -86,6 +86,8 @@ const TAB_KIND_LABELS: Readonly<Record<TabType, string>> = {
   cursor: "Cursor terminal",
   grok: "Grok terminal",
   pi: "Pi terminal",
+  // Never a terminal: an Antigravity tab is always native.
+  antigravity: "Antigravity",
   "agent-native": "Agent",
   "auto-pipeline": "Auto-pipeline",
   browser: "Browser",

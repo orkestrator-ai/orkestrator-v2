@@ -73,7 +73,7 @@ test("the Platforms note stays with the platform card", async ({ page }) => {
     "Disabling a platform hides new launch choices; existing sessions and files are kept.",
   );
   const group = note.locator("..");
-  await expect(group.getByRole("switch")).toHaveCount(6);
+  await expect(group.getByRole("switch")).toHaveCount(7);
   const gap = await note.evaluate(
     (node) =>
       node.getBoundingClientRect().top -

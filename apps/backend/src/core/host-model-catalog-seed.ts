@@ -57,7 +57,12 @@ export async function persistHostCatalog(
       catalog.accountLoginKey,
     );
     if (!saved) throw new Error("The active Codex login changed during model discovery");
-  } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
+  } else if (
+    catalog.agent === "cursor" ||
+    catalog.agent === "grok" ||
+    catalog.agent === "pi" ||
+    catalog.agent === "antigravity"
+  ) {
     await storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
   } else {
     projectId ??= HOST_OPENCODE_CATALOG_SCOPE;

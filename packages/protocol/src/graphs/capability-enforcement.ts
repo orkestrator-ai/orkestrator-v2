@@ -207,6 +207,15 @@ function readOnlyBoundary(platform: AgentPlatform, host: AgentEnforcementHost): 
         reason:
           "Grok's write, edit, shell, subagent, web search and web fetch tools are removed. Remaining permission requests are denied; other tools that do not ask, including xAI's hosted X search tools, remain advisory.",
       };
+    case "antigravity":
+      // No Antigravity tool is removed: the bridge denies the permission
+      // requests agy sends and withholds ACP client writes and terminals, but
+      // agy's own edit and command tools are not proven to ask every time.
+      return {
+        tier: "advisory",
+        reason:
+          "Antigravity's permission requests are denied, but its native edit and command tools have not been qualified as asking before every write.",
+      };
   }
 }
 
@@ -230,6 +239,7 @@ function fileToolBoundary(platform: AgentPlatform): TierAndReason {
     opencode: "OpenCode is not given file-tool denials outside a read-only turn.",
     pi: "Pi applies no capability denial outside its read-only gate.",
     grok: "Grok asks before edits, but an unattended run has nobody to refuse them.",
+    antigravity: "Antigravity asks before edits, but an unattended run has nobody to refuse them.",
   };
   return {
     tier: "advisory",
@@ -277,6 +287,12 @@ function networkBoundary(platform: AgentPlatform, policy: AgentEnforcementPolicy
     return {
       tier: "advisory",
       reason: "xAI's hosted X search tools cannot be removed.",
+    };
+  }
+  if (platform === "antigravity") {
+    return {
+      tier: "advisory",
+      reason: "Antigravity's hosted tools have not been qualified as removable.",
     };
   }
   return {
@@ -330,7 +346,7 @@ function secondaryAxis(
       // (Cursor) a denied server.
       if (platform === "codex" || platform === "cursor") return { tier: "provider-configured" };
       if (platform === "pi") return { tier: "enforced" };
-      if (readOnly && platform !== "grok") {
+      if (readOnly && platform !== "grok" && platform !== "antigravity") {
         return {
           tier: "provider-configured",
           reason: "Read-only turns load no repository MCP servers.",
@@ -344,6 +360,12 @@ function secondaryAxis(
     case "web-search":
       if (platform === "grok") {
         return { tier: "advisory", reason: "Grok's hosted search cannot be removed on its own." };
+      }
+      if (platform === "antigravity") {
+        return {
+          tier: "advisory",
+          reason: "Antigravity's hosted search has not been qualified as removable.",
+        };
       }
       // Pi has no hosted search to remove.
       return platform === "pi" ? { tier: "enforced" } : { tier: "provider-configured" };
@@ -391,6 +413,12 @@ function userMcpSelectionAxis(platform: AgentPlatform, readOnly: boolean): TierA
       return {
         tier: "advisory",
         reason: "Grok loads every MCP server in its own configuration; none can be removed.",
+      };
+    case "antigravity":
+      return {
+        tier: "advisory",
+        reason:
+          "Antigravity loads the MCP servers in its own configuration; narrowing them has not been qualified.",
       };
   }
 }

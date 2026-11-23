@@ -490,6 +490,35 @@ describe("a machine-wide notice on a leaf", () => {
     f.dispose();
   });
 
+  test("placed in words an earlier build rendered, a retry is delivered and leaves the outbox", async () => {
+    const f = await fleet();
+    await f.collect();
+    f.link.up = false;
+    await f.leaf.coordinator.noticeRouter.deliverAutoSwitch(SWITCH, "this machine");
+    expect(f.store.state.outbox[COMMAND]?.items).toHaveLength(1);
+
+    // An earlier build placed it with other wording, and that collect failed before the ack.
+    const storage = f.command.storage;
+    const send = storage.sendAgentMail.bind(storage);
+    const placedEarlier = spyOn(storage, "sendAgentMail").mockImplementationOnce(
+      async (sender, input, options) => {
+        await send(sender, { ...input, body: `${input.body} In older words.` }, options);
+        throw new Error("the collect failed after placing it");
+      },
+    );
+    f.link.up = true;
+    await f.collect();
+    placedEarlier.mockRestore();
+    expect(f.store.state.outbox[COMMAND]?.items).toHaveLength(1);
+
+    await f.collect();
+    expect(f.store.state.outbox[COMMAND]?.items ?? []).toHaveLength(0);
+    const received = await inbox(f.command, await f.command.main());
+    expect(received).toHaveLength(1);
+    expect(received[0]!.body).toContain("In older words.");
+    f.dispose();
+  });
+
   test("still reaches the leaf's coordinators for repositories the command node lacks", async () => {
     const f = await fleet({ commandHasRepository: false });
     await f.collect();

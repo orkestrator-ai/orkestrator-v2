@@ -155,7 +155,8 @@ export function nativeTab(
         platform === "cursor" ||
         platform === "grok" ||
         platform === "opencode" ||
-        platform === "pi"
+        platform === "pi" ||
+        platform === "antigravity"
       ) {
         result = { tab, agent: platform };
       }
@@ -331,7 +332,7 @@ export async function cachedLaunchModels(
       },
     ];
   });
-  const providerNeutral = ["cursor", "grok", "pi"].flatMap((key) =>
+  const providerNeutral = ["cursor", "grok", "pi", "antigravity"].flatMap((key) =>
     catalogModels(key).filter(
       (model): model is JsonRecord & AgentModel =>
         typeof model.id === "string" &&

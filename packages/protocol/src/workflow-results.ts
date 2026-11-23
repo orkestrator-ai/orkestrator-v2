@@ -668,7 +668,11 @@ export function workflowResultSubmissionLabel(
   return `${noun[0]!.toUpperCase()}${noun.slice(1)} needs attention`;
 }
 
-/** Providers with qualified result-tool delivery and reconnect behavior. */
+/**
+ * Providers with qualified result-tool delivery and reconnect behavior.
+ * Antigravity is deliberately absent: its result-tool delivery over HTTP MCP
+ * has not been qualified against the pinned `agy` runtime.
+ */
 export const QUALIFIED_WORKFLOW_RESULT_TOOL_PROVIDERS: readonly StructuredOutputProvider[] = [
   "claude",
   "codex",
@@ -703,6 +707,7 @@ export const STRUCTURED_OUTPUT_PROVIDER_VALUES: readonly StructuredOutputProvide
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ];
 
 /**

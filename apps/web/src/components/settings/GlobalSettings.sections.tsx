@@ -2674,6 +2674,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     codex: renderCodex,
     grok: () => renderPlatform("grok"),
     pi: () => renderPlatform("pi"),
+    antigravity: () => renderPlatform("antigravity"),
     terminal: renderTerminal,
     previews: () => (
       <SettingsPageLayout title="Browser previews">

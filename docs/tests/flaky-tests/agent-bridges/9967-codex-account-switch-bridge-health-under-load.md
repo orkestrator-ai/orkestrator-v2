@@ -155,3 +155,21 @@ Reproduce under load first (four concurrent copies pinned to two cores, as
 case 9901 did), capturing the bridge's stdout and the `/global/health` status
 code per poll; then decide between a longer codex health budget and fixing
 whatever keeps the bridge from answering.
+
+## Recurrence: CI on pull request #2541 (2026-11-23)
+
+The "Tests (backend)" job of run 45091972925 (head `f1dee962c`, base
+`307d19317`) failed `two tabs stopped together each continue once` and
+`another limit moves nothing and resends nothing`. Both reported
+`Server on port <n> did not become healthy` after about 16 s
+(`start_local_codex_server_cmd ... outcome=failed`). The branch adds
+Antigravity's own port and process fields to the local-server code and does
+not change how a Codex bridge starts or is health-checked. Run alone on
+beelink2 (16 CPUs) the owning file passed:
+
+```sh
+env -u NODE_ENV mise run test:logged -- --name account-switch-codex -- \
+  bash -c 'cd apps/backend && bun test tests/account-switch-codex-live.test.ts'
+```
+
+PASS in 29.1 s. `mise run flaky:recurrence -- 9967` reported the case open.

@@ -536,7 +536,7 @@ export function commandUnavailableResponse(message: string): {
  * names a known command rather than silently running it.
  */
 export function literalCommandSuppression(platform: AgentPlatform): boolean {
-  return !(platform === "claude" || platform === "grok");
+  return !(platform === "claude" || platform === "grok" || platform === "antigravity");
 }
 
 /**

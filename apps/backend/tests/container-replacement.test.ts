@@ -23,7 +23,10 @@ import {
 import { reconcileContainerOperation } from "../src/core/containers/lifecycle-service";
 import { planStorageSet } from "../src/core/containers/storage";
 import { PROVIDER_STATE_LAYOUT } from "../src/core/containers/state-layout";
-import { isDockerRunStoppedFromOutside } from "../src/core/containers/cli-errors";
+import {
+  dockerDaemonStart,
+  isDockerRunStoppedFromOutside,
+} from "../src/core/containers/cli-errors";
 import { CommandFailedError } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { resetResourceCaches } from "../src/core/containers/resources";
@@ -43,6 +46,29 @@ afterEach(async () => {
 });
 
 const OPERATION_ID = "01890000-0000-7000-8000-000000000001";
+
+describe("dockerDaemonStart", () => {
+  test("classifies a timed-out CLI call as unreachable", async () => {
+    await withDockerScript("#!/bin/sh\nexec sleep 8\n", async () => {
+      expect(await dockerDaemonStart(200)).toEqual({ kind: "unreachable" });
+    });
+  });
+
+  test("classifies a permission-denied connection as unknown", async () => {
+    await withDockerScript(
+      "#!/bin/sh\necho 'error during connect: permission denied' >&2\nexit 1\n",
+      async () => {
+        expect(await dockerDaemonStart()).toEqual({ kind: "unknown" });
+      },
+    );
+  });
+
+  test("classifies an unparseable bridge marker as unknown", async () => {
+    await withDockerScript("#!/bin/sh\necho 'no usable marker'\n", async () => {
+      expect(await dockerDaemonStart()).toEqual({ kind: "unknown" });
+    });
+  });
+});
 
 describe("copy plan", () => {
   test("stops a producer when the copy consumer exits early", async () => {

@@ -150,6 +150,14 @@ host writes nothing new. `rate-limited` is a 403 or 429 whose
 `x-ratelimit-remaining` header is `0`, so a spent quota is told apart from
 other refusals.
 
+### Task 1: verify HTTPS reachability after the seed is written
+
+The container's anonymous probe accepts HTTP 2xx, 403 and 429. The seed
+assertion already verifies the backend's metadata fetch, and a quota
+response proves that the container reached GitHub over HTTPS. Curl
+transport errors still fail the probe. The job token stays with the
+backend fetch.
+
 ### Task 2: the default bridge network as the daemon start
 
 Docker has no daemon start time in its API. The default bridge network's ID

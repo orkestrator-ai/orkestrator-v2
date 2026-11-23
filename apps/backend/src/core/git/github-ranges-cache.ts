@@ -71,15 +71,17 @@ export function validIpv4Cidr(value: string): boolean {
 
 /** Extracts the IPv4 web/api/git ranges from a `/meta` answer, or null. */
 export function parseGithubMeta(text: string): string[] | null {
-  let value: Record<string, unknown>;
+  let value: unknown;
   try {
-    value = JSON.parse(text) as Record<string, unknown>;
+    value = JSON.parse(text);
   } catch {
     return null;
   }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const metadata = value as Record<string, unknown>;
   const ranges: string[] = [];
   for (const key of ["web", "api", "git"]) {
-    const list = value[key];
+    const list = metadata[key];
     if (!Array.isArray(list)) return null;
     for (const entry of list) {
       if (typeof entry === "string" && validIpv4Cidr(entry)) ranges.push(entry);

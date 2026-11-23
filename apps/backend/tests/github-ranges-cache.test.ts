@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   GITHUB_RANGES_FETCH_TOKEN_ENV,
   GITHUB_RANGES_RETRY_AFTER_FAILURE_MS,
+  GITHUB_RANGES_SEED_FILENAME,
   LEGACY_GITHUB_RANGES_FILE,
   copyGithubRangesSeed,
   formatGithubRangesSeed,
@@ -118,7 +119,15 @@ describe("GitHub ranges seed", () => {
     // After an hour it refreshes; a failure keeps serving the previous seed.
     up = false;
     now += 2 * 60 * 60_000;
-    expect(await githubRangesSeed(dir, { fetcher, now: () => now })).toBe(first);
+    const logs = captureLogs();
+    try {
+      expect(await githubRangesSeed(dir, { fetcher, now: () => now, token: "" })).toBe(first);
+    } finally {
+      logs.restore();
+    }
+    expect(
+      logs.records().filter((record) => record.event === "github-ranges.fetch-failed"),
+    ).toMatchObject([{ fields: { outcome: "http-4xx", status: 403, servingPrevious: true } }]);
     expect(calls).toBe(2);
     // Past a week, a seed that cannot be refreshed is not offered.
     now += 8 * 24 * 60 * 60_000;
@@ -268,8 +277,18 @@ describe("GitHub ranges seed", () => {
         fields: { outcome: "http-5xx", status: 502 },
       },
       {
+        name: "redirect",
+        fetcher: async () => new Response(null, { status: 302 }),
+        fields: { outcome: "http-other", status: 302 },
+      },
+      {
         name: "malformed",
         fetcher: async () => new Response('{"web":"not a list body"}'),
+        fields: { outcome: "malformed" },
+      },
+      {
+        name: "JSON null",
+        fetcher: async () => new Response("null"),
         fields: { outcome: "malformed" },
       },
       {
@@ -302,6 +321,40 @@ describe("GitHub ranges seed", () => {
       expect(written).not.toContain("fixture-secret-token");
       expect(written).not.toContain("body");
     }
+  });
+
+  test("a seed write failure logs the outcome and keeps serving the previous seed", async () => {
+    const dir = await tempDir("ork-gh-seed-write-failed-");
+    cleanup.push(dir);
+    const seed = githubRangesSeedFile(dir);
+    const previous = formatGithubRangesSeed(["192.30.252.0/22"], Date.now());
+    await fs.mkdir(githubRangesSeedDirectory(dir));
+    await fs.writeFile(seed, previous);
+    const { mtimeMs } = await fs.stat(seed);
+    // A directory at the staging path makes writeFile fail even as root.
+    await fs.mkdir(path.join(dir, `.${GITHUB_RANGES_SEED_FILENAME}.${process.pid}.tmp`));
+    const logs = captureLogs();
+    try {
+      expect(
+        await githubRangesSeed(dir, {
+          fetcher: async () => new Response(META),
+          now: () => mtimeMs + 2 * 60 * 60_000,
+          token: "",
+        }),
+      ).toBe(seed);
+    } finally {
+      logs.restore();
+    }
+    expect(await fs.readFile(seed, "utf8")).toBe(previous);
+    const records = logs
+      .records()
+      .filter((record) => record.event === "github-ranges.fetch-failed");
+    expect(records).toHaveLength(1);
+    expect(records[0]?.fields).toEqual({
+      outcome: "write-failed",
+      authenticated: false,
+      servingPrevious: true,
+    });
   });
 
   test("a fetch that times out is logged as a timeout", async () => {

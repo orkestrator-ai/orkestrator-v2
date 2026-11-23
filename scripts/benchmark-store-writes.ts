@@ -26,7 +26,7 @@
  *   bun scripts/benchmark-store-writes.ts [--runs=50] [--core=<dir>] [--json]
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -40,9 +40,17 @@ const runs = Number(arg("runs", "50"));
 const asJson = process.argv.includes("--json");
 const core = path.resolve(arg("core", path.join(import.meta.dir, "../apps/backend/src/core")));
 
-const { StorageService, createEnvironment } = await import(path.join(core, "storage/service.ts"));
-const { seedStore, storageDatabase } = await import(path.join(core, "storage/test-support.ts"));
-const { openBackendDatabase } = await import(path.join(core, "storage/stores.ts"));
+const storageService = path.join(core, "storage/service.ts");
+const hasStorageDirectory = existsSync(storageService);
+const { StorageService, createEnvironment } = await import(
+  hasStorageDirectory ? storageService : path.join(core, "storage.ts")
+);
+const { seedStore, storageDatabase } = await import(
+  path.join(core, hasStorageDirectory ? "storage/test-support.ts" : "storage-test-support.ts")
+);
+const { openBackendDatabase } = await import(
+  path.join(core, hasStorageDirectory ? "storage/stores.ts" : "storage-stores.ts")
+);
 const { UsageHistoryStore } = await import(path.join(core, "usage-history-store.ts"));
 const { USAGE_HISTORY_STORE } = await import(path.join(core, "usage-history-layout.ts"));
 const { NATIVE_AGENT_DISPLAY_TAIL_STORE } = await import(

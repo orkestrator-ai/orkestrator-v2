@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test, type Mock } from "bun:test";
-import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope, renderHookInAppCommandScope } from "@/test/render-in-node-scope";
 import type { DesignCapabilities } from "@orkestrator/protocol/design-operations";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
@@ -1193,5 +1193,213 @@ describe("DesignWorkspaceDialog", () => {
     expect(screen.getByText(/Creating a design needs the renderer/)).toBeTruthy();
     await switchTo("Open design");
     expect(screen.getByText(/an opened design will be stored unvalidated/)).toBeTruthy();
+  });
+
+  describe("Cmd/Ctrl+Enter", () => {
+    /** A `createTab` that adds the tab to the layout, as the real one does. */
+    const addingCreateTab = () =>
+      mock((type: CreatableTabType, options?: CreateTabOptions) => {
+        appCommandStore(paneLayoutStore)
+          .getState()
+          .addTab(
+            "pane-1",
+            type === "design-canvas"
+              ? {
+                  id: options!.tabId!,
+                  type: "design-canvas",
+                  designCanvasData: { canvasId: canvas.id },
+                }
+              : {
+                  id: options!.tabId!,
+                  type: "agent-native",
+                  nativeAgentData: { platform: "claude", environmentId: "env-1" },
+                },
+            "env-1",
+          );
+        return true;
+      });
+    const createCanvasCalls = () =>
+      commandNames().filter((command) => command === "create_canvas").length;
+
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      test(`${Object.keys(modifier)[0]}+Enter in the brief creates the workspace like the button`, async () => {
+        const createTab = addingCreateTab();
+        const { onOpenChange } = mount(createTab);
+        await flush();
+        fireEvent.change(brief(), { target: { value: "A calmer checkout" } });
+        const event = createEvent.keyDown(brief(), { key: "Enter", ...modifier });
+        fireEvent(brief(), event);
+        expect(event.defaultPrevented).toBe(true);
+        await flush();
+        expect(createCanvasCalls()).toBe(1);
+        expect(createTab.mock.calls.map(([type]) => type)).toEqual(["design-canvas", "claude"]);
+        expect(createTab.mock.calls[1]![1]?.initialPrompt).toContain("A calmer checkout");
+        expect(onOpenChange).toHaveBeenCalledWith(false);
+      });
+    }
+
+    test("works from any field of the dialog, not only the brief", async () => {
+      const createTab = addingCreateTab();
+      mount(createTab);
+      await flush();
+      fireEvent.keyDown(screen.getByRole("combobox", { name: "Initial frame" }), {
+        key: "Enter",
+        metaKey: true,
+      });
+      await flush();
+      expect(createCanvasCalls()).toBe(1);
+      // The focused Select did not open on the chord.
+      expect(screen.queryByRole("listbox") === null).toBe(true);
+    });
+
+    test("plain Enter, Shift+Enter and Alt+Enter in the brief never submit", async () => {
+      const createTab = addingCreateTab();
+      mount(createTab);
+      await flush();
+      for (const extra of [
+        {},
+        { shiftKey: true },
+        { metaKey: true, shiftKey: true },
+        { ctrlKey: true, altKey: true },
+      ]) {
+        const event = createEvent.keyDown(brief(), { key: "Enter", ...extra });
+        fireEvent(brief(), event);
+        // Left to the textarea, which inserts the new line.
+        expect(event.defaultPrevented).toBe(false);
+      }
+      await flush();
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(createTab).not.toHaveBeenCalled();
+    });
+
+    test("Enter that confirms an IME composition, or a held key, does not submit", async () => {
+      const createTab = addingCreateTab();
+      mount(createTab);
+      await flush();
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true, isComposing: true });
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true, keyCode: 229 });
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true, repeat: true });
+      await flush();
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(createTab).not.toHaveBeenCalled();
+    });
+
+    test("does nothing while the create button is disabled", async () => {
+      renderInAppCommandScope(
+        <DesignWorkspaceDialog
+          open
+          onOpenChange={() => {}}
+          environmentId="env-1"
+          createTab={null}
+          loadReadiness={async () => ready}
+        />,
+      );
+      await flush();
+      const create = screen.getByRole("button", {
+        name: "Create design workspace",
+      }) as HTMLButtonElement;
+      expect(create.disabled).toBe(true);
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+      await flush();
+      expect(invokeMock).not.toHaveBeenCalled();
+    });
+
+    test("an invalid name is refused as on a click", async () => {
+      const createTab = addingCreateTab();
+      mount(createTab);
+      await flush();
+      fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+        target: { value: "   " },
+      });
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+      await flush();
+      expect(screen.getByText("Enter a name for the design.")).toBeTruthy();
+      expect(invokeMock).not.toHaveBeenCalled();
+      expect(createTab).not.toHaveBeenCalled();
+    });
+
+    test("a create in progress is not started twice", async () => {
+      const pending = deferred<DesignCanvas>();
+      invokeMock.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "enqueue_prompt_queue_message") return {};
+        if (command === "get_compose_draft") return null;
+        if ((args as { action?: string } | undefined)?.action === "create_canvas")
+          return pending.promise;
+        throw new Error(`Unexpected command: ${command}`);
+      });
+      const createTab = addingCreateTab();
+      mount(createTab);
+      await flush();
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+      await flush();
+      expect(screen.getByRole("button", { name: "Opening…" })).toBeTruthy();
+      fireEvent.keyDown(brief(), { key: "Enter", metaKey: true });
+      fireEvent.keyDown(brief(), { key: "Enter", ctrlKey: true });
+      await flush();
+      expect(createCanvasCalls()).toBe(1);
+      await act(async () => pending.resolve(canvas));
+      await flush();
+      expect(createCanvasCalls()).toBe(1);
+      expect(createTab.mock.calls.filter(([type]) => type === "design-canvas")).toHaveLength(1);
+    });
+
+    test("on Open design it opens the file picker like Choose .orkdes file…", async () => {
+      mount(() => true);
+      await flush();
+      await switchTo("Open design");
+      fireEvent.keyDown(screen.getByRole("button", { name: "Choose .orkdes file…" }), {
+        key: "Enter",
+        ctrlKey: true,
+      });
+      await flush();
+      expect(useHostPathPickerStore.getState().request?.mode).toBe("file");
+      // A second chord while the picker is open does not ask again.
+      const first = useHostPathPickerStore.getState().request;
+      fireEvent.keyDown(screen.getByRole("dialog", { name: "Design workspace" }), {
+        key: "Enter",
+        metaKey: true,
+      });
+      await flush();
+      expect(useHostPathPickerStore.getState().request).toBe(first);
+      await act(async () => useHostPathPickerStore.getState().settle(null));
+    });
+
+    test("on Saved designs, which has no single primary action, nothing happens", async () => {
+      invokeMock.mockImplementation(async (command) => {
+        if (command === "design_library")
+          return {
+            ok: true,
+            value: {
+              entries: [],
+              total: 0,
+              quota: {
+                live: 0,
+                liveLimit: 256,
+                deleted: 0,
+                deletedLimit: 0,
+                deletedBytes: 0,
+                deletedBytesLimit: 0,
+              },
+            },
+          };
+        throw new Error(`Unexpected command: ${command}`);
+      });
+      const createTab = mock(() => true);
+      mount(createTab);
+      await flush();
+      await switchTo("Saved designs");
+      await flush();
+      const before = invokeMock.mock.calls.length;
+      const event = createEvent.keyDown(screen.getByRole("dialog", { name: "Design workspace" }), {
+        key: "Enter",
+        metaKey: true,
+      });
+      fireEvent(screen.getByRole("dialog", { name: "Design workspace" }), event);
+      await flush();
+      expect(event.defaultPrevented).toBe(false);
+      expect(invokeMock.mock.calls.length).toBe(before);
+      expect(createTab).not.toHaveBeenCalled();
+      expect(useHostPathPickerStore.getState().request ?? null).toBe(null);
+    });
   });
 });

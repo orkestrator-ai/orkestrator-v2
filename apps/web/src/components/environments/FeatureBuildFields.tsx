@@ -362,11 +362,12 @@ function FeatureBuildModelPickers({
   disabled,
 }: ModelPickersProps) {
   const {
-    favorites: favoriteModels,
+    favorites,
     toggleFavorite: toggleFavoriteModel,
     reorderFavorites,
   } = useAgentModelFavorites();
 
+  const favoriteModels = favorites.filter(({ platform }) => enabledPlatforms.includes(platform));
   const pickerModels: AgentModel[] = enabledPlatforms.flatMap((platform) =>
     modelsForAgent(catalog, platform).map((option) => toPickerModel(platform, option)),
   );

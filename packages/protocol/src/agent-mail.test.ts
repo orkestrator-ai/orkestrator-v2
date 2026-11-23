@@ -62,10 +62,13 @@ describe("agent mail protocol", () => {
 
   test("has explicit platform capabilities", () => {
     for (const agent of AGENT_PLATFORMS) {
+      // Antigravity's mail delivery has not been qualified, so its tabs have
+      // no mailbox rather than one that could never acknowledge a message.
+      const qualified = agent !== "antigravity";
       expect(agentMailCapabilities("agent-native", agent)).toEqual({
-        canPull: true,
-        canSend: true,
-        canInject: true,
+        canPull: qualified,
+        canSend: qualified,
+        canInject: qualified,
       });
     }
     expect(agentMailCapabilities("agent-native", "claude", false)).toEqual({

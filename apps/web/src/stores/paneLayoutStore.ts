@@ -440,7 +440,14 @@ function cleanupBackendNativeTab(
 
 function cleanupSharedNativeTab(scope: NodeScope, envId: string, tab: TabInfo) {
   const data = getNativeAgentData(tab);
-  if (data?.platform !== "cursor" && data?.platform !== "grok" && data?.platform !== "pi") return;
+  if (
+    data?.platform !== "cursor" &&
+    data?.platform !== "grok" &&
+    data?.platform !== "pi" &&
+    data?.platform !== "antigravity"
+  ) {
+    return;
+  }
   void tabTeardownBackend(scope)
     .teardownTab({
       environmentId: envId,
@@ -497,7 +504,12 @@ function cleanupTabResources(
       cleanupBackendNativeTab(scope, envId, tab.id, "opencode-native", "OpenCode");
     else if (platform === "codex")
       cleanupBackendNativeTab(scope, envId, tab.id, "codex-native", "Codex");
-    else if (platform === "cursor" || platform === "grok" || platform === "pi")
+    else if (
+      platform === "cursor" ||
+      platform === "grok" ||
+      platform === "pi" ||
+      platform === "antigravity"
+    )
       cleanupSharedNativeTab(scope, envId, tab);
     return;
   }

@@ -34,6 +34,7 @@ export interface AgentModelCatalogState {
   cursorModels: AgentModel[];
   grokModels: AgentModel[];
   piModels: AgentModel[];
+  antigravityModels: AgentModel[];
 
   /** Without an environment, replaces the host-wide Claude catalogue. */
   setClaudeModels: (models: ClaudeModel[], environmentId?: string) => void;
@@ -58,6 +59,7 @@ export const agentModelCatalogStore = defineScopedStore<AgentModelCatalogState>(
     cursorModels: [],
     grokModels: [],
     piModels: [],
+    antigravityModels: [],
 
     setClaudeModels: (models, environmentId) =>
       set((state) => {
@@ -88,11 +90,22 @@ export const agentModelCatalogStore = defineScopedStore<AgentModelCatalogState>(
       const cursorModels = models.filter((model) => model.platform === "cursor");
       const grokModels = models.filter((model) => model.platform === "grok");
       const piModels = models.filter((model) => model.platform === "pi");
-      if (cursorModels.length === 0 && grokModels.length === 0 && piModels.length === 0) return;
+      const antigravityModels = models.filter((model) => model.platform === "antigravity");
+      if (
+        cursorModels.length === 0 &&
+        grokModels.length === 0 &&
+        piModels.length === 0 &&
+        antigravityModels.length === 0
+      ) {
+        return;
+      }
       set((state) => ({
         ...(cursorModels.length > 0 ? { cursorModels } : { cursorModels: state.cursorModels }),
         ...(grokModels.length > 0 ? { grokModels } : { grokModels: state.grokModels }),
         ...(piModels.length > 0 ? { piModels } : { piModels: state.piModels }),
+        ...(antigravityModels.length > 0
+          ? { antigravityModels }
+          : { antigravityModels: state.antigravityModels }),
       }));
     },
   }),

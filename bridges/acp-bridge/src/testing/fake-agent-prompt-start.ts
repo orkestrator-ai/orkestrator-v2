@@ -13,7 +13,54 @@ function retriableProviderErrorMessage(): string {
   return `${name}: [${code}] ${detail}`;
 }
 
+/** The open `ANTIGRAVITY_QUESTION` prompt, answered once the bridge answers the question. */
+let antigravityQuestionPrompt: number | undefined;
+let antigravityBackgroundQuestion = false;
+const ANTIGRAVITY_QUESTION_REQUEST_ID = 990;
+
 export function handlePromptStart(message: JsonObject): boolean {
+  // The bridge's answer to an Antigravity-style question: report the option it
+  // chose (or that it cancelled) as text, then end the turn.
+  if (
+    message.id === ANTIGRAVITY_QUESTION_REQUEST_ID &&
+    "result" in message &&
+    antigravityQuestionPrompt !== undefined
+  ) {
+    const outcome = (message.result as { outcome?: { outcome?: string; optionId?: string } })
+      .outcome;
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: {
+            type: "text",
+            text: `answered:${outcome?.outcome === "selected" ? outcome.optionId : "cancelled"}`,
+          },
+        },
+      },
+    });
+    if (antigravityBackgroundQuestion) {
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: "fake-session",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "background",
+            status: "completed",
+          },
+        },
+      });
+    } else {
+      write({ jsonrpc: "2.0", id: antigravityQuestionPrompt, result: { stopReason: "end_turn" } });
+    }
+    antigravityQuestionPrompt = undefined;
+    return true;
+  }
   if (message.method === "session/prompt" && typeof message.id === "number") {
     const params = message.params as { prompt?: Array<{ text?: unknown }> } | undefined;
     const prompt = typeof params?.prompt?.[0]?.text === "string" ? params.prompt[0].text : "";
@@ -25,6 +72,42 @@ export function handlePromptStart(message: JsonObject): boolean {
         process.env.FAKE_ACP_PROMPT_BLOCKS_FILE,
         `${JSON.stringify(params?.prompt ?? [])}\n`,
       );
+    }
+    // Antigravity asks a fixed-choice question through the permission method,
+    // with an `interaction_` tool-call id.
+    if (prompt === "ANTIGRAVITY_QUESTION" || prompt === "ANTIGRAVITY_BACKGROUND_QUESTION") {
+      antigravityBackgroundQuestion = prompt === "ANTIGRAVITY_BACKGROUND_QUESTION";
+      if (antigravityBackgroundQuestion) {
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "fake-session",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "background",
+              title: "Background work",
+              status: "in_progress",
+            },
+          },
+        });
+        write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+      }
+      antigravityQuestionPrompt = message.id;
+      write({
+        jsonrpc: "2.0",
+        id: ANTIGRAVITY_QUESTION_REQUEST_ID,
+        method: "session/request_permission",
+        params: {
+          sessionId: "fake-session",
+          toolCall: { toolCallId: "interaction_db", title: "Which database should I use?" },
+          options: [
+            { optionId: "opt-pg", name: "Postgres", kind: "allow_once" },
+            { optionId: "opt-sqlite", name: "SQLite", kind: "allow_always" },
+          ],
+        },
+      });
+      return true;
     }
     if (prompt === "COMMANDS_UPDATE") {
       announceCommands("fake-session");

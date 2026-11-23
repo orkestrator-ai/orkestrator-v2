@@ -219,6 +219,23 @@ export const NATIVE_AGENT_OBSERVATION_CAPABILITIES: Readonly<
     idleBackoffWakeup: null,
     quietClientBackoff: quietClientBackoff("grok"),
   },
+  // The same ACP bridge as Grok. Its activity route carries no content
+  // revision for Antigravity (only Grok's was qualified), so the transcript
+  // revision is the bridge generation alone and every sweep reads.
+  antigravity: {
+    activitySnapshot: "bridge-activity-route",
+    parkedInputReportsWaiting: false,
+    readyForInput: false,
+    asyncQuestionAttention: false,
+    transcriptRevision: "bridge-generation-only",
+    pendingInteractions: "no-touch",
+    backendTurnEvents: false,
+    backgroundChildren: "working-while-live",
+    generationIdentity: "bridge-connection",
+    noTouchActivity: true,
+    idleBackoffWakeup: null,
+    quietClientBackoff: quietClientBackoff("antigravity"),
+  },
   opencode: {
     activitySnapshot: "sdk-event-fed-batch",
     parkedInputReportsWaiting: true,

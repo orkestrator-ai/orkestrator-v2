@@ -101,7 +101,13 @@ import {} from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt, promptStopReason, turnTerminalError } from "./acp-prompt.js";
 import { sessionActivityObservation } from "./acp-activity.js";
-import { acpReadiness, acpSignInMissing, acpSignInRoute } from "./acp-credentials.js";
+import {
+  acpReadiness,
+  acpSignInMissing,
+  acpSignInRoute,
+  antigravitySignInRecentlyRefused,
+  ANTIGRAVITY_SIGN_IN_RECHECK_MS,
+} from "./acp-credentials.js";
 import {
   answerSessionActivityBatch,
   SESSION_ACTIVITY_BATCH_PATH,
@@ -183,13 +189,21 @@ export async function route(
     return json(response, answer.ok ? 200 : 400, answer);
   }
   if (url.pathname === "/global/auth" && request.method === "GET") {
-    const signedIn =
-      !(await acpSignInMissing(provider, providerConfig.authMethodEnv, {
-        ...process.env,
-        ...providerConfig.env,
-      })) && agentRuntime.authenticated !== false;
+    const missing =
+      provider === "antigravity"
+        ? antigravitySignInRecentlyRefused()
+        : agentRuntime.authenticated === false ||
+          (await acpSignInMissing(provider, providerConfig.authMethodEnv, {
+            ...process.env,
+            ...providerConfig.env,
+          }));
     return json(response, 200, {
-      state: signedIn ? "signed-in" : "needs-auth",
+      state: missing
+        ? "needs-auth"
+        : provider === "antigravity" &&
+            Date.now() - (agentRuntime.authConfirmedAt ?? 0) >= ANTIGRAVITY_SIGN_IN_RECHECK_MS
+          ? "unknown"
+          : "signed-in",
       signIn: acpSignInRoute(provider),
       signOut: false,
     });
@@ -955,8 +969,16 @@ export async function route(
     // is authoritative again and the claim can be released.
     state.dispatching = false;
     const turnCompletion = promptCompletion.then(
-      (result) => {
-        const stopReason = promptStopReason(result);
+      async (result) => {
+        let stopReason = promptStopReason(result);
+        if (provider === "antigravity" && stopReason === "end_turn") {
+          const continuing = await waitForAntigravityWork(state, child, promptSequence);
+          if (continuing === "cancelled") stopReason = "cancelled";
+          if (continuing === "failed") {
+            state.status = "error";
+            state.error = "Antigravity did not confirm the end of its native work.";
+          }
+        }
         if (stopReason !== "end_turn" && stopReason !== "cancelled") {
           state.health.recordNotice({
             method: "session/prompt",
@@ -1016,7 +1038,7 @@ export async function route(
         if (requestId)
           setPromptJournal(state, {
             requestId,
-            state: state.outputTruncated ? "failed" : "completed",
+            state: state.outputTruncated || state.status === "error" ? "failed" : "completed",
             acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
             ...(terminalError ? { terminalError } : {}),
           });
@@ -1028,7 +1050,7 @@ export async function route(
           state,
           stopReason === "cancelled"
             ? "cancelled"
-            : terminalError || state.outputTruncated
+            : terminalError || state.outputTruncated || state.status === "error"
               ? "failed"
               : "succeeded",
         );
@@ -1102,6 +1124,39 @@ export async function route(
         });
   }
   return json(response, 405, { error: "Method not allowed" });
+}
+
+const ANTIGRAVITY_NATIVE_WORK_LIMIT_MS = 5 * 60_000;
+
+async function waitForAntigravityWork(
+  state: SessionState,
+  child: AcpProcess,
+  promptSequence: number,
+): Promise<"finished" | "cancelled" | "failed"> {
+  const deadline = Date.now() + ANTIGRAVITY_NATIVE_WORK_LIMIT_MS;
+  const hasWork = () =>
+    state.interactions.size > 0 ||
+    state.approvals.size > 0 ||
+    state.activeSubagentToolIds.size > 0 ||
+    state.messages.some((message) =>
+      message.parts.some(
+        (part) =>
+          part.type === "tool-invocation" &&
+          part.toolState !== "success" &&
+          part.toolState !== "failure",
+      ),
+    );
+  while (state.child === child && !state.outputTruncated && hasWork()) {
+    const cancelled = state.closing || state.retryCancelledPromptSequence === promptSequence;
+    if (cancelled || Date.now() >= deadline) {
+      denyPendingRequests(state);
+      await child.close();
+      return cancelled ? "cancelled" : "failed";
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 250));
+  }
+  if (state.retryCancelledPromptSequence === promptSequence) return "cancelled";
+  return state.child === child ? "finished" : "failed";
 }
 
 export function authenticated(request: IncomingMessage): boolean {

@@ -61,7 +61,13 @@ import { isReviewLens, type ReviewLens } from "./review-lens.js";
 
 export const BUILD_PIPELINE_VERSION = 2;
 
-export type BuildPipelineAgent = "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi";
+/**
+ * Every platform the native agent service runs. The name is historical: the
+ * same union keys native sessions everywhere, so it includes platforms that
+ * may not run a pipeline step (`isPipelineQualifiedAgent`).
+ */
+export type BuildPipelineAgent =
+  "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "antigravity";
 
 /** The one list every agent check is built from. */
 export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] = Object.freeze([
@@ -71,7 +77,52 @@ export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] = Object.freez
   "cursor",
   "grok",
   "pi",
+  "antigravity",
 ]);
+
+/**
+ * Native platforms that may not run a build pipeline step or Multi Review.
+ *
+ * Antigravity is an interactive platform whose structured-result delivery and
+ * terminal outcome have not been qualified against the pinned `agy` runtime
+ * (docs/architecture/agent-engines.md, "Antigravity"). Registering a platform
+ * must not qualify it for unattended workflows.
+ */
+export const PIPELINE_UNQUALIFIED_AGENTS: readonly BuildPipelineAgent[] = Object.freeze([
+  "antigravity",
+]);
+
+/**
+ * The first agent a start request names that may not run a pipeline step,
+ * across its build agent, step rows, reviewers and review preparation.
+ */
+export function unqualifiedPipelineAgent(input: {
+  agentType: BuildPipelineAgent;
+  steps?: Partial<Record<string, { agent?: BuildPipelineAgent } | undefined>>;
+  reviewers?: readonly { agent?: BuildPipelineAgent }[];
+  reviewPreparation?: { agent?: BuildPipelineAgent };
+}): BuildPipelineAgent | undefined {
+  const named = [
+    input.agentType,
+    ...Object.values(input.steps ?? {}).map((step) => step?.agent),
+    ...(input.reviewers ?? []).map((reviewer) => reviewer.agent),
+    input.reviewPreparation?.agent,
+  ];
+  return named.find(
+    (agent): agent is BuildPipelineAgent =>
+      agent !== undefined && PIPELINE_UNQUALIFIED_AGENTS.includes(agent),
+  );
+}
+
+/** Whether `value` may run a build pipeline step (see `PIPELINE_UNQUALIFIED_AGENTS`). */
+export function isPipelineQualifiedAgent(
+  value: unknown,
+): value is Exclude<BuildPipelineAgent, "antigravity"> {
+  return (
+    BUILD_PIPELINE_AGENTS.includes(value as BuildPipelineAgent) &&
+    !PIPELINE_UNQUALIFIED_AGENTS.includes(value as BuildPipelineAgent)
+  );
+}
 
 export type BuildPipelineEnvironmentType = "containerized" | "local";
 

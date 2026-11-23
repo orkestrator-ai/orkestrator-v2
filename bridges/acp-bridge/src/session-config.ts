@@ -9,6 +9,7 @@ import type {
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { EMPTY_NATIVE_AGENT_COMPOSER_STATE } from "@orkestrator/protocol/native-agent";
 import { loadAcpProviderConfig } from "./acp-provider-config.js";
+import { isAntigravityApprovalPolicyMode } from "./antigravity-acp.js";
 
 export type AcpProvider = AgentPlatform;
 
@@ -43,6 +44,7 @@ export interface AcpConfigWire {
   /** Conversation mode → the agent's own mode id (`agent`, `plan`, `code`, …). */
   availableModeIds: Partial<Record<AgentConversationMode, string>>;
   usesSetModel: boolean;
+  modeOptionId?: string;
   currentModelId?: string;
 }
 
@@ -128,13 +130,23 @@ export function normalizeAcpSessionConfig(
 ): AcpNormalizedSessionConfig {
   const root = isObject(result) ? result : {};
   const configOptions = parseConfigOptions(root.configOptions);
-  const modes = parseAvailableModes(root.modes);
+  const modeOption = provider === "antigravity" ? selectOption(configOptions, "mode") : undefined;
+  const modes = conversationModesOnly(
+    provider,
+    modeOption?.type === "select"
+      ? {
+          currentId: optionCurrentString(modeOption),
+          available: (modeOption.options ?? []).map(({ value, name }) => ({ id: value, name })),
+        }
+      : parseAvailableModes(root.modes),
+  );
   const grokModels = parseGrokModelCatalog(root.models);
   const usesSetModel = grokModels.models.length > 0;
-  const availableModeIds = modeIdMap(modes.available);
+  const availableModeIds = modeIdMap(modes.available, provider);
   const wire: AcpConfigWire = {
     configOptions,
     availableModeIds,
+    ...(modeOption?.type === "select" ? { modeOptionId: modeOption.configId } : {}),
     usesSetModel,
     currentModelId:
       grokModels.currentModelId ?? optionCurrentString(selectOption(configOptions, "model")),
@@ -146,7 +158,11 @@ export function normalizeAcpSessionConfig(
 
   return {
     composer: withGenericBooleanOptions(
-      withModes(composer, availableModeIds, modes.currentId),
+      withModes(
+        { ...composer, selectedModeId: mapModeId(modes.currentId, provider) },
+        availableModeIds,
+        modes.currentId,
+      ),
       configOptions,
     ),
     wire,
@@ -164,13 +180,18 @@ export function applyConfigOptionUpdate(
     : current.wire.configOptions;
   return normalizeAcpSessionConfig(provider, {
     configOptions: nextOptions,
-    modes: {
-      currentModeId: reverseModeId(current.wire.availableModeIds, current.composer.selectedModeId),
-      availableModes: Object.entries(current.wire.availableModeIds).map(([id, modeId]) => ({
-        id: modeId,
-        name: modeLabel(id),
-      })),
-    },
+    modes: current.wire.modeOptionId
+      ? undefined
+      : {
+          currentModeId: reverseModeId(
+            current.wire.availableModeIds,
+            current.composer.selectedModeId,
+          ),
+          availableModes: Object.entries(current.wire.availableModeIds).map(([id, modeId]) => ({
+            id: modeId,
+            name: modeLabel(id),
+          })),
+        },
     models: current.wire.usesSetModel
       ? {
           currentModelId: current.composer.selectedModelId,
@@ -196,10 +217,23 @@ export function applyConfigOptionUpdate(
 export function applyCurrentModeUpdate(
   current: AcpNormalizedSessionConfig,
   modeId: string,
+  provider?: AcpProvider,
 ): AcpNormalizedSessionConfig {
-  const selectedModeId = mapModeId(modeId);
+  const selectedModeId =
+    provider === "antigravity" && isAntigravityApprovalPolicyMode(modeId.trim())
+      ? undefined
+      : mapModeId(modeId, provider);
   return {
-    wire: current.wire,
+    wire: current.wire.modeOptionId
+      ? {
+          ...current.wire,
+          configOptions: current.wire.configOptions.map((option) =>
+            option.configId === current.wire.modeOptionId
+              ? { ...option, currentValue: modeId }
+              : option,
+          ),
+        }
+      : current.wire,
     composer: {
       ...current.composer,
       selectedModeId,
@@ -326,6 +360,7 @@ export function planComposerApply(
   sessionId: string,
   current: AcpNormalizedSessionConfig,
   patch: AcpComposerPatch,
+  provider?: AcpProvider,
 ): AcpConfigRpc[] {
   const calls: AcpConfigRpc[] = [];
   const modelOption = selectOption(current.wire.configOptions, "model");
@@ -340,10 +375,27 @@ export function planComposerApply(
     current.wire.availableModeIds[patch.mode] &&
     patch.mode !== current.composer.selectedModeId
   ) {
-    calls.push({
-      method: "session/set_mode",
-      params: { sessionId, modeId: current.wire.availableModeIds[patch.mode]! },
-    });
+    const modeId = current.wire.availableModeIds[patch.mode]!;
+    calls.push(
+      current.wire.modeOptionId
+        ? {
+            method: "session/set_config_option",
+            params: { sessionId, configId: current.wire.modeOptionId, value: modeId },
+          }
+        : { method: "session/set_mode", params: { sessionId, modeId } },
+    );
+  }
+
+  if (provider === "antigravity") {
+    if (patch.modelId && !current.composer.models.some((model) => model.id === patch.modelId)) {
+      throw new Error("The selected Antigravity model is unavailable for this session.");
+    }
+    if (
+      patch.reasoningId &&
+      (!thoughtOption || resolveSelectValue(thoughtOption, patch.reasoningId) === undefined)
+    ) {
+      throw new Error("The selected thinking level is unavailable for this Antigravity model.");
+    }
   }
 
   // Whether the config-option surface will carry the change. Catalogue updates
@@ -502,7 +554,9 @@ function composerFromConfigOptions(
   const fastOption = selectFastOption(configOptions);
   const { options: reasoning, selectedId } = reasoningFromOptions(thoughtOption);
   const selectedReasoningId = selectedId ?? reasoning[0]?.id;
+  const selectedModelId = optionCurrentString(modelOption) || modelOption?.options?.[0]?.value;
   const models = (modelOption?.options ?? []).map((option): AgentModel => {
+    const ownsReasoning = provider !== "antigravity" || option.value === selectedModelId;
     const fastSibling = hasFastSibling(option.value, modelOption?.options ?? []);
     return {
       platform: provider,
@@ -510,13 +564,12 @@ function composerFromConfigOptions(
       label: option.name || option.value,
       ...(option.description ? { description: option.description } : {}),
       providerLabel: providerLabel(provider),
-      reasoning: reasoning.length > 0 ? reasoning : undefined,
-      defaultReasoningId: selectedReasoningId,
+      reasoning: ownsReasoning && reasoning.length > 0 ? reasoning : undefined,
+      defaultReasoningId: ownsReasoning ? selectedReasoningId : undefined,
       supportsSpeed: Boolean(fastOption) || fastSibling,
       supportsMode: Object.keys(availableModeIds).length > 0,
     };
   });
-  const selectedModelId = optionCurrentString(modelOption) || models[0]?.id;
   const selected = models.find((model) => model.id === selectedModelId) ?? models[0];
   const fastModeAvailable = Boolean(fastOption) || selected?.supportsSpeed === true;
   const fastModeEnabled = fastOption
@@ -664,17 +717,43 @@ function parseAvailableModes(value: unknown): { currentId?: string; available: P
   };
 }
 
-function modeIdMap(available: ParsedMode[]): AcpConfigWire["availableModeIds"] {
+/**
+ * Leave out native modes that are approval policies rather than
+ * conversation modes (Antigravity's `auto` and `accept-edits`), so a mode
+ * switch cannot bypass Orkestrator's own permission selector. A current mode
+ * that is one of them is reported as none.
+ */
+function conversationModesOnly(
+  provider: AcpProvider,
+  modes: { currentId?: string; available: ParsedMode[] },
+): { currentId?: string; available: ParsedMode[] } {
+  if (provider !== "antigravity") return modes;
+  const available = modes.available.filter((mode) => !isAntigravityApprovalPolicyMode(mode.id));
+  const currentId =
+    modes.currentId && !isAntigravityApprovalPolicyMode(modes.currentId)
+      ? modes.currentId
+      : undefined;
+  return { available, ...(currentId ? { currentId } : {}) };
+}
+
+function modeIdMap(
+  available: ParsedMode[],
+  provider: AcpProvider,
+): AcpConfigWire["availableModeIds"] {
   const mapped: AcpConfigWire["availableModeIds"] = {};
   for (const mode of available) {
-    const conversation = mapModeId(mode.id);
+    const conversation = mapModeId(mode.id, provider);
     if (conversation && !mapped[conversation]) mapped[conversation] = mode.id;
   }
   return mapped;
 }
 
-function mapModeId(modeId: string | undefined): AgentConversationMode | undefined {
+function mapModeId(
+  modeId: string | undefined,
+  provider?: AcpProvider,
+): AgentConversationMode | undefined {
   if (!modeId) return undefined;
+  if (provider === "antigravity" && modeId.trim().toLowerCase() === "default") return "build";
   const normalized = modeId.trim().toLowerCase();
   return configuredModeMap()[normalized] ?? (modeId.trim() as AgentConversationMode);
 }
@@ -1090,6 +1169,12 @@ function parsePersistedWire(value: Record<string, unknown>): AcpConfigWire | nul
     configOptions,
     availableModeIds,
     usesSetModel: value.usesSetModel,
+    ...(typeof value.modeOptionId === "string" &&
+    configOptions.some(
+      (option) => option.configId === value.modeOptionId && option.type === "select",
+    )
+      ? { modeOptionId: value.modeOptionId }
+      : {}),
     ...(currentModelId ? { currentModelId } : {}),
   };
 }

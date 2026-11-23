@@ -24,6 +24,7 @@ const AGENT_NAMES: Record<AgentInteractionProvider, string> = {
   grok: "Grok",
   opencode: "OpenCode",
   pi: "Pi",
+  antigravity: "Antigravity",
 };
 
 export interface PromptDeadlineProps {

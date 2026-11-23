@@ -1,3 +1,4 @@
+import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 export const TAB_TEARDOWN_KINDS = [
   "terminal",
   "claude-tmux",
@@ -7,9 +8,22 @@ export const TAB_TEARDOWN_KINDS = [
   "cursor-native",
   "grok-native",
   "pi-native",
+  "antigravity-native",
 ] as const;
 
 export type TabTeardownKind = (typeof TAB_TEARDOWN_KINDS)[number];
+
+/** A native tab's teardown kind for each platform: `<platform>-native`. */
+export function nativeTabTeardownKind(agent: AgentPlatform): TabTeardownKind {
+  return `${agent}-native`;
+}
+
+/** The platform a native teardown kind closes a session of, or null for a terminal kind. */
+export function nativeTabTeardownAgent(kind: TabTeardownKind): AgentPlatform | null {
+  if (kind === "terminal" || kind === "claude-tmux") return null;
+  const agent = kind.slice(0, -"-native".length);
+  return isAgentPlatform(agent) ? agent : null;
+}
 
 export interface TabTeardownInput {
   environmentId: string;

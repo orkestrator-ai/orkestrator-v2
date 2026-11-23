@@ -64,11 +64,13 @@ export const SETTINGS_SIGN_IN_ROUTES: Readonly<Record<AgentPlatform, NativeAgent
   grok: { kind: "terminal", hint: "Open a terminal and run grok login." },
   opencode: { kind: "terminal", hint: "Sign each model provider in under Provider Sign-in." },
   pi: { kind: "terminal", hint: "Open a Pi terminal tab and run /login." },
+  antigravity: { kind: "terminal", hint: "Open a terminal and run agy acp --login." },
 };
 
 export interface AgentSignInStatusDependencies {
   listAccounts: () => Promise<AgentAccountsSnapshot>;
   cursorStatus: () => Promise<CursorSdkAuthStatus>;
+  antigravityStatus?: () => Promise<NativeAgentAuthStatus["state"]>;
   env?: NodeJS.ProcessEnv;
   home?: string;
   readText?: (filePath: string) => Promise<string | undefined>;
@@ -205,6 +207,12 @@ export async function readAgentSignInStatus(
       return {
         state: (await grokSignedIn(env, home, readText)) ? "signed-in" : "signed-out",
         signIn: SETTINGS_SIGN_IN_ROUTES.grok,
+        signOut: false,
+      };
+    case "antigravity":
+      return {
+        state: (await deps.antigravityStatus?.()) ?? "unknown",
+        signIn: SETTINGS_SIGN_IN_ROUTES.antigravity,
         signOut: false,
       };
     case "pi": {

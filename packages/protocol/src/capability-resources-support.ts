@@ -560,6 +560,26 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
     hook: NO_HOOKS("Pi"),
     subagent: NO_SUBAGENTS("Pi"),
   },
+  // Nothing is qualified yet: Antigravity's skill, rule and MCP directories
+  // have not been verified against the pinned `agy` runtime, so Orkestrator
+  // neither discovers nor writes them (docs/architecture/agent-engines.md,
+  // "Antigravity"). Its MCP connection to Orkestrator is delivered per session
+  // by the ACP bridge, which does not depend on this table.
+  antigravity: {
+    skill: kindSupport(
+      {},
+      "Antigravity's skill directories have not been qualified against the pinned agy runtime.",
+    ),
+    "native-plugin": kindSupport({}, "Antigravity plugins are managed by Antigravity itself."),
+    "mcp-server": kindSupport(
+      {},
+      "Antigravity's MCP configuration has not been qualified against the pinned agy runtime; Orkestrator's own tools are delivered per session over ACP.",
+    ),
+    command: NO_COMMAND_DIR("Antigravity"),
+    prompt: NO_COMMAND_DIR("Antigravity"),
+    hook: NO_HOOKS("Antigravity"),
+    subagent: NO_SUBAGENTS("Antigravity"),
+  },
 });
 
 /**

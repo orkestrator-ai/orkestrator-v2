@@ -161,6 +161,7 @@ describe("the wire form for bridges", () => {
     );
     // Codex, Cursor and Pi name a denied server themselves since item 404.
     expect(resources).toEqual({
+      antigravity: false,
       claude: true,
       codex: true,
       cursor: true,
@@ -332,6 +333,7 @@ describe("user MCP server selection (item 404)", () => {
         ]),
       ),
     ).toEqual({
+      antigravity: [false, false],
       claude: [true, true],
       codex: [true, true],
       cursor: [true, false],

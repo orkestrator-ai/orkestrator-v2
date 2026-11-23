@@ -1,8 +1,8 @@
 # Agent engine architecture
 
-Status: Living — six-engine architecture; keep aligned with the tree.
+Status: Living — seven-engine architecture; keep aligned with the tree.
 
-Orkestrator provisions six coding-agent platforms. They are listed once, in
+Orkestrator provisions seven coding-agent platforms. They are listed once, in
 `packages/protocol/src/agent-platforms.ts`, and everything else keys off that
 list:
 
@@ -14,6 +14,7 @@ list:
 | `cursor` | Cursor Agent | Bridge process wrapping `@cursor/sdk` |
 | `grok` | Grok Build | Bridge process speaking ACP to the CLI over stdio |
 | `pi` | Pi | Bridge process wrapping the Pi coding-agent SDK |
+| `antigravity` | Antigravity | The same ACP bridge as Grok, as its own process, speaking ACP to `agy acp` over stdio |
 
 They do **not** share one mechanism. Each vendor exposes a different surface —
 a TypeScript SDK, a JSON-RPC app-server, an HTTP server, or a raw stdio
@@ -116,6 +117,7 @@ Per bridge, "stop proven" means:
 - **Pi, Cursor** — see their bridge sections; both answer 503 until owned work
   has stopped and the removal is published.
 - **Grok (ACP)** — see [Grok Build](#grok-build).
+- **Antigravity (ACP)** — the same close as Grok; see [Antigravity](#antigravity).
 
 OpenCode has no bridge. Tab close goes through the native agent service to the
 cached (or freshly peeked, never started) provider's `closeSession`
@@ -1739,6 +1741,117 @@ Grok CLI 1.0.52 kept the conversation listed and loadable after it (not
 rechecked at 1.0.67 or 1.0.70). Close
 drops the bridge's own journal and usage for the session and leaves Grok's
 store untouched, so `/session/list` + `session/load` reopen the conversation.
+
+## Antigravity
+
+**Bridge:** `bridges/acp-bridge/` (shared with Grok, a separate process) ·
+**Transport:** ACP JSON-RPC over stdio · **Runtime:** Google's `agy` CLI,
+pinned at 1.5.12
+
+Antigravity is Google's agent CLI. It ships an official ACP server
+(`agy acp`), so Orkestrator runs it on the ACP bridge Grok already uses
+rather than on a bridge of its own: the bridge build is shared, while every
+environment gets a separate Antigravity bridge process with its own port,
+PID record, token and state directory
+(`acp-bridge-state/<environment>/antigravity`). Grok and Antigravity can run
+in one environment at once without sharing anything.
+
+### Launch
+
+All three launch paths build the bridge's launcher record from one place,
+`apps/backend/src/core/acp-provider-launch.ts`: the host bridge
+(`commands-servers.ts`), the cold model-catalogue probe
+(`host-model-catalog-refresh.ts`) and the container launch
+(`commands-registry-servers.ts`). Each bridge is started with a
+`--provider=<kind>` argument the bridge ignores, so the orphan reaper can tell
+a Grok bridge from an Antigravity one (`commandMatchesRecordedServer`); the
+process-field routing (`localServerFields`) is exhaustive, so a new kind
+cannot fall through to another provider's port.
+
+The record runs `agy acp --process-per-session` with no model or effort flags
+(both are session config options). `--process-per-session` serves each session
+from its own worker and is what makes agy advertise `mcpCapabilities.http`;
+without it 1.5.12's `initialize` has no MCP capability at all, and
+Orkestrator's per-tab HTTP MCP connection could not be handed to
+`session/new`. Every child gets `AGY_CLI_DISABLE_AUTO_UPDATE=1`
+(`POLICY_ENV`), so the managed, hash-verified binary is never replaced in
+place. The binary is the `antigravity` toolchain entry, Google's official
+GitHub release with the documented `agy` command name as an activation alias;
+the container image installs the same release, but containers do not run it
+yet (below).
+
+### Handshake and sign-in
+
+`clientInfo` carries the real Orkestrator version (`ORKESTRATOR_VERSION`) for
+every ACP provider. The bridge withholds `fs/writeTextFile` and `terminal/*`
+from Antigravity whatever the policy allows (`ACP_CLIENT_METHOD_CEILINGS` in
+`acp-policy.ts`): advertising client writes makes agy replace its own diff
+edits with whole-file client writes. File reads stay confined to the
+workspace as for Grok. Withholding the two methods is not a sandbox: agy's
+own edit and command tools still run, behind its permission requests.
+
+agy's Google login lives in the OS keyring (a file,
+`~/.gemini/antigravity-cli/antigravity-oauth-token`, only without one), so a
+login cannot be checked from files. The bridge does not call `authenticate`
+for it, because with no login agy 1.5.12 starts an interactive browser
+sign-in and waits (`-32603 No browser is available` on a machine without a
+display). A session request without a login fails at once with
+`-32000 Authentication required`; the bridge turns that, an abandoned
+sign-in, or the login banner agy may print outside JSON-RPC into a
+`CredentialError`, records it for `/status` readiness for a minute
+(`acp-credentials.ts`), and gives a create the same deferred session Grok's
+file check produces. The user signs in from Settings → Antigravity, which
+opens a host terminal running `agy acp --login` (`agent-sign-ins.ts`); the
+next attach or prompt asks agy again. `authenticate` is sent only when the
+backend names a method in `ORKESTRATOR_ANTIGRAVITY_AUTH_METHOD` (an API key or
+Agent Platform login), bounded at 20 seconds. Settings reports a confirmed
+sign-in when an active bridge has a recent successful ACP session or
+authentication response. A token file alone leaves the status unknown.
+
+### Sessions
+
+New sessions use `session/new`. A session the bridge still holds a transcript
+for reattaches with `session/resume` (advertised by 1.5.12), so nothing is
+replayed or duplicated (`prefersSessionResume`); an empty transcript still
+hydrates through `session/load`. Session instructions travel in agy's own
+carrier, `_meta.antigravity.systemPrompt.append`, on new, load and resume, and
+the standard `systemPrompt` wins if agy ever advertises it, so they never
+arrive twice. Close is the shared ACP close: native `session/close` when
+advertised, never a delete.
+
+### Questions, approvals and modes
+
+agy asks fixed-choice questions through `session/request_permission` with a
+tool-call id beginning `interaction_`. The bridge recognises them before any
+approval branch runs (`parkAntigravityQuestion` in `acp-session.ts`), so
+neither auto-approval nor a deny policy answers for the person: the request is
+a single-choice question card with no free text, answered once with the exact
+native option id, and cancelled on Stop, close, expiry, a malformed request or
+a child exit. Ordinary permission requests go through the shared approval flow
+and Orkestrator's own permission rules; agy's `allow_always` is never sent.
+Native modes that are approval policies (`auto`, `accept-edits`) are left out
+of the composer's Build/Plan modes (`session-config.ts`).
+
+### What is not offered yet
+
+These are explicit gates, not omissions; each needs live qualification first:
+
+- **Containers.** `start_antigravity_server` refuses with a reason: the login
+  is in the host keyring and no container sign-in route has been qualified.
+- **Pipelines and Multi Review.** `PIPELINE_UNQUALIFIED_AGENTS` keeps
+  Antigravity out of every pipeline step and reviewer, in the launchers and in
+  the backend's start paths; its workflow-result tool delivery is not in
+  `QUALIFIED_WORKFLOW_RESULT_TOOL_PROVIDERS`.
+- **Coordinators, graphs, goals, suborks, mail, public CLI completion.** The
+  coordinator table marks it `unavailable`; enforcement tiers are `advisory`;
+  goals, suborks and native mail are off; public-CLI completion is
+  `unqualified`.
+- **Steer, fork, elicitation.** A follow-up waits in the queue; agy steers with
+  a second `session/prompt`, which is not qualified. ACP fork is not
+  advertised. Standard `elicitation/create` is not implemented.
+- **Native configuration.** Skills, rules, plugins and agy's own MCP file are
+  neither discovered nor edited; Orkestrator's tools reach it over the
+  injected per-tab MCP connection.
 
 ## Pi
 

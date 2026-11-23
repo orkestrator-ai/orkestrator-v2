@@ -374,6 +374,7 @@ describe("AgentModelPicker", () => {
       cursor: "text-violet-400",
       grok: "text-sky-400",
       pi: "text-amber-400",
+      antigravity: "text-blue-500",
     });
   });
 

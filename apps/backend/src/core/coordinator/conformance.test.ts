@@ -272,8 +272,9 @@ describe("coordinator read-only conformance", () => {
     // `launch_environment`, and a mailbox the worker's reply can be injected
     // into. Native Claude, Codex, OpenCode, Pi, Cursor, and Grok all have both.
     // Grok can still be withheld at the default safety tier; that is
-    // availability, not a missing mailbox.
-    for (const platform of everyPlatform) {
+    // availability, not a missing mailbox. Antigravity is not qualified to run
+    // a coordinator at all, so it offers no delegation either.
+    for (const platform of everyPlatform.filter((candidate) => candidate !== "antigravity")) {
       expect(
         coordinatorProviderQualification(platform, { host, enabledPlatforms: everyPlatform })
           .delegation,

@@ -53,6 +53,7 @@ export const ASK_QUESTION_SUPPORT: Readonly<Record<AgentPlatform, AskQuestionSup
     // ACP's question request (`acp-session.ts`).
     grok: { tool: "question" },
     pi: { unavailable: "Pi raises no question interactions, so its coordinator cannot ask" },
+    antigravity: { unavailable: "Antigravity is not qualified to run a coordinator" },
     cursor: {
       unavailable: "the Cursor SDK bridge raises no interactions, so its coordinator cannot ask",
     },

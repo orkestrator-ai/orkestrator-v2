@@ -2266,7 +2266,7 @@ async function readTurnLost(
 ): Promise<boolean> {
   const requestId = session.dispatchedRequestIds?.at(-1);
   if (
-    !["codex", "cursor", "grok", "pi"].includes(session.agent) ||
+    !["codex", "cursor", "grok", "pi", "antigravity"].includes(session.agent) ||
     !requestId ||
     !provider.dispatchStatus
   )

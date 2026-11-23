@@ -305,7 +305,10 @@ describe("add once, use wherever compatible", () => {
       "review",
       "Review the change carefully.",
     );
-    expect(inspection.compatibleProviders).toEqual([...AGENT_PLATFORMS]);
+    // Antigravity reads no qualified skill location yet.
+    expect(inspection.compatibleProviders).toEqual(
+      AGENT_PLATFORMS.filter((platform) => platform !== "antigravity"),
+    );
     expect(preview.operation.requiresApproval).toBe(false);
     // Two locations (Claude's and the shared one) on each of three machines.
     expect(preview.operation.targets.filter((target) => target.action === "install")).toHaveLength(
@@ -327,12 +330,16 @@ describe("add once, use wherever compatible", () => {
       expect(marker.packageId).toBe(inspection.packageId);
     }
     const detail = await command.service.getPackage({ packageId: inspection.packageId });
-    // 3 machines x 6 providers.
-    expect(detail.availability).toHaveLength(18);
+    // 3 machines x 7 providers; Antigravity cannot hold the skill.
+    expect(detail.availability).toHaveLength(21);
+    const held = detail.availability.filter((cell) => cell.target.provider !== "antigravity");
+    expect(
+      detail.availability
+        .filter((cell) => cell.target.provider === "antigravity")
+        .every((cell) => cell.status === "unsupported"),
+    ).toBe(true);
     // A copy is never "ready" without runtime evidence.
-    expect(detail.availability.every((cell) => cell.status === "installed-next-session")).toBe(
-      true,
-    );
+    expect(held.every((cell) => cell.status === "installed-next-session")).toBe(true);
     const cursor = detail.availability.find((cell) => cell.target.provider === "cursor");
     expect(cursor?.verification).toBe("present");
 
@@ -503,7 +510,14 @@ describe("remote safety", () => {
     const offlineCells = (
       await command.service.getPackage({ packageId: second.packageId })
     ).availability.filter((cell) => cell.target.nodeId === leafB.id);
-    expect(offlineCells.every((cell) => cell.status === "offline")).toBe(true);
+    // A provider that cannot hold the skill at all stays unsupported, online or not.
+    expect(
+      offlineCells.every((cell) =>
+        cell.target.provider === "antigravity"
+          ? cell.status === "unsupported"
+          : cell.status === "offline",
+      ),
+    ).toBe(true);
 
     leafB.connected = true;
     command.service.noteNodeConnected(leafB.id);

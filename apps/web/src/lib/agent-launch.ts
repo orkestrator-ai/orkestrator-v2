@@ -46,7 +46,7 @@ export interface AgentModelOption {
 }
 
 export type AgentModelCatalog = Record<"claude" | "codex" | "opencode", AgentModelOption[]> &
-  Partial<Record<"cursor" | "grok" | "pi", AgentModelOption[]>>;
+  Partial<Record<"cursor" | "grok" | "pi" | "antigravity", AgentModelOption[]>>;
 
 export function modelsForAgent(catalog: AgentModelCatalog, agent: LaunchAgent): AgentModelOption[] {
   return catalog[agent] ?? [{ id: "default", name: "Default", reasoningEfforts: [] }];
@@ -59,6 +59,7 @@ export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> 
   { value: "grok", label: "Grok Build" },
   { value: "opencode", label: "OpenCode" },
   { value: "pi", label: "Pi" },
+  { value: "antigravity", label: "Antigravity" },
 ];
 
 /** The launcher catalogue rows in the shape the shared resolver reads. */

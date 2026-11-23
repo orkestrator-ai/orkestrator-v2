@@ -1145,8 +1145,10 @@ function richNativeAgentCapabilities(): NativeAgentCapabilities {
  */
 export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
   const base = platformCapabilities(agent);
-  // Every native agent has the Orkestrator tools and a mailbox that can wake it.
-  const capabilities = { ...base, actions: { ...base.actions, subork: true } };
+  // Every native agent has the Orkestrator tools and a mailbox that can wake
+  // it. Suborks are not yet qualified on Antigravity.
+  const capabilities =
+    agent === "antigravity" ? base : { ...base, actions: { ...base.actions, subork: true } };
   // A platform gains the goal loop only after its live run passes (D14).
   return (GOAL_QUALIFIED_PLATFORMS as readonly AgentPlatform[]).includes(agent)
     ? { ...capabilities, actions: { ...capabilities.actions, goal: true } }
@@ -1155,6 +1157,31 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
 
 function platformCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
   const capabilities = richNativeAgentCapabilities();
+  if (agent === "antigravity") {
+    return {
+      ...capabilities,
+      // `agy acp` 1.5.12 advertises `promptCapabilities.image` and
+      // `embeddedContext` (observed on the pinned binary), so the ACP bridge
+      // sends images inline and text files as `resource` blocks.
+      attachments: { files: true, images: true },
+      // ACP's `session/fork` is unstable and agy does not advertise it; a
+      // similarly named slash command is not a fork.
+      fork: false,
+      slashCommands: true,
+      // Modes and the model are session config options (`session/set_config_option`).
+      composer: { ...capabilities.composer, modeScope: "session" },
+      // `/compact` runs through the ACP bridge's journaled command path when
+      // the live inventory advertises it (422 `command-unavailable` otherwise).
+      // Steering is not offered: agy steers with a second `session/prompt`,
+      // which the bridge has not qualified, so a follow-up waits in the queue.
+      actions: { compact: true },
+      // Questions arrive as `interaction_*` permission requests; approvals as
+      // ordinary `session/request_permission`. No elicitation is implemented.
+      interactions: {
+        kinds: ["question", "command-approval", "file-approval", "permission"],
+      },
+    };
+  }
   if (agent === "cursor" || agent === "grok") {
     return {
       ...capabilities,
@@ -1554,7 +1581,16 @@ export interface NativeAgentContextUsage {
   durationMs?: number;
   apiDurationMs?: number;
   estimated?: boolean;
-  source?: "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi" | "heuristic" | "provider";
+  source?:
+    | "claude"
+    | "opencode"
+    | "codex"
+    | "cursor"
+    | "grok"
+    | "pi"
+    | "antigravity"
+    | "heuristic"
+    | "provider";
   updatedAt?: string;
   rateLimits?: Array<{
     label: string;

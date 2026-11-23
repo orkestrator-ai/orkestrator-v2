@@ -248,6 +248,7 @@ describe("LAUNCH_AGENT_OPTIONS", () => {
       { value: "grok", label: "Grok Build" },
       { value: "opencode", label: "OpenCode" },
       { value: "pi", label: "Pi" },
+      { value: "antigravity", label: "Antigravity" },
     ]);
   });
 });

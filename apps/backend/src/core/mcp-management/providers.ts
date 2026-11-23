@@ -27,7 +27,7 @@ import {
 } from "@orkestrator/protocol/mcp-management";
 
 import { claudePluginSources, listHostDirectories } from "./claude-plugins.js";
-import { PROVIDER_CODECS } from "./codecs.js";
+import { ANTIGRAVITY_MCP_UNMANAGED_REASON, PROVIDER_CODECS } from "./codecs.js";
 import {
   codexProjectTrust,
   grokCompat,
@@ -138,6 +138,7 @@ export const INJECTED_SERVER_NAMES: Readonly<Record<AgentPlatform, readonly stri
     cursor: ["orkestrator"],
     grok: ["orkestrator"],
     pi: ["orkestrator"],
+    antigravity: ["orkestrator"],
   });
 
 function injectedSource(provider: AgentPlatform): SourceSpec {
@@ -1112,6 +1113,11 @@ const TRANSPORTS: Record<AgentPlatform, Record<McpTransport, McpCapabilityFlag>>
       "Pi's own CLI rejects SSE servers and Orkestrator's Pi sessions reach them over Streamable HTTP; use HTTP.",
     ),
   },
+  antigravity: {
+    stdio: flag(false, ANTIGRAVITY_MCP_UNMANAGED_REASON),
+    http: flag(false, ANTIGRAVITY_MCP_UNMANAGED_REASON),
+    sse: flag(false, ANTIGRAVITY_MCP_UNMANAGED_REASON),
+  },
 };
 
 const APPLY: Record<AgentPlatform, McpTargetCapabilities["apply"]> = {
@@ -1151,6 +1157,12 @@ const APPLY: Record<AgentPlatform, McpTargetCapabilities["apply"]> = {
     description:
       "The Pi bridge rebuilds its MCP connections and tools before a session's next message; the conversation is kept.",
   },
+  antigravity: {
+    strategy: "next-load",
+    impact: "environment-process",
+    description:
+      "Antigravity loads its own MCP configuration when a session's agy worker starts; Orkestrator does not edit it.",
+  },
 };
 
 const TERMINAL: Record<AgentPlatform, McpTargetCapabilities["terminal"]> = {
@@ -1180,6 +1192,10 @@ const TERMINAL: Record<AgentPlatform, McpTargetCapabilities["terminal"]> = {
     guidance:
       "Pi terminals load these files with Pi's own MCP client, which ignores a file without the mcpServers wrapper, honours only enabled: false (not disabled) and rejects SSE servers. Running Pi terminals keep their servers; restart the terminal session to load changes.",
   },
+  antigravity: {
+    readsNativeConfig: false,
+    guidance: "Antigravity has no terminal mode in Orkestrator.",
+  },
 };
 
 const SIGN_IN: Record<AgentPlatform, McpCapabilityFlag> = {
@@ -1195,6 +1211,7 @@ const SIGN_IN: Record<AgentPlatform, McpCapabilityFlag> = {
     false,
     "Orkestrator's Pi sessions cannot sign in to a server; use a header or environment variable. Pi terminals sign in with /mcp login.",
   ),
+  antigravity: flag(false, ANTIGRAVITY_MCP_UNMANAGED_REASON),
 };
 
 const ENABLED_FLAG: Record<AgentPlatform, McpCapabilityFlag> = {
@@ -1205,6 +1222,7 @@ const ENABLED_FLAG: Record<AgentPlatform, McpCapabilityFlag> = {
   codex: flag(true),
   opencode: flag(true),
   cursor: flag(false, "Cursor stores its enable switch outside mcp.json."),
+  antigravity: flag(false, ANTIGRAVITY_MCP_UNMANAGED_REASON),
   grok: flag(
     false,
     "Grok's saved enable switch is shown, but changing it from Orkestrator has not been verified with the pinned Grok Build release; use `grok mcp enable` or `grok mcp disable`.",
@@ -1219,12 +1237,17 @@ const CWD_FLAG: Record<AgentPlatform, McpCapabilityFlag> = {
   cursor: flag(true),
   grok: flag(false, "Not supported by Grok Build's configuration."),
   pi: flag(true),
+  antigravity: flag(false, ANTIGRAVITY_MCP_UNMANAGED_REASON),
 };
 
 export function providerCapabilities(
   provider: AgentPlatform,
-  readOnlyReason?: string,
+  requestedReadOnlyReason?: string,
 ): McpTargetCapabilities {
+  // Antigravity's native configuration is never edited from Orkestrator.
+  const readOnlyReason =
+    requestedReadOnlyReason ??
+    (provider === "antigravity" ? ANTIGRAVITY_MCP_UNMANAGED_REASON : undefined);
   const codec = PROVIDER_CODECS[provider];
   const write = readOnlyReason ? flag(false, readOnlyReason) : flag(true);
   return {

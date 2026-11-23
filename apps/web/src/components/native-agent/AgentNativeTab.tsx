@@ -292,7 +292,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             ? "Cursor Agent"
             : platform === "grok"
               ? "Grok Build"
-              : "Agent Session",
+              : platform === "antigravity"
+                ? "Antigravity"
+                : "Agent Session",
         prompt,
         requestId,
         model: options.modelId,

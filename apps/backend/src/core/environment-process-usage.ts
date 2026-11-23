@@ -46,6 +46,7 @@ export interface ProcessUsageEnvironment {
   cursorBridgePid?: number;
   grokBridgePid?: number;
   piBridgePid?: number;
+  antigravityBridgePid?: number;
 }
 
 interface ProcessUsageDependencies {
@@ -77,6 +78,7 @@ const ROOT_PID_FIELDS = [
   "cursorBridgePid",
   "grokBridgePid",
   "piBridgePid",
+  "antigravityBridgePid",
 ] as const satisfies readonly LocalServerPidField[];
 
 const SECRET_FLAG_PATTERN =

@@ -47,9 +47,9 @@ const question = (labels: string[], id = "question-1") => ({
 });
 
 describe("ask scenario", () => {
-  test("every platform says whether its coordinator can ask; Pi and Cursor cannot", () => {
+  test("every platform says whether its coordinator can ask; Antigravity, Cursor and Pi cannot", () => {
     const skipped = AGENT_PLATFORMS.filter((platform) => !askApplies(platform).applies);
-    expect(skipped.toSorted()).toEqual(["cursor", "pi"]);
+    expect(skipped.toSorted()).toEqual(["antigravity", "cursor", "pi"]);
   });
 
   test("the prompt names both options, the provider's question tool and the report line", () => {

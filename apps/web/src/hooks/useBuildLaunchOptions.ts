@@ -63,6 +63,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
+  const antigravityModels = useAgentModelCatalogStore((state) => state.antigravityModels);
   const favoriteModels = useConfigStore((state) => state.config.global.favoriteModels);
   const openCodeModelProviders = useConfigStore(
     (state) => state.config.global.openCodeModelProviders,
@@ -135,6 +136,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       cursorModels,
       grokModels,
       piModels,
+      antigravityModels,
     });
     const allowedProviders = normalizeOpenCodeModelProviders(openCodeModelProviders);
     const favoriteOpenCodeIds = (favoriteModels ?? [])
@@ -162,6 +164,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     favoriteModels,
     grokModels,
     piModels,
+    antigravityModels,
     openCodeModelProviders,
     projectOpenCodeModels,
   ]);

@@ -94,6 +94,24 @@ export function PiIcon({ className }: IconProps) {
   );
 }
 
+/**
+ * Antigravity: an original, generic mark (a chevron rising out of an arch),
+ * not Google's logo.
+ */
+export function AntigravityIcon({ className }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="currentColor"
+      className={cn("h-4 w-4", className)}
+      aria-hidden="true"
+    >
+      <path d="M16 3 6 13.5l2.8 2.8L16 8.9l7.2 7.4 2.8-2.8z" />
+      <path d="M4 29v-4.5C4 17.6 9.4 13 16 13s12 4.6 12 11.5V29h-4v-4.5c0-4.6-3.6-7.5-8-7.5s-8 2.9-8 7.5V29z" />
+    </svg>
+  );
+}
+
 /** The one accent colour each agent platform is drawn in across the app. */
 export const PLATFORM_ICON_CLASS: Record<AgentPlatform, string> = {
   claude: "text-orange-400",
@@ -102,6 +120,7 @@ export const PLATFORM_ICON_CLASS: Record<AgentPlatform, string> = {
   cursor: "text-violet-400",
   grok: "text-sky-400",
   pi: "text-amber-400",
+  antigravity: "text-blue-500",
 };
 
 /**
@@ -123,6 +142,7 @@ export function AgentPlatformIcon({
   if (platform === "opencode") return <OpenCodeIcon className={resolved} />;
   if (platform === "cursor") return <CursorAgentIcon className={resolved} />;
   if (platform === "pi") return <PiIcon className={resolved} />;
+  if (platform === "antigravity") return <AntigravityIcon className={resolved} />;
   return <GrokBuildIcon className={resolved} />;
 }
 

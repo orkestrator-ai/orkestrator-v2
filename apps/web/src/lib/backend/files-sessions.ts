@@ -153,6 +153,7 @@ export interface SavedInitialPromptAttachment {
 
 // --- Port Mapping Commands ---
 
+/** Platforms with extension discovery; Antigravity's is not qualified, so it has none. */
 export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi";
 
 export interface AgentExtensionItem {
@@ -746,10 +747,14 @@ export function createFilesSessionsApi(client: BackendClient) {
     environmentId: string,
     options: { refresh?: boolean } = {},
   ): Promise<AgentExtensionCatalog[]> {
-    return environments().getEnvironmentExtensions({
+    const catalogs = await environments().getEnvironmentExtensions({
       environmentId,
       refresh: options.refresh === true,
     });
+    // Defensive: an older or mocked backend may answer with no list at all.
+    return (catalogs ?? []).filter(
+      (catalog): catalog is AgentExtensionCatalog => catalog.agent !== "antigravity",
+    );
   }
 
   /** Create a new persistent session for tracking */

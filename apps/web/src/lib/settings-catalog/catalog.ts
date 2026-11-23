@@ -11,6 +11,7 @@
 import { createDefaultGlobalConfig } from "@orkestrator/protocol/app-config-defaults";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
+  isNativeOnlyPlatform,
   resolveMultiReviewSettings,
   SHIPPED_PLATFORM_MODES,
   normalizeAgentSettings,
@@ -167,7 +168,7 @@ const platformPane = (platform: AgentPlatform): SettingDescriptor[] => {
   const label = AGENT_PLATFORM_LABELS[platform];
   const model = { id: `agent-model-${platform}`, heading: "Default model" };
   return [
-    ...(platform === "cursor"
+    ...(isNativeOnlyPlatform(platform)
       ? []
       : [
           platformField(
@@ -466,7 +467,17 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     section: "platforms",
     label: "Agent platforms",
     description: "Which agent systems appear in the toolbar, review picker and build workflow.",
-    aliases: ["enable agent", "claude", "codex", "cursor", "grok", "opencode", "pi", "providers"],
+    aliases: [
+      "enable agent",
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+      "pi",
+      "antigravity",
+      "providers",
+    ],
     appliesWhen: "immediately",
     value: stored("enabledAgentPlatforms", DEFAULTS.enabledAgentPlatforms, listOf("platform")),
   },
@@ -719,6 +730,8 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
   ...platformPane("cursor"),
   signIn("grok", ["xai"]),
   ...platformPane("grok"),
+  signIn("antigravity", ["google", "gemini", "agy"]),
+  ...platformPane("antigravity"),
   signIn("opencode"),
   {
     id: "opencode.zen-api-key",

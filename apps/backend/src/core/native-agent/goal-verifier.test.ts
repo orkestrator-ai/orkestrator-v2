@@ -704,7 +704,8 @@ describe("restarts", () => {
 });
 
 describe("the session itself", () => {
-  test.each(AGENT_PLATFORMS.map((agent) => [agent]))(
+  // Antigravity is not goal-qualified (`GOAL_QUALIFIED_PLATFORMS`).
+  test.each(AGENT_PLATFORMS.filter((agent) => agent !== "antigravity").map((agent) => [agent]))(
     "%s runs read-only, unattended, with the reviewer boundary",
     async (agent) => {
       const w = await world(answers(PASS), { agent });

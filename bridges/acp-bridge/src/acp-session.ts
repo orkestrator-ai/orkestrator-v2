@@ -38,7 +38,7 @@ import {
   type AcpTurnUsage,
 } from "./usage.js";
 import { EMPTY_SESSION_COST, updateSessionCost } from "./acp-usage-cost.js";
-import { acpSignInMissing, assertAcpSignedIn } from "./acp-credentials.js";
+import { acpSignInMissing, assertAcpSignedIn, CredentialError } from "./acp-credentials.js";
 import { grokQuestionTimeoutFromEnv } from "./acp-question-timeout.js";
 import { syncPromptTurnClock } from "./acp-prompt-clock.js";
 import {
@@ -62,7 +62,6 @@ import {
   acpToolSourceStates,
   adjustAnonymousSessionCreations,
   clientSessionKeys,
-  configuredAcpMcpServers,
   mcpConnectionKey,
   externalSessionToken,
   isObject,
@@ -132,7 +131,17 @@ import {
   effectiveTurnExecutionPolicy,
   liveExecutionPolicy,
 } from "./acp-policy.js";
-import { sessionInstructionsCarrier, sessionInstructionsParams } from "./acp-provider-config.js";
+import {
+  prefersSessionResume,
+  sessionInstructionsCarrier,
+  sessionInstructionsParams,
+} from "./acp-provider-config.js";
+import {
+  ANTIGRAVITY_PROVIDER_ID,
+  antigravityQuestion,
+  antigravityQuestionResponse,
+  isAntigravityQuestionRequest,
+} from "./antigravity-acp.js";
 import { sessionInstructions } from "./acp-session-instructions.js";
 import {
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -384,7 +393,7 @@ export async function resumeSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(state.agentMcp),
+        mcpServers: child.configuredMcpServers(state.agentMcp),
         sessionId: acpSessionId,
         ...(await sessionInstructionFields(child, "load", effectiveTurnExecutionPolicy(state))),
       },
@@ -525,7 +534,7 @@ export async function createSessionReserved(
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(spawnOptions.agentMcp),
+        mcpServers: child.configuredMcpServers(spawnOptions.agentMcp),
         ...(await sessionInstructionFields(
           child,
           "new",
@@ -572,6 +581,12 @@ export async function createSessionReserved(
     }
   } catch (error) {
     await child.close();
+    // Antigravity's login is only known by asking agy: a `session/new` it
+    // refused for want of one gets the same deferred session Grok's file
+    // check would have produced.
+    if (error instanceof CredentialError && provider === ANTIGRAVITY_PROVIDER_ID) {
+      return createDeferredSession(clientSessionKey, spawnOptions);
+    }
     throw error;
   }
 }
@@ -645,7 +660,13 @@ async function createDeferredSession(
   // an unset one lets the agent pick its default once it starts.
   const empty = normalizeAcpSessionConfig(provider, {});
   const sessionConfig = withRequestedSelection(
-    { ...empty, composer: { ...empty.composer, models: catalogCache?.models ?? [] } },
+    {
+      ...empty,
+      composer: {
+        ...empty.composer,
+        models: provider === "antigravity" ? [] : (catalogCache?.models ?? []),
+      },
+    },
     composerPatchFromSpawn(spawnOptions),
   );
   const state = newSessionState(id, clientSessionKey, "", null, sessionConfig, spawnOptions);
@@ -705,7 +726,7 @@ async function startDeferredSession(state: SessionState): Promise<AcpProcess> {
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(state.agentMcp),
+        mcpServers: child.configuredMcpServers(state.agentMcp),
         ...(await sessionInstructionFields(child, "new", effectiveTurnExecutionPolicy(state))),
       },
       RPC_TIMEOUT_MS,
@@ -1042,6 +1063,13 @@ export function attachChild(state: SessionState, child: AcpProcess): void {
       child.respond(requestId, { outcome: { outcome: "cancelled" } });
       return;
     }
+    // A question is the person's to answer whatever the policy: it is matched
+    // before every approval branch below, so neither auto-approval nor a deny
+    // policy can pick or refuse an answer for them.
+    if (provider === ANTIGRAVITY_PROVIDER_ID && isAntigravityQuestionRequest(params)) {
+      parkAntigravityQuestion(state, child, requestId, params);
+      return;
+    }
     const policy = effectiveTurnExecutionPolicy(state);
     const toolCallId = isObject(params.toolCall) ? params.toolCall.toolCallId : undefined;
     const recorded =
@@ -1226,12 +1254,13 @@ export async function setSessionReadOnly(state: SessionState, readOnly: boolean)
  */
 async function sessionInstructionFields(
   child: AcpProcess,
-  lifecycle: "new" | "load",
+  lifecycle: "new" | "load" | "resume",
   policy: NativeAgentExecutionPolicy | undefined,
 ): Promise<ReturnType<typeof sessionInstructionsParams>> {
   const carrier = sessionInstructionsCarrier(providerConfig, {
     lifecycle,
     systemPromptSupported: child.systemPromptSupported,
+    antigravitySystemPromptAppend: child.antigravitySystemPromptAppend,
   });
   if (!carrier) return {};
   return sessionInstructionsParams(
@@ -1250,6 +1279,17 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     const capabilities = isObject(initialized.agentCapabilities)
       ? initialized.agentCapabilities
       : undefined;
+    // A provider that prefers it reattaches a session whose transcript the
+    // bridge still holds with `session/resume`: the conversation is restored
+    // without a replay, so no row or tool card is rebuilt. An empty
+    // transcript still needs `session/load`'s replay to hydrate.
+    if (
+      state.messages.length > 0 &&
+      prefersSessionResume(provider) &&
+      supportsSessionCapability(initialized, "resume")
+    ) {
+      return await resumeAttachedSession(state, child);
+    }
     if (capabilities?.loadSession !== true) {
       throw new HttpError(410, `${provider} cannot reload persisted ACP sessions`);
     }
@@ -1262,7 +1302,7 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
       {
         cwd: workingDirectory,
         additionalDirectories: [],
-        mcpServers: configuredAcpMcpServers(state.agentMcp),
+        mcpServers: child.configuredMcpServers(state.agentMcp),
         sessionId: state.acpSessionId,
         ...(await sessionInstructionFields(child, "load", effectiveTurnExecutionPolicy(state))),
       },
@@ -1304,6 +1344,45 @@ export async function spawnAndLoadSession(state: SessionState): Promise<AcpProce
     await child.close();
     throw error;
   }
+}
+
+/**
+ * `session/resume` for a session the bridge holds a transcript for. Nothing
+ * is replayed, so the rows stay as they are and only the configuration the
+ * agent returns is applied. The resumed conversation keeps its own model and
+ * mode; an explicit selection the user made is applied by the composer path
+ * as on any attach.
+ */
+async function resumeAttachedSession(state: SessionState, child: AcpProcess): Promise<AcpProcess> {
+  attachChild(state, child);
+  const resumed = await child.request(
+    "session/resume",
+    {
+      cwd: workingDirectory,
+      additionalDirectories: [],
+      mcpServers: child.configuredMcpServers(state.agentMcp),
+      sessionId: state.acpSessionId,
+      ...(await sessionInstructionFields(child, "resume", effectiveTurnExecutionPolicy(state))),
+    },
+    RPC_TIMEOUT_MS,
+  );
+  state.cursorTodos = restoreCursorTodosFromMessages(state.messages);
+  if (isObject(resumed)) {
+    const sessionConfig = normalizeAcpSessionConfig(provider, {
+      ...resumed,
+      sessionId: state.acpSessionId,
+    });
+    if (sessionConfig.composer.models.length > 0 || sessionConfig.composer.modes.length > 0) {
+      state.sessionConfig = sessionConfig;
+      rememberCatalog(sessionConfig.composer);
+    }
+  }
+  state.attachedMcpKey = mcpConnectionKey(state.agentMcp);
+  state.status = "idle";
+  state.error = undefined;
+  markSessionChanged(state);
+  await persistState();
+  return child;
 }
 
 export function clearApprovals(state: SessionState): void {
@@ -1508,6 +1587,79 @@ export function parkGrokInteraction(
       ),
     });
   }
+  markSessionChanged(state);
+  schedulePersist();
+}
+
+/**
+ * An Antigravity question (`interaction_*` on `session/request_permission`)
+ * as a single-choice question card: exactly one option, no free text, and the
+ * native option id returned once. Malformed (`antigravityQuestion`) or
+ * unanswerable requests are cancelled, never approved. Expiry, Stop, close,
+ * a child exit and a new generation cancel it through the same paths as any
+ * parked question.
+ */
+export function parkAntigravityQuestion(
+  state: SessionState,
+  child: AcpProcess,
+  requestId: number,
+  params: JsonObject,
+): void {
+  const cancelled = () => child.respond(requestId, { outcome: { outcome: "cancelled" } });
+  const question = antigravityQuestion(params);
+  const toolCallId = isObject(params.toolCall) ? params.toolCall.toolCallId : undefined;
+  if (
+    !question ||
+    typeof toolCallId !== "string" ||
+    toolCallId.length > AGENT_INTERACTION_LIMITS.maxIdLength ||
+    (typeof params.sessionId === "string" && params.sessionId !== state.acpSessionId) ||
+    state.interactions.size >= AGENT_INTERACTION_LIMITS.maxPendingRequests
+  ) {
+    cancelled();
+    return;
+  }
+  const existing = state.interactions.get(toolCallId);
+  if (existing) existing.respond({ outcome: "cancelled" });
+  const requestedAt = Date.now();
+  const promptSequence = state.promptSequence;
+  let answered = false;
+  const finish = (result: JsonObject) => {
+    const interaction = state.interactions.get(toolCallId);
+    if (!interaction || answered) return;
+    answered = true;
+    interaction.deadline.settle();
+    state.interactions.delete(toolCallId);
+    syncPromptTurnClock(state);
+    child.respond(requestId, antigravityQuestionResponse(question, result));
+    markSessionChanged(state);
+    schedulePersist();
+  };
+  const expire = () => {
+    if (state.promptSequence === promptSequence) {
+      state.expiredRequestPromptSequence = promptSequence;
+    }
+    finish({ outcome: "cancelled" });
+  };
+  state.interactions.set(toolCallId, {
+    id: toolCallId,
+    kind: "question",
+    questions: [
+      {
+        id: "answer",
+        question: question.question.slice(0, AGENT_INTERACTION_LIMITS.maxTextLength),
+        multiple: false,
+        options: question.options
+          .slice(0, AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion)
+          .map((option) => ({
+            id: option.id.slice(0, AGENT_INTERACTION_LIMITS.maxProviderValueLength),
+            label: option.label.slice(0, AGENT_INTERACTION_LIMITS.maxTextLength),
+          })),
+      },
+    ],
+    requestedAt,
+    respond: finish,
+    deadline: parkedDeadline(state, requestedAt, () => turnHoldLimit(state), expire),
+  });
   markSessionChanged(state);
   schedulePersist();
 }
@@ -2004,7 +2156,7 @@ export function applySessionUpdate(state: SessionState, params: JsonObject): voi
           ? update.modeId
           : "";
     if (modeId) {
-      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId);
+      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, modeId, provider);
       markSessionChanged(state);
       schedulePersist();
     }
@@ -2285,7 +2437,40 @@ async function applyComposerCalls(
   patch: AcpComposerPatch,
   signal?: AbortSignal,
 ): Promise<void> {
-  const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch);
+  if (provider === "antigravity") {
+    const { modelId, reasoningId, ...remaining } = patch;
+    if (modelId && modelId !== "default") {
+      await dispatchComposerCalls(state, child, { modelId }, signal);
+      if (state.sessionConfig.composer.selectedModelId !== modelId) {
+        throw new HttpError(422, "Antigravity did not confirm the selected model.");
+      }
+    }
+    await dispatchComposerCalls(
+      state,
+      child,
+      { ...remaining, ...(reasoningId && reasoningId !== "default" ? { reasoningId } : {}) },
+      signal,
+    );
+    if (
+      reasoningId &&
+      reasoningId !== "default" &&
+      state.sessionConfig.composer.selectedReasoningId !== reasoningId
+    ) {
+      throw new HttpError(422, "Antigravity did not confirm the selected thinking level.");
+    }
+  } else {
+    await dispatchComposerCalls(state, child, patch, signal);
+  }
+}
+
+async function dispatchComposerCalls(
+  state: SessionState,
+  child: AcpProcess,
+  patch: AcpComposerPatch,
+  signal?: AbortSignal,
+): Promise<void> {
+  const calls = planComposerApply(state.acpSessionId, state.sessionConfig, patch, provider);
+  if (calls.length === 0) return;
   for (const call of calls) {
     const result = await child.request(call.method, call.params, RPC_TIMEOUT_MS, signal);
     if (call.method === "session/set_config_option") {
@@ -2295,7 +2480,11 @@ async function applyComposerCalls(
         isObject(result) ? result : {},
       );
     } else if (call.method === "session/set_mode") {
-      state.sessionConfig = applyCurrentModeUpdate(state.sessionConfig, call.params.modeId);
+      state.sessionConfig = applyCurrentModeUpdate(
+        state.sessionConfig,
+        call.params.modeId,
+        provider,
+      );
     } else if (call.method === "session/set_model") {
       const meta = isObject(result) && isObject(result._meta) ? result._meta : {};
       const model = isObject(meta.model) ? meta.model : {};

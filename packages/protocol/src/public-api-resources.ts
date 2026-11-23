@@ -512,7 +512,15 @@ export interface PublicSettingDescriptor {
   description: string;
 }
 
-const AGENT_PLATFORM_KEYS = ["claude", "codex", "cursor", "grok", "opencode", "pi"] as const;
+const AGENT_PLATFORM_KEYS = [
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+  "antigravity",
+] as const;
 
 function agentSettingDescriptors(scope: PublicSettingScope): PublicSettingDescriptor[] {
   const application: PublicSettingApplication = "next-session";

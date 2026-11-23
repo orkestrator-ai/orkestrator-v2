@@ -22,7 +22,8 @@ const BATCH: NativeAgentSuborkBatchView = {
 };
 
 describe("/subork", () => {
-  for (const agent of AGENT_PLATFORMS) {
+  // Suborks are not yet qualified on Antigravity, so it does not list the command.
+  for (const agent of AGENT_PLATFORMS.filter((platform) => platform !== "antigravity")) {
     test(`on ${agent} is listed, and sends the agent an instruction to use the tool`, async () => {
       const stub = createProviderStub(agent, {
         interactiveSnapshot: async () => ({ status: "idle", messages: [] }),

@@ -195,6 +195,7 @@ const PLATFORM_LABELS: Record<AgentPlatform, string> = {
   cursor: "Cursor",
   grok: "Grok",
   pi: "Pi",
+  antigravity: "Antigravity",
 };
 
 function PlatformIcon({ platform }: { platform: AgentPlatform }) {

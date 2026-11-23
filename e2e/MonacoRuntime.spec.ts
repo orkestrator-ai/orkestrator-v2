@@ -70,9 +70,6 @@ test("dotenv highlights comments and recovers unfinished quotes in real Monaco",
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "tokenization is viewport independent");
-  const monacoResponse = page.waitForResponse((response) =>
-    /\/deps\/monaco-editor\.js\?/.test(response.url()),
-  );
   await page.goto("/monaco-runtime");
   await expect(page.getByTestId("monaco-runtime-editor").locator(".monaco-editor")).toBeVisible();
   const source = [
@@ -84,13 +81,11 @@ test("dotenv highlights comments and recovers unfinished quotes in real Monaco",
     "EMPTY_VALUE=",
     "LAST=$HOME/${USER}",
   ].join("\n");
-  const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
   const tokens = await page.evaluate(
-    async ({ root, source, monacoUrl }) => {
-      const monaco = await import(/* @vite-ignore */ monacoUrl);
-      const { registerDotenvLanguage } = await import(
-        /* @vite-ignore */ `${root}/apps/web/src/lib/monaco-dotenv.ts`
-      );
+    async ({ source }) => {
+      // The editor's own instance: its model is the one the page created.
+      const monaco = await window.__fixtureModules!["monaco-editor"]();
+      const { registerDotenvLanguage } = await window.__fixtureModules!["lib/monaco-dotenv"]();
       registerDotenvLanguage(monaco);
       const model = monaco.editor.getModels()[0];
       monaco.editor.setModelLanguage(model, "dotenv");
@@ -101,7 +96,7 @@ test("dotenv highlights comments and recovers unfinished quotes in real Monaco",
           line.map((token) => ({ offset: token.offset, type: token.type })),
         );
     },
-    { root: `/@fs${root}`, source, monacoUrl: (await monacoResponse).url() },
+    { source },
   );
   expect(tokens[0]).toContainEqual({ offset: 10, type: "comment.dotenv" });
   expect(tokens[1]).toContainEqual({ offset: 6, type: "comment.dotenv" });

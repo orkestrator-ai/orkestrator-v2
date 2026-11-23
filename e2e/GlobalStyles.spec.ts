@@ -214,13 +214,21 @@ test("copyable user messages compile the native callout suppression utility", as
 
   const bubble = page.getByTestId("user-message-shell").locator(".rounded-xl");
   await expect(bubble).toBeVisible();
-  const compiled = await bubble.evaluate((element) => {
+  const compiled = await bubble.evaluate(async (element) => {
     const utility = Array.from(element.classList).find((name) => name.includes("touch-callout"));
     if (!utility) throw new Error("Copyable message is missing its touch-callout utility");
     const selector = `.${CSS.escape(utility)}`;
-    const source = Array.from(document.querySelectorAll("style"))
-      .map((style) => style.textContent ?? "")
-      .join("\n");
+    // Source text rather than CSSOM rules, which drop properties the engine
+    // does not know. A dev server inlines styles; a build links stylesheets.
+    const inline = Array.from(document.querySelectorAll("style")).map(
+      (style) => style.textContent ?? "",
+    );
+    const linked = await Promise.all(
+      Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')).map(
+        async (link) => (await fetch(link.href)).text(),
+      ),
+    );
+    const source = [...inline, ...linked].join("\n");
     return {
       selector,
       selectorMatches: element.matches(selector),

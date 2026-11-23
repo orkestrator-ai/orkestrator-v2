@@ -6,13 +6,11 @@ test("trusted terminal gestures authorize clipboard writes; replies and replay d
 }) => {
   await page.goto("/tmux-compose-focus");
   const root = path.resolve(import.meta.dirname, "..");
-  await page.evaluate(async (root) => {
-    const xtermPath = `/@fs${root}/apps/web/src/lib/terminal-xterm.ts`;
-    const helperPath = `/@fs${root}/apps/web/src/lib/terminal-osc52.ts`;
-    const { createXtermTerminal } = await import(/* @vite-ignore */ xtermPath);
-    const { bindOsc52ClipboardGestures, suppressOsc52Clipboard } = await import(
-      /* @vite-ignore */ helperPath
-    );
+  await page.evaluate(async () => {
+    const modules = window.__fixtureModules!;
+    const { createXtermTerminal } = await modules["lib/terminal-xterm"]();
+    const { bindOsc52ClipboardGestures, suppressOsc52Clipboard } =
+      await modules["lib/terminal-osc52"]();
     const copies: string[] = [];
     window.orkestrator!.clipboard.writeText = async (text: string) => {
       copies.push(text);
@@ -47,7 +45,7 @@ test("trusted terminal gestures authorize clipboard writes; replies and replay d
         resolve,
       ),
     );
-  }, root);
+  });
   const state = () =>
     page.evaluate(() => (window as unknown as { oscTest: { copies: string[] } }).oscTest.copies);
   const output = (query: string) =>

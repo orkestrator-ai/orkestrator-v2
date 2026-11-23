@@ -6,5 +6,5 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true
   },
-  "include": ["vite.config.ts", "vite-plugin-renderer-security.ts"]
+  "include": ["vite.config.ts", "vite.fixture.config.ts", "vite-plugin-renderer-security.ts"]
 }

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { KEEP_PRIVATE_TMPDIR_ENV, PRIVATE_TMPDIR_ENV } from "../private-tmpdir";
+import { FIXTURE_SERVER_ENV } from "../../e2e/fixture-server-mode";
 import { FIXTURE_SERVER_PROBE_INTERVAL_ENV } from "../playwright-fixture-server-watch";
 import { PARENT_TMPDIR_ENV } from "../temp-sweep";
 
@@ -17,8 +18,9 @@ import { PARENT_TMPDIR_ENV } from "../temp-sweep";
 // server and the specs are stand-ins. The server is this test process's own,
 // bound to port 0 and held until it goes, so no other process can take the
 // port first; the run reuses it, as a person's run outside CI reuses a
-// running Vite. It answers everything, as Vite does for the setup's ownership
-// check, and closes once the first spec asks it to. Each later spec takes two
+// running Vite dev server (`ORKESTRATOR_E2E_FIXTURE_SERVER=dev`). It answers
+// everything, as Vite does for that mode's ownership check, and closes once
+// the first spec asks it to. Each later spec takes two
 // seconds and then needs the server, as a page load would. Without the watch the run would take about a minute and fail
 // every one of them; with it the runner stops itself within a few probes,
 // says why, and leaves the rest "did not run".
@@ -200,6 +202,8 @@ describe.skipIf(process.platform === "win32")("the component suite's fixture ser
       ...process.env,
       TMPDIR: root,
       [FIXTURE_SERVER_PROBE_INTERVAL_ENV]: String(PROBE_INTERVAL_MS),
+      // The mode that reuses a server, so the setup's ownership check runs too.
+      [FIXTURE_SERVER_ENV]: "dev",
     };
     for (const key of [
       PRIVATE_TMPDIR_ENV,

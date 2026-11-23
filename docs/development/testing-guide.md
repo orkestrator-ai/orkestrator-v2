@@ -146,7 +146,48 @@ staged or combined diffs. New code/configuration edits,
 non-documentation resolutions, tooling-consumed documentation, and outstanding
 feature validation still follow the normal requirements.
 
+### The fixture server
+
+The component suite's specs open routes of one fixture page, `e2e/fixture`.
+Each run builds that page once (`apps/web/vite.fixture.config.ts`, a few
+seconds) into the runner's private `TMPDIR` and serves the build with
+`vite preview`. Until 2026-11-23 the suite served the page through Vite's dev
+server, unbundled. Every test opens a fresh browser context, so every page load
+fetched about 1,940 modules and took about 1.9 s, even for a test that checks
+one label. A built page loads about 370 chunks in about 0.5 s. Measured on
+beelink (16 cores) with 5 workers at `6e072c3cf`, the component suite took
+28.7 min and 8,422 test-seconds through the dev server. Through the build, with
+the specs converted, it took 13.3 min, at a host load of 15 to 25 from other
+worktrees.
+
+The build keeps the dev server's semantics, because those are what the specs
+assert: React's development build (`NODE_ENV=development`, set by the config
+whatever the shell says), no `rendererSecurityPlugin` (no production
+Content-Security-Policy, and the design and static HTML frames keep their
+`srcdoc` bootstrap; `e2e/public-site` tests the production policy), and
+Tailwind's CSS unoptimized and nothing minified.
+
+- A spec that drives an app module directly in the page takes it from
+  `window.__fixtureModules` (`e2e/fixture/fixture-modules.ts`), never from an
+  `import("/@fs/…")` path, which only a dev server answers. Add the module to
+  that registry. Its entries belong to the page's own module graph, so a spec
+  that patches `portalStore` patches the store the page reads.
+  `tests/unit/component-fixture-server.test.ts` fails on a `/@fs` path in a
+  component spec.
+- The build is never reused. A server already on the port fails the run with
+  Playwright's "is already used" error, which the loopback wrapper retries on
+  fresh ports in review validation. Set `ORKESTRATOR_E2E_PORT` to run beside
+  another run.
+- `ORKESTRATOR_E2E_FIXTURE_SERVER=dev` serves the page through the dev server
+  instead, reused across runs outside CI after a check that it belongs to this
+  checkout. That suits iterating on a fixture with hot reload. It runs about
+  twice as slowly.
+
 ### Component suite workers
+
+The worker measurements below predate the fixture build, when each page load
+cost the shared dev server CPU as well as time. They have not been repeated
+since.
 
 The component suite (`e2e/playwright.config.ts`) starts a third of the
 host's cores as workers, at least one: 5 on a 16-core host, 4 on 12 cores, 2
@@ -1695,8 +1736,8 @@ fixture server died partway on 2026-11-15 therefore carried on and failed 371
 cases with `net::ERR_CONNECTION_REFUSED` before it was stopped by hand (to-do
 8200 (retired)). The component suite's global setup
 (`e2e/fixture-server-setup.ts`) now watches the server itself, through
-`tests/playwright-fixture-server-watch.ts`, after its existing check that the
-server belongs to this checkout. It asks the fixture URL every ten seconds;
+`tests/playwright-fixture-server-watch.ts`, after checking that a reused dev server
+(`ORKESTRATOR_E2E_FIXTURE_SERVER=dev`) belongs to this checkout. It asks the fixture URL every ten seconds;
 after three refusals in a row it prints one line naming the server ("The
 fixture server at … stopped answering"), repeats it above the summary, and
 stops the run as Ctrl+C does, with a `SIGINT` to the runner's own PID. The run

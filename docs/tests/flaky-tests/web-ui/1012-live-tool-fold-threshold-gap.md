@@ -537,3 +537,15 @@ The same command, run twice each and back to back, failed 4 of 12 and 4 of 12
 on the branch, and 5 of 12 and 3 of 12 on a detached `origin/main`
 (`307d19317`). The branch does not touch tool groups. `mise run flaky:recurrence -- 1012`
 reported the case open.
+
+## Recurrence — 2026-11-23 (fixture build branch)
+
+On `optimize-browser-tests-3b10dfb32710-r1` (base `6e072c3cf`), which builds
+the component suite's fixture page instead of serving it through Vite's dev
+server and does not touch tool groups, the case failed on both projects in
+two whole runs on beelink. With the dev server and 5 workers it failed with
+80 px (mobile) and 9 px (desktop) gaps, in 28.7 min. With the fixture build,
+`mise run test:browser` and 5 workers at host load 15 to 25, it failed with
+57 px (mobile, line 195) and 4 px (desktop, line 170) gaps, in 13.3 min. The
+fixture server does not decide it. `mise run flaky:recurrence -- 1012 --base
+6e072c3cf` reported the case open.

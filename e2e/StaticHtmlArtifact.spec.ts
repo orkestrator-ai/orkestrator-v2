@@ -51,13 +51,13 @@ test.describe("static HTML presentation", () => {
     await page.screenshot({
       path: `output/visual-previews/static-before-${testInfo.project.name}.png`,
     });
-    await page.evaluate(async (modulePath) => {
+    await page.evaluate(async () => {
       // Force the Safari fallback even on Chromium.
       Object.defineProperty(Element.prototype, "moveBefore", {
         value: undefined,
         configurable: true,
       });
-      const { parkHost, placeHost } = await import(/* @vite-ignore */ modulePath);
+      const { parkHost, placeHost } = await window.__fixtureModules!["lib/stable-host"]();
       const frame = document.querySelector('iframe[data-artifact-static-document="true"]')!;
       const host = frame.closest<HTMLElement>("[data-artifact-static-state]")!;
       const originalParent = host.parentElement!;
@@ -66,7 +66,7 @@ test.describe("static HTML presentation", () => {
       parkHost(host, park);
       placeHost(host, originalParent);
       park.remove();
-    }, `/@fs${process.cwd()}/apps/web/src/lib/stable-host.ts`);
+    });
     const fresh = await rendered(page);
     await expect(fresh.locator("h1")).toHaveText("Agent activity and cost");
     expect(await page.locator(IFRAME).getAttribute("srcdoc")).not.toBe(before);

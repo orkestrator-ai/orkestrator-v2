@@ -222,10 +222,17 @@ if (import.meta.main) {
         });
       }
       tail = (tail + chunk.toString()).slice(-8192);
-      // Retry only an explicit collision on a port this wrapper chose.
+      // Retry only an explicit collision on a port this wrapper chose: Vite's
+      // and Node's wording, or Playwright's for a `webServer` it may not reuse.
       collision ||= assigned.some((name) =>
         new RegExp(
-          "(?:Port " + env[name] + " is already in use|EADDRINUSE[^\\n]*:" + env[name] + "\\b)",
+          "(?:Port " +
+            env[name] +
+            " is already in use|EADDRINUSE[^\\n]*:" +
+            env[name] +
+            "\\b|:" +
+            env[name] +
+            " is already used, make sure that nothing is running)",
           "i",
         ).test(tail),
       );

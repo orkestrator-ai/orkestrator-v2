@@ -4,6 +4,7 @@ import path from "node:path";
 import { reviewValidationRunOptions } from "../tests/playwright-review-validation";
 import { installPlaywrightRunnerSigterm } from "../tests/playwright-runner-sigterm";
 import { enterPrivateTestTmpdir } from "../tests/private-tmpdir";
+import { fixtureServerMode } from "./fixture-server-mode";
 
 // Workers inherit a private TMPDIR, so the browser profiles of a worker that is
 // killed land where a later run can remove them (#1425). Workers load this file
@@ -14,7 +15,7 @@ process.once("exit", enterPrivateTestTmpdir());
 installPlaywrightRunnerSigterm();
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
-// Override to run beside another checkout's fixture server on the default port.
+// Override to run beside another run or checkout that holds the default port.
 const port = Number.parseInt(process.env.ORKESTRATOR_E2E_PORT ?? "1422", 10);
 const baseURL = `http://127.0.0.1:${port}`;
 // Opt-in engine override for qualification runs, e.g. `webkit` for Safari's
@@ -46,6 +47,46 @@ const grantedWorkers = Number.parseInt(
 const workers =
   grantedWorkers > 0 ? Math.min(grantedWorkers, playwrightDefaultWorkers) : defaultWorkers;
 
+/**
+ * The fixture page's server (e2e/fixture-server-mode.ts). By default the run
+ * builds the fixture and serves the build: through the dev server every page
+ * load fetched about 1,900 modules and took about 2 s, half the suite's time
+ * (docs/development/testing-guide.md, "The fixture server").
+ */
+function fixtureWebServer() {
+  const fixture = "../../e2e/fixture";
+  const config = "vite.fixture.config.ts";
+  const common = {
+    cwd: path.join(repositoryRoot, "apps/web"),
+    url: baseURL,
+    // The build takes seconds alone, longer beside a busy validation plan.
+    timeout: 120_000,
+  };
+  if (fixtureServerMode() === "dev") {
+    return {
+      ...common,
+      command: `bunx vite ${fixture} --config ${config} --host 127.0.0.1 --port ${port} --strictPort`,
+      reuseExistingServer: !process.env.CI,
+    };
+  }
+  // In the runner's private TMPDIR: two runs in one checkout never serve each
+  // other's build, and the build goes when the directory does.
+  const outDir = JSON.stringify(path.join(os.tmpdir(), "component-fixture"));
+  return {
+    ...common,
+    command:
+      `bunx vite build ${fixture} --config ${config} --outDir ${outDir} --emptyOutDir` +
+      ` && bunx vite preview ${fixture} --config ${config} --outDir ${outDir}` +
+      ` --host 127.0.0.1 --port ${port} --strictPort`,
+    // React's development build, which the fixtures' retry paths need, even
+    // when the shell set `NODE_ENV=production`.
+    env: { NODE_ENV: "development" },
+    // Always this run's own build. A server already on the port fails the run
+    // rather than serving another checkout's build, or a stale one.
+    reuseExistingServer: false,
+  };
+}
+
 export default defineConfig({
   testDir: import.meta.dirname,
   testMatch: "*.spec.ts",
@@ -71,17 +112,12 @@ export default defineConfig({
   // Review validation streams one line per test and stops the run before its
   // deadline (tests/playwright-review-validation.ts).
   ...reviewValidationRunOptions("line"),
-  // Checks the fixture server belongs to this checkout, then ends the run if it
-  // stops answering (Playwright watches it only while it starts).
+  // Checks a reused dev server belongs to this checkout, then ends the run if
+  // the fixture server stops answering (Playwright watches it only while it
+  // starts).
   globalSetup: "./fixture-server-setup.ts",
   outputDir: path.join(repositoryRoot, "output/playwright/test-results"),
-  webServer: {
-    command: `bunx vite ../../e2e/fixture --config vite.config.ts --host 127.0.0.1 --port ${port} --strictPort`,
-    cwd: path.join(repositoryRoot, "apps/web"),
-    url: baseURL,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: fixtureWebServer(),
   use: {
     baseURL,
     browserName,

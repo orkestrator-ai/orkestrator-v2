@@ -1,6 +1,7 @@
 import type { FullConfig } from "@playwright/test";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { fixtureServerMode } from "./fixture-server-mode";
 import {
   fixtureServerProbeIntervalMs,
   watchFixtureServer,
@@ -13,7 +14,8 @@ export default async function fixtureServerSetup(
 ): Promise<(() => Promise<void>) | undefined> {
   const baseURL = config.projects[0]?.use.baseURL;
   if (!baseURL) return undefined;
-  await assertFixtureServerOwner(baseURL);
+  // A build is always this run's own: the config never reuses a server for it.
+  if (fixtureServerMode() === "dev") await assertFixtureServerOwner(baseURL);
   // Playwright stops watching the `webServer` once it has started, so a server
   // that exits mid-run would leave every later case failing with
   // ERR_CONNECTION_REFUSED. The watch ends the run instead, saying why
@@ -26,7 +28,7 @@ export default async function fixtureServerSetup(
   };
 }
 
-// Outside CI the config reuses whatever already listens on the fixture port, and
+// Outside CI the dev server mode reuses whatever already listens on the fixture port, and
 // every worktree uses the same port. A fixture server started by another
 // checkout would then serve that checkout's sources, and the run would test
 // code other than this one. Vite only serves `/@fs/` paths inside its own

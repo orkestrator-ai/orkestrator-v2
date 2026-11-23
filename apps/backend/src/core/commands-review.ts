@@ -940,6 +940,7 @@ export async function verifyEnvironmentReviewPackage(
   environmentId: string,
   reference: ReviewPackageReference,
   context: CommandContext,
+  onVerifiedPackage?: (pkg: ReviewPackage) => void,
 ): Promise<ReviewPackageVerification> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -951,7 +952,12 @@ export async function verifyEnvironmentReviewPackage(
   );
   try {
     await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
-    const contents = await readEnvironmentWorkspaceFile(environment, runner, reference.filePath);
+    const contents = await readEnvironmentWorkspaceFile(
+      environment,
+      runner,
+      reference.filePath,
+      MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
+    );
     if (contents.byteLength !== reference.bytes) {
       return {
         valid: false,
@@ -980,6 +986,7 @@ export async function verifyEnvironmentReviewPackage(
       if (reason) return { valid: false, reason };
     }
     const artifacts = await verifyValidationArtifacts(environment, runner, pkg.validation);
+    onVerifiedPackage?.(pkg);
     return { valid: true, artifacts: artifacts.artifacts, artifactBytes: artifacts.bytes };
   } catch (error) {
     return {

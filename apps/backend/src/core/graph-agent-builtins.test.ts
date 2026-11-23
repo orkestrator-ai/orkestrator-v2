@@ -97,6 +97,7 @@ function artifact(
   if (name === "review-package") {
     const descriptor = value as ReviewPackageReference;
     entry.file = { path: descriptor.filePath, sha256: descriptor.sha256, bytes: descriptor.bytes };
+    entry.validationChecks = [];
   }
   const items = graphBuiltInType(ref)?.items;
   if (items && name === "review-report") {

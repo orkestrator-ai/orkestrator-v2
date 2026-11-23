@@ -1,4 +1,12 @@
 import { expect, mock, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { BackendRuntime } from "../backend-runtime.js";
+import { verifyEnvironmentReviewPackage } from "../commands-review.js";
+import { graphEnvironmentFixture } from "../graph-run-test-support.js";
+import { runCommand } from "../shell.js";
+import type { ReviewPackage } from "@orkestrator/protocol/review-workflow";
 import {
   MULTI_REVIEW_ADDRESS_USER_INSTRUCTION,
   MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION,
@@ -18,6 +26,12 @@ import {
   dispatchMultiReviewAddressFindingsPrompt,
   recoverMissingMultiReviewAddressFindingsSession,
 } from "./address-findings-dispatch.js";
+import {
+  StaleAddressFindingsEvidenceError,
+  type AddressFindingsPackageVerifier,
+} from "./address-findings-validation.js";
+import { fixtureAddressFindingsVerifier } from "./service-test-support.js";
+import { reviewPackageFileContents, reviewPackageReference } from "./package.js";
 
 const workflow = {
   id: "multi-1",
@@ -457,6 +471,10 @@ const packagedWorkflow = {
   },
 } as MultiReviewWorkflow;
 
+const verifiedPackage = fixtureAddressFindingsVerifier([
+  { command: "bun test changed.test.ts", status: "failed" },
+]);
+
 function acceptingAgents(providerSessionId = "provider-fix") {
   return {
     adoptSession: mock(async () => undefined as never),
@@ -475,6 +493,7 @@ function expectBranchValidationInstruction(prompt: string): void {
   expect(prompt).toContain(".orkestrator/review-packages/review-package-1.json");
   expect(prompt).toContain("**Validation report**");
   expect(prompt).toContain("**Failure triage**");
+  expect(prompt).toContain("bun test changed.test.ts");
   // The pipeline's repair and excuse rules, judged against the branch.
   expect(prompt).toContain(BRANCH_REPAIR_RULE);
   expect(prompt).toContain(
@@ -496,7 +515,13 @@ function expectBranchValidationInstruction(prompt: string): void {
 
 test("dispatchMultiReviewAddressFindingsPrompt gives the reused consolidation session the recorded validation", async () => {
   const agents = acceptingAgents();
-  await dispatchMultiReviewAddressFindingsPrompt(agents, packagedWorkflow);
+  await dispatchMultiReviewAddressFindingsPrompt(
+    agents,
+    packagedWorkflow,
+    undefined,
+    false,
+    verifiedPackage,
+  );
   const sent = agents.dispatchIntent.mock.calls[0]![0];
   expect(sent.requestId).toBe("multi-review-address:multi-1");
   expectBranchValidationInstruction(sent.prompt);
@@ -506,11 +531,17 @@ test("dispatchMultiReviewAddressFindingsPrompt gives the reused consolidation se
 
 test("dispatchMultiReviewAddressFindingsPrompt gives a fresh Address Findings session the recorded validation", async () => {
   const agents = acceptingAgents("provider-fix-new");
-  await dispatchMultiReviewAddressFindingsPrompt(agents, {
-    ...packagedWorkflow,
-    reviewModel: { agent: "claude", model: "review-coordinator" },
-    addressFindingsSession: undefined,
-  } as MultiReviewWorkflow);
+  await dispatchMultiReviewAddressFindingsPrompt(
+    agents,
+    {
+      ...packagedWorkflow,
+      reviewModel: { agent: "claude", model: "review-coordinator" },
+      addressFindingsSession: undefined,
+    } as MultiReviewWorkflow,
+    undefined,
+    false,
+    verifiedPackage,
+  );
   const sent = agents.dispatchIntent.mock.calls[0]![0];
   expect(sent.requestId).toBe("multi-review-address:multi-1");
   expectBranchValidationInstruction(sent.prompt);
@@ -519,12 +550,18 @@ test("dispatchMultiReviewAddressFindingsPrompt gives a fresh Address Findings se
 
 test("dispatchMultiReviewAddressFindingsPrompt gives a custom Address Findings the recorded validation", async () => {
   const agents = acceptingAgents("provider-custom");
-  await dispatchMultiReviewAddressFindingsPrompt(agents, {
-    ...packagedWorkflow,
-    customAddressFindingsModel: packagedWorkflow.addressFindingsModel,
-    customAddressFindingsInstruction: "Only fix the regression",
-    addressRequestId: "multi-review-address:multi-1:launch-2",
-  } as MultiReviewWorkflow);
+  await dispatchMultiReviewAddressFindingsPrompt(
+    agents,
+    {
+      ...packagedWorkflow,
+      customAddressFindingsModel: packagedWorkflow.addressFindingsModel,
+      customAddressFindingsInstruction: "Only fix the regression",
+      addressRequestId: "multi-review-address:multi-1:launch-2",
+    } as MultiReviewWorkflow,
+    undefined,
+    false,
+    verifiedPackage,
+  );
   const sent = agents.dispatchIntent.mock.calls[0]![0];
   expect(sent.requestId).toBe("multi-review-address:multi-1:launch-2");
   expectBranchValidationInstruction(sent.prompt);
@@ -551,12 +588,75 @@ test("recoverMissingMultiReviewAddressFindingsSession seeds the replacement with
       expectedProviderSessionId: "provider-fix",
       replacementProviderSessionId: "provider-replacement",
     },
+    verifiedPackage,
   );
   const sent = agents.dispatchIntent.mock.calls[0]![0];
   expect(sent.requestId).toMatch(/^multi-review-address-replacement:multi-1:/);
   expectBranchValidationInstruction(sent.prompt);
   expect(sent.prompt).toContain("Packaged finding");
 });
+
+test.each(["changed", "deleted"] as const)(
+  "manual dispatch and replacement both reject a %s review package before provider I/O",
+  async (mutation) => {
+    const worktree = await fs.mkdtemp(path.join(tmpdir(), "ork-fix-evidence-"));
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    try {
+      await runCommand("git", ["init", "-q", worktree]);
+      const environment = graphEnvironmentFixture({
+        id: packagedWorkflow.environmentId,
+        worktreePath: worktree,
+      });
+      const context = { runtime, storage: { getEnvironment: async () => environment } } as never;
+      const verify: AddressFindingsPackageVerifier = (id, reference, accept) =>
+        verifyEnvironmentReviewPackage(id, reference, context, accept);
+      const pkg = {
+        ...packagedWorkflow.reviewPackage,
+        validation: [
+          { command: "bun test original", status: "failed" },
+          { command: "bun test passing", status: "passed" },
+        ],
+        changedFiles: [],
+        limitations: [],
+      } as unknown as ReviewPackage;
+      const contents = reviewPackageFileContents(pkg);
+      const reference = reviewPackageReference(pkg, contents);
+      const file = path.join(worktree, reference.filePath);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, contents);
+      const repair = { ...packagedWorkflow, reviewPackage: reference };
+      const intact = acceptingAgents();
+      await dispatchMultiReviewAddressFindingsPrompt(intact, repair, undefined, false, verify);
+      expect(intact.dispatchIntent.mock.calls[0]![0].prompt).toContain("bun test original");
+      expect(intact.dispatchIntent.mock.calls[0]![0].prompt).not.toContain("bun test passing");
+
+      if (mutation === "deleted") await fs.unlink(file);
+      else await fs.writeFile(file, contents.toString().replace("original", "replaced"));
+      const agents = acceptingAgents();
+      await expect(
+        dispatchMultiReviewAddressFindingsPrompt(agents, repair, undefined, false, verify),
+      ).rejects.toBeInstanceOf(StaleAddressFindingsEvidenceError);
+      await expect(
+        recoverMissingMultiReviewAddressFindingsSession(
+          agents,
+          repair,
+          {
+            tabId: "multi-review-fix:multi-1",
+            expectedProviderSessionId: "provider-fix",
+            replacementProviderSessionId: "provider-replacement",
+          },
+          verify,
+        ),
+      ).rejects.toBeInstanceOf(StaleAddressFindingsEvidenceError);
+      expect(agents.adoptSession).not.toHaveBeenCalled();
+      expect(agents.ensureSession).not.toHaveBeenCalled();
+      expect(agents.dispatchIntent).not.toHaveBeenCalled();
+    } finally {
+      runtime.shutdown();
+      await fs.rm(worktree, { recursive: true, force: true });
+    }
+  },
+);
 
 test("dispatchMultiReviewAddressFindingsPrompt still dispatches a review persisted with an inline legacy package", async () => {
   const agents = acceptingAgents();

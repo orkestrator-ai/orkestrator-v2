@@ -119,6 +119,11 @@ export {
 } from "./provisional-findings.js";
 export { openMultiReviewTab } from "./tab-actions.js";
 export {
+  addressFindingsValidationChecks,
+  type AddressFindingsPackageVerifier,
+  type AddressFindingsValidationCheck,
+} from "./address-findings-validation.js";
+export {
   WorkspaceFileHashError,
   hashEnvironmentWorkspaceFile,
   verifyValidationArtifacts,

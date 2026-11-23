@@ -277,6 +277,7 @@ import {
   dispatchMultiReviewAddressFindingsPrompt,
   recoverMissingMultiReviewAddressFindingsSession,
 } from "./review/address-findings-dispatch.js";
+import type { AddressFindingsPackageVerifier } from "./review/index.js";
 import { MultiReviewService } from "./review/service.js";
 import { FeaturePlanningService } from "./features/index.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
@@ -1756,6 +1757,11 @@ export class OrkestratorBackend {
         setLongCheckToolHost?: AgentToolsServer["setLongCheckToolHost"];
       }
     ).setLongCheckToolHost?.(this.buildPipelines.longCheckHost());
+    const verifyAddressFindingsPackage: AddressFindingsPackageVerifier = (
+      environmentId,
+      reference,
+      onVerifiedPackage,
+    ) => verifyEnvironmentReviewPackage(environmentId, reference, context, onVerifiedPackage);
     this.multiReviews = new MultiReviewService(
       storage,
       async <T>(command: string, args: Record<string, unknown> = {}) => {
@@ -1764,6 +1770,7 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
       {
+        verifyAddressFindingsPackage,
         workflowResults: this.workflowResults,
         workflowResultRollout: this.workflowResultRollout,
         // Agent-test profiles only: the fan-out's peak concurrency for the live
@@ -1800,9 +1807,15 @@ export class OrkestratorBackend {
             workflow,
             storage,
             presentation.activateTab,
+            verifyAddressFindingsPackage,
           ),
         recoverAddressFindingsSession: (workflow, replacement) =>
-          recoverMissingMultiReviewAddressFindingsSession(this.nativeAgents, workflow, replacement),
+          recoverMissingMultiReviewAddressFindingsSession(
+            this.nativeAgents,
+            workflow,
+            replacement,
+            verifyAddressFindingsPackage,
+          ),
         ...multiReviewNativeAddressFindingsOptions(this.nativeAgents),
         workflowAdmission: this.workflowAdmission,
         invalidateAddressFindingsSession: async (workflow, session) => {

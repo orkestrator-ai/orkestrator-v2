@@ -1,3 +1,4 @@
+import { isExcusedValidationFailures, type ReviewAddressFindingsResult } from "./review-results.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import type { AgentPlatform } from "./agent-platforms.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
@@ -522,14 +523,7 @@ export interface MultiReviewWorkflow {
   consolidatedReport?: StructuredReviewReport;
   /** Reviewer overlap in {@link consolidatedReport}; written and cleared with it. */
   consolidationOverlap?: ReviewPanelOverlapV1;
-  addressFindingsResult?: {
-    complete: boolean;
-    summary: string;
-    filesChanged: string[];
-    commandsRun: Array<{ command: string; result: "passed" | "failed"; summary: string }>;
-    notes: string[];
-    limitations: string[];
-  };
+  addressFindingsResult?: ReviewAddressFindingsResult;
   /** The interactive address prompt still needs durable backend dispatch. */
   addressPromptPending?: boolean;
   /** Logical native-agent key reserved for the pending interactive handoff. */
@@ -999,11 +993,13 @@ function isAddressFindingsResult(value: unknown): boolean {
     value.commandsRun.every(
       (entry) =>
         record(entry) &&
-        hasOnlyKeys(entry, ["command", "result", "summary"]) &&
+        hasOnlyKeys(entry, ["command", "result", "summary", "excusedFailures"]) &&
         nonBlank(entry.command, 16_384) &&
         (entry.result === "passed" || entry.result === "failed") &&
         typeof entry.summary === "string" &&
-        entry.summary.length <= 100_000,
+        entry.summary.length <= 100_000 &&
+        (entry.excusedFailures === undefined ||
+          (entry.result === "failed" && isExcusedValidationFailures(entry.excusedFailures))),
     ) &&
     Array.isArray(value.notes) &&
     value.notes.length <= 512 &&

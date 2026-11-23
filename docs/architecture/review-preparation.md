@@ -99,13 +99,16 @@ the reviewers' findings, under the pipeline's rules. Every way it starts gets
 the same instruction (`multiReviewAddressFindingsValidationInstruction` in
 `build-pipeline/prompts.ts`): the reused consolidation session, a fresh
 session, the replacement for a lost session, a custom Address Findings
-(`review/address-findings-dispatch.ts`) and the unattended step
-(`review/service.ts`). It is built from the pipeline's own pieces:
+(`review/address-findings-dispatch.ts`), the unattended step
+(`review/service.ts`), and the graph engine's automatic Address Findings node.
+It is built from the pipeline's own pieces:
 
 - **The evidence.** `recordedValidationSection` names the review package and its
   `validation`, `validationReport` and `failureTriage`, with
-  `VALIDATION_REPORT_GUIDE` and `FAILURE_TRIAGE_GUIDE`. A legacy inline package's
-  failing output is inlined, bounded.
+  `VALIDATION_REPORT_GUIDE` and `FAILURE_TRIAGE_GUIDE`. Before dispatching a
+  writable repair turn, the backend verifies the sealed package and its hashed
+  artifacts and supplies the failed or incomplete commands from those verified
+  bytes. A legacy inline package includes bounded excerpts of failing output.
 - **The repair rule.** Fix every recorded failure that relates to this branch's
   changes and rerun that exact command, even when it is the full suite,
   typecheck, lint or build. Passing recorded commands are not rerun.
@@ -119,12 +122,16 @@ changes and the instruction names no acceptance criteria. No verifier follows,
 so two pipeline parts are left out: the validated-commit history rule and the
 Address Findings result contract. The session instead names each check, each
 repaired failure with its commit, and each excused failure with its evidence in
-its final summary. The unattended step records the same in its result's
-`commandsRun` and `notes`, so an excused failure does not make it incomplete.
-A review persisted without a package gets no instruction and dispatches as
-before. Request ids and at-most-once dispatch are unchanged. A graph-engine
-review's automatic Address Findings node has no package input, so it does not
-get the instruction yet.
+its final summary. Structured Multi Review results keep a nonzero rerun marked
+failed in `commandsRun`. The result can complete when every remaining failure
+on that command has an `excusedFailures` entry naming the failure, reason and
+evidence, and there are no unresolved failures or limitations. The built-in
+graph template uses `address-findings-result@2` for this contract.
+A review persisted without a package has no recorded validation to repair.
+On the default engine, a failed or incomplete recorded check can start
+automatic Address Findings even when the consolidated report is empty.
+The clean-review shortcut to Auto-PR requires both an empty report and no
+recorded validation to triage.
 
 ## Fresh discovery for arbitrary repositories
 
@@ -574,18 +581,17 @@ run the same `MultiReviewService` code:
 
 | Step | Durable record | Recovery after restart |
 | --- | --- | --- |
-| Consolidation with findings and `autoAddressFindings` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultFix`); no `ready` | The supervisor delivers the pending handoff under its reserved request id; failed attempts persist and fail the review after three |
+| Consolidation with findings or validation to triage and `autoAddressFindings` | report saved with `phase: interactive`, `addressPromptPending` (`queueDefaultAddressFindings`) | The supervisor delivers the pending handoff under its reserved request id. Failed attempts persist and fail the review after three |
 | Consolidation with nothing to fix and `autoPr` | report saved with `phase: ready` and `autoPrLaunch: { basis: clean-review, state: pending }` in one save (`queueCleanReviewAutoPr`); no Address Findings | The supervisor launches the PR as below while the review is still `ready` on that clean report |
 | Address Findings runs in its ordinary interactive tab | `addressFindingsSession` observed `running` | Observation resumes from the provider session |
 | Address Findings turn finished on its own, `autoPr` | `addressFindingsSession.status: idle` and `autoPrLaunch: pending` in one save (`queueAutoPr`) | The supervisor retries the launch under `multi-review-pr:<id>`, which the native-agent layer deduplicates |
 | PR session | `autoPrLaunch: launched` with its tab, or `failed` after three attempts | A launched PR is never repeated |
 
-Only proof that an Address Findings run completed, or a clean report, queues the PR: a complete
-structured result, an interactive handoff turn that finished on its own as its
-conversation's last turn, or a consolidated report with no issues and no
-coverage gaps. A clean report needs no Address Findings, so with `autoPr` on it goes
-straight to the PR whatever `autoAddressFindings` says, for button, coordinator and every
-other launch alike. Its intent is marked `basis: clean-review` and is
+The PR queues after a complete structured result, an interactive handoff that
+finished on its own as the conversation's last turn, or a consolidated report
+with no issues or coverage gaps and no recorded failed or incomplete validation.
+The clean route applies to any launch with `autoPr` enabled. Its intent is
+marked `basis: clean-review` and is
 delivered only while the review is still `ready` on that report; starting a
 Fix first drops it, and a review that moved on records `skipped`. An Address Findings run that fails, is stopped, is superseded or cannot be confirmed
 records `skipped` with its reason, or nothing when the session failed. The

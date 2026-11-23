@@ -25,6 +25,7 @@ import {
   autoPrInvoker,
   cleanReport,
   completedAddressFindings,
+  fixtureAddressFindingsVerifier,
   mutateStoredWorkflow,
   rewindGit,
   runInteractiveAddressFindings,
@@ -588,10 +589,16 @@ test.each(["delivery", "retry", "restart"] as const)(
             ...mapping,
             addressFindingsDispatchRetryMs: 0,
             dispatchAddressFindingsPrompt: async (workflow) => {
-              const delivered = await dispatchMultiReviewAddressFindingsPrompt(native, {
-                ...workflow,
-                reviewModel: workflow.addressFindingsModel,
-              });
+              const delivered = await dispatchMultiReviewAddressFindingsPrompt(
+                native,
+                {
+                  ...workflow,
+                  reviewModel: workflow.addressFindingsModel,
+                },
+                undefined,
+                false,
+                fixtureAddressFindingsVerifier(),
+              );
               const fix = delivered.addressFindingsSession;
               // Simulate the provider's natural completion before the workflow's idle observation.
               await nativeStorage.recordNativeAgentTurnOutcome(
@@ -846,10 +853,16 @@ test.each(["queued", "dispatch"] as const)(
           ...mapping,
           addressFindingsDispatchRetryMs: 0,
           dispatchAddressFindingsPrompt: async (workflow) => {
-            const delivered = await dispatchMultiReviewAddressFindingsPrompt(native, {
-              ...workflow,
-              reviewModel: workflow.addressFindingsModel,
-            });
+            const delivered = await dispatchMultiReviewAddressFindingsPrompt(
+              native,
+              {
+                ...workflow,
+                reviewModel: workflow.addressFindingsModel,
+              },
+              undefined,
+              false,
+              fixtureAddressFindingsVerifier(),
+            );
             const fix = delivered.addressFindingsSession;
             await nativeStorage.recordNativeAgentTurnOutcome(
               nativeAgentSessionStorageKey(workflow.environmentId, fix.agent, fix.sessionKey),
@@ -1760,52 +1773,147 @@ test("the review-transcript push reads come from the record, probe through the r
   });
 });
 
-test("an unattended Address Findings carries the round's recorded validation", async () => {
+test("an unattended Address Findings completes after an exact rerun with a supported excuse", async () => {
   const provider = new Provider(false);
   provider.statusValue = "running";
   const environmentId = "env-unattended-address-validation";
-  await withService(environmentId, provider, async (context) => {
-    const { storage } = context;
-    const workflowId = await seedLegacyFixingWorkflow(storage, environmentId);
-    const sha256 = "b".repeat(64);
-    await mutateStoredWorkflow(storage, workflowId, (workflow) => {
-      workflow.addressFindingsModel = { agent: "codex", model: "default" };
-      workflow.addressFindingsSession!.agent = "codex";
-      workflow.activeRequest!.resultTransport = "structured-output-v1";
-      workflow.reviewPackage = {
-        kind: "file",
-        id: "review-package-address",
-        round: 1,
-        preparedAt: new Date(0).toISOString(),
-        targetBranch: "main",
-        baseRef: "1".repeat(40),
-        headRef: REVIEW_HEAD,
-        filePath: reviewPackageArtifactPath("review-package-address", sha256),
-        sha256,
-        bytes: 1024,
-        changedFileCount: 1,
+  await withService(
+    environmentId,
+    provider,
+    async (context) => {
+      const { storage } = context;
+      const workflowId = await seedLegacyFixingWorkflow(storage, environmentId, true);
+      const sha256 = "b".repeat(64);
+      await mutateStoredWorkflow(storage, workflowId, (workflow) => {
+        workflow.addressFindingsModel = { agent: "codex", model: "default" };
+        workflow.addressFindingsSession!.agent = "codex";
+        workflow.activeRequest!.resultTransport = "tool-v1";
+        workflow.reviewPackage = {
+          kind: "file",
+          id: "review-package-address",
+          round: 1,
+          preparedAt: new Date(0).toISOString(),
+          targetBranch: "main",
+          baseRef: "1".repeat(40),
+          headRef: REVIEW_HEAD,
+          filePath: reviewPackageArtifactPath("review-package-address", sha256),
+          sha256,
+          bytes: 1024,
+          changedFileCount: 1,
+          limitations: [],
+        };
+      });
+      const sent = await advanceUntil(
+        context.service,
+        context.snapshot,
+        workflowId,
+        (workflow) => workflow.activeRequest?.state === "sent",
+      );
+      const prompt = provider.sends.get(sent.activeRequest!.requestId)!.prompt;
+      expect(prompt).toContain(reviewPackageArtifactPath("review-package-address", sha256));
+      expect(prompt).toContain(
+        "Fix every recorded failure that relates to this branch's changes, then rerun only that check.",
+      );
+      expect(prompt).toContain(
+        "record the checks in `commandsRun` and the fixed and excused failures",
+      );
+      expect(prompt).toContain("bun test branch.test.ts");
+      expect(prompt).toContain("excusedFailures");
+      expect(prompt).not.toContain("acceptance criteria");
+      expect(
+        prompt.split(
+          "do not redundantly rerun passing full-suite, typecheck, lint, or build commands",
+        ),
+      ).toHaveLength(2);
+      const resultKey = sent.activeRequest!.requestId;
+      const caller = { environmentId, projectId: "project-1" };
+      const check = {
+        command: "bun test branch.test.ts",
+        result: "failed" as const,
+        summary: "The repaired case passed. Only the platform fixture failed.",
+      };
+      const result = {
+        complete: true,
+        summary: "Repaired the branch regression.",
+        filesChanged: ["src/a.ts"],
+        commandsRun: [check],
+        notes: ["The repaired case passed on the exact rerun."],
         limitations: [],
       };
-    });
-    const sent = await advanceUntil(
-      context.service,
-      context.snapshot,
-      workflowId,
-      (workflow) => workflow.activeRequest?.state === "sent",
-    );
-    const prompt = provider.sends.get(sent.activeRequest!.requestId)!.prompt;
-    expect(prompt).toContain(reviewPackageArtifactPath("review-package-address", sha256));
-    expect(prompt).toContain(
-      "Fix every recorded failure that relates to this branch's changes, then rerun only that check.",
-    );
-    expect(prompt).toContain(
-      "record the checks in `commandsRun` and the fixed and excused failures",
-    );
-    expect(prompt).not.toContain("acceptance criteria");
-    expect(
-      prompt.split(
-        "do not redundantly rerun passing full-suite, typecheck, lint, or build commands",
-      ),
-    ).toHaveLength(2);
-  });
+      const results = context.workflowResults!;
+      expect(await results.submit(caller, resultKey, result)).toMatchObject({ ok: false });
+      const excusedCheck = {
+        ...check,
+        excusedFailures: [
+          {
+            failure: "Platform fixture",
+            reason: "environmental" as const,
+            evidence: "The rerun identified the missing SDK at the fixture's platform check.",
+          },
+        ],
+      };
+      expect(
+        await results.submit(caller, resultKey, { ...result, commandsRun: [excusedCheck] }),
+      ).toMatchObject({ ok: true });
+      provider.statusValue = "idle";
+      const completed = await advanceUntil(
+        context.service,
+        context.snapshot,
+        workflowId,
+        (workflow) => workflow.phase === "completed",
+      );
+      expect(completed.addressFindingsResult?.commandsRun).toEqual([excusedCheck]);
+      expect(completed.autoPrLaunch?.state).toBe("pending");
+    },
+    {
+      toolMode: true,
+      serviceOptions: {
+        verifyAddressFindingsPackage: fixtureAddressFindingsVerifier([
+          { command: "bun test branch.test.ts", status: "failed" },
+        ]),
+      },
+    },
+  );
+});
+
+test("unattended Address Findings stops before dispatch when the sealed package is stale", async () => {
+  const provider = new Provider(false);
+  const environmentId = "env-unattended-address-stale";
+  const sha256 = "b".repeat(64);
+  await withService(
+    environmentId,
+    provider,
+    async ({ service, storage, snapshot }) => {
+      const workflowId = await seedLegacyFixingWorkflow(storage, environmentId, true);
+      await mutateStoredWorkflow(storage, workflowId, (workflow) => {
+        workflow.reviewPackage = {
+          kind: "file",
+          id: "stale",
+          round: 1,
+          preparedAt: new Date(0).toISOString(),
+          targetBranch: "main",
+          baseRef: "0".repeat(40),
+          headRef: REVIEW_HEAD,
+          filePath: reviewPackageArtifactPath("stale", sha256),
+          sha256,
+          bytes: 1024,
+          changedFileCount: 1,
+          limitations: [],
+        };
+      });
+      const failed = await advanceUntil(
+        service,
+        snapshot,
+        workflowId,
+        (workflow) => workflow.phase === "failed",
+      );
+      expect(failed.error).toContain("validation evidence could not be verified");
+      expect(failed.reviewSnapshotStale).toBe(true);
+      expect(failed.autoPrLaunch).toBeUndefined();
+      expect(provider.sends.size).toBe(0);
+    },
+    {
+      serviceOptions: { verifyAddressFindingsPackage: async () => ({ valid: false }) },
+    },
+  );
 });

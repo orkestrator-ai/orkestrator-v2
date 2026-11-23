@@ -78,11 +78,14 @@ import {
   addressFindingsValidationGuidance,
   buildPipelineReviewPackageContext,
   buildTaskPrompt,
+  multiReviewAddressFindingsValidationInstruction,
+  MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING,
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,
   reworkTaskPrompt,
   verificationTaskPrompt,
 } from "./build-pipeline/index.js";
+import type { AddressFindingsValidationCheck } from "./review/index.js";
 import {
   ConsolidationBudgetError,
   createDiscoveryPrompt,
@@ -104,6 +107,7 @@ export interface GraphBuiltInPromptInputValue {
   value?: unknown;
   /** Reference artifacts: the sealed file, workspace-relative, already hash-verified by the caller. */
   file?: { path: string; sha256: string; bytes: number };
+  validationChecks?: readonly AddressFindingsValidationCheck[];
   /** Stable per-item source ids of the artifact (types with `items`), in item order. */
   itemIds?: string[];
   /**
@@ -144,6 +148,7 @@ export interface GraphBuiltInPromptContext {
   outputs: Readonly<Record<string, string>>;
   /** The environment's base branch the work targets ("main"). */
   targetBranch: string;
+  reportsValidationExcuses?: boolean;
   validationPlan?: ReviewValidationPlan;
   /** Project notes, when the project has any. */
   notes?: string;
@@ -241,7 +246,7 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       return consolidationText(inputs, target, context.validationPlan);
     case "address-findings":
       inputs.optional("code");
-      return addressFindingsText(inputs, instruction);
+      return addressFindingsText(inputs, instruction, target, context.reportsValidationExcuses);
     case "pipeline-address-findings": {
       inputs.optional("code");
       const report = inputs.reviewReport(inputs.required("report"));
@@ -423,7 +428,12 @@ function withSourceIds(
   };
 }
 
-function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefined): string {
+function addressFindingsText(
+  inputs: BuiltInInputs,
+  instruction: string | undefined,
+  target: string,
+  reportsValidationExcuses: boolean | undefined,
+): string {
   const entry = inputs.required("report");
   const name = typeName(entry.type);
   let framed: unknown;
@@ -440,11 +450,20 @@ function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefi
     findings = inputs.reportValue(entry);
     framed = findings;
   }
-  // Without an instruction this is addressFindingsReportPrompt as Multi Review's Address Findings sends
-  // it, minus the recorded-validation instruction: this node has no package input to read it from.
+  const pkg = inputs.reviewPackage("package");
+  const checks = inputs.optional("package")?.validationChecks;
+  if (pkg && !checks) {
+    throw new GraphBuiltInPromptError("Address Findings needs verified validation checks");
+  }
+  const validation = [
+    multiReviewAddressFindingsValidationInstruction(pkg, target, Boolean(instruction), checks),
+    reportsValidationExcuses ? MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return instruction
-    ? customAddressFindingsText(framed, instruction)
-    : addressFindingsPrompt(findings);
+    ? customAddressFindingsText(framed, instruction, validation)
+    : addressFindingsPrompt(findings, validation);
 }
 
 /**
@@ -455,7 +474,11 @@ function addressFindingsText(inputs: BuiltInInputs, instruction: string | undefi
  * instruction it ends with is kept on its own. Built here from the same
  * protocol constants, so a finding or a custom report frames like a report.
  */
-function customAddressFindingsText(framed: unknown, instruction: string): string {
+function customAddressFindingsText(
+  framed: unknown,
+  instruction: string,
+  validation: string,
+): string {
   return `${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}
 ${instruction}
 
@@ -467,7 +490,7 @@ ${STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN}
 ${promptCarrierJson(framed)}
 ${STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE}
 
-${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION)}`;
+${wrapSystemInstructions(MULTI_REVIEW_CUSTOM_ADDRESS_FINDINGS_PROMPT_CONTINUATION, validation)}`;
 }
 
 function verifyText(inputs: BuiltInInputs, notes: string, target: string): string {

@@ -67,6 +67,7 @@ export {
   buildPipelineReviewPackageContext,
   buildTaskPrompt,
   multiReviewAddressFindingsValidationInstruction,
+  MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING,
   type ObservedWorktreeSnapshot,
   pullRequestDescriptionPrompt,
   resolveConflictsLocallyPrompt,

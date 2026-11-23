@@ -107,7 +107,7 @@ interface TemplateUpgrade {
 
 const NO_BINDING_RENAMES: BindingRenames = { params: {}, roles: {} };
 
-/** Digests of the shipped definitions at b2c91abb9 and 1443c5989, respectively. */
+/** Shipped pins before the vocabulary rename and their corresponding built-in targets. */
 const BUILTIN_UPGRADES = new Map<string, TemplateUpgrade>([
   [
     "multi-review",
@@ -119,7 +119,7 @@ const BUILTIN_UPGRADES = new Map<string, TemplateUpgrade>([
       ]),
       digests: {
         before: "d36469246d09b603f92d4aa1beeedb4c06c897b1bf6fb61d4785403d213cf981",
-        after: "22b3bb73f5faf52217ac1bd6a9c5b7970e2817a8c17489f0400df311f2e86cb9",
+        after: "913164f8d5acdb778196f5bcf986a426b71097108ca39a2f03b2006ace81c73f",
       },
     },
   ],

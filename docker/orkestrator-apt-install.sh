@@ -78,7 +78,9 @@ for name in "$@"; do
         refuse "$name is not allowed: it could change the container's protections"
     fi
     seen=0
-    for existing in "${packages[@]}"; do
+    # The `+` form expands an empty array to nothing under `set -u` in every
+    # bash; bash before 4.4 (macOS /bin/bash 3.2) calls the plain form unbound.
+    for existing in ${packages[@]+"${packages[@]}"}; do
         [ "$existing" = "$name" ] && seen=1
     done
     [ "$seen" = 1 ] || packages+=("$name")

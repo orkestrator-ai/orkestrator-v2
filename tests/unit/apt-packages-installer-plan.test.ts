@@ -33,7 +33,16 @@ const installerSource = readFileSync(
   join(repoRoot, "docker", "orkestrator-apt-install.sh"),
   "utf8",
 );
-const flockAvailable = spawnSync("flock", ["--version"], { encoding: "utf8" }).status === 0;
+/**
+ * The installer pins its own `PATH`, so the lock is util-linux `flock` found
+ * there, as in the image. macOS has none there (Homebrew's port lives in
+ * /opt/homebrew/bin and is a different program), so the suite skips.
+ */
+const flockProbe = spawnSync("flock", ["--version"], {
+  encoding: "utf8",
+  env: { ...process.env, PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },
+});
+const flockAvailable = flockProbe.status === 0 && flockProbe.stdout.includes("util-linux");
 
 const dirs: string[] = [];
 afterEach(() => {

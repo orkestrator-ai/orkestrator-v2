@@ -1,4 +1,4 @@
-// Shared fixtures for the environment-move.*.test.ts files. Each file registers
+// Shared fixtures for move.test.ts and the move.*.test.ts files. Each registers
 // the hooks below with registerEnvironmentMoveFixtureHooks(); the repository
 // templates are built once per file (and per worker) and copied per test.
 

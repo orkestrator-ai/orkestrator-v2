@@ -1260,7 +1260,13 @@ Reachability is verified against `github.com`, not the rate-limited API. The
 report's `githubRanges` says which source applied. The fetch is anonymous and
 stays so (the user's decision of 2026-11-14): no GitHub credential goes near a
 restricted container's root phase, so the seed is what keeps boots off
-`api.github.com/meta`'s 60-an-hour, per-address allowance.
+`api.github.com/meta`'s 60-an-hour, per-address allowance. The one
+authenticated fetch is the Container live qualification workflow's unseeded
+C23 step, which sets `ORKESTRATOR_QUALIFICATION_GITHUB_META_TOKEN` to the job
+token for that step only (to-do 8322 task 1); nothing in the product sets it.
+A backend fetch that writes no seed logs `github-ranges.fetch-failed` with its
+outcome class (`http-4xx`, `rate-limited`, `timeout`, `malformed`, …), never
+the answer's body or a token.
 
 The seed lives alone in `<data directory>/github-ranges-seed/github-ranges`,
 and whichever container runs the firewall (the egress gateway, or a

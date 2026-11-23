@@ -1,9 +1,9 @@
-import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
+import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import {
   capacityVerdict,
   runCopyStep,
@@ -1229,7 +1229,13 @@ exit 125
   // A graceful daemon shutdown can yield the helper's signal exit status
   // with no Docker connection error on the attached `run`.
   describe("a volume helper stopped by a signal without reporting", () => {
-    async function stoppedHelper(events: string, signalExit = 143) {
+    async function stoppedHelper(
+      events: string,
+      signalExit = 143,
+      // The daemon start read (`docker network inspect bridge`); by default
+      // it fails like the helper and reads as unknown.
+      network = `exit ${signalExit}`,
+    ) {
       const { context, owner } = await fixture();
       const source = planStorageSet("env-lifecycle", owner, 1, "source");
       const candidate = planStorageSet("env-lifecycle", owner, 2, "candidate");
@@ -1242,6 +1248,10 @@ exit 125
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = events ]; then ${events}; fi
 if [ "$1" = version ]; then echo 28.0.4; exit 0; fi
+if [ "$1" = network ]; then
+  reads=$(grep -c '^network inspect bridge' "$FAKE_DOCKER_LOG")
+  ${network}
+fi
 exit ${signalExit}
 `,
         async (log) => {
@@ -1273,6 +1283,91 @@ exit ${signalExit}
         expect(calls).toContain(`--filter container=${helper} --filter event=die`);
       },
     );
+
+    // Engine 28.0.4 on GitHub's runners: the restarted daemon has a new
+    // default bridge network and no record of the helper (to-do 8322 task 2).
+    const BRIDGE = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const RESTARTED = `echo "${BRIDGE.slice(0, -1)}$reads 2026-11-22T04:1$reads:00.000000000Z"; exit 0`;
+    const SAME = `echo "${BRIDGE} 2026-11-22T04:10:00.000000000Z"; exit 0`;
+
+    test.each([143, 137, 125, 1])(
+      "a changed daemon start between before and after the copy is an outage (exit %i)",
+      async (exit) => {
+        const logs = captureLogs();
+        let outcome: Awaited<ReturnType<typeof stoppedHelper>>;
+        try {
+          outcome = await stoppedHelper("exit 0", exit, RESTARTED);
+        } finally {
+          logs.restore();
+        }
+        const { result, calls, failureMessage } = outcome;
+        expect(result).toEqual({ ok: false, reason: "daemon-unavailable" });
+        expect(failureMessage).toStartWith("ContainerLifecycleError:daemon-unavailable:");
+        expect(failureMessage).toContain("The original container was kept unchanged");
+        // Read once before the helper ran and once after it failed.
+        const order = calls
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => line.split(" ")[0]);
+        expect(order).toEqual(["network", "run", "network"]);
+        expect(calls).not.toContain("events");
+        expect(
+          logs.records().filter((r) => r.event === "replacement.copy-helper-unreported"),
+        ).toMatchObject([
+          {
+            fields: {
+              exitCode: exit,
+              daemon: "restarted",
+              exitEvidence: "not-asked",
+              outcome: "daemon-unavailable",
+            },
+          },
+        ]);
+      },
+    );
+
+    test("the same daemon start is a helper that failed on its own, even after a signal", async () => {
+      const logs = captureLogs();
+      let outcome: Awaited<ReturnType<typeof stoppedHelper>>;
+      try {
+        outcome = await stoppedHelper(
+          "echo 'Cannot connect to the Docker daemon' >&2; exit 1",
+          143,
+          SAME,
+        );
+      } finally {
+        logs.restore();
+      }
+      const { result, calls, failureMessage } = outcome;
+      expect(result).toEqual({ ok: false, reason: "helper-failed" });
+      expect(failureMessage).toStartWith("ContainerLifecycleError:needs-attention:");
+      expect(failureMessage).toContain("(helper-failed)");
+      // The answering daemon is the one the copy started on: no history lookup.
+      expect(calls).not.toContain("events");
+      expect(
+        logs.records().filter((r) => r.event === "replacement.copy-helper-unreported"),
+      ).toMatchObject([{ fields: { exitCode: 143, daemon: "same", outcome: "helper-failed" } }]);
+    });
+
+    test("a daemon that answered before the copy and not after it is an outage", async () => {
+      const { result, calls } = await stoppedHelper(
+        "exit 0",
+        143,
+        `if [ "$reads" -gt 1 ]; then echo 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock' >&2; exit 1; fi; ${SAME}`,
+      );
+      expect(result).toEqual({ ok: false, reason: "daemon-unavailable" });
+      expect(calls).not.toContain("events");
+    });
+
+    test("an unreadable daemon start before the copy falls back to the exit history", async () => {
+      const { result, calls } = await stoppedHelper(
+        "exit 0",
+        143,
+        `if [ "$reads" -gt 1 ]; then ${SAME}; fi; echo 'Error response from daemon: network bridge not found' >&2; exit 1`,
+      );
+      expect(result).toEqual({ ok: false, reason: "helper-failed" });
+      expect(calls).toContain("--filter event=die");
+    });
 
     test("an evicted helper exit in otherwise readable history is indeterminate", async () => {
       // The filtered response is empty when newer events evicted this helper's die.

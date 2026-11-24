@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -223,7 +223,45 @@ ${body}
 /** A CLI that ignores SIGTERM, so only the group SIGKILL can stop it. */
 const IGNORES_SIGTERM = `trap '' TERM
 for argument in "$@"; do echo "$argument"; done > "$FAKE_RECORD/argv"
+: > "$FAKE_RECORD/ready"
 while :; do sleep 1; done`;
+
+/**
+ * Drive the real timeout callback once the shell has installed its trap. The
+ * capture layer tests wall-clock deadlines separately. The safety timer still
+ * stops the subprocess if the fixture never becomes ready.
+ */
+async function afterFakeCliReady<T>(record: string, run: () => Promise<T>): Promise<T> {
+  const originalSetTimeout = globalThis.setTimeout;
+  let expire: (() => void) | undefined;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((
+    callback: Parameters<typeof setTimeout>[0],
+    delay?: number,
+    ...args: unknown[]
+  ) => {
+    if (delay !== 300) return originalSetTimeout(callback, delay, ...args);
+    const watchdog = originalSetTimeout(callback, 8_000, ...args);
+    expire = () => {
+      clearTimeout(watchdog);
+      callback(...args);
+    };
+    return watchdog;
+  }) as typeof setTimeout);
+  try {
+    const result = run();
+    void result.catch(() => undefined);
+    const ready = path.join(record, "ready");
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
+    expire?.();
+    const value = await result;
+    expect(existsSync(ready)).toBe(true);
+    expect(expire).toBeDefined();
+    return value;
+  } finally {
+    timer.mockRestore();
+  }
+}
 
 function processAlive(pid: number): boolean {
   try {
@@ -293,14 +331,16 @@ describe("subprocess bounds", () => {
       const record = temporaryDirectory();
       const executable = fakeCli(temporaryDirectory(), provider, IGNORES_SIGTERM);
       const started = Date.now();
-      const turn = await runConsolidation({
-        provider,
-        executable,
-        prompt: "consolidate this",
-        model: undefined,
-        timeoutMs: 300,
-        env: { ...process.env, FAKE_RECORD: record },
-      });
+      const turn = await afterFakeCliReady(record, () =>
+        runConsolidation({
+          provider,
+          executable,
+          prompt: "consolidate this",
+          model: undefined,
+          timeoutMs: 300,
+          env: { ...process.env, FAKE_RECORD: record },
+        }),
+      );
       expect(turn).toEqual({ ok: false, failure: "timed out" });
       expect(Date.now() - started).toBeLessThan(10_000);
       const pid = Number(readFileSync(path.join(record, "pid"), "utf8").trim());
@@ -334,10 +374,8 @@ describe("subprocess bounds", () => {
   test("the version probe is bounded the same way", async () => {
     const record = temporaryDirectory();
     const executable = fakeCli(temporaryDirectory(), "codex", IGNORES_SIGTERM);
-    const version = await executableVersion(
-      executable,
-      { ...process.env, FAKE_RECORD: record },
-      300,
+    const version = await afterFakeCliReady(record, () =>
+      executableVersion(executable, { ...process.env, FAKE_RECORD: record }, 300),
     );
     expect(version).toBeUndefined();
     const pid = Number(readFileSync(path.join(record, "pid"), "utf8").trim());

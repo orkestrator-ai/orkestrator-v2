@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
-import { useState } from "react";
+import { createContext, useContext, useState, type ComponentProps } from "react";
 import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
@@ -62,18 +62,55 @@ mock.module("@/lib/backend", () => ({
   getEnvironment: getEnvironmentMock,
 }));
 
+// The flow creates, updates and starts through its node's `useEnvironments`;
+// each case supplies those operations.
+import * as realHooks from "@/hooks";
+const realHooksSnapshot = { ...realHooks };
+type FlowOperations = Pick<
+  ReturnType<typeof realHooks.useEnvironments>,
+  "createEnvironment" | "updateEnvironment" | "startEnvironment"
+>;
+const Operations = createContext<FlowOperations | null>(null);
+mock.module("@/hooks", () => ({
+  ...realHooksSnapshot,
+  useEnvironments: () => useContext(Operations),
+}));
+
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
+  mock.module("@/hooks", () => realHooksSnapshot);
 });
 
 const {
-  CreateEnvironmentFlowDialog,
+  CreateEnvironmentFlowDialog: FlowDialog,
   resolveEnvironmentAgentSettings,
   resolveEnvironmentAgentLaunchSettings,
   resolveEnvironmentCreateRequest,
 } = await import("@/components/environments/CreateEnvironmentFlowDialog");
 import type { ClaudeOptions } from "@/components/environments/CreateEnvironmentDialog";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+
+function CreateEnvironmentFlowDialog({
+  createEnvironment,
+  updateEnvironment,
+  startEnvironment,
+  ...props
+}: ComponentProps<typeof FlowDialog> & {
+  createEnvironment: (...args: never[]) => Promise<Environment>;
+  updateEnvironment: () => void;
+  startEnvironment: (...args: never[]) => Promise<unknown>;
+}) {
+  const operations = {
+    createEnvironment,
+    updateEnvironment,
+    startEnvironment,
+  } as unknown as FlowOperations;
+  return (
+    <Operations.Provider value={operations}>
+      <FlowDialog {...props} />
+    </Operations.Provider>
+  );
+}
 
 const baseOptions: ClaudeOptions = {
   environmentType: "containerized",

@@ -1,7 +1,3 @@
-import type {
-  CreateEnvironmentHandoff,
-  CreateEnvironmentRecovery,
-} from "@/lib/federation/workspace-request";
 import {
   effectiveClaudeNativeBackend,
   isTmuxModeEnabled,
@@ -23,59 +19,47 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
-import type { EnvironmentLaunchBase } from "@/lib/launch-base";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers } from "@/lib/agent-settings";
 import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
 import { armStartupAgentTabActivation } from "@/lib/pane-layout-authoritative";
 import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
-import type {
-  AppConfig,
-  Environment,
-  EnvironmentType,
-  NetworkAccessMode,
-  PortMapping,
-} from "@/types";
+import type { AppConfig, EnvironmentType } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { preloadLaunchViews } from "@/components/native-agent/LazyLaunchPromptPending";
 import {
-  openCreateEnvironmentOnMachine,
   useCreateEnvironmentMachines,
   type CreateEnvironmentMachine,
 } from "./create-environment-machines";
-import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import {
+  DockerAvailabilityProvider,
+  useDockerAvailability,
+  useDockerAvailabilityReady,
+} from "@/contexts/DockerAvailabilityContext";
+import { useCreateEnvironmentTarget } from "./useCreateEnvironmentTarget";
+import { useEnvironments } from "@/hooks";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
-import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
+import {
+  NodeScopeProvider,
+  useScopesWithCommandFallback,
+  WindowScopeProvider,
+} from "@/lib/node-scope/providers";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
+import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { noteNodeSelectionRecents } from "@/stores/windowSelectionStore";
 
 const log = createLogger("web.environment");
 
-export interface CreateEnvironmentFlowOperations {
-  createEnvironment: (
-    projectId: string,
-    name?: string,
-    networkAccessMode?: NetworkAccessMode,
-    initialPrompt?: string,
-    portMappings?: PortMapping[],
-    environmentType?: EnvironmentType,
-    namingPrompt?: string,
-    buildPipelineId?: string,
-    worktreeBaseDir?: string,
-    launchBase?: EnvironmentLaunchBase,
-  ) => Promise<Environment>;
-  updateEnvironment: (environmentId: string, updates: Partial<Environment>) => void;
-  startEnvironment: (
-    environmentId: string,
-    initialPrompt?: string,
-    options?: StartEnvironmentOptions,
-  ) => Promise<unknown>;
-}
+type StartEnvironment = (
+  environmentId: string,
+  initialPrompt?: string,
+  options?: StartEnvironmentOptions,
+) => Promise<unknown>;
 
-interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperations {
-  handoff?: CreateEnvironmentHandoff;
-  recovery?: CreateEnvironmentRecovery;
+interface CreateEnvironmentFlowDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectId: string | null;
@@ -166,7 +150,7 @@ export function usesNativeStartupAgentTab(
  * authoritative admission refusal.
  */
 export function startEnvironmentInBackground(
-  startEnvironment: CreateEnvironmentFlowOperations["startEnvironment"],
+  startEnvironment: StartEnvironment,
   environmentId: string,
   initialPrompt?: string,
 ): void {
@@ -183,30 +167,97 @@ export function startEnvironmentInBackground(
 }
 
 /**
- * Owns the shared create/configure/start workflow so every project entry point
- * behaves the same way.
+ * The New Environment dialog: one window-level dialog that stays mounted while
+ * the header's machine dropdown changes the machine it creates on.
  *
- * The environment is created on the machine of the node scope the dialog
- * renders in, so an entry point chooses the default machine by opening the
- * dialog there (`openMachineWorkspace` with `createEnvironment` for another
- * machine). The header's machine dropdown moves the dialog to another
- * machine that holds the same repository.
+ * It opens aimed at the node scope it renders in (the origin: the command
+ * node's, or the machine a caller aimed it at, see `AppDialogHost`). Another
+ * machine is prepared in the background (`useCreateEnvironmentTarget`) while
+ * the form stays as it is; then only the scope under the form changes, so the
+ * create, its settings and its start go to that machine. Nothing is selected
+ * or shown until the environment exists.
  */
 export function CreateEnvironmentFlowDialog({
   open,
   onOpenChange,
   projectId,
-  projectName: providedProjectName,
-  handoff,
-  recovery,
-  createEnvironment,
-  updateEnvironment,
-  startEnvironment,
+  projectName,
 }: CreateEnvironmentFlowDialogProps) {
+  const { windowScope, scope: origin } = useScopesWithCommandFallback();
+  const originDockerAvailable = useDockerAvailability();
+  const originDockerReady = useDockerAvailabilityReady();
+  const machines = useCreateEnvironmentMachines(open ? projectId : null);
+  const { target, dockerAvailable, selectedKey, switchingTo, select } = useCreateEnvironmentTarget({
+    open,
+    machines,
+  });
+
+  // The same tree for every target: a different one would remount the form.
+  return (
+    <WindowScopeProvider windowScope={windowScope}>
+      <NodeScopeProvider scope={target?.scope ?? origin}>
+        <DockerAvailabilityProvider
+          available={target ? dockerAvailable : originDockerAvailable}
+          ready={target ? true : originDockerReady}
+        >
+          <CreateEnvironmentFlow
+            open={open}
+            onOpenChange={onOpenChange}
+            projectId={target?.projectId ?? projectId}
+            projectName={target ? undefined : projectName}
+            origin={origin}
+            originProjectId={projectId}
+            machines={machines}
+            selectedMachineKey={selectedKey}
+            switchingTo={switchingTo}
+            onSelectMachine={select}
+          />
+        </DockerAvailabilityProvider>
+      </NodeScopeProvider>
+    </WindowScopeProvider>
+  );
+}
+
+interface CreateEnvironmentFlowProps extends CreateEnvironmentFlowDialogProps {
+  origin: NodeScope;
+  originProjectId: string | null;
+  machines: readonly CreateEnvironmentMachine[];
+  selectedMachineKey: string | null;
+  switchingTo: string | null;
+  onSelectMachine: (machine: CreateEnvironmentMachine) => void;
+}
+
+/**
+ * Brings the window's central region to another machine that is about to show
+ * what was created there; its selection follows on that machine's scope.
+ */
+function holdCreatedOn(scope: NodeScope): void {
+  if (scope.role === "leaf") useRemoteWorkspaceStore.getState().hold(scope.nodeId);
+}
+
+/**
+ * The shared create/configure/start workflow on the machine of the node scope
+ * it renders in, the same for every project entry point.
+ */
+function CreateEnvironmentFlow({
+  open,
+  onOpenChange,
+  projectId,
+  projectName: providedProjectName,
+  origin,
+  originProjectId,
+  machines,
+  selectedMachineKey,
+  switchingTo,
+  onSelectMachine,
+}: CreateEnvironmentFlowProps) {
   const nodeBackend = useScopeBackend();
   // The node the environment is created on: its activation and selection
   // belong to that node, never to the window's command node.
   const scope = useScopesWithCommandFallback().scope;
+  const { createEnvironment, updateEnvironment, startEnvironment } = useEnvironments(null, {
+    listenForRenameEvents: false,
+  });
   const dockerAvailable = useDockerAvailability();
   const [isCreating, setIsCreating] = useState(false);
   // What the busy button is doing, so a slow step reads as a named step.
@@ -230,7 +281,6 @@ export function CreateEnvironmentFlowDialog({
     localEnvironmentAvailableRef.current = localEnvironmentAvailable;
   }, [dockerAvailable, localEnvironmentAvailable]);
   const projectName = providedProjectName ?? storedProjectName;
-  const machines = useCreateEnvironmentMachines(open ? projectId : null);
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
 
@@ -300,7 +350,7 @@ export function CreateEnvironmentFlowDialog({
     }
     const warning = pendingCredentialWarningRef.current;
     if (warning) cancelPendingCredentialFlow();
-  }, [cancelPendingCredentialFlow, projectId]);
+  }, [cancelPendingCredentialFlow, projectId, scope]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -387,7 +437,15 @@ export function CreateEnvironmentFlowDialog({
       });
 
       setProjectCollapsed(projectId, false);
+      holdCreatedOn(scope);
       selectProjectAndEnvironment(projectId, configuredEnvironment.id);
+      if (scope.role === "leaf") {
+        noteNodeSelectionRecents({
+          nodeId: scope.nodeId,
+          projectId,
+          environmentId: configuredEnvironment.id,
+        });
+      }
 
       // Leave the modal as soon as the environment is ready to display. Start
       // and prompt-based naming can continue without blocking the UI.
@@ -483,33 +541,6 @@ export function CreateEnvironmentFlowDialog({
     });
   };
 
-  // That machine's own dialog takes over: this one closes, and the window
-  // shows the machine's copy of the project with its dialog open. If that
-  // machine cannot show it, the form comes back here with what was entered.
-  const handleSelectMachine = (
-    machine: CreateEnvironmentMachine,
-    form: CreateEnvironmentHandoff,
-    sourceForm: CreateEnvironmentRecovery,
-  ) => {
-    if (isCreating || !projectId) return false;
-    cancelPendingCredentialFlow();
-    onOpenChange(false);
-    const currentName = machines.find((candidate) => candidate.current)?.name;
-    openCreateEnvironmentOnMachine(
-      machine,
-      projectName ?? "New environment",
-      form,
-      {
-        connectionId: scope.role === "command" ? "" : scope.nodeId,
-        projectId,
-        machineName: !currentName || currentName === "This machine" ? "this machine" : currentName,
-        title: projectName ?? "New environment",
-      },
-      sourceForm,
-    );
-    return true;
-  };
-
   const handleCreate = (options: ClaudeOptions): Promise<boolean> =>
     withGitHubCredentialPreflight(options.environmentType, () => performCreate(options));
 
@@ -531,6 +562,7 @@ export function CreateEnvironmentFlowDialog({
       // idempotent retry may return before its concurrent winner has attached
       // the environment, so the one-shot activation follows the authoritative
       // pipeline snapshot in that case and survives this dialog closing.
+      holdCreatedOn(scope);
       activateFeatureBuildEnvironment(projectId, result, scope);
       toast.success("Build started", {
         description: "The ticket was added and its environment is being created.",
@@ -605,10 +637,12 @@ export function CreateEnvironmentFlowDialog({
         projectId={projectId}
         projectName={projectName}
         localEnvironmentAvailable={localEnvironmentAvailable}
+        draftScope={origin}
+        draftProjectId={originProjectId}
         machines={machines}
-        handoff={handoff}
-        recovery={recovery}
-        onSelectMachine={handleSelectMachine}
+        selectedMachineKey={selectedMachineKey}
+        switchingTo={switchingTo}
+        onSelectMachine={onSelectMachine}
         defaultPortMappings={
           projectId ? config.repositories[projectId]?.defaultPortMappings : undefined
         }

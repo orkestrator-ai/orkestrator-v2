@@ -8,17 +8,20 @@ import {
 } from "@/components/ui/select";
 import type { CreateEnvironmentMachine } from "./create-environment-machines";
 
-const CURRENT_MACHINE = "current";
+/** The dialog's machine when the offered machines do not list it. */
+const UNLISTED_MACHINE = "current";
 
 interface CreateEnvironmentMachinePickerProps {
   /** The machine the dialog creates on now, as its header names it. */
   current: { name: string; colorToken: string };
   /**
-   * Every machine the environment can be created on, the dialog's own
-   * (`current`) included; see `useCreateEnvironmentMachines`.
+   * Every machine the environment can be created on, the one the dialog
+   * opened on (`current`) included; see `useCreateEnvironmentMachines`.
    */
   machines: readonly CreateEnvironmentMachine[];
-  /** Moves the dialog to another machine. */
+  /** The machine picked: the dialog's own by default. */
+  selectedKey?: string | null;
+  /** Aims the dialog at another machine. */
   onSelect?: (machine: CreateEnvironmentMachine) => void;
   disabled?: boolean;
 }
@@ -32,20 +35,25 @@ interface CreateEnvironmentMachinePickerProps {
 export function CreateEnvironmentMachinePicker({
   current,
   machines,
+  selectedKey,
   onSelect,
   disabled = false,
 }: CreateEnvironmentMachinePickerProps) {
-  const others = machines.filter((machine) => !machine.current);
-  const choosable = others.length > 0 && Boolean(onSelect);
+  const value = selectedKey ?? machines.find((machine) => machine.current)?.key ?? UNLISTED_MACHINE;
+  // A picked machine that has since left the list still names itself.
+  const options = machines.some((machine) => machine.key === value)
+    ? machines
+    : [{ key: value, ...current }, ...machines];
+  const choosable = Boolean(onSelect) && machines.some((machine) => machine.key !== value);
   return (
     <div className="flex shrink-0 items-center gap-2" data-testid="create-environment-machine">
       <span className="hidden text-sm text-muted-foreground sm:inline" aria-hidden="true">
         Machine
       </span>
       <Select
-        value={CURRENT_MACHINE}
+        value={value}
         onValueChange={(key) => {
-          const machine = others.find((candidate) => candidate.key === key);
+          const machine = machines.find((candidate) => candidate.key === key);
           if (machine) onSelect?.(machine);
         }}
         disabled={disabled || !choosable}
@@ -64,11 +72,7 @@ export function CreateEnvironmentMachinePicker({
           <SelectValue />
         </SelectTrigger>
         <SelectContent position="popper" align="end">
-          <SelectItem value={CURRENT_MACHINE} data-create-environment-machine="current">
-            <MachineColorDot colorToken={current.colorToken} />
-            <span className="truncate">{current.name}</span>
-          </SelectItem>
-          {others.map((machine) => (
+          {options.map((machine) => (
             <SelectItem
               key={machine.key}
               value={machine.key}

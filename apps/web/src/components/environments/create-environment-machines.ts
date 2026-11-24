@@ -8,19 +8,10 @@ import {
   scopeBackendClient,
   type AccountMachine,
 } from "@/lib/backend/client";
-import { toast } from "sonner";
-import { watchCreateEnvironmentRequest } from "@/lib/federation/create-environment-handoff";
-import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { scopeRowsSource } from "@/lib/federation/scope-overlay";
-import type {
-  CreateEnvironmentHandoff,
-  CreateEnvironmentRecovery,
-} from "@/lib/federation/workspace-request";
 import { domainApi } from "@/lib/node-scope/domains/domain-api";
 import { useScopesWithCommandFallback } from "@/lib/node-scope/providers";
 import { portalStore } from "@/lib/portal/portal-store";
-import { useAppDialogStore } from "@/stores/appDialogStore";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 export type CreateEnvironmentMachine = BuildLaunchMachine;
 
@@ -117,67 +108,4 @@ export function useCreateEnvironmentMachines(
       ),
     [machines, observedDocker, pendingChecks, probed],
   );
-}
-
-/** Where a machine switch started: reopened with the form when the destination fails. */
-export interface CreateEnvironmentSwitchSource {
-  /** The source node (`""`: the window's own node). */
-  connectionId: string;
-  projectId: string;
-  /** The source machine's name, for the message. */
-  machineName: string;
-  title: string;
-}
-
-/**
- * Opens the destination's own form with the data from this switch request.
- *
- * Another node's workspace opens its dialog once its stores have loaded. When
- * it cannot (its workspace fails to open, the project is not there, or
- * nothing opens within `CREATE_ENVIRONMENT_HANDOFF_TIMEOUT_MS`), the user is
- * told and the form opens again on `source` with what they entered. A request
- * the user navigated away from is left cancelled.
- */
-export function openCreateEnvironmentOnMachine(
-  machine: CreateEnvironmentMachine,
-  title: string,
-  handoff: CreateEnvironmentHandoff,
-  source?: CreateEnvironmentSwitchSource,
-  recovery?: CreateEnvironmentRecovery,
-): void {
-  const destinationId = machine.nodeId ?? "";
-  openMachineWorkspace({
-    connectionId: destinationId,
-    projectId: machine.projectId,
-    createEnvironment: true,
-    createEnvironmentHandoff: handoff,
-    title,
-  });
-  if (!source) return;
-  const selfId = portalStore.getState().selfId;
-  const connectionId = selfId && destinationId !== selfId ? destinationId : "";
-  const seq = connectionId
-    ? useRemoteWorkspaceStore.getState().requests[connectionId]?.seq
-    : useAppDialogStore.getState().requestSequence;
-  if (seq === undefined) return;
-  watchCreateEnvironmentRequest(connectionId, seq, (outcome) => {
-    if (outcome.kind !== "opened" && !connectionId) {
-      const dialogs = useAppDialogStore.getState();
-      if (dialogs.requestSequence === seq && dialogs.request?.kind === "create-environment") {
-        dialogs.close();
-      }
-    }
-    if (outcome.kind !== "failed") return;
-    toast.error(`Could not open the new environment form on ${machine.name}`, {
-      description: `${outcome.reason} It is open again on ${source.machineName} with what you entered.`,
-    });
-    openMachineWorkspace({
-      connectionId: source.connectionId,
-      projectId: source.projectId,
-      createEnvironment: true,
-      createEnvironmentHandoff: handoff,
-      createEnvironmentRecovery: recovery,
-      title: source.title,
-    });
-  });
 }

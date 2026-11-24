@@ -1,8 +1,4 @@
 import type { BackendId } from "@orkestrator/protocol/federation";
-import type {
-  CreateEnvironmentHandoff,
-  CreateEnvironmentRecovery,
-} from "@/lib/federation/workspace-request";
 import { create } from "zustand";
 
 /**
@@ -15,8 +11,8 @@ import { create } from "zustand";
  *
  * Project and environment ids are only unique on their node, so a request
  * names its node: the producer passes its scope's node, and the host renders
- * the dialog inside that node's scope (or drops the request when the window
- * has no scope for it).
+ * the dialog inside that node's scope. It drops the request when the window
+ * has no scope for that node, except New Environment, which opens one.
  */
 export type AppDialogRequest = { nodeId: BackendId } & (
   | {
@@ -28,12 +24,8 @@ export type AppDialogRequest = { nodeId: BackendId } & (
   /** Also how another machine's project menu reaches these, in that machine's workspace. */
   | { kind: "repository-settings"; projectId: string }
   | { kind: "delete-project"; projectId: string }
-  | {
-      kind: "create-environment";
-      projectId: string;
-      handoff?: CreateEnvironmentHandoff;
-      recovery?: CreateEnvironmentRecovery;
-    }
+  /** Aimed at the request's node, whose scope `AppDialogHost` opens when the window has none. */
+  | { kind: "create-environment"; projectId: string }
 );
 
 interface AppDialogState {

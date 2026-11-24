@@ -8,8 +8,7 @@ import {
   uninstallDesktopFake,
 } from "@/test/federation-desktop-fake";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
-import { NodeWorkspaceHost } from "@/components/federation/NodeWorkspaceHost";
-import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
+import { AppDialogHost } from "@/components/layout/AppDialogHost";
 import { portalStore } from "@/lib/portal/portal-store";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
@@ -1729,20 +1728,21 @@ describe("HierarchicalSidebar", () => {
     }
   });
 
-  describe("another node's workspace: the node's New environment dialog its window asked for", () => {
-    const initialRemote = useRemoteWorkspaceStore.getState();
-    // The window asks through its own store, keyed by the node the host shows.
+  describe("the window's New environment dialog, asked for outside the sidebar", () => {
     const askForCreate = (projectId: string) =>
-      useRemoteWorkspaceStore
-        .getState()
-        .open(appCommandScope().nodeId, { projectId, createEnvironmentProjectId: projectId });
-    const forgetRequest = () => useRemoteWorkspaceStore.setState(initialRemote, true);
+      useAppDialogStore.getState().open({
+        kind: "create-environment",
+        nodeId: appCommandScope().nodeId,
+        projectId,
+      });
+    const forgetRequest = () => useAppDialogStore.getState().close();
 
     test("opens the create dialog its window asked for once config has loaded", async () => {
+      appCommandStore(projectStore).setState({ projects: [project] });
       appCommandStore(configStore).setState({ hasLoaded: false });
       askForCreate("project-1");
       try {
-        renderInAppCommandScope(<NodeWorkspaceHost />);
+        renderInAppCommandScope(<AppDialogHost />);
         // Its defaults come from config, so the dialog waits for it.
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
@@ -1766,7 +1766,7 @@ describe("HierarchicalSidebar", () => {
         askForCreate(project.id);
         const sidebar = (ready: boolean) => (
           <DockerAvailabilityProvider available={ready && available} ready={ready}>
-            <NodeWorkspaceHost />
+            <AppDialogHost />
           </DockerAvailabilityProvider>
         );
         try {
@@ -1841,19 +1841,17 @@ describe("HierarchicalSidebar", () => {
     );
 
     test("waits for both initial project hydration and an in-flight project load", async () => {
-      projectsValue = [];
-      projectsLoadingValue = false;
-      appCommandStore(projectStore).setState({ hasLoaded: false });
+      const projects = appCommandStore(projectStore);
+      projects.setState({ hasLoaded: false, projects: [] });
       askForCreate(project.id);
       try {
-        const view = renderInAppCommandScope(<NodeWorkspaceHost />);
+        renderInAppCommandScope(<AppDialogHost />);
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
-        projectsValue = [project];
-        projectsLoadingValue = true;
-        act(() => appCommandStore(projectStore).setState({ hasLoaded: true, projects: [project] }));
+        // A stale first list is not an answer while a newer read is in flight.
+        act(() => projects.setState({ hasLoaded: true, isLoading: true }));
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
-        projectsLoadingValue = false;
-        view.rerender(<NodeWorkspaceHost />);
+        expect(useAppDialogStore.getState().request).not.toBeNull();
+        act(() => projects.setState({ isLoading: false, projects: [project] }));
         await screen.findByText(/^Create Ork \(environment\)/);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
@@ -1862,15 +1860,14 @@ describe("HierarchicalSidebar", () => {
     });
 
     test("discards a missing destination project after projects have loaded", () => {
-      projectsValue = [];
+      const projects = appCommandStore(projectStore);
+      projects.setState({ hasLoaded: true, isLoading: false, projects: [] });
       askForCreate(project.id);
       try {
-        const view = renderInAppCommandScope(<NodeWorkspaceHost />);
+        renderInAppCommandScope(<AppDialogHost />);
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         // A later project refresh must not revive an already discarded request.
-        projectsValue = [project];
-        act(() => appCommandStore(projectStore).setState({ projects: [project] }));
-        view.rerender(<NodeWorkspaceHost />);
+        act(() => projects.setState({ projects: [project] }));
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
       } finally {
@@ -1879,16 +1876,17 @@ describe("HierarchicalSidebar", () => {
     });
 
     test("keeps a create request pending when config fails until a retry loads it", async () => {
+      appCommandStore(projectStore).setState({ projects: [project] });
       appCommandStore(configStore).setState({ hasLoaded: false, isLoading: true });
       askForCreate(project.id);
       try {
-        const view = renderInAppCommandScope(<NodeWorkspaceHost />);
+        const view = renderInAppCommandScope(<AppDialogHost />);
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         act(() => {
           appCommandStore(configStore).getState().setError("Config could not be loaded");
           appCommandStore(configStore).getState().setLoading(false);
         });
-        view.rerender(<NodeWorkspaceHost />);
+        view.rerender(<AppDialogHost />);
         expect(screen.queryByText(/^Create Ork \(environment\)/) === null).toBe(true);
         expect(createEnvironmentMock).not.toHaveBeenCalled();
         act(() => {

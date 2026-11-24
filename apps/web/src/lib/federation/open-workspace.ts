@@ -3,8 +3,6 @@ import type { BackendId } from "@orkestrator/protocol/federation";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
 import { portalStore } from "@/lib/portal/portal-store";
 import type {
-  CreateEnvironmentHandoff,
-  CreateEnvironmentRecovery,
   WorkspaceBoardTab,
   WorkspaceDialog,
   WorkspaceWorkTarget,
@@ -29,10 +27,11 @@ export interface MachineWorkspaceSpec {
   landingTab?: WorkspaceBoardTab;
   workTarget?: WorkspaceWorkTarget;
   filesPanelTab?: WorkspaceRequest["filesPanelTab"];
-  /** Open the New Environment dialog for `projectId` instead of selecting it. */
+  /**
+   * Open the window's New Environment dialog aimed at this node's
+   * `projectId`, without showing the node or selecting anything.
+   */
   createEnvironment?: boolean;
-  createEnvironmentHandoff?: CreateEnvironmentHandoff;
-  createEnvironmentRecovery?: CreateEnvironmentRecovery;
   /**
    * Open one of the node's own dialogs over the selection: the project's, or
    * with `environmentId`, the environment's settings (or its rebuild).
@@ -48,26 +47,29 @@ export interface MachineWorkspaceSpec {
  * ordinary selection, and another node's is shown in the central region, in
  * the window's own tree, without reloading anything around it.
  *
- * Creating an environment on another node goes through that node's own New
- * Environment dialog, so its defaults (the command node's inherited settings
- * laid over the node's own) and start apply as they would there.
+ * The New Environment dialog belongs to the window, whichever node it creates
+ * on (`AppDialogHost`): it opens over whatever the window shows, and the
+ * window goes to the node once the environment exists.
  */
 export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
   const selfId = portalStore.getState().selfId;
-  if (!spec.connectionId || !selfId || spec.connectionId === selfId) {
+  const onCommandNode = !spec.connectionId || !selfId || spec.connectionId === selfId;
+  if (spec.createEnvironment && spec.projectId) {
+    useAppDialogStore.getState().open({
+      kind: "create-environment",
+      nodeId: onCommandNode
+        ? getWindowScope().commandScope().nodeId
+        : (spec.connectionId as BackendId),
+      projectId: spec.projectId,
+    });
+    return;
+  }
+  if (onCommandNode) {
     useRemoteWorkspaceStore.getState().showLocal();
     const scope = getWindowScope().commandScope();
     const ui = scope.store(uiStore).getState();
     if (!spec.projectId) return;
-    if (spec.createEnvironment) {
-      useAppDialogStore.getState().open({
-        kind: "create-environment",
-        nodeId: scope.nodeId,
-        projectId: spec.projectId,
-        ...(spec.createEnvironmentHandoff ? { handoff: spec.createEnvironmentHandoff } : {}),
-        ...(spec.createEnvironmentRecovery ? { recovery: spec.createEnvironmentRecovery } : {}),
-      });
-    } else if (spec.environmentId) {
+    if (spec.environmentId) {
       ui.selectProjectAndEnvironment(spec.projectId, spec.environmentId, {
         landingTab: spec.landingTab,
       });
@@ -88,26 +90,15 @@ export function openMachineWorkspace(spec: MachineWorkspaceSpec): void {
     spec.connectionId,
     !spec.projectId
       ? { addProject: true }
-      : spec.createEnvironment
-        ? {
-            projectId: spec.projectId,
-            createEnvironmentProjectId: spec.projectId,
-            ...(spec.createEnvironmentHandoff
-              ? { createEnvironmentHandoff: spec.createEnvironmentHandoff }
-              : {}),
-            ...(spec.createEnvironmentRecovery
-              ? { createEnvironmentRecovery: spec.createEnvironmentRecovery }
-              : {}),
-          }
-        : {
-            projectId: spec.projectId,
-            ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
-            ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
-            ...(spec.landingTab ? { landingTab: spec.landingTab } : {}),
-            ...(spec.filesPanelTab ? { filesPanelTab: spec.filesPanelTab } : {}),
-            ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
-            ...(spec.dialog ? { dialog: spec.dialog } : {}),
-          },
+      : {
+          projectId: spec.projectId,
+          ...(spec.environmentId ? { environmentId: spec.environmentId } : {}),
+          ...(spec.boardTab ? { boardTab: spec.boardTab } : {}),
+          ...(spec.landingTab ? { landingTab: spec.landingTab } : {}),
+          ...(spec.filesPanelTab ? { filesPanelTab: spec.filesPanelTab } : {}),
+          ...(spec.workTarget ? { workTarget: spec.workTarget } : {}),
+          ...(spec.dialog ? { dialog: spec.dialog } : {}),
+        },
   );
 }
 

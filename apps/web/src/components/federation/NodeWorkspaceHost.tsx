@@ -2,22 +2,13 @@ import { filesPanelStore } from "@/stores/filesPanelStore";
 import { useFilesPanelChromeStore } from "@/stores/filesPanelChromeStore";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
-import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import { useSidebarHydration } from "@/components/sidebar/useSidebarHydration";
-import {
-  useDockerAvailability,
-  useDockerAvailabilityReady,
-} from "@/contexts/DockerAvailabilityContext";
 import { useEnvironments } from "@/hooks";
 import { useEnvironmentListSync } from "@/hooks/useEnvironmentListSync";
 import { useProjects } from "@/hooks/useProjects";
 import { startsOnSelection } from "@/lib/environment-auto-start";
 import { openCoordinatorWorkTarget } from "@/lib/coordinator-work-navigation";
 import { openDialog } from "@/lib/federation/open-workspace";
-import {
-  reportCreateEnvironmentFailed,
-  reportCreateEnvironmentOpened,
-} from "@/lib/federation/create-environment-handoff";
 import type { WorkspaceRequest } from "@/lib/federation/workspace-request";
 import { suggestedCloneDirectory } from "@/lib/github-clone";
 import { useConfigStore } from "@/stores/configStore";
@@ -68,30 +59,21 @@ export interface NodeDialogHydration {
   readonly configLoaded: boolean;
   /** Every project's environments have loaded (`useSidebarHydration`). */
   readonly environmentsReady: boolean;
-  /** The node's first Docker probe has finished. */
-  readonly dockerReady: boolean;
 }
 
 /**
  * Whether the node's stores have what a request's dialog reads, so it may
- * open now (plan item 4005). Add Project waits for the node's projects; New
- * Environment also for its config and first Docker probe (its defaults); a
+ * open now (plan item 4005). Add Project waits for the node's projects; a
  * project's dialog for the project list to be live, Delete Project also for
  * its environments, Repository Settings also for the config. An
  * environment's dialogs wait for the environment itself.
  */
 export function dialogHydrated(
-  request: Pick<
-    WorkspaceRequest,
-    "addProject" | "createEnvironmentProjectId" | "dialog" | "environmentId"
-  >,
+  request: Pick<WorkspaceRequest, "addProject" | "dialog" | "environmentId">,
   hydration: NodeDialogHydration,
 ): boolean {
   const projectsLive = hydration.projectsLoaded && !hydration.projectsLoading;
   if (request.addProject) return hydration.projectsLoaded;
-  if (request.createEnvironmentProjectId) {
-    return projectsLive && hydration.configLoaded && hydration.dockerReady;
-  }
   if (!request.dialog || request.environmentId) return true;
   if (!projectsLive) return false;
   if (request.dialog === "delete-project") return hydration.environmentsReady;
@@ -105,12 +87,11 @@ export function dialogHydrated(
  * environments loaded, show what the window asks for
  * (`remoteWorkspaceStore.requests`) as a sidebar click would (starting a
  * local environment that needs it), add the Home flag and recents to the
- * window's selection, and open the node's Add Project, New Environment,
- * project and environment dialogs.
+ * window's selection, and open the node's Add Project, project and
+ * environment dialogs. New Environment is the window's own dialog
+ * (`AppDialogHost`), whichever node it creates on.
  */
 export function NodeWorkspaceHost() {
-  const dockerReady = useDockerAvailabilityReady();
-  const dockerAvailable = useDockerAvailability();
   const {
     projects,
     addProject,
@@ -118,14 +99,8 @@ export function NodeWorkspaceHost() {
     validateGitUrl,
     isLoading: projectsLoading,
   } = useProjects();
-  const {
-    allEnvironments,
-    loadEnvironments,
-    refreshEnvironmentSnapshot,
-    createEnvironment,
-    startEnvironment,
-    updateEnvironment,
-  } = useEnvironments(null);
+  const { allEnvironments, loadEnvironments, refreshEnvironmentSnapshot, startEnvironment } =
+    useEnvironments(null);
   // The node this host shows: the one the hooks above read.
   const scope = useNodeScope();
   const selection = useWindowSelection();
@@ -159,8 +134,6 @@ export function NodeWorkspaceHost() {
   const appliedSeq = useRef(resumedSeq);
   // The request whose dialog the user closed.
   const [closedSeq, setClosedSeq] = useState(resumedSeq);
-  const [acceptedCreateSeq, setAcceptedCreateSeq] = useState<number | null>(null);
-  const [failedCreate, setFailedCreate] = useState<{ seq: number; reason: string } | null>(null);
 
   useEffect(
     () =>
@@ -185,53 +158,15 @@ export function NodeWorkspaceHost() {
     [scope],
   );
 
-  // The New Environment dialog reads its defaults (environment type, ports)
-  // when it opens, so it waits for the node's projects, config and first
-  // Docker probe. An unfinished probe must not force a local default.
   const hydration: NodeDialogHydration = {
     projectsLoaded,
     projectsLoading,
     configLoaded,
     environmentsReady,
-    dockerReady,
   };
-  const createReady = dialogHydrated({ createEnvironmentProjectId: "*" }, hydration);
   const dialogRequest = shownHere && request && closedSeq < request.seq ? request : null;
   const showAddProject =
     Boolean(dialogRequest?.addProject) && dialogHydrated({ addProject: true }, hydration);
-  const createProjectId = createReady ? (dialogRequest?.createEnvironmentProjectId ?? null) : null;
-  const createProject = projects.find((project) => project.id === createProjectId);
-  const failure = !createProject
-    ? "The project is not on that machine any more."
-    : dialogRequest?.createEnvironmentHandoff &&
-        dialogRequest.seq !== acceptedCreateSeq &&
-        !dialogRequest.createEnvironmentRecovery &&
-        !createProject.localPath &&
-        !dockerAvailable
-      ? "The project has no local checkout and Docker is unavailable."
-      : null;
-  // A later refresh must not revive a rejected request.
-  if (dialogRequest && createProjectId !== null) {
-    if (failure) {
-      setClosedSeq(dialogRequest.seq);
-      setFailedCreate({ seq: dialogRequest.seq, reason: failure });
-    } else if (acceptedCreateSeq !== dialogRequest.seq) {
-      setAcceptedCreateSeq(dialogRequest.seq);
-    }
-  }
-  const createEnvProjectId = failure ? null : createProjectId;
-  const openedCreateSeq = createEnvProjectId !== null ? (dialogRequest?.seq ?? null) : null;
-
-  // A machine switch waits to hear whether its form opened here
-  // (`openCreateEnvironmentOnMachine`), and brings it back if not.
-  useEffect(() => {
-    if (openedCreateSeq !== null) reportCreateEnvironmentOpened(scope.nodeId, openedCreateSeq);
-  }, [openedCreateSeq, scope]);
-  useEffect(() => {
-    if (failedCreate) {
-      reportCreateEnvironmentFailed(scope.nodeId, failedCreate.seq, failedCreate.reason);
-    }
-  }, [failedCreate, scope]);
   const closeDialog = () => {
     if (request) setClosedSeq(request.seq);
   };
@@ -257,19 +192,11 @@ export function NodeWorkspaceHost() {
       projectsLoading,
       configLoaded,
       environmentsReady,
-      dockerReady,
     });
     if (request.addProject) {
       if (!hydrated) return;
       applied();
       ui.selectProject(null);
-      return;
-    }
-    if (request.createEnvironmentProjectId) {
-      if (!hydrated) return;
-      applied();
-      const projectId = request.createEnvironmentProjectId;
-      if (projects.some((project) => project.id === projectId)) ui.selectProject(projectId);
       return;
     }
     if (!request.projectId) {
@@ -323,9 +250,7 @@ export function NodeWorkspaceHost() {
   }, [
     allEnvironments,
     configLoaded,
-    dockerReady,
     environmentsReady,
-    projects,
     projectsLoaded,
     projectsLoading,
     request,
@@ -356,20 +281,6 @@ export function NodeWorkspaceHost() {
         validateGitUrl={validateGitUrl}
         defaultCloneDirectory={defaultCloneDirectory}
         existingGitUrls={projectGitUrls}
-      />
-      <CreateEnvironmentFlowDialog
-        key={createEnvProjectId ? dialogRequest?.seq : undefined}
-        open={createEnvProjectId !== null}
-        handoff={createEnvProjectId ? dialogRequest?.createEnvironmentHandoff : undefined}
-        recovery={createEnvProjectId ? dialogRequest?.createEnvironmentRecovery : undefined}
-        onOpenChange={(open) => {
-          if (!open) closeDialog();
-        }}
-        projectId={createEnvProjectId}
-        projectName={projects.find((project) => project.id === createEnvProjectId)?.name}
-        createEnvironment={createEnvironment}
-        updateEnvironment={updateEnvironment}
-        startEnvironment={startEnvironment}
       />
     </>
   );

@@ -17,7 +17,10 @@ export const IN_TREE_DOCKER_POLL_INTERVAL_MS = 60_000;
  * about Docker). The window's own probe is the command node's.
  */
 export function useNodeDockerAvailability(scope: NodeScope, active = true): boolean | null {
-  const [available, setAvailable] = useState<boolean | null>(null);
+  // Kept with its scope, so one node's answer never shows for another.
+  const [answer, setAnswer] = useState<{ scope: NodeScope; available: boolean | null } | null>(
+    null,
+  );
   useEffect(() => {
     if (!active) return;
     let current = true;
@@ -28,7 +31,10 @@ export function useNodeDockerAvailability(scope: NodeScope, active = true): bool
           (result: DockerAvailability | null) => {
             if (!current) return;
             // A malformed answer says nothing about Docker.
-            setAvailable(typeof result?.available === "boolean" ? result.available : null);
+            setAnswer({
+              scope,
+              available: typeof result?.available === "boolean" ? result.available : null,
+            });
           },
           (error: unknown) => {
             if (current)
@@ -43,5 +49,5 @@ export function useNodeDockerAvailability(scope: NodeScope, active = true): bool
       clearInterval(timer);
     };
   }, [active, scope]);
-  return available;
+  return answer?.scope === scope ? answer.available : null;
 }

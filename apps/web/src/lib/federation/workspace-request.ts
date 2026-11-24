@@ -1,18 +1,4 @@
-import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import type { EnvironmentInteractionMode } from "@orkestrator/protocol/environment-interaction";
 import type { ProjectBoardTab } from "@/stores/uiStore";
-import type { AgentType } from "@/stores/claudeOptionsStore";
-import type {
-  AgentStyle,
-  ClaudeMode,
-  CodexMode,
-  EnvironmentType,
-  NetworkAccessMode,
-  OpenCodeMode,
-  PortMapping,
-} from "@/types";
-import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
-import type { FeatureBuildModelState } from "@/lib/feature-build-launch";
 
 /**
  * What the window asks another node's workspace to show when it opens it
@@ -61,49 +47,6 @@ export type WorkspaceWorkTarget =
   | { type: "review"; projectId: string; environmentId: string; workflowId: string }
   | { type: "graph-run"; projectId: string; environmentId: string; runId: string; title?: string };
 
-/** Form fields that can travel without depending on the source node's defaults. */
-export interface CreateEnvironmentHandoff {
-  prompt: string;
-  name: string;
-  interactionMode?: EnvironmentInteractionMode;
-  feature?: {
-    name: string;
-    acceptanceCriteria: string;
-    deliveryPolicy: DeliveryPolicy;
-  };
-  /**
-   * The chosen environment type. The destination keeps it only where it can
-   * create that type (a checkout for Local, Docker for a container).
-   */
-  environmentType?: EnvironmentType;
-  /**
-   * The chosen agent and model. The destination keeps the agent only when it
-   * is enabled there, and the model and effort only when its catalogue has them.
-   */
-  agent?: { type: AgentType; model: string; reasoningEffort: string };
-}
-
-/** Form state used only when reopening on the original machine after a failed switch. */
-export interface CreateEnvironmentRecovery {
-  prompt: string;
-  name: string;
-  attachments: InitialPromptImageAttachment[];
-  launchAgent: boolean;
-  networkAccessMode: NetworkAccessMode;
-  portMappings: PortMapping[];
-  showPortConfig: boolean;
-  worktreeBaseDir: string | null;
-  claudeMode: ClaudeMode;
-  codexMode: CodexMode;
-  opencodeMode: OpenCodeMode;
-  grokMode: AgentStyle;
-  piMode: AgentStyle;
-  fastMode: boolean | undefined;
-  advancedOpen: boolean;
-  customizeModels: boolean;
-  featureModels: FeatureBuildModelState | null;
-}
-
 /** What the window asks another node's workspace to show. */
 export interface WorkspaceRequest {
   projectId?: string;
@@ -121,10 +64,6 @@ export interface WorkspaceRequest {
   workTarget?: WorkspaceWorkTarget;
   /** Open the node's Add Project dialog. */
   addProject?: true;
-  /** Open the node's New Environment dialog for this project. */
-  createEnvironmentProjectId?: string;
-  createEnvironmentHandoff?: CreateEnvironmentHandoff;
-  createEnvironmentRecovery?: CreateEnvironmentRecovery;
   /** Open one of the node's dialogs for the selected project or environment. */
   dialog?: WorkspaceDialog;
 }

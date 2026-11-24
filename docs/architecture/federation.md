@@ -599,6 +599,12 @@ window's streams. Before a scope's streams close, its attention is handed to
 the command node's relay (`attentionHandoff`, plan item 5001), so a question
 on a suspended node still notifies.
 
+Something that uses a hidden node's scope pins it
+(`ScopeLifecycle.pin(nodeId)`, the New Environment dialog aimed at that node):
+the scope resumes, and neither the suspend timer nor the pressure path touches
+it until the pin is released. A hidden document on iOS still suspends it, and
+it resumes with the document.
+
 ### Budgets
 
 Memory is bounded per window, never per node, so more nodes do not multiply
@@ -899,8 +905,9 @@ button):
   machine has one), else, when the command node has no copy, the first icon in
   machine order. Its members' project-home activity buttons follow the name.
   A **+** button labelled "New environment in <repository>" follows them,
-  always visible, and opens the New Environment dialog of the
-  member the heading opens (this window's own dialog for its own copy).
+  always visible, and opens the window's New Environment dialog aimed at the
+  member the heading opens
+  ([command-nodes.md](command-nodes.md#opening-an-environment-on-another-node)).
   A chevron sits to its right at the row's right edge, with the same icon
   and desktop styling as a folder heading's. On narrow viewports or with
   a coarse primary pointer, both repository actions are 40 × 40 px. The

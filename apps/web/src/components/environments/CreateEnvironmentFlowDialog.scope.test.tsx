@@ -1,7 +1,5 @@
 import { afterAll, afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import * as machineRouting from "./create-environment-machines";
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import { NodeScopeProvider, WindowScopeProvider } from "@/lib/node-scope/providers";
@@ -11,18 +9,6 @@ import { projectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
 import { FakeNodeClient } from "@/test/render-in-node-scope";
 import type { Environment, Project } from "@/types";
-
-const targetMachine: machineRouting.CreateEnvironmentMachine = {
-  key: "alt",
-  machine: "alt",
-  nodeId: "alt",
-  name: "Target",
-  projectId: "target-project",
-  current: false,
-  available: true,
-  hasCheckout: true,
-};
-const handoff = { prompt: "Carry this", name: "carried" };
 
 // The inner form is stubbed to submit one feature build or one plain
 // environment; its own tests cover the form. Snapshot and restore it so later files see the real module.
@@ -36,14 +22,12 @@ mock.module("./CreateEnvironmentDialog", () => ({
     onCreateFeatureBuild,
     isLoading,
     loadingLabel,
-    onSelectMachine,
   }: {
     projectId: string;
     onCreate: (options: ClaudeOptions) => Promise<boolean>;
     onCreateFeatureBuild: (input: CreateFeatureBuildInput) => Promise<boolean>;
     isLoading?: boolean;
     loadingLabel?: string;
-    onSelectMachine: (machine: typeof targetMachine, form: CreateEnvironmentHandoff) => boolean;
   }) => {
     const buildFeature = (environmentType: "local" | "containerized") =>
       void onCreateFeatureBuild({
@@ -66,9 +50,6 @@ mock.module("./CreateEnvironmentDialog", () => ({
       } as unknown as ClaudeOptions);
     return (
       <>
-        <button type="button" onClick={() => onSelectMachine(targetMachine, handoff)}>
-          Switch machines
-        </button>
         <output data-testid="create-busy">{isLoading ? (loadingLabel ?? "busy") : "idle"}</output>
         <button type="button" onClick={() => buildFeature("local")}>
           Build feature
@@ -130,14 +111,7 @@ test("a feature build created on another node selects it on that node, not the c
   render(
     <WindowScopeProvider windowScope={windowScope}>
       <NodeScopeProvider scope={leaf}>
-        <CreateEnvironmentFlowDialog
-          open
-          onOpenChange={() => undefined}
-          projectId="project-leaf"
-          createEnvironment={async () => ({}) as Environment}
-          updateEnvironment={() => undefined}
-          startEnvironment={async () => undefined}
-        />
+        <CreateEnvironmentFlowDialog open onOpenChange={() => undefined} projectId="project-leaf" />
       </NodeScopeProvider>
     </WindowScopeProvider>,
   );
@@ -174,7 +148,11 @@ test("a plain environment created on another node arms its startup agent tab on 
   const created = { id: "env-leaf", projectId: "project-leaf" } as Environment;
   const leafClient = new FakeNodeClient({
     nodeId: "bk_leaf" as BackendId,
-    invoke: { update_environment_agent_settings: created },
+    invoke: {
+      create_environment: created,
+      update_environment_agent_settings: created,
+      start_environment_in_background: null,
+    },
   });
   const leaf = windowScope.open({ role: "leaf", client: leafClient });
   leaf.store(projectStore).setState({
@@ -182,20 +160,11 @@ test("a plain environment created on another node arms its startup agent tab on 
     hasLoaded: true,
   });
   command.store(projectStore).setState({ projects: [], hasLoaded: true });
-  const createEnvironment = mock(async () => created);
-  const startEnvironment = mock(async () => undefined);
 
   render(
     <WindowScopeProvider windowScope={windowScope}>
       <NodeScopeProvider scope={leaf}>
-        <CreateEnvironmentFlowDialog
-          open
-          onOpenChange={() => undefined}
-          projectId="project-leaf"
-          createEnvironment={createEnvironment}
-          updateEnvironment={() => undefined}
-          startEnvironment={startEnvironment}
-        />
+        <CreateEnvironmentFlowDialog open onOpenChange={() => undefined} projectId="project-leaf" />
       </NodeScopeProvider>
     </WindowScopeProvider>,
   );
@@ -234,9 +203,11 @@ const CREDENTIAL_OK = { available: true, source: "host-cli" };
 
 function renderStagedDialog(
   client: FakeNodeClient,
-  createEnvironment: (...args: unknown[]) => Promise<Environment> = async () =>
+  createEnvironment: () => Promise<Environment> = async () =>
     ({ id: "env-staged", projectId: "project-staged" }) as Environment,
 ) {
+  client.respond("create_environment", createEnvironment);
+  client.respond("start_environment_in_background", null);
   const windowScope = new WindowScope();
   scopes.push(windowScope);
   const node = windowScope.open({ role: "command", client });
@@ -255,9 +226,6 @@ function renderStagedDialog(
           open={props.open ?? true}
           onOpenChange={onOpenChange}
           projectId={props.projectId ?? "project-staged"}
-          createEnvironment={createEnvironment as never}
-          updateEnvironment={() => undefined}
-          startEnvironment={async () => undefined}
         />
       </NodeScopeProvider>
     </WindowScopeProvider>
@@ -396,44 +364,5 @@ test("changing project during the credential check returns the button to idle", 
   await act(async () => rerender({ projectId: "project-other" }));
   await act(async () => credential.release(CREDENTIAL_OK));
   await waitFor(() => expect(busyLabel()).toBe("idle"));
-  expect(createEnvironment).not.toHaveBeenCalled();
-});
-
-test("switching refuses a busy form and cancels the pending credential warning before routing", async () => {
-  const credential = gate<unknown>();
-  const route = spyOn(machineRouting, "openCreateEnvironmentOnMachine").mockImplementation(
-    () => undefined,
-  );
-  const createEnvironment = mock(async () => ({ id: "env-staged" }) as Environment);
-  const { onOpenChange } = renderStagedDialog(
-    new FakeNodeClient({
-      invoke: { get_container_github_credential_status: () => credential.promise },
-    }),
-    createEnvironment,
-  );
-
-  await click("Create container environment");
-  await click("Switch machines");
-  expect(route).not.toHaveBeenCalled();
-  expect(onOpenChange).not.toHaveBeenCalled();
-
-  await act(async () => credential.release({ available: false, source: "host-cli" }));
-  await screen.findByRole("alertdialog");
-  // The real alert traps interaction. Invoke the form callback through the stub
-  // to verify the close path settles a preflight that has reached its warning.
-  await act(async () =>
-    fireEvent.click(screen.getByRole("button", { name: "Switch machines", hidden: true })),
-  );
-  expect(screen.queryByRole("alertdialog") === null).toBe(true);
-  expect(onOpenChange.mock.calls).toEqual([[false]]);
-  expect(route.mock.calls).toEqual([
-    [
-      targetMachine,
-      "repo",
-      handoff,
-      // The form comes back here if the destination cannot show it.
-      { connectionId: "", projectId: "project-staged", machineName: "this machine", title: "repo" },
-    ],
-  ]);
   expect(createEnvironment).not.toHaveBeenCalled();
 });

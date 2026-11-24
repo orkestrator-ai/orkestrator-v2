@@ -182,6 +182,8 @@ interface Entry {
   suspendedInPass: number | null;
   /** `client.suspend()` ran and no `resume()` since. */
   streamsClosed: boolean;
+  /** Uses of the scope while it is hidden (`pin`). */
+  pins: number;
 }
 
 const BUDGET_KINDS = ["transcripts", "artifacts", "images"] as const;
@@ -337,6 +339,7 @@ export class ScopeLifecycle {
       hiddenReported: null,
       suspendedInPass: null,
       streamsClosed: false,
+      pins: 0,
     };
     this.entries.set(scope, entry);
     // The scope's own lifetime (Effect-backed) ends the entry: a scope
@@ -361,6 +364,32 @@ export class ScopeLifecycle {
     const shown = entry.scope.nodeId === this.shownNode;
     this.wake(entry, shown ? "live" : "warm");
     if (!shown) this.armSuspendTimer(entry);
+  }
+
+  /**
+   * Something in the window uses `nodeId`'s scope while it is hidden (the New
+   * Environment dialog aimed at that machine): it resumes now, and neither
+   * its suspend timer nor the pressure path moves it until the returned
+   * release. A hidden document on iOS still suspends it; it resumes when the
+   * document is visible again. Does nothing for a node that is not managed.
+   */
+  pin(nodeId: BackendId): Unlisten {
+    const entry = this.entryOf(nodeId);
+    if (!entry) return () => undefined;
+    entry.pins += 1;
+    this.clearSuspendTimer(entry);
+    this.resume(nodeId);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      entry.pins -= 1;
+      if (entry.pins > 0 || this.entries.get(entry.scope) !== entry) return;
+      if (entry.tier === "warm" && entry.scope.nodeId !== this.shownNode) {
+        this.armSuspendTimer(entry);
+      }
+      void this.checkPressure();
+    };
   }
 
   /**
@@ -562,6 +591,7 @@ export class ScopeLifecycle {
 
   private armSuspendTimer(entry: Entry): void {
     this.clearSuspendTimer(entry);
+    if (entry.pins > 0) return;
     entry.suspendTimer = this.clock.setTimeout(() => {
       entry.suspendTimer = null;
       if (this.entries.get(entry.scope) !== entry) return;
@@ -626,13 +656,20 @@ export class ScopeLifecycle {
     for (const entry of Array.from(this.entries.values())) {
       if (hidden) this.suspend(entry, "document-hidden", null);
       else if (entry.scope.nodeId === this.shownNode) this.show(entry);
+      else if (entry.pins > 0) this.resume(entry.scope.nodeId);
     }
   }
 
-  /** Hidden managed scopes, least recently shown first (never shown counts as oldest, by opening). */
+  /**
+   * Hidden managed scopes nothing has pinned, least recently shown first
+   * (never shown counts as oldest, by opening).
+   */
   private hiddenByRecency(): Entry[] {
     return Array.from(this.entries.values())
-      .filter((entry) => entry.scope.nodeId !== this.shownNode && !entry.scope.disposed)
+      .filter(
+        (entry) =>
+          entry.scope.nodeId !== this.shownNode && !entry.scope.disposed && entry.pins === 0,
+      )
       .sort(
         (a, b) =>
           (a.lastShown ?? Number.NEGATIVE_INFINITY) - (b.lastShown ?? Number.NEGATIVE_INFINITY) ||

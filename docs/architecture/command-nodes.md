@@ -585,40 +585,48 @@ node ([federation.md](federation.md#node-scopes-one-scope-per-node-in-the-window
   Selecting one of the command node's own environments returns the central
   region to the window's own workspace, whose selection was cleared while
   another node's was shown.
-- **Creating on another node** opens that node's New environment dialog on
-  its scope, so the node's defaults — the command node's inherited settings
-  laid over its own — and start apply as they would there. The entry point
-  chooses the default machine by where it opens the dialog. The dialog's
-  header has a Machine dropdown beside its close button
-  (`CreateEnvironmentMachinePicker`), listing the dialog's own machine and
-  reachable machines holding a project for the same repository
+- **Creating on another node** uses the window's own New Environment dialog
+  (`CreateEnvironmentFlowDialog`), which stays mounted whichever machine it
+  creates on. An entry point aims it at a machine and nothing else: it opens
+  over whatever the window shows (`openMachineWorkspace` with
+  `createEnvironment`, rendered by `AppDialogHost`), and the window goes to
+  that machine only once the environment exists.
+
+  The dialog's header has a Machine dropdown beside its close button
+  (`CreateEnvironmentMachinePicker`), listing the machine the dialog opened on
+  and reachable machines holding a project for the same repository
   (`repositoryHint`, `useCreateEnvironmentMachines`). Matching uses a held node's
   loaded project list when available. An alternate needs a local checkout or
   confirmed Docker availability.
 
-  Picking another machine opens its own dialog for its copy of the project
-  (`openCreateEnvironmentOnMachine`). The command node's dialog opens through
-  the app-level host, including when the sidebar is hidden. The open request
-  carries the name, prompt, Build choice and Feature build details, and the
-  environment type and agent with its model and effort. The destination keeps
-  the type only where it can create it, the agent only when it is enabled
-  there, and the model only when its catalogue lists it. A carried OpenCode
-  model and effort can resolve when the project catalogue arrives, until the
-  user edits the agent selection. Opening a handoff preserves any saved
-  destination draft. The destination uses its own machine-specific defaults.
-  Attachments and machine-specific settings stay with the source form.
+  Picking another machine changes only the target
+  (`useCreateEnvironmentTarget`). In the background
+  `prepareCreateEnvironmentTarget` opens the machine's node scope
+  (`holdInTreeScope`) and loads what the form reads there: its project,
+  settings, Docker state and saved model lists. Until that is ready the form
+  stays on the machine it had, usable, with only Create disabled (after 400 ms
+  the button names the machine it is connecting to). Then the node scope around
+  the form changes in place, so the create, its agent settings and its start
+  are that machine's, with the command node's inherited settings laid over its
+  own. The target's scope is pinned while the dialog is open
+  (`ScopeLifecycle.pin`), because it is used without being shown.
 
-  The request survives the destination opening the project's Home behind the
-  dialog (`useProjectHomeActivation`): the window's selection sync
-  (`startRemoteWorkspaceSelectionSync`) keeps a switch's request while the
-  selection is its project or that project's Home, and drops it on any other
-  navigation. The switch watches its request (`watchCreateEnvironmentRequest`,
-  `lib/federation/create-environment-handoff.ts`). When the destination cannot
-  show the form (its workspace fails to open, the project is missing or has
-  neither a checkout nor Docker, or 30 seconds pass), the command and leaf
-  hosts use the same recovery path. A toast gives the reason, and the source
-  form reopens with its input, attachments and machine-specific settings.
-  Navigation cancels a pending switch. The handoff lives in the renderer.
+  Everything in the form stays: the prompt and its attachments, the name, the
+  Build choice and Feature build details, network access and whether the agent
+  launches. The type and the agent with its model and effort are kept where the
+  machine has them, replaced by its own where it does not, and come back when a
+  later pick (or a model list that arrives late) has them again. A worktree
+  folder belongs to the machine it was picked on. Ports the user left alone
+  follow the target project's defaults, and terminal or native is each
+  machine's own setting. The draft kept on close is the opening machine's.
+
+  A machine that cannot be the target (it cannot be reached, the project is
+  missing, it has neither a checkout nor Docker, or 30 seconds pass) leaves the
+  form where it was and a toast gives the reason. So does a target whose scope
+  closes, which returns the form to the machine it opened on. Closing the
+  dialog drops a pending pick. A dialog opened on another machine shows a
+  cancellable "Connecting to…" until that machine is ready, and going elsewhere
+  in the window drops it.
   The [mixed-version browser check](../development/agent-testing.md#mixed-version-create-environment-handoff)
   exercises the destination's project reads and create command separately.
 - **Project and environment menus** of another node offer what the node's

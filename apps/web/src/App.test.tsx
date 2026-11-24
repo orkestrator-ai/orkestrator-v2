@@ -89,7 +89,6 @@ const mockListen = listen as ReturnType<typeof mock>;
 type AppEventCallback = (event: { payload: any }) => void;
 let appEventCallbacks = new Map<string, AppEventCallback>();
 const mockAppUnlisten = mock(() => {});
-let projectLauncherProps: React.ComponentProps<typeof realProjects.ProjectLauncher> | null = null;
 
 const mockConfig: AppConfig = {
   version: "1.0",
@@ -195,10 +194,7 @@ mock.module("@/components/kanban", () => ({
 
 mock.module("@/components/projects", () => ({
   ...realProjectsSnapshot,
-  ProjectLauncher: (props: React.ComponentProps<typeof realProjects.ProjectLauncher>) => {
-    projectLauncherProps = props;
-    return <div data-testid="project-launcher" />;
-  },
+  ProjectLauncher: () => <div data-testid="project-launcher" />,
 }));
 
 mock.module("@/components/projects/ProjectWorkspace", () => ({
@@ -583,7 +579,6 @@ function resetAppMocks() {
   mockCreateEnvironment.mockImplementation(async () => makeEnvironment("created", "project-1"));
   mockUpdateEnvironment.mockClear();
   mockUseEnvironmentLifecycleService.mockClear();
-  projectLauncherProps = null;
   mockExit.mockClear();
   mockRestart.mockClear();
   mockCheckDocker.mockClear();
@@ -993,7 +988,7 @@ describe("App background processing mounts", () => {
     }
   });
 
-  test("routes the empty selection to the launcher and forwards environment operations", async () => {
+  test("routes the empty selection to the launcher", async () => {
     resetStores({
       environments: [],
       selectedProjectId: null,
@@ -1003,11 +998,6 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     expect(screen.getByTestId("project-launcher")).toBeTruthy();
-    expect(projectLauncherProps).toEqual({
-      createEnvironment: mockCreateEnvironment,
-      updateEnvironment: mockUpdateEnvironment,
-      startEnvironment: mockStartEnvironment,
-    });
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
   });
 

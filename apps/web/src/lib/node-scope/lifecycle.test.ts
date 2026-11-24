@@ -229,6 +229,48 @@ describe("tier state machine", () => {
     expect(scope.tier.get()).toBe("suspended");
   });
 
+  test("pin(nodeId) wakes a hidden scope and keeps its timer and pressure off it until released", async () => {
+    const { scope } = open(node(1));
+    await clock.advance(SUSPEND_MS);
+    expect(scope.tier.get()).toBe("suspended");
+    const first = windowScope.lifecycle.pin(node(1));
+    const second = windowScope.lifecycle.pin(node(1));
+    expect(scope.tier.get()).toBe("warm");
+    await clock.advance(SUSPEND_MS * 3);
+    windowScope.lifecycle.configure({ memoryBudgetBytes: 1 });
+    await flush();
+    windowScope.lifecycle.relieveMemoryWarning();
+    expect(scope.tier.get()).toBe("warm");
+
+    first();
+    first();
+    windowScope.lifecycle.configure({ memoryBudgetBytes: 1024 * MIB });
+    await clock.advance(SUSPEND_MS * 3);
+    expect(scope.tier.get()).toBe("warm");
+    second();
+    await clock.advance(SUSPEND_MS);
+    expect(scope.tier.get()).toBe("suspended");
+  });
+
+  test("a pinned hidden scope suspends with the iOS document and resumes with it", async () => {
+    makeWindow({ host: "ios", suspendWhenDocumentHidden: true });
+    const { scope } = open(node(1));
+    const other = open(node(2));
+    const unpin = windowScope.lifecycle.pin(node(1));
+    visibility.set(true);
+    expect(scope.tier.get()).toBe("suspended");
+    visibility.set(false);
+    expect(scope.tier.get()).toBe("warm");
+    expect(other.scope.tier.get()).toBe("suspended");
+    unpin();
+  });
+
+  test("pinning a node the lifecycle does not manage does nothing", () => {
+    windowScope.lifecycle.pin(COMMAND)();
+    windowScope.lifecycle.pin(node(9))();
+    expect(windowScope.lifecycle.size).toBe(0);
+  });
+
   test("releasing a managed scope gives it back unsuspended, with its services stopped", async () => {
     const { scope, client, managed } = open(node(1));
     await clock.advance(SUSPEND_MS);

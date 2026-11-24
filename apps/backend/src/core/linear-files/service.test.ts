@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import sharp from "sharp";
 import { McpServer } from "@modelcontextprotocol/server";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -9,6 +10,7 @@ import { runCommand } from "../command-capture.js";
 import { callToolInProcess, listToolsInProcess } from "../mcp-in-process.js";
 import { linearFileName, safeFileName } from "./issue-files.js";
 import { LinearFileService, type LinearFileServiceDependencies } from "./service.js";
+import { WorkflowResultService } from "../workflows/index.js";
 import { registerLinearFileTool } from "./tool.js";
 
 const KEY = "lin_api_secret";
@@ -69,12 +71,35 @@ function linearPipeline(): BuildPipeline {
   } as BuildPipeline;
 }
 
-function service(overrides: Partial<LinearFileServiceDependencies> = {}): LinearFileService {
+function pendingAttempt(requestId: string): NonNullable<BuildPipeline["pendingPromptAttempt"]> {
+  return {
+    dispatchVersion: 1,
+    id: requestId,
+    requestId,
+    sessionId: "session",
+    phase: "building",
+    prompt: "Build the ticket",
+    useTaskImages: false,
+    structuredReview: false,
+    startedAt: "2026-11-24T10:00:00.000Z",
+  };
+}
+
+function service(
+  overrides: Partial<LinearFileServiceDependencies> = {},
+  containerId?: string,
+): LinearFileService {
   return new LinearFileService({
     storage: {
       getEnvironment: async (id: string) =>
         id === SCOPE.environmentId
-          ? { id, projectId: SCOPE.projectId, environmentType: "local", worktreePath: worktree }
+          ? {
+              id,
+              projectId: SCOPE.projectId,
+              ...(containerId
+                ? { environmentType: "container", containerId }
+                : { environmentType: "local", worktreePath: worktree }),
+            }
           : null,
       getProject: async (id: string) => ({ id, name: "Web", gitUrl: null }),
       kanban: { getLinearAuth: async () => (apiKey ? { apiKey } : null) },
@@ -144,7 +169,7 @@ describe("the build's files", () => {
     const directory = path.join(worktree, ".orkestrator/linear-files/DND-107");
     const names = (await readdir(directory)).sort();
     expect(names).toHaveLength(2);
-    const zip = linearFileName(ZIP);
+    const zip = `${linearFileName(ZIP)}.zip`;
     expect(await readFile(path.join(directory, zip), "utf8")).toBe("zip-bytes");
     expect((await stat(path.join(directory, zip))).mode & 0o777).toBe(0o644);
     const { stdout } = await runCommand(
@@ -156,9 +181,11 @@ describe("the build's files", () => {
 
     expect(prepared.section).toContain(`.orkestrator/linear-files/DND-107/${zip}`);
     expect(prepared.section).not.toContain("could not be downloaded");
-    expect(prepared.images).toEqual([
-      { filename: linearFileName(LOGO), data: PNG.toString("base64") },
-    ]);
+    expect(prepared.images).toHaveLength(1);
+    expect(prepared.images[0]?.filename).toBe(`${linearFileName(LOGO)}.webp`);
+    expect((await sharp(Buffer.from(prepared.images[0]!.data, "base64")).metadata()).format).toBe(
+      "webp",
+    );
     // The comment's file is not in this build's ticket: comments were left out.
     expect(fetched).toEqual([ZIP, LOGO]);
   });
@@ -239,12 +266,12 @@ describe("the build's files", () => {
   test("includes acceptance-criteria links from the snapshot", async () => {
     const snapshot = { ...taskSnapshot(""), acceptanceCriteria: `Extract [package.zip](${ZIP})` };
     const prepared = await service().prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
-    expect(prepared?.section).toContain(`${STAGING_DIRECTORY}/${linearFileName(ZIP)}`);
+    expect(prepared?.section).toContain(`${STAGING_DIRECTORY}/${linearFileName(ZIP)}.zip`);
     expect(fetched).toEqual([ZIP]);
   });
 
   test("refuses a destination exposed by an ignore exception or already tracked", async () => {
-    const target = `${STAGING_DIRECTORY}/${linearFileName(ZIP)}`;
+    const target = `${STAGING_DIRECTORY}/${linearFileName(ZIP)}.zip`;
     await writeFile(
       path.join(worktree, ".gitignore"),
       `!/.orkestrator/\n/${STAGING_DIRECTORY}/*\n!/${target}\n`,
@@ -280,8 +307,8 @@ describe("the build's files", () => {
     expect(result.files).toEqual([]);
     expect(result.failed.map(({ reason }) => reason)).toEqual([
       expect.stringContaining("larger than"),
-      expect.stringContaining("larger than"),
-      expect.stringContaining("files together are too large"),
+      expect.stringContaining("issue limit"),
+      expect.stringContaining("issue limit"),
     ]);
   });
 
@@ -323,29 +350,71 @@ describe("the build's files", () => {
     expect(writeContainer).toHaveBeenCalledTimes(1);
   });
 
-  test("bounds ticket images by per-image size, total size and count", async () => {
+  test("bounds the input size and number of ticket images", async () => {
     const urls = Array.from({ length: 13 }, (_, index) => `${LOGO}/${index}.png`);
     const snapshot = taskSnapshot(urls.join(" "));
     issue.description = snapshot.description;
-    const twoMiB = 2 * 1024 * 1024;
-    urls.forEach((url, index) => {
-      const image = index >= 2 && index < 12 ? PNG : Buffer.concat([PNG, Buffer.alloc(twoMiB)]);
-      fileAnswers.set(url, () => new Response(image));
-    });
-
-    const host = service();
-    const first = await host.prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
-    expect(first?.images.map(({ filename }) => filename)).toEqual(
-      urls.slice(2, 12).map(linearFileName),
-    );
-    for (const url of urls.slice(0, 2)) {
-      const image = Buffer.concat([PNG, Buffer.alloc(twoMiB - PNG.length)]);
+    for (const [index, url] of urls.entries()) {
+      const image = index === 0 ? Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024)]) : PNG;
       fileAnswers.set(url, () => new Response(image));
     }
-    const second = await host.prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
-    expect(second?.images.map(({ filename }) => filename)).toEqual(
-      urls.slice(0, 2).map(linearFileName),
+    const prepared = await service().prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
+    expect(prepared?.images.map(({ filename }) => filename)).toEqual(
+      urls.slice(1, 11).map((url) => linearFileName(url).replace(/\.png$/, ".webp")),
     );
+  });
+
+  test("keeps original files and uses only decodable, bounded images in the ticket", async () => {
+    const corrupt = PNG.subarray(0, 18);
+    const tall = await sharp({
+      create: { width: 100, height: 9000, channels: 3, background: "green" },
+    })
+      .png()
+      .toBuffer();
+    fileAnswers.set(ZIP, () => new Response(corrupt));
+    fileAnswers.set(LOGO, () => new Response(tall));
+    const prepared = await service().prepareBuild(linearPipeline());
+    expect(prepared?.images).toHaveLength(1);
+    const normalized = await sharp(Buffer.from(prepared!.images[0]!.data, "base64")).metadata();
+    expect(normalized).toMatchObject({ height: 2000, format: "webp" });
+    expect(
+      await readFile(path.join(worktree, STAGING_DIRECTORY, `${linearFileName(ZIP)}.png`)),
+    ).toEqual(corrupt);
+    expect(
+      await readFile(path.join(worktree, STAGING_DIRECTORY, `${linearFileName(LOGO)}.png`)),
+    ).toEqual(tall);
+  });
+
+  test("recovers file extensions and reuses the first path when response metadata changes", async () => {
+    fileAnswers.set(
+      ZIP,
+      () =>
+        new Response("zip", {
+          headers: { "content-disposition": 'attachment; filename="archive.zip"' },
+        }),
+    );
+    const host = service();
+    const first = await host.download(SCOPE, { urls: [ZIP, LOGO] });
+    expect(first.files.map(({ path }) => path)).toEqual([
+      `${STAGING_DIRECTORY}/${linearFileName(ZIP)}.zip`,
+      `${STAGING_DIRECTORY}/${linearFileName(LOGO)}.png`,
+    ]);
+    fileAnswers.set(
+      ZIP,
+      () =>
+        new Response("new", {
+          headers: { "content-disposition": 'attachment; filename="archive.gz"' },
+        }),
+    );
+    const second = await host.download(SCOPE, { urls: [ZIP] });
+    expect(second.files[0]?.path).toBe(first.files[0]?.path);
+    expect(await readFile(path.join(worktree, second.files[0]!.path), "utf8")).toBe("new");
+  });
+
+  test("names the issue budget when the next file cannot fit", async () => {
+    const result = await service({ maxIssueBytes: 10 }).download(SCOPE, { urls: [ZIP, LOGO] });
+    expect(result.files).toHaveLength(1);
+    expect(result.failed[0]?.reason).toContain("10 B issue limit. Request this file by URL.");
   });
 
   test("reuses a path after a link label changes and writes long Unicode names", async () => {
@@ -461,6 +530,119 @@ describe("download_linear_files", () => {
     board = { teamId: "team-1" };
     expect((await call({ issueId: "DND-108" })).isError).toBe(false);
   });
+
+  test("scopes off-board access to the own attempt or the latest general build", async () => {
+    const first = {
+      ...linearPipeline(),
+      pendingPromptAttempt: pendingAttempt("first-attempt"),
+    };
+    pipelines = [
+      first,
+      {
+        ...first,
+        id: "pipeline-2",
+        createdAt: "2026-11-24T11:00:00Z",
+        source: { type: "kanban", taskId: "task-2" },
+        pendingPromptAttempt: pendingAttempt("second-attempt"),
+      },
+    ];
+    const host = service();
+    await expect(host.offered(SCOPE)).resolves.toBe(false);
+    await expect(
+      host.download({ ...SCOPE, workflowResultKey: "second-attempt" }, { issueId: "issue-1" }),
+    ).rejects.toThrow("not on");
+    await expect(
+      host.download({ ...SCOPE, workflowResultKey: "first-attempt" }, { urls: [ZIP] }),
+    ).resolves.toMatchObject({ issue: "DND-107" });
+    pipelines[1]!.source = { type: "linear", issueId: "issue-2", issueIdentifier: "DND-108" };
+    const fetchFile = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, options?: RequestInit) => {
+      if (String(input) !== "https://api.linear.app/graphql") return fetchFile(input, options);
+      const { variables } = JSON.parse(String(options?.body));
+      return Response.json({
+        data: {
+          issue: {
+            ...issue,
+            id: variables.id,
+            identifier: variables.id === "issue-1" ? "DND-107" : "DND-108",
+          },
+        },
+      });
+    }) as typeof fetch;
+    for (const [workflowResultKey, expected] of [
+      ["first-attempt", "DND-107"],
+      ["second-attempt", "DND-108"],
+    ]) {
+      await expect(
+        host.download({ ...SCOPE, workflowResultKey }, { urls: [ZIP] }),
+      ).resolves.toMatchObject({ issue: expected });
+    }
+  });
+
+  test("resolves the worktree after the fetch under a workspace mutation hold", async () => {
+    const retired = worktree;
+    const next = await mkdtemp(path.join(os.tmpdir(), "linear-moved-"));
+    try {
+      await runCommand("git", ["init", "--quiet", next], { timeoutMs: 10_000 });
+      fileAnswers.set(ZIP, () => {
+        worktree = next;
+        return new Response("contents");
+      });
+      const host = service();
+      const result = await host.download(SCOPE, { urls: [ZIP] });
+      const target = result.files[0]!.path;
+      expect(await readFile(path.join(next, target), "utf8")).toBe("contents");
+      await expect(stat(path.join(retired, target))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      worktree = retired;
+      await rm(next, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["local", "container"] as const)(
+    "revocation during network I/O fences %s publication",
+    async (target) => {
+      const resultKey = crypto.randomUUID();
+      const results = new WorkflowResultService(worktree);
+      await results.prepare({ ...SCOPE, resultKey, kind: "review-preparation", provider: "codex" });
+      pipelines[0]!.pendingPromptAttempt = pendingAttempt(resultKey);
+      const started = Promise.withResolvers<void>();
+      const fetched = Promise.withResolvers<Response>();
+      const fetchFile = globalThis.fetch;
+      globalThis.fetch = (async (input: string | URL | Request, options?: RequestInit) => {
+        if (String(input) !== ZIP) return fetchFile(input, options);
+        started.resolve();
+        return fetched.promise;
+      }) as typeof fetch;
+      const writeContainer = mock(async () => {});
+      const beginMutation = mock(() => () => undefined);
+      const host = service(
+        { writeContainer, fence: { beginMutation } },
+        target === "container" ? "test-container" : undefined,
+      );
+      try {
+        const srv = new McpServer({ name: "test", version: "1" }, { capabilities: { tools: {} } });
+        expect(
+          await registerLinearFileTool(srv, host, { ...SCOPE, workflowResultKey: resultKey }, () =>
+            results.holdOpenResult(SCOPE, resultKey),
+          ),
+        ).toBe(true);
+        const call = callToolInProcess(async () => srv, "download_linear_files", { urls: [ZIP] });
+        await started.promise;
+        await results.close(resultKey, "cancelled");
+        fetched.resolve(new Response("arrived after close"));
+        expect((await call).isError).toBe(true);
+        expect(beginMutation).not.toHaveBeenCalled();
+        expect(writeContainer).not.toHaveBeenCalled();
+        await expect(stat(path.join(worktree, STAGING_DIRECTORY))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        fetched.resolve(new Response());
+        results.closeStorage();
+      }
+    },
+  );
 
   test("includes an attachment Linear hosts, and no other attachment", async () => {
     issue.description = "";

@@ -97,7 +97,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   set_linear_board_link: ["projectId", "teamId", "linearProjectId"],
   clear_linear_board_link: ["projectId"],
   get_linear_board_options: ["projectId"],
-  get_linear_issue_files: ["projectId", "issueId", "fileUrl"],
+  get_linear_issue_files: ["projectId", "issueId", "fileUrl", "offset"],
   create_linear_issue: [
     "projectId",
     "requestKey",
@@ -218,6 +218,7 @@ describe("kanban definitions", () => {
       add_kanban_comment: ["requestId", "projectId"],
       start_feature_planning: ["operationId"],
       create_linear_issue: ["requestKey"],
+      get_linear_issue_files: ["offset"],
     });
   });
 

@@ -181,6 +181,7 @@ describe("Electron backend command registry", () => {
     const file = "https://uploads.linear.app/ws/aaaa/bbbb";
     const bare = "https://uploads.linear.app/ws/aaaa/bare";
     const emphasis = "https://uploads.linear.app/ws/aaaa/emphasis";
+    let attachments: { url: string; title: string }[] = [];
     let hostStatus = 206;
     const fileHost = mock();
     globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
@@ -203,7 +204,7 @@ describe("Electron backend command registry", () => {
             description: `[package.zip](${file}?signature=abc) See ${bare}?signature=abc_. **${emphasis}?signature=abc-**.`,
             team: { id: teamId },
             project: null,
-            attachments: { nodes: [] },
+            attachments: { nodes: attachments },
             comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
           },
         },
@@ -211,9 +212,14 @@ describe("Electron backend command registry", () => {
     }) as unknown as typeof fetch;
 
     try {
-      const read = (fileUrl?: string) =>
+      const read = (fileUrl?: string, offset?: number) =>
         commands.get("get_linear_issue_files")?.(
-          { projectId: "project-1", issueId: "ENG-1", ...(fileUrl ? { fileUrl } : {}) },
+          {
+            projectId: "project-1",
+            issueId: "ENG-1",
+            ...(fileUrl ? { fileUrl } : {}),
+            ...(offset === undefined ? {} : { offset }),
+          },
           context,
         );
       await expect(read()).resolves.toEqual({
@@ -236,6 +242,19 @@ describe("Electron backend command registry", () => {
         "no longer links",
       );
       expect(fileHost).toHaveBeenCalledTimes(3);
+      attachments = Array.from({ length: 51 }, (_, index) => ({
+        title: `Attachment ${index + 1}`,
+        url: `https://uploads.linear.app/ws/attachment-${index + 1}.zip?s=fixture`,
+      }));
+      await expect(read()).resolves.toMatchObject({ files: expect.any(Array), nextOffset: 50 });
+      await expect(read(undefined, 50)).resolves.toMatchObject({
+        files: [
+          { name: "Attachment 51", url: "https://uploads.linear.app/ws/attachment-51.zip" },
+          { url: file },
+          { url: bare },
+          { url: emphasis },
+        ],
+      });
       teamId = "another-team";
       await expect(read()).rejects.toThrow("not on this project's Linear board");
     } finally {

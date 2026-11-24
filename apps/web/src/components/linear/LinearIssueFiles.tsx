@@ -1,6 +1,6 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
-import { linearFileUrl } from "@orkestrator/protocol/linear-files";
+import { linearFilePathSegment, linearFileUrl } from "@orkestrator/protocol/linear-files";
 import {
   createContext,
   useCallback,
@@ -65,7 +65,7 @@ export function useLinearIssueFiles(
   const load = useCallback(
     async (issueId: string) => {
       const request = ++requestRef.current;
-      setLoaded({ issueId, files: [] });
+      setLoaded((current) => (current?.issueId === issueId ? current : { issueId, files: [] }));
       if (!projectId) return;
       try {
         const next = await read(issueId);
@@ -144,6 +144,12 @@ export function useLinearIssueFiles(
 }
 
 const LinearFilesContext = createContext<LinearIssueFilesState | null>(null);
+const InsideMarkdownLink = createContext(false);
+
+function signedFileUrl(files: readonly LinearIssueFile[], url: string): string | undefined {
+  const signedUrl = files.find((file) => file.url === url)?.signedUrl;
+  return signedUrl && linearFileUrl(signedUrl) === url ? signedUrl : undefined;
+}
 
 export function LinearFilesProvider({
   files,
@@ -158,14 +164,21 @@ export function LinearFilesProvider({
 function LinearFileLink(props: AnchorHTMLAttributes<HTMLAnchorElement> & ExtraProps) {
   const files = useContext(LinearFilesContext);
   const url = props.href ? linearFileUrl(props.href) : null;
-  if (!files || !url) return <MarkdownLink {...props} />;
+  const children = (
+    <InsideMarkdownLink.Provider value>{props.children}</InsideMarkdownLink.Provider>
+  );
+  if (!files || !url) return <MarkdownLink {...props}>{children}</MarkdownLink>;
+  const open = (event: MouseEvent) => {
+    event.preventDefault();
+    void files.open(url);
+  };
   return (
     <a
-      href={props.href}
+      href={signedFileUrl(files.files, url) ?? props.href}
       className="cursor-pointer text-blue-300 hover:underline"
-      onClick={(event: MouseEvent) => {
-        event.preventDefault();
-        void files.open(url);
+      onClick={open}
+      onAuxClick={(event) => {
+        if (event.button === 1) open(event);
       }}
     >
       {files.opening === url ? (
@@ -176,7 +189,7 @@ function LinearFileLink(props: AnchorHTMLAttributes<HTMLAnchorElement> & ExtraPr
       ) : (
         <Download className="mr-1 inline size-3.5 align-text-bottom" aria-hidden="true" />
       )}
-      {props.children}
+      {children}
     </a>
   );
 }
@@ -188,13 +201,29 @@ function LinearFileImage({
   node: _node,
 }: ImgHTMLAttributes<HTMLImageElement> & ExtraProps) {
   const files = useContext(LinearFilesContext);
+  const linked = useContext(InsideMarkdownLink);
   // The link that failed, so a newer link of the same image is tried again.
   const [failed, setFailed] = useState<string | null>(null);
   const url = typeof src === "string" ? linearFileUrl(src) : null;
   if (!files || !url) return <img src={src} alt={alt} title={title} />;
   const label = alt || "image";
-  const signedUrl = files.files.find((file) => file.url === url)?.signedUrl;
-  const shown = signedUrl && signedUrl !== failed ? signedUrl : null;
+  const signedUrl = signedFileUrl(files.files, url);
+  const image =
+    signedUrl && signedUrl !== failed ? (
+      <img
+        src={signedUrl}
+        alt={alt ?? ""}
+        title={title}
+        className="!my-0 max-h-96 max-w-full rounded-md border border-border/60"
+        onError={() => setFailed(signedUrl)}
+      />
+    ) : (
+      <>
+        <ImageIcon className="inline size-3.5 shrink-0" aria-hidden="true" />
+        {label}
+      </>
+    );
+  if (linked) return image;
   return (
     <button
       type="button"
@@ -202,20 +231,7 @@ function LinearFileImage({
       aria-label={`Open ${label}`}
       onClick={() => void files.open(url)}
     >
-      {shown ? (
-        <img
-          src={shown}
-          alt={alt ?? ""}
-          title={title}
-          className="!my-0 max-h-96 max-w-full rounded-md border border-border/60"
-          onError={() => setFailed(shown)}
-        />
-      ) : (
-        <>
-          <ImageIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          {label}
-        </>
-      )}
+      {image}
     </button>
   );
 }
@@ -240,7 +256,12 @@ export function LinearFileList() {
       </div>
       <ul className="divide-y divide-border/60 rounded-md border border-border/60">
         {state.files.map((file) => {
-          const name = file.name || "Untitled file";
+          const segment = linearFilePathSegment(file.url)
+            .replace(/[\\/\x00-\x1f\x7f]/g, "-")
+            .trim();
+          const name =
+            file.name ||
+            (/\.[a-z\d]{1,10}$/i.test(segment) ? segment : `File ${segment || file.url}`);
           return (
             <li key={file.url} className="flex min-w-0 items-center gap-2 px-3 py-1.5 text-sm">
               <FileIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />

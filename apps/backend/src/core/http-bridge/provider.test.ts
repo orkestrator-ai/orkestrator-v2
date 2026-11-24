@@ -146,6 +146,38 @@ describe("HTTP bridge provider", () => {
     },
   );
 
+  test("uses only the restricted tab token for HTTP bridge review prompts", async () => {
+    const agentMcp = {
+      url: "http://127.0.0.1:4567/mcp",
+      token: "write-token",
+      readOnlyToken: "read-token",
+    };
+    for (const connection of [
+      claudeConnection,
+      codexConnection,
+      cursorConnection,
+      grokConnection,
+      piConnection,
+    ]) {
+      const provider = httpProvider(() => Response.json({ status: "processing" }), connection);
+      await provider.provider.send("session-1", "review", {
+        requestId: "r1",
+        readOnly: true,
+        agentMcp,
+      });
+      expect(JSON.parse(String(provider.requests[0]!.init.body)).agentMcp).toEqual({
+        url: agentMcp.url,
+        token: agentMcp.readOnlyToken,
+      });
+    }
+    const provider = httpProvider(() => Response.json({ attached: true }), cursorConnection);
+    await provider.provider.prepareDispatch?.("session-1", { readOnly: true, agentMcp });
+    expect(JSON.parse(String(provider.requests[0]!.init.body)).agentMcp).toEqual({
+      url: agentMcp.url,
+      token: agentMcp.readOnlyToken,
+    });
+  });
+
   test("tells Grok and Pi which attempt a workflow-result turn runs for", async () => {
     const agentMcp = { url: "http://127.0.0.1:4567/mcp", token: "attempt-token" };
     const attempt = {

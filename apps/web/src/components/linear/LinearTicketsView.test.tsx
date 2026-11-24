@@ -1168,6 +1168,30 @@ describe("LinearTicketsView", () => {
     });
   });
 
+  test("refreshes the file list and inline images after posting a comment", async () => {
+    const url = "https://uploads.linear.app/issue/comment.png";
+    const body = `![New comment diagram](${url})`;
+    postLinearIssueCommentMock.mockResolvedValueOnce({
+      id: "comment-image",
+      body,
+      createdAt: "2026-06-28T12:10:00.000Z",
+      authorName: "Ada",
+    });
+    getLinearIssueFilesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ url, signedUrl: `${url}?signature=comment` }]);
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Initial Linear comment");
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), { target: { value: body } });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+    const image = await screen.findByRole("img", { name: "New comment diagram" });
+    expect(image.getAttribute("src")).toBe(`${url}?signature=comment`);
+    expect(screen.getByRole("button", { name: "Download comment.png" })).toBeTruthy();
+    expect(getLinearIssueFilesMock).toHaveBeenCalledTimes(2);
+  });
+
   test("does not clear a newly selected ticket draft when an older comment finishes", async () => {
     const pendingComment = deferred<Awaited<ReturnType<typeof postLinearIssueCommentMock>>>();
     postLinearIssueCommentMock.mockImplementationOnce(() => pendingComment.promise);

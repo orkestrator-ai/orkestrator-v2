@@ -1,6 +1,8 @@
 /** A Linear-sourced build's ticket files in its prompts (`linear-files/service.ts`). */
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline, TaskSnapshot } from "@orkestrator/protocol/build-pipeline";
+import type { Environment } from "../models.js";
+import { MAX_TOTAL_ATTACHMENT_BYTES, stagePromptImages } from "../prompt-attachments.js";
 import { addTaskSnapshotImages, buildPrompt } from "./prompts.js";
 import { startBuilding, pipeline, startInput, withService } from "./service-test-support.js";
 
@@ -38,6 +40,33 @@ test("images are added once and stay within what a prompt carries", () => {
   ]);
   expect(task.images.map((image) => image.filename).slice(18)).toEqual(["18.png", "logo.png"]);
   expect(task.images[0]!.data).toBe("eA==");
+});
+
+test("only adds Linear images that fit the total byte budget used by prompt staging", async () => {
+  const image = Buffer.alloc(MAX_TOTAL_ATTACHMENT_BYTES / 4 - 1).toString("base64");
+  const task = snapshot("");
+  task.images = Array.from({ length: 4 }, (_, index) => ({
+    filename: `existing-${index}.png`,
+    data: image,
+  }));
+  addTaskSnapshotImages(task, [
+    { filename: "large.png", data: "eHh4eHg=" },
+    { filename: "fits.png", data: "eHh4eA==" },
+  ]);
+  expect(task.images.map(({ filename }) => filename)).toEqual([
+    "existing-0.png",
+    "existing-1.png",
+    "existing-2.png",
+    "existing-3.png",
+    "fits.png",
+  ]);
+  await expect(
+    stagePromptImages(
+      async <T>() => "/worktree/image" as T,
+      { environmentType: "local", worktreePath: "/worktree" } as Environment,
+      task.images,
+    ),
+  ).resolves.toHaveLength(5);
 });
 
 describe("a build started from a Linear issue", () => {
@@ -134,9 +163,10 @@ test.each(["pause", "cancel"] as const)(
 );
 
 test("strips signed links from a supplied snapshot and from the first Build prompt", async () => {
-  const signed = `${FILE}?signature=synthetic_secret`;
+  const quoted = "https://uploads.linear.app:443/ws/spec(v2).zip";
+  const signed = `${quoted}?signature=synthetic_secret`;
   const taskSnapshot = {
-    ...snapshot(`Use [package.zip](${signed})`),
+    ...snapshot(`Use [package.zip](<${signed}>)`),
     acceptanceCriteria: `Inspect ${signed}.`,
     comments: [{ text: `See **${signed}**.` }],
   };
@@ -144,9 +174,9 @@ test("strips signed links from a supplied snapshot and from the first Build prom
     const { started } = await startBuilding(service, storage, { source: SOURCE, taskSnapshot });
     const stored = await pipeline(storage, started.id);
     expect(JSON.stringify(stored.taskSnapshot)).not.toContain("synthetic_secret");
-    expect(stored.taskSnapshot.description).toBe(`Use [package.zip](${FILE})`);
-    expect(stored.taskSnapshot.comments).toEqual([{ text: `See **${FILE}**.` }]);
+    expect(stored.taskSnapshot.description).toBe(`Use [package.zip](<${quoted}>)`);
+    expect(stored.taskSnapshot.comments).toEqual([{ text: `See **${quoted}**.` }]);
     expect(provider.sent[0]?.prompt).not.toContain("synthetic_secret");
-    expect(provider.sent[0]?.prompt).toContain(FILE);
+    expect(provider.sent[0]?.prompt).toContain(quoted);
   });
 });

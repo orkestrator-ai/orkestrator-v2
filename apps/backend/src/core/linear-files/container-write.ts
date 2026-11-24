@@ -1,7 +1,14 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands-files.js";
 
 const STAGED = "LINEAR_FILE_STAGED\n";
+
+type SpawnWriter = (
+  command: string,
+  args: string[],
+  options: { stdio: ["pipe", "pipe", "ignore"] },
+) => ChildProcessByStdio<Writable, Readable, null>;
 
 /** Authorize publication only after Docker confirms the complete file is staged. */
 export function writeContainerLinearFile(
@@ -11,12 +18,13 @@ export function writeContainerLinearFile(
   contents: Buffer,
   signal: AbortSignal,
   deadline: number,
+  spawnWriter: SpawnWriter = spawn,
 ): Promise<void> {
   signal.throwIfAborted();
   const encoded = contents.toString("base64") + "\n";
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawn(
+    const child = spawnWriter(
       "docker",
       [
         "exec",
@@ -59,6 +67,10 @@ export function writeContainerLinearFile(
         return;
       }
       output += chunk.toString("ascii");
+      if (!STAGED.startsWith(output)) {
+        stop();
+        return;
+      }
       if (output !== STAGED) return;
       if (signal.aborted || Date.now() >= deadline || child.stdin.destroyed) {
         stop();
@@ -73,6 +85,7 @@ export function writeContainerLinearFile(
       if (code === 0 && authorized) resolve();
       else reject(spawnError ?? new Error("The container file writer stopped before publication."));
     });
-    child.stdin.write(encoded);
+    if (signal.aborted) stop();
+    else child.stdin.write(encoded);
   });
 }

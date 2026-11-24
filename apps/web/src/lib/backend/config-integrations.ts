@@ -653,14 +653,25 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     issueId: string,
     fileUrl?: string,
   ): Promise<LinearIssueFile[]> {
-    const result = await asKanbanModel<{ files: LinearIssueFile[] }>(
-      kanban(client).get_linear_issue_files({
-        projectId,
-        issueId,
-        ...(fileUrl ? { fileUrl } : {}),
-      }),
-    );
-    return result.files;
+    const files = new Map<string, LinearIssueFile>();
+    let offset: number | undefined;
+    do {
+      const page: { files: LinearIssueFile[]; nextOffset?: number } = await asKanbanModel(
+        kanban(client).get_linear_issue_files({
+          projectId,
+          issueId,
+          ...(fileUrl ? { fileUrl } : {}),
+          ...(offset === undefined ? {} : { offset }),
+        }),
+      );
+      for (const file of page.files) files.set(file.url, file);
+      if (fileUrl || page.nextOffset === undefined) break;
+      if (page.files.length === 0 || page.nextOffset !== (offset ?? 0) + page.files.length) {
+        throw new Error("Linear file pagination did not advance.");
+      }
+      offset = page.nextOffset;
+    } while (offset !== undefined);
+    return Array.from(files.values());
   }
 
   /** The linked board's workflow states (the board view's lanes), labels and members. */

@@ -115,9 +115,10 @@ export const getLinearIssueFilesCommand = defineCommand({
     projectId: Schema.String,
     issueId: Schema.String,
     fileUrl: Schema.optionalKey(Schema.String),
+    offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   }),
   result: LinearIssueFilesSchema,
-  critical: [],
+  critical: ["offset"],
 });
 
 /**

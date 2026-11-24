@@ -17,7 +17,7 @@ export const LINEAR_FILE_TOOL_NAME = "download_linear_files";
 /** Where downloaded files go in a workspace; `.orkestrator` is Git-excluded. */
 export const LINEAR_FILES_DIRECTORY = ".orkestrator/linear-files";
 
-/** The most files listed or downloaded in one batch. */
+/** The most files downloaded in one agent batch. */
 export const MAX_LINEAR_ISSUE_FILES = 50;
 
 /** One file an issue links to. `url` never carries a signature. */
@@ -43,28 +43,55 @@ export function linearFileUrl(value: string): string | null {
   return `https://${LINEAR_FILE_HOST}${url.pathname}`;
 }
 
+/** The final URL segment, decoded for display or for a confined filename. */
+export function linearFilePathSegment(url: string): string {
+  const segment = URL.parse(url)?.pathname.split("/").filter(Boolean).at(-1) ?? "";
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 // A file link, and the Markdown link or image label before it when it has one.
 // The label is bounded, so text full of brackets stays linear to scan.
 const FILE_LINK =
-  /(?:\[((?:\\.|[^[\]\\\n]){0,300})\]\(\s{0,4}<?)?(https:\/\/uploads\.linear\.app\/[^\s<>()[\]"'`\\]+)/gi;
+  /(?:\[((?:\\.|[^[\]\\\n]){0,300})\]\(\s{0,4})?(<?)(https:\/\/uploads\.linear\.app(?::\d+)?\/)/gi;
 
 /** Finds both forms of each link using the same Markdown boundaries. */
 export function* linearFileLinks(text: string) {
-  for (const match of text.matchAll(FILE_LINK)) {
-    const raw = match[2]!;
-    // Markdown destinations end at their closing delimiter. Bare links may
-    // end in sentence punctuation or emphasis. Underscore may end a signature.
-    const offset = match.index + match[0].length - raw.length;
-    let link = match[1] === undefined ? raw.replace(/[.,;:!?*~|]+$/, "") : raw;
-    if (match[1] === undefined) {
+  const starts = new RegExp(FILE_LINK);
+  for (let match = starts.exec(text); match; match = starts.exec(text)) {
+    const start = starts.lastIndex;
+    const offset = start - match[3]!.length;
+    const angled = match[2] === "<";
+    let depth = 0;
+    let end = start;
+    for (; end < text.length; end += 1) {
+      const character = text[end]!;
+      if (/[\s<>]/.test(character)) break;
+      if (angled) continue;
+      if (character === "\\" && match[1] !== undefined && /[()]/.test(text[end + 1] ?? "")) {
+        end += 1;
+        continue;
+      }
+      if (/[[\]"'`\\]/.test(character)) break;
+      if (character === "(") depth += 1;
+      if (character === ")" && depth-- === 0) break;
+    }
+    starts.lastIndex = end;
+    let raw = text.slice(offset, end);
+    if (match[1] === undefined && !angled) {
+      raw = raw.replace(/[.,;:!?*~|]+$/, "");
       const before = text.slice(Math.max(0, offset - 2), offset);
       const emphasis = before.endsWith("__") ? "__" : before.endsWith("_") ? "_" : "";
-      if (emphasis && link.endsWith(emphasis)) link = link.slice(0, -emphasis.length);
+      if (emphasis && raw.endsWith(emphasis)) raw = raw.slice(0, -emphasis.length);
     }
+    const link = raw.replace(/\\([()])/g, "$1");
     const url = linearFileUrl(link);
     if (!url) continue;
     const name = match[1]?.replace(/\\(.)/g, "$1").trim();
-    yield { url, link, name, offset };
+    yield { url, link, name, offset, length: raw.length };
   }
 }
 
@@ -72,10 +99,13 @@ export function* linearFileLinks(text: string) {
 export function unsignedLinearFileMarkdown(text: string): string {
   let cursor = 0;
   const parts: string[] = [];
-  for (const { url, link, offset } of linearFileLinks(text)) {
+  for (const { link, offset, length } of linearFileLinks(text)) {
     if (!link.includes("?") && !link.includes("#")) continue;
-    parts.push(text.slice(cursor, offset), url);
-    cursor = offset + link.length;
+    parts.push(
+      text.slice(cursor, offset),
+      text.slice(offset, offset + length).split(/[?#]/, 1)[0]!,
+    );
+    cursor = offset + length;
   }
   return cursor === 0 ? text : parts.join("") + text.slice(cursor);
 }

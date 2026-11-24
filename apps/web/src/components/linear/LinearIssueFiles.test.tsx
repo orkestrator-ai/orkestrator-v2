@@ -88,6 +88,65 @@ describe("a Linear issue's files", () => {
     );
   });
 
+  test.each([ZIP, "https://example.com/docs"])(
+    "keeps a Linear image inside %s as a single link",
+    async (target) => {
+      show(`[![logo](${LOGO})](${target})`);
+      const image = await screen.findByRole("img", { name: "logo" });
+      expect(image.closest("button") === null).toBe(true);
+      getLinearIssueFiles.mockClear();
+      fireEvent.click(image);
+      await waitFor(() => expect(opened).toHaveBeenCalledTimes(1));
+      expect(opened).toHaveBeenCalledWith(target === ZIP ? `${ZIP}?signature=1` : target);
+      expect(getLinearIssueFiles).toHaveBeenCalledTimes(target === ZIP ? 1 : 0);
+    },
+  );
+
+  test("middle-click refreshes and opens a signed URL, with a signed native link", async () => {
+    show(`[package.zip](${ZIP})`);
+    await screen.findByRole("region", { name: "Files" });
+    const link = screen.getByRole("link", { name: "package.zip" });
+    expect(link.getAttribute("href")).toBe(`${ZIP}?signature=1`);
+    getLinearIssueFiles.mockResolvedValue(signed("new"));
+    expect(
+      fireEvent(link, new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true })),
+    ).toBe(false);
+    await waitFor(() => expect(opened).toHaveBeenCalledWith(`${ZIP}?signature=new`));
+  });
+
+  test("shows useful names for bare file URLs", async () => {
+    getLinearIssueFiles.mockResolvedValue([
+      { url: `${ZIP}/internal%20spec.pdf` },
+      { url: `${ZIP}/build.zip` },
+    ]);
+    show("");
+    expect(await screen.findByRole("button", { name: "Download internal spec.pdf" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download build.zip" })).toBeTruthy();
+  });
+
+  test("opens the checked link in the iOS web view without reserving a popup", async () => {
+    const gateway = window.orkestratorGateway;
+    const platform = window.__orkestratorClientPlatform;
+    window.orkestratorGateway = { enabled: true, desktop: false } as Window["orkestratorGateway"];
+    window.__orkestratorClientPlatform = "iphone-wkwebview";
+    const assign = spyOn(window.location, "assign").mockImplementation(() => undefined);
+    const popup = spyOn(window, "open");
+    try {
+      show("");
+      const button = await screen.findByRole("button", { name: "Download package.zip" });
+      getLinearIssueFiles.mockResolvedValueOnce(signed("ios"));
+      fireEvent.click(button);
+      await waitFor(() => expect(assign).toHaveBeenCalledWith(`${ZIP}?signature=ios`));
+      expect(popup).not.toHaveBeenCalled();
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      assign.mockRestore();
+      popup.mockRestore();
+      window.__orkestratorClientPlatform = platform;
+      window.orkestratorGateway = gateway;
+    }
+  });
+
   test("read a new link when the one shown has been there too long", async () => {
     show("");
     await screen.findByRole("region", { name: "Files" });

@@ -115,8 +115,13 @@ describe("report_goal", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  async function call(tabId: string | undefined, method: string, params?: Record<string, unknown>) {
-    const { url, token } = server.connection("env-1", "project-1", "host", tabId);
+  async function call(
+    tabId: string | undefined,
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { credentialsDisabled: true },
+  ) {
+    const { url, token } = server.connection("env-1", "project-1", "host", tabId, options);
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -165,6 +170,9 @@ describe("report_goal", () => {
     offered = true;
     expect(await names()).toContain("download_linear_files");
     expect(asked[0]).toEqual({ environmentId: "env-1", projectId: "project-1" });
+
+    const tmux = await call("tmux-1", "tools/list", undefined, { credentialsDisabled: true });
+    expect(tmux.result?.tools?.map((tool) => tool.name)).toContain("download_linear_files");
 
     // A read-only turn's connection writes nothing to the workspace.
     const { url, readOnlyToken } = server.connection("env-1", "project-1", "host", "tab-1");
@@ -1056,8 +1064,8 @@ describe("agent Kanban tools", () => {
     expect(await listed(openCodeConnection)).not.toContain(name);
     expect(refused(await call(openCodeConnection))).toBe(true);
     expect(downloads).toEqual([
-      { scope, input: { issueId: "ENG-1" } },
-      { scope, input: { issueId: "ENG-1" } },
+      { scope: { ...scope, workflowResultKey: build }, input: { issueId: "ENG-1" } },
+      { scope: { ...scope, workflowResultKey: openCodeBuild }, input: { issueId: "ENG-1" } },
     ]);
   });
 

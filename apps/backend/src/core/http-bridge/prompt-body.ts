@@ -11,6 +11,17 @@ import type { HttpBridgeAgent } from "./catalog.js";
 import { withoutRetiredParameterValues } from "../native-agent/index.js";
 import { servesSharedBridgeSurface } from "./bridge-agents.js";
 
+/** Choose the restricted tab identity before serializing any bridge request. */
+export function bridgeAgentMcp(
+  agentMcp: ProviderSendOptions["agentMcp"],
+  readOnly?: boolean,
+): Omit<NonNullable<ProviderSendOptions["agentMcp"]>, "readOnlyToken"> | undefined {
+  if (!agentMcp) return undefined;
+  const { readOnlyToken, ...wire } = agentMcp;
+  if (readOnly && readOnlyToken) wire.token = readOnlyToken;
+  return wire;
+}
+
 /**
  * The workflow-result attempt a turn runs for, for a bridge that gates tools
  * itself: the attempt's tool and key and, for a graph activation, every
@@ -46,6 +57,7 @@ export function bridgePromptBody(
   options: ProviderSendOptions,
   attachments: unknown,
 ): Record<string, unknown> {
+  const agentMcp = bridgeAgentMcp(options.agentMcp, options.readOnly);
   return {
     prompt,
     requestId: options.requestId,
@@ -66,7 +78,7 @@ export function bridgePromptBody(
           agent: options.subAgent,
           includeLocalSettings: options.includeLocalSettings,
           promptSuggestions: options.promptSuggestions,
-          agentMcp: options.agentMcp,
+          agentMcp,
           ...(options.capabilityPlugins && options.capabilityPlugins.length > 0
             ? { capabilityPlugins: options.capabilityPlugins }
             : {}),
@@ -83,7 +95,7 @@ export function bridgePromptBody(
       : agent === "codex"
         ? {
             fastMode: options.fastMode ?? connection.fastMode,
-            agentMcp: options.agentMcp,
+            agentMcp,
             workflowResultTool: options.workflowResultTool,
             ...workflowResultTurnFields(options),
             ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
@@ -94,7 +106,7 @@ export function bridgePromptBody(
               model: options.model ?? connection.model,
               reasoningEffort: options.effort ?? connection.effort,
               mode: options.mode,
-              agentMcp: options.agentMcp,
+              agentMcp,
               // These bridges gate tools themselves, so a read-only turn needs
               // to know which attempt's tools it may let through.
               ...workflowResultTurnFields(options),

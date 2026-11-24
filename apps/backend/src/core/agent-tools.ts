@@ -162,7 +162,7 @@ export type AgentToolConnection = {
   design?: boolean;
   url: string;
   token: string;
-  /** Same tab authority, with credential access suppressed for a read-only turn. */
+  /** Same tab identity, with credential tools and Linear file publication disabled. */
   readOnlyToken?: string;
   /** Signed one-attempt argument used with the persistent OpenCode broker. */
   workflowResultCapability?: string;
@@ -179,6 +179,7 @@ export type AgentToolScope = {
   workflowResultKeys?: string[];
   workflowResultBroker?: boolean;
   credentialsDisabled?: true;
+  readOnlyTurn?: true;
 };
 
 type StoredCredential = AgentToolScope & {
@@ -788,11 +789,14 @@ async function createAgentToolServer(
     const offered =
       linearFiles &&
       resultKey &&
-      !scope.credentialsDisabled &&
+      !scope.readOnlyTurn &&
       (await canPublishLinearFiles(resultKey, "opencode")) &&
-      (await registerLinearFileTool(server, linearFiles, pipelineScope, {
-        authorize: () => canPublishLinearFiles(resultKey, "opencode"),
-      }));
+      (await registerLinearFileTool(
+        server,
+        linearFiles,
+        { ...pipelineScope, workflowResultKey: resultKey },
+        () => workflowResults!.holdOpenResult(pipelineScope, resultKey),
+      ));
     // A writable OpenCode turn without a linked issue or board still connects.
     if (!offered) server.server.setRequestHandler("tools/list", () => ({ tools: [] }));
     return server;
@@ -908,10 +912,13 @@ async function createAgentToolServer(
       await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
     }
     const resultKey = scope.workflowResultKey;
-    if (linearFiles && !scope.credentialsDisabled && (await canPublishLinearFiles(resultKey))) {
-      await registerLinearFileTool(server, linearFiles, pipelineScope, {
-        authorize: () => canPublishLinearFiles(resultKey),
-      });
+    if (linearFiles && !scope.readOnlyTurn && (await canPublishLinearFiles(resultKey))) {
+      await registerLinearFileTool(
+        server,
+        linearFiles,
+        { ...pipelineScope, workflowResultKey: resultKey },
+        () => workflowResults.holdOpenResult(pipelineScope, resultKey),
+      );
     }
     if (workerTabId) {
       registerAgentMessagingTools(
@@ -1117,7 +1124,7 @@ async function createAgentToolServer(
   if (longChecks) await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
 
   // Writes into the workspace, so a read-only turn's connection goes without.
-  if (linearFiles && !scope.credentialsDisabled)
+  if (linearFiles && !scope.readOnlyTurn)
     await registerLinearFileTool(server, linearFiles, pipelineScope);
 
   return server;
@@ -1311,7 +1318,7 @@ export class AgentToolsServer {
         ...(tabId ? { tabId } : {}),
         ...options,
         token: mintAgentToolsToken(),
-        ...(!options?.credentialsDisabled ? { readOnlyToken: mintAgentToolsToken() } : {}),
+        readOnlyToken: mintAgentToolsToken(),
       };
       this.credentialsByEnvironment.set(credentialKey, credential);
       const scope: AgentToolScope = {
@@ -1325,6 +1332,7 @@ export class AgentToolsServer {
         this.scopesByDigest.set(credentialDigest(credential.readOnlyToken), {
           ...scope,
           credentialsDisabled: true,
+          readOnlyTurn: true,
         });
       }
     }

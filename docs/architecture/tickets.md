@@ -963,26 +963,32 @@ out. Code: `packages/protocol/src/linear-files.ts` (recognising links) and
 
 **What may be read.** Nobody names an arbitrary file. Each read fetches the
 issue live and serves only the files that its description, comments or
-attachments refer to. The issue must be the one the environment's build was
-started from, or be on the project's linked board.
+attachments refer to. An issue on the linked board is eligible. Off-board
+access is limited to the Linear issue of the credential's own Build attempt.
+For a general environment connection, the latest Build determines whether
+there is a source issue.
 
 **Agents** get ordinary files under `.orkestrator/linear-files/<issue>/`.
 The backend checks the exact destination against Git's ignore rules and index
-before writing through confined workspace helpers. The name comes from the
-canonical URL and stays stable when the issue's label changes. Download results
-keep the attachment name alongside its path.
+before writing through confined workspace helpers. The backend resolves the
+current worktree or container under the mutation fence after fetching each
+file. A canonical URL supplies the filename stem. If the URL has no extension,
+the backend can infer one from the file metadata or label and reuses the path
+on later downloads. Download results keep the attachment name alongside its path.
 
 - **Before a Build** started from Linear, Orkestrator stages live files named
   in the ticket snapshot's description, acceptance criteria and selected
   comments. The prompt lists the paths and gives a reason for each failure.
-  Small raster images join the ticket snapshot. Pause and Cancel interrupt
-  preparation before a session opens.
+  Decodable raster images join the ticket snapshot as resized WebP within
+  the prompt's image budget. Pause and Cancel interrupt preparation before a
+  session opens.
 - **`download_linear_files`** is available on writable environment and pipeline
   connections when the environment's build came from Linear or the project has
   a linked board. OpenCode registers a session-specific file connection
   for writable pipeline turns. The backend verifies its signed attempt
-  credential on every call. Review, graph activation, subork and shared
-  broker credentials cannot publish files.
+  credential on every call. Closing the attempt cancels its downloads and
+  waits for active writes to settle. Read-only, graph activation, subork and
+  shared broker credentials cannot publish files.
 
 The backend checks membership across the paginated live issue before applying
 the 50-file batch limit. It counts bytes from rejected streams toward the
@@ -992,8 +998,9 @@ A container writer stages the contents before the backend authorizes
 publication. The key goes only to `uploads.linear.app`, and redirects to
 other HTTPS hosts carry no Linear credentials.
 
-**The Linear tab** reads `get_linear_issue_files` when an issue opens. Linear
-signs the links for ten minutes so the tab can render images. A download
+**The Linear tab** pages through `get_linear_issue_files` when an issue opens
+and refreshes after a comment with file links is posted. Linear signs the links
+for ten minutes so the tab can render images. A download
 reserves the browser tab at the click and requests a fresh signed link for
 that file. The backend checks the file host's response before the tab
 navigates, so the app can display a refusal. Older nodes without the board or

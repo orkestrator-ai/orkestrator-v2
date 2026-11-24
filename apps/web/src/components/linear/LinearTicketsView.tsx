@@ -1,3 +1,4 @@
+import { linearFileReferences } from "@orkestrator/protocol/linear-files";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -849,6 +850,12 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
           ),
         };
       });
+      if (
+        selectedIssueIdRef.current === submittedIssueId &&
+        linearFileReferences(comment.body).length
+      ) {
+        void loadFiles(submittedIssueId);
+      }
       const submittedDraftGenerationIsCurrent =
         (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0) === submittedEditRevision;
       const submittedDraftIsCurrent =

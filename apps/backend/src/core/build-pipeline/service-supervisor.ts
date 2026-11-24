@@ -1961,6 +1961,7 @@ export class BuildPipelineSupervisor {
       turnAgentMcp
         ? {
             agentMcp: turnAgentMcp,
+            readOnly: readOnlyReview,
             ...(resultKind ? { workflowResultTool: workflowResultToolName(resultKind) } : {}),
           }
         : undefined,

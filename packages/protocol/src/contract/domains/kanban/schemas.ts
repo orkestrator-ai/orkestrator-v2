@@ -297,6 +297,7 @@ export const LinearIssueDetailSchema = openRecord({
 
 /** The Linear-hosted files one issue refers to. */
 export const LinearIssueFilesSchema = openRecord({
+  nextOffset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   files: mutableArray(
     openRecord({
       url: Schema.String,

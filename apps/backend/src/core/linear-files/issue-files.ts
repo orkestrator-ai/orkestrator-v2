@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import {
   linearFileLinks,
+  linearFilePathSegment,
   linearFileReferences,
   linearFileUrl,
   type LinearFileReference,
@@ -63,7 +64,7 @@ function connectionTexts(field: keyof typeof ISSUE_CONNECTIONS, connection: Issu
     const title = asString(node.title)
       .replace(/[[\]\\\r\n]/g, " ")
       .slice(0, 300);
-    return linearFileUrl(url) ? [`[${title}](${url})`] : [];
+    return linearFileUrl(url) ? [`[${title}](<${url}>)`] : [];
   });
 }
 
@@ -194,15 +195,12 @@ export function safeFileName(value: string, max = 120): string {
   return prefix + extension;
 }
 
-/** Stable across label edits and file host response changes. */
+/** The canonical URL supplies the stable stem. The workspace keeps its first extension. */
 export function linearFileName(url: string): string {
-  const pathname = new URL(url).pathname;
-  let segment = pathname.slice(pathname.lastIndexOf("/") + 1);
-  try {
-    segment = decodeURIComponent(segment);
-  } catch {
-    // Use the encoded URL segment when it contains malformed escapes.
-  }
   const hash = createHash("sha256").update(url).digest("hex").slice(0, 16);
-  return `${hash}-${safeFileName(segment) || "file"}`;
+  return `${hash}-${safeFileName(linearFilePathSegment(url)) || "file"}`;
+}
+
+export function linearFileNameExtension(name: string | undefined): string {
+  return /\.[a-z\d]{1,10}$/i.exec(name ?? "")?.[0] ?? "";
 }

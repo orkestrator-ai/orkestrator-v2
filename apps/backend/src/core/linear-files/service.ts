@@ -8,9 +8,8 @@
  * started from a Linear issue, before its first prompt, and the
  * `download_linear_files` agent tool.
  *
- * A caller never names an arbitrary file. The issue must be the one the
- * environment's build was started from, or be on the project's linked board,
- * and only files that issue itself refers to are fetched.
+ * The live issue must be the caller's Build source or be on the linked board.
+ * Only files the issue itself refers to are fetched.
  *
  * Nothing here logs file names, links or contents.
  */
@@ -30,18 +29,20 @@ import {
   assertWorkspaceArtifactIsGitExcluded,
   setupWorkspaceArtifactGitExclude,
 } from "../commands-review.js";
+import { serializeFileWrite } from "../file-write-precondition.js";
 import type { EnvironmentMutationFence } from "../environments/index.js";
 import { sanitizeLinearError, type LinearBoardFilter } from "../linear.js";
 import type { Environment } from "../models.js";
 import { writeConfinedFile } from "../path-safety.js";
 import { detectedMimeTypeForImageData } from "../prompt-attachments.js";
 import { runCommand } from "../shell.js";
-import { linearBoardLinkKey, type StorageService } from "../storage/index.js";
+import { linearBoardLinkKey, resizeKanbanImage, type StorageService } from "../storage/index.js";
 import { writeContainerLinearFile } from "./container-write.js";
-import { downloadLinearFile } from "./download.js";
+import { LinearFileSizeLimitError, downloadLinearFile } from "./download.js";
 import {
   issueFilesAreOnBoard,
   linearFileName,
+  linearFileNameExtension,
   readLinearIssueFiles,
   safeFileName,
   type LinearIssueFile,
@@ -58,6 +59,18 @@ export const LINEAR_FILE_TOOL_DEADLINE_MS = 50_000;
 export const LINEAR_FILE_BUILD_DEADLINE_MS = 3 * 60_000;
 const CONTAINER_WRITE_TIMEOUT_MS = 120_000;
 
+const LINEAR_FILE_EXTENSIONS = new Map([
+  ["application/pdf", ".pdf"],
+  ["application/zip", ".zip"],
+  ["application/x-zip-compressed", ".zip"],
+  ["image/gif", ".gif"],
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
+  ["text/csv", ".csv"],
+  ["text/markdown", ".md"],
+]);
+
 /** Images kept on the build's ticket, for the prompt and the Ticket tab. */
 const MAX_TICKET_IMAGES = 10;
 const MAX_TICKET_IMAGE_BYTES = 2 * MEBIBYTE;
@@ -66,6 +79,12 @@ const MAX_TICKET_IMAGES_BYTES = 4 * MEBIBYTE;
 export interface LinearFileScope {
   environmentId: string;
   projectId: string;
+  workflowResultKey?: string;
+}
+
+export interface LinearFileDownloadGrant {
+  signal: AbortSignal;
+  publish(write: () => Promise<void>): Promise<void>;
 }
 
 export interface DownloadedIssueFile {
@@ -134,9 +153,11 @@ export class LinearFileService {
     scope: LinearFileScope,
     input: { issueId?: string; urls?: readonly string[] } = {},
     deadlineMs = LINEAR_FILE_TOOL_DEADLINE_MS,
+    grant?: LinearFileDownloadGrant,
   ): Promise<LinearFilesDownload> {
     const deadline = Date.now() + deadlineMs;
-    const signal = AbortSignal.timeout(deadlineMs);
+    const timeout = AbortSignal.timeout(deadlineMs);
+    const signal = grant ? AbortSignal.any([timeout, grant.signal]) : timeout;
     const source = await this.sourceFor(scope);
     const issueId = input.issueId ?? source?.issueId;
     if (!issueId) {
@@ -175,7 +196,9 @@ export class LinearFileService {
       files,
       signal,
       deadline,
+      { grant },
     );
+    grant?.signal.throwIfAborted();
     return result;
   }
 
@@ -215,6 +238,7 @@ export class LinearFileService {
         files,
         signal,
         deadline,
+        { includeImages: true },
       );
       for (const reference of quoted) {
         if (files.some((file) => file.url === reference.url)) continue;
@@ -250,11 +274,19 @@ export class LinearFileService {
         (snapshot): snapshot is BuildPipeline =>
           isBuildPipeline(snapshot) &&
           snapshot.environmentId === scope.environmentId &&
-          snapshot.projectId === scope.projectId &&
-          snapshot.source?.type === "linear",
+          snapshot.projectId === scope.projectId,
       )
       .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
-    const source = pipelines[0]?.source;
+    const resultKey = scope.workflowResultKey;
+    const pipeline = resultKey
+      ? pipelines.find(
+          (candidate) =>
+            candidate.pendingPromptAttempt?.requestId === resultKey ||
+            candidate.activePromptContext?.requestId === resultKey ||
+            candidate.sessions.some((session) => session.structuredRequestId === resultKey),
+        )
+      : pipelines[0];
+    const source = pipeline?.source;
     return source?.type === "linear" ? source : null;
   }
 
@@ -289,7 +321,7 @@ export class LinearFileService {
     try {
       return await readLinearIssueFiles(apiKey, issueId, { signal });
     } catch (error) {
-      if (signal.aborted) throw new Error("Reading the Linear issue timed out.", { cause: error });
+      if (signal.aborted) throw new Error("Reading the Linear issue timed out or was stopped.");
       // No cause: the original may hold the key this text had removed.
       throw new Error(errorText(error, apiKey));
     }
@@ -314,22 +346,21 @@ export class LinearFileService {
     files: readonly LinearIssueFile[],
     signal: AbortSignal,
     deadline: number,
+    options: { grant?: LinearFileDownloadGrant; includeImages?: boolean },
   ): Promise<{ result: LinearFilesDownload; images: TaskSnapshotImage[] }> {
     const label = issue.identifier ?? issue.issueId;
     const result: LinearFilesDownload = { issue: label, files: [], failed: [] };
     const images: TaskSnapshotImage[] = [];
     if (files.length === 0) return { result, images };
-    const environment = await this.requireEnvironment(environmentId);
     const directory = `${LINEAR_FILES_DIRECTORY}/${safeFileName(label, 60) || "issue"}`;
-    const runner = createGitEnvironmentCommandRunner(
-      environment,
-      this.dependencies.fence,
-      signal,
-      this.dependencies.run,
-    );
-    let setup = false;
+    let configuredWorkspace: string | undefined;
     const maxFileBytes = this.dependencies.maxFileBytes ?? MAX_LINEAR_FILE_BYTES;
-    let remaining = this.dependencies.maxIssueBytes ?? MAX_LINEAR_ISSUE_BYTES;
+    const issueBudget = this.dependencies.maxIssueBytes ?? MAX_LINEAR_ISSUE_BYTES;
+    let remaining = issueBudget;
+    const issueLimitError = () =>
+      new Error(
+        `The issue's files together are too large for the ${sizeText(issueBudget)} issue limit. Request this file by URL.`,
+      );
     let imageBytes = 0;
     for (const [index, { url, name }] of files.entries()) {
       const displayName = name ? safeFileName(name) || undefined : undefined;
@@ -340,32 +371,83 @@ export class LinearFileService {
             `Only ${MAX_LINEAR_ISSUE_FILES} files can be downloaded at once. Request this file by URL.`,
           );
         }
-        if (remaining <= 0) throw new Error("The issue's files together are too large.");
+        if (remaining <= 0) throw issueLimitError();
+        const cappedByIssue = remaining < maxFileBytes;
         const downloaded = await downloadLinearFile(apiKey, url, {
           maxBytes: Math.min(maxFileBytes, remaining),
           signal,
           onBytes: (bytes) => {
             remaining -= bytes;
           },
+        }).catch((error: unknown) => {
+          if (cappedByIssue && error instanceof LinearFileSizeLimitError) throw issueLimitError();
+          throw error;
         });
         const { contents, contentType } = downloaded;
-        const fileName = linearFileName(url);
-        const filePath = `${directory}/${fileName}`;
-        const release = this.dependencies.fence.beginMutation(environment.id);
-        try {
-          if (!setup) {
-            await setupWorkspaceArtifactGitExclude(environment, runner, signal);
-            setup = true;
-          }
-          if (await runner("git", ["ls-files", "--cached", "--", filePath], 10_000)) {
-            throw new Error("The Linear file path is tracked by Git.");
-          }
-          await assertWorkspaceArtifactIsGitExcluded(runner, filePath, "Linear file path");
-          signal.throwIfAborted();
-          await this.write(environment, filePath, contents, maxFileBytes, signal, deadline);
-        } finally {
-          release();
-        }
+        const mime = detectedMimeTypeForImageData(contents.subarray(0, 18).toString("base64"));
+        const stem = linearFileName(url);
+        const filenameExtension =
+          linearFileNameExtension(downloaded.filename) ||
+          LINEAR_FILE_EXTENSIONS.get(mime ?? "") ||
+          LINEAR_FILE_EXTENSIONS.get(contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? "") ||
+          linearFileNameExtension(name);
+        const filePath = await serializeFileWrite(
+          `linear-file:${environmentId}:${directory}/${stem}`,
+          async () => {
+            signal.throwIfAborted();
+            const release = this.dependencies.fence.beginMutation(environmentId);
+            try {
+              const environment = await this.requireEnvironment(environmentId);
+              const runner = createGitEnvironmentCommandRunner(
+                environment,
+                this.dependencies.fence,
+                signal,
+                this.dependencies.run,
+              );
+              const workspaceKey =
+                environment.environmentType === "local"
+                  ? `local:${environment.worktreePath}`
+                  : `container:${environment.containerId}`;
+              if (configuredWorkspace !== workspaceKey) {
+                await setupWorkspaceArtifactGitExclude(environment, runner, signal);
+                configuredWorkspace = workspaceKey;
+              }
+              let fileName = stem;
+              if (!linearFileNameExtension(stem)) {
+                const names = await runner(
+                  "sh",
+                  [
+                    "-c",
+                    'if [ -d "$1" ] && [ ! -L "$1" ]; then ls -1 -- "$1"; fi',
+                    "linear-files",
+                    directory,
+                  ],
+                  10_000,
+                );
+                const existing = names
+                  .split("\n")
+                  .find(
+                    (entry) => entry === stem || entry === stem + linearFileNameExtension(entry),
+                  );
+                fileName = existing ?? stem + filenameExtension;
+              }
+              const target = `${directory}/${fileName}`;
+              if (await runner("git", ["ls-files", "--cached", "--", target], 10_000)) {
+                throw new Error("The Linear file path is tracked by Git.");
+              }
+              await assertWorkspaceArtifactIsGitExcluded(runner, target, "Linear file path");
+              signal.throwIfAborted();
+              const write = () =>
+                this.write(environment, target, contents, maxFileBytes, signal, deadline);
+              if (options.grant) await options.grant.publish(write);
+              else await write();
+              return target;
+            } finally {
+              release();
+            }
+          },
+        );
+        const fileName = path.posix.basename(filePath);
         result.files.push({
           name: name || safeFileName(downloaded.filename ?? "") || fileName,
           path: filePath,
@@ -374,13 +456,24 @@ export class LinearFileService {
           url,
         });
         if (
+          options.includeImages &&
+          mime &&
           images.length < MAX_TICKET_IMAGES &&
           contents.byteLength <= MAX_TICKET_IMAGE_BYTES &&
-          imageBytes + contents.byteLength <= MAX_TICKET_IMAGES_BYTES &&
-          detectedMimeTypeForImageData(contents.subarray(0, 18).toString("base64"))
+          !signal.aborted
         ) {
-          imageBytes += contents.byteLength;
-          images.push({ filename: fileName, data: contents.toString("base64") });
+          const image = await resizeKanbanImage(contents).catch(() => null);
+          if (
+            image &&
+            !signal.aborted &&
+            image.byteLength <= MAX_TICKET_IMAGE_BYTES &&
+            imageBytes + image.byteLength <= MAX_TICKET_IMAGES_BYTES
+          ) {
+            imageBytes += image.byteLength;
+            const extension = linearFileNameExtension(fileName);
+            const base = extension ? fileName.slice(0, -extension.length) : fileName;
+            images.push({ filename: `${base}.webp`, data: image.toString("base64") });
+          }
         }
       } catch (error) {
         result.failed.push({

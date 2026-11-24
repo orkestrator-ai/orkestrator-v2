@@ -14,8 +14,12 @@ export interface DownloadedLinearFile {
   filename?: string;
 }
 
-function megabytes(bytes: number): string {
-  return `${Math.floor(bytes / (1024 * 1024))} MB`;
+export class LinearFileSizeLimitError extends Error {
+  constructor(maxBytes: number) {
+    const limit =
+      maxBytes < 1024 * 1024 ? `${maxBytes} bytes` : `${Math.floor(maxBytes / (1024 * 1024))} MB`;
+    super(`The file is larger than the ${limit} limit.`);
+  }
 }
 
 function dispositionFilename(header: string | null): string | undefined {
@@ -47,11 +51,10 @@ async function readBounded(
   maxBytes: number,
   onBytes?: (bytes: number) => void,
 ): Promise<Buffer> {
-  const tooLarge = () => new Error(`The file is larger than the ${megabytes(maxBytes)} limit.`);
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
-    throw tooLarge();
+    throw new LinearFileSizeLimitError(maxBytes);
   }
   if (!response.body) return Buffer.alloc(0);
   const chunks: Uint8Array[] = [];
@@ -64,7 +67,7 @@ async function readBounded(
     onBytes?.(value.byteLength);
     if (bytes > maxBytes) {
       await reader.cancel().catch(() => undefined);
-      throw tooLarge();
+      throw new LinearFileSizeLimitError(maxBytes);
     }
     chunks.push(value);
   }

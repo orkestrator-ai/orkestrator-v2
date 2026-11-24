@@ -1,6 +1,11 @@
 import { PR_MERGE_CHECK_SHELL } from "../pull-request-merge-preflight.js";
 import { taskSnapshotCriteria } from "@orkestrator/protocol/build-pipeline";
-import { MAX_ATTACHMENT_COUNT } from "../prompt-attachments.js";
+import {
+  MAX_ATTACHMENT_COUNT,
+  MAX_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES,
+  base64ByteLength,
+} from "../prompt-attachments.js";
 import { usesPackagePreparationSession } from "./stages.js";
 import {
   LINEAR_FILE_HOST,
@@ -121,9 +126,13 @@ export function addTaskSnapshotImages(
   task: TaskSnapshot,
   images: readonly TaskSnapshotImage[],
 ): void {
+  let bytes = task.images.reduce((total, image) => total + base64ByteLength(image.data), 0);
   for (const image of images) {
     if (task.images.length >= MAX_ATTACHMENT_COUNT) return;
     if (task.images.some((known) => known.filename === image.filename)) continue;
+    const size = base64ByteLength(image.data);
+    if (size > MAX_ATTACHMENT_BYTES || bytes + size > MAX_TOTAL_ATTACHMENT_BYTES) continue;
+    bytes += size;
     task.images.push(image);
   }
 }

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { linearFileReferences, linearFileUrl, MAX_LINEAR_ISSUE_FILES } from "./linear-files.js";
+import {
+  linearFileReferences,
+  linearFileUrl,
+  unsignedLinearFileMarkdown,
+  MAX_LINEAR_ISSUE_FILES,
+} from "./linear-files.js";
 
 const ZIP = "https://uploads.linear.app/ws/aaaa/bbbb";
 const LOGO = "https://uploads.linear.app/ws/cccc/dddd";
@@ -42,6 +47,14 @@ describe("linearFileReferences", () => {
       { url: ZIP, name: "a.zip" },
       { url: LOGO },
     ]);
+  });
+
+  test("discovers complete Markdown destinations and strips their credentials", () => {
+    const path = "https://uploads.linear.app/ws/spec(v2).zip";
+    const port = path.replace("linear.app", "linear.app:443");
+    const input = `[angle](<${port}?signature=secret#fragment>) [balanced](${path}?signature=secret)`;
+    expect(linearFileReferences(input)).toEqual([{ url: path, name: "angle" }]);
+    expect(unsignedLinearFileMarkdown(input)).toBe(`[angle](<${port}>) [balanced](${path})`);
   });
 
   test("collects beyond the batch limit, and stays fast on text full of brackets", () => {

@@ -5,9 +5,8 @@
  *
  * Both stores are per node scope, so these registrations run on every scope:
  * each reads its own node and writes that node's stores. The live change
- * announcements for both collections are consumed by `useProjects` and the
- * sidebar's environment list sync; this module owns the manifest and full
- * reconciliation, so convergence never depends on the sidebar being mounted.
+ * announcements also trigger reconciliation on leaf scopes, including scopes
+ * warmed by a dialog with no mounted workspace.
  *
  * Kept out of `store-resource-sync.ts` so the store bindings stay a list of
  * registrations, and out of the store modules so a store does not import the
@@ -33,6 +32,11 @@ function listReads(scope: NodeScope) {
 
 function registerProjects(context: StoreResourceSyncContext): void {
   const projects = context.scope.store(projectStore);
+  if (context.scope.role === "leaf") {
+    context.onResourceChanged("project", () =>
+      context.requestResync({ reason: "explicit", resources: new Set(["project", "environment"]) }),
+    );
+  }
   context.onResync("projects", async (pass) => {
     if (!pass.includes("project")) return;
     const projectsAtRequest = projects.getState().projects;
@@ -54,6 +58,11 @@ function registerProjects(context: StoreResourceSyncContext): void {
 function registerEnvironments(context: StoreResourceSyncContext): void {
   const environments = context.scope.store(environmentStore);
   const projects = context.scope.store(projectStore);
+  if (context.scope.role === "leaf") {
+    context.onResourceChanged("environment", () =>
+      context.requestResync({ reason: "explicit", resources: new Set(["environment"]) }),
+    );
+  }
   context.onResync("environments", async (pass) => {
     if (!pass.includes("environment")) return;
     const environmentsAtRequest = environments.getState().environments;

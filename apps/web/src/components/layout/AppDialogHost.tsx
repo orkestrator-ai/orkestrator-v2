@@ -319,33 +319,33 @@ function MachineCreateEnvironmentHost({
     closeCreateRequest(requestSequence);
   });
   useEffect(() => {
-    let current = true;
+    const preparation = new AbortController();
     // Until it opens, going elsewhere in the window drops the request.
     const stopSelection = windowScope.selection.subscribe(() =>
       closeCreateRequest(requestSequence),
     );
-    prepareCreateEnvironmentTarget({ windowScope, nodeId, projectId, requireUsable: false }).then(
+    prepareCreateEnvironmentTarget({
+      windowScope,
+      nodeId,
+      projectId,
+      requireUsable: false,
+      signal: preparation.signal,
+    }).then(
       (prepared) => {
         stopSelection();
-        if (current) setTarget(prepared);
+        if (!preparation.signal.aborted) setTarget(prepared);
       },
       (error: unknown) => {
         stopSelection();
-        if (current) reportFailure(error);
+        if (!preparation.signal.aborted) reportFailure(error);
       },
     );
     return () => {
-      current = false;
+      preparation.abort();
       stopSelection();
     };
   }, [nodeId, projectId, requestSequence, windowScope]);
 
-  const lost = target?.scope.disposed === true;
-  useEffect(() => {
-    if (lost) reportFailure(new Error("It is no longer connected."));
-  }, [lost]);
-
-  if (lost) return null;
   if (!target) {
     return (
       <ConnectingToMachine machine={machine} onCancel={() => closeCreateRequest(requestSequence)} />
@@ -368,10 +368,9 @@ function MachineCreateEnvironmentDialog({
   target: CreateEnvironmentTarget;
   onClose: () => void;
 }) {
-  const dockerAvailable = useNodeDockerAvailability(target.scope) ?? target.dockerAvailable;
-  const projectName = useProjectStore(
-    (state) => state.projects.find((candidate) => candidate.id === target.projectId)?.name,
-  );
+  const dockerAvailable =
+    useNodeDockerAvailability(target.scope, !target.scope.disposed, target) ??
+    target.dockerAvailable;
   return (
     <DockerAvailabilityProvider available={dockerAvailable}>
       <CreateEnvironmentFlowDialog
@@ -380,7 +379,6 @@ function MachineCreateEnvironmentDialog({
           if (!open) onClose();
         }}
         projectId={target.projectId}
-        projectName={projectName}
       />
     </DockerAvailabilityProvider>
   );

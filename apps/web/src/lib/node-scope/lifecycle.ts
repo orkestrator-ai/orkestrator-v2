@@ -361,6 +361,7 @@ export class ScopeLifecycle {
   resume(nodeId: BackendId): void {
     const entry = this.entryOf(nodeId);
     if (!entry || entry.tier !== "suspended") return;
+    if (this.settings.suspendWhenDocumentHidden && this.visibility?.isHidden()) return;
     const shown = entry.scope.nodeId === this.shownNode;
     this.wake(entry, shown ? "live" : "warm");
     if (!shown) this.armSuspendTimer(entry);

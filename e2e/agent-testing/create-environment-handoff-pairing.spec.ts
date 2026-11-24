@@ -237,6 +237,28 @@ test("Create Environment switches to and submits on a backend one release behind
     } finally {
       await recoveryContext.close();
     }
+    // Remove the selected machine while the form has a draft and still holds
+    // its scope. The same form returns to the command machine.
+    const disconnected = await openSourceForm(page, status.browserUrl);
+    const disconnectedPrompt = disconnected.getByLabel("Initial prompt (optional)");
+    await disconnectedPrompt.fill("Keep this draft after the machine is removed");
+    await disconnected.evaluate((element) => element.setAttribute("data-same-dialog", ""));
+    await chooseLeaf(page, nodeId);
+    await expect(
+      disconnected.getByText(`Git worktree on ${leafName}`, { exact: true }),
+    ).toBeVisible();
+    await command.invoke("forget_node", { nodeId });
+    nodeId = undefined;
+    await expect(page.getByText(`${leafName} is no longer connected`)).toBeVisible();
+    await expect(disconnected).toHaveAttribute("data-same-dialog", "");
+    await expect(disconnectedPrompt).toHaveValue("Keep this draft after the machine is removed");
+    await expect(disconnected.getByRole("button", { name: "Create environment" })).toBeEnabled();
+    await disconnected.screenshot({
+      path: testInfo.outputPath("removed-target-desktop.png"),
+      mask: [disconnectedPrompt],
+      maskColor: "#171717",
+      animations: "disabled",
+    });
   } finally {
     if (nodeId) await command.invoke("forget_node", { nodeId }).catch(() => undefined);
     await command

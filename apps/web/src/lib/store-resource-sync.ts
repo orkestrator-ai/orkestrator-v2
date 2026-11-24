@@ -77,7 +77,8 @@ export {
  *
  * Live project/environment changes are also consumed by their UI hooks for
  * low-latency updates. Manifest/full reconciliation owns those collections
- * here as well so convergence never depends on the sidebar being mounted.
+ * here as well. Warm leaf scopes also consume live collection changes here,
+ * including those opened without a workspace host.
  *
  * ## Per-store handler registrations (plan item 3014)
  *

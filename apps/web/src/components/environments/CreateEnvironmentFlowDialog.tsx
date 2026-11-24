@@ -74,6 +74,7 @@ interface CreateEnvironmentFlowDialogProps {
  * build. Both clone the repository, so both deserve the same warning.
  */
 interface PendingGitHubCredentialWarning {
+  target: CredentialTarget;
   environmentType: EnvironmentType;
   create: () => Promise<boolean>;
   status: GitHubCredentialStatus | null;
@@ -82,8 +83,13 @@ interface PendingGitHubCredentialWarning {
   creating: boolean;
 }
 
+interface CredentialTarget {
+  scope: NodeScope;
+  projectId: string | null;
+}
+
 interface PendingGitHubCredentialPreflight {
-  projectId: string;
+  target: CredentialTarget;
   cancel: () => void;
 }
 
@@ -187,27 +193,32 @@ export function CreateEnvironmentFlowDialog({
   const originDockerAvailable = useDockerAvailability();
   const originDockerReady = useDockerAvailabilityReady();
   const machines = useCreateEnvironmentMachines(open ? projectId : null);
-  const { target, dockerAvailable, selectedKey, switchingTo, select } = useCreateEnvironmentTarget({
-    open,
-    machines,
-  });
+  const { target, originAvailable, dockerAvailable, selectedKey, switchingTo, select } =
+    useCreateEnvironmentTarget({
+      open,
+      machines,
+    });
 
+  // Keep the draft mounted even if its opening scope closes. Until the user
+  // picks a replacement, no project can be submitted on the presentation scope.
+  const targetScope = target?.scope ?? (originAvailable ? origin : windowScope.commandScope());
+  const targetProjectId = target?.projectId ?? (originAvailable ? projectId : null);
   // The same tree for every target: a different one would remount the form.
   return (
     <WindowScopeProvider windowScope={windowScope}>
-      <NodeScopeProvider scope={target?.scope ?? origin}>
+      <NodeScopeProvider scope={targetScope}>
         <DockerAvailabilityProvider
-          available={target ? dockerAvailable : originDockerAvailable}
+          available={target ? dockerAvailable : originAvailable && originDockerAvailable}
           ready={target ? true : originDockerReady}
         >
           <CreateEnvironmentFlow
             open={open}
             onOpenChange={onOpenChange}
-            projectId={target?.projectId ?? projectId}
+            projectId={targetProjectId}
             projectName={target ? undefined : projectName}
             origin={origin}
             originProjectId={projectId}
-            machines={machines}
+            machines={originAvailable ? machines : machines.filter((machine) => !machine.current)}
             selectedMachineKey={selectedKey}
             switchingTo={switchingTo}
             onSelectMachine={select}
@@ -266,6 +277,7 @@ function CreateEnvironmentFlow({
     useState<PendingGitHubCredentialWarning | null>(null);
   const mountedRef = useRef(true);
   const dockerAvailableRef = useRef(dockerAvailable);
+  const currentCredentialTarget = useRef<CredentialTarget | null>(null);
   const activePreflightRef = useRef<PendingGitHubCredentialPreflight | null>(null);
   const pendingCredentialWarningRef = useRef<PendingGitHubCredentialWarning | null>(null);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
@@ -273,7 +285,8 @@ function CreateEnvironmentFlow({
   const storedProjectName = useProjectStore((state) =>
     projectId ? state.projects.find((project) => project.id === projectId)?.name : undefined,
   );
-  const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
+  const hasLocalCheckout = useLocalEnvironmentAvailable(projectId);
+  const localEnvironmentAvailable = projectId === null ? false : hasLocalCheckout;
   const localEnvironmentAvailableRef = useRef(localEnvironmentAvailable);
   // Read after the credential preflight's await, so they track the latest commit.
   useLayoutEffect(() => {
@@ -343,14 +356,14 @@ function CreateEnvironmentFlow({
     if (!dockerAvailable) cancelPendingCredentialFlow();
   }, [cancelPendingCredentialFlow, dockerAvailable]);
 
-  useEffect(() => {
-    const preflight = activePreflightRef.current;
-    if (preflight && preflight.projectId !== projectId) {
+  useLayoutEffect(() => {
+    const target = open ? { scope, projectId } : null;
+    currentCredentialTarget.current = target;
+    return () => {
+      currentCredentialTarget.current = null;
       cancelPendingCredentialFlow();
-    }
-    const warning = pendingCredentialWarningRef.current;
-    if (warning) cancelPendingCredentialFlow();
-  }, [cancelPendingCredentialFlow, projectId, scope]);
+    };
+  }, [cancelPendingCredentialFlow, open, projectId, scope]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -476,7 +489,9 @@ function CreateEnvironmentFlow({
     environmentType: EnvironmentType,
     create: () => Promise<boolean>,
   ): Promise<boolean> => {
-    if (!projectId || !canCreateEnvironment(environmentType)) return false;
+    const target = currentCredentialTarget.current;
+    if (!target || !projectId || scope.disposed || !canCreateEnvironment(environmentType))
+      return false;
     if (environmentType === "local") return create();
 
     cancelPendingCredentialFlow();
@@ -485,7 +500,7 @@ function CreateEnvironmentFlow({
       cancelPreflight = () => resolve(PREFLIGHT_CANCELLED);
     });
     const preflight: PendingGitHubCredentialPreflight = {
-      projectId,
+      target,
       cancel: cancelPreflight,
     };
     activePreflightRef.current = preflight;
@@ -499,9 +514,8 @@ function CreateEnvironmentFlow({
       cancelled,
     ]);
 
-    if (activePreflightRef.current === preflight) {
-      activePreflightRef.current = null;
-    }
+    if (activePreflightRef.current !== preflight) return false;
+    activePreflightRef.current = null;
     // Every way out that does not enter `create()` hands the button back,
     // unless a newer preflight has already taken it over.
     const releaseBusy = () => {
@@ -513,7 +527,11 @@ function CreateEnvironmentFlow({
       releaseBusy();
       return false;
     }
-    if (!mountedRef.current || !open || preflight.projectId !== projectId) {
+    if (
+      !mountedRef.current ||
+      scope.disposed ||
+      currentCredentialTarget.current !== preflight.target
+    ) {
       releaseBusy();
       return false;
     }
@@ -529,6 +547,7 @@ function CreateEnvironmentFlow({
 
     return new Promise<boolean>((resolve) => {
       const pending: PendingGitHubCredentialWarning = {
+        target,
         environmentType,
         create,
         status,
@@ -592,7 +611,11 @@ function CreateEnvironmentFlow({
   const createWithoutGitHubCredential = async () => {
     const pending = pendingCredentialWarningRef.current;
     if (!pending || pending.creating) return;
-    if (!canCreateEnvironment(pending.environmentType)) {
+    if (
+      pending.target.scope.disposed ||
+      pending.target !== currentCredentialTarget.current ||
+      !canCreateEnvironment(pending.environmentType)
+    ) {
       settleCredentialWarning(pending, { created: false });
       return;
     }

@@ -41,6 +41,8 @@ export interface PrepareCreateEnvironmentTargetOptions {
   /** Refuse a machine that can create neither a worktree nor a container. */
   readonly requireUsable?: boolean;
   readonly timeoutMs?: number;
+  /** Owns the preparation and retains its scope pin until aborted. */
+  readonly signal: AbortSignal;
 }
 
 /**
@@ -49,8 +51,8 @@ export interface PrepareCreateEnvironmentTargetOptions {
  * selects nothing and shows nothing, so the window does not move. Rejects with
  * a message for the user when the machine cannot be the target.
  *
- * The scope belongs to the window's lifecycle: whoever uses the target pins it
- * (`ScopeLifecycle.pin`) while it does.
+ * The caller keeps the pin through the handoff and releases it by aborting
+ * its signal when the target is no longer needed.
  */
 export async function prepareCreateEnvironmentTarget({
   windowScope,
@@ -58,66 +60,81 @@ export async function prepareCreateEnvironmentTarget({
   projectId,
   requireUsable = true,
   timeoutMs = CREATE_ENVIRONMENT_TARGET_TIMEOUT_MS,
+  signal,
 }: PrepareCreateEnvironmentTargetOptions): Promise<CreateEnvironmentTarget> {
-  const ended = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new Error("It did not answer in time. It may be unreachable or still loading.")),
-      timeoutMs,
+  signal.throwIfAborted();
+  const readiness = new AbortController();
+  const stop = () => readiness.abort(signal.reason);
+  signal.addEventListener("abort", stop, { once: true });
+  const timer = setTimeout(() => {
+    readiness.abort(
+      new Error("It did not answer in time. It may be unreachable or still loading."),
+    );
+  }, timeoutMs);
+  const ended = readiness.signal;
+  let hold: ReturnType<typeof holdInTreeScope> | null = null;
+  const release = () => hold?.release();
+  let retained = false;
+  let stopScopes: (() => void) | undefined;
+
+  const interrupted = new Promise<never>((_, reject) => {
+    ended.addEventListener(
+      "abort",
+      () => {
+        if (!retained) release();
+        reject(ended.reason);
+      },
+      { once: true },
     );
   });
+  void interrupted.catch(() => undefined);
   try {
-    return await Promise.race([
-      prepare({ windowScope, nodeId, projectId, requireUsable, ended: ended.signal }),
-      timedOut,
+    hold = nodeId ? holdInTreeScope(nodeId, { windowScope, pin: true }) : null;
+    const scope = hold
+      ? await Promise.race([
+          hold.scope.catch((error: unknown) => {
+            throw new Error(
+              `Could not connect: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }),
+          interrupted,
+        ])
+      : windowScope.commandScope();
+    ended.throwIfAborted();
+    const checkScope = () => {
+      if (scope.disposed) readiness.abort(new Error("Its connection was closed."));
+    };
+    stopScopes = windowScope.nodeScopes.subscribe(checkScope);
+    checkScope();
+    ended.throwIfAborted();
+
+    const [docker] = await Promise.race([
+      Promise.all([
+        readDocker(scope),
+        loadProjects(scope, ended),
+        whenConfigLoaded(scope, ended),
+        waitForCatalog(scope, ended),
+      ]),
+      interrupted,
     ]);
+    ended.throwIfAborted();
+    const project = scope
+      .store(projectStore)
+      .getState()
+      .projects.find((candidate) => candidate.id === projectId);
+    if (!project) throw new Error("The project is not on that machine any more.");
+    if (requireUsable && !project.localPath && !docker) {
+      throw new Error("The project has no local checkout and Docker is unavailable.");
+    }
+    signal.addEventListener("abort", release, { once: true });
+    retained = true;
+    return { scope, projectId, dockerAvailable: docker };
   } finally {
+    stopScopes?.();
+    signal.removeEventListener("abort", stop);
     clearTimeout(timer);
-    ended.abort();
-  }
-}
-
-async function prepare({
-  windowScope,
-  nodeId,
-  projectId,
-  requireUsable,
-  ended,
-}: Required<Omit<PrepareCreateEnvironmentTargetOptions, "timeoutMs">> & {
-  ended: AbortSignal;
-}): Promise<CreateEnvironmentTarget> {
-  const scope = nodeId ? await openTargetScope(windowScope, nodeId) : windowScope.commandScope();
-  const [docker] = await Promise.all([
-    readDocker(scope),
-    loadProjects(scope),
-    whenConfigLoaded(scope, ended),
-    waitForCatalog(scope, ended),
-  ]);
-  if (scope.disposed) throw new Error("Its connection was closed.");
-  const project = scope
-    .store(projectStore)
-    .getState()
-    .projects.find((candidate) => candidate.id === projectId);
-  if (!project) throw new Error("The project is not on that machine any more.");
-  if (requireUsable && !project.localPath && !docker) {
-    throw new Error("The project has no local checkout and Docker is unavailable.");
-  }
-  return { scope, projectId, dockerAvailable: docker };
-}
-
-async function openTargetScope(windowScope: WindowScope, nodeId: BackendId): Promise<NodeScope> {
-  const hold = holdInTreeScope(nodeId, { windowScope });
-  try {
-    const scope = await hold.scope;
-    // A scope hidden for long has closed its streams.
-    windowScope.lifecycle.resume(scope.nodeId);
-    return scope;
-  } catch (error) {
-    throw new Error(`Could not connect: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    // The lifecycle keeps the open scope; a hold only counts who shows it.
-    hold.release();
+    readiness.abort();
+    if (!retained) release();
   }
 }
 
@@ -131,12 +148,13 @@ function readDocker(scope: NodeScope): Promise<boolean> {
     );
 }
 
-async function loadProjects(scope: NodeScope): Promise<void> {
+async function loadProjects(scope: NodeScope, ended: AbortSignal): Promise<void> {
   const store = scope.store(projectStore);
-  if (store.getState().hasLoaded) return;
-  await loadProjectsFromBackend(scope);
+  do {
+    await loadProjectsFromBackend(scope);
+  } while (!ended.aborted && !scope.disposed && store.getState().isLoading);
   const { hasLoaded, error } = store.getState();
-  if (!hasLoaded) throw new Error(error ?? "Its projects could not be read.");
+  if (error || !hasLoaded) throw new Error(error ?? "Its projects could not be read.");
 }
 
 /** Resolves once the node's settings have loaded (the scope's own services read them). */

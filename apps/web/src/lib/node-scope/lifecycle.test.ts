@@ -265,6 +265,21 @@ describe("tier state machine", () => {
     unpin();
   });
 
+  test("a pin acquired in the iOS background waits for the visible transition", () => {
+    makeWindow({ host: "ios", suspendWhenDocumentHidden: true });
+    const { scope, client } = open(node(1));
+    visibility.set(true);
+    expect(client.suspended).toBe(true);
+    const unpin = windowScope.lifecycle.pin(node(1));
+    expect(scope.tier.get()).toBe("suspended");
+    expect(client.suspended).toBe(true);
+
+    visibility.set(false);
+    expect(scope.tier.get()).toBe("warm");
+    expect(client.suspended).toBe(false);
+    unpin();
+  });
+
   test("pinning a node the lifecycle does not manage does nothing", () => {
     windowScope.lifecycle.pin(COMMAND)();
     windowScope.lifecycle.pin(node(9))();

@@ -601,9 +601,11 @@ on a suspended node still notifies.
 
 Something that uses a hidden node's scope pins it
 (`ScopeLifecycle.pin(nodeId)`, the New Environment dialog aimed at that node):
-the scope resumes, and neither the suspend timer nor the pressure path touches
-it until the pin is released. A hidden document on iOS still suspends it, and
-it resumes with the document.
+the scope is protected from the suspend timer and memory pressure until the
+pin is released. Target preparation acquires its pin as the scope joins the
+lifecycle and keeps it until the dialog releases that target. A hidden
+document on iOS still suspends pinned scopes, which resume when the document
+becomes visible.
 
 ### Budgets
 
@@ -675,7 +677,9 @@ window holds its scope `warm` or `live`, `useRemoteMachineViews` takes its
 projects and environments from that scope's `projectStore` and
 `environmentStore` (`machineViewWithScopeRows`), so a change the scope hears
 on the node's own stream, such as an environment renamed, shows without
-waiting for the next summary. Every other node, and a `summary` or
+waiting for the next summary. Warm services process these collection changes
+when the dialog opens a scope in the background, even before its workspace
+mounts. Every other node, and a `summary` or
 `suspended` one, keeps its summary rows.
 
 - **The same row either way.** The scope's records go through the projection

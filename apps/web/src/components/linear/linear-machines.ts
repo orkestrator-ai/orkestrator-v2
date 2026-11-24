@@ -136,7 +136,10 @@ export function useLinearMachineTargets(
 ): LinearMachineTarget[] {
   const { windowScope, scope } = useScopesWithCommandFallback();
   const commandScope = windowScope.commandScope();
-  const projects = useStore(scope.store(projectStore), (state) => state.projects);
+  // A window-owned form can keep its repository identity after its opening
+  // scope closes, while it uses another machine.
+  const projectStoreApi = useMemo(() => scope.store(projectStore), [scope]);
+  const projects = useStore(projectStoreApi, (state) => state.projects);
   const commandProjects = useStore(commandScope.store(projectStore), (state) => state.projects);
   const nodes = useStore(portalStore.store, (state) => state.nodes);
   const selfId = useStore(portalStore.store, (state) => state.selfId);

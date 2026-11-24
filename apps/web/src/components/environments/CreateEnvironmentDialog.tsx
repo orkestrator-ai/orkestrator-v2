@@ -278,7 +278,10 @@ function mapFeatureModels(
 ): FeatureBuildModelState {
   return {
     build: map(models.build),
-    reviewers: models.reviewers.map((reviewer) => ({ ...reviewer, ...map(reviewer) })),
+    reviewers: models.reviewers.map((reviewer) => {
+      const selection = map(reviewer);
+      return selection === reviewer ? reviewer : { key: reviewer.key, ...selection };
+    }),
     reviewPreparation: map(models.reviewPreparation),
     address: map(models.address),
     verify: map(models.verify),
@@ -395,7 +398,7 @@ export function CreateEnvironmentDialog({
   const dialogScope = useScopesWithCommandFallback().scope;
   const draftKey = draftProjectId === undefined ? projectId : draftProjectId;
   const ownerScope = draftScope ?? dialogScope;
-  const drafts = environmentDrafts(ownerScope);
+  const drafts = useMemo(() => environmentDrafts(ownerScope), [ownerScope]);
   const buildIntentSaves = pendingBuildIntents(dialogScope);
   const configStore = dialogScope.store(useConfigStore.def);
   const remoteMachine = useRemoteMachineView(
@@ -699,11 +702,21 @@ export function CreateEnvironmentDialog({
   const rootSetupSteps = setupRequirements?.rootSteps ?? null;
   const [environmentName, setEnvironmentName] = useState("");
   // A folder belongs to the machine it was picked on.
-  const [worktreeLocation, setWorktreeLocation] = useState<{
-    scope: NodeScope;
-    path: string;
-  } | null>(null);
-  const worktreeBaseDir = worktreeLocation?.scope === dialogScope ? worktreeLocation.path : null;
+  const [worktreeLocations, setWorktreeLocations] = useState<ReadonlyMap<NodeScope, string>>(
+    () => new Map(),
+  );
+  const worktreeBaseDir = worktreeLocations.get(dialogScope) ?? null;
+  const setWorktreeLocation = useCallback(
+    (path: string | null) => {
+      setWorktreeLocations((previous) => {
+        const locations = new Map(previous);
+        if (path) locations.set(dialogScope, path);
+        else locations.delete(dialogScope);
+        return locations;
+      });
+    },
+    [dialogScope],
+  );
   const [launchAgent, setLaunchAgent] = useState(true);
   const [agentType, setAgentType] = useState<AgentType>(initialAgentDefaults.agent);
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(initialAgentDefaults.claudeMode);
@@ -803,13 +816,23 @@ export function CreateEnvironmentDialog({
     [enabledAgentPlatforms],
   );
   const constrainFeatureModels = useCallback(
-    (selections: FeatureBuildModelState) => {
+    (selections: FeatureBuildModelState, preserveModels = false) => {
       const fallback = featurePlatforms[0];
       if (!fallback) return selections;
-      const eligible = (selection: FeatureBuildStepSelection) =>
-        isPipelineQualifiedAgent(selection.agent) && featurePlatforms.includes(selection.agent)
+      const eligible = (selection: FeatureBuildStepSelection) => {
+        if (
+          !isPipelineQualifiedAgent(selection.agent) ||
+          !featurePlatforms.includes(selection.agent)
+        ) {
+          return resolveFeatureBuildStep({ agent: fallback }, modelCatalog);
+        }
+        const modelAvailable = modelsForAgent(modelCatalog, selection.agent).some(
+          (candidate) => candidate.id === selection.model,
+        );
+        return preserveModels || modelAvailable
           ? selection
-          : resolveFeatureBuildStep({ agent: fallback }, modelCatalog);
+          : resolveFeatureBuildStep({ agent: selection.agent }, modelCatalog);
+      };
       return mapFeatureModels(selections, eligible);
     },
     [featurePlatforms, modelCatalog],
@@ -838,7 +861,8 @@ export function CreateEnvironmentDialog({
     setupRequirements?.aptPackages,
     networkAccessMode === "full" ? "full" : "restricted",
   );
-  const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
+  const [editedPorts, setEditedPorts] = useState<PortMapping[] | null>(null);
+  const portMappings = editedPorts ?? defaultPortMappings;
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
   const [mobileTabTransitionDirection, setMobileTabTransitionDirection] =
@@ -856,8 +880,6 @@ export function CreateEnvironmentDialog({
     (AttachmentOperation & { switchedPromptMode?: boolean }) | null
   >(null);
   const agentSelectionTouchedRef = useRef(false);
-  /** The project defaults the port list holds until the user edits it. */
-  const appliedPortMappingsRef = useRef(defaultPortMappings);
 
   useEffect(() => {
     if (
@@ -958,8 +980,8 @@ export function CreateEnvironmentDialog({
       title: "Choose where the worktree is created",
       defaultPath,
     });
-    if (chosen) setWorktreeLocation({ scope: dialogScope, path: chosen });
-  }, [dialogScope, pickHostPath, worktreeBaseDir, nodeBackend]);
+    if (chosen) setWorktreeLocation(chosen);
+  }, [pickHostPath, worktreeBaseDir, nodeBackend, setWorktreeLocation]);
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;
@@ -968,7 +990,7 @@ export function CreateEnvironmentDialog({
     promptPasteOperationRef.current = null;
     setEnvironmentType(effectiveDefaultEnvironmentType);
     setEnvironmentName("");
-    setWorktreeLocation(null);
+    setWorktreeLocations(new Map());
     setLaunchAgent(true);
     setAgentType(initialAgentDefaults.agent);
     setClaudeMode(initialAgentDefaults.claudeMode);
@@ -987,7 +1009,7 @@ export function CreateEnvironmentDialog({
     setPendingAttachmentOperations(0);
     attachmentDragDepthRef.current = 0;
     setNetworkAccessMode("full");
-    setPortMappings(defaultPortMappings);
+    setEditedPorts(null);
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
@@ -1019,10 +1041,27 @@ export function CreateEnvironmentDialog({
     [defaultFeatureModels],
   );
 
-  const handleFeatureModelsChange = useCallback((models: FeatureBuildModelState) => {
-    setFeatureModels(models);
+  const handleFeatureModelsChange = (models: FeatureBuildModelState) => {
+    // The panel emits all rows. Preserve choices behind fallbacks for rows
+    // the user did not edit, including when another reviewer is added or removed.
+    const choices = featureModels ?? defaultFeatureModels;
+    const keep = (step: Exclude<keyof FeatureBuildModelState, "reviewers">) =>
+      models[step] === effectiveFeatureModels[step] ? choices[step] : models[step];
+    setFeatureModels({
+      build: keep("build"),
+      reviewPreparation: keep("reviewPreparation"),
+      address: keep("address"),
+      verify: keep("verify"),
+      pr: keep("pr"),
+      resolve: keep("resolve"),
+      reviewers: models.reviewers.map((row) =>
+        effectiveFeatureModels.reviewers.includes(row)
+          ? (choices.reviewers.find((choice) => choice.key === row.key) ?? row)
+          : row,
+      ),
+    });
     featureAttemptModelsRef.current = null;
-  }, []);
+  };
 
   const handleBuildIntentChange = useCallback((intent: BuildIntent) => {
     if (intent === buildIntentRef.current) return;
@@ -1039,7 +1078,7 @@ export function CreateEnvironmentDialog({
     }
     buildIntentRef.current = intent;
     setBuildIntent(intent);
-    if (intent === "feature") setWorktreeLocation(null);
+    if (intent === "feature") setWorktreeLocations(new Map());
   }, []);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -1385,8 +1424,7 @@ export function CreateEnvironmentDialog({
     initializedOpeningRef.current = true;
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
-    appliedPortMappingsRef.current = defaultPortMappings;
-    setPortMappings(defaultPortMappings);
+    setEditedPorts(null);
     setShowPortConfig(defaultPortMappings.length > 0);
     setEnvironmentType(effectiveDefaultEnvironmentType);
     agentSelectionTouchedRef.current = false;
@@ -1489,25 +1527,7 @@ export function CreateEnvironmentDialog({
     setCodexMode(initialAgentDefaults.codexMode);
     setGrokMode(initialAgentDefaults.grokMode);
     setPiMode(initialAgentDefaults.piMode);
-    // Ports the user left alone are the project's defaults there.
-    if (portMappings === appliedPortMappingsRef.current) {
-      appliedPortMappingsRef.current = defaultPortMappings;
-      setPortMappings(defaultPortMappings);
-      setShowPortConfig(defaultPortMappings.length > 0);
-    }
-    setFeatureModels((models) =>
-      models
-        ? mapFeatureModels(models, (selection) =>
-            // OpenCode's list is the project's and may still be loading.
-            selection.agent === "opencode" ||
-            modelsForAgent(modelCatalog, selection.agent).some(
-              (candidate) => candidate.id === selection.model,
-            )
-              ? selection
-              : resolveFeatureBuildStep({ agent: selection.agent }, modelCatalog),
-          )
-        : null,
-    );
+    if (editedPorts === null) setShowPortConfig(defaultPortMappings.length > 0);
     featureAttemptModelsRef.current = null;
   });
   useEffect(() => {
@@ -1554,17 +1574,17 @@ export function CreateEnvironmentDialog({
           : "default",
         fastMode: carried.fastMode,
       });
-    } else if (agentType !== carried.type) {
+    } else {
       apply(carried.type, getInitialAgentSelection(carried.type));
     }
   });
   useEffect(() => {
     if (open) restoreCarriedAgent();
-  }, [dialogScope, enabledAgentPlatforms, modelCatalog, open]);
+  }, [dialogScope, enabledAgentPlatforms, modelCatalog, open, projectId]);
 
   // The user's own choice replaces what a machine switch carries.
   const chooseEnvironmentType = useCallback((type: EnvironmentType) => {
-    carriedTypeRef.current = null;
+    carriedTypeRef.current = type;
     setEnvironmentType(type);
   }, []);
   const noteAgentChosen = useCallback(() => {
@@ -1667,19 +1687,29 @@ export function CreateEnvironmentDialog({
   }, [environmentType, launchAgent, mobileSection, selectMobileSection]);
 
   const addPortMapping = useCallback(() => {
-    setPortMappings((prev) => [
-      ...prev,
+    setEditedPorts((previous) => [
+      ...(previous ?? defaultPortMappings),
       { containerPort: 3000, hostPort: 3000, protocol: "tcp" as PortProtocol },
     ]);
-  }, []);
+  }, [defaultPortMappings]);
 
-  const removePortMapping = useCallback((index: number) => {
-    setPortMappings((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  const removePortMapping = useCallback(
+    (index: number) => {
+      setEditedPorts((previous) => (previous ?? defaultPortMappings).filter((_, i) => i !== index));
+    },
+    [defaultPortMappings],
+  );
 
-  const updatePortMapping = useCallback((index: number, updates: Partial<PortMapping>) => {
-    setPortMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...updates } : m)));
-  }, []);
+  const updatePortMapping = useCallback(
+    (index: number, updates: Partial<PortMapping>) => {
+      setEditedPorts((previous) =>
+        (previous ?? defaultPortMappings).map((mapping, i) =>
+          i === index ? { ...mapping, ...updates } : mapping,
+        ),
+      );
+    },
+    [defaultPortMappings],
+  );
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
@@ -1806,7 +1836,7 @@ export function CreateEnvironmentDialog({
             return;
           }
           const requestModels = featureAttemptModelsRef.current
-            ? constrainFeatureModels(featureAttemptModelsRef.current)
+            ? constrainFeatureModels(featureAttemptModelsRef.current, true)
             : effectiveFeatureModels;
           const buildRequest = (requestId: string) =>
             featureBuildRequest({

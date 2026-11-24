@@ -280,13 +280,11 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     options: Pick<ProviderSendOptions, "agentMcp" | "readOnly" | "workflowResultTool"> = {},
   ): Promise<void> {
     if (!servesSharedBridgeSurface(this.agent)) return;
+    const body = JSON.stringify({ agentMcp: bridgeAgentMcp(options.agentMcp, options.readOnly) });
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/attach`,
-      {
-        method: "POST",
-        body: JSON.stringify({ agentMcp: bridgeAgentMcp(options.agentMcp, options.readOnly) }),
-      },
+      { method: "POST", body },
       this.fetchImpl,
       "attach",
     );

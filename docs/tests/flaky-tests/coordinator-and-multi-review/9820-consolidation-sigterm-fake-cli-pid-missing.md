@@ -1,7 +1,7 @@
 # Consolidation subprocess-bounds fake CLI never records its pid under load
 
 - **ID:** 9820
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-15
 
 Tests: `subprocess bounds > a claude CLI that ignores SIGTERM times out, is
@@ -166,3 +166,23 @@ cases failed with `ENOENT` reading the fake CLI's `pid` at
 The backend group reported 20,272 pass, 212 skip and 2 fail across 1,434 files
 (316.21 s). The runner's rerun of the owning file alone passed in 4.3 s. Logs
 are in `orkestrator-test-run.iIeNjo` under the host temporary directory.
+
+
+## Linear attachments review repair (2026-11-24)
+
+The review run at `175fb8f22` (merge base `9a9b5f8df`) reported the
+missing PID file after 408.05 ms for Claude and 409.02 ms for Codex. The
+recorded aggregate reported that the isolated owner rerun also failed
+without retaining its assertion details in the review output. A new
+single-worker owner run in the repair worktree passed before the edit.
+
+The two assertions assumed that the subprocess scheduler would let the
+fake CLI write its PID and install its SIGTERM trap before the capture
+deadline. Commit `5e4ea0749` adds a marker after the trap and drives the
+capture timeout only after the fixture reaches that marker. The fixture
+still has a watchdog, and the production command deadline is unchanged.
+The owner run passed after the fix. Both original cases also passed in
+the exact default-suite rerun with two backend workers. That run had a
+provider line-limit assertion and a transient duplicate export error
+elsewhere, so it still exited 1. Its bounded logs are retained under
+`orkestrator-test-run.VFvlfx` and `orkestrator-test-run.B6pSky`.

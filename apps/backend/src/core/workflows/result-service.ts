@@ -1936,7 +1936,7 @@ export class WorkflowResultService {
         },
       },
     );
-    // Closing is observable only after already-started writes have stopped.
+    // Wait for already-started writes before returning from the close request.
     if (work) await Promise.allSettled(work.publications);
   }
 

@@ -9,12 +9,15 @@ Linear-sourced build's issue when its pull request merges
 [Merged builds label their issue](../../architecture/tickets.md#merged-builds-label-their-issue)).
 Both behaviours are built and covered by deterministic tests against a faked
 Linear API; what is left needs the user's real Linear workspace, which agents
-may not use.
+may not use. Task 3 was added on 2026-11-24 by the build that gives agents and
+the Linear tab an issue's files
+([Linear files](../../architecture/tickets.md#linear-files)).
 
 ### Tasks
 
 1. **Board cards against the user's real labels.** Status: open (blocked: waits on 7568 item "8174 task 1").
 2. **A real merge labels its issue in the user's real workspace.** Status: open (blocked: waits on 7568 item "8174 task 2").
+3. **An issue's files from the user's real workspace.** Status: open (blocked: waits on 7568 item "8174 task 3").
 
 ### 1. Board cards against the user's real labels
 
@@ -68,7 +71,32 @@ stays pending, and the fix is a query change here.
     - Pros: no failing requests every hour.
     - Cons: merges seen meanwhile would never be labelled.
 
+### 3. An issue's files from the user's real workspace
+
+**Problem.** Downloading from `uploads.linear.app` and reading signed links
+have only run against fakes (`apps/backend/src/core/linear-files/*.test.ts`,
+`LinearIssueFiles.test.tsx`).
+
+**Context.** The key is sent to the file host as the API takes it, in the
+`Authorization` header. Signed links come from the `public-file-urls-expire-in`
+header on the issue read, matched to the plain link by path.
+
+**Investigation.** Linear's file-storage page (read 2026-11-24) says the file
+host takes the same `authorization` header as the API and that the header signs
+every file link in a response. Its one example is an OAuth bearer token, and it
+mentions neither redirects nor size limits. Nothing was run live.
+
+**Decisions.**
+
+- **What to do if the file host refuses a personal API key.**
+  - **Download through a signed link the backend reads for itself (recommended).**
+    - Pros: the same issue read already returns one; the key then goes to the API only.
+    - Cons: one more dependency on Linear's signing.
+  - **Ask for an OAuth connection.**
+    - Pros: the documented example.
+    - Cons: a new sign-in flow for something the existing key may already allow.
+
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md), "Cross-cutting": both checks.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md), "Cross-cutting": all three checks.
 - [Linear](../../architecture/tickets.md#linear)

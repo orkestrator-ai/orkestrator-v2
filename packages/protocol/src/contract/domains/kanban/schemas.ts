@@ -295,6 +295,18 @@ export const LinearIssueDetailSchema = openRecord({
   comments: Schema.optional(mutableArray(LinearIssueCommentSchema)),
 }).annotate({ identifier: "LinearIssueDetail" });
 
+/** The Linear-hosted files one issue refers to. */
+export const LinearIssueFilesSchema = openRecord({
+  files: mutableArray(
+    openRecord({
+      url: Schema.String,
+      name: optionalString,
+      /** Opens without Linear sign-in, for a few minutes. */
+      signedUrl: optionalString,
+    }),
+  ),
+}).annotate({ identifier: "LinearIssueFiles" });
+
 /** `LinearCompletionCommentResult`, or the earlier post a retry found. */
 export const LinearCompletionCommentResultSchema = openRecord({
   // `posted` or `already-posted`.

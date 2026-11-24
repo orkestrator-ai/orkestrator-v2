@@ -101,6 +101,7 @@ mock.module("@/lib/backend", () => ({
   ),
   getLinearBoardLink: mock(async () => boardLink),
   getLinearBoardOptions: getLinearBoardOptionsMock,
+  getLinearIssueFiles: async () => [],
   updateLinearIssue: updateLinearIssueMock,
   getLinearNodeConnections: mock(async () => []),
   getComposeDraft: mock(async () => null),

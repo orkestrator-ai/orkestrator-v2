@@ -952,6 +952,66 @@ two live profiles with a throwaway Linear key, and the board labels and the
 The board's labels are covered by `LinearIssueBoard.test.tsx` (an issue with
 labels, one with none and one with many).
 
+### Linear files
+
+A file added to a Linear issue is a link to `uploads.linear.app` in the issue's
+Markdown (or an attachment there). That host answers 401 without the
+workspace's key, and a restricted container cannot reach it at all. Only the
+backend holds the key, so the backend reads the files and never hands the key
+out. Code: `packages/protocol/src/linear-files.ts` (recognising links) and
+`apps/backend/src/core/linear-files/`.
+
+**What may be read.** Nobody names an arbitrary file. Each read fetches the
+issue live and serves only the files that its description, comments or
+attachments refer to. The issue must be the one the environment's build was
+started from, or be on the project's linked board.
+
+**Agents** get ordinary files under `.orkestrator/linear-files/<issue>/` in
+their workspace. The directory is Git-excluded, and writes go through the
+confined writers, so a repository's symbolic link cannot redirect one. A file's
+name starts with a short hash of its link, so two `image.png` stay apart and a
+second download replaces the first.
+
+- **Before a Build** started from a Linear issue, `prepareBuild` downloads the
+  files the ticket snapshot quotes. A build launched without comments gets no
+  comment files. The prompt lists each path, and each file that failed with the
+  reason; a failure never stops the build. Small raster images also join the
+  ticket snapshot, so they reach the prompt and the Ticket tab as a Kanban
+  ticket's images do.
+- **`download_linear_files`** does the same on request: for a file added later,
+  a resumed build, or an issue on the board (`issueId`) in any environment of
+  the project. It is listed on the general agent server and on a stage turn's
+  workflow-result server, when the environment's build came from Linear or the
+  project has a linked board; not on a read-only turn's connection, and not to
+  graph activations or suborks.
+- Every stage prompt whose ticket has such a link says to use the directory and
+  the tool, rather than fetch the link or ask for a credential.
+
+Limits: 50 files and 200 MB an issue, 50 MB a file, three minutes before a
+Build and 50 seconds a tool call (short of the minute after which providers
+give up on one). The key goes only to `uploads.linear.app`; a redirect
+elsewhere is followed without it, over HTTPS only.
+
+**The Linear tab** reads `get_linear_issue_files` when an issue opens. Linear
+signs the links for ten minutes (the `public-file-urls-expire-in` header), so
+images show in place, and a file link or the Files list opens the file in the
+browser, which downloads it. A link older than eight minutes is read again
+first. Signed links stay out of the issue detail, because a build's snapshot is
+made from that. An older node answers `unknown-command`, and links open
+unsigned as before.
+
+**Decisions.**
+
+- *The backend downloads, rather than agents receiving signed links.* A signed
+  link would need no tool, but it would sit in prompts and transcripts as a
+  working link, would expire inside a long build, and a restricted container
+  could not fetch it.
+- *Both a download before the Build and a tool.* The first needs nothing from
+  the agent; only the second covers resumed builds, later files and environments
+  that no pipeline started.
+- *Each machine uses its own key.* A build running on a machine that is not
+  connected to Linear says so in its prompt; no key or file crosses a node link.
+
 ### Merged builds label their issue
 
 When a build started from a Linear issue (pipeline source `linear`) has its

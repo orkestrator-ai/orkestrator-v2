@@ -29,6 +29,7 @@ import {
   type BuildPipeline,
   type BuildPipelineAgent,
   type PipelineSession,
+  type TaskSnapshotImage,
   type ResumableBuildPhase,
   isBuildPipeline,
   BUILD_PIPELINE_VERSION,
@@ -154,6 +155,14 @@ export type BuildPipelineServiceOptions = {
    * sweep still queue it.
    */
   onPullRequestMerged?: (pipeline: BuildPipeline, prUrl: string) => void;
+  /**
+   * Downloads a Linear-sourced build's ticket files into its workspace before
+   * the Build prompt (`linear-files/service.ts`). Bounded in time and never
+   * throws. Absent: the prompt only names the links.
+   */
+  prepareLinearFiles?: (
+    pipeline: BuildPipeline,
+  ) => Promise<{ section: string; images: TaskSnapshotImage[] } | null>;
   /** The backend fence shared by file writes, commands and agent dispatch. */
   environmentFence?: EnvironmentMutationFence;
   /** Checks native/background writers while new work is excluded by the fence. */

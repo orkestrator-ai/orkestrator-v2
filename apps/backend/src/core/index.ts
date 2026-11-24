@@ -302,6 +302,7 @@ import {
   cancelScheduledEnvironmentCleanup,
   runStartupEnvironmentCleanup,
 } from "./environments/cleanup-reconciler.js";
+import { LinearFileService } from "./linear-files/index.js";
 import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
@@ -1682,6 +1683,15 @@ export class OrkestratorBackend {
     // D3 across engines: graph runs and Build Pipelines consult one projection
     // of who uses each checkout (bespoke Multi Reviews are tracked too).
     const workspaceWriters = new WorkspaceWriters(storage);
+    const linearFiles = new LinearFileService({
+      storage,
+      fence: context.runtime.environments.fence,
+    });
+    (
+      this.agentTools as {
+        setLinearFileToolHost?: AgentToolsServer["setLinearFileToolHost"];
+      }
+    ).setLinearFileToolHost?.(linearFiles);
     this.buildPipelines = new BuildPipelineService(
       storage,
       async <T>(
@@ -1732,6 +1742,7 @@ export class OrkestratorBackend {
             environmentId,
           ),
         workspaceWriters,
+        prepareLinearFiles: (pipeline) => linearFiles.prepareBuild(pipeline),
         onPullRequestMerged: (pipeline, prUrl) =>
           context.runtime.linearMergedLabels.recordPipelineMerge(storage, pipeline, prUrl),
       },

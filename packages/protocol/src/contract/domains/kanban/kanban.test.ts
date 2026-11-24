@@ -97,6 +97,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   set_linear_board_link: ["projectId", "teamId", "linearProjectId"],
   clear_linear_board_link: ["projectId"],
   get_linear_board_options: ["projectId"],
+  get_linear_issue_files: ["projectId", "issueId"],
   create_linear_issue: [
     "projectId",
     "requestKey",
@@ -132,6 +133,7 @@ const SINCE_2 = new Set([
   "set_linear_board_link",
   "clear_linear_board_link",
   "get_linear_board_options",
+  "get_linear_issue_files",
   "create_linear_issue",
   "update_linear_issue",
   "get_linear_node_connections",
@@ -162,9 +164,9 @@ function argsError(def: AnyCommandDef, raw: unknown): string {
 }
 
 describe("kanban definitions", () => {
-  it("cover the 42 commands once, the Linear board ones since version 2", () => {
-    expect(ALL).toHaveLength(42);
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(42);
+  it("cover the 43 commands once, the Linear board ones since version 2", () => {
+    expect(ALL).toHaveLength(43);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(43);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({

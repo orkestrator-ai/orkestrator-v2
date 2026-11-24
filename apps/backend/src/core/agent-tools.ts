@@ -72,6 +72,7 @@ import {
   registerLongCheckTools,
 } from "./build-pipeline/index.js";
 import { registerKeyInformationTools } from "./build-pipeline/key-information-tools.js";
+import { registerLinearFileTool, type LinearFileToolHost } from "./linear-files/tool.js";
 import {
   registerAutoPipelineTool,
   type AutoPipelineToolHost,
@@ -723,6 +724,7 @@ async function createAgentToolServer(
     suborkTools = null,
     keyInformation = null,
     longChecks = null,
+    linearFiles = null,
     autoPipelineTools = null,
     credentialTools = null,
     interactionTools = null,
@@ -733,6 +735,7 @@ async function createAgentToolServer(
     suborkTools?: SuborkToolHost | null;
     keyInformation?: BuildPipelineKeyInformationHost | null;
     longChecks?: BuildPipelineLongCheckHost | null;
+    linearFiles?: LinearFileToolHost | null;
     autoPipelineTools?: AutoPipelineToolHost | null;
     credentialTools?: CredentialToolHost | null;
     interactionTools?: RichInteractionService | null;
@@ -823,6 +826,7 @@ async function createAgentToolServer(
     if (keyInformation)
       await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
     if (longChecks) await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
+    if (linearFiles) await registerLinearFileTool(server, linearFiles, pipelineScope);
     return server;
   }
   if (scope.workflowResultKey) {
@@ -870,6 +874,10 @@ async function createAgentToolServer(
     // And the long check tools, so a stage can hand a slow run to the pipeline.
     if (longChecks && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
       await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
+    }
+    // And the files of the Linear issue the build works on.
+    if (linearFiles && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
+      await registerLinearFileTool(server, linearFiles, pipelineScope);
     }
     if (workerTabId) {
       registerAgentMessagingTools(
@@ -1074,6 +1082,10 @@ async function createAgentToolServer(
 
   if (longChecks) await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
 
+  // Writes into the workspace, so a read-only turn's connection goes without.
+  if (linearFiles && !scope.credentialsDisabled)
+    await registerLinearFileTool(server, linearFiles, pipelineScope);
+
   return server;
 }
 
@@ -1147,6 +1159,7 @@ export class AgentToolsServer {
   private graphActivationToolHost: GraphActivationToolHost | null = null;
   private keyInformationHost: BuildPipelineKeyInformationHost | null = null;
   private longCheckHost: BuildPipelineLongCheckHost | null = null;
+  private linearFileHost: LinearFileToolHost | null = null;
   private autoPipelineToolHost: AutoPipelineToolHost | null = null;
   private credentialToolHost: CredentialToolHost | null = null;
   private readonly peerFilter: AgentToolsPeerGate;
@@ -1484,6 +1497,11 @@ export class AgentToolsServer {
    */
   setLongCheckToolHost(host: BuildPipelineLongCheckHost | null): void {
     this.longCheckHost = host;
+  }
+
+  /** Installs (or removes, with null) the host of the `download_linear_files` tool. */
+  setLinearFileToolHost(host: LinearFileToolHost | null): void {
+    this.linearFileHost = host;
   }
 
   /** Installs the scheduler behind the agents' schedule tools. */
@@ -1839,6 +1857,7 @@ export class AgentToolsServer {
                   suborkTools: this.suborkToolHost,
                   keyInformation: this.keyInformationHost,
                   longChecks: this.longCheckHost,
+                  linearFiles: this.linearFileHost,
                   autoPipelineTools: this.autoPipelineToolHost,
                   credentialTools: this.credentialToolHost,
                   interactionTools: this.richInteractionService,

@@ -884,6 +884,7 @@ export async function writeContainerReviewPackage(
   filename: string,
   contents: Buffer,
   timeoutMs = CONTAINER_REVIEW_PACKAGE_WRITE_TIMEOUT_MS,
+  fileMode = 0o444,
 ): Promise<void> {
   try {
     await run(
@@ -901,7 +902,7 @@ export async function writeContainerReviewPackage(
         String(contents.byteLength),
         "",
         "overwrite",
-        String(0o444),
+        String(fileMode),
       ],
       { stdin: contents.toString("base64"), timeoutMs },
     );

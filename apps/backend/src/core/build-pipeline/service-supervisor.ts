@@ -98,6 +98,7 @@ import {
   reviewPackagePreparationPrompt,
   type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
+  addTaskSnapshotImages,
 } from "./prompts.js";
 import { BuildPipelineReviewFanout, type ReviewFanoutStep } from "./review-fanout.js";
 import {
@@ -1725,6 +1726,13 @@ export class BuildPipelineSupervisor {
         ? await this.agents.settingsForSelection(pipeline, override.settings)
         : await this.agents.stepSettings(pipeline, sessionPhase);
       const provider = await this.agents.provider(pipeline, agent);
+      // Before the session exists: a slow download must not leave one behind
+      // unrecorded. The prompt is built after, so it names the images too.
+      const linearFiles =
+        !override && sessionPhase === "build"
+          ? await this.ctx.options.prepareLinearFiles?.(pipeline)
+          : undefined;
+      addTaskSnapshotImages(pipeline.taskSnapshot, linearFiles?.images ?? []);
       const label =
         override?.label ??
         (sessionPhase === "pr" && pipeline.delivery?.policy === "push-no-pr"
@@ -1770,7 +1778,9 @@ export class BuildPipelineSupervisor {
       const stagePrompt = override
         ? { prompt: override.prompt, images: override.images, schema: override.schema }
         : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
-      const prompt = withUnattendedPolicy(stagePrompt.prompt);
+      const prompt = withUnattendedPolicy(
+        linearFiles ? `${stagePrompt.prompt}\n\n${linearFiles.section}` : stagePrompt.prompt,
+      );
       const { schema, images } = stagePrompt;
       const requestId = randomUUID();
       const dispatchResultKind = this.ctx.workflowResultKind(

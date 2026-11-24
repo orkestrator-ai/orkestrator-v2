@@ -38,6 +38,7 @@ import type {
   LinearConnectionStatus,
   LinearIssueComment,
   LinearIssueDetail,
+  LinearIssueFile,
   LinearIssueListItem,
   LinearNodeConnection,
   LinearTeam,
@@ -646,6 +647,17 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     );
   }
 
+  /** The Linear-hosted files an issue refers to, with links that open for a few minutes. */
+  async function getLinearIssueFiles(
+    projectId: string,
+    issueId: string,
+  ): Promise<LinearIssueFile[]> {
+    const result = await asKanbanModel<{ files: LinearIssueFile[] }>(
+      kanban(client).get_linear_issue_files({ projectId, issueId }),
+    );
+    return result.files;
+  }
+
   /** The linked board's workflow states (the board view's lanes), labels and members. */
   async function getLinearBoardOptions(projectId: string): Promise<LinearBoardOptions> {
     return asKanbanModel<LinearBoardOptions>(
@@ -858,6 +870,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     setLinearBoardLink,
     clearLinearBoardLink,
     getLinearBoardOptions,
+    getLinearIssueFiles,
     updateLinearIssue,
     getLinearNodeConnections,
     copyLinearConnectionFromNode,
@@ -917,6 +930,7 @@ export const {
   setLinearBoardLink,
   clearLinearBoardLink,
   getLinearBoardOptions,
+  getLinearIssueFiles,
   updateLinearIssue,
   getLinearNodeConnections,
   copyLinearConnectionFromNode,

@@ -160,6 +160,61 @@ describe("Electron backend command registry", () => {
     }
   });
 
+  test("reads an issue's files with links that open without Linear sign-in", async () => {
+    const originalFetch = globalThis.fetch;
+    const { context } = createContext(createEnvironment());
+    const commands = createCommandRegistry();
+    let teamId = "team-1";
+    Object.assign(context.storage, {
+      getProject: mock(async (id: string) => ({ id, name: "Web", gitUrl: null })),
+    });
+    Object.assign(context.storage.kanban, {
+      getLinearAuth: mock(async () => ({ apiKey: "lin_api_secret" })),
+    });
+    Object.assign(context.storage.linear, {
+      getLinearBoardLink: mock(async () => ({
+        key: "project:p",
+        teamId: "team-1",
+        teamKey: "ENG",
+      })),
+    });
+    const file = "https://uploads.linear.app/ws/aaaa/bbbb";
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({
+        Authorization: "lin_api_secret",
+        "public-file-urls-expire-in": "600",
+      });
+      return Response.json({
+        data: {
+          issue: {
+            id: "issue-1",
+            identifier: "ENG-1",
+            description: `[package.zip](${file}?signature=abc)`,
+            team: { id: teamId },
+            project: null,
+            attachments: { nodes: [] },
+            comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const read = () =>
+        commands.get("get_linear_issue_files")?.(
+          { projectId: "project-1", issueId: "ENG-1" },
+          context,
+        );
+      await expect(read()).resolves.toEqual({
+        files: [{ url: file, name: "package.zip", signedUrl: `${file}?signature=abc` }],
+      });
+      teamId = "another-team";
+      await expect(read()).rejects.toThrow("not on this project's Linear board");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("serializes concurrent Linear completion comments by pipeline ID", async () => {
     const originalFetch = globalThis.fetch;
     const { context } = createContext(createEnvironment());

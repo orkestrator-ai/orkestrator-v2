@@ -148,6 +148,37 @@ describe("report_goal", () => {
     expect(AGENT_GOAL_TOOL_NAMES).toContain("report_goal");
   });
 
+  test("download_linear_files is listed as its host offers it", async () => {
+    const names = async () =>
+      (await call("tab-1", "tools/list")).result?.tools?.map((tool) => tool.name);
+    const asked: unknown[] = [];
+    let offered = false;
+    server.setLinearFileToolHost({
+      offered: async (scope) => {
+        asked.push(scope);
+        return offered;
+      },
+      download: async () => ({ issue: "ENG-1", files: [], failed: [] }),
+    });
+    expect(await names()).not.toContain("download_linear_files");
+    offered = true;
+    expect(await names()).toContain("download_linear_files");
+    expect(asked[0]).toEqual({ environmentId: "env-1", projectId: "project-1" });
+
+    // A read-only turn's connection writes nothing to the workspace.
+    const { url, readOnlyToken } = server.connection("env-1", "project-1", "host", "tab-1");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${readOnlyToken}`,
+        Accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(await response.text()).not.toContain("download_linear_files");
+  });
+
   test("passes the credential's own scope, never one the caller chose", async () => {
     server.setGoalToolHost({
       report: async (scope, input) => {

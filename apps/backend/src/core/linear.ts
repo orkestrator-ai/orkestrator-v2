@@ -156,6 +156,7 @@ export async function linearGraphql<T>(
   query: string,
   variables: Record<string, unknown> = {},
   signal?: AbortSignal,
+  headers: Readonly<Record<string, string>> = {},
 ): Promise<T> {
   const token = apiKey.trim();
   if (!token) throw new Error("Linear API key is not configured");
@@ -166,6 +167,7 @@ export async function linearGraphql<T>(
       method: "POST",
       signal,
       headers: {
+        ...headers,
         "Content-Type": "application/json",
         Authorization: token,
       },

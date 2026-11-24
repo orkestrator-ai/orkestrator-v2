@@ -4,6 +4,7 @@ import {
   createLinearIssueCommand,
   getLinearBoardLinkCommand,
   getLinearBoardOptionsCommand,
+  getLinearIssueFilesCommand,
   getLinearNodeConnectionsCommand,
   getLinearTeamsCommand,
   setLinearBoardLinkCommand,
@@ -28,6 +29,7 @@ import {
   listLinearTeams,
   updateLinearIssue,
 } from "./linear-boards.js";
+import { issueFilesAreOnBoard, readLinearIssueFiles } from "./linear-files/index.js";
 import { linearBoardLinkKey, type LinearBoardLink } from "./storage/index.js";
 
 /**
@@ -95,6 +97,9 @@ export async function requireIssueOnProjectBoard(
     );
   }
 }
+
+/** How long a file link handed to the Linear tab opens without Linear sign-in. */
+const SIGNED_FILE_SECONDS = 10 * 60;
 
 /** A board change here goes to every machine with the repository. */
 export function noteLinearChange(context: CommandContext): void {
@@ -202,6 +207,25 @@ export function registerLinearBoardCommands(register: CommandRegistrar): void {
     async ({ projectId }, context) => {
       const { board } = await requireProjectLinearBoard(context, projectId);
       return withLinearKey(context, (apiKey) => getLinearBoardOptions(apiKey, board.teamId));
+    },
+    ASYNC_HANDLER,
+  );
+
+  register(
+    getLinearIssueFilesCommand,
+    async ({ projectId, issueId }, context) => {
+      const { link, board } = await requireProjectLinearBoard(context, projectId);
+      return withLinearKey(context, async (apiKey) => {
+        const issue = await readLinearIssueFiles(apiKey, issueId, {
+          signedSeconds: SIGNED_FILE_SECONDS,
+        });
+        if (!issueFilesAreOnBoard(issue, board)) {
+          throw new Error(
+            `Linear issue ${issue.identifier ?? issueId} is not on this project's Linear board (${linearBoardName(link)}).`,
+          );
+        }
+        return { files: issue.files };
+      });
     },
     ASYNC_HANDLER,
   );

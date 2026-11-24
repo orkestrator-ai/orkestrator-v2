@@ -16,6 +16,7 @@ import type {
   LinearBoardOptions,
   LinearConnectionStatus,
   LinearIssueDetail,
+  LinearIssueFile,
   LinearIssueListItem,
   LinearNodeConnection,
   LinearTeam,
@@ -90,6 +91,9 @@ const getLinearBoardOptionsMock = mock(async (_projectId: string): Promise<Linea
   teamId: "team-1",
   states: [],
 }));
+const getLinearIssueFilesMock = mock(
+  async (_projectId: string, _issueId: string): Promise<LinearIssueFile[]> => [],
+);
 const getLinearNodeConnectionsMock = mock(async (): Promise<LinearNodeConnection[]> => []);
 const copyLinearConnectionFromNodeMock = mock(
   async (_nodeId: string): Promise<LinearConnectionStatus> => ({
@@ -155,6 +159,7 @@ mock.module("@/lib/backend", () => ({
   clearLinearBoardLink: clearLinearBoardLinkMock,
   getLinearTeams: getLinearTeamsMock,
   getLinearBoardOptions: getLinearBoardOptionsMock,
+  getLinearIssueFiles: getLinearIssueFilesMock,
   updateLinearIssue: updateLinearIssueMock,
   getLinearNodeConnections: getLinearNodeConnectionsMock,
   copyLinearConnectionFromNode: copyLinearConnectionFromNodeMock,
@@ -306,6 +311,8 @@ describe("LinearTicketsView", () => {
     appCommandStore(projectStore).setState({ projects: [] });
     appCommandStore(linearViewPreferencesStore).setState({ projects: {} });
     updateLinearIssueMock.mockReset();
+    getLinearIssueFilesMock.mockReset();
+    getLinearIssueFilesMock.mockResolvedValue([]);
     getLinearBoardOptionsMock.mockReset();
     getLinearBoardOptionsMock.mockResolvedValue({
       teamId: "team-1",
@@ -351,6 +358,36 @@ describe("LinearTicketsView", () => {
     fireEvent.click(title);
     await screen.findByText("Build Linear support");
     assertDecorativeAvatar(screen.getByTestId("linear-assignee-avatar"), detailAvatarUrl);
+  });
+
+  test("lists an issue's files and shows its images and links as Linear has them", async () => {
+    const zip = "https://uploads.linear.app/ws/aaaa/bbbb";
+    const logo = "https://uploads.linear.app/ws/cccc/dddd";
+    getLinearIssueMock.mockResolvedValue({
+      ...issueDetail,
+      description: `Use [package.zip](${zip}) and ![logo](${logo})`,
+      comments: [{ ...issueDetail.comments[0]!, body: `Again: [package.zip](${zip})` }],
+    });
+    getLinearIssueFilesMock.mockResolvedValue([
+      { url: zip, name: "package.zip", signedUrl: `${zip}?signature=1` },
+      { url: logo, name: "logo", signedUrl: `${logo}?signature=2` },
+    ]);
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    const files = await screen.findByRole("region", { name: "Files" });
+    expect(getLinearIssueFilesMock).toHaveBeenCalledWith("project-1", "issue-1");
+    expect(within(files).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("img", { name: "logo" }).getAttribute("src")).toBe(
+      `${logo}?signature=2`,
+    );
+
+    fireEvent.click(within(files).getByRole("button", { name: "Download package.zip" }));
+    expect(openInBrowserMock).toHaveBeenLastCalledWith(`${zip}?signature=1`);
+    const links = screen.getAllByRole("link", { name: "package.zip" });
+    expect(links).toHaveLength(2);
+    fireEvent.click(links[1]!);
+    expect(openInBrowserMock).toHaveBeenCalledTimes(2);
   });
 
   test("shows a connect state and can start Linear connection setup", async () => {

@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { Loader2, Plus, RotateCcw, Settings2 } from "lucide-react";
+import { Loader2, Plus, RotateCcw, Settings2, X } from "lucide-react";
 import {
   AGENT_PLATFORM_LABELS,
   normalizeAgentPlatforms,
@@ -209,17 +209,27 @@ export function CoordinatorConversationPane({
   const heldReason = sendingHeldReason(snapshot, conversation, platformOff);
   return (
     <div key={conversation.id} className="relative flex h-full min-h-0 min-w-0 flex-col">
-      {/* Conversation notices stay inside this pane, including when it is hidden. */}
-      <FloatingNoticeLayer independent columnRem={TRANSCRIPT_COLUMN_REM}>
-        {launchError ? (
-          <CoordinatorBanner
-            tone="error"
-            label="Opening message could not be sent"
-            onDismiss={() => clearLaunchError(conversation.id)}
+      {launchError ? (
+        <div className="flex shrink-0 items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure">
+          <p
+            role="alert"
+            className="min-w-0 flex-1 max-h-28 overflow-auto break-words whitespace-pre-wrap"
           >
             {launchError}
-          </CoordinatorBanner>
-        ) : null}
+          </p>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-6 shrink-0"
+            aria-label="Dismiss opening message error"
+            onClick={() => clearLaunchError(conversation.id)}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
+      ) : null}
+      {/* Conversation notices stay inside this pane, including when it is hidden. */}
+      <FloatingNoticeLayer independent columnRem={TRANSCRIPT_COLUMN_REM}>
         {conversation.startupError ? (
           <CoordinatorStartupFailure
             title={conversation.title}

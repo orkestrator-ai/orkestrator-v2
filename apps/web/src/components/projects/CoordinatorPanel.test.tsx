@@ -1221,7 +1221,8 @@ describe("CoordinatorPanel", () => {
       await screen.findByTestId("first-prompt-sent");
       assignAgent.mockRejectedValueOnce(new Error("Claude could not be assigned"));
       await act(async () => finishFetch(gitStatus));
-      expect(await screen.findByText("Claude could not be assigned")).toBeTruthy();
+      const failure = await screen.findByText("Claude could not be assigned");
+      expect(failure.getAttribute("role")).toBe("alert");
       expect(screen.queryByTestId("first-prompt-sent") === null).toBe(true);
       expect(composerText()).toBe(fullDraft.text);
       expect(

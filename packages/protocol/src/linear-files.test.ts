@@ -44,9 +44,9 @@ describe("linearFileReferences", () => {
     ]);
   });
 
-  test("is bounded, and stays fast on text full of brackets", () => {
+  test("collects beyond the batch limit, and stays fast on text full of brackets", () => {
     const many = Array.from({ length: MAX_LINEAR_ISSUE_FILES + 5 }, (_, i) => `${ZIP}${i}`);
-    expect(linearFileReferences(many.join(" "))).toHaveLength(MAX_LINEAR_ISSUE_FILES);
+    expect(linearFileReferences(many.join(" "))).toHaveLength(many.length);
     expect(linearFileReferences("[".repeat(100_000))).toEqual([]);
   });
 });

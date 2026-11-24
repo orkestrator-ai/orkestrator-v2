@@ -72,6 +72,10 @@ import {
   registerLongCheckTools,
 } from "./build-pipeline/index.js";
 import { registerKeyInformationTools } from "./build-pipeline/key-information-tools.js";
+import {
+  LINEAR_FILE_WORKFLOW_MCP_PATH,
+  LINEAR_FILE_WRITE_RESULT_KINDS,
+} from "./linear-files/authorization.js";
 import { registerLinearFileTool, type LinearFileToolHost } from "./linear-files/tool.js";
 import {
   registerAutoPipelineTool,
@@ -725,6 +729,7 @@ async function createAgentToolServer(
     keyInformation = null,
     longChecks = null,
     linearFiles = null,
+    linearFilesOnly = false,
     autoPipelineTools = null,
     credentialTools = null,
     interactionTools = null,
@@ -736,6 +741,7 @@ async function createAgentToolServer(
     keyInformation?: BuildPipelineKeyInformationHost | null;
     longChecks?: BuildPipelineLongCheckHost | null;
     linearFiles?: LinearFileToolHost | null;
+    linearFilesOnly?: boolean;
     autoPipelineTools?: AutoPipelineToolHost | null;
     credentialTools?: CredentialToolHost | null;
     interactionTools?: RichInteractionService | null;
@@ -764,6 +770,33 @@ async function createAgentToolServer(
     }
     throw new Error("Build outcome capability denied");
   };
+  const canPublishLinearFiles = async (resultKey: string, provider?: StructuredOutputProvider) => {
+    const binding = await workflowResults?.binding(pipelineScope, resultKey);
+    return (
+      !!binding &&
+      (!provider || binding.provider === provider) &&
+      LINEAR_FILE_WRITE_RESULT_KINDS.includes(binding.kind) &&
+      (await workflowResults?.status(pipelineScope, resultKey))?.lifecycle === "open"
+    );
+  };
+  if (linearFilesOnly) {
+    const server = new McpServer(
+      { name: "orkestrator-linear-files", version: "1.0.0" },
+      { capabilities: { tools: {} } },
+    );
+    const resultKey = scope.workflowResultKey;
+    const offered =
+      linearFiles &&
+      resultKey &&
+      !scope.credentialsDisabled &&
+      (await canPublishLinearFiles(resultKey, "opencode")) &&
+      (await registerLinearFileTool(server, linearFiles, pipelineScope, {
+        authorize: () => canPublishLinearFiles(resultKey, "opencode"),
+      }));
+    // A writable OpenCode turn without a linked issue or board still connects.
+    if (!offered) server.server.setRequestHandler("tools/list", () => ({ tools: [] }));
+    return server;
+  }
   if (scope.workflowResultBroker) {
     const server = new McpServer(
       { name: WORKFLOW_RESULT_MCP_SERVER_NAME, version: "1.0.0" },
@@ -826,7 +859,6 @@ async function createAgentToolServer(
     if (keyInformation)
       await registerKeyInformationTools(server, keyInformation, pipelineScope, outcomeScope);
     if (longChecks) await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
-    if (linearFiles) await registerLinearFileTool(server, linearFiles, pipelineScope);
     return server;
   }
   if (scope.workflowResultKey) {
@@ -875,9 +907,11 @@ async function createAgentToolServer(
     if (longChecks && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
       await registerLongCheckTools(server, longChecks, pipelineScope, outcomeScope);
     }
-    // And the files of the Linear issue the build works on.
-    if (linearFiles && binding.kind !== "graph-output" && binding.kind !== SUBORK_RESULT_KIND) {
-      await registerLinearFileTool(server, linearFiles, pipelineScope);
+    const resultKey = scope.workflowResultKey;
+    if (linearFiles && !scope.credentialsDisabled && (await canPublishLinearFiles(resultKey))) {
+      await registerLinearFileTool(server, linearFiles, pipelineScope, {
+        authorize: () => canPublishLinearFiles(resultKey),
+      });
     }
     if (workerTabId) {
       registerAgentMessagingTools(
@@ -1758,7 +1792,12 @@ export class AgentToolsServer {
       await this.handleArtifactMcp(request, response);
       return;
     }
-    if (url.pathname !== AGENT_MCP_PATH && !(url.pathname === "/design-mcp" && this.design)) {
+    const isLinearFiles = url.pathname === LINEAR_FILE_WORKFLOW_MCP_PATH;
+    if (
+      url.pathname !== AGENT_MCP_PATH &&
+      !isLinearFiles &&
+      !(url.pathname === "/design-mcp" && this.design)
+    ) {
       jsonResponse(response, 404, { error: "Not found" });
       return;
     }
@@ -1779,6 +1818,13 @@ export class AgentToolsServer {
         { error: "Invalid agent tools credential" },
         { "www-authenticate": 'Bearer realm="orkestrator-agent-tools"' },
       );
+      return;
+    }
+
+    if (isLinearFiles && !scope.workflowResultKey) {
+      jsonResponse(response, 403, {
+        error: "Linear file workflow tools require a signed attempt credential",
+      });
       return;
     }
 
@@ -1858,6 +1904,7 @@ export class AgentToolsServer {
                   keyInformation: this.keyInformationHost,
                   longChecks: this.longCheckHost,
                   linearFiles: this.linearFileHost,
+                  linearFilesOnly: isLinearFiles,
                   autoPipelineTools: this.autoPipelineToolHost,
                   credentialTools: this.credentialToolHost,
                   interactionTools: this.richInteractionService,

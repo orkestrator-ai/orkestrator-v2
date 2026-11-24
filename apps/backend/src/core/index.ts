@@ -1742,7 +1742,8 @@ export class OrkestratorBackend {
             environmentId,
           ),
         workspaceWriters,
-        prepareLinearFiles: (pipeline) => linearFiles.prepareBuild(pipeline),
+        prepareLinearFiles: (pipeline, signal) =>
+          linearFiles.prepareBuild(pipeline, undefined, signal),
         onPullRequestMerged: (pipeline, prUrl) =>
           context.runtime.linearMergedLabels.recordPipelineMerge(storage, pipeline, prUrl),
       },

@@ -651,9 +651,14 @@ export function createConfigIntegrationsApi(client: BackendClient) {
   async function getLinearIssueFiles(
     projectId: string,
     issueId: string,
+    fileUrl?: string,
   ): Promise<LinearIssueFile[]> {
     const result = await asKanbanModel<{ files: LinearIssueFile[] }>(
-      kanban(client).get_linear_issue_files({ projectId, issueId }),
+      kanban(client).get_linear_issue_files({
+        projectId,
+        issueId,
+        ...(fileUrl ? { fileUrl } : {}),
+      }),
     );
     return result.files;
   }

@@ -97,7 +97,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   set_linear_board_link: ["projectId", "teamId", "linearProjectId"],
   clear_linear_board_link: ["projectId"],
   get_linear_board_options: ["projectId"],
-  get_linear_issue_files: ["projectId", "issueId"],
+  get_linear_issue_files: ["projectId", "issueId", "fileUrl"],
   create_linear_issue: [
     "projectId",
     "requestKey",

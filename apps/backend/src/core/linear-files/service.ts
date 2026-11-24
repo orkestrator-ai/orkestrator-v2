@@ -20,14 +20,15 @@ import { isBuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import {
   LINEAR_FILE_TOOL_NAME,
   LINEAR_FILES_DIRECTORY,
+  MAX_LINEAR_ISSUE_FILES,
   linearFileReferences,
   linearFileUrl,
 } from "@orkestrator/protocol/linear-files";
 import { createLogger } from "@orkestrator/protocol/logger";
 import {
   createGitEnvironmentCommandRunner,
-  ensureWorkspaceArtifactIsGitExcluded,
-  writeContainerReviewPackage,
+  assertWorkspaceArtifactIsGitExcluded,
+  setupWorkspaceArtifactGitExclude,
 } from "../commands-review.js";
 import type { EnvironmentMutationFence } from "../environments/index.js";
 import { sanitizeLinearError, type LinearBoardFilter } from "../linear.js";
@@ -36,6 +37,7 @@ import { writeConfinedFile } from "../path-safety.js";
 import { detectedMimeTypeForImageData } from "../prompt-attachments.js";
 import { runCommand } from "../shell.js";
 import { linearBoardLinkKey, type StorageService } from "../storage/index.js";
+import { writeContainerLinearFile } from "./container-write.js";
 import { downloadLinearFile } from "./download.js";
 import {
   issueFilesAreOnBoard,
@@ -96,11 +98,12 @@ export interface PreparedBuildFiles {
 export interface LinearFileServiceDependencies {
   storage: Pick<
     StorageService,
-    "getEnvironment" | "getProject" | "kanban" | "linear" | "listBuildPipelines"
+    "getEnvironment" | "getProject" | "kanban" | "linear" | "listBuildPipelinesForEnvironment"
   >;
   fence: Pick<EnvironmentMutationFence, "beginMutation">;
-  /** Spawns the in-container writer. */
+  /** Runs Git in the workspace. */
   run?: typeof runCommand;
+  writeContainer?: typeof writeContainerLinearFile;
   maxFileBytes?: number;
   maxIssueBytes?: number;
 }
@@ -132,6 +135,7 @@ export class LinearFileService {
     input: { issueId?: string; urls?: readonly string[] } = {},
     deadlineMs = LINEAR_FILE_TOOL_DEADLINE_MS,
   ): Promise<LinearFilesDownload> {
+    const deadline = Date.now() + deadlineMs;
     const signal = AbortSignal.timeout(deadlineMs);
     const source = await this.sourceFor(scope);
     const issueId = input.issueId ?? source?.issueId;
@@ -164,7 +168,14 @@ export class LinearFileService {
         if (!files.includes(file)) files.push(file);
       }
     }
-    const { result } = await this.fetchInto(scope.environmentId, apiKey, issue, files, signal);
+    const { result } = await this.fetchInto(
+      scope.environmentId,
+      apiKey,
+      issue,
+      files,
+      signal,
+      deadline,
+    );
     return result;
   }
 
@@ -176,18 +187,21 @@ export class LinearFileService {
   async prepareBuild(
     pipeline: Pick<BuildPipeline, "environmentId" | "projectId" | "source" | "taskSnapshot">,
     deadlineMs = LINEAR_FILE_BUILD_DEADLINE_MS,
+    interrupted?: AbortSignal,
   ): Promise<PreparedBuildFiles | null> {
     const source = pipeline.source;
     if (source?.type !== "linear") return null;
-    const { description, comments } = pipeline.taskSnapshot;
+    const { description, acceptanceCriteria, comments } = pipeline.taskSnapshot;
     // What the user chose to send: a build without comments gets no comment files.
     const quoted = linearFileReferences(
-      [description, ...comments.map((comment) => comment.text)].join("\n\n"),
+      [description, acceptanceCriteria, ...comments.map((comment) => comment.text)].join("\n\n"),
     );
     if (quoted.length === 0) return null;
     let apiKey: string | undefined;
     try {
-      const signal = AbortSignal.timeout(deadlineMs);
+      const deadline = Date.now() + deadlineMs;
+      const timeout = AbortSignal.timeout(deadlineMs);
+      const signal = interrupted ? AbortSignal.any([interrupted, timeout]) : timeout;
       apiKey = await this.requireApiKey();
       const issue = await this.readIssue(apiKey, source.issueId, signal);
       const files = quoted.flatMap((reference) => {
@@ -200,6 +214,7 @@ export class LinearFileService {
         issue,
         files,
         signal,
+        deadline,
       );
       for (const reference of quoted) {
         if (files.some((file) => file.url === reference.url)) continue;
@@ -225,7 +240,10 @@ export class LinearFileService {
   }
 
   private async sourceFor(scope: LinearFileScope): Promise<LinearSource | null> {
-    const records = await this.dependencies.storage.listBuildPipelines(scope.projectId);
+    const records = await this.dependencies.storage.listBuildPipelinesForEnvironment(
+      scope.projectId,
+      scope.environmentId,
+    );
     const pipelines = records
       .map((record) => record.snapshot)
       .filter(
@@ -295,6 +313,7 @@ export class LinearFileService {
     issue: LinearIssueFiles,
     files: readonly LinearIssueFile[],
     signal: AbortSignal,
+    deadline: number,
   ): Promise<{ result: LinearFilesDownload; images: TaskSnapshotImage[] }> {
     const label = issue.identifier ?? issue.issueId;
     const result: LinearFilesDownload = { issue: label, files: [], failed: [] };
@@ -302,31 +321,53 @@ export class LinearFileService {
     if (files.length === 0) return { result, images };
     const environment = await this.requireEnvironment(environmentId);
     const directory = `${LINEAR_FILES_DIRECTORY}/${safeFileName(label, 60) || "issue"}`;
-    const runner = createGitEnvironmentCommandRunner(environment, this.dependencies.fence);
-    await ensureWorkspaceArtifactIsGitExcluded(
+    const runner = createGitEnvironmentCommandRunner(
       environment,
-      runner,
-      `${directory}/file`,
-      "Linear files path",
+      this.dependencies.fence,
+      signal,
+      this.dependencies.run,
     );
+    let setup = false;
     const maxFileBytes = this.dependencies.maxFileBytes ?? MAX_LINEAR_FILE_BYTES;
     let remaining = this.dependencies.maxIssueBytes ?? MAX_LINEAR_ISSUE_BYTES;
     let imageBytes = 0;
-    for (const { url, name } of files) {
+    for (const [index, { url, name }] of files.entries()) {
+      const displayName = name ? safeFileName(name) || undefined : undefined;
       try {
         if (signal.aborted) throw new Error("There was no time left to download it.");
+        if (index >= MAX_LINEAR_ISSUE_FILES) {
+          throw new Error(
+            `Only ${MAX_LINEAR_ISSUE_FILES} files can be downloaded at once. Request this file by URL.`,
+          );
+        }
         if (remaining <= 0) throw new Error("The issue's files together are too large.");
         const downloaded = await downloadLinearFile(apiKey, url, {
           maxBytes: Math.min(maxFileBytes, remaining),
           signal,
+          onBytes: (bytes) => {
+            remaining -= bytes;
+          },
         });
         const { contents, contentType } = downloaded;
-        remaining -= contents.byteLength;
-        const fileName = linearFileName({ url, ...(name ? { name } : {}) }, downloaded);
+        const fileName = linearFileName(url);
         const filePath = `${directory}/${fileName}`;
-        await this.write(environment, filePath, contents, maxFileBytes);
+        const release = this.dependencies.fence.beginMutation(environment.id);
+        try {
+          if (!setup) {
+            await setupWorkspaceArtifactGitExclude(environment, runner, signal);
+            setup = true;
+          }
+          if (await runner("git", ["ls-files", "--cached", "--", filePath], 10_000)) {
+            throw new Error("The Linear file path is tracked by Git.");
+          }
+          await assertWorkspaceArtifactIsGitExcluded(runner, filePath, "Linear file path");
+          signal.throwIfAborted();
+          await this.write(environment, filePath, contents, maxFileBytes, signal, deadline);
+        } finally {
+          release();
+        }
         result.files.push({
-          name: name || fileName,
+          name: name || safeFileName(downloaded.filename ?? "") || fileName,
           path: filePath,
           bytes: contents.byteLength,
           ...(contentType ? { contentType } : {}),
@@ -342,7 +383,13 @@ export class LinearFileService {
           images.push({ filename: fileName, data: contents.toString("base64") });
         }
       } catch (error) {
-        result.failed.push({ url, ...(name ? { name } : {}), reason: errorText(error, apiKey) });
+        result.failed.push({
+          url,
+          ...(displayName ? { name: displayName } : {}),
+          reason: signal.aborted
+            ? "The file download timed out or was stopped."
+            : errorText(error, apiKey),
+        });
       }
     }
     return { result, images };
@@ -353,8 +400,9 @@ export class LinearFileService {
     filePath: string,
     contents: Buffer,
     maxBytes: number,
+    signal: AbortSignal,
+    deadline: number,
   ): Promise<void> {
-    const release = this.dependencies.fence.beginMutation(environment.id);
     try {
       if (environment.environmentType === "local") {
         await writeConfinedFile(environment.worktreePath!, filePath, contents, {
@@ -362,23 +410,22 @@ export class LinearFileService {
           label: "Linear file path",
           maxBytes,
           fileMode: 0o644,
+          signal,
         });
       } else {
-        await writeContainerReviewPackage(
-          this.dependencies.run ?? runCommand,
+        const publishBy = Math.min(deadline, Date.now() + CONTAINER_WRITE_TIMEOUT_MS);
+        await (this.dependencies.writeContainer ?? writeContainerLinearFile)(
           environment.containerId!,
           path.posix.dirname(filePath),
           path.posix.basename(filePath),
           contents,
-          CONTAINER_WRITE_TIMEOUT_MS,
-          0o644,
+          signal,
+          publishBy,
         );
       }
     } catch {
       // The writers' messages name host paths and other writers.
       throw new Error("The file could not be written to the workspace.");
-    } finally {
-      release();
     }
   }
 }
@@ -389,13 +436,19 @@ function buildFilesSection(result: LinearFilesDownload): string {
   if (result.files.length > 0) {
     lines.push(
       "Orkestrator downloaded these files of the ticket into the workspace. The directory is Git-excluded; copy what the change needs out of it.",
-      ...result.files.map((file) => `- \`${file.path}\` (${sizeText(file.bytes)}): ${file.url}`),
+      ...result.files.map(
+        (file) =>
+          `- \`${file.path}\` (${safeFileName(file.name) || "file"}, ${sizeText(file.bytes)}): ${file.url}`,
+      ),
     );
   }
   if (result.failed.length > 0) {
     lines.push(
       `${result.files.length > 0 ? "These files" : "The ticket refers to these files, which"} could not be downloaded:`,
-      ...result.failed.map((file) => `- ${file.url}: ${file.reason}`),
+      ...result.failed.map(
+        (file) =>
+          `- ${file.name ? `${safeFileName(file.name) || "file"} (${file.url})` : file.url}: ${file.reason}`,
+      ),
       `Try the Orkestrator \`${LINEAR_FILE_TOOL_NAME}\` tool once. If the work depends on a file you still cannot get, stop and report the build blocked, saying which file is missing and why.`,
     );
   }

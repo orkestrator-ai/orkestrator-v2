@@ -966,39 +966,40 @@ issue live and serves only the files that its description, comments or
 attachments refer to. The issue must be the one the environment's build was
 started from, or be on the project's linked board.
 
-**Agents** get ordinary files under `.orkestrator/linear-files/<issue>/` in
-their workspace. The directory is Git-excluded, and writes go through the
-confined writers, so a repository's symbolic link cannot redirect one. A file's
-name starts with a short hash of its link, so two `image.png` stay apart and a
-second download replaces the first.
+**Agents** get ordinary files under `.orkestrator/linear-files/<issue>/`.
+The backend checks the exact destination against Git's ignore rules and index
+before writing through confined workspace helpers. The name comes from the
+canonical URL and stays stable when the issue's label changes. Download results
+keep the attachment name alongside its path.
 
-- **Before a Build** started from a Linear issue, `prepareBuild` downloads the
-  files the ticket snapshot quotes. A build launched without comments gets no
-  comment files. The prompt lists each path, and each file that failed with the
-  reason; a failure never stops the build. Small raster images also join the
-  ticket snapshot, so they reach the prompt and the Ticket tab as a Kanban
-  ticket's images do.
-- **`download_linear_files`** does the same on request: for a file added later,
-  a resumed build, or an issue on the board (`issueId`) in any environment of
-  the project. It is listed on the general agent server and on a stage turn's
-  workflow-result server, when the environment's build came from Linear or the
-  project has a linked board; not on a read-only turn's connection, and not to
-  graph activations or suborks.
-- Every stage prompt whose ticket has such a link says to use the directory and
-  the tool, rather than fetch the link or ask for a credential.
+- **Before a Build** started from Linear, Orkestrator stages live files named
+  in the ticket snapshot's description, acceptance criteria and selected
+  comments. The prompt lists the paths and gives a reason for each failure.
+  Small raster images join the ticket snapshot. Pause and Cancel interrupt
+  preparation before a session opens.
+- **`download_linear_files`** is available on writable environment and pipeline
+  connections when the environment's build came from Linear or the project has
+  a linked board. OpenCode registers a session-specific file connection
+  for writable pipeline turns. The backend verifies its signed attempt
+  credential on every call. Review, graph activation, subork and shared
+  broker credentials cannot publish files.
 
-Limits: 50 files and 200 MB an issue, 50 MB a file, three minutes before a
-Build and 50 seconds a tool call (short of the minute after which providers
-give up on one). The key goes only to `uploads.linear.app`; a redirect
-elsewhere is followed without it, over HTTPS only.
+The backend checks membership across the paginated live issue before applying
+the 50-file batch limit. It counts bytes from rejected streams toward the
+200 MiB issue budget. Each file can use up to 50 MiB. The Build and tool
+deadlines are three minutes and 50 seconds respectively, including the write.
+A container writer stages the contents before the backend authorizes
+publication. The key goes only to `uploads.linear.app`, and redirects to
+other HTTPS hosts carry no Linear credentials.
 
 **The Linear tab** reads `get_linear_issue_files` when an issue opens. Linear
-signs the links for ten minutes (the `public-file-urls-expire-in` header), so
-images show in place, and a file link or the Files list opens the file in the
-browser, which downloads it. A link older than eight minutes is read again
-first. Signed links stay out of the issue detail, because a build's snapshot is
-made from that. An older node answers `unknown-command`, and links open
-unsigned as before.
+signs the links for ten minutes so the tab can render images. A download
+reserves the browser tab at the click and requests a fresh signed link for
+that file. The backend checks the file host's response before the tab
+navigates, so the app can display a refusal. Older nodes without the board or
+file commands open the unsigned link. Linear signatures are stripped from
+the Build snapshot, including links already pasted into a description or
+comment.
 
 **Decisions.**
 

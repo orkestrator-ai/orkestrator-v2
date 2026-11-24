@@ -179,7 +179,18 @@ describe("Electron backend command registry", () => {
       })),
     });
     const file = "https://uploads.linear.app/ws/aaaa/bbbb";
-    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+    const bare = "https://uploads.linear.app/ws/aaaa/bare";
+    const emphasis = "https://uploads.linear.app/ws/aaaa/emphasis";
+    let hostStatus = 206;
+    const fileHost = mock();
+    globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).startsWith("https://uploads.linear.app/")) {
+        fileHost(String(url));
+        const headers = new Headers(init?.headers);
+        expect(headers.get("range")).toBe("bytes=0-0");
+        expect(headers.has("authorization")).toBe(false);
+        return new Response("x", { status: hostStatus });
+      }
       expect(init?.headers).toMatchObject({
         Authorization: "lin_api_secret",
         "public-file-urls-expire-in": "600",
@@ -189,7 +200,7 @@ describe("Electron backend command registry", () => {
           issue: {
             id: "issue-1",
             identifier: "ENG-1",
-            description: `[package.zip](${file}?signature=abc)`,
+            description: `[package.zip](${file}?signature=abc) See ${bare}?signature=abc_. **${emphasis}?signature=abc-**.`,
             team: { id: teamId },
             project: null,
             attachments: { nodes: [] },
@@ -200,14 +211,31 @@ describe("Electron backend command registry", () => {
     }) as unknown as typeof fetch;
 
     try {
-      const read = () =>
+      const read = (fileUrl?: string) =>
         commands.get("get_linear_issue_files")?.(
-          { projectId: "project-1", issueId: "ENG-1" },
+          { projectId: "project-1", issueId: "ENG-1", ...(fileUrl ? { fileUrl } : {}) },
           context,
         );
       await expect(read()).resolves.toEqual({
+        files: [
+          { url: file, name: "package.zip", signedUrl: `${file}?signature=abc` },
+          { url: bare, signedUrl: `${bare}?signature=abc_` },
+          { url: emphasis, signedUrl: `${emphasis}?signature=abc-` },
+        ],
+      });
+      expect(fileHost).not.toHaveBeenCalled();
+      await expect(read(file)).resolves.toEqual({
         files: [{ url: file, name: "package.zip", signedUrl: `${file}?signature=abc` }],
       });
+      expect(fileHost).toHaveBeenCalledWith(`${file}?signature=abc`);
+      for (const status of [403, 404]) {
+        hostStatus = status;
+        await expect(read(file)).rejects.toThrow(`(${status})`);
+      }
+      await expect(read("https://uploads.linear.app/ws/aaaa/absent")).rejects.toThrow(
+        "no longer links",
+      );
+      expect(fileHost).toHaveBeenCalledTimes(3);
       teamId = "another-team";
       await expect(read()).rejects.toThrow("not on this project's Linear board");
     } finally {

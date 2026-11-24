@@ -19,18 +19,15 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { MarkdownLink, MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { openInBrowser } from "@/lib/backend";
+import { isWkWebViewClient } from "@/lib/client-platform";
 import type { ScopeBackend } from "@/lib/backend/scope-backend";
 import type { LinearIssueFile } from "@/types/linear";
 
 const log = createLogger("web.linear");
 
-/** Links last ten minutes; an older one is read again before it is opened. */
-const LINK_FRESH_MS = 8 * 60 * 1000;
-
 interface LoadedFiles {
   issueId: string;
   files: LinearIssueFile[];
-  readAt: number;
 }
 
 export interface LinearIssueFilesState {
@@ -60,7 +57,7 @@ export function useLinearIssueFiles(
     async (issueId: string): Promise<LoadedFiles> => {
       if (!projectId) throw new Error("This project has no Linear board linked.");
       const files = await backend.getLinearIssueFiles(projectId, issueId);
-      return { issueId, files, readAt: Date.now() };
+      return { issueId, files };
     },
     [backend, projectId],
   );
@@ -68,7 +65,7 @@ export function useLinearIssueFiles(
   const load = useCallback(
     async (issueId: string) => {
       const request = ++requestRef.current;
-      setLoaded({ issueId, files: [], readAt: 0 });
+      setLoaded({ issueId, files: [] });
       if (!projectId) return;
       try {
         const next = await read(issueId);
@@ -84,27 +81,54 @@ export function useLinearIssueFiles(
 
   const open = useCallback(
     async (url: string) => {
-      const known = loaded?.files.find((file) => file.url === url)?.signedUrl;
-      if (known && loaded && Date.now() - loaded.readAt < LINK_FRESH_MS) {
-        // Opened in the click itself: a browser blocks a window opened later.
-        await openInBrowser(known);
-        return;
-      }
       const issueId = loaded?.issueId;
-      if (!issueId) return;
-      setOpening(url);
+      let pending: Window | null = null;
       try {
-        const request = requestRef.current;
-        const next = await read(issueId);
-        if (requestRef.current === request) setLoaded(next);
-        const signedUrl = next.files.find((file) => file.url === url)?.signedUrl;
-        if (!signedUrl) throw new Error("Linear no longer links this file to the issue.");
-        await openInBrowser(signedUrl);
-      } catch (error) {
-        if (incompatibility(error, "get_linear_issue_files")?.code === "unknown-command") {
-          await openInBrowser(url);
-          return;
+        const browser = window.orkestratorGateway?.enabled && !window.orkestratorGateway.desktop;
+        const webView = browser && isWkWebViewClient();
+        if (browser && !webView) {
+          pending = window.open("about:blank", "_blank");
+          if (!pending)
+            throw new Error("The browser blocked the download tab. Allow pop-ups and try again.");
+          pending.opener = null;
         }
+
+        let target = url;
+        if (projectId && issueId) {
+          setOpening(url);
+          try {
+            const next = await backend.getLinearIssueFiles(projectId, issueId, url);
+            const signedUrl = next.find((file) => file.url === url)?.signedUrl;
+            if (!signedUrl || linearFileUrl(signedUrl) !== url) {
+              throw new Error("Linear did not return a download link for this file.");
+            }
+            target = signedUrl;
+            setLoaded((current) =>
+              current?.issueId === issueId
+                ? {
+                    ...current,
+                    files: current.files.map((file) =>
+                      file.url === url ? { ...file, signedUrl } : file,
+                    ),
+                  }
+                : current,
+            );
+          } catch (error) {
+            if (incompatibility(error, "get_linear_issue_files")?.code !== "unknown-command") {
+              throw error;
+            }
+          }
+        }
+        if (pending) {
+          if (pending.closed) throw new Error("The download tab was closed.");
+          pending.location.replace(target);
+        } else if (webView) {
+          window.location.assign(target);
+        } else {
+          await openInBrowser(target);
+        }
+      } catch (error) {
+        pending?.close();
         toast.error("Failed to download the Linear file", {
           description: error instanceof Error ? error.message : String(error),
         });
@@ -112,7 +136,7 @@ export function useLinearIssueFiles(
         setOpening((current) => (current === url ? null : current));
       }
     },
-    [loaded, read],
+    [backend, loaded?.issueId, projectId],
   );
 
   const files = loaded?.files ?? NO_FILES;

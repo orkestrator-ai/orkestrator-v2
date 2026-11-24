@@ -111,7 +111,11 @@ export const getLinearIssueFilesCommand = defineCommand({
   since: 2,
   access: "workspace",
   read: true,
-  args: Schema.Struct({ projectId: Schema.String, issueId: Schema.String }),
+  args: Schema.Struct({
+    projectId: Schema.String,
+    issueId: Schema.String,
+    fileUrl: Schema.optionalKey(Schema.String),
+  }),
   result: LinearIssueFilesSchema,
   critical: [],
 });

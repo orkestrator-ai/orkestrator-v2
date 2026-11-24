@@ -383,11 +383,11 @@ describe("LinearTicketsView", () => {
     );
 
     fireEvent.click(within(files).getByRole("button", { name: "Download package.zip" }));
-    expect(openInBrowserMock).toHaveBeenLastCalledWith(`${zip}?signature=1`);
+    await waitFor(() => expect(openInBrowserMock).toHaveBeenLastCalledWith(`${zip}?signature=1`));
     const links = screen.getAllByRole("link", { name: "package.zip" });
     expect(links).toHaveLength(2);
     fireEvent.click(links[1]!);
-    expect(openInBrowserMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(openInBrowserMock).toHaveBeenCalledTimes(2));
   });
 
   test("shows a connect state and can start Linear connection setup", async () => {

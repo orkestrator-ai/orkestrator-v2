@@ -11,6 +11,8 @@ import {
   updateLinearIssueCommand,
 } from "@orkestrator/protocol/contract/domains/kanban";
 import { exportLinearConnectionCommand } from "@orkestrator/protocol/contract/domains/ticket-sync";
+import { linearFileUrl, MAX_LINEAR_ISSUE_FILES } from "@orkestrator/protocol/linear-files";
+import { checkSignedLinearFile } from "./linear-files/download.js";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -213,18 +215,27 @@ export function registerLinearBoardCommands(register: CommandRegistrar): void {
 
   register(
     getLinearIssueFilesCommand,
-    async ({ projectId, issueId }, context) => {
+    async ({ projectId, issueId, fileUrl }, context) => {
       const { link, board } = await requireProjectLinearBoard(context, projectId);
       return withLinearKey(context, async (apiKey) => {
+        const signal = AbortSignal.timeout(15_000);
         const issue = await readLinearIssueFiles(apiKey, issueId, {
           signedSeconds: SIGNED_FILE_SECONDS,
+          signal,
         });
         if (!issueFilesAreOnBoard(issue, board)) {
           throw new Error(
             `Linear issue ${issue.identifier ?? issueId} is not on this project's Linear board (${linearBoardName(link)}).`,
           );
         }
-        return { files: issue.files };
+        if (fileUrl === undefined) return { files: issue.files.slice(0, MAX_LINEAR_ISSUE_FILES) };
+        const canonical = linearFileUrl(fileUrl);
+        const file = canonical && issue.files.find((entry) => entry.url === canonical);
+        if (!file) throw new Error("Linear no longer links this file to the issue.");
+        if (!file.signedUrl)
+          throw new Error("Linear did not return a download link for this file.");
+        await checkSignedLinearFile(file.signedUrl, signal);
+        return { files: [file] };
       });
     },
     ASYNC_HANDLER,

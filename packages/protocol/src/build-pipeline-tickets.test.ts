@@ -48,6 +48,24 @@ describe("linearIssueBuildTicket", () => {
     comments: [{ body: "Seen twice", authorName: "Ada" }, { body: "Anonymous" }],
   };
 
+  test("strips signatures without dropping labels or surrounding Markdown", () => {
+    const url = "https://uploads.linear.app/issue/spec.pdf";
+    const signed = `${url}?signature=example_`;
+    const ticket = linearIssueBuildTicket(
+      {
+        id: "issue-1",
+        identifier: "ENG-1",
+        title: "Files",
+        description: `Read [the spec](${signed}) and __${signed}__.`,
+        comments: [{ authorName: "Ada", body: `Use ${signed}.` }],
+      },
+      "project-1",
+    );
+    expect(ticket.taskSnapshot.description).toBe(`Read [the spec](${url}) and __${url}__.`);
+    expect(ticket.taskSnapshot.comments.at(-1)?.text).toBe(`Ada: Use ${url}.`);
+    expect(ticket.namingPrompt).not.toContain("signature=");
+  });
+
   test("leads the comments with the issue reference and attributes the rest", () => {
     const ticket = linearIssueBuildTicket(issue, "project-1");
     expect(ticket.id).toBe("lin-1");

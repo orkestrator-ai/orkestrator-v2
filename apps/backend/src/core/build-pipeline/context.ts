@@ -162,6 +162,7 @@ export type BuildPipelineServiceOptions = {
    */
   prepareLinearFiles?: (
     pipeline: BuildPipeline,
+    signal: AbortSignal,
   ) => Promise<{ section: string; images: TaskSnapshotImage[] } | null>;
   /** The backend fence shared by file writes, commands and agent dispatch. */
   environmentFence?: EnvironmentMutationFence;
@@ -221,6 +222,20 @@ export class BuildPipelineContext {
   private readonly rewindFence = new EnvironmentMutationFence();
 
   readonly locks = new Map<string, Promise<void>>();
+
+  readonly linearFilePreparations = new Map<string, AbortController>();
+
+  /** Marks a stop before its locked mutation, including a preparation about to start. */
+  interruptLinearFilePreparation(pipelineId: string): () => void {
+    const controller = this.linearFilePreparations.get(pipelineId) ?? new AbortController();
+    this.linearFilePreparations.set(pipelineId, controller);
+    controller.abort();
+    return () => {
+      if (this.linearFilePreparations.get(pipelineId) === controller) {
+        this.linearFilePreparations.delete(pipelineId);
+      }
+    };
+  }
 
   readonly providers = new Map<string, BuildPipelineProvider>();
 

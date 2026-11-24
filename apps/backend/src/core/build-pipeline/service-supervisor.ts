@@ -1728,10 +1728,22 @@ export class BuildPipelineSupervisor {
       const provider = await this.agents.provider(pipeline, agent);
       // Before the session exists: a slow download must not leave one behind
       // unrecorded. The prompt is built after, so it names the images too.
-      const linearFiles =
-        !override && sessionPhase === "build"
-          ? await this.ctx.options.prepareLinearFiles?.(pipeline)
-          : undefined;
+      let linearFiles;
+      const prepareLinearFiles = this.ctx.options.prepareLinearFiles;
+      if (!override && sessionPhase === "build" && prepareLinearFiles) {
+        const preparations = this.ctx.linearFilePreparations;
+        const controller = preparations.get(pipeline.id) ?? new AbortController();
+        if (this.ctx.stopped || controller.signal.aborted) return;
+        preparations.set(pipeline.id, controller);
+        try {
+          linearFiles = await prepareLinearFiles(pipeline, controller.signal);
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+        } finally {
+          if (!controller.signal.aborted) preparations.delete(pipeline.id);
+        }
+        if (controller.signal.aborted) return;
+      }
       addTaskSnapshotImages(pipeline.taskSnapshot, linearFiles?.images ?? []);
       const label =
         override?.label ??
@@ -1747,6 +1759,11 @@ export class BuildPipelineSupervisor {
         (readOnlyReview ? "plan" : executionModeForSessionPhase(sessionPhase, agent));
       const sessionKey = `${pipeline.id}:${sessionPhase}:${pipeline.iteration}:${randomUUID()}`;
       const policy = await this.ctx.executionPolicy(pipeline);
+      if (
+        sessionPhase === "build" &&
+        this.ctx.linearFilePreparations.get(pipeline.id)?.signal.aborted
+      )
+        return;
       // Codex binds model and effort at session creation, Claude and OpenCode at
       // prompt dispatch, so a per-step selection has to be supplied at both.
       const sessionId = await provider.createSession(sessionPhase, label, {
@@ -1890,6 +1907,7 @@ export class BuildPipelineSupervisor {
       if (error instanceof ProviderUnavailableError) throw error;
       throw new PreSessionStageStartError(error, phase);
     });
+    if (!dispatch) return;
     const {
       provider,
       sessionId,

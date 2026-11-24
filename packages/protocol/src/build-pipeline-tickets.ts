@@ -14,6 +14,8 @@
  */
 import type { BuildPipelineSource, TaskSnapshot, TaskSnapshotImage } from "./build-pipeline.js";
 
+import { unsignedLinearFileMarkdown } from "./linear-files.js";
+
 /** What a build needs from its ticket, whatever the ticket's source. */
 export interface BuildPipelineTicket {
   /** The pipeline's `taskId`: the ticket id, or a source-qualified id. */
@@ -112,20 +114,24 @@ export function linearIssueBuildTicket(
   projectId: string,
   includeComments = true,
 ): BuildPipelineTicket {
+  const description = unsignedLinearFileMarkdown(issue.description);
+  const issueTitle = unsignedLinearFileMarkdown(issue.title);
   const comments = [
     { text: `Linear issue: ${issue.identifier}` },
     ...(issue.url ? [{ text: `URL: ${issue.url}` }] : []),
     ...(issue.status ? [{ text: `Status: ${issue.status}` }] : []),
     ...(includeComments ? issue.comments : []).map((comment) => ({
-      text: comment.authorName ? `${comment.authorName}: ${comment.body}` : comment.body,
+      text: unsignedLinearFileMarkdown(
+        comment.authorName ? `${comment.authorName}: ${comment.body}` : comment.body,
+      ),
     })),
   ];
-  const title = `${issue.identifier}: ${issue.title}`;
+  const title = `${issue.identifier}: ${issueTitle}`;
   return {
     id: issue.id,
     projectId,
     title,
-    namingPrompt: joinPrompt([issue.identifier, issue.title, issue.description, issue.status]),
+    namingPrompt: joinPrompt([issue.identifier, issueTitle, description, issue.status]),
     source: {
       type: "linear",
       issueId: issue.id,
@@ -137,7 +143,7 @@ export function linearIssueBuildTicket(
     },
     taskSnapshot: {
       title,
-      description: issue.description,
+      description,
       acceptanceCriteria: "",
       comments,
       images: [],

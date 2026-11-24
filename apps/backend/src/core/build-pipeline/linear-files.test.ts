@@ -102,3 +102,51 @@ describe("a build started from a Linear issue", () => {
     );
   });
 });
+
+test.each(["pause", "cancel"] as const)(
+  "%s interrupts file preparation before a session opens",
+  async (stop) => {
+    const preparing = Promise.withResolvers<string>();
+    await withService(
+      async (service, storage, provider) => {
+        const started = await service.start(startInput({ source: SOURCE }));
+        const advancing = (async () => {
+          await service.advanceNow(started.id);
+          await service.advanceNow(started.id);
+        })();
+        expect(await preparing.promise).toBe(started.id);
+        const stopped = await service[stop](started.id);
+        await advancing;
+        expect(stopped.phase).toBe(stop === "pause" ? "paused" : "failed");
+        expect(provider.sent).toEqual([]);
+        expect((await pipeline(storage, started.id)).sessions).toEqual([]);
+      },
+      {
+        prepareLinearFiles: (pipeline, signal) => {
+          preparing.resolve(pipeline.id);
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        },
+      },
+    );
+  },
+);
+
+test("strips signed links from a supplied snapshot and from the first Build prompt", async () => {
+  const signed = `${FILE}?signature=synthetic_secret`;
+  const taskSnapshot = {
+    ...snapshot(`Use [package.zip](${signed})`),
+    acceptanceCriteria: `Inspect ${signed}.`,
+    comments: [{ text: `See **${signed}**.` }],
+  };
+  await withService(async (service, storage, provider) => {
+    const { started } = await startBuilding(service, storage, { source: SOURCE, taskSnapshot });
+    const stored = await pipeline(storage, started.id);
+    expect(JSON.stringify(stored.taskSnapshot)).not.toContain("synthetic_secret");
+    expect(stored.taskSnapshot.description).toBe(`Use [package.zip](${FILE})`);
+    expect(stored.taskSnapshot.comments).toEqual([{ text: `See **${FILE}**.` }]);
+    expect(provider.sent[0]?.prompt).not.toContain("synthetic_secret");
+    expect(provider.sent[0]?.prompt).toContain(FILE);
+  });
+});

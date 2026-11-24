@@ -26,13 +26,13 @@ const ZIP = "https://uploads.linear.app/ws/aaaa/bbbb";
 const LOGO = "https://uploads.linear.app/ws/cccc/dddd";
 
 const getLinearIssueFiles = mock(
-  async (_projectId: string, _issueId: string): Promise<LinearIssueFile[]> => [],
+  async (_projectId: string, _issueId: string, _fileUrl?: string): Promise<LinearIssueFile[]> => [],
 );
 const nodeBackend = { getLinearIssueFiles } as unknown as ScopeBackend;
 let opened: ReturnType<typeof spyOn<typeof backend, "openInBrowser">>;
 
-function Harness({ content }: { content: string }) {
-  const files = useLinearIssueFiles(nodeBackend, "project-1");
+function Harness({ content, board }: { content: string; board: boolean }) {
+  const files = useLinearIssueFiles(nodeBackend, board ? "project-1" : undefined);
   return (
     <LinearFilesProvider files={files}>
       <button type="button" onClick={() => void files.load("issue-1")}>
@@ -44,8 +44,8 @@ function Harness({ content }: { content: string }) {
   );
 }
 
-function show(content: string) {
-  renderInAppCommandScope(<Harness content={content} />);
+function show(content: string, board = true) {
+  renderInAppCommandScope(<Harness content={content} board={board} />);
   fireEvent.click(screen.getByRole("button", { name: "Load" }));
 }
 
@@ -95,6 +95,7 @@ describe("a Linear issue's files", () => {
     setSystemTime(new Date(Date.now() + 9 * 60_000));
     fireEvent.click(screen.getByRole("button", { name: "Download package.zip" }));
     await waitFor(() => expect(opened).toHaveBeenCalledWith(`${ZIP}?signature=2`));
+    expect(getLinearIssueFiles).toHaveBeenLastCalledWith("project-1", "issue-1", ZIP);
   });
 
   test("say why a file could not be opened", async () => {
@@ -117,5 +118,67 @@ describe("a Linear issue's files", () => {
     fireEvent.click(screen.getByRole("link", { name: "package.zip" }));
     await waitFor(() => expect(opened).toHaveBeenCalledWith(ZIP));
     expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("opens an unsigned link when the node cannot supply a board project", async () => {
+    show(`[package.zip](${ZIP})`, false);
+    fireEvent.click(screen.getByRole("link", { name: "package.zip" }));
+    await waitFor(() => expect(opened).toHaveBeenCalledWith(ZIP));
+    expect(getLinearIssueFiles).not.toHaveBeenCalled();
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test.each([0, 9])(
+    "checks a link aged %i minutes and reports the file host refusal",
+    async (minutes) => {
+      show("");
+      await screen.findByRole("region", { name: "Files" });
+      setSystemTime(new Date(Date.now() + minutes * 60_000));
+      const failure = minutes
+        ? "Linear no longer has this file (404)."
+        : "Linear refused the download (403).";
+      getLinearIssueFiles.mockRejectedValueOnce(new Error(failure));
+      fireEvent.click(screen.getByRole("button", { name: "Download package.zip" }));
+      await waitFor(() =>
+        expect(mockToastError).toHaveBeenCalledWith("Failed to download the Linear file", {
+          description: failure,
+        }),
+      );
+      expect(opened).not.toHaveBeenCalled();
+    },
+  );
+
+  test("reserves a browser tab during the click and closes it if the file check fails", async () => {
+    const gateway = window.orkestratorGateway;
+    window.orkestratorGateway = { enabled: true, desktop: false } as Window["orkestratorGateway"];
+    const replace = mock();
+    const close = mock();
+    const blank = { opener: window, closed: false, location: { replace }, close };
+    const popup = spyOn(window, "open").mockReturnValue(blank as unknown as Window);
+    try {
+      show("");
+      await screen.findByRole("region", { name: "Files" });
+      const check = Promise.withResolvers<LinearIssueFile[]>();
+      getLinearIssueFiles.mockReturnValueOnce(check.promise);
+      fireEvent.click(screen.getByRole("button", { name: "Download package.zip" }));
+      expect(popup).toHaveBeenCalledWith("about:blank", "_blank");
+      expect(blank.opener).toBeNull();
+      expect(replace).not.toHaveBeenCalled();
+      check.resolve(signed("2"));
+      await waitFor(() => expect(replace).toHaveBeenCalledWith(`${ZIP}?signature=2`));
+
+      getLinearIssueFiles.mockRejectedValueOnce(new Error("Linear no longer has this file (404)."));
+      fireEvent.click(screen.getByRole("button", { name: "Download package.zip" }));
+      await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+
+      popup.mockReturnValueOnce(null);
+      fireEvent.click(screen.getByRole("button", { name: "Download package.zip" }));
+      expect(mockToastError).toHaveBeenLastCalledWith("Failed to download the Linear file", {
+        description: expect.stringContaining("blocked the download tab"),
+      });
+    } finally {
+      popup.mockRestore();
+      window.orkestratorGateway = gateway;
+    }
   });
 });

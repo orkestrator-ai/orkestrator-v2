@@ -4,9 +4,9 @@
  */
 import { createHash } from "node:crypto";
 import {
+  linearFileLinks,
   linearFileReferences,
   linearFileUrl,
-  MAX_LINEAR_ISSUE_FILES,
   type LinearFileReference,
 } from "@orkestrator/protocol/linear-files";
 import { issueIsOnBoard, type LinearIssueBoard } from "../linear-boards.js";
@@ -25,8 +25,8 @@ import {
  */
 const SIGNED_LINKS_HEADER = "public-file-urls-expire-in";
 
-/** Comment pages of 100: more than any issue a person reads has. */
-const MAX_COMMENT_PAGES = 10;
+/** Bounds each issue connection read. An incomplete read cannot authorize files. */
+const MAX_CONNECTION_PAGES = 10;
 
 export interface LinearIssueFile extends LinearFileReference {
   /** The short-lived link, only when signed links were asked for. */
@@ -40,7 +40,7 @@ export interface LinearIssueFiles {
   files: LinearIssueFile[];
 }
 
-interface CommentConnection {
+interface IssueConnection {
   nodes?: unknown[];
   pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
 }
@@ -49,23 +49,62 @@ const COMMENTS = `comments(first: 100, after: $after) {
           nodes { body }
           pageInfo { hasNextPage endCursor }
         }`;
+const ATTACHMENTS = `attachments(first: 50, after: $after) {
+          nodes { title url }
+          pageInfo { hasNextPage endCursor }
+        }`;
+const ISSUE_CONNECTIONS = { comments: COMMENTS, attachments: ATTACHMENTS } as const;
 
-function commentBodies(connection: CommentConnection | undefined): string[] {
-  return (connection?.nodes ?? []).flatMap((node) =>
-    isRecord(node) && typeof node.body === "string" ? [node.body] : [],
-  );
+function connectionTexts(field: keyof typeof ISSUE_CONNECTIONS, connection: IssueConnection) {
+  return (Array.isArray(connection.nodes) ? connection.nodes : []).flatMap((node) => {
+    if (!isRecord(node)) return [];
+    if (field === "comments") return typeof node.body === "string" ? [node.body] : [];
+    const url = asString(node.url);
+    const title = asString(node.title)
+      .replace(/[[\]\\\r\n]/g, " ")
+      .slice(0, 300);
+    return linearFileUrl(url) ? [`[${title}](${url})`] : [];
+  });
 }
 
-function connectionOf(value: unknown): CommentConnection | undefined {
-  return isRecord(value) ? (value as CommentConnection) : undefined;
+async function readConnectionTexts(
+  issue: Record<string, unknown>,
+  field: keyof typeof ISSUE_CONNECTIONS,
+  apiKey: string,
+  signal: AbortSignal | undefined,
+  headers: Record<string, string>,
+): Promise<string[]> {
+  const texts: string[] = [];
+  let value = issue[field];
+  const seenCursors = new Set<string>();
+  for (let page = 0; isRecord(value); page += 1) {
+    const connection = value as IssueConnection;
+    texts.push(...connectionTexts(field, connection));
+    const after = nextPageCursor(connection.pageInfo, seenCursors, `issue ${field}`);
+    if (!after) break;
+    if (page + 1 >= MAX_CONNECTION_PAGES) {
+      throw new Error(`The Linear issue has too many ${field} to check file membership.`);
+    }
+    const next = await linearGraphql<{ issue?: unknown }>(
+      apiKey,
+      `query OrkestratorLinearIssueFilePage($id: String!, $after: String) {
+        issue(id: $id) { ${ISSUE_CONNECTIONS[field]} }
+      }`,
+      { id: asString(issue.id), after },
+      signal,
+      headers,
+    );
+    value = isRecord(next.issue) ? next.issue[field] : undefined;
+    if (!isRecord(value)) throw new Error(`Linear did not return the next page of ${field}.`);
+  }
+  return texts;
 }
 
 /** Signed links by canonical link; text holds at most one per file. */
 function signedLinks(text: string): Map<string, string> {
   const links = new Map<string, string>();
-  for (const match of text.matchAll(/https:\/\/uploads\.linear\.app\/[^\s<>()[\]"'`\\]+/gi)) {
-    const url = linearFileUrl(match[0]);
-    if (url && match[0].includes("?") && !links.has(url)) links.set(url, match[0]);
+  for (const { url, link } of linearFileLinks(text)) {
+    if (link.includes("?") && !links.has(url)) links.set(url, link);
   }
   return links;
 }
@@ -89,7 +128,7 @@ export async function readLinearIssueFiles(
         description
         team { id }
         project { id }
-        attachments(first: 50) { nodes { title url } }
+        ${ATTACHMENTS}
         ${COMMENTS}
       }
     }`,
@@ -101,41 +140,16 @@ export async function readLinearIssueFiles(
   if (!isRecord(issue) || !asString(issue.id))
     throw new Error(`Linear issue not found: ${issueId}`);
 
-  const texts = [asString(issue.description)];
-  let connection = connectionOf(issue.comments);
-  texts.push(...commentBodies(connection));
-  const seenCursors = new Set<string>();
-  for (let page = 1; page < MAX_COMMENT_PAGES; page += 1) {
-    const after = nextPageCursor(connection?.pageInfo, seenCursors, "issue comments");
-    if (!after) break;
-    const next = await linearGraphql<{ issue?: unknown }>(
-      apiKey,
-      `query OrkestratorLinearIssueFileComments($id: String!, $after: String) {
-        issue(id: $id) { ${COMMENTS} }
-      }`,
-      { id: issueId, after },
-      options.signal,
-      headers,
-    );
-    connection = isRecord(next.issue) ? connectionOf(next.issue.comments) : undefined;
-    texts.push(...commentBodies(connection));
-  }
-
-  const attachments = isRecord(issue.attachments) ? issue.attachments.nodes : undefined;
-  for (const node of Array.isArray(attachments) ? attachments : []) {
-    if (!isRecord(node) || !linearFileUrl(asString(node.url))) continue;
-    const title = asString(node.title).replace(/[[\]\\\r\n]/g, " ");
-    texts.push(`[${title}](${asString(node.url)})`);
-  }
-
-  const text = texts.join("\n\n");
+  const [attachments, comments] = await Promise.all([
+    readConnectionTexts(issue, "attachments", apiKey, options.signal, headers),
+    readConnectionTexts(issue, "comments", apiKey, options.signal, headers),
+  ]);
+  const text = [...attachments, asString(issue.description), ...comments].join("\n\n");
   const signed = options.signedSeconds === undefined ? null : signedLinks(text);
-  const files = linearFileReferences(text)
-    .slice(0, MAX_LINEAR_ISSUE_FILES)
-    .map((file): LinearIssueFile => {
-      const signedUrl = signed?.get(file.url);
-      return { ...file, ...(signedUrl ? { signedUrl } : {}) };
-    });
+  const files = linearFileReferences(text).map((file): LinearIssueFile => {
+    const signedUrl = signed?.get(file.url);
+    return { ...file, ...(signedUrl ? { signedUrl } : {}) };
+  });
 
   const team = isRecord(issue.team) ? issue.team : {};
   const project = isRecord(issue.project) ? issue.project : {};
@@ -166,48 +180,29 @@ export function safeFileName(value: string, max = 120): string {
     .replace(/[^\p{L}\p{N}._-]+/gu, "-")
     .replace(/^[.-]+/, "")
     .replace(/[.-]+$/, "");
-  if (safe.length <= max) return safe;
+  if (Buffer.byteLength(safe) <= max) return safe;
   const dot = safe.lastIndexOf(".");
-  const extension = dot > 0 && safe.length - dot <= 12 ? safe.slice(dot) : "";
-  return `${safe.slice(0, max - extension.length)}${extension}`;
+  const suffix = dot > 0 ? safe.slice(dot) : "";
+  const extension = Buffer.byteLength(suffix) <= Math.min(12, max) ? suffix : "";
+  let remaining = max - Buffer.byteLength(extension);
+  let prefix = "";
+  for (const character of safe) {
+    remaining -= Buffer.byteLength(character);
+    if (remaining < 0) break;
+    prefix += character;
+  }
+  return prefix + extension;
 }
 
-const EXTENSIONS: Readonly<Record<string, string>> = {
-  "application/json": ".json",
-  "application/pdf": ".pdf",
-  "application/zip": ".zip",
-  "application/x-zip-compressed": ".zip",
-  "image/gif": ".gif",
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/svg+xml": ".svg",
-  "image/webp": ".webp",
-  "text/csv": ".csv",
-  "text/html": ".html",
-  "text/markdown": ".md",
-  "text/plain": ".txt",
-  "video/mp4": ".mp4",
-  "video/quicktime": ".mov",
-};
-
-function hasExtension(name: string): boolean {
-  return /\.[A-Za-z0-9]{1,10}$/.test(name);
-}
-
-/**
- * The name a downloaded file gets: the link's own text when it names a file,
- * else what Linear answered, behind a short hash of the link. The hash keeps
- * two `image.png` of one issue apart and gives a file the same name each time.
- */
-export function linearFileName(
-  file: LinearFileReference,
-  answered: { filename?: string; contentType?: string },
-): string {
-  const label = safeFileName(file.name ?? "");
-  const sent = safeFileName(answered.filename ?? "");
-  const base = hasExtension(label) ? label : hasExtension(sent) ? sent : label || sent || "file";
-  const type = answered.contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
-  const name = hasExtension(base) ? base : `${base}${EXTENSIONS[type] ?? ""}`;
-  const hash = createHash("sha256").update(file.url).digest("hex").slice(0, 8);
-  return `${hash}-${name}`;
+/** Stable across label edits and file host response changes. */
+export function linearFileName(url: string): string {
+  const pathname = new URL(url).pathname;
+  let segment = pathname.slice(pathname.lastIndexOf("/") + 1);
+  try {
+    segment = decodeURIComponent(segment);
+  } catch {
+    // Use the encoded URL segment when it contains malformed escapes.
+  }
+  const hash = createHash("sha256").update(url).digest("hex").slice(0, 16);
+  return `${hash}-${safeFileName(segment) || "file"}`;
 }

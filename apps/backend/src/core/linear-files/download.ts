@@ -42,7 +42,11 @@ function statusError(status: number): Error {
   return new Error(`Linear answered ${status}.`);
 }
 
-async function readBounded(response: Response, maxBytes: number): Promise<Buffer> {
+async function readBounded(
+  response: Response,
+  maxBytes: number,
+  onBytes?: (bytes: number) => void,
+): Promise<Buffer> {
   const tooLarge = () => new Error(`The file is larger than the ${megabytes(maxBytes)} limit.`);
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -57,6 +61,7 @@ async function readBounded(response: Response, maxBytes: number): Promise<Buffer
     const { done, value } = await reader.read();
     if (done) break;
     bytes += value.byteLength;
+    onBytes?.(value.byteLength);
     if (bytes > maxBytes) {
       await reader.cancel().catch(() => undefined);
       throw tooLarge();
@@ -66,22 +71,25 @@ async function readBounded(response: Response, maxBytes: number): Promise<Buffer
   return Buffer.concat(chunks, bytes);
 }
 
-/** Errors are safe to show: they never hold the key or a redirect's signed address. */
-export async function downloadLinearFile(
-  apiKey: string,
+async function openLinearFileResponse(
   fileUrl: string,
-  options: { maxBytes: number; signal?: AbortSignal },
-): Promise<DownloadedLinearFile> {
+  options: { apiKey?: string; signal?: AbortSignal; probe?: boolean },
+): Promise<Response> {
   const canonical = linearFileUrl(fileUrl);
   if (!canonical) throw new Error("Not a file on Linear's file host.");
-  let url = new URL(canonical);
+  let url = new URL(options.probe ? fileUrl : canonical);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
     let response: Response;
     try {
       response = await fetch(url, {
         redirect: "manual",
         signal: options.signal,
-        headers: url.origin === LINEAR_FILE_ORIGIN ? { Authorization: apiKey.trim() } : {},
+        headers: {
+          ...(options.apiKey && url.origin === LINEAR_FILE_ORIGIN
+            ? { Authorization: options.apiKey.trim() }
+            : {}),
+          ...(options.probe ? { Range: "bytes=0-0" } : {}),
+        },
       });
     } catch {
       throw new Error(
@@ -96,24 +104,46 @@ export async function downloadLinearFile(
       url = next;
       continue;
     }
+    if (
+      options.probe &&
+      response.status === 416 &&
+      response.headers.get("content-range") === "bytes */0"
+    )
+      return response;
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw statusError(response.status);
     }
-    const contentType = response.headers.get("content-type") ?? undefined;
-    const filename = dispositionFilename(response.headers.get("content-disposition"));
-    let contents: Buffer;
-    try {
-      contents = await readBounded(response, options.maxBytes);
-    } catch (error) {
-      if (options.signal?.aborted) throw new Error("The download timed out.", { cause: error });
-      throw error;
-    }
-    return {
-      contents,
-      ...(contentType ? { contentType } : {}),
-      ...(filename ? { filename } : {}),
-    };
+    return response;
   }
   throw new Error("Linear redirected too many times.");
+}
+
+/** Tests the signed URL the browser will open without downloading the body. */
+export async function checkSignedLinearFile(signedUrl: string, signal: AbortSignal): Promise<void> {
+  const response = await openLinearFileResponse(signedUrl, { probe: true, signal });
+  await response.body?.cancel().catch(() => undefined);
+}
+
+/** Errors are safe to show: they never hold the key or a redirect's signed address. */
+export async function downloadLinearFile(
+  apiKey: string,
+  fileUrl: string,
+  options: { maxBytes: number; signal?: AbortSignal; onBytes?: (bytes: number) => void },
+): Promise<DownloadedLinearFile> {
+  const response = await openLinearFileResponse(fileUrl, { apiKey, signal: options.signal });
+  const contentType = response.headers.get("content-type") ?? undefined;
+  const filename = dispositionFilename(response.headers.get("content-disposition"));
+  let contents: Buffer;
+  try {
+    contents = await readBounded(response, options.maxBytes, options.onBytes);
+  } catch (error) {
+    if (options.signal?.aborted) throw new Error("The download timed out.");
+    throw error;
+  }
+  return {
+    contents,
+    ...(contentType ? { contentType } : {}),
+    ...(filename ? { filename } : {}),
+  };
 }

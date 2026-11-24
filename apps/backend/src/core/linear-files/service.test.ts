@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/server";
-import { mkdtemp, readdir, readFile, rm, stat, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { BUILD_PIPELINE_VERSION, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands-files.js";
 import { runCommand } from "../command-capture.js";
 import { callToolInProcess, listToolsInProcess } from "../mcp-in-process.js";
 import { linearFileName, safeFileName } from "./issue-files.js";
@@ -15,6 +16,7 @@ const ZIP = "https://uploads.linear.app/ws/aaaa/bbbb";
 const LOGO = "https://uploads.linear.app/ws/cccc/dddd";
 const NOTES = "https://uploads.linear.app/ws/eeee/ffff";
 const SCOPE = { environmentId: "env-1", projectId: "project-1" };
+const STAGING_DIRECTORY = ".orkestrator/linear-files/DND-107";
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
   "base64",
@@ -28,6 +30,9 @@ let pipelines: BuildPipeline[];
 let issue: Record<string, unknown>;
 let fileAnswers: Map<string, () => Response>;
 let fetched: string[];
+const listForEnvironment = mock(async (_projectId: string, _environmentId: string) =>
+  pipelines.map((snapshot) => ({ snapshot })),
+);
 
 const description = `Use [package.zip](${ZIP}) and ![logo](${LOGO}).`;
 
@@ -74,7 +79,7 @@ function service(overrides: Partial<LinearFileServiceDependencies> = {}): Linear
       getProject: async (id: string) => ({ id, name: "Web", gitUrl: null }),
       kanban: { getLinearAuth: async () => (apiKey ? { apiKey } : null) },
       linear: { getLinearBoardLink: async () => board },
-      listBuildPipelines: async () => pipelines.map((snapshot) => ({ snapshot })),
+      listBuildPipelinesForEnvironment: listForEnvironment,
     } as unknown as LinearFileServiceDependencies["storage"],
     fence: { beginMutation: () => () => undefined },
     ...overrides,
@@ -86,6 +91,7 @@ beforeEach(async () => {
   await runCommand("git", ["init", "--quiet", worktree], { timeoutMs: 10_000 });
   apiKey = KEY;
   board = null;
+  listForEnvironment.mockClear();
   pipelines = [linearPipeline()];
   issue = {
     id: "issue-1",
@@ -123,17 +129,11 @@ describe("file names", () => {
     expect(safeFileName("../../etc/passwd")).toBe("etc-passwd");
     expect(safeFileName(".env")).toBe("env");
     expect(safeFileName(`${"a".repeat(300)}.zip`)).toMatch(/^a{116}\.zip$/);
-    expect(linearFileName({ url: ZIP, name: "pack.zip" }, {})).toMatch(/^[0-9a-f]{8}-pack\.zip$/);
-    expect(linearFileName({ url: ZIP, name: "logo" }, { contentType: "image/png" })).toMatch(
-      /-logo\.png$/,
-    );
-    expect(linearFileName({ url: ZIP, name: "logo" }, { filename: "real.svg" })).toMatch(
-      /-real\.svg$/,
-    );
-    expect(linearFileName({ url: ZIP }, {})).toMatch(/^[0-9a-f]{8}-file$/);
-    expect(linearFileName({ url: ZIP, name: "image.png" }, {})).not.toBe(
-      linearFileName({ url: LOGO, name: "image.png" }, {}),
-    );
+    const cjk = `${"文".repeat(100)}.pdf`;
+    const filename = linearFileName(`${ZIP}/${encodeURIComponent(cjk)}`);
+    expect(Buffer.byteLength(filename)).toBeLessThan(200);
+    expect(filename.endsWith(".pdf")).toBe(true);
+    expect(linearFileName(ZIP)).not.toBe(linearFileName(LOGO));
   });
 });
 
@@ -144,7 +144,7 @@ describe("the build's files", () => {
     const directory = path.join(worktree, ".orkestrator/linear-files/DND-107");
     const names = (await readdir(directory)).sort();
     expect(names).toHaveLength(2);
-    const zip = names.find((name) => name.endsWith("-package.zip"))!;
+    const zip = linearFileName(ZIP);
     expect(await readFile(path.join(directory, zip), "utf8")).toBe("zip-bytes");
     expect((await stat(path.join(directory, zip))).mode & 0o777).toBe(0o644);
     const { stdout } = await runCommand(
@@ -157,7 +157,7 @@ describe("the build's files", () => {
     expect(prepared.section).toContain(`.orkestrator/linear-files/DND-107/${zip}`);
     expect(prepared.section).not.toContain("could not be downloaded");
     expect(prepared.images).toEqual([
-      { filename: expect.stringMatching(/-logo\.png$/), data: PNG.toString("base64") },
+      { filename: linearFileName(LOGO), data: PNG.toString("base64") },
     ]);
     // The comment's file is not in this build's ticket: comments were left out.
     expect(fetched).toEqual([ZIP, LOGO]);
@@ -180,8 +180,8 @@ describe("the build's files", () => {
   test("report one that failed beside the ones that worked", async () => {
     fileAnswers.set(ZIP, () => new Response("no", { status: 403 }));
     const prepared = (await service().prepareBuild(linearPipeline()))!;
-    expect(prepared.section).toContain("-logo.png");
-    expect(prepared.section).toContain(`${ZIP}: Linear refused the download (403)`);
+    expect(prepared.section).toContain(linearFileName(LOGO));
+    expect(prepared.section).toContain(`package.zip (${ZIP}): Linear refused the download (403)`);
     expect(prepared.section).toContain("download_linear_files");
   });
 
@@ -232,33 +232,174 @@ describe("the build's files", () => {
     const prepared = (await service({ maxIssueBytes: "zip-bytes".length }).prepareBuild(
       linearPipeline(),
     ))!;
-    expect(prepared.section).toContain("-package.zip");
+    expect(prepared.section).toContain(linearFileName(ZIP));
     expect(prepared.section).toContain("files together are too large");
   });
 
-  test("are piped into a container", async () => {
-    const writes: string[][] = [];
-    const container = service({
-      run: (async (_command: string, args: string[]) => {
-        writes.push(args);
-        return { stdout: "", stderr: "" };
-      }) as unknown as typeof runCommand,
+  test("includes acceptance-criteria links from the snapshot", async () => {
+    const snapshot = { ...taskSnapshot(""), acceptanceCriteria: `Extract [package.zip](${ZIP})` };
+    const prepared = await service().prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
+    expect(prepared?.section).toContain(`${STAGING_DIRECTORY}/${linearFileName(ZIP)}`);
+    expect(fetched).toEqual([ZIP]);
+  });
+
+  test("refuses a destination exposed by an ignore exception or already tracked", async () => {
+    const target = `${STAGING_DIRECTORY}/${linearFileName(ZIP)}`;
+    await writeFile(
+      path.join(worktree, ".gitignore"),
+      `!/.orkestrator/\n/${STAGING_DIRECTORY}/*\n!/${target}\n`,
+    );
+    const host = service();
+    const exposed = await host.download(SCOPE, { urls: [ZIP] });
+    expect(exposed.failed[0]?.reason).toContain("not Git-excluded");
+    await expect(stat(path.join(worktree, target))).rejects.toThrow();
+
+    await mkdir(path.dirname(path.join(worktree, target)), { recursive: true });
+    await writeFile(path.join(worktree, target), "tracked contents");
+    await runCommand("git", ["add", "--force", "--", target], { cwd: worktree });
+    await writeFile(path.join(worktree, ".gitignore"), "");
+    const tracked = await host.download(SCOPE, { urls: [ZIP] });
+    expect(tracked.failed[0]?.reason).toContain("tracked by Git");
+    expect(await readFile(path.join(worktree, target), "utf8")).toBe("tracked contents");
+  });
+
+  test("counts partial chunked responses against the issue budget", async () => {
+    for (const url of [ZIP, LOGO]) {
+      fileAnswers.set(
+        url,
+        () =>
+          new Response(
+            new ReadableStream({
+              pull: (controller) => controller.enqueue(new Uint8Array(4)),
+            }),
+          ),
+      );
+    }
+    const result = await service({ maxFileBytes: 6, maxIssueBytes: 12 }).download(SCOPE);
+    expect(fetched).toEqual([ZIP, LOGO]);
+    expect(result.files).toEqual([]);
+    expect(result.failed.map(({ reason }) => reason)).toEqual([
+      expect.stringContaining("larger than"),
+      expect.stringContaining("larger than"),
+      expect.stringContaining("files together are too large"),
+    ]);
+  });
+
+  test("cancels a stalled container writer before releasing the workspace fence", async () => {
+    const order: string[] = [];
+    const run = mock<typeof runCommand>(async () => ({ stdout: "", stderr: "" }));
+    const writeContainer = mock<NonNullable<LinearFileServiceDependencies["writeContainer"]>>(
+      async (_container, _directory, _filename, _contents, signal, deadline) => {
+        order.push("started");
+        expect(deadline - Date.now()).toBeLessThanOrEqual(500);
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          }),
+        );
+        order.push("stopped");
+        throw new Error("The writer stopped.");
+      },
+    );
+    const storage = {
+      getEnvironment: async () => ({ id: SCOPE.environmentId, containerId: "c1" }),
+      kanban: { getLinearAuth: async () => ({ apiKey: KEY }) },
+    } as unknown as LinearFileServiceDependencies["storage"];
+    const controller = new AbortController();
+    const host = service({
+      storage,
+      run,
+      writeContainer,
+      fence: {
+        beginMutation: () => () => {
+          if (order.includes("started")) order.push("released");
+        },
+      },
     });
-    // Only the write is under test: the Git exclusion runs in a real container.
-    const write = (
-      container as unknown as {
-        write(environment: object, file: string, contents: Buffer, max: number): Promise<void>;
+    const prepared = await host.prepareBuild(linearPipeline(), 500, controller.signal);
+    expect(order).toEqual(["started", "stopped", "released"]);
+    expect(prepared?.section.match(/timed out/g)).toHaveLength(2);
+    expect(fetched).toEqual([ZIP]);
+    expect(writeContainer).toHaveBeenCalledTimes(1);
+  });
+
+  test("bounds ticket images by per-image size, total size and count", async () => {
+    const urls = Array.from({ length: 13 }, (_, index) => `${LOGO}/${index}.png`);
+    const snapshot = taskSnapshot(urls.join(" "));
+    issue.description = snapshot.description;
+    const twoMiB = 2 * 1024 * 1024;
+    urls.forEach((url, index) => {
+      const image = index >= 2 && index < 12 ? PNG : Buffer.concat([PNG, Buffer.alloc(twoMiB)]);
+      fileAnswers.set(url, () => new Response(image));
+    });
+
+    const host = service();
+    const first = await host.prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
+    expect(first?.images.map(({ filename }) => filename)).toEqual(
+      urls.slice(2, 12).map(linearFileName),
+    );
+    for (const url of urls.slice(0, 2)) {
+      const image = Buffer.concat([PNG, Buffer.alloc(twoMiB - PNG.length)]);
+      fileAnswers.set(url, () => new Response(image));
+    }
+    const second = await host.prepareBuild({ ...linearPipeline(), taskSnapshot: snapshot });
+    expect(second?.images.map(({ filename }) => filename)).toEqual(
+      urls.slice(0, 2).map(linearFileName),
+    );
+  });
+
+  test("reuses a path after a link label changes and writes long Unicode names", async () => {
+    const url = `${ZIP}/${encodeURIComponent(`${"文".repeat(100)}.pdf`)}`;
+    const host = service();
+    issue.description = `[Original.pdf](${url})`;
+    fileAnswers.set(url, () => new Response("old"));
+    const first = await host.download(SCOPE, { urls: [url] });
+    issue.description = `[Updated label](${url})`;
+    fileAnswers.set(url, () => new Response("new"));
+    const second = await host.download(SCOPE, { urls: [url] });
+    expect(second.files).toMatchObject([{ name: "Updated label", path: first.files[0]?.path }]);
+    expect(await readdir(path.join(worktree, STAGING_DIRECTORY))).toEqual([linearFileName(url)]);
+    expect(await readFile(path.join(worktree, second.files[0]!.path), "utf8")).toBe("new");
+  });
+
+  test("the container helper waits for authorization before publishing a long Unicode name", async () => {
+    const file = linearFileName(`${ZIP}/${encodeURIComponent(`${"文".repeat(100)}.pdf`)}`);
+    const target = path.join(worktree, STAGING_DIRECTORY, file);
+    for (const publish of [false, true]) {
+      const helper = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          CONTAINER_PINNED_ATTACHMENT_WRITE,
+          worktree,
+          STAGING_DIRECTORY,
+          file,
+          "3",
+          "",
+          "overwrite",
+          String(0o644),
+          "",
+          String(Date.now() + 3_000),
+        ],
+        { stdin: "pipe", stdout: "pipe", stderr: "ignore" },
+      );
+      try {
+        helper.stdin.write("emlw\n");
+        helper.stdin.flush();
+        const reader = helper.stdout.getReader();
+        const staged = await reader.read();
+        expect(Buffer.from(staged.value!).toString()).toBe("LINEAR_FILE_STAGED\n");
+        await expect(stat(target)).rejects.toThrow();
+        if (publish) helper.stdin.write("publish\n");
+        helper.stdin.end();
+        expect(await helper.exited).toBe(publish ? 0 : 78);
+        expect(await readdir(path.dirname(target))).toEqual(publish ? [file] : []);
+      } finally {
+        helper.kill();
+        await helper.exited;
       }
-    ).write.bind(container);
-    await write(
-      { id: "env-1", environmentType: "container", containerId: "c1" },
-      ".orkestrator/linear-files/DND-107/x.zip",
-      Buffer.from("zip"),
-      100,
-    );
-    expect(writes[0]).toEqual(
-      expect.arrayContaining(["c1", ".orkestrator/linear-files/DND-107", "x.zip", String(0o644)]),
-    );
+    }
+    expect(await readFile(target, "utf8")).toBe("zip");
   });
 });
 
@@ -279,6 +420,7 @@ describe("download_linear_files", () => {
   test("is listed for a Linear build or a linked board, and nowhere else", async () => {
     const names = async () => (await listToolsInProcess(factory())).map((tool) => tool.name);
     expect(await names()).toEqual(["other", "download_linear_files"]);
+    expect(listForEnvironment).toHaveBeenCalledWith(SCOPE.projectId, SCOPE.environmentId);
     pipelines = [];
     expect(await names()).toEqual(["other"]);
     board = { teamId: "team-1" };
@@ -330,6 +472,40 @@ describe("download_linear_files", () => {
       ],
     };
     expect((await call()).structuredContent).toMatchObject({ files: [{ name: "Spec.pdf" }] });
+  });
+
+  test("checks files beyond the download cap and follows the comment cursor", async () => {
+    const urls = Array.from({ length: 51 }, (_, index) => `${ZIP}/${index}`);
+    issue.description = urls.slice(0, 50).join(" ");
+    issue.comments = { nodes: [], pageInfo: { hasNextPage: true, endCursor: "next" } };
+    const fetchFirstPage = globalThis.fetch;
+    const cursors: (string | null)[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === "https://api.linear.app/graphql") {
+        const { variables } = JSON.parse(String(init?.body));
+        cursors.push(variables.after);
+        if (variables.after === "next")
+          return Response.json({
+            data: {
+              issue: {
+                id: "issue-1",
+                comments: { nodes: [{ body: urls[50] }], pageInfo: { hasNextPage: false } },
+              },
+            },
+          });
+      }
+      return fetchFirstPage(input, init);
+    }) as typeof fetch;
+    for (const url of urls) fileAnswers.set(url, () => new Response("file"));
+    const host = service();
+    const selected = await host.download(SCOPE, { urls: [urls[50]!] });
+    expect(selected.files).toMatchObject([{ url: urls[50] }]);
+    expect(cursors).toEqual([null, "next"]);
+    const all = await host.download(SCOPE);
+    expect(all.files).toHaveLength(50);
+    expect(all.failed).toEqual([
+      { url: urls[50]!, reason: expect.stringContaining("Only 50 files") },
+    ]);
   });
 
   test("says how to connect Linear", async () => {

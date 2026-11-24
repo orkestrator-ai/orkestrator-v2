@@ -22,8 +22,9 @@ export async function registerLinearFileTool(
   server: McpServer,
   host: LinearFileToolHost,
   scope: LinearFileScope,
-): Promise<void> {
-  if (!(await host.offered(scope).catch(() => false))) return;
+  access?: { authorize: () => Promise<boolean> },
+): Promise<boolean> {
+  if (!(await host.offered(scope).catch(() => false))) return false;
   server.registerTool(
     LINEAR_FILE_TOOL_NAME,
     {
@@ -53,6 +54,9 @@ export async function registerLinearFileTool(
       },
     },
     async ({ issueId, urls }) => {
+      if (access && !(await access.authorize())) {
+        throw new Error("Linear file download capability denied.");
+      }
       const value = {
         ...(await host.download(scope, {
           ...(issueId ? { issueId } : {}),
@@ -65,4 +69,5 @@ export async function registerLinearFileTool(
       };
     },
   );
+  return true;
 }

@@ -156,7 +156,6 @@ import {
   presentPeerMailCarrierRow,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
-  positionOptimisticNativeMessage,
   TURN_STOPPED_BY_USER,
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
@@ -214,7 +213,6 @@ import {
   nativeComposePersistence,
   nativeComposeStore,
   useNativeComposeStore,
-  type NativeComposeDraft,
 } from "@/stores/nativeComposeStore";
 import { paneLayoutStore, usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -289,11 +287,19 @@ import { useNativeQueuedPromptEditing } from "./useNativeQueuedPromptEditing";
 import { ClaudeAuthRecoveryCard } from "@/components/claude/ClaudeAuthRecoveryCard";
 import { isClaudeLoginRefusalNotice } from "@/lib/claude-auth";
 import {
+  coordinatorOpeningPromptMessageId,
   createStartupPromptPreviewMessage,
   INITIAL_STARTUP_PROMPT_PREVIEW_STATE,
   nextStartupPromptPreviewState,
   startupPromptPreviewMessageId,
+  type CoordinatorOpeningPrompt,
 } from "./startup-prompt-preview";
+import {
+  findPromptEcho,
+  placeOptimisticPrompts,
+  reconcileOptimisticPrompts,
+  type OptimisticPrompt,
+} from "./optimistic-prompts";
 
 const log = createLogger("web.native-agent");
 
@@ -341,6 +347,9 @@ export function SharedNativeAgentController({
   data,
   isActive,
   initialPrompt,
+  coordinatorOpeningPrompt,
+  onCoordinatorOpeningPromptSettled,
+  claimCoordinatorOpeningPrompt,
   initialAgentModel,
   initialReasoningEffort,
   initialConversationMode,
@@ -457,40 +466,10 @@ export function SharedNativeAgentController({
   // reads the ref. Neither is ever updated.
   const [requestedResumeSessionId] = useState(data.sessionId);
   const requestedResumeSessionIdRef = useRef(requestedResumeSessionId);
-  const [optimisticPrompt, setOptimisticPrompt] = useState<{
-    text: string;
-    attachments: Array<{ path: string; previewUrl?: string; name: string }>;
-    createdAt: string;
-    requestId?: string;
-    /**
-     * The provider session this prompt was submitted to.
-     *
-     * Captured at submit, before any confirmation is attached, so the
-     * provisional bubble can be refused on a transcript that belongs to a
-     * different session. A resume replaces the transcript without clearing this
-     * state, and the captured anchor ids no longer exist in the new one, so
-     * without this the bubble would be spliced in at the top of an unrelated
-     * conversation.
-     */
-    sessionId?: string;
-    confirmation?: NonNullable<NativeComposeDraft["pendingTranscriptConfirmation"]>;
-    /**
-     * Raw ids of the transcript rows on screen when this prompt was submitted.
-     *
-     * The provisional bubble has to sit where the prompt belongs — after the
-     * rows that predate it and ahead of the assistant turn it starts — not at
-     * the tail of whatever the projection has delivered since. Without this
-     * anchor a slow authoritative echo renders the response above the prompt and
-     * pins the prompt to the bottom of the transcript for the whole turn.
-     */
-    priorDisplayIds?: readonly string[];
-    /**
-     * Drawn before its pre-send check answered. Such a row is on screen well
-     * before the provider can refuse it, so it does not wait for acceptance to
-     * leave the centered first-prompt layout, which hides the transcript.
-     */
-    shownBeforeDispatch?: true;
-  } | null>(null);
+  const [optimisticPrompts, setOptimisticPrompts] = useState<readonly OptimisticPrompt[]>([]);
+  const removeOptimisticRequest = useCallback((requestId: string) => {
+    setOptimisticPrompts((current) => current.filter((prompt) => prompt.requestId !== requestId));
+  }, []);
   /**
    * The session whose draft the transcript already shows as sent, so its
    * composer shows none of it (`composerContent`). Set only where there is a
@@ -919,64 +898,25 @@ export function SharedNativeAgentController({
     }
     return ids;
   }, [normalizedMessages]);
-  /*
-   * A tab's first prompt is sent before its provider session has an id, so its
-   * confirmation starts with an empty one. Retain the adopted id on the
-   * optimistic prompt too: acceptance can clear the draft before its echo.
-   */
   const projectedSessionId = projection?.sessionId;
-  if (
-    optimisticPrompt?.confirmation &&
-    !optimisticPrompt.confirmation.sessionId &&
-    projectedSessionId
-  ) {
-    setOptimisticPrompt({
-      ...optimisticPrompt,
-      sessionId: projectedSessionId,
-      confirmation: { ...optimisticPrompt.confirmation, sessionId: projectedSessionId },
-    });
-  }
-  const activeTranscriptConfirmation =
-    optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
-  /**
-   * Has an authoritative transcript row appeared that can only be this prompt?
-   *
-   * Two conditions, and both are load-bearing:
-   *
-   * - The row was not visible when the prompt was submitted. Matching on text
-   *   alone confirmed a *previous* identical prompt the instant the user
-   *   pressed Enter, and providers reshape prompts (slash-command expansion,
-   *   handoff history, attachment references) often enough that the text sent
-   *   is not reliably the text echoed.
-   * - The row sits after every prior authoritative row that is still visible.
-   *   Novelty alone is not confirmation: widening the transcript window brings
-   *   older history into view for the first time, and a retained window can
-   *   begin on an assistant row. Anchoring to every role keeps those prepended
-   *   user rows behind the old tail. A prompt's own echo is appended past what
-   *   the composer could see, so position separates the two without depending
-   *   on a clock or on the provider echoing the text verbatim.
-   * - The row belongs to the same provider session. Resuming another session
-   *   replaces the transcript and must not turn one of its user rows into an
-   *   acknowledgement for the session the prompt was sent to.
-   */
-  const transcriptEchoedOptimistic = useMemo(() => {
-    const confirmation = activeTranscriptConfirmation;
-    if (!confirmation?.sessionId || confirmation.sessionId !== projection?.sessionId) return false;
-    const priorMessageIds = new Set(confirmation.priorMessageIds);
-    let lastPriorMessageIndex = -1;
-    for (let index = 0; index < normalizedMessages.length; index += 1) {
-      if (priorMessageIds.has(normalizedMessages[index]!.id)) {
-        lastPriorMessageIndex = index;
-      }
-    }
-    return normalizedMessages.some(
-      (message, index) =>
-        index > lastPriorMessageIndex &&
-        message.role === "user" &&
-        !isClientOnlyNativeMessage(message) &&
-        !priorMessageIds.has(message.id),
+  const reconciledPrompts = useMemo(
+    () => reconcileOptimisticPrompts(optimisticPrompts, normalizedMessages, projectedSessionId),
+    [normalizedMessages, optimisticPrompts, projectedSessionId],
+  );
+  const optimisticPrompt = reconciledPrompts.findLast((prompt) => !prompt.echoId);
+  // A remount can recover a draft's last dispatch without its provisional row.
+  const savedConfirmation = draft.pendingTranscriptConfirmation;
+  const recoveredEcho = useMemo(() => {
+    if (
+      !savedConfirmation ||
+      reconciledPrompts.some((row) => row.requestId === savedConfirmation.requestId)
+    )
+      return false;
+    const lastEcho = normalizedMessages.findLastIndex((row) =>
+      reconciledPrompts.some((prompt) => prompt.echoId === row.id),
     );
-  }, [activeTranscriptConfirmation, normalizedMessages, projection?.sessionId]);
+    return findPromptEcho(normalizedMessages, savedConfirmation, projectedSessionId, lastEcho) >= 0;
+  }, [normalizedMessages, projectedSessionId, reconciledPrompts, savedConfirmation]);
   /*
    * The opening prompt renders the moment the tab opens, not when the provider
    * finally echoes it. Creating the session (or, for a backend-owned launch,
@@ -1013,7 +953,13 @@ export function SharedNativeAgentController({
       nextStartupPromptPreviewState(current, startupPromptInput, () => new Date().toISOString()),
     );
   }
-  const startupPromptPreview = optimisticPrompt ? null : startupPromptState.preview;
+  const openingPreview =
+    coordinatorOpeningPrompt &&
+    !reconciledPrompts.some((row) => row.requestId === coordinatorOpeningPrompt.requestId)
+      ? coordinatorOpeningPrompt
+      : null;
+  const tabStartupPromptPreview = optimisticPrompt ? null : startupPromptState.preview;
+  const startupPromptPreview = openingPreview ?? tabStartupPromptPreview;
   // The draft is the launch's own until it settles; the unassigned composer
   // drew these attachments with the prompt, and the submitted row draws them again.
   const startupPromptAttachments = beforeSend ? draft.attachments : undefined;
@@ -1038,85 +984,54 @@ export function SharedNativeAgentController({
             },
           ]
         : handoff.displayMessages;
-    const base = startupPromptPreview
+    const base = openingPreview
       ? [
-          createStartupPromptPreviewMessage(
-            sessionKey,
-            startupPromptPreview,
+          createOptimisticNativeMessage(
+            coordinatorOpeningPromptMessageId(sessionKey, openingPreview.requestId),
+            openingPreview.text,
             startupPromptAttachments,
+            openingPreview.createdAt,
           ),
           ...providerBase,
         ]
-      : providerBase;
-    if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
-    /*
-     * A resume (or any other session replacement) rewrites the transcript while
-     * this state is still mounted. The bubble belongs to the session it was
-     * sent to; on a different session its captured anchor ids are gone, and
-     * splicing it in would make the previous conversation's pending prompt the
-     * first row of the resumed one.
-     */
-    if (optimisticPrompt.sessionId !== undefined && projectedSessionId !== undefined) {
-      if (optimisticPrompt.sessionId !== projectedSessionId) return base;
-    }
-
-    const optimistic = createOptimisticNativeMessage(
-      `optimistic-native:${sessionKey}`,
-      optimisticPrompt.text,
-      optimisticPrompt.attachments,
-      optimisticPrompt.createdAt,
-    );
-    /*
-     * Insert the provisional prompt after the last row that was on screen when
-     * it was submitted, rather than appending it.
-     *
-     * The provider's authoritative user row can lag the first streamed
-     * assistant frame, and until it lands the optimistic bubble is the only
-     * representation of the prompt. Appending put the response *above* it and
-     * left the prompt pinned to the bottom of the transcript for the turn —
-     * exactly the inversion a slow echo produces. Anchoring on the pre-submit
-     * rows keeps the prompt ahead of every row the turn has produced since; when
-     * the real echo arrives the bubble is retired in place, with no jump.
-     */
-    const priorDisplayIds = optimisticPrompt.priorDisplayIds;
-    return positionOptimisticNativeMessage(base, optimistic, priorDisplayIds);
+      : tabStartupPromptPreview
+        ? [
+            createStartupPromptPreviewMessage(
+              sessionKey,
+              tabStartupPromptPreview,
+              startupPromptAttachments,
+            ),
+            ...providerBase,
+          ]
+        : providerBase;
+    return placeOptimisticPrompts(base, reconciledPrompts);
   }, [
     handoff.displayMessages,
-    optimisticPrompt,
+    openingPreview,
     projectedSessionId,
+    reconciledPrompts,
     sessionKey,
     startupPromptAttachments,
-    startupPromptPreview,
-    transcriptEchoedOptimistic,
+    tabStartupPromptPreview,
     turnStopMarker,
   ]);
-  /**
-   * Raw ids of the rows on screen, captured so an optimistic prompt can be
-   * placed where it belongs.
-   *
-   * Distinct from {@link visibleAuthoritativeMessageIds}, which is normalized
-   * (assistant turns split into blocks, adjacent tool rows coalesced) and is
-   * matched against `normalizedMessages` for echo detection. The transcript is
-   * rendered from the raw rows — turn-stop markers included — so the insertion
-   * boundary for a provisional prompt is expressed in the same raw ids.
-   */
+  // Raw rendered IDs are for placement. The normalized authoritative IDs
+  // above are for echo detection and can advance while preflight is running.
   const visibleDisplayMessageIds = useMemo(
     () =>
       displayMessages
-        // The preview disappears on submission, so it cannot anchor its replacement.
-        // Nor can a prompt drawn before its check anchor itself once dispatched.
         .filter(
           (message) =>
             message.id !== startupPromptPreviewMessageId(sessionKey) &&
-            message.id !== `optimistic-native:${sessionKey}`,
+            (beforeSend !== undefined || message.id !== `optimistic-native:${sessionKey}`),
         )
         .map((message) => message.id),
-    [displayMessages, sessionKey],
+    [beforeSend, displayMessages, sessionKey],
   );
   /*
    * The transcript as last committed, for a submit that has waited on its
    * pre-send check: rows that arrived meanwhile (mail, another window's prompt)
-   * predate the dispatch, and must neither confirm it nor follow it.
+   * predate the dispatch, and cannot confirm it.
    */
   const committedTranscriptRef = useRef({
     sessionId: projectedSessionId,
@@ -1934,9 +1849,7 @@ export function SharedNativeAgentController({
     // this runs again once it has.
     if (submitInFlightRef.current || isSubmitting || isResolvingDispatch) return;
     releaseRetiredRequestId(retiredDispatch.requestId, retiredDispatch.message);
-    setOptimisticPrompt((current) =>
-      current?.requestId === retiredDispatch.requestId ? null : current,
-    );
+    removeOptimisticRequest(retiredDispatch.requestId);
     setSendError(retiredDispatch.message);
     dismissNotice(noticeSessionIdentity, retiredDispatchNoticeId);
   }, [
@@ -1945,6 +1858,7 @@ export function SharedNativeAgentController({
     isSubmitting,
     noticeSessionIdentity,
     releaseRetiredRequestId,
+    removeOptimisticRequest,
     retiredDispatch,
     retiredDispatchNoticeId,
     retiredDispatchOwnedByDraft,
@@ -1996,37 +1910,28 @@ export function SharedNativeAgentController({
   }, [draft.pendingTranscriptConfirmation, projection?.sessionId, sessionKey, updateDraft]);
 
   useEffect(() => {
-    if (!transcriptEchoedOptimistic) return;
-    const confirmation = activeTranscriptConfirmation;
-    if (!confirmation) return;
-    // A dispatch response can be lost after the backend accepted the prompt.
-    // The new authoritative transcript row is definitive confirmation, so the
-    // matching submitted draft must not remain in the composer indefinitely.
-    transcriptConfirmedRequestIdRef.current = confirmation.requestId;
-    // Clearing the error depends on the compose-store write just before it, and
-    // the confirmation that write needs is read from the optimistic prompt this
-    // effect then clears, so these updates cannot move into render.
+    const confirm = (requestId: string) => {
+      transcriptConfirmedRequestIdRef.current = requestId;
+      if (clearConfirmedDraft(requestId)) setSendError(null);
+    };
+    if (savedConfirmation && recoveredEcho) confirm(savedConfirmation.requestId);
+    if (reconciledPrompts === optimisticPrompts) return;
+    for (const row of reconciledPrompts) {
+      if (
+        row.echoId &&
+        row.requestId &&
+        !optimisticPrompts.some((old) => old.echoId === row.echoId)
+      ) {
+        confirm(row.requestId);
+      }
+    }
+    // Keep echo placement only for rows shown before dispatch. The next
+    // projection that no longer includes an echo drops its placement record.
+    const remaining = reconciledPrompts.filter((row) => !row.echoId || row.shownBeforeDispatch);
+    // An async submit may already have added a row since this render.
     // oxlint-disable-next-line react/set-state-in-effect
-    if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
-    setOptimisticPrompt(null);
-  }, [activeTranscriptConfirmation, clearConfirmedDraft, transcriptEchoedOptimistic]);
-
-  /*
-   * A resume, fork adoption or any other session replacement means the
-   * provisional bubble no longer belongs to the transcript on screen. Drop it
-   * rather than letting a stale prompt linger against an unrelated conversation.
-   * Only a definite move between two real ids counts: an undefined/undefined or
-   * undefined/new pairing is a brand-new session this prompt created, not a
-   * replacement of the one it was sent to.
-   */
-  const submittedSessionId = optimisticPrompt?.sessionId;
-  if (
-    submittedSessionId !== undefined &&
-    projection?.sessionId !== undefined &&
-    submittedSessionId !== projection.sessionId
-  ) {
-    setOptimisticPrompt(null);
-  }
+    setOptimisticPrompts((current) => (current === optimisticPrompts ? remaining : current));
+  }, [clearConfirmedDraft, optimisticPrompts, reconciledPrompts, recoveredEcho, savedConfirmation]);
 
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
@@ -2168,6 +2073,7 @@ export function SharedNativeAgentController({
         noQueue?: boolean;
         preflight?: boolean;
         failureSessionId?: string;
+        openingPrompt?: CoordinatorOpeningPrompt;
       },
     ) => {
       if (queueEditPendingRef.current || submitInFlightRef.current || beforeSendPendingRef.current)
@@ -2507,12 +2413,29 @@ export function SharedNativeAgentController({
       // A failed turn's Retry belongs to its own row and never owns the draft,
       // and a queued prompt belongs to the queue, where the running turn it
       // waits behind also means the check has nothing to fetch.
-      const shownAsSent = beforeSend !== undefined && !failureRetry && !canQueue;
-      const submittedAt = new Date().toISOString();
-      // Preflight belongs after local validation. Keep the submitted draft's
-      // identity across the wait: suggestions, mentions and attachments can
-      // still edit it, and a remounted composer must never replay this send.
+      const openingPrompt = submitOptions?.openingPrompt;
       const preflighted = submitOptions?.preflight === true && beforeSend !== undefined;
+      const shownAsSent = beforeSend !== undefined && !failureRetry && !canQueue;
+      const submittedAt = openingPrompt?.createdAt ?? new Date().toISOString();
+      const optimisticId = openingPrompt
+        ? coordinatorOpeningPromptMessageId(sessionKey, openingPrompt.requestId)
+        : preflighted && shownAsSent
+          ? `optimistic-native:${sessionKey}:${crypto.randomUUID()}`
+          : `optimistic-native:${sessionKey}`;
+      const removeSubmittedRow = () => {
+        setOptimisticPrompts((current) => current.filter((row) => row.id !== optimisticId));
+      };
+      const putSubmittedRow = (row: OptimisticPrompt) => {
+        setOptimisticPrompts((current) => {
+          if (!beforeSend && !openingPrompt) return [row];
+          const existing = current.findIndex((item) => item.id === row.id);
+          return existing < 0
+            ? [...current, row]
+            : current.map((item, index) => (index === existing ? row : item));
+        });
+      };
+      const priorDisplayIds = openingPrompt ? [] : visibleDisplayMessageIds;
+      // Keep the draft's identity across the wait so edits cancel this send.
       if (submitOptions?.preflight && beforeSend) {
         const lifetime = composerLifetimeRef.current;
         const pendingDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
@@ -2524,11 +2447,12 @@ export function SharedNativeAgentController({
          * dispatch. So is the request id, which nothing has been sent under.
          */
         if (shownAsSent) {
-          setOptimisticPrompt({
+          putSubmittedRow({
+            id: optimisticId,
             text: userPrompt,
             attachments: submittedAttachments,
             createdAt: submittedAt,
-            priorDisplayIds: visibleDisplayMessageIds,
+            priorDisplayIds,
             shownBeforeDispatch: true,
           });
           setDraftInTranscript(sessionKey);
@@ -2559,9 +2483,7 @@ export function SharedNativeAgentController({
           if (composerLifetimeRef.current === lifetime) setPreparingSend(false);
           // The draft never left the store, so uncovering it restores all of it.
           if (shownAsSent && !proceeding) {
-            setOptimisticPrompt((current) =>
-              current?.shownBeforeDispatch && current.requestId === undefined ? null : current,
-            );
+            removeSubmittedRow();
             setDraftInTranscript(null);
           }
         }
@@ -2591,15 +2513,6 @@ export function SharedNativeAgentController({
         updateDraft(sessionKey, { requestId: dispatchRequestId });
       reportSendError(null);
       transcriptConfirmedRequestIdRef.current = null;
-      setOptimisticPrompt({
-        text: userPrompt,
-        attachments: submittedAttachments,
-        createdAt: submittedAt,
-        requestId: dispatchRequestId,
-        sessionId: transcriptAtDispatch.sessionId,
-        priorDisplayIds: transcriptAtDispatch.displayIds,
-        ...(shownAsSent ? { shownBeforeDispatch: true } : {}),
-      });
       if (shownAsSent) setDraftInTranscript(sessionKey);
       const options = {
         requestId: dispatchRequestId,
@@ -2643,11 +2556,20 @@ export function SharedNativeAgentController({
             pendingTranscriptConfirmation: transcriptConfirmation,
           });
         }
-        setOptimisticPrompt((current) =>
-          current && current.requestId === dispatchRequestId
-            ? { ...current, confirmation: transcriptConfirmation }
-            : current,
-        );
+      }
+      if (!canQueue || !beforeSend) {
+        putSubmittedRow({
+          id: optimisticId,
+          text: userPrompt,
+          attachments: submittedAttachments,
+          createdAt: submittedAt,
+          requestId: dispatchRequestId,
+          sessionId: transcriptAtDispatch.sessionId,
+          priorDisplayIds:
+            shownAsSent || openingPrompt ? priorDisplayIds : transcriptAtDispatch.displayIds,
+          shownBeforeDispatch: shownAsSent || Boolean(openingPrompt),
+          confirmation: transcriptConfirmation,
+        });
       }
       const openingFallback =
         dispatchRequestId === tabInitialPromptRequestId(data.environmentId, tabId)
@@ -2674,7 +2596,7 @@ export function SharedNativeAgentController({
       try {
         if (canQueue) {
           await enqueue(prompt, autoSteerId ? { ...options, requestId: autoSteerId } : options);
-          setOptimisticPrompt(null);
+          if (!beforeSend) removeSubmittedRow();
           clearDraft(sessionKey);
           consumeBrowserAnnotations(data.environmentId, submittedBrowserAnnotationIds);
           discardProvisionalDraft();
@@ -2707,7 +2629,7 @@ export function SharedNativeAgentController({
         }
         const outcome = await send(prompt, options);
         if (openingFallback?.backendOwned) {
-          setOptimisticPrompt(null);
+          removeSubmittedRow();
           return true;
         }
         const transcriptConfirmed =
@@ -2727,7 +2649,7 @@ export function SharedNativeAgentController({
             consumeTabAgentHandoff(tabId, data.environmentId);
           return true;
         }
-        if (outcome.outcome === "rejected") setOptimisticPrompt(null);
+        if (outcome.outcome === "rejected") removeSubmittedRow();
         requestIdRetired = outcome.outcome === "rejected" && outcome.requestIdRetired === true;
         if (outcome.outcome === "rejected" && requestIdRetired && dispatchRequestId) {
           releaseRetiredRequestId(dispatchRequestId, outcome.error);
@@ -2742,7 +2664,7 @@ export function SharedNativeAgentController({
          * delivered with no feedback.
          */
         const transportFailure = outcome.outcome === "unknown" && outcome.origin === "transport";
-        if (transportFailure) setOptimisticPrompt(null);
+        if (transportFailure) removeSubmittedRow();
         if (transportFailure) {
           reportSendError(
             `The connection dropped before ${label} confirmed your last message. Retrying uses the same request id, so it cannot run twice.`,
@@ -2751,7 +2673,7 @@ export function SharedNativeAgentController({
           reportSendError(outcome.error);
         }
       } catch (error) {
-        setOptimisticPrompt(null);
+        removeSubmittedRow();
         if (openingFallback?.backendOwned) return true;
         reportSendError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -2765,7 +2687,7 @@ export function SharedNativeAgentController({
       }
       if (failureRetry) return false;
       updateDraft(sessionKey, {
-        text,
+        text: openingPrompt ? draft.text : text,
         mentions: draft.mentions,
         annotations: draft.annotations,
         attachments: submittedAttachments,
@@ -3399,6 +3321,57 @@ export function SharedNativeAgentController({
             : runtimeError || hasCompletedRead
               ? ("error" as const)
               : ("connecting" as const)));
+  useEffect(() => {
+    const opening = coordinatorOpeningPrompt;
+    if (!opening || !onCoordinatorOpeningPromptSettled || !claimCoordinatorOpeningPrompt) return;
+    const blockedReason =
+      sendingHeldReason ??
+      (authenticationRequired
+        ? "Sign in before sending the opening message."
+        : connectionState === "error"
+          ? "Reconnect before sending the opening message."
+          : sessionStateAuthoritative &&
+              (isRunning || phase === "blocked" || phase === "cancelling")
+            ? "Another turn is already active. Send the opening message when it finishes."
+            : undefined);
+    if (blockedReason) {
+      if (claimCoordinatorOpeningPrompt(opening.requestId)) {
+        onCoordinatorOpeningPromptSettled(opening.requestId, blockedReason);
+      }
+      return;
+    }
+    if (sendLocked || isDispatching || preparingSend) return;
+
+    if (!claimCoordinatorOpeningPrompt(opening.requestId)) return;
+    // The authoritative read triggers the external dispatch. Its normal
+    // submit path marks the composer as busy synchronously.
+    // oxlint-disable-next-line react/set-state-in-effect
+    void submit(opening.text, opening.requestId, true, undefined, {
+      noQueue: true,
+      openingPrompt: opening,
+    }).then(
+      () => onCoordinatorOpeningPromptSettled(opening.requestId),
+      (error: unknown) =>
+        onCoordinatorOpeningPromptSettled(
+          opening.requestId,
+          error instanceof Error ? error.message : "The opening message could not be sent.",
+        ),
+    );
+  }, [
+    authenticationRequired,
+    claimCoordinatorOpeningPrompt,
+    connectionState,
+    coordinatorOpeningPrompt,
+    isDispatching,
+    isRunning,
+    onCoordinatorOpeningPromptSettled,
+    phase,
+    preparingSend,
+    sendLocked,
+    sendingHeldReason,
+    sessionStateAuthoritative,
+    submit,
+  ]);
   // Visibility unmounts retain the intent in the compose store. Reconcile it
   // before replay, including expiry while hidden and provider-session changes.
   const sessionStateFailure = sessionStateError ?? runtimeError;
@@ -4088,13 +4061,13 @@ export function SharedNativeAgentController({
                       clearConfirmedDraft(actionableDispatch.requestId);
                     }
                     setSendError(null);
-                    setOptimisticPrompt(null);
+                    removeOptimisticRequest(actionableDispatch.requestId);
                   } else if (outcome.outcome === "rejected") {
                     if (outcome.requestIdRetired) {
                       // The backend resolved the card. Keep the text, but under
                       // a new id, so sending it again can actually run it.
                       releaseRetiredRequestId(actionableDispatch.requestId, outcome.error);
-                      setOptimisticPrompt(null);
+                      removeOptimisticRequest(actionableDispatch.requestId);
                     }
                     setSendError(outcome.error);
                   } else {
@@ -4120,7 +4093,7 @@ export function SharedNativeAgentController({
               void discardRecoverableDispatch()
                 .then(() => {
                   setSendError(null);
-                  setOptimisticPrompt(null);
+                  removeOptimisticRequest(actionableDispatch.requestId);
                 })
                 .catch((error: unknown) => {
                   setSendError(error instanceof Error ? error.message : String(error));

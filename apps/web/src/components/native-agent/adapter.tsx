@@ -1,3 +1,4 @@
+import type { CoordinatorOpeningPrompt } from "./startup-prompt-preview";
 import type { NativeAgentResumeIntent } from "@/lib/native-agent-resume-requests";
 import type { ReactNode } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -20,6 +21,9 @@ export interface AgentNativeTabProps {
   hiddenByLayout?: boolean;
   ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
+  coordinatorOpeningPrompt?: CoordinatorOpeningPrompt;
+  claimCoordinatorOpeningPrompt?: (requestId: string) => boolean;
+  onCoordinatorOpeningPromptSettled?: (requestId: string, error?: string) => void;
   isReviewTab?: boolean;
   hideStructuredOutput?: boolean;
   initialAgentPlatform?: AgentPlatform;
@@ -65,7 +69,7 @@ export interface AgentNativeTabProps {
    * draft edits cancel this send.
    *
    * On an unassigned tab its owner runs the check inside `onAssignPlatform`;
-   * `initialPrompt` is then the first prompt that check is holding.
+   * `coordinatorOpeningPrompt` is then the first prompt that check is holding.
    */
   beforeSend?: () => Promise<void | boolean>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */

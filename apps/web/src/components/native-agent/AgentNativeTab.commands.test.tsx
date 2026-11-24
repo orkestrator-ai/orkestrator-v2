@@ -1083,6 +1083,26 @@ describe("a prompt shown while its preflight runs", () => {
     expect(composerText()).toBe("Keep me");
   });
 
+  test("a declined second check leaves the accepted first row visible until its echo", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-consecutive";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    await type(input, tabId, "Accepted first");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => settle());
+    await waitFor(() => expect(draftFor(tabId)).toBeUndefined());
+
+    await type(input, tabId, "Decline this second");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(transcript().textContent).toMatch(/Accepted first.*Decline this second/s);
+    await act(async () => settle(false));
+    expect(rowsWith("Accepted first")).toBe(1);
+    expect(rowsWith("Decline this second")).toBe(0);
+    expect(composerText()).toBe("Decline this second");
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+  });
+
   test("another prompt that arrives during the check is not taken for this one's echo", async () => {
     projectionOptions = { messages: [EARLIER] };
     const { beforeSend, settle } = heldPreflight();
@@ -1106,7 +1126,7 @@ describe("a prompt shown while its preflight runs", () => {
           revision: 2,
         }),
     );
-    await waitFor(() => expect(transcript().textContent).toContain("From another window"));
+    await waitFor(() => expect(transcript().textContent).toMatch(/Mine.*From another window/s));
 
     let accept!: () => void;
     dispatchNativeAgentIntentMock.mockImplementationOnce(
@@ -1121,9 +1141,31 @@ describe("a prompt shown while its preflight runs", () => {
       "earlier",
       "other-window",
     ]);
-    // Still waiting for its own echo, below the prompt that came first.
-    expect(transcript().textContent).toMatch(/From another window.*Mine/s);
+    expect(transcript().textContent).toMatch(/Mine.*From another window/s);
     await act(async () => accept());
+    projectionOptions = {
+      messages: [
+        EARLIER,
+        other,
+        {
+          ...other,
+          id: "mine-echo",
+          content: "Mine echoed",
+          parts: [{ type: "text", content: "Mine echoed" }],
+        },
+      ],
+    };
+    act(() =>
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(createSessionKey("env-1", tabId), {
+          ...projectionFor("codex"),
+          revision: 3,
+        }),
+    );
+    await waitFor(() => expect(transcript().textContent).toMatch(/Mine.*From another window/s));
+    expect(rowsWith("Mine")).toBe(1);
+    expect(transcript().textContent).toContain("Mine echoed");
   });
 
   test("a prompt bound for the queue never becomes a transcript row", async () => {

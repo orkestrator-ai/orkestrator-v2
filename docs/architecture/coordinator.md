@@ -1925,11 +1925,15 @@ answers a mergeable checkout `{ offer: true, automatic: true }`. The panel
 then fast-forwards with `syncProjectGit` and sends. The user does not wait to
 see the message: it is drawn in the transcript as sent, with the waiting
 indicator, before the check is asked, and the composer looks empty while the
-draft stays stored. It is dispatched only after the check, into the same row.
-A stopped send removes the row and the composer shows the draft again. A
-message that will join a running turn's queue is not drawn first. The first
-prompt is held by the panel (`useCoordinatorLaunches`), not the pane, so a
-pane that remounts draws it again and cannot send it twice. The backend waits for the
+draft stays stored. It is dispatched only after the check. Its transcript
+position stays anchored to the rows visible at send time, and its echo is
+detected against the transcript at dispatch time. A stopped send removes its
+own row and the composer shows the draft again. A message that will join a
+running turn's queue is drawn when the queue accepts it. The panel holds each
+opening prompt under its own request ID across pane remounts, assignment and
+dispatch. If another turn is already active when the agent binds, the panel
+reports why the opening prompt was returned to the composer. It also reports
+assignment failures after a pane remount. The backend waits for the
 fetch for at most three seconds (`coordinator/message-upstream.ts`). When it
 is slower, or fails, the backend fast-forwards the checkout itself to the
 upstream commit it has already fetched (`fastForwardToFetchedUpstream`, a

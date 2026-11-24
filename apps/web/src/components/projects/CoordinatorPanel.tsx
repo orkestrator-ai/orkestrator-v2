@@ -179,7 +179,14 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
     }
     return { platformNotes: notes, platformBadges: badges };
   }, [availablePlatforms, snapshot]);
-  const { pendingLaunches, startConversation } = useCoordinatorLaunches({
+  const {
+    pendingLaunches,
+    launchErrors,
+    startConversation,
+    claimLaunch,
+    settleLaunch,
+    clearLaunchError,
+  } = useCoordinatorLaunches({
     projectId,
     snapshot,
     setSnapshot,
@@ -599,6 +606,10 @@ export function CoordinatorPanel({ projectId }: CoordinatorPanelProps) {
                       platformNotes={platformNotes}
                       platformBadges={platformBadges}
                       launch={conversationId ? pendingLaunches.get(conversationId) : undefined}
+                      launchError={conversationId ? launchErrors.get(conversationId) : undefined}
+                      claimLaunch={claimLaunch}
+                      clearLaunchError={clearLaunchError}
+                      settleLaunch={settleLaunch}
                       startConversation={startConversation}
                       confirmUpstreamMerge={confirmUpstreamMerge}
                       conversationBusy={conversationBusy}

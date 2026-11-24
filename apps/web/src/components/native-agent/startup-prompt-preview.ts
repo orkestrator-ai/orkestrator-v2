@@ -2,6 +2,17 @@ import { parseCoordinatorDelegatedPrompt } from "@orkestrator/protocol/review-ev
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
+/** Identity and content of a coordinator prompt from preflight through dispatch. */
+export interface CoordinatorOpeningPrompt {
+  requestId: string;
+  text: string;
+  createdAt: string;
+}
+
+export function coordinatorOpeningPromptMessageId(sessionKey: string, requestId: string): string {
+  return `optimistic-native-startup:${sessionKey}:${requestId}`;
+}
+
 /**
  * The opening prompt a tab was created with, shown before anything can echo it.
  *

@@ -367,7 +367,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
    * accepted the assignment — a failure leaves the composer exactly as the user
    * left it, with the draft intact, rather than a half-bound conversation. A
    * surface with a pre-send check holds the prompt meanwhile and passes it back
-   * as `initialPrompt`, which draws it as sent.
+   * as `coordinatorOpeningPrompt`, which draws it as sent.
    */
   const assignAndSend = useCallback(
     async (
@@ -463,7 +463,7 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             containerId={props.data.containerId}
             disabled={awaitingDurability || props.sendingHeldReason !== undefined}
             // Held by the owner whose pre-send check it is waiting on.
-            sentPrompt={props.beforeSend ? props.initialPrompt : undefined}
+            sentPrompt={props.beforeSend ? props.coordinatorOpeningPrompt : undefined}
             initialAgentPlatform={props.initialAgentPlatform}
             initialAgentModel={props.initialAgentModel}
             initialReasoningEffort={props.initialReasoningEffort}

@@ -1,4 +1,8 @@
-import { useMemo, useState } from "react";
+import {
+  coordinatorOpeningPromptMessageId,
+  type CoordinatorOpeningPrompt,
+} from "./startup-prompt-preview";
+import { useMemo } from "react";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import { NativeMessage } from "@/components/chat/NativeMessage";
@@ -106,17 +110,24 @@ export function LaunchingAgentStatus({ label }: { label: string }) {
  */
 export function SentFirstPrompt({
   platform,
-  text,
+  sessionKey,
+  prompt,
   attachments,
 }: {
   platform: AgentPlatform;
-  text: string;
+  sessionKey: string;
+  prompt: CoordinatorOpeningPrompt;
   attachments: FirstPromptPendingState["attachments"];
 }) {
-  const [createdAt] = useState(() => new Date().toISOString());
   const message = useMemo(
-    () => createOptimisticNativeMessage("first-prompt-sent", text, attachments, createdAt),
-    [attachments, createdAt, text],
+    () =>
+      createOptimisticNativeMessage(
+        coordinatorOpeningPromptMessageId(sessionKey, prompt.requestId),
+        prompt.text,
+        attachments,
+        prompt.createdAt,
+      ),
+    [attachments, prompt, sessionKey],
   );
   return (
     // The top padding is the bound tab's changes header, so the row does not

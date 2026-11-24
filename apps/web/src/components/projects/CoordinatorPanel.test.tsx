@@ -1,7 +1,7 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { VirtuosoMockContext } from "react-virtuoso";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   coordinatorRuntimeId,
@@ -10,7 +10,10 @@ import {
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
-import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentDispatchOutcome,
+  NativeAgentSessionProjection,
+} from "@orkestrator/protocol/native-agent";
 import type { Environment } from "@/types";
 import { createNativeAgentSessionBackend } from "@/test/native-agent-session-backend";
 import * as realBackend from "@/lib/backend";
@@ -19,7 +22,10 @@ import type { AgentMailMailboxSnapshot } from "@orkestrator/protocol/agent-mail"
 import { agentMailStore } from "@/stores/agentMailStore";
 import { environmentStore } from "@/stores/environmentStore";
 import { configStore } from "@/stores/configStore";
-import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { SentFirstPrompt } from "@/components/native-agent/FirstPromptPending";
+import type { CoordinatorOpeningPrompt } from "@/components/native-agent/startup-prompt-preview";
+import { useCoordinatorLaunches } from "./useCoordinatorLaunches";
+import { nativeComposeStore, type NativeComposeDraft } from "@/stores/nativeComposeStore";
 import { useActiveCoordinatorConversationStore } from "@/stores/activeCoordinatorConversationStore";
 import { projectStore } from "@/stores/projectStore";
 import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -234,7 +240,9 @@ const getAgentProjection = mock(async (): Promise<NativeAgentSessionProjection> 
   launchProjection("idle"),
 );
 const dispatchIntent = mock(
-  async (input: Parameters<typeof realBackend.dispatchNativeAgentIntent>[0]) => ({
+  async (
+    input: Parameters<typeof realBackend.dispatchNativeAgentIntent>[0],
+  ): Promise<NativeAgentDispatchOutcome> => ({
     outcome: "accepted" as const,
     requestId: input.requestId,
   }),
@@ -334,18 +342,29 @@ const renderAgentNativeTab = mock((props: Record<string, unknown>) => (
     data-coordinator-project-id={String(props.coordinatorProjectId ?? "")}
     data-platform={String((props.data as { platform?: string } | undefined)?.platform ?? "")}
     data-available-platforms={(props.availablePlatforms as string[] | undefined)?.join(",") ?? ""}
-    data-initial-prompt={String(props.initialPrompt ?? "")}
+    data-initial-prompt={
+      (props.coordinatorOpeningPrompt as CoordinatorOpeningPrompt | undefined)?.text ?? ""
+    }
     data-initial-model={String(props.initialAgentModel ?? "")}
     data-platform-notes={JSON.stringify(props.platformNotes ?? {})}
     data-platform-badges={JSON.stringify(props.platformBadges ?? {})}
   >
+    {props.coordinatorOpeningPrompt && props.data && !props.onAssignPlatform ? (
+      <button
+        type="button"
+        onClick={() => {
+          const opening = props.coordinatorOpeningPrompt as CoordinatorOpeningPrompt;
+          const settle = props.onCoordinatorOpeningPromptSettled as (requestId: string) => void;
+          settle(opening.requestId);
+        }}
+      >
+        Settle opening message
+      </button>
+    ) : null}
     {props.onAssignPlatform ? (
       <button
         type="button"
         onClick={() => {
-          // The real tab awaits this and renders a failure itself, so the stub
-          // has to absorb the rejection the same way rather than turning a
-          // reported error into an unhandled one.
           void (
             props.onAssignPlatform as (
               platform: string,
@@ -636,64 +655,41 @@ describe("CoordinatorPanel", () => {
     expect(assigned.getAttribute("data-initial-model")).toBe("opus");
   });
 
-  test.each([
-    { phase: "running", messages: [] },
-    { phase: "blocked", messages: [] },
-    { phase: "cancelling", messages: [] },
-    {
-      phase: "idle",
-      messages: [{ id: "opening-user-message", role: "user", text: openingPrompt }],
-    },
-    {
-      phase: "error",
-      messages: [{ id: "opening-user-message", role: "user", text: openingPrompt }],
-    },
-  ] satisfies { phase: NativeAgentSessionProjection["turn"]["phase"]; messages: unknown[] }[])(
-    "retains the opening prompt through empty error and recovery, then releases on %p",
-    async ({ phase, messages }) => {
-      const assignedSnapshot = prepareUnassignedLaunch();
-      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-      await screen.findByTestId("native-agent");
-      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-      await waitFor(() =>
-        expect(screen.getByTestId("native-agent").getAttribute("data-platform")).toBe("claude"),
-      );
-      const expectPrompt = (prompt: string) =>
-        expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(prompt);
-      expectPrompt(openingPrompt);
-
-      // Prove a resource-driven read actually reached the rendered panel.
-      await refreshCoordinator(assignedSnapshot, 2);
-      expectPrompt(openingPrompt);
-
-      let revision = 0;
-      for (const placeholder of ["idle", "recovering", "error", "recovering"] as const) {
-        act(() => {
-          appCommandStore(nativeAgentProjectionStore)
-            .getState()
-            .setProjection(launchSessionKey, launchProjection(placeholder, [], ++revision));
-        });
-        expectPrompt(openingPrompt);
-      }
-      await refreshCoordinator(assignedSnapshot, 3);
-      expectPrompt(openingPrompt);
-
+  test("only settlement of its own send releases the opening prompt", async () => {
+    const assignedSnapshot = prepareUnassignedLaunch();
+    renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
+    await screen.findByTestId("native-agent");
+    fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("native-agent").getAttribute("data-platform")).toBe("claude"),
+    );
+    const expectPrompt = (prompt: string) =>
+      expect(screen.getByTestId("native-agent").getAttribute("data-initial-prompt")).toBe(prompt);
+    expectPrompt(openingPrompt);
+    for (const [index, phase] of (
+      ["recovering", "error", "running", "blocked", "idle"] as const
+    ).entries()) {
       act(() => {
         appCommandStore(nativeAgentProjectionStore)
           .getState()
-          .setProjection(launchSessionKey, launchProjection(phase, messages, ++revision));
+          .setProjection(
+            launchSessionKey,
+            launchProjection(
+              phase,
+              [{ id: "unrelated-row", role: "user", content: "Other prompt", parts: [] }],
+              index + 1,
+            ),
+          );
       });
-      await waitFor(() => expectPrompt(""));
-      // Releasing is permanent even when the next snapshot is quiet again.
-      act(() => {
-        appCommandStore(nativeAgentProjectionStore)
-          .getState()
-          .setProjection(launchSessionKey, launchProjection("idle", [], ++revision));
-      });
-      await refreshCoordinator(assignedSnapshot, 4);
-      expectPrompt("");
-    },
-  );
+      expectPrompt(openingPrompt);
+    }
+    await refreshCoordinator(assignedSnapshot, 2);
+    expectPrompt(openingPrompt);
+    fireEvent.click(screen.getByRole("button", { name: "Settle opening message" }));
+    await waitFor(() => expectPrompt(""));
+    await refreshCoordinator(assignedSnapshot, 3);
+    expectPrompt("");
+  });
 
   test("the real tab dispatches the opening prompt once after a delayed authoritative read", async () => {
     useRealAgentTab = true;
@@ -729,11 +725,10 @@ describe("CoordinatorPanel", () => {
       environmentId: launchEnvironmentId,
       logicalSessionKey: launchSessionKey,
       prompt: openingPrompt,
-      requestId: `initial-prompt:${launchEnvironmentId}:coordinator-tab`,
+      requestId: expect.any(String),
     });
 
-    // Exercise rerenders both while the parent still holds the prompt and
-    // after the authoritative turn releases it.
+    // An authoritative turn after settlement cannot replay the launch.
     await refreshCoordinator(assignedSnapshot, 4);
     panel.rerender(<CoordinatorPanel projectId="project-1" />);
     act(() => {
@@ -1104,7 +1099,7 @@ describe("CoordinatorPanel", () => {
     };
 
     /** A main coordinator with no agent, its panel open and its next fetch held. */
-    async function sendHeldFirstPrompt() {
+    async function sendHeldFirstPrompt(draft?: Partial<NativeComposeDraft>) {
       useRealAgentTab = true;
       appCommandStore(configStore)
         .getState()
@@ -1146,7 +1141,13 @@ describe("CoordinatorPanel", () => {
             finishFetch = resolve;
           }),
       );
-      fireEvent.input(input, { target: { textContent: prompt } });
+      if (draft) {
+        act(() =>
+          appCommandStore(nativeComposeStore).getState().updateDraft(launchSessionKey, draft),
+        );
+      } else {
+        fireEvent.input(input, { target: { textContent: prompt } });
+      }
       fireEvent.keyDown(input, { key: "Enter" });
       await screen.findByTestId("first-prompt-sent");
       return {
@@ -1197,17 +1198,138 @@ describe("CoordinatorPanel", () => {
       expect(dispatchIntent).toHaveBeenCalledTimes(1);
     });
 
-    test("a failed start withdraws it and gives the draft and the error back", async () => {
-      const { finishFetch } = await sendHeldFirstPrompt();
+    const fullDraft = {
+      text: "Read @notes.ts",
+      mentions: [{ id: "notes", filename: "notes.ts", relativePath: "src/notes.ts" }],
+      attachments: [
+        {
+          id: "image",
+          type: "image" as const,
+          path: "/tmp/fixture.png",
+          name: "fixture.png",
+          previewUrl: "data:image/png;base64,AAAA",
+        },
+      ],
+      annotations: [{ id: "note", text: "Selected line", comment: "Explain this line" }],
+    };
+
+    test("a failed assignment after remount returns the whole draft and gives a reason", async () => {
+      const { finishFetch } = await sendHeldFirstPrompt(fullDraft);
+      fireEvent.click(screen.getByRole("tab", { name: "Second, no agent chosen yet" }));
+      await waitFor(() => expect(screen.queryByTestId("first-prompt-sent") === null).toBe(true));
+      fireEvent.click(screen.getByRole("tab", { name: "First, no agent chosen yet" }));
+      await screen.findByTestId("first-prompt-sent");
       assignAgent.mockRejectedValueOnce(new Error("Claude could not be assigned"));
       await act(async () => finishFetch(gitStatus));
       expect(await screen.findByText("Claude could not be assigned")).toBeTruthy();
       expect(screen.queryByTestId("first-prompt-sent") === null).toBe(true);
-      expect(composerText()).toBe(prompt);
+      expect(composerText()).toBe(fullDraft.text);
+      expect(
+        appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey),
+      ).toMatchObject(fullDraft);
       expect(dispatchIntent).not.toHaveBeenCalled();
-      // And it can be sent again.
-      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    });
+
+    test("passes the whole draft through handoff and restores it on a definitive refusal", async () => {
+      getAgentProjection.mockImplementation(async () => {
+        const projection = launchProjection("idle");
+        return {
+          ...projection,
+          capabilities: { ...projection.capabilities, attachments: { images: true, files: true } },
+        };
+      });
+      let refuse!: () => void;
+      dispatchIntent.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            refuse = () =>
+              resolve({ outcome: "rejected", error: "Provider refused this opening message" });
+          }),
+      );
+      const { finishFetch } = await sendHeldFirstPrompt(fullDraft);
+      expect(
+        screen.getByTestId("first-prompt-sent").querySelectorAll('img[src^="data:image/png"]'),
+      ).toHaveLength(1);
+      await act(async () => finishFetch(gitStatus));
       await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+      const sent = dispatchIntent.mock.calls[0]?.[0];
+      expect(sent?.prompt).toContain("src/notes.ts");
+      expect(sent?.prompt).toContain("Explain this line");
+      expect(sent?.attachments).toEqual([
+        { type: "image", path: "/tmp/fixture.png", filename: "fixture.png" },
+      ]);
+      expect(
+        screen.getByTestId("transcript-region").querySelectorAll('img[src^="data:image/png"]'),
+      ).toHaveLength(1);
+      expect(composerText()).toBe("");
+      await act(async () => refuse());
+      expect(await screen.findByText("Provider refused this opening message")).toBeTruthy();
+      expect(composerText()).toBe(fullDraft.text);
+      expect(
+        appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey),
+      ).toMatchObject(fullDraft);
+      expect(screen.getByTestId("compose-image-attachment")).toBeTruthy();
+      expect(screen.getByTestId("compose-annotation-count")).toBeTruthy();
+    });
+
+    test("keeps a long first prompt expanded through assignment and dispatch", async () => {
+      const text = Array.from({ length: 40 }, (_, index) => `Opening line ${index + 1}`).join("\n");
+      const { finishFetch } = await sendHeldFirstPrompt({ text });
+      fireEvent.click(
+        within(screen.getByTestId("first-prompt-sent")).getByRole("button", { name: "show more" }),
+      );
+      expect(screen.getByRole("button", { name: "show less" }).getAttribute("aria-expanded")).toBe(
+        "true",
+      );
+      let accept!: () => void;
+      dispatchIntent.mockImplementationOnce(
+        (input) =>
+          new Promise((resolve) => {
+            accept = () => resolve({ outcome: "accepted", requestId: input.requestId });
+          }),
+      );
+      await act(async () => finishFetch(gitStatus));
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+      expect(
+        within(screen.getByTestId("transcript-region"))
+          .getByRole("button", { name: "show less" })
+          .getAttribute("aria-expanded"),
+      ).toBe("true");
+      await act(async () => accept());
+    });
+
+    test("two held first prompts in different projects have independent expansion", () => {
+      const text = Array.from({ length: 40 }, (_, index) => `Opening line ${index + 1}`).join("\n");
+      const prompt = { requestId: "first-send", text, createdAt: new Date(0).toISOString() };
+      renderInAppCommandScope(
+        <>
+          <section aria-label="First conversation">
+            <SentFirstPrompt
+              platform="claude"
+              sessionKey="project-a-conversation"
+              prompt={prompt}
+              attachments={[]}
+            />
+          </section>
+          <section aria-label="Second conversation">
+            <SentFirstPrompt
+              platform="claude"
+              sessionKey="project-b-conversation"
+              prompt={{ ...prompt, requestId: "second-send" }}
+              attachments={[]}
+            />
+          </section>
+        </>,
+      );
+      const first = within(screen.getByRole("region", { name: "First conversation" }));
+      const second = within(screen.getByRole("region", { name: "Second conversation" }));
+      fireEvent.click(first.getByRole("button", { name: "show more" }));
+      expect(first.getByRole("button", { name: "show less" }).getAttribute("aria-expanded")).toBe(
+        "true",
+      );
+      expect(second.getByRole("button", { name: "show more" }).getAttribute("aria-expanded")).toBe(
+        "false",
+      );
     });
 
     test("is still shown, and not sent again, after its composer remounts", async () => {
@@ -1233,6 +1355,114 @@ describe("CoordinatorPanel", () => {
       await act(async () => finishFetch(gitStatus));
       await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
     });
+
+    test("returns the draft visibly when another window has already started a turn", async () => {
+      const { finishFetch, assignedSnapshot } = await sendHeldFirstPrompt();
+      const other = {
+        id: "other-window-user",
+        role: "user",
+        content: "Another window sent this",
+        parts: [{ type: "text", content: "Another window sent this" }],
+        createdAt: new Date(0).toISOString(),
+      };
+      const running = launchProjection("running", [other], 10);
+      getAgentProjection.mockImplementation(async () => running);
+      await refreshCoordinator(assignedSnapshot, 2);
+      act(() =>
+        appCommandStore(nativeAgentProjectionStore)
+          .getState()
+          .setProjection(launchSessionKey, running),
+      );
+      expect(composerText()).toBe("");
+      await act(async () => finishFetch(gitStatus));
+      expect(
+        await screen.findByText(
+          "Another turn is already active. Send the opening message when it finishes.",
+        ),
+      ).toBeTruthy();
+      expect(composerText()).toBe(prompt);
+      expect(dispatchIntent).not.toHaveBeenCalled();
+    });
+
+    test.each(["held", "authentication", "connection error"] as const)(
+      "returns ownership of the ready draft on %s",
+      async (gate) => {
+        const { finishFetch, assignedSnapshot } = await sendHeldFirstPrompt();
+        const view =
+          gate === "held"
+            ? {
+                ...assignedSnapshot,
+                workspace: { ...assignedSnapshot.workspace, lifecycleState: "paused" as const },
+              }
+            : assignedSnapshot;
+        assignAgent.mockResolvedValueOnce(view);
+        if (gate === "authentication") {
+          getAgentProjection.mockImplementation(async () => ({
+            ...launchProjection("idle"),
+            readiness: { state: "authentication-required", message: "Sign in" },
+          }));
+        } else if (gate === "connection error") {
+          getAgentProjection.mockImplementation(async () => ({
+            ...launchProjection("error"),
+            connection: "error",
+          }));
+        }
+        await act(async () => finishFetch(gitStatus));
+        if (gate === "connection error") {
+          expect(
+            await screen.findByText("Reconnect before sending the opening message."),
+          ).toBeTruthy();
+          expect(draftText()).toBe(prompt);
+          getAgentProjection.mockImplementation(async () => launchProjection("idle", [], 2));
+          fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+          await screen.findByRole("textbox");
+        }
+        await waitFor(() => expect(composerText()).toBe(prompt));
+        expect(screen.getByTestId("transcript-region").textContent).not.toContain(prompt);
+        expect(dispatchIntent).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("a declined first-prompt check releases its claim without assigning", async () => {
+    let finishCheck!: (proceed: false | undefined) => void;
+    const confirmUpstreamMerge = () =>
+      new Promise<false | undefined>((resolve) => {
+        finishCheck = resolve;
+      });
+    function LaunchHarness() {
+      const { pendingLaunches, startConversation } = useCoordinatorLaunches({
+        projectId: "project-1",
+        snapshot,
+        setSnapshot: () => undefined,
+        confirmUpstreamMerge,
+      });
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            void startConversation(
+              snapshot.workspace.conversations[0]!,
+              "claude",
+              { fastMode: false },
+              openingPrompt,
+            );
+          }}
+        >
+          {pendingLaunches.size ? "Opening message pending" : "Send opening message"}
+        </button>
+      );
+    }
+    const compose = appCommandStore(nativeComposeStore);
+    compose.getState().updateDraft(launchSessionKey, { text: openingPrompt });
+    renderInAppCommandScope(<LaunchHarness />);
+    fireEvent.click(screen.getByRole("button", { name: "Send opening message" }));
+    await screen.findByRole("button", { name: "Opening message pending" });
+    await act(async () => finishCheck(false));
+    expect(screen.getByRole("button", { name: "Send opening message" })).toBeTruthy();
+    expect(assignAgent).not.toHaveBeenCalled();
+    expect(compose.getState().drafts.get(launchSessionKey)?.text).toBe(openingPrompt);
+    expect(dispatchIntent).not.toHaveBeenCalled();
   });
 
   describe("follow-up messages to the main coordinator", () => {

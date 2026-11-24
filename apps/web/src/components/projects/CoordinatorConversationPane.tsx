@@ -49,6 +49,10 @@ interface CoordinatorConversationPaneProps {
    * conversation that produced it, so another group cannot replay it into its own.
    */
   launch: PendingCoordinatorLaunch | undefined;
+  launchError?: string;
+  claimLaunch: (conversationId: string, requestId: string) => boolean;
+  clearLaunchError: (conversationId: string) => void;
+  settleLaunch: (conversationId: string, requestId: string, error?: string) => void;
   startConversation: (
     conversation: { id: string; role?: string },
     platform: AgentPlatform,
@@ -116,6 +120,10 @@ export function CoordinatorConversationPane({
   platformNotes,
   platformBadges,
   launch,
+  launchError,
+  claimLaunch,
+  clearLaunchError,
+  settleLaunch,
   startConversation,
   confirmUpstreamMerge,
   conversationBusy,
@@ -157,6 +165,16 @@ export function CoordinatorConversationPane({
     () => (assignTo ? confirmUpstreamMerge(assignTo) : Promise.resolve(undefined)),
     [assignTo, confirmUpstreamMerge],
   );
+  const claimOpeningPrompt = useCallback(
+    (requestId: string) => conversationId !== undefined && claimLaunch(conversationId, requestId),
+    [conversationId, claimLaunch],
+  );
+  const onOpeningPromptSettled = useCallback(
+    (requestId: string, error?: string) => {
+      if (conversationId) settleLaunch(conversationId, requestId, error);
+    },
+    [conversationId, settleLaunch],
+  );
   if (!conversation || !data) {
     return (
       <div className="grid h-full place-items-center text-center">
@@ -193,6 +211,15 @@ export function CoordinatorConversationPane({
     <div key={conversation.id} className="relative flex h-full min-h-0 min-w-0 flex-col">
       {/* Conversation notices stay inside this pane, including when it is hidden. */}
       <FloatingNoticeLayer independent columnRem={TRANSCRIPT_COLUMN_REM}>
+        {launchError ? (
+          <CoordinatorBanner
+            tone="error"
+            label="Opening message could not be sent"
+            onDismiss={() => clearLaunchError(conversation.id)}
+          >
+            {launchError}
+          </CoordinatorBanner>
+        ) : null}
         {conversation.startupError ? (
           <CoordinatorStartupFailure
             title={conversation.title}
@@ -288,7 +315,9 @@ export function CoordinatorConversationPane({
               emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
               onAssignPlatform={platform ? undefined : onAssignPlatform}
               beforeSend={side ? undefined : beforeSend}
-              {...(launch ? { initialPrompt: launch.prompt } : {})}
+              coordinatorOpeningPrompt={launch}
+              claimCoordinatorOpeningPrompt={claimOpeningPrompt}
+              onCoordinatorOpeningPromptSettled={onOpeningPromptSettled}
               {...(launch?.ready
                 ? {
                     initialAgentModel: launch.modelId,

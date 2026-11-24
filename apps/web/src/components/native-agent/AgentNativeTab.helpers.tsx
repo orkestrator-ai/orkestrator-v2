@@ -1,3 +1,4 @@
+import type { CoordinatorOpeningPrompt } from "./startup-prompt-preview";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
@@ -386,7 +387,7 @@ export function UnassignedNativeAgentComposer({
    * The first prompt, while its owner still holds it. It is drawn as sent and
    * the composer shows none of the draft, which stays stored until it settles.
    */
-  sentPrompt?: string;
+  sentPrompt?: CoordinatorOpeningPrompt;
   onSend: (
     platform: AgentPlatform,
     prompt: string,
@@ -991,7 +992,12 @@ export function UnassignedNativeAgentComposer({
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       {sentPrompt !== undefined ? (
-        <SentFirstPrompt platform={platform} text={sentPrompt} attachments={draft.attachments} />
+        <SentFirstPrompt
+          platform={platform}
+          sessionKey={sessionKey}
+          prompt={sentPrompt}
+          attachments={draft.attachments}
+        />
       ) : null}
       <NativeComposeDock
         centered={!promptSent}

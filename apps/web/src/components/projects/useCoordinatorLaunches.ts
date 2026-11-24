@@ -1,9 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { coordinatorRuntimeId, type CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
-import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
-import { createSessionKey } from "@/lib/utils";
-import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
+import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
+import type { CoordinatorOpeningPrompt } from "@/components/native-agent/startup-prompt-preview";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
 /** What the composer chose for a conversation's first turn. */
@@ -15,9 +13,8 @@ export interface CoordinatorLaunchOptions {
   executionProfileId?: string;
 }
 
-export interface PendingCoordinatorLaunch extends CoordinatorLaunchOptions {
-  conversationId: string;
-  prompt: string;
+export interface PendingCoordinatorLaunch
+  extends CoordinatorLaunchOptions, CoordinatorOpeningPrompt {
   /**
    * The upstream check is over and the agent is bound, so the tab may send it.
    * Until then the prompt is only drawn, whatever binds the conversation.
@@ -35,46 +32,7 @@ interface UseCoordinatorLaunchesOptions {
 
 const NO_LAUNCHES: ReadonlyMap<string, PendingCoordinatorLaunch> = new Map();
 
-/**
- * Whether a held first prompt is finished with: its turn has been seen, or its
- * conversation closed, so no tab will ever consume it. Either half of the turn
- * is enough: a turn that has started, or a message already in the transcript.
- * A slow first read shows neither, which is precisely when the prompt still has
- * to be held. Only phases a turn produces count: the first read of a new session
- * is the backend's `recovering` placeholder while the provider mapping settles,
- * and an `error` with no transcript is a failed start. Releasing on either
- * dropped the prompt before it was ever sent.
- */
-function launchFinished(
-  conversationId: string,
-  snapshot: CoordinatorSnapshot,
-  projections: ReadonlyMap<string, NativeAgentSessionProjection>,
-): boolean {
-  const conversation = snapshot.workspace.conversations.find((item) => item.id === conversationId);
-  if (!conversation || conversation.closedAt) return true;
-  // The conversation's own tab id, never a reconstructed one: the workspace
-  // assigns it, and a key that does not match leaves the prompt held for good.
-  const projection = projections.get(
-    createSessionKey(
-      coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
-      conversation.tabId,
-    ),
-  );
-  if (!projection) return false;
-  const phase = projection.turn.phase;
-  return (
-    phase === "running" ||
-    phase === "blocked" ||
-    phase === "cancelling" ||
-    projection.messages.length > 0
-  );
-}
-
-/**
- * Each conversation's first prompt, from the send until its turn exists: while
- * the main coordinator's upstream check runs, and while its agent is bound. One slot per conversation: tab groups put several composers on
- * screen, and a second first send must not take the place of one still held.
- */
+/** Owns first prompts across conversation pane remounts until their own send settles. */
 export function useCoordinatorLaunches({
   projectId,
   snapshot,
@@ -83,17 +41,32 @@ export function useCoordinatorLaunches({
 }: UseCoordinatorLaunchesOptions) {
   const nodeBackend = useScopeBackend();
   const [pendingLaunches, setPendingLaunches] = useState(NO_LAUNCHES);
-  const startingRef = useRef(new Set<string>());
-  const holdLaunch = useCallback((launch: PendingCoordinatorLaunch) => {
-    setPendingLaunches((current) => new Map(current).set(launch.conversationId, launch));
-  }, []);
-  const dropLaunch = useCallback((conversationId: string) => {
-    setPendingLaunches((current) => {
+  const [launchErrors, setLaunchErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const launchClaims = useRef(new Map<string, { requestId: string; dispatched: boolean }>());
+  const clearLaunchError = useCallback((conversationId: string) => {
+    setLaunchErrors((current) => {
       if (!current.has(conversationId)) return current;
       const remaining = new Map(current);
       remaining.delete(conversationId);
       return remaining;
     });
+  }, []);
+  const claimLaunch = useCallback((conversationId: string, requestId: string) => {
+    const claim = launchClaims.current.get(conversationId);
+    if (claim?.requestId !== requestId || claim.dispatched) return false;
+    claim.dispatched = true;
+    return true;
+  }, []);
+  const settleLaunch = useCallback((conversationId: string, requestId: string, error?: string) => {
+    if (launchClaims.current.get(conversationId)?.requestId !== requestId) return;
+    launchClaims.current.delete(conversationId);
+    setPendingLaunches((current) => {
+      if (current.get(conversationId)?.requestId !== requestId) return current;
+      const remaining = new Map(current);
+      remaining.delete(conversationId);
+      return remaining;
+    });
+    if (error) setLaunchErrors((current) => new Map(current).set(conversationId, error));
   }, []);
   const startConversation = useCallback(
     async (
@@ -102,62 +75,58 @@ export function useCoordinatorLaunches({
       options: CoordinatorLaunchOptions,
       prompt: string,
     ) => {
-      // A pane that remounted mid-start can send again: this panel, not the
-      // pane, knows the conversation's first prompt is already on its way.
-      if (startingRef.current.has(conversation.id)) return;
-      startingRef.current.add(conversation.id);
-      const launch = { conversationId: conversation.id, prompt, ready: false, ...options };
-      let started = false;
+      const { id } = conversation;
+      if (launchClaims.current.has(id)) return;
+      const requestId = crypto.randomUUID();
+      launchClaims.current.set(id, { requestId, dispatched: false });
+      clearLaunchError(id);
+      const launch = {
+        requestId,
+        text: prompt,
+        createdAt: new Date().toISOString(),
+        ready: false,
+        ...options,
+      };
       try {
-        // Held before the upstream check, so the prompt is drawn while the
-        // check runs and by every remount of the pane meanwhile. A side
-        // conversation has no check, so its prompt is held once it is bound.
-        if (conversation.role !== "side") holdLaunch(launch);
-        if ((await confirmUpstreamMerge(conversation)) === false) return;
-        const next = await nodeBackend.assignCoordinatorConversationAgent(
-          projectId,
-          conversation.id,
-          platform,
-        );
-        // Held only until the assigned tab mounts and consumes them. They are not
-        // durable state: the backend owns the conversation, and a reload before
-        // the first dispatch legitimately returns the user to the composer with
-        // their draft rather than replaying a prompt that was never sent.
-        started = true;
-        holdLaunch({ ...launch, ready: true });
+        if (conversation.role !== "side") {
+          setPendingLaunches((current) => new Map(current).set(id, launch));
+        }
+        if ((await confirmUpstreamMerge(conversation)) === false) {
+          settleLaunch(id, requestId);
+          return;
+        }
+        if (launchClaims.current.get(id)?.requestId !== requestId) return;
+        const next = await nodeBackend.assignCoordinatorConversationAgent(projectId, id, platform);
+        if (launchClaims.current.get(id)?.requestId !== requestId) return;
+        setPendingLaunches((current) => new Map(current).set(id, { ...launch, ready: true }));
         setSnapshot(next);
-      } finally {
-        startingRef.current.delete(conversation.id);
-        if (!started) dropLaunch(conversation.id);
+      } catch (error) {
+        settleLaunch(
+          id,
+          requestId,
+          error instanceof Error ? error.message : "This conversation could not be started.",
+        );
       }
     },
-    [confirmUpstreamMerge, dropLaunch, holdLaunch, nodeBackend, projectId, setSnapshot],
+    [clearLaunchError, confirmUpstreamMerge, nodeBackend, projectId, setSnapshot, settleLaunch],
   );
-  // One id at a time, so the selector answers a stable value however often the
-  // projections change; releasing it re-renders, which finds the next.
-  const finishedId = useNativeAgentProjectionStore((state) => {
-    if (!snapshot) return null;
-    for (const [conversationId, launch] of pendingLaunches) {
-      // Its start settles it: this is another window's turn.
-      if (!launch.ready) continue;
-      if (launchFinished(conversationId, snapshot, state.projections)) return conversationId;
+
+  // A closed conversation has no pane left to settle its prompt.
+  useEffect(() => {
+    if (!snapshot) return;
+    const openIds = new Set(
+      snapshot.workspace.conversations.filter((item) => !item.closedAt).map((item) => item.id),
+    );
+    for (const [id, { requestId }] of Array.from(launchClaims.current)) {
+      if (!openIds.has(id)) settleLaunch(id, requestId);
     }
-    return null;
-  });
-  /*
-   * Held until the turn is observed, not until the tab has rendered once.
-   *
-   * The agent tab dispatches an opening prompt only after its first
-   * authoritative read, so dropping the prompt on the next render — which the
-   * snapshot poll triggers within a second or two — raced that read and left
-   * the text sitting in the composer unsent. Evidence of the turn is the
-   * authoritative signal, and re-dispatch is safe in the meantime because the
-   * opening submit carries a deterministic idempotency key.
-   */
-  if (finishedId !== null) {
-    const remaining = new Map(pendingLaunches);
-    remaining.delete(finishedId);
-    setPendingLaunches(remaining);
-  }
-  return { pendingLaunches, startConversation };
+  }, [snapshot, settleLaunch]);
+  return {
+    pendingLaunches,
+    launchErrors,
+    startConversation,
+    claimLaunch,
+    settleLaunch,
+    clearLaunchError,
+  };
 }

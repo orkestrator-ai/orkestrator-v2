@@ -1013,6 +1013,17 @@ comment.
 - *Each machine uses its own key.* A build running on a machine that is not
   connected to Linear says so in its prompt; no key or file crosses a node link.
 
+**Outstanding live check.** Linear files have run only against a faked Linear
+API and file host; agents may not use the user's Linear workspace or key. Not
+yet observed on real Linear: whether the file host accepts a personal API key
+(Linear's documentation shows only an OAuth bearer token), whether it redirects
+downloads, and whether signed links cover files in descriptions, comments and
+attachments. The check is task 3 of
+[8174](../todo/cross-cutting/8174-linear-board-labels-and-merged-label-live-checks.md),
+which also says what to do if the file host refuses the key. Its steps are in
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+item "8174 task 3".
+
 ### Merged builds label their issue
 
 When a build started from a Linear issue (pipeline source `linear`) has its

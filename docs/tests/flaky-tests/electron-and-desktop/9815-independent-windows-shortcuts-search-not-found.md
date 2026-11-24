@@ -42,3 +42,26 @@ the accessibility tree, and under the full suite's load that took longer
 than the 5 s assertion budget. Nothing points at the shared backend or the
 connection code, but the next failure should keep its trace before that is
 ruled out.
+
+## Recurrence and cause (2026-11-24)
+
+The Electron qualification failed the same step on `main` at `a2609f28b` (run
+45196609459, 2026-11-23; also in run 43840642859). `mise run flaky:recurrence
+-- 9815 --base a2609f28b --registry-ref origin/main` answered "open".
+
+The run's log and screenshot answer the hypothesis above: the search box is
+drawn and holds the caret, but the "GitHub CLI not found" alert was open too.
+An alert dialog hides the rest of the page from role queries, so the box was
+"not found". The startup-dialog handler did run ("found ... Continue without
+GitHub CLI, intercepting action"), but the shortcuts dialog's overlay covers
+that button, so its click never landed and Playwright waited for it to hide
+for the rest of the 30 s.
+
+## Fix (2026-11-24)
+
+`dismissStartupDialogsOnPage` (`e2e/agent-testing/electron-startup-dialogs.ts`)
+falls back to a dispatched click when the pointer click does not land.
+
+- **Reproduced:** no (the alert's timing against the menu item); the handler's
+  fallback is covered by `electron-startup-dialogs.test.ts`.
+- **Stays open** until the Electron qualification passes the step.

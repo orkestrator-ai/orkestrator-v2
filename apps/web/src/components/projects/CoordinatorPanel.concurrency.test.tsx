@@ -222,8 +222,18 @@ mock.module("@/components/native-agent", () => ({
     <div
       data-testid="native-agent"
       data-tab-id={props.tabId}
-      data-initial-prompt={props.initialPrompt ?? ""}
+      data-initial-prompt={props.coordinatorOpeningPrompt?.text ?? ""}
     >
+      {props.coordinatorOpeningPrompt && !props.onAssignPlatform ? (
+        <button
+          type="button"
+          onClick={() =>
+            props.onCoordinatorOpeningPromptSettled!(props.coordinatorOpeningPrompt!.requestId)
+          }
+        >
+          {`Settle in ${props.tabId}`}
+        </button>
+      ) : null}
       {props.onAssignPlatform ? (
         <button
           type="button"
@@ -317,7 +327,7 @@ describe("first sends in two tab groups", () => {
     return { first, second };
   };
 
-  test("each keeps its own prompt until its own turn is observed", async () => {
+  test("each keeps its own prompt until its own send settles", async () => {
     const { first, second } = unassignedSides();
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
@@ -329,27 +339,35 @@ describe("first sends in two tab groups", () => {
     await waitFor(() => expect(promptOf(second.tabId)).toBe("First prompt for tab-side-2"));
     expect(promptOf(first.tabId)).toBe("First prompt for tab-side-1");
 
-    // Each is released by its own observation and by nothing else.
+    // A turn in either conversation releases neither prompt.
     setPhase(first, "running");
+    setPhase(second, "idle", [{ id: "opening", role: "user", text: "First prompt" }]);
+    expect(promptOf(first.tabId)).toBe("First prompt for tab-side-1");
+    expect(promptOf(second.tabId)).toBe("First prompt for tab-side-2");
+
+    // Each is released by its own settlement and by nothing else.
+    fireEvent.click(await screen.findByRole("button", { name: "Settle in tab-side-1" }));
     await waitFor(() => expect(promptOf(first.tabId)).toBe(""));
     expect(promptOf(second.tabId)).toBe("First prompt for tab-side-2");
-    setPhase(second, "idle", [{ id: "opening", role: "user", text: "First prompt" }]);
+    fireEvent.click(await screen.findByRole("button", { name: "Settle in tab-side-2" }));
     await waitFor(() => expect(promptOf(second.tabId)).toBe(""));
+    expect(promptOf(first.tabId)).toBe("");
   });
 
-  test("both observed in one update release together", async () => {
+  test("both settled in one update release together", async () => {
     const { first, second } = unassignedSides();
     renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
     await screen.findByRole("button", { name: "Send in tab-side-1" });
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Send in tab-side-2" }));
-    await waitFor(() => expect(promptOf(second.tabId)).toBe("First prompt for tab-side-2"));
-    await waitFor(() => expect(promptOf(first.tabId)).toBe("First prompt for tab-side-1"));
+    const settleFirst = await screen.findByRole("button", { name: "Settle in tab-side-1" });
+    const settleSecond = await screen.findByRole("button", { name: "Settle in tab-side-2" });
+    expect(promptOf(first.tabId)).toBe("First prompt for tab-side-1");
+    expect(promptOf(second.tabId)).toBe("First prompt for tab-side-2");
 
     act(() => {
-      const store = appCommandStore(nativeAgentProjectionStore).getState();
-      store.setProjection(sessionKeyOf(first), projectionOf(first, "running"));
-      store.setProjection(sessionKeyOf(second), projectionOf(second, "running"));
+      settleFirst.click();
+      settleSecond.click();
     });
     await waitFor(() => {
       expect(promptOf(first.tabId)).toBe("");

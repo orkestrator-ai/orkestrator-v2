@@ -65,7 +65,8 @@ mkdir -p "$BINARIES_DIR"
 
 # Download and extract
 TEMP_DIR=$(mktemp -d)
-curl -fsSL "$BUN_URL" -o "$TEMP_DIR/bun.zip"
+# A CI runner's DNS can be down for a moment, which `--retry` alone does not cover.
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "$BUN_URL" -o "$TEMP_DIR/bun.zip"
 printf '%s  %s\n' "$BUN_SHA" "$TEMP_DIR/bun.zip" | shasum -a 256 -c -
 unzip -q "$TEMP_DIR/bun.zip" -d "$TEMP_DIR"
 

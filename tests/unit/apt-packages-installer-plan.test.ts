@@ -66,7 +66,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 case "$cmd" in
-    update) [ -e "$dir/update-fails" ] && exit 100; exit 0 ;;
+    update)
+        # How many more updates fail; empty means every one.
+        [ -e "$dir/update-fails" ] || exit 0
+        left=$(cat "$dir/update-fails")
+        [ "$left" = 0 ] && exit 0
+        [ -n "$left" ] && echo $((left - 1)) > "$dir/update-fails"
+        exit 100 ;;
     clean) exit 0 ;;
     install) ;;
     *) exit 2 ;;
@@ -153,6 +159,7 @@ function sandbox(input: {
     ["/root/", `${root}/root/`],
     ["/etc/orkestrator/", `${root}/etc/orkestrator/`],
     ["/run/orkestrator-network/", `${root}/run/orkestrator-network/`],
+    ["APT_UPDATE_RETRY_DELAYS=(5 15 30)", "APT_UPDATE_RETRY_DELAYS=(0.01 0.01 0.01)"],
     ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", `PATH=${stubs}:/usr/sbin:/usr/bin:/sbin:/bin`],
   ] as const) {
     // A rewrite that no longer matches would test the host instead.
@@ -275,12 +282,25 @@ describe.skipIf(skipInstallerPlan)("orkestrator-apt-install after its argument c
     });
   }
 
-  test("an unreachable archive is status 5", () => {
+  const updates = (box: Sandbox) =>
+    box.aptGetCalls().filter((call) => call.endsWith(" update")).length;
+
+  test("an unreachable archive is status 5, after its bounded retries", () => {
     const box = sandbox({ archive: ["hello"] });
     box.setRecords(GATEWAY);
     box.write("update-fails", "");
     expect(install(box, "hello").code).toBe(5);
+    expect(updates(box)).toBe(4);
     expect(box.installed()).toEqual([]);
+  });
+
+  test("an archive address the gateway does not hold yet costs a retry, not the install", () => {
+    const box = sandbox({ archive: ["hello"] });
+    box.setRecords(GATEWAY);
+    box.write("update-fails", "2");
+    expect(install(box, "hello").code).toBe(0);
+    expect(updates(box)).toBe(3);
+    expect(box.installed()).toEqual(["hello"]);
   });
 
   test("a name the archive does not hold exactly is refused", () => {

@@ -1011,7 +1011,12 @@ describe("a prompt shown while its preflight runs", () => {
 
       await waitFor(() => expect(beforeSend).toHaveBeenCalledTimes(1));
       expect(transcript().textContent).toContain("/review");
-      expect(transcript().querySelector('img[src^="data:image/png"]')).toBeTruthy();
+      // The row is drawn at once; its image resolves in an effect after that.
+      await waitFor(() =>
+        expect(
+          transcript().querySelector('img[src^="data:image/png"]') instanceof HTMLImageElement,
+        ).toBe(true),
+      );
       expect(composerText()).toBe("");
       expect(screen.queryByTestId("compose-image-attachment") === null).toBe(true);
 

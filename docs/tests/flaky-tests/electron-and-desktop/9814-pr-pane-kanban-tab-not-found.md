@@ -40,3 +40,43 @@ row. A tiling display can refuse that size, as it narrows the window in flake
 and a narrower project panel may not show the Kanban tab by that name. The
 next failure should record the window's content size and the project panel's
 role tree before the click.
+
+## Recurrence and likely cause (2026-11-24)
+
+The weekly Electron qualification failed this test on `main` at `a2609f28b`
+(run 45196609459, 2026-11-23) and in the two earlier runs whose logs were read
+(43869578513 and 43840642859, both 2026-11-16). `mise run flaky:recurrence -- 9814 --base
+a2609f28b --registry-ref origin/main` answered "open".
+
+The run kept its screenshot and trace:
+
+- The window is 1440 pixels wide, so a tiling display refusing the size is not
+  the cause on CI.
+- The click on the project landed (its hover card is open), yet the workspace
+  shows "Recent projects": no project is selected.
+- The renderer logged `run-commands.read-failed`, a read made only once an
+  environment is selected. So the project and its home had been selected, and
+  the selection was then cleared.
+
+That fits a race in the product, which is real on its own.
+`useEnvironments`' `loadEnvironments` replaced a project's environments with
+the list it had read. A list read that began before the project home was
+ensured does not hold the home. Installing it removed the home from the store,
+`startEnvironmentCleanupSelectionSync` read that as the home's deletion, and
+`activateProjectForEnvironmentCleanup` left the project. `createEnvironment`
+was already fenced against this; the project home was not. A user on a slow
+machine who opens a project while its list is loading would see it close.
+
+## Fix (2026-11-24)
+
+`loadEnvironments` (`apps/web/src/hooks/useEnvironments.ts`) keeps an
+environment that entered the store while the read was in flight and is absent
+from its answer. A real deletion is announced on its own.
+
+- **Reproduced:** yes, in
+  `apps/web/src/hooks/useEnvironments.scopes.test.tsx` (a list answer held
+  until the home was ensured and selected): the home and the selection were
+  lost before the fix and are kept after it. A second test shows a later read
+  still removes a deleted environment. The Electron spec itself passes
+  headless on this host with and without the fix.
+- **Stays open** until the Electron qualification passes the spec on Xvfb.

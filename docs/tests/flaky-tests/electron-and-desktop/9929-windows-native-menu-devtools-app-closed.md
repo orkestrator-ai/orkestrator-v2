@@ -74,3 +74,22 @@ timeout or retry was changed for this record.
 ## Note, 2026-11-15 (no fix, case stays open)
 
 `application-menu-electron.spec.ts` now waits on the `devtools-closed` event instead of polling after `closeDevTools()` (see [9935](9935-linux-native-menu-devtools-open-poll.md)), but the recorded failure is the Electron process dying with a crashpad `not connected` line at the close call, which a different wait cannot address. It was seen only on `windows-latest` and cannot be reproduced or run on this Linux host. It stays open for the evidence listed under "Next evidence".
+
+## Recurrences (2026-11-23)
+
+Two more, both `Native menu (windows-latest)`, repetition 4 of 5
+(`-repeat3`), one failed and 14 passed, with the same
+`electronApplication.evaluate: Target page, context or browser has been
+closed` and the same last crashpad line. The failing call is now the
+`devtools-closed` evaluate at line 100.
+
+| Run | Branch | Head | Merge base with `main` |
+| --- | --- | --- | --- |
+| 45193487343 | `upgrade-packages-0a3b6266bb77-r1` (#2547) | `6814d3aec` | `307d19317` |
+| 45188273227 | `environments-domain-refactor-9cd761aba937-r1` (#2545) | `617551ce6` | `b8473d21e` |
+
+`mise run flaky:recurrence -- 9929 --base a2609f28b --registry-ref origin/main`
+answered "open". No other job of either run failed; the second run's macOS
+job was cancelled. The artifacts hold `error-context.md` and `trace.zip` but no
+exit code or crash dump, so the question under "Next evidence" is still open.
+Nothing was changed.

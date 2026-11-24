@@ -65,7 +65,11 @@ for it takes any arguments. Root enforces every rule, in this order:
    after 15 minutes waiting). Without it two installs could both pass the
    checks below against the same state, and the second could then remove what
    the first installed.
-5. `apt-get update` (exit 5 when the archive is unreachable), then an exact
+5. `apt-get update`, tried again after 5, 15 and 30 seconds when it fails:
+   under Restricted the archive's CDN name can answer with an address the
+   gateway has not seen yet, which is rejected at once, and a later lookup
+   usually returns one it holds (exit 5 when the archive stays unreachable).
+   Then an exact
    name check with `apt-cache pkgnames`, then a simulated install whose `Inst`
    and `Remv` lines are checked against the denylist (exit 3), then the
    install, itself run with `--no-remove` (exit 6 on failure).

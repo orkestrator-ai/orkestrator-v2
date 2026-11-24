@@ -44,6 +44,8 @@ APT_PACKAGES_MAX=32
 LOCK_FILE=/root/.orkestrator-apt-install.lock
 LOCK_WAIT_SECONDS=900
 APT_NAME_MAX=100
+# Seconds before each further `apt-get update` when one fails.
+APT_UPDATE_RETRY_DELAYS=(5 15 30)
 # Packages that change the container boundary: privilege grants, the
 # firewall, and remote login. Keep in step with APT_PACKAGE_DENYLIST in
 # packages/protocol/src/apt-packages.ts (tests/unit/apt-packages-installer.test.ts).
@@ -149,7 +151,22 @@ run_apt() {
 APT_OPTIONS=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=120)
 
 echo "Updating the package lists from Debian's archive"
-if ! run_apt apt-get "${APT_OPTIONS[@]}" -q --error-on=any update; then
+# Under Restricted the gateway opens the addresses deb.debian.org resolved to
+# when it last looked, and a CDN name can answer with another one: that
+# connection is rejected at once, and apt's own retries reuse the address. A
+# later run looks the name up again, so wait past the record's short TTL.
+updated=0
+for delay in 0 "${APT_UPDATE_RETRY_DELAYS[@]}"; do
+    if [ "$delay" != 0 ]; then
+        echo "Debian's archive could not be reached; trying again in ${delay}s"
+        sleep "$delay"
+    fi
+    if run_apt apt-get "${APT_OPTIONS[@]}" -q --error-on=any update; then
+        updated=1
+        break
+    fi
+done
+if [ "$updated" = 0 ]; then
     echo "orkestrator-apt-install: Debian's archive could not be reached (deb.debian.org)" >&2
     exit 5
 fi

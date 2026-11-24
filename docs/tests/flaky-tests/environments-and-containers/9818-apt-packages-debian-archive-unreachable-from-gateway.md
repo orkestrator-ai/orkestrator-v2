@@ -2,7 +2,7 @@
 
 - **ID:** 9818
 - **Status:** open
-- **Date observed:** 2026-11-14 (first), 2026-11-20 (latest)
+- **Date observed:** 2026-11-14 (first), 2026-11-23 (latest)
 - **Test:** `declared Debian packages (to-do 7770) > a restricted gateway runtime installs a declared package and refuses denied ones`
 - **File:** `apps/backend/tests/container-live-apt-packages.test.ts`
 - **Host:** GitHub Actions, workflow "Container live qualification", step
@@ -47,3 +47,40 @@ record the gateway's network status (`resolvedDomains`, `refusals`) and the
 address `apt-get` tried, which separates the two.
 
 No test, wait or assertion was changed.
+
+## Recurrences (2026-11-23), and the address apt-get tried
+
+`mise run flaky:recurrence -- 9818 --base 5239d8a33 --registry-ref origin/main`
+answered "open. Record the failure as a recurrence".
+
+| Run, job | Head | Architecture | Failed assertion |
+| --- | --- | --- | --- |
+| 45201486540, 137785857385 | `1581ea949` (#2549, base `5239d8a33`) | arm64 | `sud.` refusal (line 205) |
+| 45188273265, 137739505461 | `617551ce6` (#2545, base `b8473d21e`) | x64 | `ssh` refusal, `would bring in openssh-server` (line 205) |
+
+Both logs name the address this time: `Could not connect to
+deb.debian.org:443 (146.75.30.132). - connect (113: No route to host)` and the
+same for `151.101.22.132`. Error 113 is `EHOSTUNREACH`, which is what the
+gateway's final rule answers (`REJECT --reject-with icmp-admin-prohibited`,
+`docker/init-firewall.sh`). An outage of the archive would time out or be
+refused by it. Earlier installs in the same container had succeeded, so the
+name had returned another address before. This confirms the rotation half of
+the hypothesis above: the CDN answered with an address the gateway's set did
+not hold.
+
+## Change (2026-11-24)
+
+A user meets the same failure as a setup that fails with `apt-packages`
+unreachable, so the change is in the product: `orkestrator-apt-install`
+(`docker/orkestrator-apt-install.sh`) tries `apt-get update` again after 5, 15
+and 30 seconds. apt's own retries reuse the address; a later run looks the
+name up again. An archive that stays unreachable still ends in exit 5.
+
+- **Reproduced:** no live run. `tests/unit/apt-packages-installer-plan.test.ts`
+  pins the retry (two failing updates, then an install) and its bound (four
+  updates, then exit 5).
+- **Not changed:** the gateway still opens only the addresses its own lookups
+  returned. Adding the addresses its DNS filter hands out would remove the
+  cause, and changes the firewall, so it is left for a decision.
+
+The case stays open until the live job has run with the change.

@@ -44,6 +44,8 @@ const CONCURRENT = process.argv[3] === "concurrent";
 const STALL = process.argv[4] === "stall";
 /** How long a turn may take once its model request is seen. */
 const TURN_DEADLINE_MS = positiveInteger(process.argv[5]) ?? 60_000;
+/** How long a bridge may take to answer its own token, cold start included. */
+const BRIDGE_START_DEADLINE_MS = 30_000;
 /** How long a child has after SIGTERM, and again after SIGKILL, before cleanup moves on. */
 const CHILD_STOP_GRACE_MS = 2_000;
 /** The one ambient variable a CLI keeps, read before the environment is cleared. */
@@ -209,7 +211,12 @@ async function createFixture(): Promise<Fixture> {
           onModelCall = undefined;
           resolve(Math.round(performance.now() - startedAt));
         };
-        void start();
+        // A start that fails will never call the model.
+        Promise.resolve(start()).catch((error: unknown) => {
+          clearTimeout(timer);
+          onModelCall = undefined;
+          reject(error);
+        });
       });
     },
     isolatedEnv,
@@ -446,8 +453,27 @@ async function compareSdk(fx: Fixture, name: string, cwd: string, extra: Partial
   };
 }
 
-/** A real bridge process on a port of its own. */
+/**
+ * A real bridge process on a port of its own. The port is released before the
+ * bridge binds it, so another process (the other bridge variant included) can
+ * take it first: that start is retried on a fresh port. Health is asked with
+ * this bridge's token on a route that checks it, because whatever took the
+ * port may answer the open health route too, and a prompt refused by it would
+ * only show as a model request that never comes.
+ */
 async function startBridge(fx: Fixture, cwd: string) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await startBridgeOnce(fx, cwd);
+    } catch (error) {
+      if (!(error instanceof PortTakenError) || attempt >= 5) throw error;
+    }
+  }
+}
+
+class PortTakenError extends Error {}
+
+async function startBridgeOnce(fx: Fixture, cwd: string) {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = probe.port as number;
   probe.stop(true);
@@ -461,7 +487,11 @@ async function startBridge(fx: Fixture, cwd: string) {
       CWD: cwd,
       CLAUDE_BRIDGE_TOKEN: token,
     },
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderrTail = "";
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString()).slice(-4_000);
   });
   fx.bridgeChildren.add(child);
   child.once("exit", () => fx.bridgeChildren.delete(child));
@@ -470,15 +500,36 @@ async function startBridge(fx: Fixture, cwd: string) {
       ...init,
       headers: { "content-type": "application/json", "X-Orkestrator-Claude-Token": token },
     });
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const healthy = await call("/global/health").then(
-      (response) => response.ok,
-      () => false,
+  const startedAt = performance.now();
+  while (performance.now() - startedAt < BRIDGE_START_DEADLINE_MS) {
+    const status = await call("/global/auth-check").then(
+      (response) => response.status,
+      () => undefined,
     );
-    if (healthy) break;
+    // A foreign server answered; ours cannot have the port.
+    if (status === 401) {
+      child.kill();
+      throw new PortTakenError(`Port ${port} belongs to another server`);
+    }
+    if (status === 200 && child.exitCode === null) return { call, stop: () => child.kill() };
+    if (child.exitCode !== null || child.signalCode !== null) {
+      // Let the bind failure it printed on the way out arrive.
+      await Bun.sleep(250);
+      const taken = /Is port \d+ in use\?|EADDRINUSE/.test(stderrTail);
+      const message = `The bridge exited before it answered: ${stderrTail}`;
+      throw taken ? new PortTakenError(message) : new Error(message);
+    }
     await Bun.sleep(25);
   }
-  return { call, stop: () => child.kill() };
+  child.kill();
+  throw new Error(`The bridge did not answer within ${BRIDGE_START_DEADLINE_MS} ms: ${stderrTail}`);
+}
+
+/** The prompt's acceptance; a refusal is reported at once, not as a missing model request. */
+async function accepted(response: Promise<Response>): Promise<Response> {
+  const answer = await response;
+  if (!answer.ok) throw new Error(`Prompt refused: ${answer.status} ${await answer.text()}`);
+  return answer;
 }
 
 async function bridgeRun(fx: Fixture, cwd: string) {
@@ -493,20 +544,22 @@ async function bridgeRun(fx: Fixture, cwd: string) {
         body: JSON.stringify({ prompt, permissionMode: "acceptEdits", model: "haiku" }),
       });
     let answered: Promise<Response> | undefined;
-    const firstMs = await fx.untilModelCall(() => {
-      answered = send("Say ok.");
-    });
+    const firstMs = await fx.untilModelCall(() => (answered = accepted(send("Say ok."))));
     const firstStatus = (await answered!).status;
-    for (let attempt = 0; attempt < 400; attempt += 1) {
+    const settling = performance.now();
+    for (;;) {
       const state = (await (await bridge.call(`/session/${created.sessionId}`)).json()) as {
         status?: string;
       };
       if (state.status === "idle") break;
+      if (performance.now() - settling > TURN_DEADLINE_MS) {
+        throw new Error(
+          `The bridge session was still ${state.status} after ${TURN_DEADLINE_MS} ms`,
+        );
+      }
       await Bun.sleep(25);
     }
-    const followUpMs = await fx.untilModelCall(() => {
-      answered = send("Say ok again.");
-    });
+    const followUpMs = await fx.untilModelCall(() => (answered = accepted(send("Say ok again."))));
     const followUpStatus = (await answered!).status;
     return { firstMs, followUpMs, firstStatus, followUpStatus };
   } finally {

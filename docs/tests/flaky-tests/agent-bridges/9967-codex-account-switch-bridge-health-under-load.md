@@ -173,3 +173,20 @@ env -u NODE_ENV mise run test:logged -- --name account-switch-codex -- \
 ```
 
 PASS in 29.1 s. `mise run flaky:recurrence -- 9967` reported the case open.
+
+## Recurrence: CI on pull request #2554 (2026-11-24)
+
+The "Tests (backend)" job 138464329706 of run 45399580419 (head `c4506674d`,
+base `9a9b5f8df`) failed `another limit moves nothing and resends nothing`
+after 31,219.06 ms: `start_local_codex_server_cmd` failed after 15,508 ms with
+`Server on port 34921 did not become healthy`. The boot Docker reachability
+check ran at the same time again (probe image pull 1,445 ms, probes 4,403 ms
+and 3,793 ms). Rerun alone on the same runner the file passed (59.1 s).
+`mise run flaky:recurrence -- 9967 --base 9a9b5f8df --registry-ref origin/main`
+answered "open. Record the failure as a recurrence".
+
+Not reproduced on beelink2: the complete owning file passed pinned to two
+cores (`taskset -c 12,13`, 10 pass, 48.2 s) and to one (`taskset -c 12`,
+10 pass, 83.6 s). CPU starvation of the test process alone therefore does not
+produce it, which leaves the shared runner's Docker or disk work. No product
+budget was changed.

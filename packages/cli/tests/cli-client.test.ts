@@ -210,6 +210,9 @@ describe("packaged client against a real backend", () => {
             ORKESTRATOR_SCENARIO_CWD: root,
           },
           manifest,
+          // Below this file's test timeout, so a command that hangs fails as
+          // its own stage. Every stage takes well under a second.
+          60_000,
         ),
         manifest,
         cleanup: [],

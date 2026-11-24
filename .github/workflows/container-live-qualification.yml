@@ -336,6 +336,28 @@ jobs:
           ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
         run: docker image inspect "$ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE" > /dev/null && mise run test:logged -- --name preview-worker-container -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1
 
+      # The PDF case also prints the same document in a host Chromium and
+      # compares the two. That Chromium runs with its sandbox, which needs the
+      # user namespaces Ubuntu's AppArmor policy denies on the runner image
+      # ("Chromium could not start with its sandbox enabled", every x64 run
+      # since #2547). After every container suite, so none of them runs under
+      # the lifted policy.
+      - name: Allow unprivileged user namespaces for the host Chromium
+        if: ${{ !cancelled() }}
+        run: |
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user true
+
+      # The build the pinned Playwright drives; the runner image's own Chromium
+      # is another one, and the arm64 image has none.
+      - name: Install the pinned Playwright Chromium
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        run: |
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          bunx playwright install --with-deps chromium
+
       - name: Live PDF print and thumbnail in the fresh preview worker
         if: ${{ !cancelled() }}
         env:

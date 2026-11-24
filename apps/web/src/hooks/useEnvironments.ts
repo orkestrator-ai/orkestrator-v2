@@ -865,6 +865,12 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
       const node = environmentNode(scope);
       const api = environmentsApi(scope);
       const creationGeneration = getEnvironmentCreationState(node, pid).generation;
+      const heldAtRequest = new Set(
+        node.environments
+          .getState()
+          .getEnvironmentsByProjectId(pid)
+          .map((environment) => environment.id),
+      );
       if (!silent) {
         setLoading(true);
         setError(null);
@@ -881,10 +887,18 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
-          cleanupSubscriptionsRemovedByProjectSnapshot(pid, envs, scope);
-          mergeEnvironmentsForProject(
-            pid,
-            envs.map(
+          const listed = new Set(envs.map((environment) => environment.id));
+          // An environment listed here while the read was in flight (a project
+          // home ensured by opening its project, a change announcement) is
+          // newer than an answer without it. Dropping it would read as its
+          // deletion and close the project the user just opened. A real
+          // deletion is announced on its own.
+          const addedDuringRead = node.environments
+            .getState()
+            .getEnvironmentsByProjectId(pid)
+            .filter(({ id }) => !heldAtRequest.has(id) && !listed.has(id));
+          const next = [
+            ...envs.map(
               (environment) =>
                 preserveLifecycleAttemptState(
                   node,
@@ -892,8 +906,10 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
                   attemptRevisions.get(environment.id),
                 ).environment,
             ),
-            true,
-          );
+            ...addedDuringRead,
+          ];
+          cleanupSubscriptionsRemovedByProjectSnapshot(pid, next, scope);
+          mergeEnvironmentsForProject(pid, next, true);
           reconcileNodeLifecycleErrors(node);
         }
       } catch (err) {

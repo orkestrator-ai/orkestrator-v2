@@ -52,6 +52,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes xvfb xdotool imagemagick vim libgtk-3-0 libnss3 libasound2t64
+      # Some specs launch Electron or Chromium with its sandbox on, which needs
+      # the user namespaces Ubuntu's AppArmor policy denies on the runner image
+      # (Electron then aborts in its SUID helper). ci.yml lifts the same
+      # restriction on its disposable runners.
+      - name: Allow unprivileged user namespaces on the disposable runner
+        run: |
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user true
+      - name: Install the pinned Playwright Chromium
+        timeout-minutes: 12
+        run: |
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          bunx playwright install --with-deps chromium
+      # The local gateway transport spec starts the built backend and renderer.
+      - name: Build the backend and renderer
+        run: |
+          bun run --cwd apps/backend build
+          bun run --cwd apps/web build
       - name: Run the Electron suite
         env:
           ORKESTRATOR_AGENT_TEST_RUN_ID: electron-qualification

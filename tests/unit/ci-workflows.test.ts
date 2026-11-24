@@ -360,6 +360,19 @@ describe("CI workflow contracts", () => {
     const install = steps.findIndex((step) => /apt-get install .*xvfb/.test(step.run ?? ""));
     expect(install).toBeGreaterThanOrEqual(0);
     expect(install).toBeLessThan(suite);
+    // What specs in the suite need beyond Electron: a sandbox that can start,
+    // Playwright's own Chromium, and the built backend and renderer. Without
+    // them every run from the first (2026-11-15) failed the same specs.
+    for (const need of [
+      "kernel.apparmor_restrict_unprivileged_userns=0",
+      "bunx playwright install --with-deps chromium",
+      "bun run --cwd apps/backend build",
+      "bun run --cwd apps/web build",
+    ]) {
+      const step = steps.findIndex((candidate) => (candidate.run ?? "").includes(need));
+      expect(step, need).toBeGreaterThanOrEqual(0);
+      expect(step, need).toBeLessThan(suite);
+    }
     // Credential-free: no secret reaches the job.
     expect(source).not.toContain("secrets.");
   });

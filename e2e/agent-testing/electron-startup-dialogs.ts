@@ -37,8 +37,13 @@ export function dismissStartupDialogsOnPage(page: Page): void {
         // re-renders the dialog. An unbounded click then waits for the whole
         // action's timeout and fails it. After this handler resolves,
         // Playwright waits for the button to become hidden; if it remains
-        // visible, the triggering action can still time out.
-        await button.click({ timeout: 5_000 }).catch(() => undefined);
+        // visible, the triggering action can still time out. That happens when
+        // another modal was drawn over this one: its overlay takes every
+        // pointer click, so the dialog is then dismissed with a dispatched one.
+        await button
+          .click({ timeout: 5_000 })
+          .catch(() => button.dispatchEvent("click", undefined, { timeout: 1_000 }))
+          .catch(() => undefined);
       })
       .catch(() => undefined);
   }

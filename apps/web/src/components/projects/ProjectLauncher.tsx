@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { ChevronRight, FolderGit2, Plus } from "lucide-react";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
-import type { CreateEnvironmentFlowOperations } from "@/components/environments/CreateEnvironmentFlowDialog";
 import { Button } from "@/components/ui/button";
 import { useProjects } from "@/hooks/useProjects";
 import { useUIStore } from "@/stores";
@@ -124,7 +123,7 @@ export function ProjectLauncherContent({
   );
 }
 
-export function ProjectLauncher(operations: CreateEnvironmentFlowOperations) {
+export function ProjectLauncher() {
   const { projects, isLoading } = useProjects();
   const recentProjectIds = useUIStore((state) => state.recentProjectIds);
   const selectProject = useUIStore((state) => state.selectProject);
@@ -151,7 +150,6 @@ export function ProjectLauncher(operations: CreateEnvironmentFlowOperations) {
         }}
         projectId={createEnvironmentProjectId}
         projectName={projects.find((project) => project.id === createEnvironmentProjectId)?.name}
-        {...operations}
       />
     </div>
   );

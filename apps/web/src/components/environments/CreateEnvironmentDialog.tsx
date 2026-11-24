@@ -1,8 +1,5 @@
-import type {
-  CreateEnvironmentHandoff,
-  CreateEnvironmentRecovery,
-} from "@/lib/federation/workspace-request";
 import { defineScopedSlot } from "@/lib/node-scope-slots";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { agentSettingsTiers, resolvedActionDefault } from "@/lib/agent-settings";
 import { useFederation } from "@/components/federation/FederationProvider";
@@ -152,6 +149,7 @@ const log = createLogger("web.environment");
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
+const NO_OPENCODE_MODELS: CachedOpenCodeModel[] = [];
 function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | null {
   if (!Array.isArray(value)) return null;
   return value.filter((candidate): candidate is CachedOpenCodeModel => {
@@ -200,6 +198,8 @@ const MOBILE_TAB_CONTENT_CLASSES =
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 const MAX_INITIAL_PROMPT_ATTACHMENTS = 20;
+/** How long a machine switch takes before the create button says what it waits for. */
+const CONNECTING_LABEL_DELAY_MS = 400;
 /** The Build section's choice when the dialog opens: a prompt environment run as a task. */
 const DEFAULT_PROMPT_INTENT: BuildIntent = "task";
 
@@ -272,6 +272,38 @@ export interface ClaudeOptions {
   portMappings: PortMapping[];
 }
 
+function mapFeatureModels(
+  models: FeatureBuildModelState,
+  map: (selection: FeatureBuildStepSelection) => FeatureBuildStepSelection,
+): FeatureBuildModelState {
+  return {
+    build: map(models.build),
+    reviewers: models.reviewers.map((reviewer) => {
+      const selection = map(reviewer);
+      return selection === reviewer ? reviewer : { key: reviewer.key, ...selection };
+    }),
+    reviewPreparation: map(models.reviewPreparation),
+    address: map(models.address),
+    verify: map(models.verify),
+    pr: map(models.pr),
+    resolve: map(models.resolve),
+  };
+}
+
+/** `value` once it has held for `delayMs`; `null` at once when it goes. */
+function useDelayed(value: string | null, delayMs: number): string | null {
+  const [shown, setShown] = useState<string | null>(null);
+  useEffect(() => {
+    if (value === null) return;
+    const timer = setTimeout(() => setShown(value), delayMs);
+    return () => {
+      clearTimeout(timer);
+      setShown(null);
+    };
+  }, [delayMs, value]);
+  return shown === value ? shown : null;
+}
+
 interface CreateEnvironmentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -300,26 +332,37 @@ interface CreateEnvironmentDialogProps {
    */
   onCreateFeatureBuild?: (input: CreateFeatureBuildInput) => Promise<void | boolean>;
   /**
-   * The machines the environment can be created on, this dialog's own
-   * (`current`) first (`useCreateEnvironmentMachines`). The header's machine
-   * dropdown lists them while several machines are in view.
+   * The machines the environment can be created on, the one the dialog opened
+   * on (`current`) included (`useCreateEnvironmentMachines`). The header's
+   * machine dropdown lists them while several machines are in view.
    */
   machines?: readonly CreateEnvironmentMachine[];
-  /** Form data carried by the request that opened this dialog. */
-  handoff?: CreateEnvironmentHandoff;
-  recovery?: CreateEnvironmentRecovery;
-  /** Moves the form to another machine, returning whether the switch was accepted. */
-  onSelectMachine?: (
-    machine: CreateEnvironmentMachine,
-    form: CreateEnvironmentHandoff,
-    recovery: CreateEnvironmentRecovery,
-  ) => boolean;
+  /** The machine the dropdown shows; the dialog's own by default. */
+  selectedMachineKey?: string | null;
+  /** The picked machine while it is made ready; nothing can be created until it is. */
+  switchingTo?: string | null;
+  /** Changes the machine the form creates on, through the node scope around it. */
+  onSelectMachine?: (machine: CreateEnvironmentMachine) => void;
+  /**
+   * Where the prompt draft and the opening Build choice are kept: the machine
+   * and project the dialog opened on, whichever machine it creates on since.
+   */
+  draftScope?: NodeScope;
+  draftProjectId?: string | null;
+}
+
+/** The choices a machine switch carries: kept until the user makes them again. */
+interface CarriedAgent {
+  type: AgentType;
+  model: string;
+  reasoningEffort: string;
+  fastMode: boolean | undefined;
 }
 
 // Drafts are per project within a node scope, independent of transient open requests.
 const environmentDrafts = defineScopedSlot(
   "create-environment-drafts",
-  () => new Map<string, CreateEnvironmentHandoff>(),
+  () => new Map<string, string>(),
 );
 
 const pendingBuildIntents = defineScopedSlot(
@@ -339,23 +382,25 @@ export function CreateEnvironmentDialog({
   defaultPortMappings = EMPTY_PORT_MAPPINGS,
   localEnvironmentAvailable = true,
   machines,
+  selectedMachineKey,
+  switchingTo = null,
   onSelectMachine,
-  handoff,
-  recovery,
+  draftScope,
+  draftProjectId,
 }: CreateEnvironmentDialogProps) {
   const nodeBackend = useScopeBackend();
   // Browses the host of the node this component renders in.
   const pickHostPath = usePickHostPath();
   const federation = useFederation();
-  // The machine the environment is created on: this node scope's, which is
-  // another machine when the dialog opens in that machine's workspace. The
-  // sidebar opens it outside every node's provider, where it is the command
-  // scope's, as for `useScopeBackend` above.
+  // The machine the environment is created on: this node scope's. Picking
+  // another machine changes the scope around the open form. A caller outside
+  // every node's provider gets the command scope, as for `useScopeBackend`.
   const dialogScope = useScopesWithCommandFallback().scope;
-  const drafts = environmentDrafts(dialogScope);
+  const draftKey = draftProjectId === undefined ? projectId : draftProjectId;
+  const ownerScope = draftScope ?? dialogScope;
+  const drafts = useMemo(() => environmentDrafts(ownerScope), [ownerScope]);
   const buildIntentSaves = pendingBuildIntents(dialogScope);
   const configStore = dialogScope.store(useConfigStore.def);
-  const preserveSavedDraft = Boolean(handoff && projectId && drafts.has(projectId));
   const remoteMachine = useRemoteMachineView(
     dialogScope.role === "command" ? null : dialogScope.nodeId,
   );
@@ -403,7 +448,7 @@ export function CreateEnvironmentDialog({
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
   const antigravityModels = useAgentModelCatalogStore((state) => state.antigravityModels);
-  const piCatalogSeedAttemptedRef = useRef(false);
+  const piCatalogSeedAttemptedRef = useRef<NodeScope | null>(null);
   const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
   useEffect(() => {
     if (!open) return;
@@ -425,20 +470,29 @@ export function CreateEnvironmentDialog({
     if (open) hydrateCatalog();
   }, [catalogRefreshRevision, hydrateCatalog, open]);
   useAgentAccountsChanged(open ? "codex" : null, hydrateCatalog, catalogScope);
-  const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
+  // Kept with the machine and project it was read for: another's is never shown.
+  const [openCodeCache, setOpenCodeCache] = useState<{
+    scope: NodeScope;
+    projectId: string;
+    models: CachedOpenCodeModel[];
+  } | null>(null);
+  const cachedOpenCodeModels =
+    openCodeCache?.scope === catalogScope && openCodeCache.projectId === projectId?.trim()
+      ? openCodeCache.models
+      : NO_OPENCODE_MODELS;
   useEffect(() => {
     if (!open) {
-      piCatalogSeedAttemptedRef.current = false;
+      piCatalogSeedAttemptedRef.current = null;
       return;
     }
     if (
       !enabledAgentPlatforms.includes("pi") ||
       piModels.length > 0 ||
-      piCatalogSeedAttemptedRef.current
+      piCatalogSeedAttemptedRef.current === catalogScope
     ) {
       return;
     }
-    piCatalogSeedAttemptedRef.current = true;
+    piCatalogSeedAttemptedRef.current = catalogScope;
     void nodeBackend
       .ensureHostPiModelCatalog()
       .then((models) => {
@@ -647,7 +701,22 @@ export function CreateEnvironmentDialog({
   );
   const rootSetupSteps = setupRequirements?.rootSteps ?? null;
   const [environmentName, setEnvironmentName] = useState("");
-  const [worktreeBaseDir, setWorktreeBaseDir] = useState<string | null>(null);
+  // A folder belongs to the machine it was picked on.
+  const [worktreeLocations, setWorktreeLocations] = useState<ReadonlyMap<NodeScope, string>>(
+    () => new Map(),
+  );
+  const worktreeBaseDir = worktreeLocations.get(dialogScope) ?? null;
+  const setWorktreeLocation = useCallback(
+    (path: string | null) => {
+      setWorktreeLocations((previous) => {
+        const locations = new Map(previous);
+        if (path) locations.set(dialogScope, path);
+        else locations.delete(dialogScope);
+        return locations;
+      });
+    },
+    [dialogScope],
+  );
   const [launchAgent, setLaunchAgent] = useState(true);
   const [agentType, setAgentType] = useState<AgentType>(initialAgentDefaults.agent);
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(initialAgentDefaults.claudeMode);
@@ -747,25 +816,24 @@ export function CreateEnvironmentDialog({
     [enabledAgentPlatforms],
   );
   const constrainFeatureModels = useCallback(
-    (selections: FeatureBuildModelState) => {
+    (selections: FeatureBuildModelState, preserveModels = false) => {
       const fallback = featurePlatforms[0];
       if (!fallback) return selections;
-      const eligible = (selection: FeatureBuildStepSelection) =>
-        isPipelineQualifiedAgent(selection.agent) && featurePlatforms.includes(selection.agent)
+      const eligible = (selection: FeatureBuildStepSelection) => {
+        if (
+          !isPipelineQualifiedAgent(selection.agent) ||
+          !featurePlatforms.includes(selection.agent)
+        ) {
+          return resolveFeatureBuildStep({ agent: fallback }, modelCatalog);
+        }
+        const modelAvailable = modelsForAgent(modelCatalog, selection.agent).some(
+          (candidate) => candidate.id === selection.model,
+        );
+        return preserveModels || modelAvailable
           ? selection
-          : resolveFeatureBuildStep({ agent: fallback }, modelCatalog);
-      return {
-        build: eligible(selections.build),
-        reviewers: selections.reviewers.map((reviewer) => ({
-          ...reviewer,
-          ...eligible(reviewer),
-        })),
-        reviewPreparation: eligible(selections.reviewPreparation),
-        address: eligible(selections.address),
-        verify: eligible(selections.verify),
-        pr: eligible(selections.pr),
-        resolve: eligible(selections.resolve),
+          : resolveFeatureBuildStep({ agent: selection.agent }, modelCatalog);
       };
+      return mapFeatureModels(selections, eligible);
     },
     [featurePlatforms, modelCatalog],
   );
@@ -793,7 +861,8 @@ export function CreateEnvironmentDialog({
     setupRequirements?.aptPackages,
     networkAccessMode === "full" ? "full" : "restricted",
   );
-  const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
+  const [editedPorts, setEditedPorts] = useState<PortMapping[] | null>(null);
+  const portMappings = editedPorts ?? defaultPortMappings;
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
   const [mobileSection, setMobileSection] = useState<MobileSection>("prompt");
   const [mobileTabTransitionDirection, setMobileTabTransitionDirection] =
@@ -832,7 +901,7 @@ export function CreateEnvironmentDialog({
 
   useEffect(() => {
     if (!open) {
-      setCachedOpenCodeModels([]);
+      setOpenCodeCache(null);
       return;
     }
     let cancelled = false;
@@ -840,7 +909,7 @@ export function CreateEnvironmentDialog({
     // Clear data from the previous project/open cycle synchronously. An empty,
     // rejected, malformed, or late response must not leave another project's
     // model catalog or preferences visible in this dialog.
-    setCachedOpenCodeModels([]);
+    setOpenCodeCache(null);
 
     const normalizedProjectId = projectId?.trim();
     if (normalizedProjectId) {
@@ -849,7 +918,7 @@ export function CreateEnvironmentDialog({
         .then((snapshot) => {
           const models = normalizeCachedOpenCodeModels(snapshot?.models);
           if (!cancelled && snapshot && snapshot.projectId === normalizedProjectId && models) {
-            setCachedOpenCodeModels(models);
+            setOpenCodeCache({ scope: catalogScope, projectId: normalizedProjectId, models });
           }
         })
         .catch((error) => {
@@ -860,43 +929,30 @@ export function CreateEnvironmentDialog({
     return () => {
       cancelled = true;
     };
-  }, [catalogRefreshRevision, open, projectId, nodeBackend]);
+  }, [catalogRefreshRevision, catalogScope, open, projectId, nodeBackend]);
 
   const initializeBuildIntent = useEffectEvent(() => {
-    const intent = projectId
-      ? (buildIntentSaves.get(projectId)?.intent ??
-        configStore.getState().getRepositoryConfig(projectId)?.lastBuildIntent)
+    const intent = draftKey
+      ? (pendingBuildIntents(ownerScope).get(draftKey)?.intent ??
+        ownerScope.store(useConfigStore.def).getState().getRepositoryConfig(draftKey)
+          ?.lastBuildIntent)
       : undefined;
     const initialIntent = rememberedBuildIntent(intent, Boolean(onCreateFeatureBuild));
     buildIntentRef.current = initialIntent;
     setBuildIntent(initialIntent);
   });
 
-  // Each opening starts on the Build choice this project last created with.
-  // Declared before the handoff effect, which overrides it with a carried form.
+  // Each opening starts on the Build choice this project last created with. A
+  // machine switch is the same opening.
   useEffect(() => {
     if (open) initializeBuildIntent();
-  }, [open, projectId, dialogScope]);
+  }, [draftKey, open, ownerScope]);
 
-  // A handoff belongs to this opening. An empty prompt can fall back to the
-  // destination's draft, while an empty Feature description stays empty.
   useEffect(() => {
-    if (!open || !projectId) return;
-    const saved = drafts.get(projectId);
-    const form = handoff ?? saved;
-    if (!form) return;
-    setInitialPrompt(
-      recovery?.prompt ?? (form.feature || form.prompt ? form.prompt : (saved?.prompt ?? "")),
-    );
-    setEnvironmentName(recovery?.name ?? form.name);
-    // A draft that carried no choice keeps the one this opening started on.
-    const intent = form.feature ? "feature" : (form.interactionMode ?? buildIntentRef.current);
-    buildIntentRef.current = intent;
-    setBuildIntent(intent);
-    setFeatureName(form.feature?.name ?? "");
-    setFeatureAcceptanceCriteria(form.feature?.acceptanceCriteria ?? "");
-    setFeatureDeliveryPolicy(form.feature?.deliveryPolicy ?? DEFAULT_DELIVERY_POLICY);
-  }, [drafts, handoff, open, projectId, recovery]);
+    if (!open || !draftKey) return;
+    const saved = drafts.get(draftKey);
+    if (saved) setInitialPrompt(saved);
+  }, [draftKey, drafts, open]);
 
   // Focus the prompt when its section becomes active.
   useEffect(() => {
@@ -924,8 +980,8 @@ export function CreateEnvironmentDialog({
       title: "Choose where the worktree is created",
       defaultPath,
     });
-    if (chosen) setWorktreeBaseDir(chosen);
-  }, [pickHostPath, worktreeBaseDir, nodeBackend]);
+    if (chosen) setWorktreeLocation(chosen);
+  }, [pickHostPath, worktreeBaseDir, nodeBackend, setWorktreeLocation]);
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;
@@ -934,7 +990,7 @@ export function CreateEnvironmentDialog({
     promptPasteOperationRef.current = null;
     setEnvironmentType(effectiveDefaultEnvironmentType);
     setEnvironmentName("");
-    setWorktreeBaseDir(null);
+    setWorktreeLocations(new Map());
     setLaunchAgent(true);
     setAgentType(initialAgentDefaults.agent);
     setClaudeMode(initialAgentDefaults.claudeMode);
@@ -953,7 +1009,7 @@ export function CreateEnvironmentDialog({
     setPendingAttachmentOperations(0);
     attachmentDragDepthRef.current = 0;
     setNetworkAccessMode("full");
-    setPortMappings(defaultPortMappings);
+    setEditedPorts(null);
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
@@ -985,10 +1041,27 @@ export function CreateEnvironmentDialog({
     [defaultFeatureModels],
   );
 
-  const handleFeatureModelsChange = useCallback((models: FeatureBuildModelState) => {
-    setFeatureModels(models);
+  const handleFeatureModelsChange = (models: FeatureBuildModelState) => {
+    // The panel emits all rows. Preserve choices behind fallbacks for rows
+    // the user did not edit, including when another reviewer is added or removed.
+    const choices = featureModels ?? defaultFeatureModels;
+    const keep = (step: Exclude<keyof FeatureBuildModelState, "reviewers">) =>
+      models[step] === effectiveFeatureModels[step] ? choices[step] : models[step];
+    setFeatureModels({
+      build: keep("build"),
+      reviewPreparation: keep("reviewPreparation"),
+      address: keep("address"),
+      verify: keep("verify"),
+      pr: keep("pr"),
+      resolve: keep("resolve"),
+      reviewers: models.reviewers.map((row) =>
+        effectiveFeatureModels.reviewers.includes(row)
+          ? (choices.reviewers.find((choice) => choice.key === row.key) ?? row)
+          : row,
+      ),
+    });
     featureAttemptModelsRef.current = null;
-  }, []);
+  };
 
   const handleBuildIntentChange = useCallback((intent: BuildIntent) => {
     if (intent === buildIntentRef.current) return;
@@ -1005,7 +1078,7 @@ export function CreateEnvironmentDialog({
     }
     buildIntentRef.current = intent;
     setBuildIntent(intent);
-    if (intent === "feature") setWorktreeBaseDir(null);
+    if (intent === "feature") setWorktreeLocations(new Map());
   }, []);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -1340,7 +1413,7 @@ export function CreateEnvironmentDialog({
   }, []);
 
   // Read the latest defaults once per opening. A replayed mount effect must
-  // preserve the handoff and the agent selection it already applied.
+  // preserve the agent selection already applied.
   const initializedOpeningRef = useRef(false);
   useEffect(() => {
     if (!open) {
@@ -1351,7 +1424,7 @@ export function CreateEnvironmentDialog({
     initializedOpeningRef.current = true;
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
-    setPortMappings(defaultPortMappings);
+    setEditedPorts(null);
     setShowPortConfig(defaultPortMappings.length > 0);
     setEnvironmentType(effectiveDefaultEnvironmentType);
     agentSelectionTouchedRef.current = false;
@@ -1431,106 +1504,111 @@ export function CreateEnvironmentDialog({
     }
   }, [agentType, availableModels, getInitialAgentSelection, model, open, reasoningEffort]);
 
+  // The target machine changed under the open form, which is otherwise left as
+  // it is. These follow the effects that apply a machine's defaults and limits,
+  // and override them: the environment type and agent the user had stay where
+  // the new machine has them, and come back if a later one does.
+  const carriedTypeRef = useRef<EnvironmentType | null>(null);
+  const carriedAgentRef = useRef<CarriedAgent | null>(null);
+  const appliedTargetRef = useRef<{
+    scope: NodeScope;
+    projectId: string | null | undefined;
+  } | null>(null);
+  const carryFormToTarget = useEffectEvent(() => {
+    const carriedType = (carriedTypeRef.current ??= environmentType);
+    carriedAgentRef.current ??= { type: agentType, model, reasoningEffort, fastMode };
+    agentSelectionTouchedRef.current = true;
+    if (carriedType === "local" ? localEnvironmentAvailable : dockerAvailable) {
+      setEnvironmentType(carriedType);
+    }
+    // Terminal or native is each machine's own setting.
+    setClaudeMode(initialAgentDefaults.claudeMode);
+    setOpencodeMode(initialAgentDefaults.opencodeMode);
+    setCodexMode(initialAgentDefaults.codexMode);
+    setGrokMode(initialAgentDefaults.grokMode);
+    setPiMode(initialAgentDefaults.piMode);
+    if (editedPorts === null) setShowPortConfig(defaultPortMappings.length > 0);
+    featureAttemptModelsRef.current = null;
+  });
   useEffect(() => {
-    if (!open || !recovery) return;
-    initialPromptAttachmentsRef.current = recovery.attachments;
-    setInitialPromptAttachments(recovery.attachments);
-    setLaunchAgent(recovery.launchAgent);
-    setNetworkAccessMode(recovery.networkAccessMode);
-    setPortMappings(recovery.portMappings);
-    setShowPortConfig(recovery.showPortConfig);
-    setWorktreeBaseDir(recovery.worktreeBaseDir);
-    setClaudeMode(recovery.claudeMode);
-    setCodexMode(recovery.codexMode);
-    setOpencodeMode(recovery.opencodeMode);
-    setGrokMode(recovery.grokMode);
-    setPiMode(recovery.piMode);
-    setAdvancedOpen(recovery.advancedOpen);
-    setCustomizeModels(recovery.customizeModels);
-    setFeatureModels(recovery.featureModels);
-  }, [open, recovery]);
-
-  // A handoff's environment type and agent override this opening's defaults,
-  // so this follows the effects that apply them. The machine's own limits
-  // still hold: the availability effect above moves a type it cannot create
-  // to one it can, and a model missing from its catalogue falls back to the
-  // agent's default.
-  const appliedHandoffRef = useRef<CreateEnvironmentHandoff | null>(null);
-  const pendingOpenCodeSelection = useRef<CreateEnvironmentHandoff["agent"]>(undefined);
-  useEffect(() => {
+    const previous = appliedTargetRef.current;
     if (!open) {
-      appliedHandoffRef.current = null;
-      pendingOpenCodeSelection.current = undefined;
+      appliedTargetRef.current = null;
+      carriedTypeRef.current = null;
+      carriedAgentRef.current = null;
       return;
     }
-    if (!handoff || appliedHandoffRef.current === handoff) return;
-    pendingOpenCodeSelection.current = undefined;
-    appliedHandoffRef.current = handoff;
-    if (handoff.environmentType) setEnvironmentType(handoff.environmentType);
-    const carried = handoff.agent;
-    if (!carried || !enabledAgentPlatforms.includes(carried.type)) return;
-    agentSelectionTouchedRef.current = true;
-    setAgentType(carried.type);
-    if (carried.type === "opencode") pendingOpenCodeSelection.current = carried;
-    const carriedModel = modelsForAgent(modelCatalog, carried.type).find(
+    appliedTargetRef.current = { scope: dialogScope, projectId };
+    if (previous && (previous.scope !== dialogScope || previous.projectId !== projectId)) {
+      carryFormToTarget();
+    }
+  }, [dialogScope, open, projectId]);
+
+  // A carried agent and model are found again as the machine's lists arrive.
+  const restoreCarriedAgent = useEffectEvent(() => {
+    const carried = carriedAgentRef.current;
+    if (!carried) return;
+    const apply = (
+      type: AgentType,
+      selection: { model: string; reasoningEffort: string; fastMode?: boolean },
+    ) => {
+      setAgentType(type);
+      setModel(selection.model);
+      setReasoningEffort(selection.reasoningEffort);
+      setFastMode(selection.fastMode);
+    };
+    if (!enabledAgentPlatforms.includes(carried.type)) {
+      if (!enabledAgentPlatforms.includes(agentType)) {
+        apply(initialAgentDefaults.agent, initialAgentDefaults);
+      }
+      return;
+    }
+    const option = modelsForAgent(modelCatalog, carried.type).find(
       (candidate) => candidate.id === carried.model,
     );
-    if (carriedModel) {
-      setModel(carriedModel.id);
-      setReasoningEffort(
-        carried.reasoningEffort !== "default" &&
-          carriedModel.reasoningEfforts?.includes(carried.reasoningEffort)
+    if (option) {
+      apply(carried.type, {
+        model: option.id,
+        reasoningEffort: option.reasoningEfforts?.includes(carried.reasoningEffort)
           ? carried.reasoningEffort
           : "default",
-      );
-      setFastMode(
-        recovery
-          ? recovery.fastMode
-          : defaultFastModeFor(carried.type, carriedModel.id, modelCatalog),
-      );
+        fastMode: carried.fastMode,
+      });
     } else {
-      const fallback = getInitialAgentSelection(carried.type);
-      setModel(fallback.model);
-      setReasoningEffort(fallback.reasoningEffort);
-      setFastMode(fallback.fastMode);
+      apply(carried.type, getInitialAgentSelection(carried.type));
     }
-  }, [enabledAgentPlatforms, getInitialAgentSelection, handoff, modelCatalog, open, recovery]);
-
+  });
   useEffect(() => {
-    if (!open || !cachedOpenCodeModels.length) return;
-    const carried = pendingOpenCodeSelection.current;
-    if (!carried) return;
-    pendingOpenCodeSelection.current = undefined;
-    const option = modelCatalog.opencode.find((candidate) => candidate.id === carried.model);
-    if (!option) return;
-    setModel(option.id);
-    setReasoningEffort(
-      option.reasoningEfforts?.includes(carried.reasoningEffort)
-        ? carried.reasoningEffort
-        : "default",
-    );
-  }, [cachedOpenCodeModels, modelCatalog, open]);
+    if (open) restoreCarriedAgent();
+  }, [dialogScope, enabledAgentPlatforms, modelCatalog, open, projectId]);
+
+  // The user's own choice replaces what a machine switch carries.
+  const chooseEnvironmentType = useCallback((type: EnvironmentType) => {
+    carriedTypeRef.current = type;
+    setEnvironmentType(type);
+  }, []);
+  const noteAgentChosen = useCallback(() => {
+    carriedAgentRef.current = null;
+    agentSelectionTouchedRef.current = true;
+    featureAttemptModelsRef.current = null;
+  }, []);
 
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {
       if (nextAgent === agentType) return;
-      pendingOpenCodeSelection.current = undefined;
-      agentSelectionTouchedRef.current = true;
-      featureAttemptModelsRef.current = null;
+      noteAgentChosen();
       setAgentType(nextAgent);
       const nextSelection = getInitialAgentSelection(nextAgent);
       setModel(nextSelection.model);
       setReasoningEffort(nextSelection.reasoningEffort);
       setFastMode(nextSelection.fastMode);
     },
-    [agentType, getInitialAgentSelection],
+    [agentType, getInitialAgentSelection, noteAgentChosen],
   );
 
   const selectAgentModel = useCallback(
     (nextModel: AgentModel) => {
-      pendingOpenCodeSelection.current = undefined;
-      agentSelectionTouchedRef.current = true;
-      featureAttemptModelsRef.current = null;
+      noteAgentChosen();
       const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
       const supportedEfforts =
         targetModels.find((candidate) => candidate.id === nextModel.id)?.reasoningEfforts ?? [];
@@ -1559,7 +1637,7 @@ export function CreateEnvironmentDialog({
         ),
       );
     },
-    [agentType, fastMode, getInitialAgentSelection, modelCatalog, reasoningEffort],
+    [agentType, fastMode, getInitialAgentSelection, modelCatalog, noteAgentChosen, reasoningEffort],
   );
 
   // The picker resolves a model to `selectAgentModel`; this id-only form is the
@@ -1572,11 +1650,17 @@ export function CreateEnvironmentDialog({
     [agentType, selectAgentModel],
   );
 
-  const selectReasoningEffort = useCallback((nextEffort: string) => {
-    pendingOpenCodeSelection.current = undefined;
-    agentSelectionTouchedRef.current = true;
-    featureAttemptModelsRef.current = null;
-    setReasoningEffort(nextEffort);
+  const selectReasoningEffort = useCallback(
+    (nextEffort: string) => {
+      noteAgentChosen();
+      setReasoningEffort(nextEffort);
+    },
+    [noteAgentChosen],
+  );
+
+  const selectFastMode = useCallback((enabled: boolean) => {
+    carriedAgentRef.current = null;
+    setFastMode(enabled);
   }, []);
 
   const selectMobileSection = useCallback(
@@ -1603,102 +1687,44 @@ export function CreateEnvironmentDialog({
   }, [environmentType, launchAgent, mobileSection, selectMobileSection]);
 
   const addPortMapping = useCallback(() => {
-    setPortMappings((prev) => [
-      ...prev,
+    setEditedPorts((previous) => [
+      ...(previous ?? defaultPortMappings),
       { containerPort: 3000, hostPort: 3000, protocol: "tcp" as PortProtocol },
     ]);
-  }, []);
+  }, [defaultPortMappings]);
 
-  const removePortMapping = useCallback((index: number) => {
-    setPortMappings((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  const removePortMapping = useCallback(
+    (index: number) => {
+      setEditedPorts((previous) => (previous ?? defaultPortMappings).filter((_, i) => i !== index));
+    },
+    [defaultPortMappings],
+  );
 
-  const updatePortMapping = useCallback((index: number, updates: Partial<PortMapping>) => {
-    setPortMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...updates } : m)));
-  }, []);
-
-  const portableForm = useMemo<CreateEnvironmentHandoff>(
-    () => ({
-      prompt: initialPrompt.trim(),
-      name: environmentName.trim(),
-      environmentType,
-      agent: { type: agentType, model, reasoningEffort },
-      ...(buildIntent === "feature"
-        ? {
-            feature: {
-              name: featureName,
-              acceptanceCriteria: featureAcceptanceCriteria,
-              deliveryPolicy: featureDeliveryPolicy,
-            },
-          }
-        : { interactionMode: buildIntent }),
-    }),
-    [
-      agentType,
-      buildIntent,
-      environmentName,
-      environmentType,
-      featureAcceptanceCriteria,
-      featureDeliveryPolicy,
-      featureName,
-      initialPrompt,
-      model,
-      reasoningEffort,
-    ],
+  const updatePortMapping = useCallback(
+    (index: number, updates: Partial<PortMapping>) => {
+      setEditedPorts((previous) =>
+        (previous ?? defaultPortMappings).map((mapping, i) =>
+          i === index ? { ...mapping, ...updates } : mapping,
+        ),
+      );
+    },
+    [defaultPortMappings],
   );
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
       if (!isOpen) {
-        if (projectId && !preserveSavedDraft) {
-          if (portableForm.prompt) drafts.set(projectId, { prompt: portableForm.prompt, name: "" });
-          else drafts.delete(projectId);
+        if (draftKey) {
+          const prompt = initialPrompt.trim();
+          if (prompt) drafts.set(draftKey, prompt);
+          else drafts.delete(draftKey);
         }
         resetForm();
       }
       onOpenChange(isOpen);
     },
-    [drafts, onOpenChange, portableForm.prompt, preserveSavedDraft, projectId, resetForm],
+    [draftKey, drafts, initialPrompt, onOpenChange, resetForm],
   );
-
-  const handleSelectMachine = (machine: CreateEnvironmentMachine) => {
-    if (!onSelectMachine || isLoading) return;
-    const sourceForm: CreateEnvironmentRecovery = {
-      name: environmentName,
-      prompt: initialPrompt,
-      attachments: initialPromptAttachments,
-      launchAgent,
-      networkAccessMode,
-      portMappings,
-      showPortConfig,
-      worktreeBaseDir,
-      claudeMode,
-      codexMode,
-      opencodeMode,
-      grokMode,
-      piMode,
-      fastMode,
-      advancedOpen,
-      customizeModels,
-      featureModels,
-    };
-    if (!onSelectMachine(machine, portableForm, sourceForm)) return;
-    // Keep recovery on the source scope. Navigation can supersede the
-    // destination request before its stores are ready to show the dialog.
-    if (projectId && !preserveSavedDraft) {
-      if (
-        portableForm.prompt ||
-        portableForm.name ||
-        portableForm.feature ||
-        portableForm.interactionMode === "interactive"
-      ) {
-        drafts.set(projectId, portableForm);
-      } else {
-        drafts.delete(projectId);
-      }
-    }
-    resetForm();
-  };
 
   // Validate port mappings - returns true if all valid
   const validatePortMappings = useCallback((): boolean => {
@@ -1783,6 +1809,7 @@ export function CreateEnvironmentDialog({
       e.preventDefault();
 
       if (
+        switchingTo !== null ||
         activeAttachmentOperationIdsRef.current.size > 0 ||
         grokTerminalConflict ||
         startupAgentBlocked
@@ -1809,7 +1836,7 @@ export function CreateEnvironmentDialog({
             return;
           }
           const requestModels = featureAttemptModelsRef.current
-            ? constrainFeatureModels(featureAttemptModelsRef.current)
+            ? constrainFeatureModels(featureAttemptModelsRef.current, true)
             : effectiveFeatureModels;
           const buildRequest = (requestId: string) =>
             featureBuildRequest({
@@ -1854,7 +1881,7 @@ export function CreateEnvironmentDialog({
           featureAttemptIdentityRef.current = null;
           featureAttemptModelsRef.current = null;
           // The description is the shared prompt text, so its draft is spent too.
-          if (!preserveSavedDraft) drafts.delete(projectId);
+          if (draftKey) drafts.delete(draftKey);
           resetForm();
           onOpenChange(false);
           return;
@@ -1889,9 +1916,7 @@ export function CreateEnvironmentDialog({
         recordBuildIntent(buildIntent);
         // Clear the draft on successful creation and close directly
         // (bypass handleOpenChange which would re-save the draft)
-        if (projectId) {
-          if (!preserveSavedDraft) drafts.delete(projectId);
-        }
+        if (draftKey) drafts.delete(draftKey);
         resetForm();
         onOpenChange(false);
       } catch (err) {
@@ -1939,9 +1964,10 @@ export function CreateEnvironmentDialog({
       onOpenChange,
       projectId,
       validatePortMappings,
+      draftKey,
       drafts,
-      preserveSavedDraft,
       recordBuildIntent,
+      switchingTo,
     ],
   );
 
@@ -1949,6 +1975,7 @@ export function CreateEnvironmentDialog({
     grokTerminalConflict ||
     startupAgentBlocked ||
     isLoading ||
+    switchingTo !== null ||
     pendingAttachmentOperations > 0 ||
     (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings())) ||
     (environmentType === "local" && !localEnvironmentAvailable) ||
@@ -1958,6 +1985,9 @@ export function CreateEnvironmentDialog({
       (!onCreateFeatureBuild ||
         featurePlatforms.length === 0 ||
         (!featureName.trim() && !initialPrompt.trim())));
+
+  // Named only when it takes a while, so an ordinary switch changes nothing here.
+  const connectingTo = useDelayed(switchingTo, CONNECTING_LABEL_DELAY_MS);
 
   // Plain Enter never submits: multi-line fields take it as a newline, and a
   // single-line field (the name, ports) would otherwise submit the form
@@ -2052,7 +2082,8 @@ export function CreateEnvironmentDialog({
                 <CreateEnvironmentMachinePicker
                   current={targetMachine}
                   machines={machines ?? []}
-                  onSelect={handleSelectMachine}
+                  selectedKey={selectedMachineKey}
+                  onSelect={onSelectMachine}
                   disabled={isLoading}
                 />
               </div>
@@ -2124,7 +2155,7 @@ export function CreateEnvironmentDialog({
                   <div className="inline-grid grid-cols-2 rounded-lg border border-divider bg-input-surface p-0.5">
                     <button
                       type="button"
-                      onClick={() => setEnvironmentType("containerized")}
+                      onClick={() => chooseEnvironmentType("containerized")}
                       disabled={isLoading || !dockerAvailable}
                       aria-describedby={!dockerAvailable ? "containerized-unavailable" : undefined}
                       title={
@@ -2143,7 +2174,7 @@ export function CreateEnvironmentDialog({
 
                     <button
                       type="button"
-                      onClick={() => setEnvironmentType("local")}
+                      onClick={() => chooseEnvironmentType("local")}
                       disabled={isLoading || !localEnvironmentAvailable}
                       aria-describedby={
                         !localEnvironmentAvailable ? "local-unavailable" : undefined
@@ -2237,7 +2268,7 @@ export function CreateEnvironmentDialog({
                       type="button"
                       className="shrink-0 rounded p-0.5 hover:bg-zinc-800 hover:text-foreground"
                       aria-label="Use the default worktree location"
-                      onClick={() => setWorktreeBaseDir(null)}
+                      onClick={() => setWorktreeLocation(null)}
                     >
                       <X className="h-3 w-3" aria-hidden="true" />
                     </button>
@@ -2387,7 +2418,7 @@ export function CreateEnvironmentDialog({
                       (speedAvailable ? (fastMode ?? false) : false)
                     }
                     onFastModeChange={
-                      !featurePickerFallback && speedAvailable ? setFastMode : undefined
+                      !featurePickerFallback && speedAvailable ? selectFastMode : undefined
                     }
                     disabled={
                       isLoading ||
@@ -2707,8 +2738,12 @@ export function CreateEnvironmentDialog({
             disabled={submitDisabled}
             className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
-            {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isLoading && loadingLabel ? loadingLabel : "Create environment"}
+            {(isLoading || connectingTo) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {isLoading && loadingLabel
+              ? loadingLabel
+              : connectingTo
+                ? `Connecting to ${connectingTo}…`
+                : "Create environment"}
           </Button>
         </DialogFooter>
       </DialogContent>

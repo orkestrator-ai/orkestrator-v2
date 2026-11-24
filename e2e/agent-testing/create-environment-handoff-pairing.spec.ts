@@ -145,8 +145,11 @@ test("Create Environment switches to and submits on a backend one release behind
       maskColor: "#171717",
     });
 
+    // Switching machines must not replace the dialog.
+    await dialog.evaluate((element) => element.setAttribute("data-same-dialog", ""));
     await chooseLeaf(page, nodeId);
     await expect(dialog.getByRole("combobox", { name: "Machine" })).toHaveText(leafName);
+    await expect(dialog).toHaveAttribute("data-same-dialog", "");
     await expect(dialog.getByText(`Git worktree on ${leafName}`, { exact: true })).toBeVisible();
     await expect(dialog.getByLabel("Environment name (optional)")).toHaveValue(environmentName);
     await expect(dialog.getByLabel("Initial prompt (optional)")).toHaveValue(
@@ -191,7 +194,7 @@ test("Create Environment switches to and submits on a backend one release behind
     await page.reload();
     await expect(page.getByText(environmentName, { exact: true }).first()).toBeVisible();
 
-    // A cold workspace can hydrate after its advertised checkout disappears.
+    // A cold machine can hydrate after its advertised checkout disappears.
     // Keep the real portal summary and replace only this tab's project read.
     // A second signed-in context, routed like the fixture's own, so its
     // modules load outside Chromium's network path too.
@@ -221,9 +224,7 @@ test("Create Environment switches to and submits on a backend one release behind
       await recovered.getByLabel("Environment name (optional)").fill("Keep my draft");
       await recovered.getByRole("checkbox", { name: "Launch agent" }).uncheck();
       await chooseLeaf(recoveryPage, nodeId);
-      const failure = recoveryPage.getByText(
-        `Could not open the new environment form on ${leafName}`,
-      );
+      const failure = recoveryPage.getByText(`Could not switch to ${leafName}`);
       await expect(failure).toBeInViewport({ ratio: 1 });
       await expect(recovered.getByLabel("Environment name (optional)")).toHaveValue(
         "Keep my draft",
@@ -236,6 +237,28 @@ test("Create Environment switches to and submits on a backend one release behind
     } finally {
       await recoveryContext.close();
     }
+    // Remove the selected machine while the form has a draft and still holds
+    // its scope. The same form returns to the command machine.
+    const disconnected = await openSourceForm(page, status.browserUrl);
+    const disconnectedPrompt = disconnected.getByLabel("Initial prompt (optional)");
+    await disconnectedPrompt.fill("Keep this draft after the machine is removed");
+    await disconnected.evaluate((element) => element.setAttribute("data-same-dialog", ""));
+    await chooseLeaf(page, nodeId);
+    await expect(
+      disconnected.getByText(`Git worktree on ${leafName}`, { exact: true }),
+    ).toBeVisible();
+    await command.invoke("forget_node", { nodeId });
+    nodeId = undefined;
+    await expect(page.getByText(`${leafName} is no longer connected`)).toBeVisible();
+    await expect(disconnected).toHaveAttribute("data-same-dialog", "");
+    await expect(disconnectedPrompt).toHaveValue("Keep this draft after the machine is removed");
+    await expect(disconnected.getByRole("button", { name: "Create environment" })).toBeEnabled();
+    await disconnected.screenshot({
+      path: testInfo.outputPath("removed-target-desktop.png"),
+      mask: [disconnectedPrompt],
+      maskColor: "#171717",
+      animations: "disabled",
+    });
   } finally {
     if (nodeId) await command.invoke("forget_node", { nodeId }).catch(() => undefined);
     await command

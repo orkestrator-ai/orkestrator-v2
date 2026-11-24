@@ -326,6 +326,9 @@ function CoordinatorSplitScene() {
               platformNotes={{}}
               platformBadges={{}}
               launch={undefined}
+              claimLaunch={() => false}
+              clearLaunchError={() => {}}
+              settleLaunch={() => {}}
               startConversation={async () => {}}
               confirmUpstreamMerge={async () => undefined}
               conversationBusy={false}

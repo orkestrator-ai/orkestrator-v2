@@ -2,9 +2,7 @@ import { create } from "zustand";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { WorkspaceRequest } from "@/lib/federation/workspace-request";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
-import type { NodeSelection, WindowScope } from "@/lib/node-scope/window-scope";
-import { findProjectHomeEnvironment } from "@/lib/project-home";
-import { environmentStore } from "./environmentStore";
+import type { NodeSelection } from "@/lib/node-scope/window-scope";
 import { isCommandNodeSelection, noteNodeSelectionRecents } from "./windowSelectionStore";
 
 /**
@@ -49,6 +47,12 @@ interface RemoteWorkspaceState {
   requests: Record<string, NodeWorkspaceRequest>;
   /** Show a node's workspace, on what the user opened there. */
   open: (nodeId: string, request: WorkspaceRequest) => void;
+  /**
+   * Hold a node's workspace for a selection the caller makes on its scope (the
+   * New Environment dialog, once the environment exists), dropping any request
+   * that selection supersedes.
+   */
+  hold: (nodeId: string) => void;
   /** Return the central region to this window's own node. */
   showLocal: () => void;
   /** A node's workspace went away (its node was removed from the command node). */
@@ -113,6 +117,10 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
       derive();
       noteNodeSelectionRecents(selection);
     },
+    hold: (nodeId) => {
+      set({ openNodes: [...get().openNodes.filter((id) => id !== nodeId), nodeId], requests: {} });
+      derive();
+    },
     showLocal: () => {
       set({ requests: {} });
       if (!get().active) return;
@@ -138,30 +146,6 @@ export const useRemoteWorkspaceStore = create<RemoteWorkspaceState>()((set, get)
 });
 
 /**
- * Whether the window still shows the project a machine switch's New
- * Environment request is for: the project itself, or its Home. Selecting the
- * project makes the node's workspace open its Home
- * (`useProjectHomeActivation`), which is not navigation away from the form;
- * treating it as navigation dropped the request and left the user on the
- * Home tab without the dialog.
- */
-function stillOnHandoffProject(
-  windowScope: WindowScope,
-  selection: NodeSelection,
-  projectId: string | undefined,
-): boolean {
-  if (!projectId || selection.projectId !== projectId) return false;
-  if (selection.environmentId === null || selection.projectHome) return true;
-  const scope = windowScope.get(selection.nodeId);
-  if (!scope) return false;
-  const home = findProjectHomeEnvironment(
-    scope.store(environmentStore).getState().environments,
-    projectId,
-  );
-  return home?.id === selection.environmentId;
-}
-
-/**
  * Keeps `active` derived from the window's selection while nodes are held:
  * any selection of the window's own node (a sidebar row, a shortcut, a
  * notification) moves the selection back to it and so brings the central
@@ -175,12 +159,7 @@ export function startRemoteWorkspaceSelectionSync(): () => void {
     // Navigation supersedes pending work even when its host has not mounted
     // yet. Returning to a warm node must not revive a deferred dialog.
     const requests = Object.fromEntries(
-      Object.entries(state.requests).filter(
-        ([nodeId, { request }]) =>
-          nodeId === selection?.nodeId &&
-          (!request.createEnvironmentHandoff ||
-            stillOnHandoffProject(windowScope, selection, request.projectId)),
-      ),
+      Object.entries(state.requests).filter(([nodeId]) => nodeId === selection?.nodeId),
     );
     if (
       !sameActive(state.active, next) ||

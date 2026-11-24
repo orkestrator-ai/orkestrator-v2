@@ -225,12 +225,7 @@ export function MobileAppShellLayout({
         if (!nodeId) return;
         const next = state.requests[nodeId];
         if (!next || next === previous.requests[nodeId]) return;
-        if (
-          !next.request.dialog &&
-          !next.request.createEnvironmentProjectId &&
-          !next.request.addProject
-        )
-          return;
+        if (!next.request.dialog && !next.request.addProject) return;
         restoreSidebarFocusRef.current = false;
         restoreToolsFocusRef.current = false;
         setSidebarOpen(false);

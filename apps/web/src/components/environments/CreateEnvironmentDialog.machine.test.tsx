@@ -1,6 +1,6 @@
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import type { CreateEnvironmentHandoff } from "@/lib/federation/workspace-request";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import * as federation from "@/components/federation/FederationProvider";
 import * as machineViews from "@/components/federation/useMachineViews";
@@ -17,7 +17,7 @@ import {
   renderInAppCommandScope,
   renderInNodeScope,
 } from "@/test/render-in-node-scope";
-import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
+import { CreateEnvironmentDialog } from "./CreateEnvironmentDialog";
 import type { CreateEnvironmentMachine } from "./create-environment-machines";
 
 const LEAF = "bk_studio" as BackendId;
@@ -121,6 +121,7 @@ describe("CreateEnvironmentDialog target machine", () => {
 const OWN: CreateEnvironmentMachine = {
   key: "node:own",
   name: "Build Mac",
+  colorToken: "teal",
   machine: undefined,
   nodeId: "own",
   projectId: "project-1",
@@ -141,33 +142,18 @@ const STUDIO: CreateEnvironmentMachine = {
 
 function dialogWithMachines(
   machines: CreateEnvironmentMachine[],
-  onSelectMachine: (machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean,
-  {
-    projectId = "project-1",
-    handoff,
-    onOpenChange = () => undefined,
-    isLoading = false,
-    localEnvironmentAvailable = true,
-  }: {
-    projectId?: string;
-    handoff?: CreateEnvironmentHandoff;
-    onOpenChange?: (open: boolean) => void;
-    isLoading?: boolean;
-    localEnvironmentAvailable?: boolean;
-  } = {},
+  props: Partial<ComponentProps<typeof CreateEnvironmentDialog>> = {},
 ) {
   return (
     <DockerAvailabilityProvider available>
       <CreateEnvironmentDialog
         open
-        onOpenChange={onOpenChange}
-        isLoading={isLoading}
-        localEnvironmentAvailable={localEnvironmentAvailable}
+        onOpenChange={() => undefined}
         onCreate={async () => true}
-        projectId={projectId}
-        handoff={handoff}
+        projectId="project-1"
         machines={machines}
-        onSelectMachine={onSelectMachine}
+        onSelectMachine={() => undefined}
+        {...props}
       />
     </DockerAvailabilityProvider>
   );
@@ -176,7 +162,7 @@ function dialogWithMachines(
 describe("CreateEnvironmentDialog machine dropdown", () => {
   test("sits in the header and lists only the machines that can take the environment", async () => {
     federated();
-    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], () => true));
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO]));
     const header = screen.getByRole("dialog").querySelector("[data-slot='dialog-header']");
     const select = screen.getByRole("combobox", { name: "Machine" });
     expect(header?.contains(select)).toBe(true);
@@ -192,7 +178,7 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
 
   test("with no other machine holding the repository it names this one, disabled", () => {
     federated();
-    renderInAppCommandScope(dialogWithMachines([OWN], () => true));
+    renderInAppCommandScope(dialogWithMachines([OWN]));
     const select = screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement;
     expect(select.textContent).toContain("Build Mac");
     expect(select.disabled).toBe(true);
@@ -200,203 +186,55 @@ describe("CreateEnvironmentDialog machine dropdown", () => {
 
   test("disables switching during creation even when an alternative is available", () => {
     federated();
-    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], () => true, { isLoading: true }));
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], { isLoading: true }));
     expect((screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
   });
 
-  for (const prompt of ["", "Add a dark mode"]) {
-    test(`preserves an existing destination draft with a ${prompt ? "populated" : "blank"} handoff`, async () => {
-      federated();
-      const projectId = `project-draft-${Boolean(prompt)}`;
-      const handoff = { prompt, name: "dark-mode" };
-      const showTarget = (form?: CreateEnvironmentHandoff) =>
-        renderInAppCommandScope(
-          dialogWithMachines([STUDIO], () => true, { projectId, handoff: form }),
-        );
-      const promptField = () =>
-        screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement;
-      const nameField = () =>
-        screen.getByLabelText("Environment name (optional)") as HTMLInputElement;
-      const close = () => fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-
-      showTarget();
-      fireEvent.change(promptField(), { target: { value: "Existing draft" } });
-      close();
-      cleanup();
-
-      showTarget(handoff);
-      expect(promptField().value).toBe(prompt || "Existing draft");
-      expect(nameField().value).toBe("dark-mode");
-      close();
-      cleanup();
-
-      showTarget({ prompt: "", name: "" });
-      expect(promptField().value).toBe("Existing draft");
-      expect(nameField().value).toBe("");
-      cleanup();
-
-      showTarget();
-      expect(promptField().value).toBe("Existing draft");
-      expect(nameField().value).toBe("");
-    });
-  }
-
-  test("an interactive handoff and source draft override the remembered Task choice", async () => {
+  test("a pick reports the machine and changes nothing else in the form", async () => {
     federated();
-    const onSelectMachine = mock(
-      (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
-    );
-    const projectId = "project-recovery";
-    const store = appCommandStore(configStore);
-    const initialConfig = store.getState().config;
-    const rememberedTask = {
-      defaultBranch: "main",
-      prBaseBranch: "main",
-      lastBuildIntent: "task",
-    } as const;
-    store.getState().setConfig({
-      ...initialConfig,
-      repositories: {
-        ...initialConfig.repositories,
-        [projectId]: rememberedTask,
-        [STUDIO.projectId]: rememberedTask,
-      },
+    const onSelectMachine = mock((_machine: CreateEnvironmentMachine) => undefined);
+    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], { onSelectMachine }));
+    fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
+      target: { value: "Add a dark mode" },
     });
-    try {
-      renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine, { projectId }));
-      expect(screen.getByRole("button", { name: "Task", pressed: true })).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
-      fireEvent.change(screen.getByLabelText("Environment name (optional)"), {
-        target: { value: "dark-mode" },
-      });
-      fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
-        target: { value: "Add a dark mode" },
-      });
-      fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
-      fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
-      const handoff = {
-        prompt: "Add a dark mode",
-        name: "dark-mode",
-        interactionMode: "interactive",
-        environmentType: "containerized",
-        agent: { type: "claude", model: "sonnet", reasoningEffort: "default" },
-      } satisfies CreateEnvironmentHandoff;
-      expect(onSelectMachine.mock.calls[0]?.slice(0, 2)).toEqual([STUDIO, handoff]);
-      cleanup();
-
-      renderInAppCommandScope(
-        dialogWithMachines([STUDIO], () => true, { projectId: STUDIO.projectId, handoff }),
-      );
-      expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
-      cleanup();
-
-      renderInAppCommandScope(dialogWithMachines([OWN], () => true, { projectId }));
-      expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
-      expect(
-        (screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value,
-      ).toBe("Add a dark mode");
-    } finally {
-      cleanup();
-      store.getState().setConfig(initialConfig);
-    }
-  });
-});
-
-describe("CreateEnvironmentDialog machine switch carries the form", () => {
-  const carried = {
-    prompt: "Ship the report",
-    name: "report",
-    interactionMode: "task",
-    environmentType: "local",
-    agent: { type: "codex", model: "not-in-this-catalogue", reasoningEffort: "high" },
-  } satisfies CreateEnvironmentHandoff;
-
-  async function switchToStudio(
-    onSelectMachine: ReturnType<
-      typeof mock<(machine: CreateEnvironmentMachine, form: CreateEnvironmentHandoff) => boolean>
-    >,
-  ) {
     fireEvent.click(screen.getByRole("combobox", { name: "Machine" }));
-    fireEvent.click(await screen.findByRole("option", { name: /Studio/ }));
-    return onSelectMachine.mock.calls.at(-1)?.[1];
-  }
-
-  test("the switch sends the environment type and agent with the rest of the form", async () => {
-    federated();
-    const onSelectMachine = mock(
-      (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
-    );
-    renderInAppCommandScope(dialogWithMachines([OWN, STUDIO], onSelectMachine));
-    fireEvent.click(screen.getByRole("button", { name: "Local" }));
-    const form = await switchToStudio(onSelectMachine);
-    expect(form?.environmentType).toBe("local");
-    expect(form?.agent?.type).toBe("claude");
-  });
-
-  test("a carried environment type and agent survive Strict Mode effect replay", async () => {
-    federated();
-    const onSelectMachine = mock(
-      (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
-    );
-    renderInAppCommandScope(
-      dialogWithMachines([OWN, STUDIO], onSelectMachine, { handoff: carried }),
-      { reactStrictMode: true },
-    );
-    // Containerized is this dialog's default; the carried Local wins.
-    expect(screen.queryByText("Git worktree on Build Mac") !== null).toBe(true);
+    fireEvent.click(await screen.findByRole("option", { name: "Studio" }));
+    expect(onSelectMachine.mock.calls).toEqual([[STUDIO]]);
     expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
-      "Ship the report",
+      "Add a dark mode",
     );
-    expect((screen.getByLabelText("Environment name (optional)") as HTMLInputElement).value).toBe(
-      "report",
-    );
-    expect(screen.getByRole("button", { name: "Task", pressed: true })).toBeTruthy();
-    const form = await switchToStudio(onSelectMachine);
-    expect(form).toMatchObject({
-      prompt: "Ship the report",
-      name: "report",
-      interactionMode: "task",
-      environmentType: "local",
-    });
-    // The agent is kept; a model this machine does not list falls back to its default.
-    expect(form?.agent?.type).toBe("codex");
-    expect(form?.agent?.model).not.toBe("not-in-this-catalogue");
   });
 
-  test("a type the destination cannot create falls back to one it can", () => {
+  test("while the picked machine is made ready it is shown, and nothing can be created", async () => {
     federated();
+    const onCreate = mock(async () => true);
     renderInAppCommandScope(
-      dialogWithMachines([OWN, STUDIO], () => true, {
-        handoff: carried,
-        localEnvironmentAvailable: false,
+      dialogWithMachines([OWN, STUDIO], {
+        onCreate,
+        selectedMachineKey: STUDIO.key,
+        switchingTo: STUDIO.name,
       }),
     );
-    expect(screen.queryByText("Isolated Docker environment on Build Mac") !== null).toBe(true);
+    const select = screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement;
+    expect(select.textContent).toContain("Studio");
+    // The user can still pick back.
+    expect(select.disabled).toBe(false);
+    const create = screen.getByRole("button", { name: "Create environment" });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter", ctrlKey: true });
+    expect(onCreate).not.toHaveBeenCalled();
+    // A wait long enough to notice is named on the button.
+    expect(await screen.findByText("Connecting to Studio…")).toBeTruthy();
   });
 
-  test("an agent the destination has not enabled keeps its default agent", async () => {
+  test("a picked machine that left the list still names itself", () => {
     federated();
-    const store = appCommandStore(configStore);
-    const initialConfig = store.getState().config;
-    store.getState().setConfig({
-      ...initialConfig,
-      global: { ...initialConfig.global, enabledAgentPlatforms: ["claude"] },
-    });
-    try {
-      const onSelectMachine = mock(
-        (_machine: CreateEnvironmentMachine, _form: CreateEnvironmentHandoff) => true,
-      );
-      renderInAppCommandScope(
-        dialogWithMachines([OWN, STUDIO], onSelectMachine, { handoff: carried }),
-      );
-      const form = await switchToStudio(onSelectMachine);
-      expect(form?.agent?.type).toBe("claude");
-    } finally {
-      cleanup();
-      store.getState().setConfig(initialConfig);
-    }
+    renderInAppCommandScope(dialogWithMachines([STUDIO], { selectedMachineKey: "node:gone" }));
+    const select = screen.getByRole("combobox", { name: "Machine" }) as HTMLButtonElement;
+    expect(select.textContent).toContain("Build Mac");
+    expect(select.disabled).toBe(false);
   });
 });
 
@@ -464,61 +302,3 @@ test("hydrates on open, ignores other nodes, and removes the refresh listener on
   });
   expect(read).toHaveBeenCalledTimes(2);
 });
-
-for (const editsModel of [false, true]) {
-  test(`a late OpenCode catalogue ${editsModel ? "respects the user's model selection" : "restores the carried model and effort"}`, async () => {
-    const cachedModel = {
-      id: "fixture/late",
-      name: "Late OpenCode model",
-      provider: "Fixture",
-      variants: ["high"],
-    };
-    const catalogue = Promise.withResolvers<{
-      projectId: string;
-      models: (typeof cachedModel)[];
-    }>();
-    const onCreate = mock(async (_options: ClaudeOptions) => true);
-    const leaf = new FakeNodeClient({ nodeId: LEAF }).respond(
-      "get_opencode_model_catalog_cache",
-      () => catalogue.promise,
-    );
-    const view = renderInNodeScope(<></>, { role: "leaf", client: leaf });
-    view.scope
-      .store(configStore)
-      .setState({ config: appCommandStore(configStore).getState().config });
-    view.rerender(
-      <DockerAvailabilityProvider available>
-        <CreateEnvironmentDialog
-          open
-          onOpenChange={() => undefined}
-          onCreate={onCreate}
-          projectId="project-1"
-          handoff={{
-            name: "carried-model",
-            prompt: "",
-            agent: { type: "opencode", model: cachedModel.id, reasoningEffort: "high" },
-          }}
-        />
-      </DockerAvailabilityProvider>,
-    );
-
-    if (editsModel) {
-      const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
-      fireEvent.keyDown(picker, { key: "Enter" });
-      fireEvent.click(await screen.findByRole("button", { name: "claude models" }));
-      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    }
-    await act(async () => catalogue.resolve({ projectId: "project-1", models: [cachedModel] }));
-    fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
-    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    if (editsModel) {
-      expect(onCreate.mock.calls[0]?.[0]).toMatchObject({ agentType: "claude" });
-    } else {
-      expect(onCreate.mock.calls[0]?.[0]).toMatchObject({
-        agentType: "opencode",
-        model: cachedModel.id,
-        reasoningEffort: "high",
-      });
-    }
-  });
-}

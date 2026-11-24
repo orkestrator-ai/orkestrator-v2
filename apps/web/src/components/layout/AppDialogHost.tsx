@@ -1,18 +1,29 @@
-import { lazy, useEffect, useRef, useState } from "react";
+import { lazy, useEffect, useEffectEvent, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
+import { toast } from "sonner";
+import type { BackendId } from "@orkestrator/protocol/federation";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import {
-  useDockerAvailability,
+  prepareCreateEnvironmentTarget,
+  type CreateEnvironmentTarget,
+} from "@/components/environments/create-environment-target";
+import { useFederation } from "@/components/federation/FederationProvider";
+import { nodeName } from "@/components/federation/NodeWorkspaceStatus";
+import {
+  DockerAvailabilityProvider,
   useDockerAvailabilityReady,
 } from "@/contexts/DockerAvailabilityContext";
-import {
-  reportCreateEnvironmentFailed,
-  reportCreateEnvironmentOpened,
-} from "@/lib/federation/create-environment-handoff";
-import type {
-  CreateEnvironmentHandoff,
-  CreateEnvironmentRecovery,
-} from "@/lib/federation/workspace-request";
+import { useNodeDockerAvailability } from "@/hooks/useNodeDockerAvailability";
 import { DeleteProjectDialog } from "@/components/projects/DeleteProjectDialog";
 import {
   createProjectUpdateHandler,
@@ -49,20 +60,34 @@ const LazyRepositorySettings = lazy(async () => ({
  * Renders the dialog `useAppDialogStore` holds, outside every drawer and row,
  * inside the scope of the node the request names. A request for a node this
  * window has no scope for is dropped rather than shown against another
- * node's data.
+ * node's data, except New Environment: that dialog is the window's own, aimed
+ * at a machine, and opens the machine's scope behind it.
  */
 export function AppDialogHost() {
   const request = useAppDialogStore((state) => state.request);
+  const requestSequence = useAppDialogStore((state) => state.requestSequence);
   const close = useAppDialogStore((state) => state.close);
   const { windowScope } = useScopesWithCommandFallback();
   // Re-resolve when scopes open or close, so a closed node's request is dropped.
   useSignal(windowScope.nodeScopes);
   const scope = request ? windowScope.get(request.nodeId) : null;
-  const unresolved = request !== null && scope === null;
+  const unresolved = request !== null && scope === null && request.kind !== "create-environment";
   useEffect(() => {
     if (unresolved) close();
   }, [close, unresolved]);
 
+  if (request?.kind === "create-environment") {
+    return (
+      <WindowScopeProvider windowScope={windowScope}>
+        <CreateEnvironmentHost
+          key={requestSequence}
+          requestSequence={requestSequence}
+          nodeId={request.nodeId}
+          projectId={request.projectId}
+        />
+      </WindowScopeProvider>
+    );
+  }
   if (!scope) return null;
   // Keyed by node: the same id on another node is another dialog.
   return (
@@ -85,16 +110,6 @@ function AppDialogContent() {
           environmentId={request.environmentId}
           section={request.section}
           sectionRequest={requestSequence}
-        />
-      );
-    case "create-environment":
-      return (
-        <CreateEnvironmentHost
-          key={requestSequence}
-          requestSequence={requestSequence}
-          projectId={request.projectId}
-          handoff={request.handoff}
-          recovery={request.recovery}
         />
       );
     case "repository-settings":
@@ -236,17 +251,26 @@ function DeleteProjectHost({ projectId }: { projectId: string }) {
   );
 }
 
-function CreateEnvironmentHost({
-  requestSequence,
-  projectId,
-  handoff,
-  recovery,
-}: {
+interface CreateEnvironmentHostProps {
   requestSequence: number;
+  nodeId: BackendId;
   projectId: string;
-  handoff?: CreateEnvironmentHandoff;
-  recovery?: CreateEnvironmentRecovery;
-}) {
+}
+
+function CreateEnvironmentHost(props: CreateEnvironmentHostProps) {
+  const { windowScope } = useScopesWithCommandFallback();
+  const scope = windowScope.get(props.nodeId);
+  return scope?.role === "command" ? (
+    <NodeScopeProvider scope={scope}>
+      <CommandCreateEnvironmentHost {...props} />
+    </NodeScopeProvider>
+  ) : (
+    <MachineCreateEnvironmentHost {...props} />
+  );
+}
+
+/** The dialog aimed at the window's own node, once its defaults have loaded. */
+function CommandCreateEnvironmentHost({ requestSequence, projectId }: CreateEnvironmentHostProps) {
   const project = useProjectStore((state) =>
     state.projects.find((candidate) => candidate.id === projectId),
   );
@@ -255,36 +279,16 @@ function CreateEnvironmentHost({
   const { windowScope } = useScopesWithCommandFallback();
   const configReady = useConfigStore((state) => state.hasLoaded);
   const dockerReady = useDockerAvailabilityReady();
-  const dockerAvailable = useDockerAvailability();
-  const { createEnvironment, updateEnvironment, startEnvironment } = useEnvironments(null);
-  const [accepted, setAccepted] = useState(false);
-  const projectsLive = projectsLoaded && !projectsLoading;
-  const ready = Boolean(
-    project &&
-    projectsLoaded &&
-    (!handoff || accepted || projectsLive) &&
-    configReady &&
-    dockerReady,
-  );
-  const failure =
-    projectsLive && !project
-      ? "The project is not on that machine any more."
-      : ready && handoff && !accepted && !recovery && !project?.localPath && !dockerAvailable
-        ? "The project has no local checkout and Docker is unavailable."
-        : null;
-  if (ready && !failure && !accepted) setAccepted(true);
+  const ready = Boolean(project && projectsLoaded && configReady && dockerReady);
+  const missing = projectsLoaded && !projectsLoading && !project;
   useEffect(() => {
-    if (failure) {
-      reportCreateEnvironmentFailed("", requestSequence, failure);
-      closeCreateRequest(requestSequence);
-    } else if (ready && handoff) {
-      reportCreateEnvironmentOpened("", requestSequence);
-    } else if (!ready) {
+    if (missing) closeCreateRequest(requestSequence);
+    else if (!ready) {
       return windowScope.selection.subscribe(() => closeCreateRequest(requestSequence));
     }
-  }, [failure, handoff, ready, requestSequence, windowScope]);
+  }, [missing, ready, requestSequence, windowScope]);
 
-  if (!project || !ready || failure) return null;
+  if (!project || !ready) return null;
   return (
     <CreateEnvironmentFlowDialog
       open
@@ -293,12 +297,124 @@ function CreateEnvironmentHost({
       }}
       projectId={projectId}
       projectName={project.name}
-      handoff={handoff}
-      recovery={recovery}
-      createEnvironment={createEnvironment}
-      updateEnvironment={updateEnvironment}
-      startEnvironment={startEnvironment}
     />
+  );
+}
+
+/** The dialog aimed at another machine, once its scope holds what the form reads. */
+function MachineCreateEnvironmentHost({
+  requestSequence,
+  nodeId,
+  projectId,
+}: CreateEnvironmentHostProps) {
+  const { windowScope } = useScopesWithCommandFallback();
+  useSignal(windowScope.nodeScopes);
+  const { portalState } = useFederation();
+  const machine = nodeName(portalState.nodes, nodeId);
+  const [target, setTarget] = useState<CreateEnvironmentTarget | null>(null);
+  const reportFailure = useEffectEvent((error: unknown) => {
+    toast.error(`Could not open the new environment form on ${machine}`, {
+      description: error instanceof Error ? error.message : String(error),
+    });
+    closeCreateRequest(requestSequence);
+  });
+  useEffect(() => {
+    const preparation = new AbortController();
+    // Until it opens, going elsewhere in the window drops the request.
+    const stopSelection = windowScope.selection.subscribe(() =>
+      closeCreateRequest(requestSequence),
+    );
+    prepareCreateEnvironmentTarget({
+      windowScope,
+      nodeId,
+      projectId,
+      requireUsable: false,
+      signal: preparation.signal,
+    }).then(
+      (prepared) => {
+        stopSelection();
+        if (!preparation.signal.aborted) setTarget(prepared);
+      },
+      (error: unknown) => {
+        stopSelection();
+        if (!preparation.signal.aborted) reportFailure(error);
+      },
+    );
+    return () => {
+      preparation.abort();
+      stopSelection();
+    };
+  }, [nodeId, projectId, requestSequence, windowScope]);
+
+  if (!target) {
+    return (
+      <ConnectingToMachine machine={machine} onCancel={() => closeCreateRequest(requestSequence)} />
+    );
+  }
+  return (
+    <NodeScopeProvider scope={target.scope}>
+      <MachineCreateEnvironmentDialog
+        target={target}
+        onClose={() => closeCreateRequest(requestSequence)}
+      />
+    </NodeScopeProvider>
+  );
+}
+
+function MachineCreateEnvironmentDialog({
+  target,
+  onClose,
+}: {
+  target: CreateEnvironmentTarget;
+  onClose: () => void;
+}) {
+  const dockerAvailable =
+    useNodeDockerAvailability(target.scope, !target.scope.disposed, target) ??
+    target.dockerAvailable;
+  return (
+    <DockerAvailabilityProvider available={dockerAvailable}>
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+        projectId={target.projectId}
+      />
+    </DockerAvailabilityProvider>
+  );
+}
+
+/** How long a machine takes to answer before the window says it is waiting for it. */
+const CONNECTING_DIALOG_DELAY_MS = 400;
+
+function ConnectingToMachine({ machine, onCancel }: { machine: string; onCancel: () => void }) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShown(true), CONNECTING_DIALOG_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+  return (
+    <Dialog
+      open={shown}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <DialogContent size="sm">
+        <DialogHeader>
+          <DialogTitle>Create Ork (environment)</DialogTitle>
+          <DialogDescription className="flex items-center gap-2" role="status">
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            Connecting to {machine}…
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -73,6 +73,9 @@ const NOT_FOLLOWED_MODULES: ReadonlySet<string> = new Set([
  * counts them nor follows their imports. Module id → why.
  */
 export const WORKSPACE_EXEMPT_MODULES: Readonly<Record<string, string>> = {
+  [`${WEB_SOURCE_ROOT}/lib/federation/in-tree-scopes`]:
+    "The window opens another node's scope (the New Environment dialog's target machine) and " +
+    "starts its services, whose command-bound reads are the app command scope's own branch.",
   [`${WEB_SOURCE_ROOT}/components/settings/agent/refresh-model-catalog`]:
     "Global Settings' model catalogue refresh, for the window's settings; the workspace " +
     "imports only its model catalogue refresh event and scope matcher.",

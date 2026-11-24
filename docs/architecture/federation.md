@@ -599,6 +599,14 @@ window's streams. Before a scope's streams close, its attention is handed to
 the command node's relay (`attentionHandoff`, plan item 5001), so a question
 on a suspended node still notifies.
 
+Something that uses a hidden node's scope pins it
+(`ScopeLifecycle.pin(nodeId)`, the New Environment dialog aimed at that node):
+the scope is protected from the suspend timer and memory pressure until the
+pin is released. Target preparation acquires its pin as the scope joins the
+lifecycle and keeps it until the dialog releases that target. A hidden
+document on iOS still suspends pinned scopes, which resume when the document
+becomes visible.
+
 ### Budgets
 
 Memory is bounded per window, never per node, so more nodes do not multiply
@@ -669,7 +677,9 @@ window holds its scope `warm` or `live`, `useRemoteMachineViews` takes its
 projects and environments from that scope's `projectStore` and
 `environmentStore` (`machineViewWithScopeRows`), so a change the scope hears
 on the node's own stream, such as an environment renamed, shows without
-waiting for the next summary. Every other node, and a `summary` or
+waiting for the next summary. Warm services process these collection changes
+when the dialog opens a scope in the background, even before its workspace
+mounts. Every other node, and a `summary` or
 `suspended` one, keeps its summary rows.
 
 - **The same row either way.** The scope's records go through the projection
@@ -899,8 +909,9 @@ button):
   machine has one), else, when the command node has no copy, the first icon in
   machine order. Its members' project-home activity buttons follow the name.
   A **+** button labelled "New environment in <repository>" follows them,
-  always visible, and opens the New Environment dialog of the
-  member the heading opens (this window's own dialog for its own copy).
+  always visible, and opens the window's New Environment dialog aimed at the
+  member the heading opens
+  ([command-nodes.md](command-nodes.md#opening-an-environment-on-another-node)).
   A chevron sits to its right at the row's right edge, with the same icon
   and desktop styling as a folder heading's. On narrow viewports or with
   a coarse primary pointer, both repository actions are 40 × 40 px. The

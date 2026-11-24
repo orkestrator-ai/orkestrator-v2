@@ -22,8 +22,9 @@
  *
  * None of it cancels work on the node (invariant 2): the node's agents,
  * terminals and pipelines keep running. Holds are counted for the views that
- * show the node; releasing the last one leaves the scope to its tiers (this
- * replaced 4001's 60 s grace timer). A disposed scope's next hold reopens it.
+ * use the node. Releasing the last hold leaves an open scope to its tiers,
+ * or discards a still-opening connection once it arrives. A disposed scope's
+ * next hold reopens it.
  *
  * A scope this module did not open (one already in the window scope) is
  * reused and never disposed here: pressure gives it back with its services
@@ -54,6 +55,8 @@ export interface InTreeScopeHost {
 export interface InTreeScopeOptions {
   readonly windowScope?: WindowScope;
   readonly host?: InTreeScopeHost;
+  /** Protects the scope from idle suspension and pressure for this hold. */
+  readonly pin?: boolean;
   /**
    * Reads the node's local snapshot while its scope opens, and hydrates the
    * opened scope from it before its services start (plan item 4003);
@@ -85,6 +88,7 @@ export interface InTreeScopeHold {
 
 interface Entry {
   refs: number;
+  readonly pinsOnOpen: Set<() => void>;
   readonly scope: Promise<NodeScope>;
   opened: NodeScope | null;
   owned: boolean;
@@ -225,6 +229,7 @@ export function holdInTreeScope(
     const existing = windowScope.get(nodeId as BackendId);
     const created: Entry = {
       refs: 0,
+      pinsOnOpen: new Set(),
       opened: null,
       owned: existing === null,
       managed: null,
@@ -240,7 +245,8 @@ export function holdInTreeScope(
         (scope) => {
           created.opened = scope;
           // The window's in-tree scopes were closed while it opened.
-          if (map.get(nodeId) !== created) {
+          if (map.get(nodeId) !== created || created.refs === 0) {
+            if (map.get(nodeId) === created) map.delete(nodeId);
             if (created.owned) scope.dispose();
             throw new Error("This workspace was closed while it opened.");
           }
@@ -248,7 +254,12 @@ export function holdInTreeScope(
             options.handoff ??
             ((handed: NodeScope) => attentionHandoff(windowScope, handed.nodeId));
           created.managed = windowScope.lifecycle.manage(scope, {
-            startServices: start,
+            startServices: (opened) => {
+              // The lifecycle entry exists now and pressure has not run yet.
+              for (const pin of created.pinsOnOpen) pin();
+              created.pinsOnOpen.clear();
+              return start(opened);
+            },
             ...readHooks,
             handoff,
             toSummary: (summarised) => {
@@ -279,11 +290,21 @@ export function holdInTreeScope(
   const held = entry;
   held.refs += 1;
   let released = false;
+  let unpin: (() => void) | undefined;
+  const pin = () => {
+    if (held.opened) unpin = windowScope.lifecycle.pin(held.opened.nodeId);
+  };
+  if (options.pin) {
+    if (held.managed) pin();
+    else held.pinsOnOpen.add(pin);
+  }
   return {
     scope: held.scope,
     release() {
       if (released) return;
       released = true;
+      held.pinsOnOpen.delete(pin);
+      unpin?.();
       // The scope stays in the lifecycle: hidden, it suspends on its timer
       // and pressure may take it back to summary.
       held.refs -= 1;

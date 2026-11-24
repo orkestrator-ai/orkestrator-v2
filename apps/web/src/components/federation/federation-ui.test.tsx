@@ -1,3 +1,4 @@
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as sortable from "@dnd-kit/sortable";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -872,7 +873,7 @@ describe("RT-02/OP-05: actions keep the destination captured when they started",
 });
 
 describe("UI-04: creating inside a project instance", () => {
-  test("UI-04: a project's \"+\" on a machine opens that machine's dialog", async () => {
+  test('UI-04: a project\'s "+" on a machine opens the dialog aimed at it', async () => {
     const fake = installTwoMachines();
     renderWithFederation(<RepositoryList />);
     await waitForRows(2);
@@ -882,14 +883,15 @@ describe("UI-04: creating inside a project instance", () => {
         name: "New environment in app",
       }),
     );
-    // The central region shows Machine B's workspace, which opens its own New
-    // Environment dialog; the window stays where it is and nothing is created
-    // until the user submits it.
-    await waitFor(() => expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_b"));
-    expect(useRemoteWorkspaceStore.getState().requests.bk_b?.request).toEqual({
+    // The window's own New Environment dialog, aimed at Machine B. The window
+    // stays where it is and nothing is created until the user submits it.
+    expect(useAppDialogStore.getState().request).toEqual({
+      kind: "create-environment",
+      nodeId: "bk_b" as BackendId,
       projectId: "project-1",
-      createEnvironmentProjectId: "project-1",
     });
+    useAppDialogStore.getState().close();
+    expect(useRemoteWorkspaceStore.getState().active).toBeNull();
     expect(reload).not.toHaveBeenCalled();
     expect(fake.calls.filter((call) => call.command === "create_environment")).toEqual([]);
   });

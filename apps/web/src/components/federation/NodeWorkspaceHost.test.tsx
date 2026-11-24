@@ -216,7 +216,7 @@ for (const delayed of ["mount", "environments", "dialog"] as const) {
       ask({
         projectId: project.id,
         ...(delayed === "dialog"
-          ? { createEnvironmentProjectId: project.id }
+          ? { dialog: "repository-settings" as const }
           : { environmentId: environment.id, dialog: "environment-settings" as const }),
       });
       const host = delayed === "mount" ? null : renderInAppCommandScope(<NodeWorkspaceHost />);

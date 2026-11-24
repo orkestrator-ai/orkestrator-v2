@@ -849,8 +849,12 @@ for (const action of [
         expectDomAbsent(screen.queryByRole("dialog", { name: "Projects and environments" })),
       );
       expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
-      expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe("bk_remote");
+      // New Environment is the window's own dialog: the window stays where it is.
+      expect(useRemoteWorkspaceStore.getState().active?.nodeId ?? null).toBe(
+        action === "createEnvironment" ? null : "bk_remote",
+      );
     } finally {
+      useAppDialogStore.getState().close();
       useRemoteWorkspaceStore.setState(remote, true);
       appCommandStore(uiStore).setState(ui, true);
       portalStore.store.setState(portal, true);

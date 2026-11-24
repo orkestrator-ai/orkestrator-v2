@@ -112,9 +112,11 @@ test("the heading's + opens New Environment on the machine the heading opens", a
   });
   await expect(add).toHaveAttribute("title", "New environment on mini");
   await add.click();
-  await expect(page.getByTestId("opened")).toHaveText("bk_mini");
-  await expect(page.getByTestId("intent")).toContainText('"createEnvironmentProjectId":"ork"');
-  await expect(page.getByTestId("intent")).toContainText('"projectId":"ork"');
+  // The window's own dialog, aimed at mini: no machine's workspace opens for it.
+  await expect(page.getByTestId("dialog-request")).toHaveText(
+    '{"kind":"create-environment","nodeId":"bk_mini","projectId":"ork"}',
+  );
+  await expect(page.getByTestId("opened")).toHaveText("");
   // Neither the + nor the heading changes the list.
   await heading(page, "acme/telegram-scraper").click();
   await expect(page.getByTestId("opened")).toHaveText("bk_beelink2");
@@ -588,8 +590,7 @@ test("the chevron right of the + collapses and expands a repository", async ({
   await expect(rows.first()).toBeVisible();
 
   await (hasTouch ? add.tap() : add.click());
-  await expect(page.getByTestId("opened")).toHaveText("bk_mini");
-  await expect(page.getByTestId("intent")).toContainText('"createEnvironmentProjectId":"ork"');
+  await expect(page.getByTestId("dialog-request")).toContainText('"nodeId":"bk_mini"');
   await expect(collapse).toHaveAttribute("aria-expanded", "true");
   await expect(rows.first()).toBeVisible();
 });

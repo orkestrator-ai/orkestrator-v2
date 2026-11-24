@@ -1,38 +1,25 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import type { ComponentProps } from "react";
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realUseProjects from "@/hooks/useProjects";
 import * as realCreateEnvironmentFlow from "@/components/environments/CreateEnvironmentFlowDialog";
 import { uiStore } from "@/stores/uiStore";
-import type { CreateEnvironmentFlowOperations } from "@/components/environments/CreateEnvironmentFlowDialog";
 import type { Project } from "@/types";
 
 const realUseProjectsSnapshot = { ...realUseProjects };
 const realCreateEnvironmentFlowSnapshot = { ...realCreateEnvironmentFlow };
 let projectsValue: Project[] = [];
 let isLoadingValue = false;
-let flowProps:
-  | (CreateEnvironmentFlowOperations & {
-      open: boolean;
-      onOpenChange: (open: boolean) => void;
-      projectId: string | null;
-      projectName?: string;
-    })
-  | null = null;
+type FlowProps = ComponentProps<typeof realCreateEnvironmentFlow.CreateEnvironmentFlowDialog>;
+let flowProps: FlowProps | null = null;
 
 mock.module("@/hooks/useProjects", () => ({
   useProjects: () => ({ projects: projectsValue, isLoading: isLoadingValue }),
 }));
 
 mock.module("@/components/environments/CreateEnvironmentFlowDialog", () => ({
-  CreateEnvironmentFlowDialog: (
-    props: CreateEnvironmentFlowOperations & {
-      open: boolean;
-      onOpenChange: (open: boolean) => void;
-      projectId: string | null;
-      projectName?: string;
-    },
-  ) => {
+  CreateEnvironmentFlowDialog: (props: FlowProps) => {
     flowProps = props;
     return props.open ? (
       <button type="button" onClick={() => props.onOpenChange(false)}>
@@ -175,17 +162,10 @@ describe("ProjectLauncher", () => {
   });
 
   test("integrates recent project selection and opens and closes the shared create flow", () => {
-    const operations = {
-      createEnvironment: mock(async () => {
-        throw new Error("not called");
-      }),
-      updateEnvironment: mock(() => {}),
-      startEnvironment: mock(async () => {}),
-    } satisfies CreateEnvironmentFlowOperations;
     projectsValue = [makeProject(1), makeProject(2)];
     appCommandStore(uiStore).setState({ recentProjectIds: ["project-2"] });
 
-    renderInAppCommandScope(<ProjectLauncher {...operations} />);
+    renderInAppCommandScope(<ProjectLauncher />);
 
     const projectButtons = screen.getAllByRole("button", { name: /^Open Project/ });
     expect(projectButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
@@ -203,7 +183,6 @@ describe("ProjectLauncher", () => {
       open: true,
       projectId: "project-1",
       projectName: "Project 1",
-      ...operations,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Close create flow" }));

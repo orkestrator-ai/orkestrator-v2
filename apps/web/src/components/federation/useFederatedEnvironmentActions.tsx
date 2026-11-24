@@ -231,10 +231,10 @@ export function useFederatedEnvironmentActions(
 }
 
 /**
- * "New environment" inside a project instance: always on the project's own
- * machine, and always through that machine's New Environment dialog. The
- * window moves to the machine first when it is another one, so the dialog's
- * defaults, agent settings and start are the machine's own.
+ * "New environment" inside a project instance: the window's New Environment
+ * dialog, aimed at the project's own machine, so its defaults, agent settings
+ * and start are that machine's. The window stays where it is until the
+ * environment exists.
  */
 export function newFederatedEnvironment(machine: MachineView, project: FederatedProject): void {
   openMachineWorkspace({

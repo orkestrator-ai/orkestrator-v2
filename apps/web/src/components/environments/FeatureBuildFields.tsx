@@ -444,7 +444,7 @@ function FeatureBuildModelPickers({
                   onSelectionChange={(selection) =>
                     updateReviewers(
                       models.reviewers.map((row) =>
-                        row.key === reviewer.key ? { ...row, ...selection } : row,
+                        row.key === reviewer.key ? { key: row.key, ...selection } : row,
                       ),
                     )
                   }

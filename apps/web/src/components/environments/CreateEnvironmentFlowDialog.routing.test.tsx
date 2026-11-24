@@ -1,36 +1,41 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
-import type { BackendId } from "@orkestrator/protocol/federation";
+import {
+  environmentKey,
+  environmentRef,
+  projectKey,
+  projectRef,
+  type BackendId,
+} from "@orkestrator/protocol/federation";
+import { createDefaultAppConfig } from "@orkestrator/protocol/app-config-defaults";
 import { toNodeProjectSummary, type NodeSummary } from "@orkestrator/protocol/node-summaries";
-import { InTreeWorkspace } from "@/components/federation/InTreeWorkspace";
-import { configureInTreeScopes } from "@/lib/federation/in-tree-scopes";
+import { configureInTreeScopes, inTreeScopeHolds } from "@/lib/federation/in-tree-scopes";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
-import { NodeWorkspaceHost } from "@/components/federation/NodeWorkspaceHost";
 import { FederationProvider } from "@/components/federation/FederationProvider";
 import { AppDialogHost } from "@/components/layout/AppDialogHost";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { useHostPathPickerStore } from "@/lib/host-path-picker";
 import { invoke } from "@/lib/native/backend";
+import { useRemoteMachineViews } from "@/components/federation/useMachineViews";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
 import { getWindowScope, resetWindowScopeForTests } from "@/lib/node-scope/app-window-scope";
-import { NodeScopeProvider } from "@/lib/node-scope/providers";
-import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
-import {
-  CREATE_ENVIRONMENT_HANDOFF_TIMEOUT_MS,
-  reportCreateEnvironmentFailed,
-  stopCreateEnvironmentWatches,
-} from "@/lib/federation/create-environment-handoff";
+import type { NodeScope } from "@/lib/node-scope/node-scope";
 import { portalStore } from "@/lib/portal/portal-store";
+import { agentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 import { useAppDialogStore } from "@/stores/appDialogStore";
 import { configStore } from "@/stores/configStore";
-import { environmentStore } from "@/stores/environmentStore";
+import { useMachineViewStore } from "@/stores/machineViewStore";
+import { requestResourceResync, startResourceSync } from "@/lib/resource-sync";
+import { startStoreResourceSync } from "@/lib/store-resource-sync";
 import { projectStore } from "@/stores/projectStore";
 import {
   startRemoteWorkspaceSelectionSync,
   useRemoteWorkspaceStore,
 } from "@/stores/remoteWorkspaceStore";
 import { FakeNodeClient, renderInAppCommandScope } from "@/test/render-in-node-scope";
-import type { Environment, Project } from "@/types";
+import type { AppConfig, Environment, Project } from "@/types";
+import { CREATE_ENVIRONMENT_TARGET_TIMEOUT_MS } from "./create-environment-target";
 
 const commandId = "bk_command" as BackendId;
 const leafId = "bk_leaf" as BackendId;
@@ -49,77 +54,95 @@ const leafProject = {
   gitUrl,
   order: 0,
 } as Project;
-/** The leaf project's Home, which its workspace opens when the project is selected. */
-const leafHome = {
-  id: "leaf-home",
-  projectId: leafProject.id,
-  name: "Leaf checkout Home",
-  projectHome: true,
-  environmentType: "local",
-  status: "running",
-  worktreePath: leafProject.localPath,
-} as Environment;
+const created = { id: "leaf-new", projectId: leafProject.id, name: "new" } as Environment;
+const commandProjectSelection = { nodeId: commandId, projectId: "elsewhere", environmentId: null };
 const nativeInvoke = invoke as ReturnType<typeof mock>;
+const machineViewState = useMachineViewStore.getState();
 const remoteState = useRemoteWorkspaceStore.getState();
 const portalState = portalStore.getState();
-let stopSync: (() => void) | undefined;
+const stops: Array<() => void> = [];
 
 afterEach(() => {
-  stopCreateEnvironmentWatches();
   cleanup();
+  useHostPathPickerStore.getState().settle(null);
   mock.restore();
   nativeInvoke.mockReset();
-  stopSync?.();
+  for (const stop of stops.splice(0).reverse()) stop();
   useAppDialogStore.getState().close();
   portalStore.store.setState(portalState, true);
   useRemoteWorkspaceStore.setState(remoteState, true);
+  useMachineViewStore.setState(machineViewState, true);
   resetWindowScopeForTests();
 });
 
-/** The part of a node's workspace that opens a selected project's Home. */
-function HomeActivation() {
-  useProjectHomeActivation();
-  return null;
+interface SetupOptions {
+  leafReady?: boolean;
+  project?: Project;
+  leafDocker?: boolean;
+  commandDocker?: boolean;
+  startServices?: (scope: NodeScope) => () => void;
+  /** No scope is open for the leaf; the host opens it with this. */
+  openLeaf?: () => Promise<NodeScope>;
 }
 
-function setup(
-  leafReady: boolean,
-  { leafHome: withHome = false, leafOffline = false, leafDocker = false } = {},
-) {
+function setup({
+  leafReady = true,
+  project = leafProject,
+  leafDocker = false,
+  commandDocker = false,
+  openLeaf,
+  startServices = () => () => undefined,
+}: SetupOptions = {}) {
   nativeInvoke.mockImplementation(async (command: string) =>
-    command === "create_feature_build"
-      ? { pipelineId: "pipeline", environmentId: "env", ticketId: "ticket" }
-      : null,
+    command === "get_projects"
+      ? [commandProject]
+      : command === "create_feature_build"
+        ? { pipelineId: "pipeline", environmentId: "env", ticketId: "ticket" }
+        : null,
   );
-  const command = new FakeNodeClient({ nodeId: commandId });
-  resetWindowScopeForTests(command);
+  resetWindowScopeForTests(new FakeNodeClient({ nodeId: commandId }));
   const windowScope = getWindowScope();
+  const commandScope = windowScope.commandScope();
   const leaf = new FakeNodeClient({
     nodeId: leafId,
     invoke: {
-      get_projects: [leafProject],
-      get_environments: withHome ? [leafHome] : [],
-      get_environment_snapshots: [],
+      get_projects: [project],
+      check_docker: { available: leafDocker, reason: null },
+      get_agent_model_catalog_cache: { schemaVersion: 1 },
+      get_opencode_model_catalog_cache: null,
+      get_project_base_branch_tip: () => Promise.reject(new Error("no base")),
+      get_project_setup_requirements: { rootSteps: 0, aptPackages: null },
+      patch_repository_settings: { repositories: {} },
       get_container_github_credential_status: { available: true },
-      create_environment: (args: Record<string, unknown>) => ({
-        ...leafHome,
-        id: "leaf-new",
-        name: String(args.name ?? "new"),
-        projectHome: false,
+      create_environment: created,
+      update_environment_agent_settings: (args: Readonly<Record<string, unknown>>) => ({
+        ...created,
+        interactionMode: args.interactionMode,
       }),
-      update_environment_agent_settings: { ...leafHome, id: "leaf-new", projectHome: false },
+      start_environment_background: null,
+      create_feature_build: {
+        pipelineId: "pipeline",
+        environmentId: "leaf-built",
+        ticketId: "ticket",
+      },
+      get_environment: null,
+      get_build_pipeline: null,
     },
   });
-  const leafScope = windowScope.open({ role: "leaf", client: leaf });
-  leafScope.store(configStore).setState({ hasLoaded: leafReady });
-  leafScope.store(projectStore).setState({ projects: [leafProject], hasLoaded: true });
-  if (withHome) leafScope.store(environmentStore).setState({ environments: [leafHome] });
-  if (leafOffline) leafScope.dispose();
-  windowScope
-    .commandScope()
+  stops.push(
+    configureInTreeScopes({
+      prepare: null,
+      startServices,
+      ...(openLeaf ? { host: { kind: "browser" as const, openLeafScope: openLeaf } } : {}),
+    }),
+    startRemoteWorkspaceSelectionSync(),
+  );
+  const leafScope = openLeaf ? null : windowScope.open({ role: "leaf", client: leaf });
+  leafScope?.store(configStore).setState({ hasLoaded: leafReady });
+  commandScope
     .store(projectStore)
-    .setState({ projects: [commandProject], hasLoaded: true });
-  windowScope.commandScope().store(configStore).setState({ hasLoaded: true });
+    .setState({ projects: [commandProject], hasLoaded: true, isLoading: false });
+  commandScope.store(configStore).setState({ hasLoaded: true });
   portalStore.store.setState({
     selfId: commandId,
     loaded: true,
@@ -134,31 +157,28 @@ function setup(
       } as unknown as NodeSummary,
     ],
   });
-  stopSync = startRemoteWorkspaceSelectionSync();
   spyOn(portalStore, "start").mockImplementation(() => () => undefined);
   renderInAppCommandScope(
     <FederationProvider>
-      <DockerAvailabilityProvider available={false}>
+      <DockerAvailabilityProvider available={commandDocker}>
         <AppDialogHost />
-        {leafOffline ? (
-          <OfflineWorkspace />
-        ) : (
-          <NodeScopeProvider scope={leafScope}>
-            <DockerAvailabilityProvider available={leafDocker}>
-              <NodeWorkspaceHost />
-              {withHome ? <HomeActivation /> : null}
-            </DockerAvailabilityProvider>
-          </NodeScopeProvider>
-        )}
+        <SidebarRows />
       </DockerAvailabilityProvider>
     </FederationProvider>,
   );
-  return { leaf, leafScope, windowScope };
+  windowScope.select(commandProjectSelection);
+  return { leaf, leafScope: leafScope!, commandScope, windowScope };
 }
 
-function OfflineWorkspace() {
-  const shown = useRemoteWorkspaceStore((state) => state.active?.nodeId === leafId);
-  return shown ? <InTreeWorkspace nodeId={leafId} shown /> : null;
+function SidebarRows() {
+  const views = useRemoteMachineViews();
+  return (
+    <output aria-label="Studio environments">
+      {views
+        .flatMap((view) => [...view.environmentsByProject.values()].flat().map((row) => row.name))
+        .join(", ")}
+    </output>
+  );
 }
 
 function open(nodeId: BackendId, project: Project) {
@@ -177,82 +197,751 @@ async function pick(name: string) {
   fireEvent.click(await screen.findByRole("option", { name }));
 }
 
-test("switches to the command machine without a sidebar and starts a Pipeline on its backend", async () => {
-  const { leaf } = setup(true);
-  open(leafId, leafProject);
+const form = () => screen.getByRole("dialog");
+const machine = () => screen.getByRole<HTMLButtonElement>("combobox", { name: "Machine" });
+const createButton = () =>
+  screen.getByRole<HTMLButtonElement>("button", { name: "Create environment" });
+const promptField = () => screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement;
+const nameField = () => screen.getByLabelText("Environment name (optional)") as HTMLInputElement;
+const targetIs = (name: string) =>
+  waitFor(() => expect(screen.queryByText(`Git worktree on ${name}`) !== null).toBe(true));
+
+test("picking another machine keeps the same dialog, and the create goes to that machine", async () => {
+  const { leaf, windowScope } = setup();
+  const selections = mock((_selection: unknown) => undefined);
+  stops.push(windowScope.selection.subscribe(selections));
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  const dialog = form();
+  const prompt = promptField();
+  fireEvent.change(prompt, { target: { value: "Ship the report" } });
+  fireEvent.change(nameField(), { target: { value: "report" } });
+  fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
+  const file = new File(["notes"], "notes.md", { type: "text/markdown" });
+  fireEvent.drop(dialog, {
+    dataTransfer: { files: [file], types: ["Files"], dropEffect: "copy" },
+  });
+  await screen.findByText("notes.md");
+
+  await pick("Studio");
+  // The dropdown names it at once; nothing else in the window changes.
+  expect(machine().textContent).toContain("Studio");
+  await targetIs("Studio");
+  expect(form()).toBe(dialog);
+  expect(promptField()).toBe(prompt);
+  expect(prompt.value).toBe("Ship the report");
+  expect(nameField().value).toBe("report");
+  expect(screen.getByText("notes.md")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
+  expect(selections).not.toHaveBeenCalled();
+  expect(useRemoteWorkspaceStore.getState().openNodes).toEqual([]);
+
+  fireEvent.click(createButton());
+  await waitFor(() => expect(leaf.calls("start_environment_background")).toHaveLength(1));
+  expect(leaf.calls("create_environment")[0]?.args).toMatchObject({
+    projectId: leafProject.id,
+    name: "report",
+    initialPrompt: "Ship the report",
+  });
+  expect(leaf.calls("update_environment_agent_settings")).toHaveLength(1);
+  expect(nativeInvoke.mock.calls.some(([command]) => command === "create_environment")).toBe(false);
+  // Only now does the window go to the machine, on the new environment.
+  expect(windowScope.selection.get()).toMatchObject({
+    nodeId: leafId,
+    projectId: leafProject.id,
+    environmentId: created.id,
+  });
+  expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+    nodeId: leafId,
+    environmentId: created.id,
+  });
+  expect(useAppDialogStore.getState().request).toBeNull();
+});
+
+test("a Pipeline build goes to the picked machine too", async () => {
+  const { leaf } = setup();
+  open(commandId, commandProject);
   await screen.findByRole("dialog");
   fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
   fireEvent.change(screen.getByLabelText(/Feature name/), { target: { value: "Improve search" } });
   fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Search by label" } });
-  fireEvent.change(screen.getByLabelText("Acceptance criteria"), {
-    target: { value: "Matches saved labels" },
+  await pick("Studio");
+  await targetIs("Studio");
+  fireEvent.click(createButton());
+  await waitFor(() => expect(leaf.calls("create_feature_build")).toHaveLength(1));
+  expect(leaf.calls("create_feature_build")[0]?.args).toMatchObject({
+    projectId: leafProject.id,
+    title: "Improve search",
+    description: "Search by label",
   });
+  expect(useMachineViewStore.getState().recentKeys).toEqual(
+    expect.arrayContaining([
+      environmentKey(environmentRef(leafId, "leaf-built")),
+      projectKey(projectRef(leafId, leafProject.id)),
+    ]),
+  );
+  expect(nativeInvoke.mock.calls.some(([command]) => command === "create_feature_build")).toBe(
+    false,
+  );
+  await waitFor(() =>
+    expect(useRemoteWorkspaceStore.getState().active).toMatchObject({
+      nodeId: leafId,
+      environmentId: "leaf-built",
+    }),
+  );
+});
+
+test("opening it on another machine shows the dialog without moving the window, and can aim back", async () => {
+  const { leaf, windowScope } = setup();
+  open(leafId, leafProject);
+  await screen.findByText("Leaf checkout");
+  expect(machine().textContent).toContain("Studio");
+  expect(windowScope.selection.get()).toEqual(commandProjectSelection);
+  fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
+  fireEvent.change(screen.getByLabelText(/Feature name/), { target: { value: "Improve search" } });
 
   await pick("This machine");
   await screen.findByText("Command checkout");
   expect((screen.getByLabelText(/Feature name/) as HTMLInputElement).value).toBe("Improve search");
-  expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe(
-    "Search by label",
-  );
-  expect((screen.getByLabelText("Acceptance criteria") as HTMLTextAreaElement).value).toBe(
-    "Matches saved labels",
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
+  fireEvent.click(createButton());
   await waitFor(() =>
     expect(
-      nativeInvoke.mock.calls.filter(([command]) => command === "create_feature_build"),
-    ).toHaveLength(1),
+      nativeInvoke.mock.calls.find(([command]) => command === "create_feature_build")?.[1],
+    ).toMatchObject({ projectId: commandProject.id, title: "Improve search" }),
   );
-  const args = nativeInvoke.mock.calls.find(([command]) => command === "create_feature_build")?.[1];
-  expect(args).toMatchObject({
-    projectId: commandProject.id,
-    title: "Improve search",
-    description: "Search by label",
-    acceptanceCriteria: "Matches saved labels",
-  });
   expect(leaf.calls("create_feature_build")).toHaveLength(0);
 });
 
-test("cancelling a switch during destination hydration discards its form and preserves the source draft", async () => {
-  const { leafScope, windowScope } = setup(false);
+test("nothing can be created while the picked machine is made ready, and picking back cancels it", async () => {
+  const { leaf, leafScope } = setup({ leafReady: false });
   open(commandId, commandProject);
-  fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
-    target: { value: "Recover this draft" },
-  });
-  fireEvent.change(screen.getByLabelText("Environment name (optional)"), {
-    target: { value: "pending-name" },
-  });
-  await pick("Studio");
-  expect(screen.queryByRole("dialog") === null).toBe(true);
-  expect(
-    useRemoteWorkspaceStore.getState().requests[leafId]?.request.createEnvironmentHandoff?.name,
-  ).toBe("pending-name");
-
-  act(() => windowScope.select({ nodeId: leafId, projectId: "other", environmentId: null }));
-  act(() => leafScope.store(configStore).setState({ hasLoaded: true }));
-  expect(useRemoteWorkspaceStore.getState().requests[leafId]).toBeUndefined();
-  expect(screen.queryByRole("dialog") === null).toBe(true);
-
-  open(leafId, leafProject);
   await screen.findByRole("dialog");
-  expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
-    "",
-  );
-  expect((screen.getByLabelText("Environment name (optional)") as HTMLInputElement).value).toBe("");
+  await pick("Studio");
+  expect(machine().textContent).toContain("Studio");
+  expect(createButton().disabled).toBe(true);
+  expect(screen.queryByText("Git worktree on Studio") === null).toBe(true);
+  // The form stays usable.
+  fireEvent.change(promptField(), { target: { value: "Typed while waiting" } });
+
+  await pick("This machine");
+  expect(createButton().disabled).toBe(false);
+  await act(async () => leafScope.store(configStore).setState({ hasLoaded: true }));
+  expect(machine().textContent).toContain("This machine");
+  expect(screen.queryByText("Git worktree on Studio") === null).toBe(true);
+  expect(promptField().value).toBe("Typed while waiting");
+  expect(leaf.calls("create_environment")).toHaveLength(0);
+});
+
+const unusable: Array<[string, SetupOptions, string]> = [
+  ["its project is gone", { project: { ...leafProject, id: "another" } }, "not on that machine"],
+  [
+    "it has neither a checkout nor Docker",
+    { project: { ...leafProject, localPath: "" } },
+    "no local checkout and Docker is unavailable",
+  ],
+  [
+    "it cannot be reached",
+    { openLeaf: () => Promise.reject(new Error("offline")) },
+    "Could not connect: offline",
+  ],
+];
+for (const [label, options, reason] of unusable) {
+  test(`a machine is not switched to when ${label}, and the form stays as it was`, async () => {
+    const error = spyOn(toast, "error").mockImplementation(() => "toast");
+    setup(options);
+    open(commandId, commandProject);
+    await screen.findByRole("dialog");
+    const dialog = form();
+    fireEvent.change(promptField(), { target: { value: "Keep this" } });
+    await pick("Studio");
+    await waitFor(() => expect(error).toHaveBeenCalledTimes(1));
+    expect(error.mock.calls[0]?.[0]).toBe("Could not switch to Studio");
+    expect(error.mock.calls[0]?.[1]).toMatchObject({
+      description: expect.stringContaining(reason),
+    });
+    expect(form()).toBe(dialog);
+    expect(machine().textContent).toContain("This machine");
+    expect(promptField().value).toBe("Keep this");
+    expect(createButton().disabled).toBe(false);
+  });
+}
+
+test("a machine that never answers gives the form back after the time limit", async () => {
+  const error = spyOn(toast, "error").mockImplementation(() => "toast");
+  const clock = installControlledTimeout(CREATE_ENVIRONMENT_TARGET_TIMEOUT_MS, {
+    label: "create-environment target",
+  });
+  try {
+    const gate = Promise.withResolvers<void>();
+    const { leaf, windowScope } = setup({
+      openLeaf: async () => {
+        await gate.promise;
+        return windowScope.open({ role: "leaf", client: leaf });
+      },
+    });
+    open(commandId, commandProject);
+    await screen.findByRole("dialog");
+    await pick("Studio");
+    expect(clock.pendingCount()).toBe(1);
+    await act(async () => {
+      expect(clock.advance()).toBe(1);
+    });
+    expect(error.mock.calls[0]?.[1]).toMatchObject({
+      description: expect.stringContaining("in time"),
+    });
+    expect(createButton().disabled).toBe(false);
+    expect(clock.pendingCount()).toBe(0);
+    expect(inTreeScopeHolds(leafId, windowScope)).toBe(0);
+    await act(async () => gate.resolve());
+    expect(leaf.calls("check_docker")).toHaveLength(0);
+    expect(leaf.calls("get_projects")).toHaveLength(0);
+    expect(windowScope.get(leafId)).toBeNull();
+  } finally {
+    clock.restore();
+  }
+});
+
+test("closing while a machine is made ready drops the switch, and the next opening starts over", async () => {
+  const error = spyOn(toast, "error").mockImplementation(() => "toast");
+  const { leafScope } = setup({ leafReady: false });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  fireEvent.change(promptField(), { target: { value: "Draft" } });
+  await pick("Studio");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await act(async () => leafScope.store(configStore).setState({ hasLoaded: true }));
+  expect(screen.queryByRole("dialog") === null).toBe(true);
 
   open(commandId, commandProject);
-  await waitFor(() =>
-    expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
-      "Recover this draft",
-    ),
-  );
-  expect((screen.getByLabelText("Environment name (optional)") as HTMLInputElement).value).toBe(
-    "pending-name",
+  await screen.findByRole("dialog");
+  expect(machine().textContent).toContain("This machine");
+  // The draft is the one kept for the machine the dialog opened on.
+  expect(promptField().value).toBe("Draft");
+  expect(error).not.toHaveBeenCalled();
+});
+
+test("a target whose scope closes falls back to the machine the dialog opened on", async () => {
+  const error = spyOn(toast, "error").mockImplementation(() => "toast");
+  const { leafScope } = setup();
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  const dialog = form();
+  fireEvent.change(promptField(), { target: { value: "Keep this" } });
+  await pick("Studio");
+  await targetIs("Studio");
+  await act(async () => leafScope.dispose());
+  await targetIs("This machine");
+  expect(form()).toBe(dialog);
+  expect(promptField().value).toBe("Keep this");
+  expect(error.mock.calls[0]?.[0]).toBe("Studio is no longer connected");
+});
+
+test("keeps the draft and returns to the origin when the selected machine leaves the registry", async () => {
+  const { leafScope } = setup();
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  const draft = promptField();
+  fireEvent.change(draft, { target: { value: "Keep this draft" } });
+  await pick("Studio");
+  await targetIs("Studio");
+
+  act(() => portalStore.store.setState({ nodes: [] }));
+  await screen.findByText(commandProject.name);
+  expect(leafScope.disposed).toBe(false);
+  expect(promptField()).toBe(draft);
+  expect(draft.value).toBe("Keep this draft");
+  expect(createButton().disabled).toBe(false);
+});
+
+test("closing the opening scope leaves the form aimed at the selected machine", async () => {
+  const { leafScope } = setup();
+  open(leafId, leafProject);
+  await screen.findByText("Leaf checkout");
+  const draft = promptField();
+  fireEvent.change(draft, { target: { value: "Keep this draft" } });
+  await pick("This machine");
+  await targetIs("This machine");
+
+  act(() => leafScope.dispose());
+  expect(promptField()).toBe(draft);
+  expect(draft.value).toBe("Keep this draft");
+  expect(machine().textContent).toContain("This machine");
+  expect(createButton().disabled).toBe(false);
+});
+
+for (const warningShown of [false, true]) {
+  test(`scope disposal cancels a credential ${warningShown ? "warning" : "check"} for the same project ID`, async () => {
+    const { leaf, leafScope } = setup({
+      leafDocker: true,
+      project: { ...leafProject, id: commandProject.id, localPath: "" },
+    });
+    const [node] = portalStore.getState().nodes;
+    act(() =>
+      portalStore.store.setState({
+        nodes: [
+          {
+            ...node!,
+            projects: [toNodeProjectSummary(leafId, { ...leafProject, id: commandProject.id }, 0)!],
+          },
+        ],
+      }),
+    );
+    const status = Promise.withResolvers<{ source: "none"; available: false }>();
+    leaf.respond("get_container_github_credential_status", () => status.promise);
+    open(commandId, commandProject);
+    await screen.findByRole("dialog");
+    await pick("Studio");
+    await screen.findByText("Isolated Docker environment on Studio");
+    expect(createButton().disabled).toBe(false);
+    fireEvent.click(createButton());
+    await waitFor(() =>
+      expect(leaf.calls("get_container_github_credential_status")).toHaveLength(1),
+    );
+    if (warningShown) {
+      status.resolve({ source: "none", available: false });
+      await screen.findByRole("alertdialog");
+    }
+    await act(async () => {
+      leafScope.dispose();
+      status.resolve({ source: "none", available: false });
+    });
+    await targetIs("This machine");
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
+    expect(leaf.calls("create_environment")).toHaveLength(0);
+    expect(createButton().disabled).toBe(false);
+  });
+}
+
+test("reselecting the same scope uses the fresh Docker result if its new poll fails", async () => {
+  const { leaf } = setup({ leafDocker: true });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await pick("Studio");
+  await targetIs("Studio");
+  await waitFor(() => expect(leaf.calls("check_docker")).toHaveLength(2));
+  await pick("This machine");
+  await targetIs("This machine");
+  let firstProbe = true;
+  leaf.respond("check_docker", () => {
+    if (firstProbe) {
+      firstProbe = false;
+      return { available: false, reason: null };
+    }
+    throw new Error("Follow-up poll failed");
+  });
+
+  await pick("Studio");
+  await targetIs("Studio");
+  await waitFor(() => expect(leaf.calls("check_docker")).toHaveLength(4));
+  expect(screen.getByRole<HTMLButtonElement>("button", { name: "Containerized" }).disabled).toBe(
+    true,
   );
 });
 
+test("a warm target waits for a fresh project read before accepting its checkout", async () => {
+  const { leaf } = setup();
+  const error = spyOn(toast, "error").mockImplementation(() => "toast");
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await pick("Studio");
+  await targetIs("Studio");
+  await pick("This machine");
+  await targetIs("This machine");
+
+  const projects = Promise.withResolvers<Project[]>();
+  leaf.respond("get_projects", () => projects.promise);
+  await pick("Studio");
+  expect(createButton().disabled).toBe(true);
+  await targetIs("This machine");
+  await act(async () => projects.resolve([]));
+  await waitFor(() =>
+    expect(error).toHaveBeenCalledWith("Could not switch to Studio", {
+      description: expect.stringContaining("not on that machine"),
+    }),
+  );
+  await targetIs("This machine");
+});
+
+test("pins a cold destination through config hydration and releases it when the form closes", async () => {
+  const config = Promise.withResolvers<AppConfig>();
+  const { leaf, windowScope } = setup({
+    openLeaf: async () => windowScope.open({ role: "leaf", client: leaf }),
+    startServices: (scope) => {
+      const stop = startStoreResourceSync({ getConfig: () => config.promise }, { scope });
+      requestResourceResync(scope);
+      return stop;
+    },
+  });
+  leaf.respond("get_environment_snapshots", []);
+  windowScope.lifecycle.configure({ memoryBudgetBytes: 1 });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await pick("Studio");
+  await waitFor(() => expect(leaf.calls("get_projects").length).toBeGreaterThan(0));
+  await windowScope.lifecycle.checkPressure();
+  expect(windowScope.lifecycle.tierOf(leafId)).toBe("warm");
+  await act(async () => config.resolve(createDefaultAppConfig() as unknown as AppConfig));
+  await targetIs("Studio");
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(inTreeScopeHolds(leafId, windowScope)).toBe(0);
+  await windowScope.lifecycle.checkPressure();
+  expect(windowScope.lifecycle.tierOf(leafId)).toBe("suspended");
+});
+
+test("a scope disposed before its config arrives fails preparation immediately", async () => {
+  const { leaf, leafScope } = setup({ leafReady: false });
+  const error = spyOn(toast, "error").mockImplementation(() => "toast");
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await pick("Studio");
+  await waitFor(() => expect(leaf.calls("get_projects")).toHaveLength(1));
+  await act(async () => leafScope.dispose());
+  expect(error).toHaveBeenCalledWith("Could not switch to Studio", {
+    description: expect.stringContaining("Its connection was closed"),
+  });
+  await targetIs("This machine");
+  expect(createButton().disabled).toBe(false);
+});
+
+test("a background-opened machine updates its sidebar and picker after the dialog closes", async () => {
+  const { leaf, windowScope } = setup({
+    openLeaf: async () => windowScope.open({ role: "leaf", client: leaf }),
+    startServices: (scope) => {
+      const stopStores = startStoreResourceSync({}, { scope });
+      const stopFeed = startResourceSync({}, scope);
+      return () => {
+        stopFeed();
+        stopStores();
+      };
+    },
+  });
+  leaf.respond("get_config", createDefaultAppConfig());
+  leaf.respond("get_environment_snapshots", []);
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await pick("Studio");
+  await targetIs("Studio");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(useRemoteWorkspaceStore.getState().openNodes).toEqual([]);
+
+  leaf.respond("get_environment_snapshots", [{ ...created, order: 0, name: "Sidebar update" }]);
+  act(() =>
+    leaf.emit("resource-changed", {
+      resource: "environment",
+      id: created.id,
+      projectId: leafProject.id,
+      revision: 1,
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByLabelText("Studio environments").textContent).toBe("Sidebar update"),
+  );
+
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  expect(machine().disabled).toBe(false);
+  leaf.respond("get_projects", []);
+  act(() =>
+    leaf.emit("resource-changed", { resource: "project", id: leafProject.id, revision: 2 }),
+  );
+  await waitFor(() => expect(machine().disabled).toBe(true));
+});
+
+test("a cancelled cold open starts no readiness work when the connection arrives", async () => {
+  const gate = Promise.withResolvers<void>();
+  const startServices = mock(() => () => undefined);
+  const { leaf, windowScope } = setup({
+    startServices,
+    openLeaf: async () => {
+      await gate.promise;
+      return windowScope.open({ role: "leaf", client: leaf });
+    },
+  });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await pick("Studio");
+  await pick("This machine");
+  expect(inTreeScopeHolds(leafId, windowScope)).toBe(0);
+  await act(async () => gate.resolve());
+  expect(startServices).not.toHaveBeenCalled();
+  expect(leaf.calls("get_projects")).toHaveLength(0);
+  expect(leaf.calls("check_docker")).toHaveLength(0);
+  expect(windowScope.get(leafId)).toBeNull();
+});
+
+test("the environment type follows what each machine can create, and comes back", async () => {
+  setup({ project: { ...leafProject, localPath: "" }, leafDocker: true });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  // The command node has a checkout and no Docker; the leaf the opposite.
+  await targetIs("This machine");
+  await pick("Studio");
+  await screen.findByText("Isolated Docker environment on Studio");
+  await pick("This machine");
+  await targetIs("This machine");
+});
+
+test("the chosen agent and model survive a machine without them, and a late model list", async () => {
+  const { leafScope, commandScope } = setup();
+  const config = createDefaultAppConfig() as unknown as AppConfig;
+  const withAgents = (agents: string[]): AppConfig => ({
+    ...config,
+    global: {
+      ...config.global,
+      enabledAgentPlatforms: agents as AppConfig["global"]["enabledAgentPlatforms"],
+      agentSettings: {
+        ...config.global.agentSettings,
+        defaultAgent: agents[0] as "codex" | "claude",
+      },
+    },
+  });
+  const models = (id: string) => [{ id, name: `Model ${id}` }];
+  act(() => {
+    commandScope
+      .store(configStore)
+      .getState()
+      .setConfig(withAgents(["codex", "claude"]));
+    commandScope.store(agentModelCatalogStore).setState({ codexModels: models("shared") as never });
+    leafScope
+      .store(configStore)
+      .getState()
+      .setConfig({
+        ...withAgents(["codex", "claude"]),
+        repositories: {
+          [leafProject.id]: {
+            defaultBranch: "main",
+            prBaseBranch: "main",
+            agentSettings: { defaultAgent: "claude" },
+          },
+        },
+      });
+    leafScope.store(agentModelCatalogStore).setState({ codexModels: models("other") as never });
+  });
+  const picker = () => screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  await waitFor(() => expect(picker().textContent).toContain("Model shared"));
+
+  await pick("Studio");
+  await targetIs("Studio");
+  await waitFor(() => expect(picker().textContent).toContain("Model other"));
+  // The machine's list arrives with the chosen model in it.
+  act(() =>
+    leafScope
+      .store(agentModelCatalogStore)
+      .setState({ codexModels: [...models("other"), ...models("shared")] as never }),
+  );
+  await waitFor(() => expect(picker().textContent).toContain("Model shared"));
+
+  // A machine where the agent is off uses its own default; going back restores it.
+  await pick("This machine");
+  await targetIs("This machine");
+  act(() => {
+    const store = leafScope.store(configStore);
+    const { config: current } = store.getState();
+    store.setState({
+      config: { ...current, global: { ...current.global, enabledAgentPlatforms: ["claude"] } },
+    });
+  });
+  await pick("Studio");
+  await targetIs("Studio");
+  await waitFor(() => expect(picker().textContent).not.toContain("Model"));
+  await pick("This machine");
+  await targetIs("This machine");
+  await waitFor(() => expect(picker().textContent).toContain("Model shared"));
+});
+
+test("restores customized Pipeline reviewers and sends only the fallback model's options", async () => {
+  const { commandScope, leafScope, leaf } = setup();
+  const shared = { id: "shared", name: "Custom review model", reasoningEfforts: ["high"] };
+  const fallback = { id: "fallback", name: "Fallback review model", reasoningEfforts: [] };
+  act(() => {
+    commandScope.store(agentModelCatalogStore).setState({ codexModels: [shared] as never });
+    leafScope.store(agentModelCatalogStore).setState({ codexModels: [fallback] as never });
+  });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  fireEvent.click(screen.getByRole("button", { name: "Pipeline" }));
+  fireEvent.change(screen.getByLabelText(/Feature name/), { target: { value: "Test review" } });
+  fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+  fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+  const reviewer = () =>
+    screen.getByRole("combobox", { name: "Review 1 agent, model and reasoning" });
+  await act(async () => fireEvent.pointerDown(reviewer()));
+  fireEvent.click(screen.getByRole("button", { name: "codex models", hidden: true }));
+  const reasoning = screen.getByRole("group", { name: "Reasoning", hidden: true });
+  fireEvent.click(within(reasoning).getByRole("menuitemradio", { name: "High", hidden: true }));
+  const speed = screen.getByRole("group", { name: "Speed mode", hidden: true });
+  fireEvent.click(within(speed).getByRole("menuitemradio", { name: /Fast/, hidden: true }));
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(reviewer().textContent).toContain(shared.name);
+
+  await pick("Studio");
+  await targetIs("Studio");
+  expect(reviewer().textContent).toContain(fallback.name);
+  // An unrelated panel edit must not overwrite the saved reviewer.
+  fireEvent.click(screen.getByRole("button", { name: "Add review" }));
+  act(() =>
+    leafScope.store(agentModelCatalogStore).setState({ codexModels: [fallback, shared] as never }),
+  );
+  expect(reviewer().textContent).toContain(shared.name);
+  await pick("This machine");
+  await targetIs("This machine");
+  expect(reviewer().textContent).toContain(shared.name);
+
+  await pick("Studio");
+  await targetIs("Studio");
+  act(() => leafScope.store(agentModelCatalogStore).setState({ codexModels: [fallback] as never }));
+  await waitFor(() => expect(reviewer().textContent).toContain(fallback.name));
+  fireEvent.click(createButton());
+  await waitFor(() => expect(leaf.calls("create_feature_build")).toHaveLength(1));
+  expect(leaf.calls("create_feature_build")[0]!.args.reviewers).toEqual(
+    expect.arrayContaining([{ agent: "codex", model: "fallback" }]),
+  );
+});
+
+function setupOpenCodeSwitch() {
+  const { leaf, commandScope } = setup();
+  const catalog = (projectId: string) => ({
+    schemaVersion: 2,
+    projectId,
+    catalogVersion: "current",
+    updatedAt: "2026-11-24T00:00:00Z",
+    models: [
+      {
+        id: "provider/shared",
+        name: "Shared OpenCode model",
+        provider: "provider",
+        variants: ["high"],
+      },
+    ],
+  });
+  const config = createDefaultAppConfig() as unknown as AppConfig;
+  commandScope
+    .store(configStore)
+    .getState()
+    .setConfig({
+      ...config,
+      global: { ...config.global, agentSettings: { defaultAgent: "opencode" } },
+    });
+  nativeInvoke.mockImplementation(async (name: string) =>
+    name === "get_opencode_model_catalog_cache" ? catalog(commandProject.id) : null,
+  );
+  const snapshot = Promise.withResolvers<ReturnType<typeof catalog>>();
+  leaf.respond("get_opencode_model_catalog_cache", () => snapshot.promise);
+  return { leaf, snapshot, catalog: catalog(leafProject.id) };
+}
+
+for (const editOnLeaf of [false, true]) {
+  test(`a late project OpenCode cache ${editOnLeaf ? "preserves a newer edit" : "restores the carried model and effort"}`, async () => {
+    const { leaf, snapshot, catalog } = setupOpenCodeSwitch();
+    const picker = () => screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    open(commandId, commandProject);
+    await waitFor(() => expect(picker().textContent).toContain("Shared OpenCode model"));
+    await act(async () => fireEvent.pointerDown(picker()));
+    const reasoning = screen.getByRole("group", { name: "Reasoning", hidden: true });
+    fireEvent.click(within(reasoning).getByRole("menuitemradio", { name: "High", hidden: true }));
+    fireEvent.keyDown(document.body, { key: "Escape" });
+
+    await pick("Studio");
+    await targetIs("Studio");
+    expect(picker().textContent).not.toContain("Shared OpenCode model");
+    if (editOnLeaf) {
+      await act(async () => fireEvent.pointerDown(picker()));
+      fireEvent.click(screen.getByRole("button", { name: "codex models", hidden: true }));
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    }
+    await act(async () => snapshot.resolve(catalog));
+    fireEvent.click(createButton());
+    await waitFor(() => expect(leaf.calls("update_environment_agent_settings")).toHaveLength(1));
+    const args = leaf.calls("update_environment_agent_settings")[0]!.args;
+    if (editOnLeaf) {
+      expect(args.agentSettings).toMatchObject({ defaultAgent: "codex" });
+      expect(args.initialAgentModel).not.toBe("provider/shared");
+    } else {
+      expect(args).toMatchObject({
+        initialAgentModel: "provider/shared",
+        initialReasoningEffort: "high",
+      });
+    }
+  });
+}
+
+test("preserves edited ports and each host's worktree location while applying target agent modes", async () => {
+  const { leaf, commandScope, leafScope } = setup({ commandDocker: true, leafDocker: true });
+  const config = createDefaultAppConfig() as unknown as AppConfig;
+  const repositoryConfig = (mode: "native" | "terminal", port: number) => ({
+    defaultBranch: "main",
+    prBaseBranch: "main",
+    lastEnvironmentType: "local" as const,
+    defaultPortMappings: [{ containerPort: port, hostPort: port, protocol: "tcp" as const }],
+    agentSettings: { defaultAgent: "codex" as const, platforms: { codex: { mode } } },
+  });
+  act(() => {
+    commandScope
+      .store(configStore)
+      .getState()
+      .setConfig({
+        ...config,
+        repositories: { [commandProject.id]: repositoryConfig("native", 3000) },
+      });
+    leafScope
+      .store(configStore)
+      .getState()
+      .setConfig({
+        ...config,
+        repositories: { [leafProject.id]: repositoryConfig("terminal", 4000) },
+      });
+  });
+  open(commandId, commandProject);
+  await screen.findByRole("dialog");
+  const chooseLocation = async (nodeId: BackendId, path: string) => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose worktree location" }));
+    await waitFor(() => expect(useHostPathPickerStore.getState().request?.nodeId).toBe(nodeId));
+    await act(async () => useHostPathPickerStore.getState().settle(path));
+  };
+  await chooseLocation(commandId, "/command/worktrees");
+  await pick("Studio");
+  await targetIs("Studio");
+  expect(screen.queryByText("Worktree in /command/worktrees") === null).toBe(true);
+  await chooseLocation(leafId, "/leaf/worktrees");
+  await screen.findByText("Worktree in /leaf/worktrees");
+  await pick("This machine");
+  await targetIs("This machine");
+  expect(screen.getByText("Worktree in /command/worktrees")).toBeTruthy();
+
+  const hostPort = () => screen.getByPlaceholderText<HTMLInputElement>("Host");
+  fireEvent.click(screen.getByRole("button", { name: "Containerized" }));
+  expect(hostPort().value).toBe("3000");
+  await pick("Studio");
+  await screen.findByText("Isolated Docker environment on Studio");
+  await waitFor(() => expect(hostPort().value).toBe("4000"));
+  fireEvent.change(hostPort(), { target: { value: "4400" } });
+  await pick("This machine");
+  await screen.findByText("Isolated Docker environment on This machine");
+  expect(hostPort().value).toBe("4400");
+  await pick("Studio");
+  await screen.findByText("Isolated Docker environment on Studio");
+  expect(hostPort().value).toBe("4400");
+  const local = screen.getByRole<HTMLButtonElement>("button", { name: "Local" });
+  expect(local.disabled).toBe(false);
+  await act(async () => fireEvent.click(local));
+  await targetIs("Studio");
+  await screen.findByText("Worktree in /leaf/worktrees");
+  fireEvent.click(createButton());
+  await waitFor(() => expect(leaf.calls("update_environment_agent_settings")).toHaveLength(1));
+  expect(leaf.calls("create_environment")[0]!.args).toMatchObject({
+    worktreeBaseDir: "/leaf/worktrees",
+  });
+  expect(leaf.calls("update_environment_agent_settings")[0]!.args).toMatchObject({
+    agentSettings: { platforms: { codex: { mode: "terminal" } } },
+  });
+});
+
 test("picker uses loaded project rows and confirmed Docker availability", async () => {
-  const { leafScope } = setup(true);
+  const { leafScope } = setup();
+  act(() => leafScope.store(projectStore).setState({ projects: [leafProject], hasLoaded: true }));
   open(commandId, commandProject);
   const picker = () => screen.getByRole<HTMLButtonElement>("combobox", { name: "Machine" });
   expect(picker().disabled).toBe(false);
@@ -291,7 +980,7 @@ test("picker uses loaded project rows and confirmed Docker availability", async 
 });
 
 test("a project without a Git remote only offers its own machine", () => {
-  const { windowScope } = setup(true);
+  const { windowScope } = setup();
   act(() =>
     windowScope
       .commandScope()
@@ -307,7 +996,7 @@ test("a project without a Git remote only offers its own machine", () => {
 });
 
 test("a remote-only command project waits for an unknown Docker probe", async () => {
-  const { windowScope } = setup(true);
+  const { windowScope } = setup();
   const docker = Promise.withResolvers<{ available: true; reason: null }>();
   const command = windowScope.commandScope();
   nativeInvoke.mockImplementation(async (name: string) =>
@@ -325,252 +1014,22 @@ test("a remote-only command project waits for an unknown Docker probe", async ()
   expect(picker.disabled).toBe(false);
 });
 
-test("navigation cancels a return to the command node while its dialog is loading", async () => {
-  const { windowScope } = setup(true);
-  const config = windowScope.commandScope().store(configStore);
-  act(() => config.setState({ hasLoaded: false }));
+test("going elsewhere before the machine answers drops the request", async () => {
+  const { leafScope, windowScope } = setup({ leafReady: false });
   open(leafId, leafProject);
-  await screen.findByRole("dialog");
-  fireEvent.change(screen.getByLabelText("Initial prompt (optional)"), {
-    target: { value: "Pending command handoff" },
-  });
-  await pick("This machine");
-  expect(screen.queryByRole("dialog") === null).toBe(true);
-
+  // A wait long enough to notice is shown, and can be cancelled.
+  expect(await screen.findByText(/Connecting to Studio/)).toBeTruthy();
   act(() => windowScope.select({ nodeId: commandId, projectId: "other", environmentId: null }));
-  act(() => config.setState({ hasLoaded: true }));
   expect(useAppDialogStore.getState().request).toBeNull();
+  await act(async () => leafScope.store(configStore).setState({ hasLoaded: true }));
   expect(screen.queryByRole("dialog") === null).toBe(true);
-
-  open(commandId, commandProject);
-  await screen.findByRole("dialog");
-  expect((screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement).value).toBe(
-    "",
-  );
 });
 
-const promptField = () => screen.getByLabelText("Initial prompt (optional)") as HTMLTextAreaElement;
-const nameField = () => screen.getByLabelText("Environment name (optional)") as HTMLInputElement;
-
-test("switching to a machine whose project opens on its Home keeps the form there, prefilled", async () => {
-  const { leaf, windowScope } = setup(true, { leafHome: true });
-  open(commandId, commandProject);
-  await screen.findByRole("dialog");
-  fireEvent.change(promptField(), { target: { value: "Ship the report" } });
-  fireEvent.change(nameField(), { target: { value: "report" } });
-  fireEvent.click(screen.getByRole("button", { name: "Interactive" }));
-
-  await pick("Studio");
-  // The leaf's workspace opens the project's Home behind its dialog. That
-  // used to drop the request and leave the Home tab without the form.
-  await waitFor(() =>
-    expect(windowScope.selection.get()).toMatchObject({
-      nodeId: leafId,
-      projectId: leafProject.id,
-      environmentId: leafHome.id,
-    }),
-  );
-  await screen.findByText("Leaf checkout");
-  expect(useRemoteWorkspaceStore.getState().requests[leafId]?.request).toMatchObject({
-    createEnvironmentProjectId: leafProject.id,
-  });
-  expect(screen.getByRole("combobox", { name: "Machine" }).textContent).toContain("Studio");
-  expect(promptField().value).toBe("Ship the report");
-  expect(nameField().value).toBe("report");
-  expect(screen.getByRole("button", { name: "Interactive", pressed: true })).toBeTruthy();
-
-  fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
-  await waitFor(() =>
-    expect(leaf.invocations.map((call) => call.command)).toContain("create_environment"),
-  );
-  expect(
-    leaf.invocations.find((call) => call.command === "create_environment")?.args,
-  ).toMatchObject({ projectId: leafProject.id, name: "report" });
-  expect(nativeInvoke.mock.calls.some(([command]) => command === "create_environment")).toBe(false);
-});
-
-test("a destination workspace that is already open still shows the form, prefilled", async () => {
-  const { windowScope } = setup(true, { leafHome: true });
-  // The user has been working in the leaf's project Home.
-  act(() =>
-    openMachineWorkspace({ connectionId: leafId, projectId: leafProject.id, title: "Leaf" }),
-  );
-  await waitFor(() =>
-    expect(windowScope.selection.get()).toMatchObject({
-      nodeId: leafId,
-      environmentId: leafHome.id,
-    }),
-  );
-  open(commandId, commandProject);
-  await screen.findByText("Command checkout");
-  fireEvent.change(promptField(), { target: { value: "Again on the leaf" } });
-
-  await pick("Studio");
-  await screen.findByText("Leaf checkout");
-  await waitFor(() =>
-    expect(windowScope.selection.get()).toMatchObject({ environmentId: leafHome.id }),
-  );
-  expect(screen.getByRole("dialog")).toBeTruthy();
-  expect(promptField().value).toBe("Again on the leaf");
-});
-
-test("a destination without the project says so and brings the form back with its input", async () => {
+test("a machine that cannot be reached says so instead of opening the form", async () => {
   const error = spyOn(toast, "error").mockImplementation(() => "toast");
-  const { leafScope } = setup(false);
-  open(commandId, commandProject);
-  await screen.findByText("Command checkout");
-  fireEvent.change(promptField(), { target: { value: "Keep this" } });
-  fireEvent.change(nameField(), { target: { value: "kept" } });
-  await pick("Studio");
-  expect(screen.queryByRole("dialog") === null).toBe(true);
-
-  // Once the leaf has loaded, its copy of the project is gone.
-  act(() => {
-    leafScope.store(projectStore).setState({ projects: [], hasLoaded: true });
-    leafScope.store(configStore).setState({ hasLoaded: true });
-  });
-  await screen.findByText("Command checkout");
-  expect(promptField().value).toBe("Keep this");
-  expect(nameField().value).toBe("kept");
-  expect(error).toHaveBeenCalledTimes(1);
+  setup({ openLeaf: () => Promise.reject(new Error("offline")) });
+  open(leafId, leafProject);
+  await waitFor(() => expect(error).toHaveBeenCalledTimes(1));
   expect(error.mock.calls[0]?.[0]).toBe("Could not open the new environment form on Studio");
-  expect(String((error.mock.calls[0]?.[1] as { description?: string })?.description)).toContain(
-    "The project is not on that machine any more.",
-  );
-});
-
-test("a scope-open rejection brings the form back with its input", async () => {
-  const error = spyOn(toast, "error").mockImplementation(() => "toast");
-  const opening = Promise.withResolvers<never>();
-  const openLeafScope = mock(() => opening.promise);
-  const restoreScopes = configureInTreeScopes({
-    host: { kind: "browser", openLeafScope },
-    prepare: null,
-  });
-  try {
-    setup(false, { leafOffline: true });
-    open(commandId, commandProject);
-    await screen.findByText("Command checkout");
-    fireEvent.change(promptField(), { target: { value: "Unreachable" } });
-    await pick("Studio");
-    expect(screen.queryByRole("dialog") === null).toBe(true);
-    expect(openLeafScope).toHaveBeenCalledTimes(1);
-
-    await act(async () => opening.reject(new Error("offline")));
-    await screen.findByText("Command checkout");
-    expect(promptField().value).toBe("Unreachable");
-    expect(useRemoteWorkspaceStore.getState().requests[leafId]).toBeUndefined();
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(error.mock.calls[0]?.[1]).toMatchObject({
-      description: expect.stringContaining("Could not connect: offline"),
-    });
-  } finally {
-    restoreScopes();
-  }
-});
-
-for (const failure of ["project removed", "timeout"] as const) {
-  test(`a command handoff recovers the leaf form when waiting ends with ${failure}`, async () => {
-    const error = spyOn(toast, "error").mockImplementation(() => "toast");
-    const clock = installControlledTimeout(CREATE_ENVIRONMENT_HANDOFF_TIMEOUT_MS, {
-      label: "create-environment handoff",
-    });
-    try {
-      const { leaf, windowScope } = setup(true, { leafDocker: true });
-      const commandScope = windowScope.commandScope();
-      act(() => commandScope.store(configStore).setState({ hasLoaded: false }));
-      open(leafId, leafProject);
-      await screen.findByText("Leaf checkout");
-      fireEvent.click(screen.getByRole("button", { name: "Containerized" }));
-      fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
-      fireEvent.change(nameField(), { target: { value: "restore-on-leaf" } });
-      fireEvent.change(promptField(), { target: { value: "Keep this on the leaf" } });
-      const file = new File(["source only"], "source-notes.md", { type: "text/markdown" });
-      fireEvent.drop(screen.getByRole("dialog"), {
-        dataTransfer: { files: [file], types: ["Files"], dropEffect: "copy" },
-      });
-      await screen.findByText("source-notes.md");
-      fireEvent.click(screen.getByRole("checkbox", { name: "Launch agent" }));
-
-      await pick("This machine");
-      const commandRequest = useAppDialogStore.getState().request;
-      expect(commandRequest?.kind).toBe("create-environment");
-      expect(commandRequest).not.toHaveProperty("recovery");
-      expect(screen.queryByRole("dialog") === null).toBe(true);
-      expect(clock.pendingCount()).toBe(1);
-
-      act(() => {
-        if (failure === "project removed") {
-          commandScope.store(projectStore).setState({ projects: [], hasLoaded: true });
-        } else {
-          expect(clock.advance()).toBe(1);
-        }
-      });
-      await screen.findByText("Leaf checkout");
-      expect(useAppDialogStore.getState().request).toBeNull();
-      expect(clock.pendingCount()).toBe(0);
-      expect(error).toHaveBeenCalledTimes(1);
-      expect(error.mock.calls[0]?.[1]).toMatchObject({
-        description: expect.stringContaining(
-          failure === "timeout" ? "in time" : "not on that machine",
-        ),
-      });
-      expect(nameField().value).toBe("restore-on-leaf");
-      const launchAgent = screen.getByRole("checkbox", { name: "Launch agent" });
-      expect(launchAgent.getAttribute("aria-checked")).toBe("false");
-      fireEvent.click(launchAgent);
-      expect(promptField().value).toBe("Keep this on the leaf");
-      expect(screen.getByText("source-notes.md")).toBeTruthy();
-      fireEvent.click(launchAgent);
-      fireEvent.click(screen.getByRole("button", { name: "Create environment" }));
-      await waitFor(() => expect(leaf.calls("create_environment")).toHaveLength(1));
-      expect(leaf.calls("create_environment")[0]?.args).toMatchObject({
-        projectId: leafProject.id,
-        name: "restore-on-leaf",
-        networkAccessMode: "restricted",
-      });
-      await waitFor(() =>
-        expect(leaf.calls("update_environment_agent_settings")[0]?.args).toMatchObject({
-          pendingAgentLaunch: false,
-        }),
-      );
-    } finally {
-      stopCreateEnvironmentWatches();
-      clock.restore();
-    }
-  });
-}
-
-test("a cold destination with neither a checkout nor Docker restores the source form", async () => {
-  const error = spyOn(toast, "error").mockImplementation(() => "toast");
-  const { leaf, leafScope } = setup(false);
-  open(commandId, commandProject);
-  fireEvent.change(promptField(), { target: { value: "Keep my input" } });
-  await pick("Studio");
-  expect(screen.queryByRole("dialog") === null).toBe(true);
-
-  const remoteOnly = { ...leafProject, localPath: "" };
-  leaf.respond("get_projects", [remoteOnly]);
-  act(() => {
-    leafScope.store(projectStore).setState({ projects: [remoteOnly], hasLoaded: true });
-    leafScope.store(configStore).setState({ hasLoaded: true });
-  });
-  await screen.findByText("Command checkout");
-  expect(promptField().value).toBe("Keep my input");
-  expect(error).toHaveBeenCalledTimes(1);
-  expect(error.mock.calls[0]?.[1]).toMatchObject({
-    description: expect.stringContaining("no local checkout and Docker is unavailable"),
-  });
-});
-
-test("navigating away from a pending switch cancels it without bringing the form back", async () => {
-  const error = spyOn(toast, "error").mockImplementation(() => "toast");
-  const { windowScope } = setup(false);
-  open(commandId, commandProject);
-  await screen.findByText("Command checkout");
-  await pick("Studio");
-  act(() => windowScope.select({ nodeId: leafId, projectId: "other", environmentId: null }));
-  act(() => reportCreateEnvironmentFailed(leafId, null, "Could not connect: offline"));
-  expect(screen.queryByRole("dialog") === null).toBe(true);
-  expect(error).not.toHaveBeenCalled();
+  expect(useAppDialogStore.getState().request).toBeNull();
 });

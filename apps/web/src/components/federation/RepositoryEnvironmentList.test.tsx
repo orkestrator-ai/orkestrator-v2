@@ -13,6 +13,7 @@ import type { FederatedEnvironment } from "@/lib/federation/summaries";
 import { portalLayoutStore } from "@/lib/portal/portal-layout";
 import { portalStore } from "@/lib/portal/portal-store";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 import {
   connectionList,
@@ -33,6 +34,14 @@ const REPO = "github.com/acme/app";
 const MACHINE_VIEW_STORAGE_KEY = "machine-view-storage";
 const INITIAL_MACHINE_VIEW_STATE = useMachineViewStore.getState();
 const INITIAL_REMOTE_WORKSPACE_STATE = useRemoteWorkspaceStore.getState();
+
+/** Which machine and project the window's New Environment dialog was asked for. */
+function createRequest() {
+  const { request } = useAppDialogStore.getState();
+  return request?.kind === "create-environment"
+    ? { nodeId: request.nodeId as string, projectId: request.projectId }
+    : null;
+}
 
 function environment(node: string, projectId: string, id: string, order: number) {
   const ref = environmentRef(node as BackendId, id);
@@ -100,6 +109,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanup();
+  useAppDialogStore.getState().close();
   uninstallDesktopFake();
   useMachineViewStore.setState(INITIAL_MACHINE_VIEW_STATE, true);
   useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
@@ -175,8 +185,7 @@ test("the + button opens New environment for the repository; the keyboard collap
   expect(screen.queryByRole("button", { name: /Collapse folder/ }) === null).toBe(true);
   fireEvent.click(add);
   // No command node copy here, so it opens on the first machine shown.
-  const request = useRemoteWorkspaceStore.getState().requests.bk_mini?.request;
-  expect(request).toMatchObject({ createEnvironmentProjectId: "project-1" });
+  expect(createRequest()).toEqual({ nodeId: "bk_mini", projectId: "project-1" });
 
   const heading = screen.getByRole("button", { name: "Open acme/app on mini" });
   const chevron = screen.getByTestId("repository-collapse-toggle");
@@ -296,9 +305,7 @@ test("the heading menu reaches each other machine's copy for a new environment",
   });
   const menu = await screen.findByRole("menu");
   fireEvent.click(within(menu).getByRole("menuitem", { name: "New environment on beelink" }));
-  expect(useRemoteWorkspaceStore.getState().requests.bk_bee?.request).toMatchObject({
-    createEnvironmentProjectId: "project-1",
-  });
+  expect(createRequest()).toEqual({ nodeId: "bk_bee", projectId: "project-1" });
 });
 
 function renderFleet() {
@@ -355,19 +362,16 @@ test("the chevron only toggles: it neither opens, drags nor creates, and they ne
 
   fireEvent.click(chevron());
   fireEvent.click(add());
-  expect(useRemoteWorkspaceStore.getState().requests.bk_mini?.request).toMatchObject({
-    createEnvironmentProjectId: "project-1",
-  });
+  expect(createRequest()).toEqual({ nodeId: "bk_mini", projectId: "project-1" });
+  expect(useRemoteWorkspaceStore.getState().requests).toEqual({});
   expect(chevron().getAttribute("aria-expanded")).toBe("true");
 
-  useRemoteWorkspaceStore.setState(INITIAL_REMOTE_WORKSPACE_STATE, true);
+  useAppDialogStore.getState().close();
   fireEvent.click(heading());
   expect(useRemoteWorkspaceStore.getState().requests.bk_mini?.request).toMatchObject({
     projectId: "project-1",
   });
-  expect(useRemoteWorkspaceStore.getState().requests.bk_mini?.request).not.toHaveProperty(
-    "createEnvironmentProjectId",
-  );
+  expect(createRequest()).toBeNull();
   expect(chevron().getAttribute("aria-expanded")).toBe("true");
   expect(screen.getAllByTestId("federated-environment-row")).toHaveLength(3);
 });

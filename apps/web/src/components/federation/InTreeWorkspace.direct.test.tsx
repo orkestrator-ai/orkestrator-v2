@@ -41,7 +41,6 @@ import { projectLandingBoardTab } from "@/lib/federation/window-grouping";
 import { WORKSPACE_DIALOGS } from "@/lib/federation/workspace-request";
 import { FederationProvider } from "./FederationProvider";
 import { RemoteWorkspaceRegion } from "./RemoteWorkspaceRegion";
-import { expectDomAbsent } from "../../../../../tests/bounded-test-diagnostics";
 
 const INITIAL_REMOTE = useRemoteWorkspaceStore.getState();
 const INITIAL_MACHINE = useMachineViewStore.getState();
@@ -301,13 +300,16 @@ for (const dialog of WORKSPACE_DIALOGS) {
   });
 }
 
-test("select: Add Project and New environment open in the node's workspace once its stores have hydrated", async () => {
+test("select: Add Project opens in the node's workspace once its stores have hydrated", async () => {
   renderRegion();
   // The machine's "Add project" entry: an empty project.
   act(() => openMachineWorkspace({ connectionId: LEAF, projectId: "", title: "Machine A" }));
   expect((await screen.findByRole("dialog")).textContent).toContain("Add project");
-  const scope = getWindowScope().get(LEAF)!;
-  // The machine's "New environment" entry for one of its projects.
+});
+
+test("select: New environment is the window's dialog, aimed at the node, and leaves the workspace alone", async () => {
+  await openLeaf({ projectId: project.id });
+  const before = getWindowScope().selection.get();
   act(() =>
     openMachineWorkspace({
       connectionId: LEAF,
@@ -316,12 +318,13 @@ test("select: Add Project and New environment open in the node's workspace once 
       title: project.name,
     }),
   );
-  await waitFor(() => expectDomAbsent(screen.queryByRole("dialog")));
-  // Its defaults are the node's config, which has not arrived yet.
+  expect(useAppDialogStore.getState().request).toEqual({
+    kind: "create-environment",
+    nodeId: LEAF,
+    projectId: project.id,
+  });
+  expect(getWindowScope().selection.get()).toEqual(before);
   await settle();
-  expectDomAbsent(screen.queryByText(/Configure a new Ork environment/u));
-  loadConfig(scope);
-  expect(await screen.findByText(/Configure a new Ork environment/u)).toBeTruthy();
 });
 
 test("selection: navigating inside the in-tree workspace is the window's one selection, with its recents", async () => {

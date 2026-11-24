@@ -147,13 +147,18 @@ for (const bound of [true, false]) {
           } else {
             expect(created).toEqual([project.ref.projectId]);
           }
+        } else if (!boardTab) {
+          // The window's own dialog, aimed at that machine: nothing is selected.
+          expect(useAppDialogStore.getState().request as unknown).toEqual({
+            kind: "create-environment",
+            nodeId: target.connectionId,
+            projectId: project.ref.projectId,
+          });
+          expect(useRemoteWorkspaceStore.getState().active).toBeNull();
         } else {
           expect(useRemoteWorkspaceStore.getState().active?.nodeId).toBe(target.connectionId);
           expect(useRemoteWorkspaceStore.getState().requests[target.connectionId]?.request).toEqual(
-            {
-              projectId: project.ref.projectId,
-              ...(boardTab ? { boardTab } : { createEnvironmentProjectId: project.ref.projectId }),
-            },
+            { projectId: project.ref.projectId, boardTab },
           );
           expect(appCommandStore(uiStore).getState().selectedProjectId).toBeNull();
           expect(useAppDialogStore.getState().request).toBeNull();

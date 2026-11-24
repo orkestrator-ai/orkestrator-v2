@@ -1,14 +1,6 @@
-import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import * as openWorkspace from "@/lib/federation/open-workspace";
+import { describe, expect, test } from "bun:test";
 import type { BuildLaunchMachine } from "@/components/build/build-machines";
-import {
-  createEnvironmentMachines,
-  openCreateEnvironmentOnMachine,
-} from "./create-environment-machines";
-
-afterEach(() => {
-  mock.restore();
-});
+import { createEnvironmentMachines } from "./create-environment-machines";
 
 const own: BuildLaunchMachine = {
   key: "node:own",
@@ -62,22 +54,4 @@ describe("createEnvironmentMachines", () => {
     const ownUnknown = { ...own, available: false };
     expect(createEnvironmentMachines([ownUnknown], new Map())).toEqual([ownUnknown]);
   });
-});
-
-describe("openCreateEnvironmentOnMachine", () => {
-  test.each([studio, { ...studio, machine: null, nodeId: null }])(
-    "opens the destination project with the switch form",
-    (machine) => {
-      const open = spyOn(openWorkspace, "openMachineWorkspace").mockImplementation(() => undefined);
-      const handoff = { prompt: "draft", name: "" };
-      openCreateEnvironmentOnMachine(machine, "repo", handoff);
-      expect(open).toHaveBeenCalledWith({
-        connectionId: machine.nodeId ?? "",
-        projectId: "project-studio",
-        createEnvironment: true,
-        createEnvironmentHandoff: handoff,
-        title: "repo",
-      });
-    },
-  );
 });

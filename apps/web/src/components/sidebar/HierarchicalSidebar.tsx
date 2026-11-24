@@ -340,14 +340,12 @@ export function HierarchicalSidebar() {
     allEnvironments,
     loadEnvironments,
     refreshEnvironmentSnapshot,
-    createEnvironment,
     forkEnvironment,
     deleteEnvironment,
     startEnvironment,
     stopEnvironment,
     restartEnvironment,
     reorderEnvironments,
-    updateEnvironment,
   } = useEnvironments(null);
   // The node this sidebar lists: the one the hooks above read.
   const scope = useNodeScope();
@@ -1506,9 +1504,6 @@ export function HierarchicalSidebar() {
         }}
         projectId={createEnvProjectId}
         projectName={projects.find((project) => project.id === createEnvProjectId)?.name}
-        createEnvironment={createEnvironment}
-        updateEnvironment={updateEnvironment}
-        startEnvironment={startEnvironment}
       />
 
       {/* Bulk Delete Confirmation Dialog */}

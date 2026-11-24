@@ -30,6 +30,7 @@ import { filterMachines } from "@/lib/federation/aggregate";
 import { isMachineShown, orderMachines } from "@/lib/federation/sidebar-layout";
 import { portalLayoutStore, usePortalLayout } from "@/lib/portal/portal-layout";
 import { useMachineViewStore } from "@/stores/machineViewStore";
+import { useAppDialogStore } from "@/stores/appDialogStore";
 import { useRemoteWorkspaceStore } from "@/stores/remoteWorkspaceStore";
 
 /**
@@ -547,6 +548,7 @@ export function RepositoryEnvironmentListFixture() {
   const filter = useMachineViewStore((value) => value.machineFilter);
   // What the central region shows: another node's workspace, and what it asked for.
   const shown = useRemoteWorkspaceStore((value) => value.active);
+  const dialogRequest = useAppDialogStore((value) => value.request);
   const latest = useRemoteWorkspaceStore((value) =>
     value.active ? value.requests[value.active.nodeId]?.request : undefined,
   );
@@ -558,6 +560,9 @@ export function RepositoryEnvironmentListFixture() {
         <output data-testid="filter">{JSON.stringify(filter)}</output>
         <output data-testid="opened">{shown ? shown.nodeId : null}</output>
         <output data-testid="intent">{latest ? JSON.stringify(latest) : null}</output>
+        <output data-testid="dialog-request">
+          {dialogRequest ? JSON.stringify(dialogRequest) : null}
+        </output>
       </div>
       <FederationProvider>
         {phoneOverlay ? (

@@ -14,7 +14,6 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useNodeDockerAvailability } from "@/hooks/useNodeDockerAvailability";
 import { useProjectHomeActivation } from "@/hooks/useProjectHomeActivation";
 import { holdInTreeScope } from "@/lib/federation/in-tree-scopes";
-import { reportCreateEnvironmentFailed } from "@/lib/federation/create-environment-handoff";
 import { MOBILE_SHELL_MEDIA_QUERY } from "@/lib/mobile-shell";
 import type { NodeScope, NodeScopeHealth, NodeScopeTier } from "@/lib/node-scope/node-scope";
 import {
@@ -142,10 +141,7 @@ export function InTreeWorkspace({
       },
       (error: unknown) => {
         if (current) {
-          const message = error instanceof Error ? error.message : String(error);
-          setFailure({ attempt, message });
-          // A New Environment form sent here cannot open; its switch takes it back.
-          reportCreateEnvironmentFailed(nodeId, null, `Could not connect: ${message}`);
+          setFailure({ attempt, message: error instanceof Error ? error.message : String(error) });
         }
       },
     );

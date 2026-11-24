@@ -16,8 +16,17 @@ export const IN_TREE_DOCKER_POLL_INTERVAL_MS = 60_000;
  * `null` until the first answer (and after a failed read, which says nothing
  * about Docker). The window's own probe is the command node's.
  */
-export function useNodeDockerAvailability(scope: NodeScope, active = true): boolean | null {
-  const [available, setAvailable] = useState<boolean | null>(null);
+export function useNodeDockerAvailability(
+  scope: NodeScope,
+  active = true,
+  activation?: object | null,
+): boolean | null {
+  // Kept with its scope, so one node's answer never shows for another.
+  const [answer, setAnswer] = useState<{
+    scope: NodeScope;
+    activation?: object | null;
+    available: boolean | null;
+  } | null>(null);
   useEffect(() => {
     if (!active) return;
     let current = true;
@@ -28,7 +37,11 @@ export function useNodeDockerAvailability(scope: NodeScope, active = true): bool
           (result: DockerAvailability | null) => {
             if (!current) return;
             // A malformed answer says nothing about Docker.
-            setAvailable(typeof result?.available === "boolean" ? result.available : null);
+            setAnswer({
+              scope,
+              activation,
+              available: typeof result?.available === "boolean" ? result.available : null,
+            });
           },
           (error: unknown) => {
             if (current)
@@ -42,6 +55,8 @@ export function useNodeDockerAvailability(scope: NodeScope, active = true): bool
       current = false;
       clearInterval(timer);
     };
-  }, [active, scope]);
-  return available;
+  }, [activation, active, scope]);
+  return active && answer?.scope === scope && answer.activation === activation
+    ? answer.available
+    : null;
 }

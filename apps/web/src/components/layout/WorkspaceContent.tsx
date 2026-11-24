@@ -184,9 +184,7 @@ export function WorkspaceContent({
   const config = useConfigStore((state) => state.config);
   const setClaudeOptions = useClaudeOptionsStore((state) => state.setOptions);
   const clearClaudeOptions = useClaudeOptionsStore((state) => state.clearOptions);
-  const { startEnvironment, createEnvironment, updateEnvironment } = useEnvironments(null, {
-    listenForRenameEvents: false,
-  });
+  const { startEnvironment } = useEnvironments(null, { listenForRenameEvents: false });
 
   const selectedEnvironment = selectedEnvironmentId
     ? (environments.find((env) => env.id === selectedEnvironmentId) ?? null)
@@ -371,13 +369,7 @@ export function WorkspaceContent({
   );
 
   if (!selectedEnvironment && !selectedProjectId) {
-    return (
-      <ProjectLauncher
-        createEnvironment={createEnvironment}
-        updateEnvironment={updateEnvironment}
-        startEnvironment={startEnvironment}
-      />
-    );
+    return <ProjectLauncher />;
   }
   return (
     <div className="relative h-full bg-background">

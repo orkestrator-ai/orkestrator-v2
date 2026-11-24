@@ -119,7 +119,9 @@ export function SentFirstPrompt({
     [attachments, createdAt, text],
   );
   return (
-    <div data-testid="first-prompt-sent" className="min-h-0 flex-1 overflow-y-auto py-4">
+    // The top padding is the bound tab's changes header, so the row does not
+    // move when that tab takes over.
+    <div data-testid="first-prompt-sent" className="min-h-0 flex-1 overflow-y-auto pt-7">
       <NativeMessage message={message} />
       <div className="px-2 @sm:px-4">
         <div className="chat-status-row mx-auto max-w-3xl min-w-0">

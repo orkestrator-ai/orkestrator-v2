@@ -934,7 +934,7 @@ describe("a prompt shown while its preflight runs", () => {
   ])(
     "is on screen at once in $label and dispatched once, after the check",
     async ({ messages }) => {
-      projectionOptions = { messages };
+      projectionOptions = { messages: [...messages] };
       const { beforeSend, settle } = heldPreflight();
       const tabId = `preflight-shown-${messages.length}`;
       const { input } = await renderTab(tabId, "codex", beforeSend);

@@ -1,5 +1,6 @@
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout";
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { VirtuosoMockContext } from "react-virtuoso";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
@@ -1089,6 +1090,149 @@ describe("CoordinatorPanel", () => {
     await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
     expect(container.querySelector(".animate-spin") === null).toBe(true);
     expect(mergeDialog() === null).toBe(true);
+  });
+
+  describe("the first prompt while its upstream check runs", () => {
+    const prompt = "Start while the check runs";
+    const otherTab = {
+      ...snapshot.workspace.conversations[0]!,
+      id: "conversation-2",
+      tabId: "coordinator-tab-2",
+      title: "Second",
+      agent: undefined,
+      role: "side" as const,
+    };
+
+    /** A main coordinator with no agent, its panel open and its next fetch held. */
+    async function sendHeldFirstPrompt() {
+      useRealAgentTab = true;
+      appCommandStore(configStore)
+        .getState()
+        .updateGlobalConfig({
+          enabledAgentPlatforms: ["claude"],
+          agentSettings: { defaultAgent: "claude" },
+        });
+      const assigned = prepareUnassignedLaunch();
+      ensuredSnapshot = {
+        ...ensuredSnapshot,
+        workspace: {
+          ...ensuredSnapshot.workspace,
+          conversations: [...ensuredSnapshot.workspace.conversations, otherTab],
+        },
+      };
+      const assignedSnapshot = {
+        ...assigned,
+        workspace: {
+          ...assigned.workspace,
+          conversations: [...assigned.workspace.conversations, otherTab],
+        },
+      };
+      assignAgent.mockImplementation(async () => {
+        ensuredSnapshot = assignedSnapshot;
+        return assignedSnapshot;
+      });
+      ensuredGit = behindGit();
+      const view = renderInAppCommandScope(
+        <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 60 }}>
+          <CoordinatorPanel projectId="project-1" />
+        </VirtuosoMockContext.Provider>,
+      );
+      const input = await screen.findByRole("textbox");
+      await fetchesAfterOpen();
+      let finishFetch!: (value: ProjectGitStatus) => void;
+      fetchGit.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFetch = resolve;
+          }),
+      );
+      fireEvent.input(input, { target: { textContent: prompt } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await screen.findByTestId("first-prompt-sent");
+      return {
+        ...view,
+        assignedSnapshot,
+        finishFetch: (value: ProjectGitStatus) => finishFetch(value),
+      };
+    }
+    const draftText = () =>
+      appCommandStore(nativeComposeStore).getState().drafts.get(launchSessionKey)?.text;
+    const composerText = () => screen.getByRole("textbox").textContent;
+
+    test("is drawn as sent, and is dispatched once after the check and the merge", async () => {
+      const order: string[] = [];
+      syncGit.mockImplementation(async () => {
+        order.push("sync");
+        return behindGit({ behind: 0, headCommit: firstUpstreamTip });
+      });
+      let accept!: () => void;
+      dispatchIntent.mockImplementation(
+        (input) =>
+          new Promise((resolve) => {
+            order.push("dispatch");
+            accept = () => resolve({ outcome: "accepted" as const, requestId: input.requestId });
+          }),
+      );
+      const { finishFetch } = await sendHeldFirstPrompt();
+      const sent = screen.getByTestId("first-prompt-sent");
+      expect(sent.textContent).toContain(prompt);
+      expect(sent.textContent).toContain("Launching Claude");
+      expect(composerText()).toBe("");
+      expect(draftText()).toBe(prompt);
+      expect(screen.queryByRole("group", { name: "Starter prompts" }) === null).toBe(true);
+      expect(assignAgent).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+      fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
+      await act(async () => finishFetch(behindGit()));
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+      // Still the one sent message, with nothing back in the composer, until accepted.
+      expect(order).toEqual(["sync", "dispatch"]);
+      expect(assignAgent).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("transcript-region").textContent?.split(prompt).length).toBe(2);
+      expect(composerText()).toBe("");
+      await act(async () => accept());
+      await waitFor(() => expect(draftText()).toBeUndefined());
+      expect(dispatchIntent.mock.calls[0]?.[0].prompt).toBe(prompt);
+      expect(dispatchIntent).toHaveBeenCalledTimes(1);
+    });
+
+    test("a failed start withdraws it and gives the draft and the error back", async () => {
+      const { finishFetch } = await sendHeldFirstPrompt();
+      assignAgent.mockRejectedValueOnce(new Error("Claude could not be assigned"));
+      await act(async () => finishFetch(gitStatus));
+      expect(await screen.findByText("Claude could not be assigned")).toBeTruthy();
+      expect(screen.queryByTestId("first-prompt-sent") === null).toBe(true);
+      expect(composerText()).toBe(prompt);
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      // And it can be sent again.
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+    });
+
+    test("is still shown, and not sent again, after its composer remounts", async () => {
+      const { finishFetch } = await sendHeldFirstPrompt();
+      fireEvent.click(screen.getByRole("tab", { name: "Second, no agent chosen yet" }));
+      await waitFor(() => expect(screen.queryByTestId("first-prompt-sent") === null).toBe(true));
+      fireEvent.click(screen.getByRole("tab", { name: "First, no agent chosen yet" }));
+      expect((await screen.findByTestId("first-prompt-sent")).textContent).toContain(prompt);
+      expect(composerText()).toBe("");
+      fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+      await act(async () => finishFetch(gitStatus));
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+      expect(assignAgent).toHaveBeenCalledTimes(1);
+    });
+
+    test("another window binding the agent does not send it before the check", async () => {
+      const { finishFetch, assignedSnapshot } = await sendHeldFirstPrompt();
+      await refreshCoordinator(assignedSnapshot, 2);
+      expect(screen.getByTestId("first-prompt-sent").textContent).toContain(prompt);
+      expect(composerText()).toBe("");
+      expect(dispatchIntent).not.toHaveBeenCalled();
+      expect(draftText()).toBe(prompt);
+      await act(async () => finishFetch(gitStatus));
+      await waitFor(() => expect(dispatchIntent).toHaveBeenCalledTimes(1));
+    });
   });
 
   describe("follow-up messages to the main coordinator", () => {

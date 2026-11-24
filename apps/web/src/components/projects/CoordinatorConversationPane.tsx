@@ -44,7 +44,8 @@ interface CoordinatorConversationPaneProps {
   /** Each available platform's read-only tier, as a pill in the picker. */
   platformBadges: Partial<Record<AgentPlatform, AgentPlatformBadge>>;
   /**
-   * This conversation's own first prompt, while it is held. Scoped to the
+   * This conversation's own first prompt, while it is held. Until its start
+   * settles it is only drawn, so the composer is given no launch options. Scoped to the
    * conversation that produced it, so another group cannot replay it into its own.
    */
   launch: PendingCoordinatorLaunch | undefined;
@@ -127,7 +128,10 @@ export function CoordinatorConversationPane({
   const enabledPlatforms = useConfigStore((state) => state.config.global.enabledAgentPlatforms);
   const workspaceId = snapshot.workspace.id;
   const conversationId = conversation?.id;
-  const platform = conversation?.agent;
+  // Until its own start settles, a pane keeps drawing the first prompt it sent,
+  // even if another window binds the conversation first.
+  const starting = launch !== undefined && !launch.ready;
+  const platform = starting ? undefined : conversation?.agent;
   const providerSessionId = conversation?.providerSessionId;
   const environmentId = conversationId
     ? coordinatorRuntimeId(workspaceId, conversationId)
@@ -282,11 +286,11 @@ export function CoordinatorConversationPane({
               {...(conversation.role === "main" ? MAIN_UNASSIGNED : {})}
               emptyPlatformsMessage="No agent platform meets this Coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the Coordinator safety level in Settings."
               emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
-              onAssignPlatform={conversation.agent ? undefined : onAssignPlatform}
+              onAssignPlatform={platform ? undefined : onAssignPlatform}
               beforeSend={side ? undefined : beforeSend}
-              {...(launch
+              {...(launch ? { initialPrompt: launch.prompt } : {})}
+              {...(launch?.ready
                 ? {
-                    initialPrompt: launch.prompt,
                     initialAgentModel: launch.modelId,
                     initialReasoningEffort: launch.reasoningId,
                     initialConversationMode: launch.mode,

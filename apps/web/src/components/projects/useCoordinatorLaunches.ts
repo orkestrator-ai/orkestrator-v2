@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { coordinatorRuntimeId, type CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
@@ -18,6 +18,11 @@ export interface CoordinatorLaunchOptions {
 export interface PendingCoordinatorLaunch extends CoordinatorLaunchOptions {
   conversationId: string;
   prompt: string;
+  /**
+   * The upstream check is over and the agent is bound, so the tab may send it.
+   * Until then the prompt is only drawn, whatever binds the conversation.
+   */
+  ready: boolean;
 }
 
 interface UseCoordinatorLaunchesOptions {
@@ -66,8 +71,8 @@ function launchFinished(
 }
 
 /**
- * Each conversation's first prompt, from the send that binds its agent until its
- * turn exists. One slot per conversation: tab groups put several composers on
+ * Each conversation's first prompt, from the send until its turn exists: while
+ * the main coordinator's upstream check runs, and while its agent is bound. One slot per conversation: tab groups put several composers on
  * screen, and a second first send must not take the place of one still held.
  */
 export function useCoordinatorLaunches({
@@ -78,46 +83,63 @@ export function useCoordinatorLaunches({
 }: UseCoordinatorLaunchesOptions) {
   const nodeBackend = useScopeBackend();
   const [pendingLaunches, setPendingLaunches] = useState(NO_LAUNCHES);
-  const assignAgent = useCallback(
-    async (
-      conversationId: string,
-      platform: AgentPlatform,
-      launch: CoordinatorLaunchOptions,
-      prompt: string,
-    ) => {
-      const next = await nodeBackend.assignCoordinatorConversationAgent(
-        projectId,
-        conversationId,
-        platform,
-      );
-      // Held only until the assigned tab mounts and consumes them. They are not
-      // durable state: the backend owns the conversation, and a reload before
-      // the first dispatch legitimately returns the user to the composer with
-      // their draft rather than replaying a prompt that was never sent.
-      setPendingLaunches((current) =>
-        new Map(current).set(conversationId, { conversationId, prompt, ...launch }),
-      );
-      setSnapshot(next);
-    },
-    [projectId, setSnapshot, nodeBackend],
-  );
+  const startingRef = useRef(new Set<string>());
+  const holdLaunch = useCallback((launch: PendingCoordinatorLaunch) => {
+    setPendingLaunches((current) => new Map(current).set(launch.conversationId, launch));
+  }, []);
+  const dropLaunch = useCallback((conversationId: string) => {
+    setPendingLaunches((current) => {
+      if (!current.has(conversationId)) return current;
+      const remaining = new Map(current);
+      remaining.delete(conversationId);
+      return remaining;
+    });
+  }, []);
   const startConversation = useCallback(
     async (
       conversation: { id: string; role?: string },
       platform: AgentPlatform,
-      launch: CoordinatorLaunchOptions,
+      options: CoordinatorLaunchOptions,
       prompt: string,
     ) => {
-      if ((await confirmUpstreamMerge(conversation)) === false) return;
-      await assignAgent(conversation.id, platform, launch, prompt);
+      // A pane that remounted mid-start can send again: this panel, not the
+      // pane, knows the conversation's first prompt is already on its way.
+      if (startingRef.current.has(conversation.id)) return;
+      startingRef.current.add(conversation.id);
+      const launch = { conversationId: conversation.id, prompt, ready: false, ...options };
+      let started = false;
+      try {
+        // Held before the upstream check, so the prompt is drawn while the
+        // check runs and by every remount of the pane meanwhile. A side
+        // conversation has no check, so its prompt is held once it is bound.
+        if (conversation.role !== "side") holdLaunch(launch);
+        if ((await confirmUpstreamMerge(conversation)) === false) return;
+        const next = await nodeBackend.assignCoordinatorConversationAgent(
+          projectId,
+          conversation.id,
+          platform,
+        );
+        // Held only until the assigned tab mounts and consumes them. They are not
+        // durable state: the backend owns the conversation, and a reload before
+        // the first dispatch legitimately returns the user to the composer with
+        // their draft rather than replaying a prompt that was never sent.
+        started = true;
+        holdLaunch({ ...launch, ready: true });
+        setSnapshot(next);
+      } finally {
+        startingRef.current.delete(conversation.id);
+        if (!started) dropLaunch(conversation.id);
+      }
     },
-    [assignAgent, confirmUpstreamMerge],
+    [confirmUpstreamMerge, dropLaunch, holdLaunch, nodeBackend, projectId, setSnapshot],
   );
   // One id at a time, so the selector answers a stable value however often the
   // projections change; releasing it re-renders, which finds the next.
   const finishedId = useNativeAgentProjectionStore((state) => {
     if (!snapshot) return null;
-    for (const conversationId of pendingLaunches.keys()) {
+    for (const [conversationId, launch] of pendingLaunches) {
+      // Its start settles it: this is another window's turn.
+      if (!launch.ready) continue;
       if (launchFinished(conversationId, snapshot, state.projections)) return conversationId;
     }
     return null;

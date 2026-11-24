@@ -253,6 +253,8 @@ import {
   nativeComposeProfileLabel,
   useNativeAgentActivityAnnouncement,
 } from "./AgentNativeTab.helpers";
+import { LaunchingAgentStatus } from "./FirstPromptPending";
+import { composerContent } from "./sent-prompt-composer";
 import { NativeInteractionAnchor } from "./NativeInteractionAnchor";
 import { NativeAgentInteractionCard } from "./NativeAgentInteractionCard";
 import { CredentialRequestCard, pendingCredentialRequests } from "./CredentialRequestCard";
@@ -482,7 +484,19 @@ export function SharedNativeAgentController({
      * pins the prompt to the bottom of the transcript for the whole turn.
      */
     priorDisplayIds?: readonly string[];
+    /**
+     * Drawn before its pre-send check answered. Such a row is on screen well
+     * before the provider can refuse it, so it does not wait for acceptance to
+     * leave the centered first-prompt layout, which hides the transcript.
+     */
+    shownBeforeDispatch?: true;
   } | null>(null);
+  /**
+   * The session whose draft the transcript already shows as sent, so its
+   * composer shows none of it (`composerContent`). Set only where there is a
+   * pre-send check, from the moment the prompt is drawn until it settles.
+   */
+  const [draftInTranscript, setDraftInTranscript] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   // Why steering left a queued prompt where it is, by queue item id, so its
@@ -1000,6 +1014,9 @@ export function SharedNativeAgentController({
     );
   }
   const startupPromptPreview = optimisticPrompt ? null : startupPromptState.preview;
+  // The draft is the launch's own until it settles; the unassigned composer
+  // drew these attachments with the prompt, and the submitted row draws them again.
+  const startupPromptAttachments = beforeSend ? draft.attachments : undefined;
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
@@ -1022,7 +1039,14 @@ export function SharedNativeAgentController({
           ]
         : handoff.displayMessages;
     const base = startupPromptPreview
-      ? [createStartupPromptPreviewMessage(sessionKey, startupPromptPreview), ...providerBase]
+      ? [
+          createStartupPromptPreviewMessage(
+            sessionKey,
+            startupPromptPreview,
+            startupPromptAttachments,
+          ),
+          ...providerBase,
+        ]
       : providerBase;
     if (!optimisticPrompt || transcriptEchoedOptimistic) return base;
     /*
@@ -1061,6 +1085,7 @@ export function SharedNativeAgentController({
     optimisticPrompt,
     projectedSessionId,
     sessionKey,
+    startupPromptAttachments,
     startupPromptPreview,
     transcriptEchoedOptimistic,
     turnStopMarker,
@@ -1079,10 +1104,32 @@ export function SharedNativeAgentController({
     () =>
       displayMessages
         // The preview disappears on submission, so it cannot anchor its replacement.
-        .filter((message) => message.id !== startupPromptPreviewMessageId(sessionKey))
+        // Nor can a prompt drawn before its check anchor itself once dispatched.
+        .filter(
+          (message) =>
+            message.id !== startupPromptPreviewMessageId(sessionKey) &&
+            message.id !== `optimistic-native:${sessionKey}`,
+        )
         .map((message) => message.id),
     [displayMessages, sessionKey],
   );
+  /*
+   * The transcript as last committed, for a submit that has waited on its
+   * pre-send check: rows that arrived meanwhile (mail, another window's prompt)
+   * predate the dispatch, and must neither confirm it nor follow it.
+   */
+  const committedTranscriptRef = useRef({
+    sessionId: projectedSessionId,
+    messageIds: visibleAuthoritativeMessageIds,
+    displayIds: visibleDisplayMessageIds,
+  });
+  useLayoutEffect(() => {
+    committedTranscriptRef.current = {
+      sessionId: projectedSessionId,
+      messageIds: visibleAuthoritativeMessageIds,
+      displayIds: visibleDisplayMessageIds,
+    };
+  }, [projectedSessionId, visibleAuthoritativeMessageIds, visibleDisplayMessageIds]);
   /*
    * Tasks the transcript cannot show: the launch fell outside the loaded
    * window, or the tab resumed a session whose earlier turns were trimmed. The
@@ -1671,9 +1718,7 @@ export function SharedNativeAgentController({
           Stopping…
         </span>
       ) : (startingTurn || phase === "recovering") && launchingSession ? (
-        <span role="status" className="agent-thinking-shimmer text-xs">
-          Launching {label}…
-        </span>
+        <LaunchingAgentStatus label={label} />
       ) : phase === "recovering" ? (
         <span role="status" className="text-xs">
           Reconnecting to {label}…
@@ -2458,14 +2503,37 @@ export function SharedNativeAgentController({
         return false;
       }
       if (!prompt || sendLocked || isDispatching) return false;
+      const failureRetry = submitOptions?.failureSessionId !== undefined;
+      // A failed turn's Retry belongs to its own row and never owns the draft,
+      // and a queued prompt belongs to the queue, where the running turn it
+      // waits behind also means the check has nothing to fetch.
+      const shownAsSent = beforeSend !== undefined && !failureRetry && !canQueue;
+      const submittedAt = new Date().toISOString();
       // Preflight belongs after local validation. Keep the submitted draft's
       // identity across the wait: suggestions, mentions and attachments can
       // still edit it, and a remounted composer must never replay this send.
+      const preflighted = submitOptions?.preflight === true && beforeSend !== undefined;
       if (submitOptions?.preflight && beforeSend) {
         const lifetime = composerLifetimeRef.current;
         const pendingDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
         beforeSendPendingRef.current = true;
         setPreparingSend(true);
+        /*
+         * Shown as sent now, dispatched after the check. The session is left
+         * open until then: this prompt goes to whichever one the tab holds at
+         * dispatch. So is the request id, which nothing has been sent under.
+         */
+        if (shownAsSent) {
+          setOptimisticPrompt({
+            text: userPrompt,
+            attachments: submittedAttachments,
+            createdAt: submittedAt,
+            priorDisplayIds: visibleDisplayMessageIds,
+            shownBeforeDispatch: true,
+          });
+          setDraftInTranscript(sessionKey);
+        }
+        let proceeding = false;
         try {
           const proceed = await beforeSend();
           if (composerLifetimeRef.current !== lifetime || proceed === false) return false;
@@ -2480,6 +2548,7 @@ export function SharedNativeAgentController({
             reportSendError("The draft changed while preparing to send. Review it and send again.");
             return false;
           }
+          proceeding = true;
         } catch (error) {
           if (composerLifetimeRef.current === lifetime) {
             reportSendError(error instanceof Error ? error.message : String(error));
@@ -2488,8 +2557,22 @@ export function SharedNativeAgentController({
         } finally {
           beforeSendPendingRef.current = false;
           if (composerLifetimeRef.current === lifetime) setPreparingSend(false);
+          // The draft never left the store, so uncovering it restores all of it.
+          if (shownAsSent && !proceeding) {
+            setOptimisticPrompt((current) =>
+              current?.shownBeforeDispatch && current.requestId === undefined ? null : current,
+            );
+            setDraftInTranscript(null);
+          }
         }
       }
+      const transcriptAtDispatch = preflighted
+        ? committedTranscriptRef.current
+        : {
+            sessionId: projection?.sessionId,
+            messageIds: visibleAuthoritativeMessageIds,
+            displayIds: visibleDisplayMessageIds,
+          };
       if (
         submitOptions?.failureSessionId &&
         (currentRetryTarget.current.requestId !== requestId ||
@@ -2504,7 +2587,6 @@ export function SharedNativeAgentController({
       const dispatchRequestId = canQueue
         ? undefined
         : (requestId ?? draft.requestId ?? crypto.randomUUID());
-      const failureRetry = submitOptions?.failureSessionId !== undefined;
       if (dispatchRequestId && !failureRetry)
         updateDraft(sessionKey, { requestId: dispatchRequestId });
       reportSendError(null);
@@ -2512,11 +2594,13 @@ export function SharedNativeAgentController({
       setOptimisticPrompt({
         text: userPrompt,
         attachments: submittedAttachments,
-        createdAt: new Date().toISOString(),
+        createdAt: submittedAt,
         requestId: dispatchRequestId,
-        sessionId: projection?.sessionId,
-        priorDisplayIds: visibleDisplayMessageIds,
+        sessionId: transcriptAtDispatch.sessionId,
+        priorDisplayIds: transcriptAtDispatch.displayIds,
+        ...(shownAsSent ? { shownBeforeDispatch: true } : {}),
       });
+      if (shownAsSent) setDraftInTranscript(sessionKey);
       const options = {
         requestId: dispatchRequestId,
         ...(submitOptions?.failureSessionId
@@ -2543,13 +2627,13 @@ export function SharedNativeAgentController({
        * Confirm it from the transcript too: an empty session id is filled in
        * from the projection once the new session reports one.
        */
-      const confirmationSessionId = projection?.sessionId ?? "";
+      const confirmationSessionId = transcriptAtDispatch.sessionId ?? "";
       const transcriptConfirmation =
         dispatchRequestId !== undefined
           ? {
               requestId: dispatchRequestId,
               sessionId: confirmationSessionId,
-              priorMessageIds: Array.from(visibleAuthoritativeMessageIds),
+              priorMessageIds: Array.from(transcriptAtDispatch.messageIds),
             }
           : undefined;
       if (transcriptConfirmation) {
@@ -2674,6 +2758,7 @@ export function SharedNativeAgentController({
         openingFallback?.release();
         submitInFlightRef.current = false;
         setIsSubmitting(false);
+        if (shownAsSent) setDraftInTranscript(null);
         if (restoreComposerFocus) {
           queueMicrotask(() => inputRef.current?.focus());
         }
@@ -3805,8 +3890,22 @@ export function SharedNativeAgentController({
   const onlyOptimisticFirstPrompt =
     !startupPromptState.preview &&
     !startupPromptState.retired &&
+    !optimisticPrompt?.shownBeforeDispatch &&
     messages.length === 1 &&
     messages[0]?.id === `optimistic-native:${sessionKey}`;
+  /*
+   * Where there is a pre-send check, a prompt drawn as sent is not also drawn
+   * as unsent text. A launch is drawn by its preview until it is submitted; one
+   * that cannot be submitted as things stand gives the composer its draft back.
+   */
+  const launchOwnsDraft =
+    beforeSend !== undefined &&
+    startupPromptPreview !== null &&
+    !sendingHeld &&
+    !authenticationRequired &&
+    connectionState !== "error";
+  const composerHidesDraft = draftInTranscript === sessionKey || launchOwnsDraft;
+  const composerShows = composerContent(draft, composerHidesDraft);
   const composerCentered =
     (messages.length === 0 || onlyOptimisticFirstPrompt) &&
     !isProviderTurnActive &&
@@ -4302,7 +4401,8 @@ export function SharedNativeAgentController({
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
       // The opening prompt is on screen before its turn exists; the indicator
       // says the response is on its way rather than leaving the prompt inert.
-      isLoading={isTurnActive || startupPromptPreview !== null}
+      // So is a prompt whose pre-send check has not answered.
+      isLoading={isTurnActive || startupPromptPreview !== null || draftInTranscript === sessionKey}
       statusLabel={phaseStatusLabel}
       elapsedSeconds={null}
       elapsedStartedAt={elapsedStartedAt}
@@ -4442,14 +4542,14 @@ export function SharedNativeAgentController({
         <NativeComposeBar
           testId="shared-native-compose-bar"
           layout={composerCentered ? "centered" : "bottom"}
-          attachments={draft.attachments}
+          attachments={composerShows.attachments}
           onRemoveAttachment={(attachmentId) => {
             if (queueEditPendingRef.current || draft.submissionPending) return;
             updateDraft(sessionKey, {
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
             });
           }}
-          annotations={draft.annotations}
+          annotations={composerShows.annotations}
           onOpenMigratedAnnotation={(annotationId) =>
             openWebAnnotationThread(data.environmentId, annotationId, {}, composeScope)
           }
@@ -4466,10 +4566,11 @@ export function SharedNativeAgentController({
           }}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
-          text={draft.text}
-          mentions={draft.mentions}
+          text={composerShows.text}
+          mentions={composerShows.mentions}
           onTextAndMentionsChange={(text, mentions) => {
-            if (queueEditPendingRef.current || draft.submissionPending) return;
+            if (queueEditPendingRef.current || draft.submissionPending || composerHidesDraft)
+              return;
             updateDraft(sessionKey, { text, mentions });
           }}
           onCursorPositionChange={detectFileMention}
@@ -4494,12 +4595,15 @@ export function SharedNativeAgentController({
             sendFromComposer(draft.text);
           }}
           inputComboboxAria={commandComposer.inputComboboxAria}
-          keyboardMenuOpen={fileMentionMenuOpen || commandComposer.menuOpen}
+          keyboardMenuOpen={
+            !composerHidesDraft && (fileMentionMenuOpen || commandComposer.menuOpen)
+          }
           placeholder={sendingHeldReason ?? composerPlaceholder ?? `Message ${label}`}
           disabled={
             queueEditPending ||
             isSubmitting ||
             preparingSend ||
+            composerHidesDraft ||
             draft.submissionPending === true ||
             // The opening prompt goes first; nothing can be sent until setup ends.
             setupInTranscript
@@ -4507,25 +4611,27 @@ export function SharedNativeAgentController({
           isSending={isDispatching || isSubmitting || preparingSend}
           isLoading={isTurnActive}
           menus={
-            <>
-              <FileMentionMenu
-                open={fileMentionMenuOpen}
-                files={filteredFiles}
-                loading={fileSearch.isLoading}
-                onRetry={
-                  fileSearch.error
-                    ? () => {
-                        inputRef.current?.focus();
-                        void fileSearch.refresh();
-                      }
-                    : undefined
-                }
-                selectedIndex={fileMentionSelectedIndex}
-                onSelect={handleFileMentionSelect}
-                onClose={closeFileMentionMenu}
-              />
-              {!fileMentionMenuOpen && commandComposer.menuElement}
-            </>
+            composerHidesDraft ? null : (
+              <>
+                <FileMentionMenu
+                  open={fileMentionMenuOpen}
+                  files={filteredFiles}
+                  loading={fileSearch.isLoading}
+                  onRetry={
+                    fileSearch.error
+                      ? () => {
+                          inputRef.current?.focus();
+                          void fileSearch.refresh();
+                        }
+                      : undefined
+                  }
+                  selectedIndex={fileMentionSelectedIndex}
+                  onSelect={handleFileMentionSelect}
+                  onClose={closeFileMentionMenu}
+                />
+                {!fileMentionMenuOpen && commandComposer.menuElement}
+              </>
+            )
           }
           primaryControls={
             composer ? (
@@ -4540,7 +4646,7 @@ export function SharedNativeAgentController({
                 ) : null}
                 {canSearchFiles ? (
                   <NativeAttachmentMenu
-                    disabled={queueEditPending || (sendLocked && !canQueue)}
+                    disabled={queueEditPending || composerHidesDraft || (sendLocked && !canQueue)}
                     fileSearch={fileSearch}
                     onSelectFile={handleWorkspaceFileAttach}
                     onMentionFile={handleWorkspaceFileMention}
@@ -4808,6 +4914,7 @@ export function SharedNativeAgentController({
           sendDisabled={
             sendingHeld ||
             queueEditPending ||
+            composerHidesDraft ||
             (sendLocked && !draftSessionAction && !draftRunsGoal) ||
             (isDispatching && !draftRunsGoal) ||
             (!draft.text.trim() &&

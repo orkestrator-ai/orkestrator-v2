@@ -106,11 +106,12 @@ export function startupPromptPreviewMessageId(sessionKey: string): string {
 export function createStartupPromptPreviewMessage(
   sessionKey: string,
   preview: StartupPromptPreview,
+  attachments?: Parameters<typeof createOptimisticNativeMessage>[2],
 ): NativeMessage {
   return createOptimisticNativeMessage(
     startupPromptPreviewMessageId(sessionKey),
     preview.text,
-    [],
+    attachments,
     preview.createdAt,
   );
 }

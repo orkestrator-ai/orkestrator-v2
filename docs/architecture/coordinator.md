@@ -1922,7 +1922,14 @@ the panel asks the backend (`check_coordinator_upstream_merge`, waited on for
 at most five seconds). The backend answers without fetching while the
 checkout cannot change, and otherwise runs the cooldown-bound fetch and
 answers a mergeable checkout `{ offer: true, automatic: true }`. The panel
-then fast-forwards with `syncProjectGit` and sends. The backend waits for the
+then fast-forwards with `syncProjectGit` and sends. The user does not wait to
+see the message: it is drawn in the transcript as sent, with the waiting
+indicator, before the check is asked, and the composer looks empty while the
+draft stays stored. It is dispatched only after the check, into the same row.
+A stopped send removes the row and the composer shows the draft again. A
+message that will join a running turn's queue is not drawn first. The first
+prompt is held by the panel (`useCoordinatorLaunches`), not the pane, so a
+pane that remounts draws it again and cannot send it twice. The backend waits for the
 fetch for at most three seconds (`coordinator/message-upstream.ts`). When it
 is slower, or fails, the backend fast-forwards the checkout itself to the
 upstream commit it has already fetched (`fastForwardToFetchedUpstream`, a

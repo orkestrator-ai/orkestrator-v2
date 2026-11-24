@@ -365,7 +365,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
    * conversation is durable backend state that outlives any pane. The backend
    * is therefore the authority here, and nothing is dispatched until it has
    * accepted the assignment — a failure leaves the composer exactly as the user
-   * left it, with the draft intact, rather than a half-bound conversation.
+   * left it, with the draft intact, rather than a half-bound conversation. A
+   * surface with a pre-send check holds the prompt meanwhile and passes it back
+   * as `initialPrompt`, which draws it as sent.
    */
   const assignAndSend = useCallback(
     async (
@@ -460,6 +462,8 @@ export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTab
             environmentId={props.data.environmentId}
             containerId={props.data.containerId}
             disabled={awaitingDurability || props.sendingHeldReason !== undefined}
+            // Held by the owner whose pre-send check it is waiting on.
+            sentPrompt={props.beforeSend ? props.initialPrompt : undefined}
             initialAgentPlatform={props.initialAgentPlatform}
             initialAgentModel={props.initialAgentModel}
             initialReasoningEffort={props.initialReasoningEffort}

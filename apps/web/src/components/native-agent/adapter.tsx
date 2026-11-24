@@ -59,8 +59,13 @@ export interface AgentNativeTabProps {
    * Runs before a message typed into an assigned conversation's composer is
    * sent (`!` commands excepted), after local validation. Resolving sends the
    * validated draft only if it is still unchanged and mounted; false cancels.
-   * Rejecting keeps the draft and shows the error. The text input stays disabled
-   * while it is pending; other draft edits cancel this send.
+   * Rejecting keeps the draft and shows the error. Unless it will join the
+   * queue, the prompt is drawn in the transcript as sent while this is pending,
+   * with the composer empty and disabled; a stopped send puts it back. Other
+   * draft edits cancel this send.
+   *
+   * On an unassigned tab its owner runs the check inside `onAssignPlatform`;
+   * `initialPrompt` is then the first prompt that check is holding.
    */
   beforeSend?: () => Promise<void | boolean>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */

@@ -38,6 +38,7 @@ import type {
   LinearConnectionStatus,
   LinearIssueComment,
   LinearIssueDetail,
+  LinearIssueFile,
   LinearIssueListItem,
   LinearNodeConnection,
   LinearTeam,
@@ -646,6 +647,33 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     );
   }
 
+  /** The Linear-hosted files an issue refers to, with links that open for a few minutes. */
+  async function getLinearIssueFiles(
+    projectId: string,
+    issueId: string,
+    fileUrl?: string,
+  ): Promise<LinearIssueFile[]> {
+    const files = new Map<string, LinearIssueFile>();
+    let offset: number | undefined;
+    do {
+      const page: { files: LinearIssueFile[]; nextOffset?: number } = await asKanbanModel(
+        kanban(client).get_linear_issue_files({
+          projectId,
+          issueId,
+          ...(fileUrl ? { fileUrl } : {}),
+          ...(offset === undefined ? {} : { offset }),
+        }),
+      );
+      for (const file of page.files) files.set(file.url, file);
+      if (fileUrl || page.nextOffset === undefined) break;
+      if (page.files.length === 0 || page.nextOffset !== (offset ?? 0) + page.files.length) {
+        throw new Error("Linear file pagination did not advance.");
+      }
+      offset = page.nextOffset;
+    } while (offset !== undefined);
+    return Array.from(files.values());
+  }
+
   /** The linked board's workflow states (the board view's lanes), labels and members. */
   async function getLinearBoardOptions(projectId: string): Promise<LinearBoardOptions> {
     return asKanbanModel<LinearBoardOptions>(
@@ -858,6 +886,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     setLinearBoardLink,
     clearLinearBoardLink,
     getLinearBoardOptions,
+    getLinearIssueFiles,
     updateLinearIssue,
     getLinearNodeConnections,
     copyLinearConnectionFromNode,
@@ -917,6 +946,7 @@ export const {
   setLinearBoardLink,
   clearLinearBoardLink,
   getLinearBoardOptions,
+  getLinearIssueFiles,
   updateLinearIssue,
   getLinearNodeConnections,
   copyLinearConnectionFromNode,

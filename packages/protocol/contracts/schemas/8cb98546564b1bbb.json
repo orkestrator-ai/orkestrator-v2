@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:8cb98546564b1bbb6dd292484419d3f2e3f1f7e8c61b02bc307a1feb532538f1",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "fileUrl": {
+          "type": "string"
+        },
+        "issueId": {
+          "type": "string"
+        },
+        "offset": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": ["issueId", "projectId"],
+      "type": "object"
+    }
+  }
+}

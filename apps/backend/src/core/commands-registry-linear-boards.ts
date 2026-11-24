@@ -4,12 +4,15 @@ import {
   createLinearIssueCommand,
   getLinearBoardLinkCommand,
   getLinearBoardOptionsCommand,
+  getLinearIssueFilesCommand,
   getLinearNodeConnectionsCommand,
   getLinearTeamsCommand,
   setLinearBoardLinkCommand,
   updateLinearIssueCommand,
 } from "@orkestrator/protocol/contract/domains/kanban";
 import { exportLinearConnectionCommand } from "@orkestrator/protocol/contract/domains/ticket-sync";
+import { linearFileUrl } from "@orkestrator/protocol/linear-files";
+import { checkSignedLinearFile } from "./linear-files/download.js";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import type { CommandContext } from "./commands-context.js";
 import type { CommandRegistrar } from "./commands-registry-types.js";
@@ -28,6 +31,7 @@ import {
   listLinearTeams,
   updateLinearIssue,
 } from "./linear-boards.js";
+import { issueFilesAreOnBoard, readLinearIssueFiles } from "./linear-files/index.js";
 import { linearBoardLinkKey, type LinearBoardLink } from "./storage/index.js";
 
 /**
@@ -95,6 +99,9 @@ export async function requireIssueOnProjectBoard(
     );
   }
 }
+
+/** How long a file link handed to the Linear tab opens without Linear sign-in. */
+const SIGNED_FILE_SECONDS = 10 * 60;
 
 /** A board change here goes to every machine with the repository. */
 export function noteLinearChange(context: CommandContext): void {
@@ -202,6 +209,40 @@ export function registerLinearBoardCommands(register: CommandRegistrar): void {
     async ({ projectId }, context) => {
       const { board } = await requireProjectLinearBoard(context, projectId);
       return withLinearKey(context, (apiKey) => getLinearBoardOptions(apiKey, board.teamId));
+    },
+    ASYNC_HANDLER,
+  );
+
+  register(
+    getLinearIssueFilesCommand,
+    async ({ projectId, issueId, fileUrl, offset = 0 }, context) => {
+      const { link, board } = await requireProjectLinearBoard(context, projectId);
+      return withLinearKey(context, async (apiKey) => {
+        const signal = AbortSignal.timeout(15_000);
+        const issue = await readLinearIssueFiles(apiKey, issueId, {
+          signedSeconds: SIGNED_FILE_SECONDS,
+          signal,
+        });
+        if (!issueFilesAreOnBoard(issue, board)) {
+          throw new Error(
+            `Linear issue ${issue.identifier ?? issueId} is not on this project's Linear board (${linearBoardName(link)}).`,
+          );
+        }
+        if (fileUrl === undefined) {
+          const end = offset + 50;
+          return {
+            files: issue.files.slice(offset, end),
+            ...(end < issue.files.length ? { nextOffset: end } : {}),
+          };
+        }
+        const canonical = linearFileUrl(fileUrl);
+        const file = canonical && issue.files.find((entry) => entry.url === canonical);
+        if (!file) throw new Error("Linear no longer links this file to the issue.");
+        if (!file.signedUrl)
+          throw new Error("Linear did not return a download link for this file.");
+        await checkSignedLinearFile(file.signedUrl, signal);
+        return { files: [file] };
+      });
     },
     ASYNC_HANDLER,
   );

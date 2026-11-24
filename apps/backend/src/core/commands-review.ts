@@ -302,6 +302,7 @@ export function createEnvironmentCommandRunner(
   gitHubConfig: GitHubCliConfigSource | undefined,
   gitHubCliSelection: GitHubCliSelection | undefined,
   execute = runCommand,
+  signal?: AbortSignal,
 ): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
     if (!environment.worktreePath) {
@@ -317,6 +318,7 @@ export function createEnvironmentCommandRunner(
             await execute(command === "gh" ? gitHubCli(gitHubCliSelection) : command, args, {
               cwd: environment.worktreePath,
               timeoutMs,
+              ...(signal ? { signal, waitForTermination: true } : {}),
               env: command === "gh" ? await gitHubCliEnv(gitHubConfig, env) : env,
             })
           ).stdout
@@ -336,7 +338,7 @@ export function createEnvironmentCommandRunner(
         await execute(
           "docker",
           ["exec", "-w", "/workspace", environment.containerId!, command, ...args],
-          { timeoutMs },
+          { timeoutMs, ...(signal ? { signal, waitForTermination: true } : {}) },
         )
       ).stdout;
     } finally {
@@ -349,8 +351,10 @@ export function createEnvironmentCommandRunner(
 export function createGitEnvironmentCommandRunner(
   environment: Environment,
   fence: Pick<EnvironmentMutationFence, "beginMutation">,
+  signal?: AbortSignal,
+  execute = runCommand,
 ): EnvironmentCommandRunner {
-  return createEnvironmentCommandRunner(environment, fence, undefined, undefined);
+  return createEnvironmentCommandRunner(environment, fence, undefined, undefined, execute, signal);
 }
 
 export function parseReviewPackageId(value: unknown): string {
@@ -794,11 +798,28 @@ export async function ensureWorkspaceArtifactIsGitExcluded(
   filePath: string,
   label: string,
 ): Promise<void> {
+  await setupWorkspaceArtifactGitExclude(environment, runner);
+  await assertWorkspaceArtifactIsGitExcluded(runner, filePath, label);
+}
+
+export async function setupWorkspaceArtifactGitExclude(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   if (environment.environmentType === "local") {
-    await addLocalWorkspaceArtifactsToGitExclude(environment.worktreePath!);
+    await addLocalWorkspaceArtifactsToGitExclude(environment.worktreePath!, signal);
   } else {
     await runner("bash", ["-lc", gitExcludeSetupScript(".orkestrator")], 10_000);
   }
+}
+
+export async function assertWorkspaceArtifactIsGitExcluded(
+  runner: EnvironmentCommandRunner,
+  filePath: string,
+  label: string,
+): Promise<void> {
   try {
     await runner("git", ["check-ignore", "--quiet", "--no-index", "--", filePath], 10_000);
   } catch (error) {

@@ -108,6 +108,15 @@ export interface LinearIssueDetail extends LinearIssueListItem {
   comments: LinearIssueComment[];
 }
 
+/** A Linear-hosted file an issue refers to. */
+export interface LinearIssueFile {
+  /** The link as the issue's text has it, without a signature. */
+  url: string;
+  name?: string;
+  /** Opens without Linear sign-in, for a few minutes. */
+  signedUrl?: string;
+}
+
 export interface LinearCompletionCommentResult {
   status: "posted" | "already-posted";
   commentId: string;

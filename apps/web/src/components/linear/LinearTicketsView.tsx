@@ -1,3 +1,4 @@
+import { linearFileReferences } from "@orkestrator/protocol/linear-files";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -42,7 +43,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { useLinearBuildPipelines, type LocatedBuildPipeline } from "./useLinearBuildPipelines";
 import { openMachineWorkspace } from "@/lib/federation/open-workspace";
@@ -82,6 +82,12 @@ import {
   compareStatusOrder,
   type IssueOrder,
 } from "./linear-issue-order";
+import {
+  LinearFileList,
+  LinearFilesProvider,
+  LinearMarkdown,
+  useLinearIssueFiles,
+} from "./LinearIssueFiles";
 import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
 import { LinearIssueBoard, LinearLanesMenu, type LinearBoardMove } from "./LinearIssueBoard";
 import {
@@ -200,7 +206,7 @@ function LinearCommentItem({ comment }: { comment: LinearIssueComment }) {
         <span>{formatUpdatedDate(comment.createdAt)}</span>
       </div>
       <div className="min-w-0 text-sm">
-        <MessageMarkdown content={comment.body} />
+        <LinearMarkdown content={comment.body} />
       </div>
     </div>
   );
@@ -729,6 +735,9 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   // refuses an issue that is not on it.
   const boardProjectId = boardState === "linked" ? projectId : undefined;
 
+  const linearFiles = useLinearIssueFiles(nodeBackend, boardProjectId);
+  const { load: loadFiles } = linearFiles;
+
   const loadDetail = useCallback(
     async (issueId: string) => {
       const requestId = detailRequestRef.current + 1;
@@ -741,6 +750,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
         setDetail(nextDetail);
         setDetailState("loaded");
         setCommentError(null);
+        void loadFiles(issueId);
       } catch (error) {
         if (detailRequestRef.current !== requestId) return;
         setDetail(null);
@@ -748,7 +758,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
         setDetailState("error");
       }
     },
-    [boardProjectId, nodeBackend],
+    [boardProjectId, loadFiles, nodeBackend],
   );
 
   const handleSelectIssue = (issueId: string) => {
@@ -840,6 +850,12 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
           ),
         };
       });
+      if (
+        selectedIssueIdRef.current === submittedIssueId &&
+        linearFileReferences(comment.body).length
+      ) {
+        void loadFiles(submittedIssueId);
+      }
       const submittedDraftGenerationIsCurrent =
         (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0) === submittedEditRevision;
       const submittedDraftIsCurrent =
@@ -967,12 +983,12 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
             )}
 
             {detail && (
-              <>
+              <LinearFilesProvider files={linearFiles}>
                 <div className="space-y-2">
                   <h3 className="text-sm font-medium text-foreground">Description</h3>
                   {detail.description ? (
                     <div className="rounded-md border border-border/60 bg-muted/20 p-4">
-                      <MessageMarkdown content={detail.description} />
+                      <LinearMarkdown content={detail.description} />
                     </div>
                   ) : (
                     <div className="rounded-md border border-border/60 bg-muted/20 p-4 text-sm text-muted-foreground">
@@ -980,6 +996,8 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                     </div>
                   )}
                 </div>
+
+                <LinearFileList />
 
                 <div className="grid gap-3 text-sm sm:grid-cols-2">
                   <div className="rounded-md border border-border/60 p-3">
@@ -1151,7 +1169,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                     </div>
                   </>
                 )}
-              </>
+              </LinearFilesProvider>
             )}
           </div>
         </ScrollArea>

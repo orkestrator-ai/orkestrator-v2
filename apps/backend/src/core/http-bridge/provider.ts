@@ -70,7 +70,7 @@ import {
 } from "../agent-provider-runtime.js";
 import { HttpBridgeInteractionAdapter } from "./interactions.js";
 import { HttpBridgeCatalogAdapter, type HttpBridgeAgent } from "./catalog.js";
-import { assertPromptOutcomeKnown, bridgePromptBody } from "./prompt-body.js";
+import { assertPromptOutcomeKnown, bridgeAgentMcp, bridgePromptBody } from "./prompt-body.js";
 import { cancelPromptDispatchHold, promptDispatchHold } from "../agent-test-dispatch-hold.js";
 import { withoutRetiredParameterValues } from "../native-agent/index.js";
 import { contextUsageWithPlanUsage, type PlanUsageState } from "../plan-usage/cache.js";
@@ -222,6 +222,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   ): Promise<string> {
     const clientSessionKey = options.clientSessionKey;
     const mode = options.mode ?? "build";
+    const agentMcp = bridgeAgentMcp(options.agentMcp, options.readOnly);
     const response = await bridgeFetch(
       this.connection,
       "/session/create",
@@ -235,7 +236,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 modelReasoningEffort: options.effort ?? this.connection.effort,
                 mode,
                 clientSessionKey,
-                agentMcp: options.agentMcp,
+                agentMcp,
                 policy: this.wirePolicy(options.policy),
               }
             : servesSharedBridgeSurface(this.agent)
@@ -246,7 +247,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   reasoningEffort: options.effort ?? this.connection.effort,
                   mode,
                   readOnly: options.readOnly ?? (options.mode === "build" ? false : undefined),
-                  agentMcp: options.agentMcp,
+                  agentMcp,
                   policy: this.wirePolicy(options.policy),
                   ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
                     ? { fastMode: options.fastMode ?? this.connection.fastMode }
@@ -255,7 +256,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
               : {
                   title: label,
                   clientSessionKey,
-                  agentMcp: options.agentMcp,
+                  agentMcp,
                   policy: this.wirePolicy(options.policy),
                 },
         ),
@@ -276,13 +277,14 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   /** Best-effort bridge cold-start outside the at-most-once dispatch window. */
   async prepareDispatch(
     sessionId: string,
-    options: { agentMcp?: ProviderSendOptions["agentMcp"]; workflowResultTool?: string } = {},
+    options: Pick<ProviderSendOptions, "agentMcp" | "readOnly" | "workflowResultTool"> = {},
   ): Promise<void> {
     if (!servesSharedBridgeSurface(this.agent)) return;
+    const body = JSON.stringify({ agentMcp: bridgeAgentMcp(options.agentMcp, options.readOnly) });
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/attach`,
-      { method: "POST", body: JSON.stringify({ agentMcp: options.agentMcp }) },
+      { method: "POST", body },
       this.fetchImpl,
       "attach",
     );

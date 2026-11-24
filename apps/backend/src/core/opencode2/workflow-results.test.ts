@@ -6,7 +6,11 @@ import {
 } from "../agent-provider-contract.js";
 import { resolveNativeAgentExecutionPolicy } from "../native-agent/execution-policy.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";
-import { openCode2TabMcpServer } from "./permissions.js";
+import {
+  OPENCODE2_LINEAR_FILES_MCP_PREFIX,
+  openCode2SessionMcpServer,
+  openCode2TabMcpServer,
+} from "./permissions.js";
 import { OpenCode2Provider } from "./provider.js";
 import type { OpenCode2PermissionRule } from "./types.js";
 
@@ -260,6 +264,29 @@ describe("workflow results", () => {
     expect(
       settled.some((rule) => rule.action === "orkestrator_workflow_result_submit_review_report"),
     ).toBe(false);
+  });
+
+  test("a writable result turn registers its own Linear server with the signed attempt", async () => {
+    const { server, provider } = setup();
+    const id = await provider.createSession("build", "b");
+    const name = openCode2SessionMcpServer(OPENCODE2_LINEAR_FILES_MCP_PREFIX, id);
+    const call = `${name}_download_linear_files`;
+    await provider.send(id, "build it", {
+      requestId: "wr-build",
+      agentMcp: BROKER,
+      workflowResultTool: "submit_review_preparation",
+    });
+    expect(server.mcp.get(name)?.config).toMatchObject({
+      url: new URL("/linear-file-workflow-mcp", BROKER.url).href,
+      headers: { Authorization: `Bearer ${BROKER.workflowResultCapability}` },
+    });
+    expect(rulesOf(server, id).findLast((rule) => rule.action === call)?.effect).toBe("allow");
+
+    server.finishRun(id);
+    expect(await provider.settleTurn(id, "wr-build")).toBe(true);
+    expect(rulesOf(server, id).some((rule) => rule.action === call)).toBe(false);
+    await provider.send(id, "continue", { requestId: "plain" });
+    expect(server.mcp.has(name)).toBe(false);
   });
 
   test("an incomplete result configuration is refused before anything is sent", async () => {

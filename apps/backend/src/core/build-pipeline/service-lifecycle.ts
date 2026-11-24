@@ -1,3 +1,4 @@
+import { unsignedLinearFileMarkdown } from "@orkestrator/protocol/linear-files";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import { adoptCompletedBuild, type CompletedBuildAttempt } from "./completed-build.js";
@@ -341,6 +342,7 @@ export class BuildPipelineLifecycle {
 
   async shutdown(): Promise<void> {
     this.ctx.stopped = true;
+    for (const controller of this.ctx.linearFilePreparations.values()) controller.abort();
     if (this.ctx.timer) clearInterval(this.ctx.timer);
     this.ctx.timer = null;
     this.ctx.supervisor?.stop();
@@ -356,6 +358,7 @@ export class BuildPipelineLifecycle {
     while (this.ctx.locks.size > 0) {
       await Promise.allSettled(this.ctx.locks.values());
     }
+    this.ctx.linearFilePreparations.clear();
     // A creation still in flight caches its provider when it settles; wait for
     // it so the disposal below reaches that instance too.
     await Promise.allSettled(this.ctx.providerCreations.values());
@@ -379,7 +382,28 @@ export class BuildPipelineLifecycle {
    * otherwise, and for other sources, they are derived from the snapshot text.
    */
   private async snapshotWithCriteria(input: StartBuildPipelineInput): Promise<TaskSnapshot> {
-    const snapshot = input.taskSnapshot;
+    const task = input.taskSnapshot;
+    const snapshot =
+      input.source?.type === "linear"
+        ? {
+            ...task,
+            title: unsignedLinearFileMarkdown(task.title),
+            description: unsignedLinearFileMarkdown(task.description),
+            acceptanceCriteria: unsignedLinearFileMarkdown(task.acceptanceCriteria),
+            comments: task.comments.map((comment) => ({
+              ...comment,
+              text: unsignedLinearFileMarkdown(comment.text),
+            })),
+            ...(task.acceptanceCriteriaItems
+              ? {
+                  acceptanceCriteriaItems: task.acceptanceCriteriaItems.map((item) => ({
+                    ...item,
+                    text: unsignedLinearFileMarkdown(item.text),
+                  })),
+                }
+              : {}),
+          }
+        : task;
     if (snapshot.acceptanceCriteriaItems) return snapshot;
     let ticket: KanbanTask | undefined;
     if (!input.source || input.source.type === "kanban") {
@@ -653,8 +677,9 @@ export class BuildPipelineLifecycle {
   }
 
   async pause(pipelineId: string): Promise<BuildPipeline> {
+    const finishInterrupt = this.ctx.interruptLinearFilePreparation(pipelineId);
     let abortErrors: unknown[] = [];
-    const pipeline = await this.ctx.mutate(pipelineId, async (pipeline) => {
+    const mutation = this.ctx.mutate(pipelineId, async (pipeline) => {
       const previous = resumablePhase(pipeline.phase);
       if (!previous) return;
       if (
@@ -692,6 +717,7 @@ export class BuildPipelineLifecycle {
         pipeline.error = `Build paused, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`;
       }
     });
+    const pipeline = await mutation.finally(finishInterrupt);
     await this.closeWorkflowResults(pipeline, "superseded");
     if (abortErrors.length > 0) throw abortErrors[0];
     return pipeline;
@@ -1814,8 +1840,9 @@ export class BuildPipelineLifecycle {
   }
 
   async cancel(pipelineId: string): Promise<BuildPipeline> {
+    const finishInterrupt = this.ctx.interruptLinearFilePreparation(pipelineId);
     let abortErrors: unknown[] = [];
-    const pipeline = await this.ctx.mutate(pipelineId, async (pipeline) => {
+    const mutation = this.ctx.mutate(pipelineId, async (pipeline) => {
       if (
         pipeline.validationRun &&
         ["planned", "running"].includes(pipeline.validationRun.status)
@@ -1860,6 +1887,7 @@ export class BuildPipelineLifecycle {
       delete pipeline.interactionRetryRequested;
       delete pipeline.stallWarning;
     });
+    const pipeline = await mutation.finally(finishInterrupt);
     // `provider()` records attribution for reconnect handling while a pipeline
     // is active. Cancellation is a terminal transition, so retaining the id
     // here would grow the map for every cancelled build until shutdown.

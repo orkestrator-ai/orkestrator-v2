@@ -16,6 +16,7 @@ import type {
   LinearBoardOptions,
   LinearConnectionStatus,
   LinearIssueDetail,
+  LinearIssueFile,
   LinearIssueListItem,
   LinearNodeConnection,
   LinearTeam,
@@ -90,6 +91,9 @@ const getLinearBoardOptionsMock = mock(async (_projectId: string): Promise<Linea
   teamId: "team-1",
   states: [],
 }));
+const getLinearIssueFilesMock = mock(
+  async (_projectId: string, _issueId: string): Promise<LinearIssueFile[]> => [],
+);
 const getLinearNodeConnectionsMock = mock(async (): Promise<LinearNodeConnection[]> => []);
 const copyLinearConnectionFromNodeMock = mock(
   async (_nodeId: string): Promise<LinearConnectionStatus> => ({
@@ -155,6 +159,7 @@ mock.module("@/lib/backend", () => ({
   clearLinearBoardLink: clearLinearBoardLinkMock,
   getLinearTeams: getLinearTeamsMock,
   getLinearBoardOptions: getLinearBoardOptionsMock,
+  getLinearIssueFiles: getLinearIssueFilesMock,
   updateLinearIssue: updateLinearIssueMock,
   getLinearNodeConnections: getLinearNodeConnectionsMock,
   copyLinearConnectionFromNode: copyLinearConnectionFromNodeMock,
@@ -306,6 +311,8 @@ describe("LinearTicketsView", () => {
     appCommandStore(projectStore).setState({ projects: [] });
     appCommandStore(linearViewPreferencesStore).setState({ projects: {} });
     updateLinearIssueMock.mockReset();
+    getLinearIssueFilesMock.mockReset();
+    getLinearIssueFilesMock.mockResolvedValue([]);
     getLinearBoardOptionsMock.mockReset();
     getLinearBoardOptionsMock.mockResolvedValue({
       teamId: "team-1",
@@ -351,6 +358,36 @@ describe("LinearTicketsView", () => {
     fireEvent.click(title);
     await screen.findByText("Build Linear support");
     assertDecorativeAvatar(screen.getByTestId("linear-assignee-avatar"), detailAvatarUrl);
+  });
+
+  test("lists an issue's files and shows its images and links as Linear has them", async () => {
+    const zip = "https://uploads.linear.app/ws/aaaa/bbbb";
+    const logo = "https://uploads.linear.app/ws/cccc/dddd";
+    getLinearIssueMock.mockResolvedValue({
+      ...issueDetail,
+      description: `Use [package.zip](${zip}) and ![logo](${logo})`,
+      comments: [{ ...issueDetail.comments[0]!, body: `Again: [package.zip](${zip})` }],
+    });
+    getLinearIssueFilesMock.mockResolvedValue([
+      { url: zip, name: "package.zip", signedUrl: `${zip}?signature=1` },
+      { url: logo, name: "logo", signedUrl: `${logo}?signature=2` },
+    ]);
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+
+    const files = await screen.findByRole("region", { name: "Files" });
+    expect(getLinearIssueFilesMock).toHaveBeenCalledWith("project-1", "issue-1");
+    expect(within(files).getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.getByRole("img", { name: "logo" }).getAttribute("src")).toBe(
+      `${logo}?signature=2`,
+    );
+
+    fireEvent.click(within(files).getByRole("button", { name: "Download package.zip" }));
+    await waitFor(() => expect(openInBrowserMock).toHaveBeenLastCalledWith(`${zip}?signature=1`));
+    const links = screen.getAllByRole("link", { name: "package.zip" });
+    expect(links).toHaveLength(2);
+    fireEvent.click(links[1]!);
+    await waitFor(() => expect(openInBrowserMock).toHaveBeenCalledTimes(2));
   });
 
   test("shows a connect state and can start Linear connection setup", async () => {
@@ -1129,6 +1166,30 @@ describe("LinearTicketsView", () => {
         expect.any(Number),
       );
     });
+  });
+
+  test("refreshes the file list and inline images after posting a comment", async () => {
+    const url = "https://uploads.linear.app/issue/comment.png";
+    const body = `![New comment diagram](${url})`;
+    postLinearIssueCommentMock.mockResolvedValueOnce({
+      id: "comment-image",
+      body,
+      createdAt: "2026-06-28T12:10:00.000Z",
+      authorName: "Ada",
+    });
+    getLinearIssueFilesMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ url, signedUrl: `${url}?signature=comment` }]);
+    renderLinearTicketsView();
+    fireEvent.click(await screen.findByText("Add Linear integration"));
+    await screen.findByText("Initial Linear comment");
+    fireEvent.change(screen.getByLabelText("Add Linear comment"), { target: { value: body } });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+
+    const image = await screen.findByRole("img", { name: "New comment diagram" });
+    expect(image.getAttribute("src")).toBe(`${url}?signature=comment`);
+    expect(screen.getByRole("button", { name: "Download comment.png" })).toBeTruthy();
+    expect(getLinearIssueFilesMock).toHaveBeenCalledTimes(2);
   });
 
   test("does not clear a newly selected ticket draft when an older comment finishes", async () => {

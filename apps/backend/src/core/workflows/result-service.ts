@@ -121,6 +121,12 @@ export interface WorkflowResultAcceptance {
   kind: WorkflowResultKind;
 }
 
+interface OpenResultWork {
+  controller: AbortController;
+  users: number;
+  publications: Set<Promise<void>>;
+}
+
 interface StoredWorkflowResult extends WorkflowResultSlotInput {
   schemaVersion: number;
   lifecycle: "open" | "accepted" | "consumed" | "cancelled" | "superseded" | "exhausted";
@@ -466,6 +472,7 @@ export class WorkflowResultService {
   private readonly nudgedResults = new Set<string>();
   private heldBytes = 0;
   private readonly deliveryCounters = new Map<string, DeliveryCounters>();
+  private readonly openWork = new Map<string, OpenResultWork>();
   private readonly acceptanceListeners = new Set<(event: WorkflowResultAcceptance) => void>();
   readonly metrics: WorkflowResultMetrics;
   /** Kind definitions plus this backend's acceptance checks and environment hook. */
@@ -496,6 +503,7 @@ export class WorkflowResultService {
    * identity are kept.
    */
   closeStorage(): void {
+    for (const work of this.openWork.values()) work.controller.abort();
     this.storage?.close();
     this.storage = null;
     this.index = null;
@@ -1773,6 +1781,54 @@ export class WorkflowResultService {
     };
   }
 
+  /** A background operation may publish only while its result slot is open. */
+  holdOpenResult(
+    scope: WorkflowResultCallerScope,
+    resultKey: string,
+  ): {
+    signal: AbortSignal;
+    publish(write: () => Promise<void>): Promise<void>;
+    release(): void;
+  } | null {
+    const isOpen = () => {
+      const entry = this.readEntry(resultKey);
+      return (
+        entry?.lifecycle === "open" &&
+        entry.projectId === scope.projectId &&
+        entry.environmentId === scope.environmentId
+      );
+    };
+    if (!isOpen()) return null;
+    let work = this.openWork.get(resultKey);
+    if (!work) {
+      work = { controller: new AbortController(), users: 0, publications: new Set() };
+      this.openWork.set(resultKey, work);
+    }
+    if (work.users >= 8) throw new Error("Too many concurrent operations for this attempt.");
+    const active = work;
+    active.users += 1;
+    const signal = active.controller.signal;
+    return {
+      signal,
+      publish: async (write) => {
+        signal.throwIfAborted();
+        if (!isOpen()) throw new Error("This workflow attempt is no longer open.");
+        const publication = write();
+        active.publications.add(publication);
+        try {
+          await publication;
+        } finally {
+          active.publications.delete(publication);
+        }
+      },
+      release: () => {
+        active.users -= 1;
+        if (active.users === 0 && this.openWork.get(resultKey) === active)
+          this.openWork.delete(resultKey);
+      },
+    };
+  }
+
   async consume(resultKey: string): Promise<void> {
     this.mutateEntry<void>(
       resultKey,
@@ -1806,7 +1862,8 @@ export class WorkflowResultService {
    */
   async deleteByEnvironment(environmentId: string): Promise<number> {
     const removedKeys: string[] = [];
-    return this.commit(
+    const publications: Promise<void>[] = [];
+    const count = this.commit(
       (database, index) => {
         for (const [resultKey, entry] of index.entries) {
           if (entry.environmentId === environmentId) removedKeys.push(resultKey);
@@ -1816,10 +1873,19 @@ export class WorkflowResultService {
       },
       {
         afterCommit: () => {
-          for (const resultKey of removedKeys) this.forgetDelivery(resultKey);
+          for (const resultKey of removedKeys) {
+            const work = this.openWork.get(resultKey);
+            if (work) {
+              work.controller.abort();
+              publications.push(...work.publications);
+            }
+            this.forgetDelivery(resultKey);
+          }
         },
       },
     );
+    await Promise.allSettled(publications);
+    return count;
   }
 
   /**
@@ -1831,6 +1897,7 @@ export class WorkflowResultService {
     lifecycle: "cancelled" | "superseded",
     successorResultKey?: string,
   ): Promise<void> {
+    const work = this.openWork.get(resultKey);
     this.mutateEntry<void>(
       resultKey,
       (entry) => {
@@ -1869,6 +1936,8 @@ export class WorkflowResultService {
         },
       },
     );
+    // Wait for already-started writes before returning from the close request.
+    if (work) await Promise.allSettled(work.publications);
   }
 
   /**
@@ -2019,29 +2088,40 @@ export class WorkflowResultService {
     },
     options: { afterCommit?: (result: T) => void } = {},
   ): T {
-    return this.commit((database, index) => {
-      const outcome = database.updateStoreRow(
-        WORKFLOW_RESULTS_STORE,
-        resultKey,
-        (current) => {
-          if (current !== undefined && !validStoredEntry(resultKey, current)) throw invalidStore();
-          const outcome = operation(current as StoredWorkflowResult | undefined);
-          return outcome.entry === undefined
-            ? { result: outcome }
-            : { result: outcome, value: outcome.entry };
+    let settled = false;
+    return this.commit(
+      (database, index) => {
+        const outcome = database.updateStoreRow(
+          WORKFLOW_RESULTS_STORE,
+          resultKey,
+          (current) => {
+            if (current !== undefined && !validStoredEntry(resultKey, current))
+              throw invalidStore();
+            const outcome = operation(current as StoredWorkflowResult | undefined);
+            return outcome.entry === undefined
+              ? { result: outcome }
+              : { result: outcome, value: outcome.entry };
+          },
+          { collection: ENTRIES, unreadable: "throw" },
+        );
+        if (outcome.entry !== undefined) {
+          settled = outcome.entry.lifecycle !== "open";
+          const bytes = Buffer.byteLength(JSON.stringify(outcome.entry), "utf8");
+          index.bytes += bytes - (index.entries.get(resultKey)?.bytes ?? 0);
+          index.entries.set(resultKey, indexedEntry(outcome.entry, bytes));
+        }
+        return {
+          result: outcome.result,
+          removesContent: outcome.removesContent === true && outcome.entry !== undefined,
+        };
+      },
+      {
+        afterCommit: (result) => {
+          if (settled) this.openWork.get(resultKey)?.controller.abort();
+          options.afterCommit?.(result);
         },
-        { collection: ENTRIES, unreadable: "throw" },
-      );
-      if (outcome.entry !== undefined) {
-        const bytes = Buffer.byteLength(JSON.stringify(outcome.entry), "utf8");
-        index.bytes += bytes - (index.entries.get(resultKey)?.bytes ?? 0);
-        index.entries.set(resultKey, indexedEntry(outcome.entry, bytes));
-      }
-      return {
-        result: outcome.result,
-        removesContent: outcome.removesContent === true && outcome.entry !== undefined,
-      };
-    }, options);
+      },
+    );
   }
 
   private removeEntry(database: StorageDatabase, index: EntryIndex, resultKey: string): void {

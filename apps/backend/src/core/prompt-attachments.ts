@@ -19,8 +19,8 @@ export type PromptAttachment = {
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 /** Matches the per-payload cap the write-file commands already enforce. */
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-const MAX_ATTACHMENT_COUNT = 20;
+export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_ATTACHMENT_COUNT = 20;
 export const MAX_TOTAL_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 
@@ -120,7 +120,7 @@ export function promptAttachmentUrl(attachment: PromptAttachment): string {
 }
 
 /** Approximate decoded size without allocating the buffer. */
-function base64ByteLength(data: string): number {
+export function base64ByteLength(data: string): number {
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 }

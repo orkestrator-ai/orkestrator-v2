@@ -20,6 +20,7 @@ import {
   LinearBoardOptionsSchema,
   LinearConnectionStatusSchema,
   LinearIssueDetailSchema,
+  LinearIssueFilesSchema,
   LinearNodeConnectionSchema,
   LinearTeamSchema,
 } from "./schemas.js";
@@ -97,6 +98,27 @@ export const getLinearBoardOptionsCommand = defineCommand({
   args: Schema.Struct({ projectId: Schema.String }),
   result: LinearBoardOptionsSchema,
   critical: [],
+});
+
+/**
+ * The Linear-hosted files an issue on the project's board refers to, each with
+ * a link that opens without Linear sign-in for a few minutes. `url` is the
+ * link as the issue's text has it, without a signature.
+ */
+export const getLinearIssueFilesCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "get_linear_issue_files",
+  since: 2,
+  access: "workspace",
+  read: true,
+  args: Schema.Struct({
+    projectId: Schema.String,
+    issueId: Schema.String,
+    fileUrl: Schema.optionalKey(Schema.String),
+    offset: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  }),
+  result: LinearIssueFilesSchema,
+  critical: ["offset"],
 });
 
 /**
@@ -192,6 +214,7 @@ export const LINEAR_BOARD_COMMANDS = [
   setLinearBoardLinkCommand,
   clearLinearBoardLinkCommand,
   getLinearBoardOptionsCommand,
+  getLinearIssueFilesCommand,
   createLinearIssueCommand,
   updateLinearIssueCommand,
   getLinearNodeConnectionsCommand,

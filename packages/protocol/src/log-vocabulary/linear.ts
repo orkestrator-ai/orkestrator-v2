@@ -7,6 +7,10 @@ export const LINEAR_LOG_AREAS = defineLogAreas({
     events: {
       "board-link.conflict":
         "Two of this machine's projects were linked to one Linear board on different machines; the link changed last kept it and the other was cleared.",
+      "build-files.failed":
+        "None of a Linear-sourced build's ticket files could be downloaded; the Build prompt says why.",
+      "build-files.prepared":
+        "A Linear-sourced build's ticket files were downloaded into its workspace, with the counts downloaded and failed.",
       "comments.load-failed":
         "An issue's comments could not be loaded; the issue still renders without them.",
       "connection.revoked-by-sync":

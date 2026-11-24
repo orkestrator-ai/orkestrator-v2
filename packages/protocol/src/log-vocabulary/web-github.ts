@@ -18,6 +18,8 @@ export const WEB_GITHUB_LOG_AREAS = defineLogAreas({
       "comment-draft.clear-failed": "A posted comment's draft could not be cleared.",
       "connection.refresh-failed":
         "A background refresh could not verify the Linear connection; the shown board stays.",
+      "files.load-failed":
+        "The files an issue refers to could not be read; the issue shows without them.",
       "issues.refresh-failed":
         "A background refresh could not read the Linear board; the shown tickets stay.",
     },

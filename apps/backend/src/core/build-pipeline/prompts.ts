@@ -1,6 +1,18 @@
 import { PR_MERGE_CHECK_SHELL } from "../pull-request-merge-preflight.js";
 import { taskSnapshotCriteria } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_ATTACHMENT_COUNT,
+  MAX_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES,
+  base64ByteLength,
+} from "../prompt-attachments.js";
 import { usesPackagePreparationSession } from "./stages.js";
+import {
+  LINEAR_FILE_HOST,
+  LINEAR_FILE_TOOL_NAME,
+  LINEAR_FILES_DIRECTORY,
+  linearFileReferences,
+} from "@orkestrator/protocol/linear-files";
 import { TICKET_SECTION_LIMITS } from "@orkestrator/protocol/ticket-sections";
 import { IMPLEMENTATION_VALIDATION_HANDOFF } from "../review/validation-prompts.js";
 import { createHash } from "node:crypto";
@@ -8,6 +20,7 @@ import type {
   BuildPipeline,
   PipelineSessionPhase,
   TaskSnapshot,
+  TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
 import {
@@ -95,7 +108,36 @@ function numberedComment(text: string, index: number): string {
   return `${marker}${text.replace(/\r\n|\r|\n/g, `\n${continuationIndent}`)}`;
 }
 
-function ticketContext(task: TaskSnapshot): string {
+/**
+ * Told to every stage whose ticket links to Linear-hosted files: agents tried
+ * the links, met a 401 and asked the user for a Linear key.
+ */
+function linearFilesNote(task: TaskSnapshot, canDownload: boolean): string {
+  const text = [task.description, task.acceptanceCriteria, ...task.comments.map((c) => c.text)];
+  if (linearFileReferences(text.join("\n\n")).length === 0) return "";
+  const download = canDownload
+    ? ` If you need a missing file and the Orkestrator \`${LINEAR_FILE_TOOL_NAME}\` tool is available, call it with \`issueId\` when the build was started from another issue.`
+    : "";
+  return `**Linear files**: the ticket's \`${LINEAR_FILE_HOST}\` links need Linear sign-in, so do not fetch them yourself or ask for a Linear credential. Orkestrator downloads a Linear issue's files to \`${LINEAR_FILES_DIRECTORY}/\` (Git-excluded).${download}`;
+}
+
+/** Adds images found after the build started, without passing what a prompt may carry. */
+export function addTaskSnapshotImages(
+  task: TaskSnapshot,
+  images: readonly TaskSnapshotImage[],
+): void {
+  let bytes = task.images.reduce((total, image) => total + base64ByteLength(image.data), 0);
+  for (const image of images) {
+    if (task.images.length >= MAX_ATTACHMENT_COUNT) return;
+    if (task.images.some((known) => known.filename === image.filename)) continue;
+    const size = base64ByteLength(image.data);
+    if (size > MAX_ATTACHMENT_BYTES || bytes + size > MAX_TOTAL_ATTACHMENT_BYTES) continue;
+    bytes += size;
+    task.images.push(image);
+  }
+}
+
+function ticketContext(task: TaskSnapshot, canDownload = false): string {
   return [
     `**Title**: ${task.title}`,
     task.description ? `**Description**: ${task.description}` : "",
@@ -106,6 +148,7 @@ function ticketContext(task: TaskSnapshot): string {
     task.images.length
       ? `**Attached Images**: ${task.images.map((image) => image.filename).join(", ")}`
       : "",
+    linearFilesNote(task, canDownload),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -252,6 +295,7 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string, targetBranch
     usesPackagePreparationSession(pipeline)
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),
+    true,
   );
 }
 
@@ -261,10 +305,15 @@ export function buildPrompt(pipeline: BuildPipeline, notes: string, targetBranch
  * the package preparation of a pipeline without a preparation session). A
  * graph's Build node (item 204) has no pipeline record to derive them from.
  */
-export function buildTaskPrompt(task: TaskSnapshot, notes: string, validation: string): string {
+export function buildTaskPrompt(
+  task: TaskSnapshot,
+  notes: string,
+  validation: string,
+  canDownloadLinearFiles = false,
+): string {
   return [
     "You are building a feature. Here is the ticket:",
-    ticketContext(task),
+    ticketContext(task, canDownloadLinearFiles),
     notes ? `**Project Notes**:\n${notes}` : "",
     "Build this feature completely. Do not ask questions; make your best judgment for ambiguous requirements.",
     REFERENCE_UPDATE_RULE,
@@ -976,6 +1025,7 @@ export function reworkPrompt(
     usesPackagePreparationSession(pipeline)
       ? IMPLEMENTATION_VALIDATION_HANDOFF
       : reviewPackagePreparationPrompt(pipeline, targetBranch),
+    true,
   );
 }
 
@@ -989,10 +1039,11 @@ export function reworkTaskPrompt(
   feedback: string,
   targetBranch: string,
   validation: string,
+  canDownloadLinearFiles = false,
 ): string {
   return [
     "Rework this ticket: fix its unmet acceptance criteria:",
-    ticketContext(task),
+    ticketContext(task, canDownloadLinearFiles),
     notes ? `**Project Notes**:\n${notes}` : "",
     `**Verification feedback**:\n${feedback}`,
     "Make the required changes. Do not ask questions.",

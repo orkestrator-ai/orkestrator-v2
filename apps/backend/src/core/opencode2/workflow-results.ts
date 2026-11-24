@@ -40,10 +40,12 @@ import {
   isOpenCodeWorkflowResultToolName,
   openCodeWorkflowResultTurnProblem,
 } from "./policy-rules.js";
+import { isLinearFileWriteResultTool } from "../linear-files/authorization.js";
 import type { OpenCode2McpServers } from "./mcp.js";
 import {
   OPENCODE2_ARTIFACTS_MCP_PREFIX,
   OPENCODE2_DESIGN_MCP_PREFIX,
+  OPENCODE2_LINEAR_FILES_MCP_PREFIX,
   OPENCODE2_TAB_MCP_PREFIX,
 } from "./permissions.js";
 import type { OpenCode2TurnGrants } from "./turn-grants.js";
@@ -127,10 +129,16 @@ export class OpenCode2WorkflowTurns {
     const connection = options.agentMcp;
     if (!connection) {
       // A grant is one turn's: a turn without one never keeps the previous turn's.
-      await this.mcp.removeSessionServer(OPENCODE2_ARTIFACTS_MCP_PREFIX, sessionId);
+      await Promise.all([
+        this.mcp.removeSessionServer(OPENCODE2_ARTIFACTS_MCP_PREFIX, sessionId),
+        this.mcp.removeSessionServer(OPENCODE2_LINEAR_FILES_MCP_PREFIX, sessionId),
+      ]);
       return;
     }
-    const broker = Boolean(connection.workflowResultCapability);
+    const capability = connection.workflowResultCapability;
+    const broker = Boolean(capability);
+    const linearFiles =
+      capability && !options.readOnly && isLinearFileWriteResultTool(options.workflowResultTool);
     // Design tools refuse workflow credentials, so only a tab-scoped connection carries them.
     const design = !broker && connection.design === true;
     const artifacts = connection.artifacts?.token;
@@ -138,6 +146,9 @@ export class OpenCode2WorkflowTurns {
       ? connection.readOnlyToken && { ...connection, token: connection.readOnlyToken }
       : connection;
     await Promise.all([
+      capability && linearFiles
+        ? this.mcp.ensureLinearFiles(sessionId, connection.url, capability)
+        : this.mcp.removeSessionServer(OPENCODE2_LINEAR_FILES_MCP_PREFIX, sessionId),
       broker
         ? this.mcp.ensureWorkflowBroker(connection)
         : tabConnection

@@ -472,7 +472,10 @@ export interface ProviderCreateSessionOptions {
   effort?: string;
   fastMode?: boolean;
   /** Tab-scoped Orkestrator MCP credential for bridges with per-session config. */
-  agentMcp?: { url: string; token: string; design?: boolean };
+  agentMcp?: Pick<
+    NonNullable<ProviderSendOptions["agentMcp"]>,
+    "url" | "token" | "readOnlyToken" | "design"
+  >;
   interaction?: ProviderSessionRegistration;
   /** Immutable backend-owned execution policy for this provider session. */
   policy?: NativeAgentExecutionPolicy;
@@ -585,7 +588,7 @@ export interface ProviderSendOptions {
     design?: boolean;
     url: string;
     token: string;
-    /** Alternate authentication for a read-only turn, with credential tools disabled. */
+    /** Alternate authentication for a read-only turn, with credential tools and Linear file writes disabled. */
     readOnlyToken?: string;
     /** Signed one-attempt argument for providers using a persistent MCP broker. */
     workflowResultCapability?: string;
@@ -606,6 +609,7 @@ export interface ProviderSendOptions {
 }
 
 export type ProviderPrepareDispatchOptions = {
+  readOnly?: boolean;
   /**
    * The tab-scoped Orkestrator MCP credential this turn will use.
    *

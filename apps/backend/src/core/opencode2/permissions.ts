@@ -22,6 +22,8 @@
  * (`orkestrator_artifacts_<id>`) servers, and the workflow-result broker
  * except during a turn that owns a result tool.
  */
+import { isLinearFileWriteResultTool } from "../linear-files/authorization.js";
+import { LINEAR_FILE_TOOL_NAME } from "@orkestrator/protocol/linear-files";
 import { createHash } from "node:crypto";
 import { WORKFLOW_RESULT_MCP_SERVER_NAME } from "@orkestrator/protocol/workflow-results";
 import {
@@ -44,11 +46,14 @@ export const OPENCODE2_TAB_MCP_PREFIX = "orkestrator_tab_";
 export const OPENCODE2_DESIGN_MCP_PREFIX = "orkestrator_design_";
 /** Prefix of every per-session artifact-only server (`/artifact-mcp`, the turn's grant). */
 export const OPENCODE2_ARTIFACTS_MCP_PREFIX = "orkestrator_artifacts_";
+/** Prefix of the writable workflow's attempt-scoped Linear file connection. */
+export const OPENCODE2_LINEAR_FILES_MCP_PREFIX = "orkestrator_linear_files_";
 /** The per-session Orkestrator server kinds, each confined to its own session. */
 export const OPENCODE2_SESSION_MCP_PREFIXES = [
   OPENCODE2_TAB_MCP_PREFIX,
   OPENCODE2_DESIGN_MCP_PREFIX,
   OPENCODE2_ARTIFACTS_MCP_PREFIX,
+  OPENCODE2_LINEAR_FILES_MCP_PREFIX,
 ] as const;
 export type OpenCode2SessionMcpPrefix = (typeof OPENCODE2_SESSION_MCP_PREFIXES)[number];
 /** Most rules a session is given; a ruleset past it is refused rather than truncated. */
@@ -270,8 +275,18 @@ export function openCode2TurnRules(
     ...(turn.workflowResultTool
       ? openCode2WorkflowTurnRules(turn.workflowResultTool, turn.workflowResultExtraTools)
       : []),
+    ...(!turn.readOnly && isLinearFileWriteResultTool(turn.workflowResultTool)
+      ? [
+          {
+            action: `${openCode2SessionMcpServer(OPENCODE2_LINEAR_FILES_MCP_PREFIX, sessionId)}_${LINEAR_FILE_TOOL_NAME}`,
+            resource: "*",
+            effect: "allow" as const,
+          },
+        ]
+      : []),
     ...(turn.readOnly
       ? [
+          LINEAR_FILE_TOOL_NAME,
           "request_credential",
           "get_credential_request",
           "list_credential_grants",

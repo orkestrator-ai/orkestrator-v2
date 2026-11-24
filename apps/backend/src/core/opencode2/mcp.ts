@@ -24,6 +24,10 @@
  *   `/artifact-mcp` with the turn's grant) on a result turn; see
  *   `turn-connections.ts`. Both are confined like the tab server.
  *
+ * A writable workflow also registers a Linear file server for its session
+ * with the signed attempt credential. Its rules grant the tool only during
+ * that turn.
+ *
  * These routes are experimental upstream. The exact pin and
  * `opencode2-mcp.live.test.ts` guard them on every bump.
  */
@@ -37,6 +41,7 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { redactSecrets } from "@orkestrator/protocol/secret-redaction";
 import { ORKESTRATOR_ARTIFACT_MCP_PATH } from "@orkestrator/protocol/transcript-artifacts";
+import { LINEAR_FILE_WORKFLOW_MCP_PATH } from "../linear-files/authorization.js";
 import { ProviderDispatchPreparationError } from "../agent-provider-contract.js";
 import { MAX_OPENCODE_CONFIGURED_MCP_SERVERS } from "./policy-rules.js";
 import type { OpenCode2Client } from "./client.js";
@@ -44,6 +49,7 @@ import {
   isOrkestratorOpenCode2McpServer,
   OPENCODE2_ARTIFACTS_MCP_PREFIX,
   OPENCODE2_DESIGN_MCP_PREFIX,
+  OPENCODE2_LINEAR_FILES_MCP_PREFIX,
   OPENCODE2_SESSION_MCP_PREFIXES,
   OPENCODE2_TAB_MCP_PREFIX,
   openCode2SessionMcpServer,
@@ -130,6 +136,13 @@ export class OpenCode2McpServers {
   /** Register the environment's workflow-result broker connection. */
   ensureWorkflowBroker(connection: OpenCode2McpConnection): Promise<void> {
     return this.ensure(WORKFLOW_RESULT_MCP_SERVER_NAME, connection);
+  }
+
+  ensureLinearFiles(sessionId: string, origin: string, capability: string): Promise<void> {
+    return this.ensure(openCode2SessionMcpServer(OPENCODE2_LINEAR_FILES_MCP_PREFIX, sessionId), {
+      url: new URL(LINEAR_FILE_WORKFLOW_MCP_PATH, origin).toString(),
+      token: capability,
+    });
   }
 
   /** Remove a closed session's tab server, so its credential stops being presented. */

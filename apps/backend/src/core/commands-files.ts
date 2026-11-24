@@ -1339,7 +1339,7 @@ ${INITIAL_PROMPT_PRUNE_BODY}`;
 
 export const CONTAINER_PINNED_ATTACHMENT_WRITE = String.raw`
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode, ancestorMode] = process.argv.slice(1);
+const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode, ancestorMode, publishBy] = process.argv.slice(1);
 let current = workspaceRoot;
 const root = fs.lstatSync(current);
 if (root.isSymbolicLink() || !root.isDirectory()) process.exit(73);
@@ -1380,6 +1380,73 @@ const assertDirectoryStillNamed = () => {
     const error = new Error("workspace directory changed"); error.code = "ESTALE_DIRECTORY"; throw error;
   }
 };
+// Linear downloads use a two-phase write. A docker client disconnect can
+// leave its exec running, so EOF alone must never authorize a rename.
+if (publishBy) {
+  const deadline = Number(publishBy);
+  const stop = () => process.exit(78);
+  if (!(deadline > Date.now())) stop();
+  const timer = setTimeout(stop, deadline - Date.now());
+  const maxEncoded = Math.ceil(Number(expectedBytes) / 3) * 4;
+  const chunks = [];
+  let encoded = 0, received = false, staged = false, authorized = false;
+  const temp = "." + filename + "." + crypto.randomUUID() + ".tmp";
+  const discard = () => {
+    if (!authorized) try { fs.unlinkSync(temp); } catch {}
+  };
+  process.on("exit", discard);
+  const fail = () => { discard(); stop(); };
+  const stage = async () => {
+    assertDirectoryStillNamed();
+    const content = Buffer.from(Buffer.concat(chunks).toString("ascii"), "base64");
+    chunks.length = 0;
+    if (content.length !== Number(expectedBytes)) return fail();
+    const file = await fs.promises.open(temp, "wx", 0o600);
+    try {
+      await file.writeFile(content);
+      await file.chmod(Number(fileMode));
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    staged = true;
+    process.stdout.write("LINEAR_FILE_STAGED\n");
+  };
+  const publish = () => {
+    if (!staged || Date.now() >= deadline) return fail();
+    try {
+      assertDirectoryStillNamed();
+      if (Date.now() >= deadline) return fail();
+      fs.renameSync(temp, filename);
+      authorized = true;
+      clearTimeout(timer);
+    } catch {
+      fail();
+    }
+  };
+  let commit = "";
+  process.stdin.on("data", chunk => {
+    if (received) {
+      if (commit.length + chunk.length > 8) return fail();
+      commit += chunk.toString("ascii");
+      if (commit === "publish\n") publish();
+      return;
+    }
+    const newline = chunk.indexOf(10);
+    const data = newline === -1 ? chunk : chunk.subarray(0, newline);
+    encoded += data.length;
+    if (encoded > maxEncoded) return fail();
+    chunks.push(data);
+    if (newline === -1) return;
+    if (newline !== chunk.length - 1 || encoded !== maxEncoded) return fail();
+    received = true;
+    void stage().catch(fail);
+  });
+  process.stdin.on("end", () => {
+    if (!authorized) fail();
+  });
+  process.stdin.on("error", fail);
+} else {
 if (readyToken) process.stdout.write(readyToken + "\n");
 const chunks = []; let encodedBytes = 0;
 process.stdin.on("data", chunk => { encodedBytes += chunk.length; if (encodedBytes > Number(expectedBytes) * 2 + 16) process.exit(74); chunks.push(chunk); });
@@ -1412,6 +1479,7 @@ process.stdin.on("end", () => {
     process.stderr.write(error && error.code || "WRITE_FAILED"); process.exit(76);
   }
 });
+}
 `;
 
 export const CONTAINER_PINNED_ATTACHMENT_REMOVE = String.raw`
@@ -2614,8 +2682,36 @@ export async function ensureContainerProjectFilesAccess(containerId: string): Pr
  */
 export async function addLocalWorkspaceArtifactsToGitExclude(
   worktreePath: string,
+  signal?: AbortSignal,
 ): Promise<{ file: string; stamp?: string }> {
-  const excludeFile = await resolveLocalGitExcludeFile(worktreePath);
+  const excludeFile = await resolveLocalGitExcludeFile(worktreePath, signal);
+  signal?.throwIfAborted();
+  if (signal) {
+    // Keep cancellable settings I/O in the same process boundary as the Git
+    // commands. Append so an interrupted write preserves the existing rules.
+    await runCommand(
+      process.execPath,
+      [
+        "-e",
+        `const fs = require("node:fs"), path = require("node:path");
+      const [file, ruleList] = process.argv.slice(1);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      let existing;
+      try { existing = fs.readFileSync(file, "utf8"); }
+      catch (error) { if (error.code !== "ENOENT") throw error; existing = ""; }
+      const rules = new Set(existing.split(/\\r?\\n/));
+      const missing = JSON.parse(ruleList).filter((rule) => !rules.has(rule));
+      if (missing.length) {
+        const separator = existing && !existing.endsWith("\\n") ? "\\n" : "";
+        fs.appendFileSync(file, separator + missing.join("\\n") + "\\n");
+      }`,
+        excludeFile,
+        JSON.stringify(WORKSPACE_ARTIFACT_GIT_EXCLUDE_PATTERNS),
+      ],
+      { signal, timeoutMs: 10_000, waitForTermination: true },
+    );
+    return { file: excludeFile };
+  }
   await fs.mkdir(path.dirname(excludeFile), { recursive: true });
 
   // The second pass only reads back what the first wrote.
@@ -2639,11 +2735,14 @@ export async function addLocalWorkspaceArtifactsToGitExclude(
   return { file: excludeFile };
 }
 
-export async function resolveLocalGitExcludeFile(worktreePath: string): Promise<string> {
+export async function resolveLocalGitExcludeFile(
+  worktreePath: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const { stdout } = await runCommand(
     "git",
     ["-C", worktreePath, "rev-parse", "--git-path", "info/exclude"],
-    { timeoutMs: 10_000 },
+    { timeoutMs: 10_000, signal, waitForTermination: !!signal },
   );
   const excludeFile = stdout.trim();
   if (!excludeFile) throw new Error(`Could not resolve git exclude file for ${worktreePath}`);

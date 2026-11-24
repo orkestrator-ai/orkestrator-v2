@@ -26,6 +26,7 @@ import {
   consumeAgentMailRateLimit,
   dropInheritedAgentToolConnection,
 } from "./agent-tools.js";
+import { LINEAR_FILE_WORKFLOW_MCP_PATH } from "./linear-files/authorization.js";
 import { StorageService } from "./storage/service.js";
 import { seedUnreadableStore } from "./storage/test-support.js";
 import { WorkflowResultService } from "./workflows/result-service.js";
@@ -114,8 +115,13 @@ describe("report_goal", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  async function call(tabId: string | undefined, method: string, params?: Record<string, unknown>) {
-    const { url, token } = server.connection("env-1", "project-1", "host", tabId);
+  async function call(
+    tabId: string | undefined,
+    method: string,
+    params?: Record<string, unknown>,
+    options?: { credentialsDisabled: true },
+  ) {
+    const { url, token } = server.connection("env-1", "project-1", "host", tabId, options);
     const response = await fetch(url, {
       method: "POST",
       headers: {
@@ -146,6 +152,40 @@ describe("report_goal", () => {
     const after = await call("tab-1", "tools/list");
     expect(after.result?.tools?.map((tool) => tool.name)).toContain("report_goal");
     expect(AGENT_GOAL_TOOL_NAMES).toContain("report_goal");
+  });
+
+  test("download_linear_files is listed as its host offers it", async () => {
+    const names = async () =>
+      (await call("tab-1", "tools/list")).result?.tools?.map((tool) => tool.name);
+    const asked: unknown[] = [];
+    let offered = false;
+    server.setLinearFileToolHost({
+      offered: async (scope) => {
+        asked.push(scope);
+        return offered;
+      },
+      download: async () => ({ issue: "ENG-1", files: [], failed: [] }),
+    });
+    expect(await names()).not.toContain("download_linear_files");
+    offered = true;
+    expect(await names()).toContain("download_linear_files");
+    expect(asked[0]).toEqual({ environmentId: "env-1", projectId: "project-1" });
+
+    const tmux = await call("tmux-1", "tools/list", undefined, { credentialsDisabled: true });
+    expect(tmux.result?.tools?.map((tool) => tool.name)).toContain("download_linear_files");
+
+    // A read-only turn's connection writes nothing to the workspace.
+    const { url, readOnlyToken } = server.connection("env-1", "project-1", "host", "tab-1");
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${readOnlyToken}`,
+        Accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(await response.text()).not.toContain("download_linear_files");
   });
 
   test("passes the credential's own scope, never one the caller chose", async () => {
@@ -937,6 +977,96 @@ describe("agent Kanban tools", () => {
       });
     }
     expect(admissions).toHaveLength(3);
+  });
+
+  test("admits Linear file writes only for live writable workflow attempts", async () => {
+    await server.stop();
+    const results = workflowResultService();
+    server = new AgentToolsServer(storage, "127.0.0.1", results);
+    await server.start();
+
+    const scope = { environmentId: "env-1", projectId: "project-1" };
+    const downloads: unknown[] = [];
+    let eligibleProject = true;
+    server.setLinearFileToolHost({
+      offered: async () => eligibleProject,
+      download: async (scope, input) => {
+        downloads.push({ scope, input });
+        return { issue: "ENG-1", files: [], failed: [] };
+      },
+    });
+    const name = "download_linear_files";
+    const listed = async ({ url, token }: { url: string; token: string }) =>
+      (await rpc(url, token, "tools/list")).body.result?.tools?.map((tool) => tool.name) ?? [];
+    const call = (connection: { url: string; token: string }, capability?: string) =>
+      rpc(connection.url, connection.token, "tools/call", {
+        name,
+        arguments: { issueId: "ENG-1", ...(capability ? { capability } : {}) },
+      });
+    const refused = (answer: RpcCall) => Boolean(answer.body.error || answer.body.result?.isError);
+    const provision = async (
+      kind: (typeof WORKFLOW_RESULT_KINDS)[number],
+      provider: "codex" | "opencode",
+      scopeOverride = scope,
+    ) => {
+      const resultKey = crypto.randomUUID();
+      await results.prepare({ ...scopeOverride, resultKey, kind, provider });
+      return resultKey;
+    };
+    const connect = (resultKey: string, provider: "codex" | "opencode" = "codex") =>
+      server.workflowResultConnection(
+        scope.environmentId,
+        scope.projectId,
+        "host",
+        resultKey,
+        provider,
+      );
+
+    const build = await provision("review-preparation", "codex");
+    const buildConnection = connect(build);
+    expect(await listed(buildConnection)).toContain(name);
+    expect((await call(buildConnection)).body.result?.structuredContent?.issue).toBe("ENG-1");
+    await results.close(build, "superseded");
+    expect(await listed(buildConnection)).not.toContain(name);
+    expect(refused(await call(buildConnection))).toBe(true);
+
+    const openCodeBuild = await provision("review-preparation", "opencode");
+    const broker = connect(openCodeBuild, "opencode");
+    const brokerCapability = broker.workflowResultCapability!;
+    const downloadUrl = new URL(LINEAR_FILE_WORKFLOW_MCP_PATH, broker.url).href;
+    const scoped = (token: string) => ({ url: downloadUrl, token });
+    expect(await listed(broker)).not.toContain(name);
+    expect(refused(await call(broker, brokerCapability))).toBe(true);
+    expect((await call(scoped(broker.token))).response.status).toBe(403);
+    expect((await call(scoped("invalid"))).response.status).toBe(401);
+    for (const kind of [
+      "review-report",
+      "consolidated-review",
+      "graph-output",
+      "subork-answer",
+    ] as const) {
+      const resultKey = await provision(kind, "opencode");
+      const direct = connect(resultKey);
+      expect(await listed(direct)).not.toContain(name);
+      expect(refused(await call(direct))).toBe(true);
+      const workflow = scoped(results.capabilityToken(scope, resultKey));
+      expect(await listed(workflow)).not.toContain(name);
+      expect(refused(await call(workflow))).toBe(true);
+    }
+    const openCodeConnection = scoped(brokerCapability);
+    eligibleProject = false;
+    expect((await rpc(downloadUrl, brokerCapability, "tools/list")).body.result?.tools).toEqual([]);
+    expect(refused(await call(openCodeConnection))).toBe(true);
+    eligibleProject = true;
+    expect(await listed(openCodeConnection)).toEqual([name]);
+    expect((await call(openCodeConnection)).body.result?.structuredContent?.issue).toBe("ENG-1");
+    await results.close(openCodeBuild, "cancelled");
+    expect(await listed(openCodeConnection)).not.toContain(name);
+    expect(refused(await call(openCodeConnection))).toBe(true);
+    expect(downloads).toEqual([
+      { scope: { ...scope, workflowResultKey: build }, input: { issueId: "ENG-1" } },
+      { scope: { ...scope, workflowResultKey: openCodeBuild }, input: { issueId: "ENG-1" } },
+    ]);
   });
 
   test("advertises one typed submission tool for every workflow result kind", async () => {

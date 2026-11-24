@@ -3,6 +3,7 @@ import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-ag
 import {
   OPENCODE2_ARTIFACTS_MCP_PREFIX,
   OPENCODE2_DESIGN_MCP_PREFIX,
+  OPENCODE2_LINEAR_FILES_MCP_PREFIX,
   OPENCODE2_READ_ONLY_RULES,
   isOrkestratorOpenCode2McpServer,
   openCode2CreateRules,
@@ -185,4 +186,31 @@ describe("readOpenCode2Rules", () => {
     );
     expect(readOpenCode2Rules("nope")).toBe(undefined);
   });
+});
+
+test("only a writable workflow turn exposes its session Linear file tool", () => {
+  const server = openCode2SessionMcpServer(OPENCODE2_LINEAR_FILES_MCP_PREFIX, "session-1");
+  const download = `${server}_download_linear_files`;
+  const build = "submit_review_preparation";
+  expect(effect(openCode2SteadyRules([], "session-1"), download)).toBe("deny");
+  expect(effect(openCode2TurnRules([], "session-2", { workflowResultTool: build }), download)).toBe(
+    "deny",
+  );
+  expect(effect(openCode2TurnRules([], "session-1", { workflowResultTool: build }), download)).toBe(
+    "allow",
+  );
+  expect(
+    effect(
+      openCode2TurnRules([], "session-1", {
+        workflowResultTool: build,
+        readOnly: true,
+      }),
+      download,
+    ),
+  ).toBe("deny");
+  for (const tool of ["submit_graph_output", "submit_subork_answer", "submit_review_report"]) {
+    expect(
+      effect(openCode2TurnRules([], "session-1", { workflowResultTool: tool }), download),
+    ).toBe("deny");
+  }
 });

@@ -952,6 +952,85 @@ two live profiles with a throwaway Linear key, and the board labels and the
 The board's labels are covered by `LinearIssueBoard.test.tsx` (an issue with
 labels, one with none and one with many).
 
+### Linear files
+
+A file added to a Linear issue is a link to `uploads.linear.app` in the issue's
+Markdown (or an attachment there). That host answers 401 without the
+workspace's key, and a restricted container cannot reach it at all. Only the
+backend holds the key, so the backend reads the files and never hands the key
+out. Code: `packages/protocol/src/linear-files.ts` (recognising links) and
+`apps/backend/src/core/linear-files/`.
+
+**What may be read.** Nobody names an arbitrary file. Each read fetches the
+issue live and serves only the files that its description, comments or
+attachments refer to. An issue on the linked board is eligible. Off-board
+access is limited to the Linear issue of the credential's own Build attempt.
+For a general environment connection, the latest Build determines whether
+there is a source issue.
+
+**Agents** get ordinary files under `.orkestrator/linear-files/<issue>/`.
+The backend checks the exact destination against Git's ignore rules and index
+before writing through confined workspace helpers. The backend resolves the
+current worktree or container under the mutation fence after fetching each
+file. A canonical URL supplies the filename stem. If the URL has no extension,
+the backend can infer one from the file metadata or label and reuses the path
+on later downloads. Download results keep the attachment name alongside its path.
+
+- **Before a Build** started from Linear, Orkestrator stages live files named
+  in the ticket snapshot's description, acceptance criteria and selected
+  comments. The prompt lists the paths and gives a reason for each failure.
+  Decodable raster images join the ticket snapshot as resized WebP within
+  the prompt's image budget. Pause and Cancel interrupt preparation before a
+  session opens.
+- **`download_linear_files`** is available on writable environment and pipeline
+  connections when the environment's build came from Linear or the project has
+  a linked board. OpenCode registers a session-specific file connection
+  for writable pipeline turns. The backend verifies its signed attempt
+  credential on every call. Closing the attempt cancels its downloads and
+  waits for active writes to settle. Read-only, graph activation, subork and
+  shared broker credentials cannot publish files.
+
+The backend checks membership across the paginated live issue before applying
+the 50-file batch limit. It counts bytes from rejected streams toward the
+200 MiB issue budget. Each file can use up to 50 MiB. The Build and tool
+deadlines are three minutes and 50 seconds respectively, including the write.
+A container writer stages the contents before the backend authorizes
+publication. The key goes only to `uploads.linear.app`, and redirects to
+other HTTPS hosts carry no Linear credentials.
+
+**The Linear tab** pages through `get_linear_issue_files` when an issue opens
+and refreshes after a comment with file links is posted. Linear signs the links
+for ten minutes so the tab can render images. A download
+reserves the browser tab at the click and requests a fresh signed link for
+that file. The backend checks the file host's response before the tab
+navigates, so the app can display a refusal. Older nodes without the board or
+file commands open the unsigned link. Linear signatures are stripped from
+the Build snapshot, including links already pasted into a description or
+comment.
+
+**Decisions.**
+
+- *The backend downloads, rather than agents receiving signed links.* A signed
+  link would need no tool, but it would sit in prompts and transcripts as a
+  working link, would expire inside a long build, and a restricted container
+  could not fetch it.
+- *Both a download before the Build and a tool.* The first needs nothing from
+  the agent; only the second covers resumed builds, later files and environments
+  that no pipeline started.
+- *Each machine uses its own key.* A build running on a machine that is not
+  connected to Linear says so in its prompt; no key or file crosses a node link.
+
+**Outstanding live check.** Linear files have run only against a faked Linear
+API and file host; agents may not use the user's Linear workspace or key. Not
+yet observed on real Linear: whether the file host accepts a personal API key
+(Linear's documentation shows only an OAuth bearer token), whether it redirects
+downloads, and whether signed links cover files in descriptions, comments and
+attachments. The check is task 3 of
+[8174](../todo/cross-cutting/8174-linear-board-labels-and-merged-label-live-checks.md),
+which also says what to do if the file host refuses the key. Its steps are in
+the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md),
+item "8174 task 3".
+
 ### Merged builds label their issue
 
 When a build started from a Linear issue (pipeline source `linear`) has its

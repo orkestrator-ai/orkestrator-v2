@@ -514,6 +514,8 @@ export function assertBase64PayloadWithinLimit(
 }
 
 type ConfinedWriteOptions = {
+  /** Stops the writer and waits for its exit before returning. */
+  signal?: AbortSignal;
   /**
    * Refuse the write when the target already exists (`O_EXCL`). Attachment
    * batches own a freshly created, unpredictable directory and must never adopt
@@ -815,6 +817,7 @@ async function writeFromPinnedRoot(
   createAncestors: boolean,
   publish: { preserveExistingMode: boolean; expectedSha256?: string; expectedAbsent?: boolean },
   testHooks: ConfinedPathTestHooks = {},
+  signal?: AbortSignal,
 ): Promise<void> {
   const helperArgs = [
     "-e",
@@ -835,11 +838,13 @@ async function writeFromPinnedRoot(
     return;
   }
   try {
-    // No deadline: a bounded payload on a slow disk still has to finish or fail.
+    // Callers without a deadline let the bounded payload finish on a slow disk.
     await runCommandBuffer(process.execPath, helperArgs, {
       cwd: rootPath,
       stdin: content,
       timeoutMs: 0,
+      signal,
+      waitForTermination: !!signal,
     });
   } catch (error) {
     if (!(error instanceof CommandFailedError) || error.executableMissing) throw error;
@@ -959,6 +964,7 @@ export async function writeConfinedFile(
       expectedAbsent: options.expectedAbsent,
     },
     options.testHooks,
+    options.signal,
   );
   return fullPath;
 }

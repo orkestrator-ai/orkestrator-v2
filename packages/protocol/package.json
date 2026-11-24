@@ -45,6 +45,7 @@
     "./environment-hydration": "./src/environment-hydration.ts",
     "./prompt-queue-edit": "./src/prompt-queue-edit.ts",
     "./log-essential": "./src/log-essential.ts",
+    "./linear-files": "./src/linear-files.ts",
     "./logger": "./src/logger.ts",
     "./log-vocabulary": "./src/log-vocabulary/index.ts",
     "./contract": "./src/contract/index.ts",

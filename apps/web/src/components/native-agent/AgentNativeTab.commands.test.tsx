@@ -897,6 +897,314 @@ describe("composer preflight", () => {
   });
 });
 
+describe("a prompt shown while its preflight runs", () => {
+  const EARLIER: NativeMessage = {
+    id: "earlier",
+    createdAt: "2026-11-19T10:00:00.000Z",
+    role: "assistant",
+    content: "Ready",
+    parts: [{ type: "text", content: "Ready" }],
+  };
+
+  function heldPreflight() {
+    let settle!: (proceed?: boolean) => void;
+    let fail!: (error: Error) => void;
+    const beforeSend = mock(
+      () =>
+        new Promise<void | boolean>((resolve, reject) => {
+          settle = resolve;
+          fail = reject;
+        }),
+    );
+    return {
+      beforeSend,
+      settle: (proceed?: boolean) => settle(proceed),
+      fail: (e: Error) => fail(e),
+    };
+  }
+
+  const transcript = () => screen.getByTestId("transcript-region");
+  const rowsWith = (text: string) => (transcript().textContent ?? "").split(text).length - 1;
+  const composerText = () => screen.getByRole("textbox").textContent;
+  const dockCentered = () => screen.getByTestId("compose-dock").className.includes("top-1/2");
+
+  test.each([
+    { label: "an existing conversation", messages: [EARLIER] },
+    { label: "an empty conversation", messages: [] },
+  ])(
+    "is on screen at once in $label and dispatched once, after the check",
+    async ({ messages }) => {
+      projectionOptions = { messages: [...messages] };
+      const { beforeSend, settle } = heldPreflight();
+      const tabId = `preflight-shown-${messages.length}`;
+      const { input } = await renderTab(tabId, "codex", beforeSend);
+      await type(input, tabId, "Show me now");
+      let accept!: () => void;
+      dispatchNativeAgentIntentMock.mockImplementationOnce(
+        (intent) =>
+          new Promise((resolve) => {
+            accept = () => resolve({ outcome: "accepted", requestId: intent.requestId });
+          }),
+      );
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(rowsWith("Show me now")).toBe(1);
+      expect(transcript().textContent).toContain("Codex is thinking...");
+      expect(composerText()).toBe("");
+      expect(dockCentered()).toBe(false);
+      expect(input.getAttribute("contenteditable")).toBe("false");
+      // Only the view is empty: a reload or a stopped send finds the draft.
+      expect(draftFor(tabId)?.text).toBe("Show me now");
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+      const row = screen.getByText("Show me now");
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.click(screen.getByTitle("Send"));
+      expect(beforeSend).toHaveBeenCalledTimes(1);
+
+      await act(async () => settle());
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+      expect(dispatchNativeAgentIntentMock.mock.calls[0]![0]).toMatchObject({
+        prompt: "Show me now",
+      });
+      // The same row carries on through the dispatch, and the text stays out of the box.
+      expect(screen.getByText("Show me now") === row).toBe(true);
+      expect(rowsWith("Show me now")).toBe(1);
+      expect(composerText()).toBe("");
+      expect(dockCentered()).toBe(false);
+
+      await act(async () => accept());
+      await waitFor(() => expect(draftFor(tabId)).toBeUndefined());
+      expect(rowsWith("Show me now")).toBe(1);
+      expect(composerText()).toBe("");
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test.each([
+    { label: "declines", error: null },
+    { label: "throws", error: "Upstream check failed" },
+    { label: "outlasts the draft", error: "The draft changed while preparing to send." },
+  ])(
+    "is withdrawn with its whole draft back when the preflight $label",
+    async ({ label, error }) => {
+      projectionOptions = { messages: [EARLIER] };
+      const { beforeSend, settle, fail } = heldPreflight();
+      const tabId = `preflight-stopped-${label}`;
+      const { input } = await renderTab(tabId, "codex", beforeSend);
+      const mention = { id: "m1", filename: "notes.ts", relativePath: "src/notes.ts" };
+      const attachment = {
+        id: "a1",
+        type: "image" as const,
+        name: "shot.png",
+        path: "/workspace/shot.png",
+        previewUrl: "data:image/png;base64,AAAA",
+      };
+      const draft = {
+        text: "/review @notes.ts",
+        mentions: [mention],
+        attachments: [attachment],
+        commandSelection: selection(),
+      };
+      act(() => seedDraft(tabId, draft));
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(beforeSend).toHaveBeenCalledTimes(1));
+      expect(transcript().textContent).toContain("/review");
+      expect(transcript().querySelector('img[src^="data:image/png"]')).toBeTruthy();
+      expect(composerText()).toBe("");
+      expect(screen.queryByTestId("compose-image-attachment") === null).toBe(true);
+
+      const changed = { ...draft, text: `${draft.text} and more` };
+      await act(async () => {
+        if (label === "throws") fail(new Error(error!));
+        else {
+          if (label === "outlasts the draft") seedDraft(tabId, { text: changed.text });
+          settle(label === "declines" ? false : undefined);
+        }
+      });
+      const expected = label === "outlasts the draft" ? changed : draft;
+      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+      expect(transcript().textContent).not.toContain("/review");
+      expect(transcript().textContent).not.toContain("is thinking");
+      expect(draftFor(tabId)).toMatchObject(expected);
+      expect(composerText()).toBe(expected.text);
+      expect(input.querySelector('[data-mention="true"]')?.textContent).toBe("@notes.ts");
+      expect(screen.getByTestId("compose-image-attachment")).toBeTruthy();
+      expect(input.getAttribute("contenteditable")).not.toBe("false");
+      if (error) expect(await screen.findByText(new RegExp(error))).toBeTruthy();
+    },
+  );
+
+  test("keeps its annotations through a stopped send", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-annotations";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    const annotations = [{ id: "n1", text: "Quoted", comment: "Why?" }];
+    act(() => seedDraft(tabId, { text: "Explain", annotations }));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.queryByTestId("compose-annotation-count") === null).toBe(true);
+    await act(async () => settle(false));
+    expect(screen.getByTestId("compose-annotation-count")).toBeTruthy();
+    expect(draftFor(tabId)?.annotations).toEqual(annotations);
+  });
+
+  test("a refused dispatch after the check gives the draft back", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async () => ({
+      outcome: "rejected",
+      error: "Not now",
+    }));
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-refused";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    await type(input, tabId, "Refuse me");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => settle());
+    expect(await screen.findByText("Not now")).toBeTruthy();
+    expect(rowsWith("Refuse me")).toBe(0);
+    expect(composerText()).toBe("Refuse me");
+  });
+
+  test("a remount during the check sends nothing and shows the draft again", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-remount";
+    const first = await renderTab(tabId, "codex", beforeSend);
+    await type(first.input, tabId, "Keep me");
+    fireEvent.keyDown(first.input, { key: "Enter" });
+    first.unmount();
+    await renderTab(tabId, "codex", beforeSend);
+    expect(composerText()).toBe("Keep me");
+    expect(rowsWith("Keep me")).toBe(0);
+    await act(async () => settle());
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(composerText()).toBe("Keep me");
+  });
+
+  test("a declined second check leaves the accepted first row visible until its echo", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-consecutive";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    await type(input, tabId, "Accepted first");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => settle());
+    await waitFor(() => expect(draftFor(tabId)).toBeUndefined());
+
+    await type(input, tabId, "Decline this second");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(transcript().textContent).toMatch(/Accepted first.*Decline this second/s);
+    await act(async () => settle(false));
+    expect(rowsWith("Accepted first")).toBe(1);
+    expect(rowsWith("Decline this second")).toBe(0);
+    expect(composerText()).toBe("Decline this second");
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("another prompt that arrives during the check is not taken for this one's echo", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-other-row";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    await type(input, tabId, "Mine");
+    fireEvent.keyDown(input, { key: "Enter" });
+    const other: NativeMessage = {
+      ...EARLIER,
+      id: "other-window",
+      role: "user",
+      content: "From another window",
+      parts: [{ type: "text", content: "From another window" }],
+    };
+    projectionOptions = { messages: [EARLIER, other] };
+    act(() =>
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(createSessionKey("env-1", tabId), {
+          ...projectionFor("codex"),
+          revision: 2,
+        }),
+    );
+    await waitFor(() => expect(transcript().textContent).toMatch(/Mine.*From another window/s));
+
+    let accept!: () => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (intent) =>
+        new Promise((resolve) => {
+          accept = () => resolve({ outcome: "accepted", requestId: intent.requestId });
+        }),
+    );
+    await act(async () => settle());
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    expect(draftFor(tabId)?.pendingTranscriptConfirmation?.priorMessageIds).toEqual([
+      "earlier",
+      "other-window",
+    ]);
+    expect(transcript().textContent).toMatch(/Mine.*From another window/s);
+    await act(async () => accept());
+    projectionOptions = {
+      messages: [
+        EARLIER,
+        other,
+        {
+          ...other,
+          id: "mine-echo",
+          content: "Mine echoed",
+          parts: [{ type: "text", content: "Mine echoed" }],
+        },
+      ],
+    };
+    act(() =>
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(createSessionKey("env-1", tabId), {
+          ...projectionFor("codex"),
+          revision: 3,
+        }),
+    );
+    await waitFor(() => expect(transcript().textContent).toMatch(/Mine.*From another window/s));
+    expect(rowsWith("Mine")).toBe(1);
+    expect(transcript().textContent).toContain("Mine echoed");
+  });
+
+  test("a prompt bound for the queue never becomes a transcript row", async () => {
+    projectionOptions = { messages: [EARLIER], phase: "running" };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "preflight-queued-row";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    await type(input, tabId, "Queue me");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(beforeSend).toHaveBeenCalledTimes(1);
+    expect(rowsWith("Queue me")).toBe(0);
+    await act(async () => settle());
+    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(draftFor(tabId)).toBeUndefined());
+    expect(rowsWith("Queue me")).toBe(0);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
+  test("a tab with no preflight still keeps its text in the composer until acceptance", async () => {
+    projectionOptions = { messages: [EARLIER] };
+    let accept!: () => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (intent) =>
+        new Promise((resolve) => {
+          accept = () => resolve({ outcome: "accepted", requestId: intent.requestId });
+        }),
+    );
+    const tabId = "no-preflight";
+    const { input } = await renderTab(tabId);
+    await type(input, tabId, "Ordinary");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(rowsWith("Ordinary")).toBe(1);
+    expect(composerText()).toBe("Ordinary");
+    await act(async () => accept());
+    await waitFor(() => expect(composerText()).toBe(""));
+  });
+});
+
 const FAILURE_ROW: NativeMessage = {
   id: "native-terminal:error:fixture",
   createdAt: "2026-11-19T10:00:00.000Z",

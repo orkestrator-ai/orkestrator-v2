@@ -378,9 +378,9 @@ async function pollUntil(clock: FakeClock, assertion: () => void, polls = 10): P
   }
 }
 
-function renderTab() {
+function renderTab(beforeSend?: () => Promise<void | boolean>) {
   return renderInAppCommandScope(
-    <AgentNativeTab tabId="tab-progressive" data={tabData()} isActive />,
+    <AgentNativeTab tabId="tab-progressive" data={tabData()} isActive beforeSend={beforeSend} />,
   );
 }
 
@@ -824,6 +824,29 @@ describe("AgentNativeTab progressive controller", () => {
     );
     expect(screen.queryByText(/Connecting to Codex…/) === null).toBe(true);
     expect(dispatched).toEqual([]);
+  });
+
+  test("replays a held submit as a sent row while its check runs", async () => {
+    const state = deferred<NativeAgentSessionStateUpdate>();
+    const check = deferred<void>();
+    const beforeSend = mock(() => check.promise);
+    transcriptUpdates = [
+      async () => transcriptSnapshot("transcript-1", [message("m1", "Readable")]),
+    ];
+    stateUpdates = [() => state.promise];
+    renderTab(beforeSend);
+    await holdMessage("Send after authority");
+    expect(beforeSend).not.toHaveBeenCalled();
+
+    await act(async () => state.resolve(stateSnapshot("state-1")));
+    await waitFor(() => expect(beforeSend).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("transcript-region").textContent).toContain("Send after authority");
+    expect(screen.getByRole("textbox").textContent).toBe("");
+    expect(dispatched).toEqual([]);
+
+    await act(async () => check.resolve());
+    await waitFor(() => expect(dispatched).toEqual(["Send after authority"]));
+    expect(currentDraft().heldSubmit).toBeUndefined();
   });
 
   test("retains a held send across an environment switch and dispatches once on return", async () => {

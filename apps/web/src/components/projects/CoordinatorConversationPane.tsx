@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { Loader2, Plus, RotateCcw, Settings2 } from "lucide-react";
+import { Loader2, Plus, RotateCcw, Settings2, X } from "lucide-react";
 import {
   AGENT_PLATFORM_LABELS,
   normalizeAgentPlatforms,
@@ -44,10 +44,15 @@ interface CoordinatorConversationPaneProps {
   /** Each available platform's read-only tier, as a pill in the picker. */
   platformBadges: Partial<Record<AgentPlatform, AgentPlatformBadge>>;
   /**
-   * This conversation's own first prompt, while it is held. Scoped to the
+   * This conversation's own first prompt, while it is held. Until its start
+   * settles it is only drawn, so the composer is given no launch options. Scoped to the
    * conversation that produced it, so another group cannot replay it into its own.
    */
   launch: PendingCoordinatorLaunch | undefined;
+  launchError?: string;
+  claimLaunch: (conversationId: string, requestId: string) => boolean;
+  clearLaunchError: (conversationId: string) => void;
+  settleLaunch: (conversationId: string, requestId: string, error?: string) => void;
   startConversation: (
     conversation: { id: string; role?: string },
     platform: AgentPlatform,
@@ -115,6 +120,10 @@ export function CoordinatorConversationPane({
   platformNotes,
   platformBadges,
   launch,
+  launchError,
+  claimLaunch,
+  clearLaunchError,
+  settleLaunch,
   startConversation,
   confirmUpstreamMerge,
   conversationBusy,
@@ -127,7 +136,10 @@ export function CoordinatorConversationPane({
   const enabledPlatforms = useConfigStore((state) => state.config.global.enabledAgentPlatforms);
   const workspaceId = snapshot.workspace.id;
   const conversationId = conversation?.id;
-  const platform = conversation?.agent;
+  // Until its own start settles, a pane keeps drawing the first prompt it sent,
+  // even if another window binds the conversation first.
+  const starting = launch !== undefined && !launch.ready;
+  const platform = starting ? undefined : conversation?.agent;
   const providerSessionId = conversation?.providerSessionId;
   const environmentId = conversationId
     ? coordinatorRuntimeId(workspaceId, conversationId)
@@ -152,6 +164,16 @@ export function CoordinatorConversationPane({
   const beforeSend = useCallback(
     () => (assignTo ? confirmUpstreamMerge(assignTo) : Promise.resolve(undefined)),
     [assignTo, confirmUpstreamMerge],
+  );
+  const claimOpeningPrompt = useCallback(
+    (requestId: string) => conversationId !== undefined && claimLaunch(conversationId, requestId),
+    [conversationId, claimLaunch],
+  );
+  const onOpeningPromptSettled = useCallback(
+    (requestId: string, error?: string) => {
+      if (conversationId) settleLaunch(conversationId, requestId, error);
+    },
+    [conversationId, settleLaunch],
   );
   if (!conversation || !data) {
     return (
@@ -187,6 +209,25 @@ export function CoordinatorConversationPane({
   const heldReason = sendingHeldReason(snapshot, conversation, platformOff);
   return (
     <div key={conversation.id} className="relative flex h-full min-h-0 min-w-0 flex-col">
+      {launchError ? (
+        <div className="flex shrink-0 items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-failure">
+          <p
+            role="alert"
+            className="min-w-0 flex-1 max-h-28 overflow-auto break-words whitespace-pre-wrap"
+          >
+            {launchError}
+          </p>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-6 shrink-0"
+            aria-label="Dismiss opening message error"
+            onClick={() => clearLaunchError(conversation.id)}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </div>
+      ) : null}
       {/* Conversation notices stay inside this pane, including when it is hidden. */}
       <FloatingNoticeLayer independent columnRem={TRANSCRIPT_COLUMN_REM}>
         {conversation.startupError ? (
@@ -282,11 +323,13 @@ export function CoordinatorConversationPane({
               {...(conversation.role === "main" ? MAIN_UNASSIGNED : {})}
               emptyPlatformsMessage="No agent platform meets this Coordinator's read-only requirement on this machine. Enable a qualified platform, or lower the Coordinator safety level in Settings."
               emptyPlatformsAction={EMPTY_PLATFORMS_ACTION}
-              onAssignPlatform={conversation.agent ? undefined : onAssignPlatform}
+              onAssignPlatform={platform ? undefined : onAssignPlatform}
               beforeSend={side ? undefined : beforeSend}
-              {...(launch
+              coordinatorOpeningPrompt={launch}
+              claimCoordinatorOpeningPrompt={claimOpeningPrompt}
+              onCoordinatorOpeningPromptSettled={onOpeningPromptSettled}
+              {...(launch?.ready
                 ? {
-                    initialPrompt: launch.prompt,
                     initialAgentModel: launch.modelId,
                     initialReasoningEffort: launch.reasoningId,
                     initialConversationMode: launch.mode,

@@ -27,7 +27,8 @@
  *    merging, so both are clean and behind an upstream they already have.
  * 4. Both delay markers are created and stay until the end.
  * 5. Typed: the user types to the first project's main coordinator in the
- *    browser. The backend log must show `checkout.message-check
+ *    browser. The prompt must be in the transcript, with the waiting indicator
+ *    and an empty composer, before the check answers. The backend log must show `checkout.message-check
  *    outcome=fast-forwarded fetch=timed-out`, HEAD must reach the recorded
  *    upstream with a new reflog entry, and the header must stop saying
  *    "commits behind".
@@ -303,7 +304,8 @@ function installShim(project: SlowProject): void {
     }),
     { mode: 0o700 },
   );
-  git(project.checkout, ["config", "core.sshCommand", project.shim]);
+  // Git hands it to a shell, and a macOS profile path has a space in it.
+  git(project.checkout, ["config", "core.sshCommand", `"${project.shim}"`]);
   git(project.checkout, ["config", "ssh.variant", "simple"]);
   git(project.checkout, ["remote", "set-url", "origin", SSH_ORIGIN]);
 }
@@ -614,7 +616,23 @@ test.describe("Coordinator checkout sync with a slow remote", () => {
       await composer.fill("What changed upstream?");
       const sentAt = Date.now();
       await composer.press("Enter");
-      await expect(composer).toHaveText("", { timeout: 30_000 });
+      // Shown as sent while the check still waits on the slow remote, and only then.
+      await expect(composer).toHaveText("", { timeout: TYPED_FETCH_BOUND_MS });
+      const sentRow = page.getByTestId("transcript-region").getByText("What changed upstream?");
+      await expect(sentRow).toHaveCount(1);
+      await expect(page.getByText("Pi is thinking...")).toBeVisible();
+      expect(
+        findLogEntries(
+          logSince(backendLog, typedLogOffset),
+          "coordinator",
+          "checkout.message-check",
+        ),
+        "the prompt was only shown once its check had answered",
+      ).toEqual([]);
+      expect((await calls(model.origin)).completions).toBe(typedCompletions);
+      // The dock slides to the bottom for 300 ms.
+      await page.waitForTimeout(400);
+      await shot(page, "typed-sent");
 
       let typedCheck: LogEntry | undefined;
       await expect
@@ -642,8 +660,12 @@ test.describe("Coordinator checkout sync with a slow remote", () => {
       expect(typedHeadAt - typedShim[0]!).toBeLessThan(DELAY_SECONDS * 1_000);
       await expect(header).not.toHaveText(/commits behind/, { timeout: 10_000 });
       await shot(page, "typed-after");
+      // The composer no longer says the prompt was dispatched; its turn does.
+      await expect
+        .poll(async () => (await calls(model.origin)).completions, { timeout: TURN_TIMEOUT_MS })
+        .toBeGreaterThan(typedCompletions);
       await waitForPhase(invoke, typed.identity!, (phase) => phase === "idle", "typed turn");
-      expect((await calls(model.origin)).completions).toBeGreaterThan(typedCompletions);
+      await expect(sentRow).toHaveCount(1);
       // The late fetch settles on the same, already merged commit.
       await expect
         .poll(async () => (await gitStatus(invoke, typed.project!.id)).operationState, {

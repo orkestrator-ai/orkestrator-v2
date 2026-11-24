@@ -1,7 +1,12 @@
+import {
+  coordinatorOpeningPromptMessageId,
+  type CoordinatorOpeningPrompt,
+} from "./startup-prompt-preview";
 import { useMemo } from "react";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { LiveElapsed } from "@/components/chat/LiveElapsed";
 import { NativeMessage } from "@/components/chat/NativeMessage";
+import { getNativeAgentAdapter } from "./adapter";
 import { createOptimisticNativeMessage } from "@/lib/chat/client-only-messages";
 
 /** What the first prompt is waiting on, and so who the person is waiting for. */
@@ -86,6 +91,58 @@ export function FirstPromptPending({ pending }: { pending: FirstPromptPendingSta
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** The wait for an agent's first session to exist. */
+export function LaunchingAgentStatus({ label }: { label: string }) {
+  return (
+    <span role="status" className="agent-thinking-shimmer text-xs">
+      Launching {label}…
+    </span>
+  );
+}
+
+/**
+ * A first prompt shown as sent, above the composer it left, until its agent is
+ * bound. Laid out as the agent tab that replaces it draws its opening preview.
+ */
+export function SentFirstPrompt({
+  platform,
+  sessionKey,
+  prompt,
+  attachments,
+}: {
+  platform: AgentPlatform;
+  sessionKey: string;
+  prompt: CoordinatorOpeningPrompt;
+  attachments: FirstPromptPendingState["attachments"];
+}) {
+  const message = useMemo(
+    () =>
+      createOptimisticNativeMessage(
+        coordinatorOpeningPromptMessageId(sessionKey, prompt.requestId),
+        prompt.text,
+        attachments,
+        prompt.createdAt,
+      ),
+    [attachments, prompt, sessionKey],
+  );
+  return (
+    // The top padding is the bound tab's changes header, so the row does not
+    // move when that tab takes over.
+    <div data-testid="first-prompt-sent" className="min-h-0 flex-1 overflow-y-auto pt-7">
+      <NativeMessage message={message} />
+      <div className="px-2 @sm:px-4">
+        <div className="chat-status-row mx-auto max-w-3xl min-w-0">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <LaunchingAgentStatus label={getNativeAgentAdapter(platform).label} />
+          </div>
+        </div>
+      </div>
+      {/* The docked composer floats over the transcript. */}
+      <div className="h-32 shrink-0" aria-hidden="true" />
     </div>
   );
 }

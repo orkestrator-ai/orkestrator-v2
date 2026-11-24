@@ -295,6 +295,36 @@ describe("AgentNativeTab auto-steer", () => {
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
   });
 
+  test("a checked auto-steer enqueues and steers without a transcript row", async () => {
+    setAutoSteer(true);
+    const text = "Also update the documentation";
+    const tabId = "tab-auto-steer-preflight";
+    let finishCheck!: () => void;
+    const beforeSend = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCheck = resolve;
+        }),
+    );
+    renderInAppCommandScope(
+      <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive beforeSend={beforeSend} />,
+    );
+    const input = await screen.findByRole("textbox");
+    await waitFor(() => expect(sessionProjectionMock).toHaveBeenCalled());
+    fireEvent.input(input, { target: { textContent: text } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(beforeSend).toHaveBeenCalledTimes(1));
+    const transcript = screen.getByTestId("transcript-region");
+    expect(transcript.textContent).not.toContain(text);
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+
+    await act(async () => finishCheck());
+    await waitFor(() => expect(steerNativeAgentQueuedPromptMock).toHaveBeenCalledTimes(1));
+    expect(enqueuedText()).toBe(text);
+    expect(transcript.textContent).not.toContain(text);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+  });
+
   test("on: a refused steer leaves the message queued and says so", async () => {
     setAutoSteer(true);
     steerOutcome = {

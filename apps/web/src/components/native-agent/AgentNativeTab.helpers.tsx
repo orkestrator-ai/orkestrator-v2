@@ -1,3 +1,4 @@
+import type { CoordinatorOpeningPrompt } from "./startup-prompt-preview";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
@@ -81,6 +82,8 @@ import {
 import type { FileCandidate, FileMention } from "@/types";
 import { toast } from "sonner";
 import { findNativeAgentAdapter, nativeAgentAdapters } from "./adapter";
+import { SentFirstPrompt } from "./FirstPromptPending";
+import { composerContent } from "./sent-prompt-composer";
 
 const log = createLogger("web.native-agent");
 
@@ -350,7 +353,8 @@ export function UnassignedNativeAgentComposer({
   tabId,
   environmentId,
   containerId,
-  disabled,
+  disabled: disabledByOwner,
+  sentPrompt,
   onSend,
   onResume,
   projectId,
@@ -379,6 +383,11 @@ export function UnassignedNativeAgentComposer({
   environmentId: string;
   containerId?: string;
   disabled: boolean;
+  /**
+   * The first prompt, while its owner still holds it. It is drawn as sent and
+   * the composer shows none of the draft, which stays stored until it settles.
+   */
+  sentPrompt?: CoordinatorOpeningPrompt;
   onSend: (
     platform: AgentPlatform,
     prompt: string,
@@ -453,6 +462,8 @@ export function UnassignedNativeAgentComposer({
   initialExecutionProfileId?: string;
 }) {
   const sessionKey = createSessionKey(environmentId, tabId);
+  const promptSent = sentPrompt !== undefined;
+  const disabled = disabledByOwner || promptSent;
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
   // The node this tab's drafts live on: the scope `useNativeComposeStore` reads.
@@ -959,6 +970,8 @@ export function UnassignedNativeAgentComposer({
     });
   };
 
+  const composerShows = composerContent(draft, promptSent);
+
   // Nothing to choose from is a real state once a filter applies: every
   // platform may be disabled, or none may meet the host's safety level.
   // Rendering the composer anyway would offer a Send button that can only fail.
@@ -978,8 +991,16 @@ export function UnassignedNativeAgentComposer({
 
   return (
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      {sentPrompt !== undefined ? (
+        <SentFirstPrompt
+          platform={platform}
+          sessionKey={sessionKey}
+          prompt={sentPrompt}
+          attachments={draft.attachments}
+        />
+      ) : null}
       <NativeComposeDock
-        centered
+        centered={!promptSent}
         actions={
           onResume ? (
             <Button
@@ -995,21 +1016,21 @@ export function UnassignedNativeAgentComposer({
           ) : null
         }
       >
-        {intro ? (
+        {intro && !promptSent ? (
           <div className="pointer-events-auto mx-auto flex w-full max-w-[56rem] sm:w-[min(calc(100%_-_2rem),56rem)]">
             {intro}
           </div>
         ) : null}
         <NativeComposeBar
           testId="unassigned-native-compose-bar"
-          layout="centered"
-          attachments={draft.attachments}
+          layout={promptSent ? "bottom" : "centered"}
+          attachments={composerShows.attachments}
           onRemoveAttachment={(attachmentId) =>
             updateDraft(sessionKey, {
               attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
             })
           }
-          annotations={draft.annotations}
+          annotations={composerShows.annotations}
           onClearAnnotations={() => {
             if (disabled) return;
             const annotationIds = new Set(draft.annotations.map((annotation) => annotation.id));
@@ -1023,8 +1044,8 @@ export function UnassignedNativeAgentComposer({
           }}
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
-          text={draft.text}
-          mentions={draft.mentions}
+          text={composerShows.text}
+          mentions={composerShows.mentions}
           onTextAndMentionsChange={handleTextAndMentionsChange}
           onCursorPositionChange={detectFileMention}
           onKeyDown={(event) => {
@@ -1054,7 +1075,7 @@ export function UnassignedNativeAgentComposer({
           disabled={disabled}
           menus={
             <FileMentionMenu
-              open={fileMentionMenuOpen}
+              open={fileMentionMenuOpen && !promptSent}
               files={filteredFiles}
               loading={fileSearch.isLoading}
               onRetry={
@@ -1229,7 +1250,7 @@ export function UnassignedNativeAgentComposer({
             ) : null
           }
         />
-        {starterPrompts && starterPrompts.length > 0 && !draft.text.trim() ? (
+        {starterPrompts && starterPrompts.length > 0 && !promptSent && !draft.text.trim() ? (
           <div
             role="group"
             aria-label="Starter prompts"

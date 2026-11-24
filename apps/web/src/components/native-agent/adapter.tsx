@@ -1,3 +1,4 @@
+import type { CoordinatorOpeningPrompt } from "./startup-prompt-preview";
 import type { NativeAgentResumeIntent } from "@/lib/native-agent-resume-requests";
 import type { ReactNode } from "react";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
@@ -20,6 +21,9 @@ export interface AgentNativeTabProps {
   hiddenByLayout?: boolean;
   ownsGlobalShortcuts?: boolean;
   initialPrompt?: string;
+  coordinatorOpeningPrompt?: CoordinatorOpeningPrompt;
+  claimCoordinatorOpeningPrompt?: (requestId: string) => boolean;
+  onCoordinatorOpeningPromptSettled?: (requestId: string, error?: string) => void;
   isReviewTab?: boolean;
   hideStructuredOutput?: boolean;
   initialAgentPlatform?: AgentPlatform;
@@ -59,8 +63,13 @@ export interface AgentNativeTabProps {
    * Runs before a message typed into an assigned conversation's composer is
    * sent (`!` commands excepted), after local validation. Resolving sends the
    * validated draft only if it is still unchanged and mounted; false cancels.
-   * Rejecting keeps the draft and shows the error. The text input stays disabled
-   * while it is pending; other draft edits cancel this send.
+   * Rejecting keeps the draft and shows the error. Unless it will join the
+   * queue, the prompt is drawn in the transcript as sent while this is pending,
+   * with the composer empty and disabled; a stopped send puts it back. Other
+   * draft edits cancel this send.
+   *
+   * On an unassigned tab its owner runs the check inside `onAssignPlatform`;
+   * `coordinatorOpeningPrompt` is then the first prompt that check is holding.
    */
   beforeSend?: () => Promise<void | boolean>;
   /** Narrows the unassigned composer to the platforms this surface qualifies. */

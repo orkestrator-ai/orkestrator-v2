@@ -81,10 +81,12 @@ export {
   isSyncableLinearLinkKey,
   type LinearBoardLink,
   linearBoardLinkKey,
+  type LinearCommentOutcome,
   type LinearMergedLabelInput,
   type LinearMergedLabelOutcome,
   type LinearRevocation,
   type LinearStorage,
+  MAX_LINEAR_COMMENT_BODY,
 } from "./linear.js";
 export type { NodesStorage, NodeStoreMutation } from "./nodes.js";
 export {

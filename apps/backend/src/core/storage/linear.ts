@@ -1,8 +1,9 @@
 /**
  * Linear boards (docs/architecture/tickets.md, "Linear"): which Linear board
  * each project uses, the disconnects other machines must apply, the
- * issues `create_linear_issue` has already created, and the `merged` labels
- * still owed to issues whose build's pull request merged. The sign-in itself stays
+ * issues `create_linear_issue` has already created, and what is still owed to
+ * issues whose build ended: the `merged` label once its pull request merged, and
+ * the completion comment when it could not be posted. The sign-in itself stays
  * in `KanbanRepository` (`linear-auth`).
  *
  * A board link is keyed by the project's repository (`repo:<hint>`), so the
@@ -79,6 +80,32 @@ export type LinearMergedLabelInput = Pick<
   "issueId" | "issueIdentifier" | "pipelineId" | "projectId" | "prUrl"
 >;
 
+/** How a run ended, as its Linear comment says it. */
+export type LinearCommentOutcome = "complete" | "failed";
+
+/**
+ * A finished Linear-sourced build's completion comment that could not be
+ * posted (`linear-completion-comments.ts`): Linear failed, or this machine has
+ * no key. One per pipeline, holding its latest ending; removed once posted.
+ */
+export type LinearPendingComment = {
+  pipelineId: string;
+  projectId: string;
+  issueId: string;
+  issueIdentifier?: string;
+  outcome: LinearCommentOutcome;
+  body: string;
+  attempts: number;
+  createdAt: string;
+  nextAttemptAt: string;
+  lastError?: string;
+};
+
+export type LinearPendingCommentInput = Pick<
+  LinearPendingComment,
+  "pipelineId" | "projectId" | "issueId" | "issueIdentifier" | "outcome" | "body"
+>;
+
 /** Board links one machine keeps, tombstones included; the oldest tombstones go first. */
 export const MAX_LINEAR_BOARD_LINKS = 1_000;
 /** Disconnects kept for machines that were offline; the oldest go first. */
@@ -89,8 +116,12 @@ export const LINEAR_REVOCATION_TTL_MS = 180 * 24 * 60 * 60 * 1_000;
 export const MAX_LINEAR_ISSUE_CREATES = 500;
 /** Retained history target; applied records go first, pending obligations are never evicted. */
 export const MAX_LINEAR_MERGED_LABELS = 500;
+/** Completion comments waiting to be posted; a further one is refused, never an older one dropped. */
+export const MAX_LINEAR_PENDING_COMMENTS = 500;
+/** The longest queued comment; a longer one is cut. */
+export const MAX_LINEAR_COMMENT_BODY = 10_000;
 /** The longest stored failure reason. */
-const MAX_LINEAR_MERGED_LABEL_ERROR = 400;
+const MAX_LINEAR_WRITE_ERROR = 400;
 
 const MAX_FIELD_LENGTH = 400;
 
@@ -228,6 +259,35 @@ export function parseLinearMergedLabelRecord(value: unknown): LinearMergedLabelR
   return record;
 }
 
+function parseLinearPendingComment(value: unknown): LinearPendingComment | null {
+  if (!isRecord(value)) return null;
+  const pipelineId = boundedString(value.pipelineId);
+  const projectId = boundedString(value.projectId);
+  const issueId = boundedString(value.issueId);
+  if (!pipelineId || !projectId || !issueId) return null;
+  if (value.outcome !== "complete" && value.outcome !== "failed") return null;
+  if (typeof value.body !== "string" || !value.body.trim()) return null;
+  if (!isIsoDate(value.createdAt) || !isIsoDate(value.nextAttemptAt)) return null;
+  const record: LinearPendingComment = {
+    pipelineId,
+    projectId,
+    issueId,
+    outcome: value.outcome,
+    body: value.body.slice(0, MAX_LINEAR_COMMENT_BODY),
+    attempts:
+      typeof value.attempts === "number" && Number.isInteger(value.attempts) && value.attempts >= 0
+        ? value.attempts
+        : 0,
+    createdAt: value.createdAt,
+    nextAttemptAt: value.nextAttemptAt,
+  };
+  const identifier = boundedString(value.issueIdentifier);
+  if (identifier) record.issueIdentifier = identifier;
+  const lastError = boundedString(value.lastError);
+  if (lastError) record.lastError = lastError;
+  return record;
+}
+
 function boundLinks(links: LinearBoardLink[]): void {
   if (links.length <= MAX_LINEAR_BOARD_LINKS) return;
   const tombstones = links
@@ -276,6 +336,139 @@ export class LinearRepository {
 
   private mergedLabelsFile(): string {
     return this.context.file("linear-merged-labels.json");
+  }
+
+  private pendingCommentsFile(): string {
+    return this.context.file("linear-pending-comments.json");
+  }
+
+  /** Completion comments still to be posted. */
+  async listLinearPendingComments(): Promise<LinearPendingComment[]> {
+    const records = await this.context.loadJson<unknown[]>(this.pendingCommentsFile(), () => []);
+    return (Array.isArray(records) ? records : [])
+      .map(parseLinearPendingComment)
+      .filter((record): record is LinearPendingComment => record !== null);
+  }
+
+  /**
+   * Queues a build's completion comment, replacing one queued for an earlier
+   * ending of the same pipeline. `full` keeps what is queued and refuses this.
+   */
+  enqueueLinearPendingComment(
+    input: LinearPendingCommentInput,
+    failure: { error: string; nextAttemptAt: Date },
+    now: Date = new Date(),
+  ): "queued" | "full" {
+    const record = parseLinearPendingComment({
+      ...input,
+      attempts: 1,
+      createdAt: now.toISOString(),
+      nextAttemptAt: failure.nextAttemptAt.toISOString(),
+      lastError: failure.error.slice(0, MAX_LINEAR_WRITE_ERROR),
+    });
+    if (!record) throw new Error("Expected a Linear issue, pipeline, project and comment.");
+    return this.context.updateStore(
+      this.pendingCommentsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const index = records.findIndex(
+          (entry) => isRecord(entry) && entry.pipelineId === record.pipelineId,
+        );
+        if (index >= 0) records[index] = record;
+        else if (records.length >= MAX_LINEAR_PENDING_COMMENTS) return "full";
+        else records.push(record);
+        return "queued";
+      },
+    );
+  }
+
+  /**
+   * Takes up to `limit` due comments, deferring each to `until` so no one else
+   * posts it meanwhile. One that is never settled is due again then.
+   */
+  claimLinearPendingComments(
+    limit: number,
+    until: Date,
+    now: Date = new Date(),
+  ): LinearPendingComment[] {
+    return this.context.updateStore(
+      this.pendingCommentsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const claimed: LinearPendingComment[] = [];
+        records.forEach((entry, index) => {
+          const record = parseLinearPendingComment(entry);
+          if (!record || claimed.length >= limit) return;
+          if (Date.parse(record.nextAttemptAt) > now.getTime()) return;
+          record.nextAttemptAt = until.toISOString();
+          records[index] = record;
+          claimed.push(record);
+        });
+        return claimed;
+      },
+    );
+  }
+
+  /** Removes a posted comment. False when it is gone, or queued for another ending. */
+  settleLinearPendingComment(pipelineId: string, outcome: LinearCommentOutcome): boolean {
+    return this.context.updateStore(
+      this.pendingCommentsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const index = records.findIndex(
+          (entry) =>
+            isRecord(entry) && entry.pipelineId === pipelineId && entry.outcome === outcome,
+        );
+        if (index < 0) return false;
+        records.splice(index, 1);
+        return true;
+      },
+    );
+  }
+
+  /** Records a failed attempt and when to try again. False when the comment is gone or replaced. */
+  deferLinearPendingComment(
+    pipelineId: string,
+    outcome: LinearCommentOutcome,
+    failure: { error: string; nextAttemptAt: Date },
+  ): boolean {
+    return this.context.updateStore(
+      this.pendingCommentsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const index = records.findIndex(
+          (entry) =>
+            isRecord(entry) && entry.pipelineId === pipelineId && entry.outcome === outcome,
+        );
+        const record = index >= 0 ? parseLinearPendingComment(records[index]) : null;
+        if (!record) return false;
+        record.attempts += 1;
+        record.lastError = failure.error.slice(0, MAX_LINEAR_WRITE_ERROR) || "Linear failed";
+        record.nextAttemptAt = failure.nextAttemptAt.toISOString();
+        records[index] = record;
+        return true;
+      },
+    );
+  }
+
+  /** A removed project's comments are never posted: their text goes with it. */
+  async deleteLinearPendingCommentsForProject(projectId: string): Promise<number> {
+    // A read first, so a project with none writes nothing.
+    const pending = await this.listLinearPendingComments();
+    if (!pending.some((record) => record.projectId === projectId)) return 0;
+    const removed = this.context.updateStore(
+      this.pendingCommentsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const kept = records.filter((entry) => !(isRecord(entry) && entry.projectId === projectId));
+        const count = records.length - kept.length;
+        if (count > 0) records.splice(0, records.length, ...kept);
+        return count;
+      },
+      { sensitive: true },
+    );
+    if (removed) this.context.scrubDeletedDatabaseContent();
+    return removed;
   }
 
   /** Every merged-label record, pending and applied. */
@@ -346,10 +539,46 @@ export class LinearRepository {
     return this.updateMergedLabel(key, (record) => {
       if (record.status === "applied") return false;
       record.attempts += 1;
-      record.lastError = failure.error.slice(0, MAX_LINEAR_MERGED_LABEL_ERROR) || "Linear failed";
+      record.lastError = failure.error.slice(0, MAX_LINEAR_WRITE_ERROR) || "Linear failed";
       record.nextAttemptAt = failure.nextAttemptAt.toISOString();
       return true;
     });
+  }
+
+  /** Why a label has not been tried here. Leaves it due; false when already noted. */
+  noteLinearMergedLabelWaiting(key: string, reason: string): boolean {
+    return this.updateMergedLabel(key, (record) => {
+      if (record.status === "applied" || record.lastError === reason) return false;
+      record.lastError = reason.slice(0, MAX_LINEAR_WRITE_ERROR);
+      return true;
+    });
+  }
+
+  /**
+   * Takes up to `limit` due labels, deferring each to `until` so no one else
+   * applies it meanwhile. One that is never settled is due again then.
+   */
+  claimLinearMergedLabels(
+    limit: number,
+    until: Date,
+    now: Date = new Date(),
+  ): LinearMergedLabelRecord[] {
+    return this.context.updateStore(
+      this.mergedLabelsFile(),
+      (): unknown[] => [],
+      (records) => {
+        const claimed: LinearMergedLabelRecord[] = [];
+        records.forEach((entry, index) => {
+          const record = parseLinearMergedLabelRecord(entry);
+          if (!record || record.status !== "pending" || claimed.length >= limit) return;
+          if (Date.parse(record.nextAttemptAt) > now.getTime()) return;
+          record.nextAttemptAt = until.toISOString();
+          records[index] = record;
+          claimed.push(record);
+        });
+        return claimed;
+      },
+    );
   }
 
   private updateMergedLabel(
@@ -613,4 +842,11 @@ export type LinearStorage = Pick<
   | "enqueueLinearMergedLabel"
   | "settleLinearMergedLabel"
   | "deferLinearMergedLabel"
+  | "noteLinearMergedLabelWaiting"
+  | "claimLinearMergedLabels"
+  | "listLinearPendingComments"
+  | "enqueueLinearPendingComment"
+  | "claimLinearPendingComments"
+  | "settleLinearPendingComment"
+  | "deferLinearPendingComment"
 >;

@@ -1,13 +1,16 @@
 import {
   applyLinearSyncStateCommand,
+  claimLinearWritesCommand,
   exportLinearConnectionCommand,
   getLinearSyncStateCommand,
+  settleLinearWritesCommand,
 } from "@orkestrator/protocol/contract/domains/ticket-sync";
 import { createLogger } from "@orkestrator/protocol/logger";
 import type { CommandRegistrar } from "./commands-registry-types.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import { attachedController } from "./commands-registry-ticket-sync.js";
 import { applyLinearSyncState, readLinearSyncState } from "./linear-sync-state.js";
+import { claimLinearWrites, settleLinearWrites } from "./linear-write-relay.js";
 
 const log = createLogger("linear");
 
@@ -22,6 +25,9 @@ const log = createLogger("linear");
  * copy the user asked for there (`copy_linear_connection_from_node`); it is
  * the only command that returns a credential to another machine
  * (command-nodes.md, "Settings"). It is logged without the key.
+ *
+ * `claim_linear_writes` and `settle_linear_writes` let the command node land
+ * what this machine owes Linear but has no key for (`linear-write-relay.ts`).
  */
 export function registerLinearSyncCommands(register: CommandRegistrar): void {
   register(
@@ -38,6 +44,29 @@ export function registerLinearSyncCommands(register: CommandRegistrar): void {
     async (args, context) => {
       attachedController(args, context);
       return applyLinearSyncState(context.storage, args);
+    },
+    ASYNC_HANDLER,
+  );
+
+  register(
+    claimLinearWritesCommand,
+    async (args, context) => {
+      attachedController(args, context);
+      return { writes: await claimLinearWrites(context.storage) };
+    },
+    ASYNC_HANDLER,
+  );
+
+  register(
+    settleLinearWritesCommand,
+    async (args, context) => {
+      attachedController(args, context);
+      const settled = await settleLinearWrites(
+        context.storage,
+        context.runtime.linearCompletionComments,
+        Array.isArray(args.results) ? args.results : [],
+      );
+      return { settled };
     },
     ASYNC_HANDLER,
   );

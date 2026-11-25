@@ -121,6 +121,9 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   get_linear_sync_state: ["controllerId"],
   apply_linear_sync_state: ["controllerId", "links", "revocations"],
   export_linear_connection: ["controllerId"],
+  // Writes a leaf without a Linear key owes, landed by its command node (2026-11-25).
+  claim_linear_writes: ["controllerId"],
+  settle_linear_writes: ["controllerId", "results"],
 };
 
 const LENIENT = [

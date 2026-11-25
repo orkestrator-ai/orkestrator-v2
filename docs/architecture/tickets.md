@@ -945,7 +945,9 @@ faked Linear API and node link (`linear-boards.test.ts`, `linear.test.ts`,
 `control-mcp/linear-tools*.test.ts`), and `linear-two-machines.test.ts` runs
 the whole two-machine sequence through the real command handlers and the
 command node's real sync: connect and link on a leaf, a sync pass, Use it
-here, a board read, disconnect everywhere and reconnect. The same sequence on
+here, a board read, disconnect everywhere and reconnect. It also runs a leaf
+without a key whose label and comment the command node writes, and
+`linear-completion-comments.test.ts` covers the comment queue. The same sequence on
 two live profiles with a throwaway Linear key, and the board labels and the
 `merged` label in the user's real workspace, are in the
 [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
@@ -1069,8 +1071,8 @@ in `linear-issue-labels.ts`.
 - **Linear failures never block.** Queueing is a local write
   (`linear-merged-labels`, one record per issue and pull request, owned by
   `BackendRuntime.linearMergedLabels`); nothing on the merge or deletion path
-  waits for Linear. A failed attempt (Linear down or refusing, the issue
-  gone, or no Linear connection on that machine) is logged as
+  waits for Linear. A failed attempt (Linear down or refusing, or the issue
+  gone) is logged as
   `[linear] merged-label.failed` with the reason and retried after a minute,
   doubling to at most an hour, until it lands; pending records survive a
   restart and the environment's deletion. Each attempt has a cancellable
@@ -1086,6 +1088,71 @@ in `linear-issue-labels.ts`.
   500-record target; unapplied durable obligations are always retained, including
   when an environment is deleted during an extended Linear outage.
 - **Which machine.** The label is added by the machine where the build ran,
-  with that machine's Linear key; the records do not sync. A build on a
-  machine without a Linear connection keeps its label pending until that
-  machine is connected.
+  with that machine's Linear key. On a machine without a Linear connection it
+  stays due (`merged-label.waiting`) and is landed as
+  [Builds on a machine without Linear](#builds-on-a-machine-without-linear)
+  says.
+
+### Completion comments on Linear issues
+
+A build started from a Linear issue comments on it as it ends: `✅` when it
+completes (with what was delivered) or `❌` when it fails or is cancelled
+(`postCompletionComment` in `build-pipeline/service-recovery.ts`, through
+`post_linear_completion_comment`).
+
+- **Once per ending.** Each comment carries a hidden marker naming the
+  pipeline, and a completion has its own marker, so a build that failed, was
+  retried and then completed gets both comments, and repeating either ending
+  adds nothing. A post looks for the marker first, so a lost answer is never a
+  second comment.
+- **A failed post is kept.** When Linear fails or this machine has no key, the
+  comment is queued (`linear-pending-comments`, one per pipeline holding its
+  latest ending, at most 500, its text cut at 10,000 characters) by
+  `linear-completion-comments.ts` and owned by
+  `BackendRuntime.linearCompletionComments`. It outlives a restart, the
+  pipeline and its environment, and is retried after a minute, doubling to an
+  hour. The build shows the failure and that the comment is queued
+  (`completionCommentError`), and turns to posted when the comment lands.
+  Retry posts at once. Removing the project deletes its queued comments.
+- **A merge ends conflict resolution.** GitHub reports a merged pull request's
+  mergeability as unknown for good, so a build still resolving conflicts when
+  its pull request merges completes then, and comments.
+- GitHub-issue builds do not have this queue: their comment is tried once and
+  by Retry.
+
+### Builds on a machine without Linear
+
+A Linear issue's launcher can build on any connected machine, but the Linear
+key is only on the machines the user connected. What a machine without a key
+owes Linear (labels and completion comments) stays in its own queues, and its
+command node writes it (`linear-write-relay.ts`):
+
+- **The command node takes, writes and reports.** A leaf never reaches its
+  command node, so after each Linear sync pass (a reconnect, or the minute
+  reconcile) a command node that holds a key calls the leaf's link-only
+  `claim_linear_writes`, makes each write with its own key, and reports it
+  with `settle_linear_writes`. The key never travels. This does not hold up
+  link sync.
+- **Two fixed writes.** A leaf can ask only for the `merged` label on an issue
+  or a pipeline's marked completion comment; the command node checks the shape
+  and bounds of each and ignores anything else.
+- **Claims.** At most eight writes, held for five minutes, so two command
+  nodes do not take the same one; a claim never reported back is due again
+  then. Repeating a write is safe (the label or marker is already there). A
+  refusal is reported with Linear's reason and backed off on the leaf.
+- **A leaf with a key claims nothing out**: it writes for itself, and
+  connecting Linear on a machine writes what waited there at once.
+- **An older leaf** answers `unknown-command` (`relay.older-node`) and keeps
+  what it owes until it is updated. With no command node holding a key, writes
+  wait until a machine is connected.
+
+*Why the command node writes rather than handing out its key:* a key leaves a
+machine only when the user asks ("Use it here"), and copying it to every build
+machine would widen who holds it. Relaying moves only the issue id and the
+comment's text. The cost is up to a minute's delay.
+
+*What was wrong before (found 2026-11-25):* each machine wrote only with its
+own key, and builds had moved to machines without one. On one such machine a
+label had failed 55 times with "Linear is not connected on this machine", while
+the connected machine's labels all landed; a comment that failed was never
+retried and went with its environment.

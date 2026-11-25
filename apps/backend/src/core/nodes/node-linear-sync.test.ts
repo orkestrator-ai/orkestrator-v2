@@ -63,6 +63,28 @@ function commandSync(command: StorageService, link: LinearSyncLink) {
 }
 
 describe("NodeLinearSync", () => {
+  test("a leaf from before the relay keeps what it owes, and its links still sync", async () => {
+    const [command, leaf] = await Promise.all([storage(), storage()]);
+    await command.kanban.saveLinearAuth("lin_api_shared", { id: "v", name: "Ada" });
+    leaf.linear.saveLinearBoardLink({ key: REPO, teamId: "team-1" }, new Set([REPO]));
+    const { link, calls } = leafLink(leaf);
+    const older: LinearSyncLink = {
+      connected: true,
+      invokeCommand: (async (def: { name: string }, args: Record<string, unknown>) => {
+        if (def.name === "claim_linear_writes") {
+          calls.push(def.name);
+          throw unknownCommand(def.name);
+        }
+        return link.invokeCommand(def as never, args as never);
+      }) as LinearSyncLink["invokeCommand"],
+    };
+    const sync = commandSync(command, older);
+    await sync.sync(LEAF);
+    await sync.deliverWrites(LEAF);
+    expect(calls).toContain("claim_linear_writes");
+    expect(await command.linear.getLinearBoardLink(REPO)).toMatchObject({ teamId: "team-1" });
+  });
+
   test("a link made on the leaf reaches the command node, and one made here reaches the leaf", async () => {
     const [command, leaf] = await Promise.all([storage(), storage()]);
     leaf.linear.saveLinearBoardLink(

@@ -306,6 +306,13 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     return this.lifecycle.retryCompletionComment(pipelineId);
   }
 
+  /** A completion comment queued by `onLinearCommentUnposted` was posted. */
+  noteLinearCommentPosted(
+    comment: Parameters<BuildPipelineRecovery["noteLinearCommentPosted"]>[0],
+  ): Promise<void> {
+    return this.recovery.noteLinearCommentPosted(comment);
+  }
+
   // -------------------------------------------------------------------------
   // Key information
 

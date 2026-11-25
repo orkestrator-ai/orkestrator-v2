@@ -9,7 +9,9 @@
  * Linear outage never delays merge handling or environment deletion. The
  * drain then adds the label (`linear-issue-labels.ts`) and retries a failure
  * with backoff, capped at an hour, until it lands; pending records survive a
- * restart and the environment's deletion.
+ * restart and the environment's deletion. On a machine with no Linear key they
+ * stay due, and the attached command node lands them with its own key
+ * (`linear-write-relay.ts`).
  *
  * Writers: the PR monitor's terminal follow-up (`git/pr-monitor-runtime.ts`), the
  * build finding its pull request already merged (`persistPullRequest`),
@@ -28,6 +30,13 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 import { addLinearIssueLabelByName, type LinearIssueLabelResult } from "./linear-issue-labels.js";
 import { sanitizeLinearError } from "./linear.js";
+import {
+  LINEAR_NOT_CONNECTED_HERE,
+  LINEAR_WRITE_MAX_RETRY_MS,
+  LinearDrainLoop,
+  linearWriteRetryDelay,
+  type LinearDrainClock,
+} from "./linear-write-drain.js";
 import type {
   Environment,
   PersistedBuildPipeline,
@@ -39,12 +48,6 @@ const log = createLogger("linear");
 
 /** The label a merged build's issue gets. */
 export const LINEAR_MERGED_LABEL = "merged";
-/** Overall deadline, including every response body and pagination request. */
-export const LINEAR_MERGED_LABEL_TIMEOUT_MS = 30_000;
-/** First retry after a failure; doubles per attempt. */
-export const LINEAR_MERGED_LABEL_RETRY_MS = 60_000;
-/** The longest wait between attempts. */
-export const LINEAR_MERGED_LABEL_MAX_RETRY_MS = 60 * 60_000;
 
 export interface LinearMergedLabelStorage {
   getEnvironment(environmentId: string): Promise<Environment | null>;
@@ -60,10 +63,11 @@ export interface LinearMergedLabelStorage {
     | "enqueueLinearMergedLabel"
     | "settleLinearMergedLabel"
     | "deferLinearMergedLabel"
+    | "noteLinearMergedLabelWaiting"
   >;
 }
 
-export type LinearMergedLabelsOptions = {
+export type LinearMergedLabelsOptions = LinearDrainClock & {
   /** Test seam: the Linear call. Defaults to the real GraphQL client. */
   addLabel?: (
     apiKey: string,
@@ -71,9 +75,6 @@ export type LinearMergedLabelsOptions = {
     name: string,
     signal?: AbortSignal,
   ) => Promise<LinearIssueLabelResult>;
-  now?: () => number;
-  schedule?: (callback: () => void, delayMs: number) => unknown;
-  cancel?: (timer: unknown) => void;
 };
 
 /** The Linear issue a pipeline record was built from, or null for any other source. */
@@ -92,11 +93,6 @@ function linearSourceOf(
   return { issueId, ...(identifier ? { issueIdentifier: identifier } : {}) };
 }
 
-export function linearMergedLabelRetryDelay(attempts: number): number {
-  const exponent = Math.min(Math.max(attempts - 1, 0), 16);
-  return Math.min(LINEAR_MERGED_LABEL_RETRY_MS * 2 ** exponent, LINEAR_MERGED_LABEL_MAX_RETRY_MS);
-}
-
 /**
  * One backend's merged-label queue and its drain timer. Owned by
  * `BackendRuntime` as `linearMergedLabels`; `shutdown()` stops the timer.
@@ -104,30 +100,17 @@ export function linearMergedLabelRetryDelay(attempts: number): number {
 export class LinearMergedLabels {
   private storage: LinearMergedLabelStorage | null = null;
   private readonly addLabel: NonNullable<LinearMergedLabelsOptions["addLabel"]>;
-  private readonly now: () => number;
-  private readonly schedule: NonNullable<LinearMergedLabelsOptions["schedule"]>;
-  private readonly cancel: NonNullable<LinearMergedLabelsOptions["cancel"]>;
-  private timer: unknown = null;
-  private timerDueAt = Number.POSITIVE_INFINITY;
-  private draining: Promise<void> | null = null;
-  private drainAgain = false;
+  private readonly loop: LinearDrainLoop;
   private swept = false;
   private sweeping: Promise<void> | null = null;
-  private attempt: AbortController | null = null;
-  private closed = false;
 
   constructor(options: LinearMergedLabelsOptions = {}) {
     this.addLabel = options.addLabel ?? addLinearIssueLabelByName;
-    this.now = options.now ?? Date.now;
-    this.schedule =
-      options.schedule ??
-      ((callback, delayMs) => {
-        const timer = setTimeout(callback, delayMs);
-        (timer as { unref?: () => void }).unref?.();
-        return timer;
-      });
-    this.cancel =
-      options.cancel ?? ((timer) => clearTimeout(timer as Parameters<typeof clearTimeout>[0]));
+    this.loop = new LinearDrainLoop(
+      () => this.drain(),
+      (error) => log.warn("merged-label.record-failed", { error: formatLogError(error) }),
+      options,
+    );
   }
 
   /**
@@ -139,7 +122,7 @@ export class LinearMergedLabels {
     environment: Pick<Environment, "id" | "projectId">,
     prUrl: string,
   ): Promise<void> {
-    if (this.closed || !prUrl) return;
+    if (this.loop.closed || !prUrl) return;
     this.bind(storage);
     try {
       const records = await storage.listBuildPipelinesForEnvironment(
@@ -162,7 +145,7 @@ export class LinearMergedLabels {
     environmentId: string,
     prUrl: string,
   ): Promise<void> {
-    if (this.closed) return;
+    if (this.loop.closed) return;
     let environment: Environment | null;
     try {
       environment = await storage.getEnvironment(environmentId);
@@ -182,7 +165,7 @@ export class LinearMergedLabels {
     >,
     prUrl: string,
   ): void {
-    if (this.closed || !prUrl) return;
+    if (this.loop.closed || !prUrl) return;
     this.bind(storage);
     try {
       this.enqueue(
@@ -206,14 +189,14 @@ export class LinearMergedLabels {
    * an earlier process left pending. Never throws.
    */
   sweepOnce(storage: LinearMergedLabelStorage): void {
-    if (this.closed || this.swept || this.sweeping) return;
+    if (this.loop.closed || this.swept || this.sweeping) return;
     this.swept = true;
     this.bind(storage);
     this.sweeping = (async () => {
       let failed = false;
       const environments = new Map<string, Environment | null>();
       for (const record of await storage.listAllBuildPipelines()) {
-        if (this.closed) return;
+        if (this.loop.closed) return;
         if (!linearSourceOf(record) || !record.environmentId) continue;
         try {
           if (!environments.has(record.environmentId)) {
@@ -247,16 +230,14 @@ export class LinearMergedLabels {
 
   /** Stops the drain timer; later calls do nothing. */
   shutdown(): void {
-    this.closed = true;
-    this.attempt?.abort(new Error("Merged label queue stopped"));
-    this.clearTimer();
+    this.loop.stop("Merged label queue stopped");
   }
 
   /** Resolves once the current drain (and any it queued) settles. Tests use it. */
   async idle(): Promise<void> {
-    while (this.sweeping || this.draining) {
+    while (this.sweeping || this.loop.running) {
       if (this.sweeping) await this.sweeping;
-      if (this.draining) await this.draining;
+      if (this.loop.running) await this.loop.running;
     }
   }
 
@@ -285,70 +266,64 @@ export class LinearMergedLabels {
         projectId: record.projectId,
         prUrl,
       };
-      storage.linear.enqueueLinearMergedLabel(input, new Date(this.now()));
+      storage.linear.enqueueLinearMergedLabel(input, new Date(this.loop.now()));
     }
   }
 
   /** Starts a drain now, or once the running one finishes. */
   requestDrain(): void {
-    if (this.closed || !this.storage) return;
-    if (this.draining) {
-      this.drainAgain = true;
-      return;
-    }
-    this.clearTimer();
-    this.draining = this.drain()
-      .catch((error: unknown) => {
-        log.warn("merged-label.record-failed", { error: formatLogError(error) });
-        this.armTimer(this.now() + LINEAR_MERGED_LABEL_RETRY_MS);
-      })
-      .finally(() => {
-        this.draining = null;
-        if (this.drainAgain) {
-          this.drainAgain = false;
-          this.requestDrain();
-        }
-      });
+    if (this.storage) this.loop.request();
   }
 
-  private async drain(): Promise<void> {
+  private async drain(): Promise<number> {
     const storage = this.storage;
-    if (!storage) return;
+    if (!storage) return Number.POSITIVE_INFINITY;
     const pending = (await storage.linear.listLinearMergedLabels()).filter(
       (record) => record.status === "pending",
     );
-    const now = this.now();
+    const now = this.loop.now();
     const due = pending.filter((record) => Date.parse(record.nextAttemptAt) <= now);
-    let apiKey: string | undefined;
-    if (due.length > 0) {
-      try {
-        apiKey = (await storage.kanban.getLinearAuth())?.apiKey;
-      } catch {
-        apiKey = undefined;
-      }
-    }
+    const apiKey = due.length > 0 ? (await storage.kanban.getLinearAuth())?.apiKey : undefined;
     let nextDue = Number.POSITIVE_INFINITY;
     for (const record of pending) {
-      if (this.closed) return;
+      if (this.loop.closed) return Number.POSITIVE_INFINITY;
       if (!due.includes(record)) {
         nextDue = Math.min(nextDue, Date.parse(record.nextAttemptAt));
         continue;
       }
+      if (!apiKey) {
+        // Left due, not deferred: the attached command node may claim it
+        // (`linear-write-relay.ts`), and connecting here drains at once.
+        if (storage.linear.noteLinearMergedLabelWaiting(record.key, LINEAR_NOT_CONNECTED_HERE)) {
+          log.info("merged-label.waiting", {
+            pipelineId: record.pipelineId,
+            issue: record.issueIdentifier ?? record.issueId,
+          });
+        }
+        nextDue = Math.min(nextDue, now + LINEAR_WRITE_MAX_RETRY_MS);
+        continue;
+      }
       try {
-        if (!apiKey) throw new Error("Linear is not connected on this machine");
-        const result = await this.applyLabel(apiKey, record.issueId);
-        storage.linear.settleLinearMergedLabel(record.key, result.outcome, new Date(this.now()));
+        const result = await this.loop.bounded(
+          (signal) => this.addLabel(apiKey, record.issueId, LINEAR_MERGED_LABEL, signal),
+          "Linear label attempt timed out",
+        );
+        storage.linear.settleLinearMergedLabel(
+          record.key,
+          result.outcome,
+          new Date(this.loop.now()),
+        );
         log.info("merged-label.applied", {
           pipelineId: record.pipelineId,
           issue: record.issueIdentifier ?? record.issueId,
           outcome: result.outcome,
         });
       } catch (error) {
-        if (this.closed) return;
+        if (this.loop.closed) return Number.POSITIVE_INFINITY;
         const attempts = record.attempts + 1;
-        const delay = linearMergedLabelRetryDelay(attempts);
+        const delay = linearWriteRetryDelay(attempts);
         const reason = sanitizeLinearError(error, apiKey);
-        const nextAttemptAt = this.now() + delay;
+        const nextAttemptAt = this.loop.now() + delay;
         storage.linear.deferLinearMergedLabel(record.key, {
           error: reason,
           nextAttemptAt: new Date(nextAttemptAt),
@@ -363,52 +338,6 @@ export class LinearMergedLabels {
         });
       }
     }
-    if (Number.isFinite(nextDue)) this.armTimer(nextDue);
-  }
-
-  private async applyLabel(apiKey: string, issueId: string): Promise<LinearIssueLabelResult> {
-    const controller = new AbortController();
-    this.attempt = controller;
-    const timer = this.schedule(
-      () => controller.abort(new Error("Linear label attempt timed out")),
-      LINEAR_MERGED_LABEL_TIMEOUT_MS,
-    );
-    let onAbort!: () => void;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(controller.signal.reason);
-      controller.signal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      // Race also bounds injected transports that do not implement cancellation.
-      return await Promise.race([
-        this.addLabel(apiKey, issueId, LINEAR_MERGED_LABEL, controller.signal),
-        aborted,
-      ]);
-    } finally {
-      this.cancel(timer);
-      controller.signal.removeEventListener("abort", onAbort);
-      this.attempt = null;
-    }
-  }
-
-  private armTimer(dueAt: number): void {
-    if (this.closed) return;
-    if (this.timer !== null && this.timerDueAt <= dueAt) return;
-    this.clearTimer();
-    this.timerDueAt = dueAt;
-    this.timer = this.schedule(
-      () => {
-        this.timer = null;
-        this.timerDueAt = Number.POSITIVE_INFINITY;
-        this.requestDrain();
-      },
-      Math.max(0, dueAt - this.now()),
-    );
-  }
-
-  private clearTimer(): void {
-    if (this.timer !== null) this.cancel(this.timer);
-    this.timer = null;
-    this.timerDueAt = Number.POSITIVE_INFINITY;
+    return nextDue;
   }
 }

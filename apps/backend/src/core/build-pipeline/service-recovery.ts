@@ -496,7 +496,8 @@ export class BuildPipelineRecovery {
     if (detection.hasMergeConflicts === true) {
       throw new Error("Merge conflicts could not be fully resolved automatically");
     }
-    if (detection.hasMergeConflicts === null) {
+    // A merged pull request's mergeability stays unknown for good: it is done.
+    if (detection.hasMergeConflicts === null && detection.state !== "merged") {
       // GitHub computes mergeability asynchronously. Keep the durable phase in
       // place until a later supervisor pass has evidence that the conflict is
       // actually gone; an indeterminate answer is not successful resolution.
@@ -624,14 +625,7 @@ export class BuildPipelineRecovery {
         : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
     const result =
       source.type === "linear"
-        ? await this.ctx.invoke<{ commentId?: string; postedAt?: string }>(
-            "post_linear_completion_comment",
-            {
-              pipelineId: pipeline.id,
-              issueId: source.issueId,
-              body,
-            },
-          )
+        ? await this.postLinearComment(pipeline, source.issueId, body)
         : await this.ctx.invoke<{ commentId?: string; postedAt?: string }>(
             "post_github_completion_comment",
             {
@@ -648,6 +642,54 @@ export class BuildPipelineRecovery {
     pipeline.completionCommentPostedAt = result.postedAt ?? new Date().toISOString();
     delete pipeline.completionCommentError;
     await this.ctx.save(pipeline, pipeline.backendRevision);
+  }
+
+  /**
+   * Posts a Linear build's comment; one that cannot be posted now is kept and
+   * posted later, whatever becomes of this pipeline, and the error says so.
+   */
+  private async postLinearComment(
+    pipeline: BuildPipeline,
+    issueId: string,
+    body: string,
+  ): Promise<{ commentId?: string; postedAt?: string }> {
+    const outcome = pipeline.phase === "complete" ? "complete" : "failed";
+    try {
+      return await this.ctx.invoke("post_linear_completion_comment", {
+        pipelineId: pipeline.id,
+        issueId,
+        body,
+        outcome,
+      });
+    } catch (error) {
+      const kept = await this.ctx.options?.onLinearCommentUnposted?.(pipeline, {
+        outcome,
+        body,
+        error: errorMessage(error),
+      });
+      throw kept ? new Error(kept) : error;
+    }
+  }
+
+  /** A completion comment kept by `onLinearCommentUnposted` is now in Linear. */
+  async noteLinearCommentPosted(comment: {
+    pipelineId: string;
+    outcome: "complete" | "failed";
+    commentId: string;
+    postedAt?: string;
+  }): Promise<void> {
+    const stale = (pipeline: BuildPipeline) =>
+      pipeline.phase !== comment.outcome || pipeline.completionCommentStatus === "posted";
+    const record = await this.ctx.storage.getBuildPipeline(comment.pipelineId);
+    // Gone with its environment, or running again: its next ending speaks for it.
+    if (!record || stale(record.snapshot as BuildPipeline)) return;
+    await this.ctx.mutate(comment.pipelineId, (pipeline) => {
+      if (stale(pipeline)) return;
+      pipeline.completionCommentStatus = "posted";
+      pipeline.completionCommentId = comment.commentId;
+      pipeline.completionCommentPostedAt = comment.postedAt ?? new Date().toISOString();
+      delete pipeline.completionCommentError;
+    });
   }
 
   needsTerminalReconciliation(pipeline: BuildPipeline): boolean {

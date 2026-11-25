@@ -103,8 +103,13 @@ export async function requireIssueOnProjectBoard(
 /** How long a file link handed to the Linear tab opens without Linear sign-in. */
 const SIGNED_FILE_SECONDS = 10 * 60;
 
-/** A board change here goes to every machine with the repository. */
+/**
+ * A board change here goes to every machine with the repository, and a new
+ * connection can write what waited for one.
+ */
 export function noteLinearChange(context: CommandContext): void {
+  context.runtime.linearMergedLabels.requestDrain();
+  context.runtime.linearCompletionComments.requestDrain();
   context.nodeCoordination?.linearSync?.noteLocalChange();
 }
 

@@ -35,6 +35,8 @@ export async function lifecycleMachine(
   environmentId: string,
   projectId: string,
   options: Partial<BuildPipelineContext["options"]> = {},
+  /** `post_linear_completion_comment`, for a test that ends a Linear build. */
+  postLinearComment?: (args: Record<string, unknown>) => Promise<unknown>,
 ): Promise<LifecycleMachine> {
   if (!(await storage.getEnvironment(environmentId))) {
     await storage.addEnvironment({
@@ -76,6 +78,9 @@ export async function lifecycleMachine(
       }
       case "pr_monitor_watch":
         return undefined as T;
+      case "post_linear_completion_comment":
+        if (!postLinearComment) throw new Error(`Unexpected command: ${command}`);
+        return (await postLinearComment(args)) as T;
       default:
         throw new Error(`Unexpected command: ${command}`);
     }
@@ -86,6 +91,13 @@ export async function lifecycleMachine(
     options,
     save: async (pipeline: BuildPipeline) => {
       await storage.saveBuildPipeline(pipeline.id, projectId, environmentId, 1, pipeline);
+    },
+    mutate: async (id: string, mutation: (pipeline: BuildPipeline) => void | Promise<void>) => {
+      const record = await storage.getBuildPipeline(id);
+      const pipeline = record!.snapshot as BuildPipeline;
+      await mutation(pipeline);
+      await storage.saveBuildPipeline(id, projectId, environmentId, 1, pipeline);
+      return pipeline;
     },
     provisioningPrompts: new Map(),
     lastProviderAgent: new Map(),

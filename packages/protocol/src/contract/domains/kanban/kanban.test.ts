@@ -90,7 +90,7 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   get_linear_issues: ["projectId"],
   get_linear_issue: ["issueId", "projectId"],
   post_linear_issue_comment: ["issueId", "body", "projectId"],
-  post_linear_completion_comment: ["pipelineId", "issueId", "body"],
+  post_linear_completion_comment: ["pipelineId", "issueId", "body", "outcome"],
   // Linear boards (domain version 2).
   get_linear_teams: [],
   get_linear_board_link: ["projectId"],

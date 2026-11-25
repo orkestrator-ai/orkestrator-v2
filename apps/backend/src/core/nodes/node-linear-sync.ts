@@ -6,7 +6,9 @@ import type {
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import {
   applyLinearSyncStateCommand,
+  claimLinearWritesCommand,
   getLinearSyncStateCommand,
+  settleLinearWritesCommand,
 } from "@orkestrator/protocol/contract/domains/ticket-sync";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
@@ -15,6 +17,11 @@ import {
   readLinearSyncState,
   type LinearSyncStorage,
 } from "../linear-sync-state.js";
+import {
+  MAX_LINEAR_WRITES_PER_CLAIM,
+  parseLinearOwedWrite,
+  performLinearWrite,
+} from "../linear-write-relay.js";
 
 const log = createLogger("linear");
 
@@ -27,6 +34,9 @@ const log = createLogger("linear");
  * this node, so a change made on a leaf arrives at the next pass: on
  * (re)connect, when the leaf's projects are read, after a change here, and at
  * the minute reconcile.
+ *
+ * After each pass it also lands what a leaf with no key owes Linear
+ * (`deliverWrites`, `linear-write-relay.ts`).
  *
  * Only non-secret state travels here: links keyed by repository, and
  * disconnects and connections by the key's fingerprint. The one key copy is
@@ -66,6 +76,9 @@ export class NodeLinearSync {
   private readonly again = new Set<string>();
   private readonly connections = new Map<string, LinearNodeConnection>();
   private readonly olderNodes = new Set<string>();
+  private readonly delivering = new Map<string, Promise<void>>();
+  private readonly withoutRelay = new Set<string>();
+  private readonly stop = new AbortController();
   private pending: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
 
@@ -73,6 +86,7 @@ export class NodeLinearSync {
 
   dispose(): void {
     this.disposed = true;
+    this.stop.abort(new Error("Linear sync stopped"));
     if (this.pending) clearTimeout(this.pending);
     this.pending = null;
   }
@@ -141,11 +155,63 @@ export class NodeLinearSync {
           log.warn("sync.failed", { error: formatLogError(error, { message: false }) });
           return;
         }
+        // Not awaited: slow Linear writes must not hold up the links.
+        void this.deliverWrites(nodeId);
         if (!this.again.has(nodeId) || this.disposed) return;
       }
     })().finally(() => this.running.delete(nodeId));
     this.running.set(nodeId, run);
     return run;
+  }
+
+  /**
+   * Writes to Linear, with this node's key, what a leaf without one owes.
+   * Nothing is claimed while this node holds no key either. Never throws; a
+   * call during a run joins it.
+   */
+  deliverWrites(nodeId: string): Promise<void> {
+    if (this.disposed || !this.deps.isCommandNode()) return Promise.resolve();
+    const running = this.delivering.get(nodeId);
+    if (running) return running;
+    const run = this.deliverOnce(nodeId)
+      .catch((error: unknown) => {
+        if (incompatibility(error, claimLinearWritesCommand.name)?.code === "unknown-command") {
+          // An older node keeps what it owes until it is updated.
+          if (!this.withoutRelay.has(nodeId)) log.info("relay.older-node");
+          this.withoutRelay.add(nodeId);
+          return;
+        }
+        if (!this.disposed) {
+          log.warn("relay.failed", { error: formatLogError(error, { message: false }) });
+        }
+      })
+      .finally(() => this.delivering.delete(nodeId));
+    this.delivering.set(nodeId, run);
+    return run;
+  }
+
+  private async deliverOnce(nodeId: string): Promise<void> {
+    const link = this.deps.link(nodeId);
+    if (!link?.connected) return;
+    if (!(await this.deps.storage.kanban.getLinearAuth())?.apiKey) return;
+    const controllerId = await this.deps.selfId();
+    const claimed = await link.invokeCommand(claimLinearWritesCommand, { controllerId });
+    this.withoutRelay.delete(nodeId);
+    const writes = Array.isArray(claimed?.writes) ? claimed.writes : [];
+    for (const value of writes.slice(0, MAX_LINEAR_WRITES_PER_CLAIM)) {
+      if (this.disposed) return;
+      const write = parseLinearOwedWrite(value);
+      if (!write) continue;
+      // Read per write: a disconnect during the run stops it.
+      const apiKey = (await this.deps.storage.kanban.getLinearAuth())?.apiKey;
+      if (!apiKey) return;
+      const result = await performLinearWrite(apiKey, write, this.stop.signal);
+      if (this.disposed) return;
+      if (!("error" in result)) {
+        log.info("relay.written", { kind: write.kind, issue: write.issueId });
+      }
+      await link.invokeCommand(settleLinearWritesCommand, { controllerId, results: [result] });
+    }
   }
 
   private async syncOnce(nodeId: string): Promise<void> {

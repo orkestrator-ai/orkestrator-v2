@@ -609,6 +609,7 @@ export class ProjectsRepository {
           (pipeline) => pipeline.id,
         ),
       );
+      await this.repos.linear.deleteLinearPendingCommentsForProject(projectId);
       await this.enqueueProjectMutation(async () => {
         this.context.updateStoreRow(this.files.projectsFile(), projectId, (current) => {
           if (current === undefined) throw new Error(`Project not found: ${projectId}`);

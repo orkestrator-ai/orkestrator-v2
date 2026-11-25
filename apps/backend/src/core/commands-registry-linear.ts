@@ -12,7 +12,6 @@ import {
   getLinearIssue,
   listLinearIssues,
   postLinearIssueComment,
-  postLinearCompletionComment,
   sanitizeLinearError,
   verifyLinearConnection,
 } from "./linear.js";
@@ -24,6 +23,7 @@ import {
   requireIssueOnProjectBoard,
   requireProjectLinearBoard,
 } from "./commands-registry-linear-boards.js";
+import { postRecordedLinearCompletionComment } from "./linear-completion-comments.js";
 import { linearKeyFingerprint } from "./linear-boards.js";
 import { nowIso } from "./storage/index.js";
 
@@ -157,47 +157,18 @@ export function registerLinearCommands(
   );
   register(
     postLinearCompletionCommentCommand,
-    async ({ pipelineId, issueId, body }, context) => {
-      const runId = asString(pipelineId, "pipelineId");
-      const targetIssueId = asString(issueId, "issueId");
-      const commentBody = asString(body, "body");
-      return context.runtime.integrationLocks.withLinearCompletionComment(runId, async () => {
-        const existing = await context.storage.kanban.getLinearCompletionComment(runId);
-        if (existing?.status === "posted" && existing.commentId) {
-          return {
-            status: "already-posted",
-            commentId: existing.commentId,
-            postedAt: existing.postedAt,
-          };
-        }
-
-        const apiKey = await requireLinearApiKey(context);
-        try {
-          const result = await postLinearCompletionComment(apiKey, {
-            pipelineId: runId,
-            issueId: targetIssueId,
-            body: commentBody,
-          });
-          await context.storage.kanban.saveLinearCompletionComment({
-            pipelineId: runId,
-            issueId: targetIssueId,
-            status: "posted",
-            commentId: result.commentId,
-            postedAt: result.postedAt ?? new Date().toISOString(),
-          });
-          return result;
-        } catch (error) {
-          const message = sanitizeLinearError(error, apiKey);
-          await context.storage.kanban.saveLinearCompletionComment({
-            pipelineId: runId,
-            issueId: targetIssueId,
-            status: "failed",
-            error: message,
-          });
-          throw new Error(message);
-        }
-      });
-    },
+    async ({ pipelineId, issueId, body, outcome }, context) =>
+      postRecordedLinearCompletionComment(
+        context.storage,
+        context.runtime.integrationLocks,
+        () => requireLinearApiKey(context),
+        {
+          pipelineId: asString(pipelineId, "pipelineId"),
+          issueId: asString(issueId, "issueId"),
+          body: asString(body, "body"),
+          ...(outcome === "complete" || outcome === "failed" ? { outcome } : {}),
+        },
+      ),
     ASYNC_HANDLER,
   );
   registerLinearBoardCommands(register);

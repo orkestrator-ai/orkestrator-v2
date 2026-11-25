@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1108,
-    "defined": 1108,
+    "commands": 1110,
+    "defined": 1110,
     "untyped": 0,
     "events": 48
   },
@@ -1133,6 +1133,15 @@
       "critical": [],
       "argsDigest": "sha256:03b7e6646b447b674e07ff564b9e53e94661dfec00d7462ab5f884e4aebe46be",
       "resultDigest": "sha256:2a402ad850b125e94eac97e2422c8de08c2860e737f870a0f3dabe5b0aa27b14"
+    },
+    "claim_linear_writes": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
+      "resultDigest": "sha256:5b91634a035e33107e88a68733f3378fe19ebf2a119c422a5859b6fb27640351"
     },
     "claim_terminal_size": {
       "domain": "terminals",
@@ -6483,7 +6492,7 @@
       "access": "workspace",
       "read": false,
       "critical": [],
-      "argsDigest": "sha256:f99f12db890e2dfda51f178a332816a0289e119e7690eb6252abdf5a381192dc",
+      "argsDigest": "sha256:f5b461d07c45096e73307aad7621bc582992c3e3eb00b163d0f3362010f36572",
       "resultDigest": "sha256:8fcefe6e5da0386bf7f6f8bc69b1f8219fb40d45439fa653167d7a87c3322834"
     },
     "post_linear_issue_comment": {
@@ -8438,6 +8447,15 @@
       "critical": [],
       "argsDigest": "sha256:de4d75cbe39dc18c6ee98727cf0c2f18a6e99563caacfd2404dbff8bae09af9e",
       "resultDigest": "sha256:9b9987916995346cd68220ade0d275cd05723d27421bb990e9bba9f1187ade60"
+    },
+    "settle_linear_writes": {
+      "domain": "ticket-sync",
+      "since": 1,
+      "access": "internal",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:ab68efc4b3900233e10bec03367dd6c0c822aa0d56a657978fcfd04be11acd93",
+      "resultDigest": "sha256:6979fa6f62851b6e8057fa0acc0b94cdc08242920a27128422812e7d232f4696"
     },
     "share_tickets_with_command_node": {
       "domain": "ticket-sync",

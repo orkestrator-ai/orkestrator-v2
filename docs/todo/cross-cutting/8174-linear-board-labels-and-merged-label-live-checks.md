@@ -11,13 +11,17 @@ Both behaviours are built and covered by deterministic tests against a faked
 Linear API; what is left needs the user's real Linear workspace, which agents
 may not use. Task 3 was added on 2026-11-24 by the build that gives agents and
 the Linear tab an issue's files
-([Linear files](../../architecture/tickets.md#linear-files)).
+([Linear files](../../architecture/tickets.md#linear-files)). Task 4 was added on
+2026-11-25 by the build that lets a command node write what a machine without
+a Linear key owes
+([Builds on a machine without Linear](../../architecture/tickets.md#builds-on-a-machine-without-linear)).
 
 ### Tasks
 
 1. **Board cards against the user's real labels.** Status: open (blocked: waits on 7568 item "8174 task 1").
 2. **A real merge labels its issue in the user's real workspace.** Status: open (blocked: waits on 7568 item "8174 task 2").
 3. **An issue's files from the user's real workspace.** Status: open (blocked: waits on 7568 item "8174 task 3").
+4. **A build on a machine without Linear labels and comments through the command node.** Status: open (blocked: waits on 7568 item "8174 task 4").
 
 ### 1. Board cards against the user's real labels
 
@@ -57,9 +61,15 @@ not from a live call.
 startup sweep (retrying incomplete scans) queue the label; the drain retries a failure from one
 minute, doubling to an hour, until it lands.
 
-**Investigation.** None live. If Linear rejects a query field, every attempt
-fails with Linear's message in `[linear] merged-label.failed`, the record
-stays pending, and the fix is a query change here.
+**Investigation.** Read from the production log and store of arktech-mini on
+2026-11-25: real merges of Linear-sourced builds logged
+`merged-label.applied` with `created` (DND-104, 2026-11-16), `added`
+(DND-98, 100 to 103 and 107) and `already-present`, so Linear accepts the
+queries. Not observed: that the issues' other labels were kept, and that a
+pull request closed without merging adds nothing. If Linear rejects a query
+field, every attempt fails with Linear's message in
+`[linear] merged-label.failed`, the record stays pending, and the fix is a
+query change here.
 
 **Decisions.**
 
@@ -96,7 +106,32 @@ mentions neither redirects nor size limits. Nothing was run live.
     - Pros: the documented example.
     - Cons: a new sign-in flow for something the existing key may already allow.
 
+### 4. A build on a machine without Linear labels and comments through the command node
+
+**Problem.** The relay has run only between two real storage services with a
+faked Linear API (`apps/backend/tests/linear-two-machines.test.ts`), not
+between two of the user's machines and their workspace.
+
+**Context.** It needs the fixed build on both the command node and the build
+machine. Labels already pending on a build machine land by themselves once
+both are updated; completion comments that failed before the update and went
+with their environment were never kept and cannot be recovered.
+
+**Investigation.** On 2026-11-25 beelink held one pending label (DND-97, pull
+request 102) after 55 attempts, each failing with "Linear is not connected on
+this machine". beelink2 and the other build machines could not be read.
+
+**Decisions.**
+
+- **What to do if the live run fails.**
+  - **Read `[linear] relay.failed` or `relay.write-failed` on the command node and fix from its reason (recommended).**
+    - Pros: what is owed stays queued and lands after the fix.
+    - Cons: labels and comments are late until then.
+  - **Connect Linear on each build machine.**
+    - Pros: works today.
+    - Cons: the key is then on every build machine.
+
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md), "Cross-cutting": all three checks.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md), "Cross-cutting": all four checks.
 - [Linear](../../architecture/tickets.md#linear)

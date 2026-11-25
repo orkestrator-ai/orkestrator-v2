@@ -9,13 +9,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  loadPersistedState,
-  persistBarrier,
-  reopenPersistenceForTests,
-  schedulePersist,
-} from "./persistence.js";
-import { clientSessionKeys, sessions, type SessionState } from "./state.js";
+import { persistBarrier, reopenPersistenceForTests, schedulePersist } from "./persistence.js";
+import { sessions, type SessionState } from "./state.js";
 import { attachFake } from "./testing/fake-agent.js";
 import {
   deferred,
@@ -218,9 +213,7 @@ describe("prompt dispatch", () => {
       );
 
       // Simulate the successor: load only what was published.
-      sessions.clear();
-      clientSessionKeys.clear();
-      await loadPersistedState();
+      await harness.restart();
       const successor = sessions.get(state.id)!;
       const successorAgent = attachFake(successor);
       const retry = await prompt(successor, "crash-1");

@@ -61,12 +61,14 @@ test("a command whose child never settles fails as its own stage", async () => {
     exited: new Promise(() => undefined),
     kill: (signal: unknown) => kills.push(signal),
   } as unknown as ReturnType<typeof Bun.spawn>);
+  const text = spyOn(Response.prototype, "text");
   try {
     const cli = new CliDriver("stuck", {}, new RunManifest(null), 60_000);
     const run = cli.run(["project", "add"], { stage: "project add" });
     const failure = run.catch((error: Error) => error.message);
     // The one end that settled is not blamed.
-    await Bun.sleep(10);
+    await text.mock.results[0]!.value;
+    await new Promise((resolve) => setImmediate(resolve));
     expect(kills).toEqual([]);
     expect(deadline.advance()).toBe(1);
     expect(kills).toEqual(["SIGKILL"]);
@@ -76,6 +78,7 @@ test("a command whose child never settles fails as its own stage", async () => {
     );
     expect(kills).toEqual(["SIGKILL"]);
   } finally {
+    text.mockRestore();
     spawn.mockRestore();
     clock.restore();
     deadline.restore();

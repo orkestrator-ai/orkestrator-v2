@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { definePaintedFrames, type EachPaintedFrame } from "./painted-frames";
 import { startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 const scrollerSelector = '[data-transcript-scroller="true"]';
@@ -12,6 +13,7 @@ async function bottomGap(page: Page) {
 
 /** Records every animation and every height the group's body takes, after layout. */
 async function observeGroupBody(page: Page) {
+  await page.evaluate(definePaintedFrames);
   await page.evaluate((selector) => {
     const probe = {
       animations: [] as { name: string; duration: number }[],
@@ -31,12 +33,12 @@ async function observeGroupBody(page: Page) {
       }
     });
     const scroller = document.querySelector<HTMLElement>('[data-transcript-scroller="true"]')!;
-    const channel = new MessageChannel();
-    channel.port1.onmessage = () => {
-      probe.gaps.push(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop);
-      requestAnimationFrame(() => channel.port2.postMessage(0));
+    const { __eachPaintedFrame: eachPaintedFrame } = window as unknown as {
+      __eachPaintedFrame: EachPaintedFrame;
     };
-    requestAnimationFrame(() => channel.port2.postMessage(0));
+    eachPaintedFrame(() => {
+      probe.gaps.push(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop);
+    });
     const body = Array.from(document.querySelectorAll<HTMLElement>(selector)).at(-1)!;
     new ResizeObserver(() => probe.heights.push(body.getBoundingClientRect().height)).observe(body);
   }, contentSelector);
@@ -119,8 +121,19 @@ type GroupProbe = {
   gaps: number[];
 };
 
+/** How many samples the last read of each page's probe saw. */
+const gapsRead = new WeakMap<Page, number>();
+
 async function readGroupProbe(page: Page) {
-  return page.evaluate(() => (window as unknown as { groupProbe: GroupProbe }).groupProbe);
+  const read = () =>
+    page.evaluate(() => (window as unknown as { groupProbe: GroupProbe }).groupProbe);
+  // The frames so far, at least one of them sampled since the last read.
+  await expect
+    .poll(async () => (await read()).gaps.length)
+    .toBeGreaterThan(gapsRead.get(page) ?? 0);
+  const probe = await read();
+  gapsRead.set(page, probe.gaps.length);
+  return probe;
 }
 
 for (const reducedMotion of ["no-preference", "reduce"] as const) {
@@ -176,20 +189,39 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     await settleFold(page);
     expect(Math.max(...(await readGroupProbe(page)).gaps)).toBeLessThanOrEqual(2);
 
-    // Reverse an opening while its height is still changing.
-    await show.click();
+    // Reverse an opening while its height is still changing. The page itself
+    // watches for that, once per frame: from the runner, a poll on a starved
+    // host came back after the whole 500 ms animation had run.
+    const fold = page.getByRole("button", { name: /^Fold 3 tool calls:/ });
     if (reducedMotion === "no-preference") {
-      await expect
-        .poll(() =>
-          row
-            .locator(contentSelector)
-            .evaluate((element) =>
-              element.getAnimations().some((animation) => animation.playState === "running"),
-            ),
-        )
-        .toBe(true);
+      const reversed = row.evaluate(
+        (element, selector) =>
+          new Promise<boolean>((resolve) => {
+            const frame = () => {
+              const body = element.querySelector(selector);
+              const running = body
+                ?.getAnimations()
+                .some((animation) => animation.playState === "running");
+              const button = Array.from(element.querySelectorAll("button")).find((candidate) =>
+                candidate.textContent!.trim().startsWith("Fold 3 tool calls:"),
+              );
+              if (!running || !button) {
+                requestAnimationFrame(frame);
+                return;
+              }
+              button.click();
+              resolve(true);
+            };
+            requestAnimationFrame(frame);
+          }),
+        contentSelector,
+      );
+      await show.click();
+      expect(await reversed).toBe(true);
+    } else {
+      await show.click();
+      await fold.click();
     }
-    await page.getByRole("button", { name: /^Fold 3 tool calls:/ }).click();
     await expect(row.getByRole("button", { name: "Exec Command success" })).toHaveCount(0);
     await settleFold(page);
     expect(Math.max(...(await readGroupProbe(page)).gaps)).toBeLessThanOrEqual(2);

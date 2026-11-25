@@ -85,3 +85,34 @@ for (const placement of ["before", "after"] as const) {
     ).toEqual(sequence);
   });
 }
+
+test("edge scrolling goes on while the pointer rests over a gap between cards", async ({
+  page,
+}) => {
+  await page.goto("/linear-board-drag");
+  const cards = page.getByTestId("linear-board-card");
+  const scroller = page.getByRole("region", { name: "Todo lane" }).locator(".overflow-y-auto");
+  const box = (await scroller.boundingBox())!;
+  // Well inside the edge that scrolls, with a gap scrolled to exactly there.
+  const gap = box.y + box.height - 12;
+  await scroller.evaluate((element, y) => {
+    const rects = Array.from(
+      element.querySelectorAll('[data-testid="linear-board-card"]'),
+      (card) => card.getBoundingClientRect(),
+    );
+    const middles = rects.slice(1).map((rect, index) => (rects[index]!.bottom + rect.top) / 2);
+    element.scrollTop = middles.find((middle) => middle >= y)! - y;
+  }, gap);
+  const initial = await scroller.evaluate((element) => element.scrollTop);
+  const start = (await cards.filter({ hasText: "ENG-1" }).first().boundingBox())!;
+  const x = start.x + 35;
+  await page.mouse.move(x, start.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(x + 10, start.y + 20);
+  // Aim at the gap from the same card, so the pointer is first over it there.
+  await page.mouse.move(x, gap, { steps: 2 });
+  await expect
+    .poll(() => scroller.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(initial + 200);
+  await page.mouse.up();
+});

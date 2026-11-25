@@ -1,7 +1,7 @@
 # Coordinator policy browser route receives a disposed API response
 
 - **ID:** 9913
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-09
 - **Test:** `[mobile-chromium] a coordinator turn delegates through Orkestrator tools, is refused a write and asks a question`
 - **File:** `e2e/InteractionPolicyChecks.spec.ts:198`
@@ -67,3 +67,16 @@ failure. The broad browser validation remains red.
 ## Triage note (2026-11-15)
 
 Changed, unverified. Both recorded errors (`route.fulfill: Fetch response has been disposed` and `apiRequestContext.fetch: Target page, context or browser has been closed`) come from the `/__claude-test/**` route handler. That handler forwards the fixture page's polling through the test's `request` context, and teardown disposes the context under a call still in flight. `e2e/InteractionPolicyChecks.spec.ts` now runs `page.unrouteAll({ behavior: "ignoreErrors" })` in `test.afterEach`, which Playwright documents for exactly this teardown race. No assertion changed. The spec was not run (no Playwright runs in this sweep). Stays `open` until a browser run confirms it.
+
+## Resolution (2026-11-25)
+
+- **Root cause:** as in the triage note: teardown disposes the `request` context
+  under a forward still in flight.
+- **Fix:** the `test.afterEach` hook added on 2026-11-15 (no further change).
+- **Reproduced:** not in this spec; yes in its sibling
+  [0252](../native-agents-and-transcripts/0252-claude-paused-question-route-disposal.md#resolution-2026-11-25),
+  which forwards the same route the same way: 18 of 18 failed with a slow poll,
+  and the same hook passed 30 of 30. No recurrence is recorded here since the
+  hook landed.
+- **Stress:** `e2e/InteractionPolicyChecks.spec.ts --repeat-each=2 --workers=4 --retries=0`
+  on six pinned cores passed 20 of 20.

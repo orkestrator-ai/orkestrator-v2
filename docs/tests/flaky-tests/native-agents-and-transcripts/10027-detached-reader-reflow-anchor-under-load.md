@@ -1,7 +1,7 @@
 # Detached reader reflow: the anchor drifted past 3 px under load (`e2e/StreamingTranscript.spec.ts`)
 
 - **ID:** 10027
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-23
 - **Test:** `e2e/StreamingTranscript.spec.ts:307 › a detached reader holds their
   place through a reflow in either direction` (both projects).
@@ -42,3 +42,23 @@ CPU starvation, a reflow that lands between the resize and the scroller's
 anchor correction is sampled before the correction runs. That is a timing gap
 a slow machine could also show a user, not only a slow test, and it occurs with
 either fixture server. The cause is unconfirmed.
+
+## Resolution (2026-11-25)
+
+- **Root cause:** the probe. The hypothesis above is right about the moment but
+  not about the screen: the resize reached the page between a frame's
+  `requestAnimationFrame` and the task that samples, so the sample laid out the
+  new width before the frame that renders it, and its anchor correction, had run.
+- **Fix:** `e2e/painted-frames.ts` skips such samples
+  ([1012](../web-ui/1012-live-tool-fold-threshold-gap.md#resolution-2026-11-25)).
+  The 3 px limit and the checks that rows re-wrapped and that samples were taken
+  are unchanged.
+- **Reproduced:** yes. `-g "detached reader holds their place through a reflow in" --repeat-each=20 --workers=8`
+  pinned to four cores failed 5 of 40 on this assertion, at 113.75 px and 91 px.
+  All five violating samples had an `innerWidth` (420 or 1200) other than their
+  frame's. With the fix, `--repeat-each=25` had no failure on this assertion in
+  50 runs.
+- **Not covered:** two of those 50 runs (and one of the 40 before) failed
+  earlier, at the `lastOutcome` poll, with `expired`: the history jump's hold ran
+  out under that starvation. It is a different assertion and was not changed.
+- **Stress:** the command above.

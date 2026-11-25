@@ -1,7 +1,7 @@
 # Terminal Notes tab did not appear in the aggregate run
 
 - **ID:** 10000
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-18
 - **Base:** `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2`.
 - **Observed branch:** `sol-availability-issue-178b6467a4b3-r1`, reviewing `2ee6bc84b29bf761282c9c08b0a78a1d940f99a9` with the catalogue changes applied in `0df400360`.
@@ -23,3 +23,15 @@ The cause is unconfirmed. The test failed while waiting for the pipeline's Notes
 - **Suite counts:** 16,137 passed, 10 skipped and 1 failed across 1,147 web test files.
 - **Isolated rerun:** The aggregate runner ran `bun test ./src/components/terminal/TerminalContainer.notes.test.tsx --only-failures --parallel=1` from `apps/web`. Its one test passed in 1.34 s.
 - **Aggregate evidence:** `orkestrator-test-run.slc14y/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` and `orkestrator-test-run.slc14y/rerun-apps-web-src-components-terminal-terminalcontainer-notes-test-tsx.log.gz` in the host temporary directory. The cause remains unconfirmed.
+
+## Resolution (2026-11-25)
+
+- **Root cause:** Testing Library's one-second default. The pipeline graph's
+  lazy modules and React Flow mount come before its Notes node, which takes
+  longer than that on a starved worker; the node then appears.
+- **Fix:** the file uses `useAsyncUtilHangWatchdog()` (30 s), the repository's
+  helper for waits on a state the component will reach. No assertion changed.
+- **Reproduced:** yes. Twelve fresh processes of the file under
+  `bun scripts/test-under-contention.ts --core 14 --burners 10` failed 12 of 12
+  with the recorded error (1.8 to 2.2 s); with the fix 12 of 12 passed.
+- **Stress:** the command above.

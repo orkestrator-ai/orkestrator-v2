@@ -1,7 +1,7 @@
 # Linear board drag stalls before reaching the scroll target
 
 - **ID:** 9991
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-18
 - **Base:** `259e88d90c9cb3e6e24de95d8333dbc5a12cbef2` (merge base with `origin/main`)
 - **Observed head:** `2d70c4fe0c3cce73985dae21fcbbf448773c660b`, with the new drag shadow test in the worktree.
@@ -95,3 +95,22 @@ touch the Linear board. Rerun alone with `--repeat-each=3` alongside
 `LinearBoardDrag` case passed on both projects. `mise run flaky:recurrence -- 9991`
 reported the case open. See also
 [10016](../aggregate-validation-runs/10016-antigravity-branch-browser-validation.md).
+
+## Resolution (2026-11-25)
+
+- **Root cause:** a product bug. dnd-kit scrolls only the scrollable ancestors of
+  what the pointer is over. Over a gap between two cards that is the lane, whose
+  droppable `<section>` holds the scroller rather than sitting in it, so dnd-kit
+  found nothing to scroll and stopped. The pointer then rests over that gap and
+  a nudge does not restart it. A fast page scrolls through gaps between renders;
+  a slow one renders with a gap under the pointer, hence the stalled offsets one
+  card pitch (74 px) apart: 2, 76, 150 and 26, 100, 170.
+- **Fix:** `LinearIssueBoard.tsx` registers the lane's scrolled content as a
+  second droppable with the same meaning, so the lane's scroller stays among the
+  ancestors. Drops are unchanged.
+- **Reproduced:** yes. Both placements, `--repeat-each=12 --workers=6` pinned to
+  four cores, failed 6 of 48 before and 0 of 48 after. A new case, `edge scrolling
+  goes on while the pointer rests over a gap between cards`, aims at a gap: 6 of 6
+  failed on the old board (scroll offsets 4 and 28), and it passes with the fix.
+- **Stress:** the whole file, `--repeat-each=8 --workers=7` on four cores, passed
+  64 of 64.

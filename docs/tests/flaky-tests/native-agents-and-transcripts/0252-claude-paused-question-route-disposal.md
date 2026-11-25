@@ -1,7 +1,7 @@
 # Paused Claude question test races request-context disposal
 
 - **ID:** 0252
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-16
 - **Test:** `[mobile-chromium] a paused Claude question stays paused across a reload, then resumes and answers`
 - **Owning file:** `e2e/ClaudeInteractions.spec.ts:100` (route callback at `:107`)
@@ -277,3 +277,20 @@ Left `open` by the Playwright default-deadline triage. Every recorded failure is
 - **Evidence:** `/tmp/orkestrator-test-run.XQb8AI/browser.log.gz`.
   `mise run flaky:recurrence -- 0252 --base b2c91abb94de8144c119aeccf4a31cf26b655d3b --registry-ref origin/main`
   reported `open`. The spec and application paths in the case were unchanged.
+
+## Resolution (2026-11-25)
+
+- **Root cause:** the fixture page polls its route until it closes, and the
+  route callback forwards each poll through the test's `request` fixture.
+  Teardown disposes that context under a forward still in flight, and the
+  callback's rejection fails the test. Not a product defect.
+- **Fix:** `test.afterEach` runs `page.unrouteAll({ behavior: "ignoreErrors" })`,
+  as `InteractionPolicyChecks.spec.ts` ([9913](../coordinator-and-multi-review/9913-interaction-policy-route-response-disposed.md))
+  and `CloseRetention.spec.ts` already do. `CodexHostRules.spec.ts` and
+  `CodexSubagentCards.spec.ts` forward the same way and gain the same hook. No
+  assertion, deadline or retry changed.
+- **Reproduced:** yes. With a temporary 700 ms delay on the polled snapshot, the
+  owning file at `--workers=3 --repeat-each=3 --retries=0` failed 18 of 18 with
+  `apiRequestContext.fetch: Request context disposed`; with the hook and the same
+  delay, `--repeat-each=5` passed 30 of 30.
+- **Stress:** the command above; the three specs together passed (10 tests).

@@ -21,9 +21,9 @@ import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { readFileSync } from "node:fs";
 import type { LocalAgentStore } from "@cursor/sdk";
 import { MAX_PROMPT_JOURNAL } from "./config.js";
-import { loadPersistedState, persistBarrier } from "./persistence.js";
+import { persistBarrier } from "./persistence.js";
 import { useCursorLocalAgentStoreForTests, useCursorSdkRuntimeForTests } from "./sdk-runtime.js";
-import { clientSessionKeys, sessions, type SessionState } from "./state.js";
+import { sessions, type SessionState } from "./state.js";
 import { attachFake, fakeAgent } from "./testing/fake-agent.js";
 import {
   deferred,
@@ -112,9 +112,7 @@ describe("a send that rejects after it was called", () => {
       acceptedAt: expect.any(Number),
     });
 
-    sessions.clear();
-    clientSessionKeys.clear();
-    await loadPersistedState();
+    await harness.restart();
     const successor = sessions.get(state.id)!;
     const successorAgent = attachFake(successor);
     // The successor answers the read-only twin of the refusal below, so the
@@ -250,9 +248,7 @@ describe("prompt journal retention", () => {
     const state = await harness.createSession();
     fillWithProtected(state);
     await persistBarrier();
-    sessions.clear();
-    clientSessionKeys.clear();
-    await loadPersistedState();
+    await harness.restart();
     const restored = sessions.get(state.id)!;
     const agent = attachFake(restored);
     expect(restored.promptJournal.size).toBe(MAX_PROMPT_JOURNAL);
@@ -265,9 +261,7 @@ describe("prompt journal retention", () => {
     expect((await prompt(restored, "old-0")).status).toBe(410);
     expect((await prompt(restored, "new-1")).status).toBe(202);
     expect(agent.sends).toHaveLength(1);
-    sessions.clear();
-    clientSessionKeys.clear();
-    await loadPersistedState();
+    await harness.restart();
     expect(sessions.get(state.id)?.promptJournal.has("new-1")).toBe(true);
   });
 

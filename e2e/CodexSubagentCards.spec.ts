@@ -182,6 +182,14 @@ async function expectNestedTranscript(
   );
 }
 
+// The fixture page polls its route until it closes, and each call is forwarded
+// through this test's `request` context. Teardown disposes that context under a
+// handler still in flight, which failed the test ("Request context disposed",
+// flake 0252). Stop the forwarding first and drop what is in flight.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 test("Codex sub-agent cards stay one per child through reload and a cold restart", async ({
   page,
   request,

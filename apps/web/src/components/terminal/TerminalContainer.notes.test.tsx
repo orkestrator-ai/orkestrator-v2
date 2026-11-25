@@ -1,5 +1,6 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useAsyncUtilHangWatchdog } from "@/test/async-util-hang-watchdog";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import * as realBackend from "@/lib/backend";
 import { TerminalProvider } from "@/contexts";
@@ -25,6 +26,10 @@ mock.module("@/lib/backend", () => ({
 afterAll(() => mock.module("@/lib/backend", () => backendSnapshot));
 afterEach(cleanup);
 const { TerminalContainer } = await import("./TerminalContainer");
+
+// The pipeline graph's lazy modules and React Flow mount come before its Notes
+// node, which takes over a second on a starved worker (flake 10000).
+useAsyncUtilHangWatchdog();
 
 test("Notes activation creates and renders a real pane tab, and reopening reuses it", async () => {
   const pipeline = buildPipelineFixture({ phase: "complete", keyInformation });

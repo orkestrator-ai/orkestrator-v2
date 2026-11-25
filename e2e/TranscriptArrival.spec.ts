@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { definePaintedFrames, type EachPaintedFrame } from "./painted-frames";
 import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 const scrollerSelector = '[data-transcript-scroller="true"]';
@@ -38,15 +39,15 @@ async function distanceFromBottom(page: Page) {
  * attribute is added to.
  */
 async function startArrivalProbe(page: Page, selector = arrivingRow) {
+  await page.evaluate(definePaintedFrames);
   await page.evaluate(
     ({ scrollerSelector, selector }) => {
       const samples: Array<{ height: number; distance: number; animating: boolean }> = [];
       const added: Array<{ row: boolean; inGroup: boolean }> = [];
-      let running = true;
-      let frame = 0;
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => {
-        if (!running) return;
+      const { __eachPaintedFrame: eachPaintedFrame } = window as unknown as {
+        __eachPaintedFrame: EachPaintedFrame;
+      };
+      const stopSampling = eachPaintedFrame(() => {
         // Re-resolved each frame: a remount replaces the scroller.
         const el = document.querySelector<HTMLElement>(scrollerSelector);
         const row = el?.querySelector<HTMLElement>(selector);
@@ -57,9 +58,7 @@ async function startArrivalProbe(page: Page, selector = arrivingRow) {
             animating: row.hasAttribute("data-transcript-arrival"),
           });
         }
-        frame = requestAnimationFrame(() => channel.port2.postMessage(0));
-      };
-      frame = requestAnimationFrame(() => channel.port2.postMessage(0));
+      });
       // One entry per element: development's re-run effects set it twice.
       const seen = new WeakSet<Element>();
       const observer = new MutationObserver((records) => {
@@ -83,8 +82,7 @@ async function startArrivalProbe(page: Page, selector = arrivingRow) {
         samples,
         added,
         stop() {
-          running = false;
-          cancelAnimationFrame(frame);
+          stopSampling();
           observer.disconnect();
         },
       };

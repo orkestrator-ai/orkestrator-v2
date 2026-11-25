@@ -1,7 +1,7 @@
 # a live group crossing the fold threshold folds into its line with no-preference motion
 
 - **ID:** 1012
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-10-26
 - **Test:** `a live group crossing the fold threshold folds into its line with no-preference motion`
 - **File:** `e2e/ToolGroupFold.spec.ts:79`
@@ -549,3 +549,26 @@ two whole runs on beelink. With the dev server and 5 workers it failed with
 57 px (mobile, line 195) and 4 px (desktop, line 170) gaps, in 13.3 min. The
 fixture server does not decide it. `mise run flaky:recurrence -- 1012 --base
 6e072c3cf` reported the case open.
+
+## Resolution (2026-11-25)
+
+- **Root cause:** the probe, not the transcript. It sampled the gap in a task
+  posted from `requestAnimationFrame`. When that task ran late, Chromium moved
+  the animation clock forward in it, so reading geometry laid out a fold height
+  that no frame had painted, ahead of the scroll correction its next frame makes.
+- **Fix:** `e2e/painted-frames.ts` samples only while the animation clock and the
+  viewport are still those of the frame that painted; `ToolGroupFold.spec.ts`,
+  `TranscriptArrival.spec.ts` and `transcript-anchor-probe.ts` use it, and a
+  fold check needs a new sample before it reads the gaps. The 2 px limit is
+  unchanged. The reversal step also moved into the page: polled from the runner
+  it could miss the whole 500 ms animation (2 of 80 under the same load).
+- **Reproduced:** yes. `-g "crossing the fold threshold folds into its line with no-preference" --repeat-each=20 --workers=6`
+  pinned to four cores failed 38 of 40. Recording each sample's clock showed
+  1,291 of 4,922 samples behind a moved clock, and every sample above 2 px among
+  them; none was read at its own frame's clock. With the fix, both motion cases
+  under the same load passed 80 of 80.
+- **Still detects a real gap:** with a temporary one-frame-late 8 px pin
+  injected, the fixed probe failed 6 of 6 (9 px).
+- **Stress:** the command above; the five specs that use the probes passed
+  (148 passed, 2 skipped, six workers). WebKit and Firefox runs (opt-in) were
+  not made.

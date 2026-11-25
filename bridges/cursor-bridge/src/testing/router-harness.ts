@@ -7,7 +7,7 @@
  * the journals, the routes — is the production code.
  */
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SDKAgent } from "@cursor/sdk";
@@ -16,6 +16,7 @@ import { authToken } from "../config.js";
 import { route } from "../http.js";
 import {
   drainPersistence,
+  loadPersistedState,
   reopenPersistenceForTests,
   usePersistenceFsForTests,
 } from "../persistence.js";
@@ -67,6 +68,15 @@ export interface RouterHarness {
   createSession(body?: Record<string, unknown>): Promise<SessionState>;
   /** The published state file as a fresh process would read it — no drain. */
   readPublished(): Promise<Record<string, unknown> | undefined>;
+  /**
+   * Replace this process by a successor that reads only what was published.
+   *
+   * Clearing the session map alone does not stop this process's queued
+   * best-effort writes: one that ran afterwards published the empty map over
+   * the file the successor was about to read (flake 10005). A dead process
+   * writes nothing, so its queue runs out first and the file is put back.
+   */
+  restart(): Promise<void>;
   /** Requests the router has received and not yet started answering. */
   unanswered(): number;
   close(): Promise<void>;
@@ -147,6 +157,17 @@ export async function startRouterHarness(
     async readPublished() {
       const raw = await readFile(stateFile, "utf8").catch(() => undefined);
       return raw === undefined ? undefined : (JSON.parse(raw) as Record<string, unknown>);
+    },
+    async restart() {
+      const published = await readFile(stateFile).catch(() => undefined);
+      sessions.clear();
+      clientSessionKeys.clear();
+      closingTombstones.clear();
+      await drainPersistence();
+      if (published === undefined) await rm(stateFile, { force: true });
+      else await writeFile(stateFile, published, { mode: 0o600 });
+      reopenPersistenceForTests();
+      await loadPersistedState();
     },
     async close() {
       await new Promise<void>((resolve) => server.close(() => resolve()));

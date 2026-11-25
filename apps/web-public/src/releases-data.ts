@@ -51,6 +51,42 @@ export function releaseNotesUrl(release: Pick<ReleaseSummary, "tag">): string {
 
 export const RELEASES: readonly ReleaseSummary[] = [
   {
+    version: "2.39.14-beta",
+    tag: "v2.39.14-beta",
+    date: "2026-11-25",
+    channel: "beta",
+    intro: "Changes since 2.39.13-beta.",
+    new: [],
+    improved: [
+      "Choosing another machine in the New Environment dialog keeps the same dialog and your form open; only the new environment is created on that machine.",
+      "Opening the New Environment dialog for a project on another machine no longer moves the window.",
+    ],
+    fixed: [
+      "Builds of Linear issues on a machine without its own Linear key still get their merged label and completion comment: your command node writes them with its own key. Comments that cannot be posted straight away are retried.",
+      "A build whose pull request merges while its conflicts are being resolved now completes.",
+      "Rebuilding a container no longer risks an unexpected failure while it copies a large workspace.",
+      "Dragging a card on the Linear board keeps scrolling at the edge while the pointer is over a gap between cards.",
+      "A project you have just opened no longer closes when an older list of environments arrives late.",
+      "Installing a project's system packages in a restricted container tries again when Debian's package archive cannot be reached.",
+    ],
+  },
+  {
+    version: "2.39.13-beta",
+    tag: "v2.39.13-beta",
+    date: "2026-11-24",
+    channel: "beta",
+    intro: "Changes since 2.39.12-beta.",
+    new: [
+      "The Linear tab shows the files attached to an issue and lets you download them. A build started from a Linear issue downloads its files into the environment before the agent starts.",
+    ],
+    improved: [
+      "A prompt you send to a coordinator appears in the conversation straight away, while Orkestrator checks the project before sending it.",
+    ],
+    fixed: [
+      "A coordinator prompt stays visible while it is being sent, and a send you stop puts your draft back in the composer.",
+    ],
+  },
+  {
     version: "2.39.12-beta",
     tag: "v2.39.12-beta",
     date: "2026-11-23",
@@ -117,64 +153,6 @@ export const RELEASES: readonly ReleaseSummary[] = [
       "On macOS, file changes are no longer missed while watches start and stop. On Linux, large ignored folders are left out of watching.",
       "A preview loading in a background tab no longer takes keyboard focus.",
       "OpenCode 2 sessions recover when their event stream goes quiet.",
-    ],
-  },
-  {
-    version: "2.37.5-beta",
-    tag: "v2.37.5-beta",
-    date: "2026-11-11",
-    channel: "beta",
-    intro: "Changes since 2.37.4-beta.",
-    new: [
-      "Tickets open in a wide tabbed view, with a Notes tab showing the linked build's notes, pull request state and Merge.",
-      "Review an Auto-pipeline draft in its own tab, which keeps your unsaved edits.",
-      "Search every action in a coordinator conversation from the Actions panel.",
-      "A Releases page on the website summarises recent releases.",
-    ],
-    improved: [
-      'Messages about environments name the machine they run on instead of saying "the host".',
-      "Unread bells on environments are drawn in amber.",
-    ],
-    fixed: [
-      "A build's ticket follows its pull request, returning to the backlog when the pull request closes or the environment is deleted.",
-      "Environment setup reports when it has finished, and retrying setup no longer starts a second run alongside the first.",
-      "The window no longer goes blank after an unexpected scroll.",
-      "A browser preview is hidden behind dialogs and menus that cover it.",
-      "Ticket sync works again with machines on older versions.",
-      "The backend stays responsive while the self-improvement scan runs.",
-    ],
-  },
-  {
-    version: "2.37.4-beta",
-    tag: "v2.37.4-beta",
-    date: "2026-11-10",
-    channel: "beta",
-    intro: "Changes since 2.37.3-beta.",
-    new: [
-      "Rewind an agent conversation to an earlier message and switch between the branches that creates.",
-      "The OpenCode 2 preview can resume and archive conversations, and runs inside containers too.",
-      "Kanban tickets, including their images, stay in sync across all your machines, and conflicting edits are shown rather than lost.",
-      "Usage readings for each signed-in account are shared between machines, with a note of how fresh each reading is.",
-      "Claude approval cards say whether an MCP tool only reads or can make changes.",
-      "Transcript timestamps include the date for messages from earlier days.",
-      "Diagnostics exports can include agent restarts, optional container logs and how much space each part of the database uses.",
-      "An experimental self-improvement loop reads recent agent conversations and turns repeated friction into tracked tickets.",
-    ],
-    improved: [
-      "Agent chat is easier to read and to tap: clearer change summaries, tidier tool details and larger touch targets.",
-      "Drafting an Auto-pipeline shows its progress, can be canceled, and tells you how the confirmation went.",
-      "Read-only reviewers can run on Linux machines where the command sandbox is unavailable.",
-      "Restoring a large set of file changes is faster.",
-    ],
-    fixed: [
-      "Cleaning up an environment or merging its pull request only deletes branches that environment created.",
-      "Spinners and progress bars in command output show their latest frame instead of every frame.",
-      "A canceled Auto-pipeline draft no longer reappears, and saved model choices are kept when launching a build.",
-      "A finished pipeline opens its Notes once, even when no window was watching it finish.",
-      "The MCP panel refreshes straight after you act on a server.",
-      "Commands that keep running after an agent's turn ends are shown as left running instead of stuck.",
-      "File watching keeps working when a worktree contains folders it cannot read, and deleting an environment is quicker.",
-      "Projects whose checkout is on another machine show the right status, and new environments are created on the right machine.",
     ],
   },
 ];

@@ -7,7 +7,7 @@
  * exist to prove was already on disk.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { loadPersistedState, persistBarrierWaitersForTests } from "./persistence.js";
+import { persistBarrierWaitersForTests } from "./persistence.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { fakeAgent } from "./testing/fake-agent.js";
 import {
@@ -51,12 +51,6 @@ async function flushMicrotasks(): Promise<void> {
   for (let index = 0; index < 10; index += 1) await Promise.resolve();
 }
 
-async function restartFromDisk(): Promise<void> {
-  sessions.clear();
-  clientSessionKeys.clear();
-  await loadPersistedState();
-}
-
 describe("create acknowledgement", () => {
   test("a 201 means a successor recovers the id, key and pre-send selections", async () => {
     const response = await create({
@@ -69,7 +63,7 @@ describe("create acknowledgement", () => {
 
     const file = await published();
     expect(file.sessions.map((entry) => entry.id)).toEqual([sessionId]);
-    await restartFromDisk();
+    await harness.restart();
     expect(clientSessionKeys.get("tab-1")).toBe(sessionId);
     expect(sessions.get(sessionId)?.composer).toMatchObject({
       selectedModelId: "composer-2",
@@ -286,7 +280,7 @@ describe("attach and resume acknowledgement", () => {
       });
       expect(response.status).toBe(201);
       const { sessionId } = (await response.json()) as { sessionId: string };
-      await restartFromDisk();
+      await harness.restart();
       expect(sessions.get(sessionId)?.agentId).toBe("vendor-agent-9");
     } finally {
       restore();
@@ -331,7 +325,7 @@ describe("config and resume publication", () => {
         body: JSON.stringify({ modelId: "lost-model" }),
       });
       expect(retried.status).toBe(200);
-      await restartFromDisk();
+      await harness.restart();
       expect(sessions.get(state.id)?.composer.selectedModelId).toBe("lost-model");
     } finally {
       hold.restore();
@@ -368,7 +362,7 @@ describe("config and resume publication", () => {
       expect(((await retried.json()) as { sessionId: string }).sessionId).toBe(retainedId);
       expect(sessions.size).toBe(1);
       expect(resumes).toBe(0);
-      await restartFromDisk();
+      await harness.restart();
       expect(sessions.get(retainedId)?.agentId).toBe("vendor-agent-7");
     } finally {
       hold.restore();
@@ -414,7 +408,7 @@ describe("create under aggregate pressure", () => {
     const response = await create({ clientSessionKey: "new-tab" });
     expect(response.status).toBe(201);
     const { sessionId } = (await response.json()) as { sessionId: string };
-    await restartFromDisk();
+    await harness.restart();
     expect(clientSessionKeys.get("new-tab")).toBe(sessionId);
     const restoredOld = sessions.get(old.id)!;
     expect(restoredOld.agentId).toBe("old-agent");

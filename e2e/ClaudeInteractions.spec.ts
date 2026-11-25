@@ -40,6 +40,14 @@ test.afterAll(async () => {
   });
 });
 
+// The fixture page polls its route until it closes, and each call is forwarded
+// through this test's `request` context. Teardown disposes that context under a
+// handler still in flight, which failed the test ("Request context disposed",
+// flake 0252). Stop the forwarding first and drop what is in flight.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+});
+
 for (const mode of ["form", "url"] as const) {
   test(`Claude ${mode} card rehydrates after an inactive environment and reload, then answers and cancels`, async ({
     page,

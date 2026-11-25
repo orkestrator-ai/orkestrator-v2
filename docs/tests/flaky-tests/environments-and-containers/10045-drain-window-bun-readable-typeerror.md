@@ -1,7 +1,7 @@
 # Copy drain window: an uncaught TypeError inside Bun's readable streams
 
 - **ID:** 10045
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-11-23
 - **Base:** `a7d21c3f5` (`main`, CI run 45238054215, job 137915138079
   `Tests (root-bridges)`).
@@ -40,3 +40,33 @@ stack. No code was changed for it.
 
 A second occurrence, with its Bun version. If it recurs, replace the `data`
 listener plus `pipe` pair with one consumer that counts and writes.
+
+## Recurrence found (2026-11-20)
+
+CI run 44728684540 (`main`), job `Tests (root-bridges)`, failed the same test
+after 555 ms with `RangeError: Range consisting of offset and length are out of
+bounds` in `fromList` (`internal:streams/readable:850`), again from `flow` and
+`resume_`.
+
+## Resolution (2026-11-25)
+
+- **Root cause:** a Bun 1.4.4 defect. When a flowing child `stdout` is paused
+  and resumed under backpressure, its `Readable` loses count of its own buffer
+  and throws where no caller can catch it. `pipeContainerPath`
+  (`apps/backend/src/core/containers/replacement.ts`) drove the archive that
+  way, so the same exception could end the backend during a container rebuild.
+- **Fix:** the pump reads the archive with `for await` and waits for the
+  helper's `drain` itself. Once the helper is gone it still reads to the end, so
+  the producer is seen to close. `container-replacement.test.ts` gains a case
+  that checks every byte reaches a slow helper.
+- **Reproduced:** yes, at base `2478cf993`, with the unchanged owning file run
+  in fresh processes pinned to two cores each
+  (`taskset -c 2,3 bun test ./tests/unit/migrate-copy-drain-window.test.ts`,
+  four or six pairs at once): 10 of 32, 3 of 30 and 9 of 30 runs failed. Every failure
+  seen locally was the `RangeError`. Comparing readers in a temporary build of the pump under
+  the same condition: `data` plus `pipe` failed 12 of 156 runs, `pipe` alone 3 of
+  24, a `data` listener with `pause`/`resume` 2 of 24; `for await` 0 of 90 and
+  `readable` with `read()` 0 of 90. Not reproduced by a script outside the test,
+  so what inside Bun goes wrong is not established.
+- **Stress:** the fixed pump passed 60 of 60 under the same condition;
+  `bun test tests/container-replacement.test.ts` passed (63 tests).

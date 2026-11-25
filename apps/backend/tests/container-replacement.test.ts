@@ -86,6 +86,21 @@ describe("copy plan", () => {
       },
     );
   });
+  test("delivers every byte to a helper that reads slower than the producer writes", async () => {
+    await withDockerScript(
+      `#!/bin/sh
+if [ "$1" = cp ]; then seq 1 400000; exit 0; fi
+i=0
+while [ $i -lt 20 ]; do head -c 4096; sleep 0.02; i=$((i+1)); done > "$0.part"
+cat >> "$0.part"
+seq 1 400000 | cmp -s - "$0.part" && echo intact
+`,
+      async () => {
+        const result = await pipeContainerPath("source", "/workspace", ["run", "helper"]);
+        expect(result).toMatchObject({ absent: false, output: "intact\n" });
+      },
+    );
+  });
   test("settles when the daemon is lost by producer and helper at once", async () => {
     // Live C15: a cut daemon connection ends `docker cp` mid-stream while the
     // helper reading it dies too. The producer exits on its own with output

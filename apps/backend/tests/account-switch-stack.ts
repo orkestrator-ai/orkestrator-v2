@@ -428,6 +428,11 @@ export function stackEnvironment(paths: StackPaths): Record<string, string> {
     ORKESTRATOR_STACK_ROOT: paths.root,
     BUN_FOR_STACK_WRAPPER: process.execPath,
     ORKESTRATOR_WORKTREE_DIR: path.join(paths.root, "worktrees"),
+    // Every scenario boots its own backend, ten at once for one platform. The
+    // boot check would pull an image, create a Docker network and run two
+    // containers in each, beside the bridge start the scenario waits on, and
+    // leave the network under an owner no reaper revisits (flake 9967).
+    ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
     GIT_CONFIG_GLOBAL: path.join(paths.root, "gitconfig"),
     GIT_CONFIG_NOSYSTEM: "1",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",

@@ -438,19 +438,39 @@ export async function pipeContainerPath(
       );
     };
     const timer = setTimeout(abandon, options.timeoutMs ?? COPY_TIMEOUT_MS);
-    producer.stdout.on("data", (chunk: Buffer) => {
-      bytes += chunk.length;
-    });
-    producer.stdout.pipe(consumer.stdin);
     // Once nothing reads the stream (the helper died, or its stdin broke),
-    // `pipe` leaves the producer's stdout paused with data unread. Discard the
-    // rest so it reaches EOF: a child "closes" only when its output has ended,
-    // and both sides losing the daemon at once would otherwise never settle.
+    // discard the rest so it reaches EOF: a child "closes" only when its output
+    // has ended, and both sides losing the daemon at once would otherwise never
+    // settle.
+    let discard = false;
+    let wakePump: (() => void) | undefined;
     const discardProducerOutput = () => {
-      producer.stdout.unpipe(consumer.stdin);
-      producer.stdout.resume();
+      discard = true;
+      wakePump?.();
     };
+    // Read by iteration, never `pipe` or a `data` listener: pausing and
+    // resuming a flowing stream under backpressure makes Bun 1.4.4's
+    // `Readable` lose count of its own buffer and throw with no
+    // caller to catch it (flake 10045).
+    const pump = async () => {
+      try {
+        for await (const chunk of producer.stdout as AsyncIterable<Buffer>) {
+          bytes += chunk.length;
+          if (discard || consumer.stdin.destroyed || consumer.stdin.writableEnded) continue;
+          if (consumer.stdin.write(chunk)) continue;
+          await new Promise<void>((resolve) => {
+            wakePump = resolve;
+          });
+          wakePump = undefined;
+        }
+      } catch {
+        // The producer's "close" or "error" settles the step.
+      }
+      if (!consumer.stdin.destroyed && !consumer.stdin.writableEnded) consumer.stdin.end();
+    };
+    consumer.stdin.on("drain", () => wakePump?.());
     consumer.stdin.on("error", discardProducerOutput);
+    void pump();
     producer.stderr.on("data", (chunk: Buffer) => {
       if (producerErr.length < 4096) producerErr += chunk.toString();
     });
@@ -482,8 +502,8 @@ export async function pipeContainerPath(
     // Once the producer has closed, the helper has its whole input (or none
     // is coming): give it the drain window to finish, then abandon the step.
     const startDrain = () => {
-      // End the helper's input explicitly; `pipe` does once the stream ends,
-      // but not after an unpipe.
+      // End the helper's input here too: the pump does once the stream ends,
+      // but not when the producer could not be started.
       if (!consumer.stdin.destroyed && !consumer.stdin.writableEnded) consumer.stdin.end();
       if (consumerCode !== null || drainTimer !== undefined || abandoned) return;
       const streamedMs = Date.now() - streamStarted;

@@ -14,8 +14,8 @@ import {
   type BridgeContractHandle,
 } from "../../../tests/conformance/bridge-contract/scenarios.js";
 import { newSessionState } from "./agent-session.js";
-import { loadPersistedState, usePersistenceFsForTests } from "./persistence.js";
-import { clientSessionKeys, closingTombstones, sessions, type SessionState } from "./state.js";
+import { usePersistenceFsForTests } from "./persistence.js";
+import { sessions, type SessionState } from "./state.js";
 import { DEFAULT_STEER_JOURNAL_LIMITS } from "./steer-journal.js";
 import { holdPublication, startRouterHarness } from "./testing/router-harness.js";
 
@@ -76,10 +76,7 @@ runBridgeContractSuite({
         return state.id;
       },
       async restartFromPublishedState() {
-        sessions.clear();
-        clientSessionKeys.clear();
-        closingTombstones.clear();
-        await loadPersistedState();
+        await harness.restart();
       },
       async saturateBoundedState(sessionId) {
         // Filling the journal publishes the state file about 510 times, each

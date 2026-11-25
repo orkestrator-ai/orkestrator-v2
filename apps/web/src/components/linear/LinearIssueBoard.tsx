@@ -100,6 +100,21 @@ export function LinearLanesMenu({
 }
 
 const LANE_DROP_PREFIX = "linear-lane:";
+/**
+ * A lane's scrolled content: the same drop as the lane itself. dnd-kit scrolls
+ * only the scrollable ancestors of what the pointer is over, and the lane
+ * holds its scroller rather than sitting in it, so over the lane (a gap
+ * between two cards) edge scrolling stopped and a nudge did not restart it.
+ */
+const LANE_CONTENT_DROP_PREFIX = "linear-lane-content:";
+
+/** The lane a drop id names, or null for a card's. */
+function laneStatusOfDrop(id: string): string | null {
+  for (const prefix of [LANE_DROP_PREFIX, LANE_CONTENT_DROP_PREFIX]) {
+    if (id.startsWith(prefix)) return id.slice(prefix.length);
+  }
+  return null;
+}
 const CARD_DROP_PREFIX = "linear-card:";
 
 /** Labels a card names before folding the rest into "+N" (the Kanban card's limit is 3). */
@@ -390,6 +405,10 @@ function LinearLaneColumn({
     id: `${LANE_DROP_PREFIX}${lane.status}`,
     disabled: !accepts,
   });
+  const { setNodeRef: setContentRef } = useDroppable({
+    id: `${LANE_CONTENT_DROP_PREFIX}${lane.status}`,
+    disabled: !accepts,
+  });
   return (
     <section
       ref={setNodeRef}
@@ -405,46 +424,48 @@ function LinearLaneColumn({
       </div>
       <div
         className={cn(
-          "min-h-[200px] flex-1 overflow-y-auto rounded-lg p-1 transition-colors",
+          "min-h-[200px] flex-1 overflow-y-auto rounded-lg transition-colors",
           isTarget ? "bg-accent/20" : "bg-transparent",
         )}
       >
-        <div className="space-y-2">
-          {lane.issues.map((issue) => (
-            <LinearBoardCard
-              key={issue.id}
-              issue={issue}
-              laneStatus={lane.status}
-              type={lane.type}
-              pipelinePhase={pipelinePhase(issue.id)}
-              draggable={accepts && !moving.has(issue.id)}
-              droppable={accepts}
-              selected={selected.has(issue.id)}
-              carried={carried.has(issue.id)}
-              indicator={
-                dropAnchor?.issueId === issue.id
-                  ? dropAnchor.before
-                    ? "before"
-                    : "after"
-                  : undefined
-              }
-              onClick={(event) => onCardClick(issue, event)}
-            />
-          ))}
-          {dropAnchor === null && lane.issues.length > 0 && <DropIndicator placement="end" />}
-        </div>
-        {lane.issues.length === 0 && (
-          <div
-            className={cn(
-              "flex h-20 items-center justify-center rounded-lg border border-dashed text-xs transition-colors",
-              isTarget
-                ? "border-primary/60 bg-primary/5 text-primary"
-                : "border-border/60 text-muted-foreground",
-            )}
-          >
-            {dragging && accepts ? `Move to ${lane.status}` : "No issues"}
+        <div ref={setContentRef} className="min-h-full p-1">
+          <div className="space-y-2">
+            {lane.issues.map((issue) => (
+              <LinearBoardCard
+                key={issue.id}
+                issue={issue}
+                laneStatus={lane.status}
+                type={lane.type}
+                pipelinePhase={pipelinePhase(issue.id)}
+                draggable={accepts && !moving.has(issue.id)}
+                droppable={accepts}
+                selected={selected.has(issue.id)}
+                carried={carried.has(issue.id)}
+                indicator={
+                  dropAnchor?.issueId === issue.id
+                    ? dropAnchor.before
+                      ? "before"
+                      : "after"
+                    : undefined
+                }
+                onClick={(event) => onCardClick(issue, event)}
+              />
+            ))}
+            {dropAnchor === null && lane.issues.length > 0 && <DropIndicator placement="end" />}
           </div>
-        )}
+          {lane.issues.length === 0 && (
+            <div
+              className={cn(
+                "flex h-20 items-center justify-center rounded-lg border border-dashed text-xs transition-colors",
+                isTarget
+                  ? "border-primary/60 bg-primary/5 text-primary"
+                  : "border-border/60 text-muted-foreground",
+              )}
+            >
+              {dragging && accepts ? `Move to ${lane.status}` : "No issues"}
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -516,7 +537,11 @@ export function LinearIssueBoard({
     geometry.current = args;
     const hits = pointerWithin(args);
     const card = hits.find((hit) => String(hit.id).startsWith(CARD_DROP_PREFIX));
-    return card ? [card] : hits;
+    if (card) return [card];
+    // The content also reaches past the part of it that is scrolled into view.
+    const lane = hits.find((hit) => String(hit.id).startsWith(LANE_DROP_PREFIX));
+    const content = hits.find((hit) => String(hit.id).startsWith(LANE_CONTENT_DROP_PREFIX));
+    return lane ? [content ?? lane] : [];
   }, []);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
   const visible = lanes.filter((lane) => !hidden.has(lane.status));
@@ -594,10 +619,9 @@ export function LinearIssueBoard({
       const before = y === null ? false : y < over.rect.top + over.rect.height / 2;
       return { lane, anchor: { issueId, before } };
     }
-    if (!overId.startsWith(LANE_DROP_PREFIX)) return null;
-    const lane = lanes.find(
-      (candidate) => candidate.status === overId.slice(LANE_DROP_PREFIX.length),
-    );
+    const status = laneStatusOfDrop(overId);
+    if (status === null) return null;
+    const lane = lanes.find((candidate) => candidate.status === status);
     if (!lane) return null;
     const y = geometry.current?.pointerCoordinates?.y;
     if (y !== undefined) {

@@ -11,9 +11,9 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { MAX_PROMPT_JOURNAL } from "./config.js";
-import { loadPersistedState, persistBarrier } from "./persistence.js";
+import { persistBarrier } from "./persistence.js";
 import { setPromptJournal } from "./prompt.js";
-import { clientSessionKeys, closingTombstones, sessions, type SessionState } from "./state.js";
+import { sessions, type SessionState } from "./state.js";
 import { attachFake, fakeAgent } from "./testing/fake-agent.js";
 import {
   defaultPolicy,
@@ -53,14 +53,6 @@ async function dispatch(state: SessionState, requestId: string): Promise<unknown
     `/session/${state.id}/dispatch?requestId=${encodeURIComponent(requestId)}`,
   );
   return ((await response.json()) as { dispatch: unknown }).dispatch;
-}
-
-/** A successor process that reads only what was published. */
-async function restart(): Promise<void> {
-  sessions.clear();
-  clientSessionKeys.clear();
-  closingTombstones.clear();
-  await loadPersistedState();
 }
 
 type PublishedFile = { sessions: Array<Record<string, unknown> & { id: string }> };
@@ -216,7 +208,7 @@ describe("losing completeness", () => {
     await persistBarrier();
     const file = (await harness.readPublished()) as PublishedFile;
     expect(record(file, state.id)).not.toHaveProperty("promptJournalComplete");
-    await restart();
+    await harness.restart();
     expect(await dispatch(sessions.get(state.id)!, "never-sent")).toBe("unknown");
   });
 
@@ -226,7 +218,7 @@ describe("losing completeness", () => {
     await editPublished((file) => {
       delete record(file, state.id).promptJournalComplete;
     });
-    await restart();
+    await harness.restart();
     expect(await dispatch(sessions.get(state.id)!, "never-sent")).toBe("unknown");
   });
 
@@ -242,7 +234,7 @@ describe("losing completeness", () => {
       await editPublished((file) => {
         (record(file, state.id).promptJournal as unknown[]).push(corrupt);
       });
-      await restart();
+      await harness.restart();
       const successor = sessions.get(state.id)!;
       expect(successor.promptJournalComplete).not.toBe(true);
       expect(await dispatch(successor, "never-sent")).toBe("unknown");
@@ -254,7 +246,7 @@ describe("losing completeness", () => {
     await editPublished((file) => {
       file.sessions.push({ ...record(file, state.id), promptJournal: [] });
     });
-    await restart();
+    await harness.restart();
     expect(await dispatch(sessions.get(state.id)!, "never-sent")).toBe("unknown");
   });
 
@@ -272,7 +264,7 @@ describe("losing completeness", () => {
       await persistBarrier();
       const file = (await harness.readPublished()) as PublishedFile;
       expect(record(file, sessionId)).not.toHaveProperty("promptJournalComplete");
-      await restart();
+      await harness.restart();
       expect(await dispatch(sessions.get(sessionId)!, "never-sent")).toBe("unknown");
     } finally {
       restore();
@@ -290,7 +282,7 @@ describe("a clean restart", () => {
     await persistBarrier();
 
     try {
-      await restart();
+      await harness.restart();
       const successor = sessions.get(state.id)!;
       expect(successor.promptJournalComplete).toBe(true);
       // Accepted when the process died: persisted as ambiguous, never absent.

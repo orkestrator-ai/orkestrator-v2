@@ -190,3 +190,23 @@ cores (`taskset -c 12,13`, 10 pass, 48.2 s) and to one (`taskset -c 12`,
 10 pass, 83.6 s). CPU starvation of the test process alone therefore does not
 produce it, which leaves the shared runner's Docker or disk work. No product
 budget was changed.
+
+## Change (2026-11-25, unverified on CI)
+
+Every health-timeout failure recorded here has the boot Docker reachability
+check in the same seconds: each of the ten concurrent scenario hosts pulled an
+image, created a network and ran two probe containers. Disposable test backends
+are meant to turn it off (`ORKESTRATOR_HOST_REACHABILITY_CHECK=off`, as the CLI
+scenarios do); `stackEnvironment` (`apps/backend/tests/account-switch-stack.ts`)
+builds its environment from scratch and did not. It does now. No product budget
+changed.
+
+- **Reproduced:** no. This host has no Docker access. CPU starvation alone does
+  not produce it: with the Codex owner limited to 60 % and 30 % of one CPU
+  (`systemd-run --user --scope -p CPUQuota=`), scenarios ran past their own
+  deadlines but no bridge start failed its health wait (the slow ones took
+  3.5 to 4.2 s).
+- **Verified:** the Codex owner passes with the check off, beside the container
+  replacement and checkpointer files (83 pass).
+- **Stays open** until the CI backend shard has run with it. A recurrence
+  without the check running would point back at the 15 s budget.

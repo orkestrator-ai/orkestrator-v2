@@ -63,6 +63,23 @@ function autocheckpoint(db: Database): number {
     .wal_autocheckpoint;
 }
 
+/**
+ * Proves no connection to the file is left: SQLite empties the WAL (macOS
+ * keeps the file, Linux removes it) only when the last connection closes, so
+ * a fresh sole connection's close empties it unless another is still open.
+ *
+ * The WAL's size straight after the backend and its worker close proves
+ * nothing by itself. They close on two threads, and when both ask for the
+ * exclusive lock at the same moment each sees the other's connection and
+ * neither empties it (flake 10019).
+ */
+function expectNoOpenConnection(file: string): void {
+  const probe = new Database(file);
+  probe.query("SELECT count(*) FROM sqlite_master").get();
+  probe.close();
+  expect(Bun.file(`${file}-wal`).size).toBe(0);
+}
+
 async function until<T>(read: () => T | undefined, timeoutMs = 5_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -167,11 +184,20 @@ describe("startBackgroundCheckpoints", () => {
 });
 
 describe("StorageDatabase background checkpoints", () => {
-  test("are off under bun test unless asked for", async () => {
-    expect(backgroundCheckpointsByDefault()).toBe(false);
-    const db = openBackendDatabase(await dataDir());
-    cleanups.push(() => db.close());
-    expect(autocheckpoint(db.db)).toBe(DEFAULT_AUTOCHECKPOINT_PAGES);
+  test("are off in the test environment unless asked for", async () => {
+    const directory = await dataDir();
+    const previousNodeEnv = process.env.NODE_ENV;
+    // Direct Bun invocations can inherit NODE_ENV=production from the app.
+    process.env.NODE_ENV = "test";
+    try {
+      expect(backgroundCheckpointsByDefault()).toBe(false);
+      const db = openBackendDatabase(directory);
+      cleanups.push(() => db.close());
+      expect(autocheckpoint(db.db)).toBe(DEFAULT_AUTOCHECKPOINT_PAGES);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   test("a backend database checkpoints off the event loop and stops on close", async () => {
@@ -188,7 +214,7 @@ describe("StorageDatabase background checkpoints", () => {
     expect((await copied.promise).checkpointed).toBeGreaterThan(0);
     db.close();
     await workers[0]!.exited;
-    expect(Bun.file(`${db.path}-wal`).size).toBe(0);
+    expectNoOpenConnection(db.path);
   });
 
   test("connections to the same resolved file share a worker until the last close", async () => {
@@ -211,7 +237,7 @@ describe("StorageDatabase background checkpoints", () => {
     second.close();
     expect(workers[0]!.isRunning()).toBe(false);
     await workers[0]!.exited;
-    expect(Bun.file(`${second.path}-wal`).size).toBe(0);
+    expectNoOpenConnection(second.path);
   });
 
   test("the shared worker retries after an independent checkpoint holds the lock", async () => {
@@ -241,7 +267,10 @@ describe("StorageDatabase background checkpoints", () => {
     second.writeStore("fixture", { version: 2 });
 
     // RESTART holds the checkpoint lock while its busy handler waits for
-    // the old reader. The production PASSIVE worker must report busy.
+    // the old reader. The production PASSIVE worker must report busy. Taking
+    // that lock never waits, so a RESTART that meets a PASSIVE pass already
+    // running returns busy at once (flake 10017): ask again until the reader
+    // is gone and one completes.
     const source = URL.createObjectURL(
       new Blob(
         [
@@ -251,7 +280,7 @@ describe("StorageDatabase background checkpoints", () => {
         const db = new Database(file);
         db.exec("PRAGMA busy_timeout = 10000");
         db.query("SELECT revision FROM stores WHERE name = 'fixture'").get();
-        db.query("PRAGMA wal_checkpoint(RESTART)").get();
+        while (db.query("PRAGMA wal_checkpoint(RESTART)").get().busy) {}
         db.close();
         process.exit(0);
       };

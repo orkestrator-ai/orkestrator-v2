@@ -1,8 +1,11 @@
 import type { Locator } from "@playwright/test";
+import { definePaintedFrames, type EachPaintedFrame } from "./painted-frames";
 
 export interface AnchorProbeResult {
   /** Samples taken (the trace below keeps at most `capacity`). */
   count: number;
+  /** Samples taken while a matching element was animating. */
+  activeCount: number;
   /** Samples where the anchor was not connected. */
   missing: number;
   /** Largest |offset - expected| over every sample, CSS px. */
@@ -13,9 +16,9 @@ export interface AnchorProbeResult {
 }
 
 /**
- * Starts sampling one anchor's offset from the scroller's top, once per frame,
- * just after paint (a task posted from `requestAnimationFrame`), so it reads
- * what the reader saw rather than an unpainted intermediate layout. Reads one
+ * Starts sampling one anchor's offset from the scroller's top, once per
+ * painted frame (`painted-frames.ts`), so it reads what the reader saw rather
+ * than an unpainted intermediate layout. Reads one
  * anchor and the scroller only; stores a bounded numeric ring buffer and never
  * touches React. Stop it with `stopAnchorProbe`.
  *
@@ -23,9 +26,15 @@ export interface AnchorProbeResult {
  * with `css:`, a selector resolved inside the scroller. The anchor must be
  * visible when the probe starts.
  */
-export async function startAnchorProbe(scroller: Locator, anchor: string, capacity = 2048) {
+export async function startAnchorProbe(
+  scroller: Locator,
+  anchor: string,
+  animationSelector?: string,
+) {
+  const capacity = 2048;
+  await scroller.evaluate(definePaintedFrames);
   await scroller.evaluate(
-    (el, { anchor, capacity }) => {
+    (el, { anchor, animationSelector, capacity }) => {
       const resolve = () =>
         anchor.startsWith("css:")
           ? el.querySelector<HTMLElement>(anchor.slice(4))
@@ -38,10 +47,11 @@ export async function startAnchorProbe(scroller: Locator, anchor: string, capaci
       if (!first) throw new Error("Anchor must be visible before measurement");
       const expected = offsetOf(first);
       const samples = new Float64Array(capacity * 3);
-      const state = { count: 0, missing: 0, maxError: 0, running: true, frame: 0 };
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => {
-        if (!state.running) return;
+      const state = { count: 0, activeCount: 0, missing: 0, maxError: 0 };
+      const { __eachPaintedFrame: eachPaintedFrame } = window as unknown as {
+        __eachPaintedFrame: EachPaintedFrame;
+      };
+      const stopSampling = eachPaintedFrame(() => {
         const anchor = resolve();
         const offset = anchor?.isConnected ? offsetOf(anchor) : Number.NaN;
         if (!Number.isFinite(offset)) state.missing += 1;
@@ -51,13 +61,21 @@ export async function startAnchorProbe(scroller: Locator, anchor: string, capaci
         samples[slot + 1] = offset;
         samples[slot + 2] = el.scrollTop;
         state.count += 1;
-        state.frame = requestAnimationFrame(() => channel.port2.postMessage(0));
-      };
-      state.frame = requestAnimationFrame(() => channel.port2.postMessage(0));
+        if (
+          animationSelector &&
+          Array.from(el.querySelectorAll(animationSelector)).some((element) =>
+            element.getAnimations().some((animation) => {
+              const progress = animation.effect?.getComputedTiming().progress;
+              return progress != null && progress > 0 && progress < 1;
+            }),
+          )
+        ) {
+          state.activeCount += 1;
+        }
+      });
       (window as unknown as { __anchorProbe: unknown }).__anchorProbe = {
         stop() {
-          state.running = false;
-          cancelAnimationFrame(state.frame);
+          stopSampling();
           const kept = Math.min(state.count, capacity);
           const start = state.count - kept;
           const trace = Array.from({ length: kept }, (_, index) => {
@@ -65,16 +83,14 @@ export async function startAnchorProbe(scroller: Locator, anchor: string, capaci
             return [samples[slot]!, samples[slot + 1]!, samples[slot + 2]!];
           });
           return {
-            count: state.count,
-            missing: state.missing,
-            maxError: state.maxError,
+            ...state,
             expected,
             trace,
           };
         },
       };
     },
-    { anchor, capacity },
+    { anchor, animationSelector, capacity },
   );
 }
 

@@ -7,7 +7,7 @@
  * Recovery is always proved from the published file, never from a drain.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { loadPersistedState, usePersistenceFsForTests } from "./persistence.js";
+import { usePersistenceFsForTests } from "./persistence.js";
 import { clientSessionKeys, sessions, type SessionState } from "./state.js";
 import { attachFake } from "./testing/fake-agent.js";
 import {
@@ -26,12 +26,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await harness.close();
 });
-
-async function restartFromDisk(): Promise<void> {
-  sessions.clear();
-  clientSessionKeys.clear();
-  await loadPersistedState();
-}
 
 function prompt(state: SessionState, requestId: string): Promise<Response> {
   return harness.call(`/session/${state.id}/prompt`, {
@@ -70,7 +64,7 @@ describe("cancel and close racing a held publication", () => {
       expect(agent.sends).toHaveLength(0);
       expect(agent.cancels).toBe(0);
 
-      await restartFromDisk();
+      await harness.restart();
       expect(sessions.has(state.id)).toBe(false);
       expect(clientSessionKeys.has("tab-1")).toBe(false);
     } finally {
@@ -158,7 +152,7 @@ describe("steering at capacity across a restart", () => {
     expect((await steer("parked")).status).toBe(429);
     expect(delivered).toHaveLength(256);
 
-    await restartFromDisk();
+    await harness.restart();
     const restored = sessions.get(state.id)!;
     // Stand in for the same run being re-adopted after the restart.
     restored.status = "running";
@@ -190,7 +184,7 @@ describe("incremental reads of a shed transcript", () => {
       kept.messages.push(bigMessage(`${key}-m`, chunk));
     }
     await harness.createSession({ clientSessionKey: "trigger" });
-    await restartFromDisk();
+    await harness.restart();
 
     const restored = sessions.get(shed.id)!;
     expect(restored.messages).toEqual([]);

@@ -82,14 +82,16 @@ test("discards the partial output of an oversized read whose unzip still exits 0
   // Flake 10001: an overflowing read stops the child, but a child that
   // finishes or handles the stop by exiting 0 left only the exit status to
   // check, so the truncated output was counted. A stand-in `unzip` exits 0
-  // when it is stopped, which is that outcome on demand.
+  // when it is stopped, which is that outcome on demand. The overflow closes
+  // the pipe as well as sending TERM, so it must ignore SIGPIPE: whichever
+  // arrived first decided the exit status (flake 10006).
   const root = await artifacts();
   await failedCase(root, "oversized", { "test.trace": aborted });
   const bin = await artifacts();
   const line = aborted.trimEnd().replaceAll('"', '\\"');
   await writeFile(
     path.join(bin, "unzip"),
-    `#!/bin/sh\ntrap 'exit 0' TERM\ni=0\nwhile [ $i -lt 2000 ]; do printf '%s\\n' "${line}"; i=$((i+1)); done\n`,
+    `#!/bin/sh\ntrap '' PIPE\ntrap 'exit 0' TERM\nexec 2>/dev/null\ni=0\nwhile [ $i -lt 2000 ]; do printf '%s\\n' "${line}"; i=$((i+1)); done\nexit 0\n`,
     { mode: 0o755 },
   );
   const original = process.env.PATH;

@@ -158,6 +158,14 @@ interface EnvironmentCreationState {
   activeCreations: number;
 }
 
+interface ProjectListReads {
+  pending: number;
+  issued: number;
+  applied: number;
+  introducedByList: Set<string>;
+  deletedAt: Map<string, number>;
+}
+
 interface LifecycleAttemptState {
   attempt: number;
   revision: number;
@@ -181,6 +189,7 @@ interface EnvironmentNode {
   readonly environments: StoreApi<EnvironmentState>;
   readonly projects: StoreApi<ProjectState>;
   readonly creationByProject: Map<string, EnvironmentCreationState>;
+  readonly listReadsByProject: Map<string, ProjectListReads>;
   readonly lifecycleAttempts: Map<string, LifecycleAttemptState>;
   readonly reportedLifecycleErrors: Map<string, string | ForegroundLifecycleErrorReport>;
   setupSnapshotReconciliation: Promise<void> | null;
@@ -192,6 +201,7 @@ const environmentNode = defineScopedSlot<EnvironmentNode>("environment-lifecycle
   environments: scope.store(environmentStore),
   projects: scope.store(projectStore),
   creationByProject: new Map(),
+  listReadsByProject: new Map(),
   lifecycleAttempts: new Map(),
   reportedLifecycleErrors: new Map(),
   setupSnapshotReconciliation: null,
@@ -322,7 +332,10 @@ export async function refreshEnvironmentSnapshot(
   ) {
     return;
   }
-  if (!snapshot) cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
+  if (!snapshot) {
+    noteEnvironmentDeleted(node, projectId, environmentId);
+    cleanupDeletedEnvironmentSubscriptions(environmentId, scope);
+  }
   store.applyEnvironmentSnapshot(
     environmentId,
     snapshot &&
@@ -330,6 +343,11 @@ export async function refreshEnvironmentSnapshot(
         .environment,
   );
   reconcileNodeLifecycleErrors(node);
+}
+
+function noteEnvironmentDeleted(node: EnvironmentNode, projectId: string, environmentId: string) {
+  const reads = node.listReadsByProject.get(projectId);
+  if (reads) reads.deletedAt.set(environmentId, reads.issued);
 }
 
 function beginLifecycleAttempt(node: EnvironmentNode, environmentId: string): number {
@@ -871,6 +889,19 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           .getEnvironmentsByProjectId(pid)
           .map((environment) => environment.id),
       );
+      let reads = node.listReadsByProject.get(pid);
+      if (!reads) {
+        reads = {
+          pending: 0,
+          issued: 0,
+          applied: 0,
+          introducedByList: new Set(),
+          deletedAt: new Map(),
+        };
+        node.listReadsByProject.set(pid, reads);
+      }
+      const request = ++reads.issued;
+      reads.pending++;
       if (!silent) {
         setLoading(true);
         setError(null);
@@ -886,19 +917,23 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
           currentCreationState.generation === creationGeneration;
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
-        if (snapshotIsCurrent) {
-          const listed = new Set(envs.map((environment) => environment.id));
-          // An environment listed here while the read was in flight (a project
+        if (snapshotIsCurrent && request > reads.applied) {
+          // A deletion read can settle before this list even when the row had
+          // never reached the store. Ignore it in lists already in flight.
+          const surviving = envs.filter(({ id }) => request > (reads.deletedAt.get(id) ?? 0));
+          const listed = new Set(surviving.map((environment) => environment.id));
+          // An environment added locally while the read was in flight (a project
           // home ensured by opening its project, a change announcement) is
           // newer than an answer without it. Dropping it would read as its
-          // deletion and close the project the user just opened. A real
-          // deletion is announced on its own.
-          const addedDuringRead = node.environments
-            .getState()
-            .getEnvironmentsByProjectId(pid)
-            .filter(({ id }) => !heldAtRequest.has(id) && !listed.has(id));
+          // deletion and close the project the user just opened. Rows from an
+          // earlier list are governed by this newer answer.
+          const current = node.environments.getState().getEnvironmentsByProjectId(pid);
+          const addedDuringRead = current.filter(
+            ({ id }) =>
+              !heldAtRequest.has(id) && !reads.introducedByList.has(id) && !listed.has(id),
+          );
           const next = [
-            ...envs.map(
+            ...surviving.map(
               (environment) =>
                 preserveLifecycleAttemptState(
                   node,
@@ -908,6 +943,13 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
             ),
             ...addedDuringRead,
           ];
+          const currentIds = new Set(current.map(({ id }) => id));
+          reads.applied = request;
+          reads.introducedByList = new Set(
+            surviving
+              .map(({ id }) => id)
+              .filter((id) => !currentIds.has(id) || reads.introducedByList.has(id)),
+          );
           cleanupSubscriptionsRemovedByProjectSnapshot(pid, next, scope);
           mergeEnvironmentsForProject(pid, next, true);
           reconcileNodeLifecycleErrors(node);
@@ -921,6 +963,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         }
         if (options.throwOnError) throw err;
       } finally {
+        if (--reads.pending === 0) node.listReadsByProject.delete(pid);
         if (!silent) {
           setLoading(false);
         }
@@ -1065,6 +1108,7 @@ export function useEnvironments(projectId: string | null, options: UseEnvironmen
         await deleteSessionsByEnvironment(environmentId);
 
         await environmentsApi(scope).deleteEnvironment(environmentId);
+        if (projectId) noteEnvironmentDeleted(node, projectId, environmentId);
         // The native chat subscriptions are deliberately owned by their stores
         // rather than by a mounted tab, so nothing else stops them. Their
         // desynced probe re-arms itself on every failure, which would otherwise

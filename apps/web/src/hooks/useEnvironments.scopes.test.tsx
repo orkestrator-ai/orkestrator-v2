@@ -6,11 +6,15 @@ import { cleanupNodeScopes, FakeNodeClient, renderInNodeScope } from "@/test/ren
 import { WindowScope } from "@/lib/node-scope/window-scope";
 import { startEnvironmentCleanupSelectionSync } from "@/lib/environment-cleanup-selection";
 import { ensureProjectHomeInStore } from "@/lib/project-home-ensures";
+import {
+  armWindowStartupAgentActivation,
+  hasWindowStartupAgentActivation,
+} from "@/lib/pane-selection-storage";
 import { environmentStore } from "@/stores/environmentStore";
 import { projectStore } from "@/stores/projectStore";
 import { uiStore } from "@/stores/uiStore";
 import type { Environment, Project } from "@/types";
-import { useEnvironments } from "./useEnvironments";
+import { refreshEnvironmentSnapshot, useEnvironments } from "./useEnvironments";
 import { useProjects } from "./useProjects";
 
 const NODE_A = "bk_environments-a" as BackendId;
@@ -206,3 +210,71 @@ test("a list read that began after an environment was listed still removes it", 
   expect(listed()).toEqual(["env-1"]);
   reload = null;
 });
+
+test.each(["older first", "newer first", "deletion announced"] as const)(
+  "overlapping project lists keep a deleted environment out (%s)",
+  async (order) => {
+    const answers: ((environments: Environment[]) => void)[] = [];
+    const client = new FakeNodeClient({
+      nodeId: NODE_A,
+      invoke: {
+        get_projects: [project("project-a")],
+        get_environments: () => new Promise<Environment[]>((resolve) => answers.push(resolve)),
+        get_environment_snapshot: null,
+      },
+    });
+    const { scope } = renderInNodeScope(<Lists label="a" />, {
+      windowScope: new WindowScope(),
+      client,
+      role: "leaf",
+    });
+    const listed = () => scope.store(environmentStore).getState().environments;
+    const descriptor = Object.getOwnPropertyDescriptor(window, "orkestrator");
+    Object.defineProperty(window, "orkestrator", {
+      configurable: true,
+      value: { isolatedViewState: true },
+    });
+    const stopSync = startEnvironmentCleanupSelectionSync(scope);
+    try {
+      await waitFor(() => expect(answers).toHaveLength(1));
+      let newer!: Promise<void>;
+      act(() => {
+        newer = reload!("p-1");
+      });
+      await waitFor(() => expect(answers).toHaveLength(2));
+      expect(listed()).toEqual([]);
+      const settleNewer = () =>
+        act(async () => {
+          answers[1]!([]);
+          await newer;
+        });
+      if (order === "newer first") await settleNewer();
+      if (order === "deletion announced") {
+        await act(() => refreshEnvironmentSnapshot("p-1", "env-1", scope));
+      }
+
+      await act(async () => answers[0]!([environment("gone")]));
+      if (order === "older first") {
+        expect(listed().map(({ id }) => id)).toEqual(["env-1"]);
+        act(() => {
+          scope.store(uiStore).getState().selectProject("p-1");
+          scope.store(uiStore).getState().selectEnvironment("env-1");
+          armWindowStartupAgentActivation("env-1", scope);
+        });
+        expect(hasWindowStartupAgentActivation("env-1", scope)).toBe(true);
+      } else {
+        expect(listed()).toEqual([]);
+      }
+      if (order !== "newer first") await settleNewer();
+
+      expect(listed()).toEqual([]);
+      expect(scope.store(uiStore).getState().selectedEnvironmentId).toBeNull();
+      expect(hasWindowStartupAgentActivation("env-1", scope)).toBe(false);
+    } finally {
+      stopSync();
+      reload = null;
+      if (descriptor) Object.defineProperty(window, "orkestrator", descriptor);
+      else delete window.orkestrator;
+    }
+  },
+);

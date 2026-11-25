@@ -377,6 +377,32 @@ describe("CI workflow contracts", () => {
     expect(source).not.toContain("secrets.");
   });
 
+  test("only the live PDF step lifts the runner's AppArmor user-namespace restriction", () => {
+    const steps = workflow("container-live-qualification").jobs.engine!.steps!;
+    const install = steps.findIndex((step) =>
+      step.run?.includes("bunx playwright install --with-deps chromium"),
+    );
+    const pdf = steps.findIndex((step) => step.run?.includes("preview-worker-pdf"));
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(pdf).toBeGreaterThan(install);
+    const policy = "kernel.apparmor_restrict_unprivileged_userns";
+    expect(steps.filter((step) => step.run?.includes(policy))).toEqual([steps[pdf]!]);
+    const run = steps[pdf]!.run!;
+    expect(run).toContain(`namespace_policy=$(sysctl -n ${policy})`);
+    const restore = `trap 'sudo sysctl --write ${policy}="$namespace_policy"' EXIT`;
+    expect(run).toContain(restore);
+    expect(run.indexOf(restore)).toBeLessThan(run.indexOf(`${policy}=0`));
+    expect(run.indexOf(`${policy}=0`)).toBeLessThan(
+      run.indexOf("unshare --user --map-root-user true"),
+    );
+    expect(run.indexOf("unshare --user --map-root-user true")).toBeLessThan(
+      run.indexOf("preview-worker-pdf"),
+    );
+    expect(steps.findIndex((step) => step.name?.includes("Docker daemon restart"))).toBeGreaterThan(
+      pdf,
+    );
+  });
+
   test("the scheduled live job runs every opt-in live container suite", () => {
     const source = read(".github/workflows/container-live-qualification.yml");
     const suites = readdirSync(join(import.meta.dir, "..", "..", "apps/backend/tests")).filter(

@@ -1,5 +1,119 @@
 import { expect, test } from "bun:test";
+import { once } from "node:events";
+import { createServer, type RequestListener } from "node:http";
 import { join } from "node:path";
+import { runBridgeFirstTurn } from "./claude-first-turn-bridge-probe.js";
+
+async function probeBridge(onRequest: RequestListener) {
+  const server = createServer(onRequest);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Missing loopback port");
+  let stopped = false;
+  return {
+    port: address.port,
+    token: "bridge-fixture-token",
+    exited: () => stopped,
+    stderr: () => "bridge fixture stderr",
+    async stop() {
+      if (stopped) return;
+      stopped = true;
+      const closed = once(server, "close");
+      server.close();
+      server.closeAllConnections();
+      await closed;
+    },
+  };
+}
+
+const probeBudgets = { startupMs: 500, turnMs: 500 };
+// The root test preload replaces AbortSignal with Happy DOM's implementation.
+const nativePlatform = (globalThis as Record<symbol, unknown>)[
+  Symbol.for("orkestrator.tests.native-web-platform")
+] as { AbortSignal: typeof AbortSignal } | undefined;
+const signalAfter = (ms: number) => (nativePlatform?.AbortSignal ?? AbortSignal).timeout(ms);
+
+async function startPrompt(start: () => Promise<unknown>): Promise<number> {
+  await start();
+  return 1;
+}
+
+test("a foreign auth reply is retried and a prompt refusal is reported immediately", async () => {
+  const foreign = await probeBridge((_, response) => response.writeHead(401).end());
+  const own = await probeBridge((request, response) => {
+    if (request.headers["x-orkestrator-claude-token"] !== "bridge-fixture-token") {
+      response.writeHead(401).end();
+      return;
+    }
+    switch (request.url) {
+      case "/global/auth-check":
+        response.end();
+        return;
+      case "/session/create":
+        response.end(JSON.stringify({ sessionId: "fixture" }));
+        return;
+      case "/session/fixture/prompt":
+        response.writeHead(409).end("fixture refusal");
+        return;
+      default:
+        response.writeHead(404).end();
+    }
+  });
+  const attempts = [foreign, own];
+  try {
+    await expect(
+      runBridgeFirstTurn(() => attempts.shift()!, startPrompt, probeBudgets, signalAfter),
+    ).rejects.toThrow("Prompt refused: 409 fixture refusal");
+    expect(attempts).toEqual([]);
+    expect(foreign.exited()).toBe(true);
+    expect(own.exited()).toBe(true);
+  } finally {
+    await Promise.all([foreign.stop(), own.stop()]);
+  }
+});
+
+test("a bridge that stalls before auth headers is stopped on the startup deadline", async () => {
+  let requested = false;
+  const bridge = await probeBridge(() => {
+    requested = true;
+  });
+  try {
+    await expect(
+      runBridgeFirstTurn(() => bridge, startPrompt, probeBudgets, signalAfter),
+    ).rejects.toThrow("The bridge did not answer within 500 ms: bridge fixture stderr");
+    expect(requested).toBe(true);
+    expect(bridge.exited()).toBe(true);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test("a bridge that stalls while reporting session state is stopped on the turn deadline", async () => {
+  let sentPartialBody = false;
+  const bridge = await probeBridge((request, response) => {
+    switch (request.url) {
+      case "/session/create":
+        response.end(JSON.stringify({ sessionId: "fixture" }));
+        return;
+      case "/session/fixture":
+        response.write('{"status":');
+        sentPartialBody = true;
+        return;
+      default:
+        response.end();
+    }
+  });
+  try {
+    await expect(
+      runBridgeFirstTurn(() => bridge, startPrompt, probeBudgets, signalAfter),
+    ).rejects.toThrow("The bridge session did not settle within 500 ms");
+    expect(sentPartialBody).toBe(true);
+    expect(bridge.exited()).toBe(true);
+  } finally {
+    await bridge.stop();
+  }
+});
 
 // Runs the pinned Claude CLI for real (no credentials, a local scripted model).
 // To-do 0005 closed the warm first turn on what a spare does and refuses; when

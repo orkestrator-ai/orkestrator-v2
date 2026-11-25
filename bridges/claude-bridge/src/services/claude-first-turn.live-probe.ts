@@ -33,6 +33,8 @@ import {
   type SpareProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { runBridgeFirstTurn } from "./claude-first-turn-bridge-probe.js";
+
 const RESULT_SENTINEL = "__FIRST_TURN_RESULT__";
 const CLI_PID_SENTINEL = "__FIRST_TURN_CLI_PID__";
 const STALLED_SENTINEL = "__FIRST_TURN_STALLED__";
@@ -453,27 +455,8 @@ async function compareSdk(fx: Fixture, name: string, cwd: string, extra: Partial
   };
 }
 
-/**
- * A real bridge process on a port of its own. The port is released before the
- * bridge binds it, so another process (the other bridge variant included) can
- * take it first: that start is retried on a fresh port. Health is asked with
- * this bridge's token on a route that checks it, because whatever took the
- * port may answer the open health route too, and a prompt refused by it would
- * only show as a model request that never comes.
- */
-async function startBridge(fx: Fixture, cwd: string) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      return await startBridgeOnce(fx, cwd);
-    } catch (error) {
-      if (!(error instanceof PortTakenError) || attempt >= 5) throw error;
-    }
-  }
-}
-
-class PortTakenError extends Error {}
-
-async function startBridgeOnce(fx: Fixture, cwd: string) {
+/** Start an owned bridge child on a fresh loopback port. */
+function launchBridge(fx: Fixture, cwd: string) {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = probe.port as number;
   probe.stop(true);
@@ -495,77 +478,26 @@ async function startBridgeOnce(fx: Fixture, cwd: string) {
   });
   fx.bridgeChildren.add(child);
   child.once("exit", () => fx.bridgeChildren.delete(child));
-  const call = (path: string, init?: RequestInit) =>
-    fetch(`http://127.0.0.1:${port}${path}`, {
-      ...init,
-      headers: { "content-type": "application/json", "X-Orkestrator-Claude-Token": token },
-    });
-  const startedAt = performance.now();
-  while (performance.now() - startedAt < BRIDGE_START_DEADLINE_MS) {
-    const status = await call("/global/auth-check").then(
-      (response) => response.status,
-      () => undefined,
-    );
-    // A foreign server answered; ours cannot have the port.
-    if (status === 401) {
-      child.kill();
-      throw new PortTakenError(`Port ${port} belongs to another server`);
-    }
-    if (status === 200 && child.exitCode === null) return { call, stop: () => child.kill() };
-    if (child.exitCode !== null || child.signalCode !== null) {
-      // Let the bind failure it printed on the way out arrive.
-      await Bun.sleep(250);
-      const taken = /Is port \d+ in use\?|EADDRINUSE/.test(stderrTail);
-      const message = `The bridge exited before it answered: ${stderrTail}`;
-      throw taken ? new PortTakenError(message) : new Error(message);
-    }
-    await Bun.sleep(25);
-  }
-  child.kill();
-  throw new Error(`The bridge did not answer within ${BRIDGE_START_DEADLINE_MS} ms: ${stderrTail}`);
+  let spawnFailed = false;
+  child.once("error", (error) => {
+    spawnFailed = true;
+    stderrTail = (stderrTail + error.message).slice(-4_000);
+    fx.bridgeChildren.delete(child);
+  });
+  return {
+    port,
+    token,
+    exited: () => spawnFailed || child.exitCode !== null || child.signalCode !== null,
+    stderr: () => stderrTail,
+    stop: () => stopChild(child),
+  };
 }
 
-/** The prompt's acceptance; a refusal is reported at once, not as a missing model request. */
-async function accepted(response: Promise<Response>): Promise<Response> {
-  const answer = await response;
-  if (!answer.ok) throw new Error(`Prompt refused: ${answer.status} ${await answer.text()}`);
-  return answer;
-}
-
-async function bridgeRun(fx: Fixture, cwd: string) {
-  const bridge = await startBridge(fx, cwd);
-  try {
-    const created = (await (
-      await bridge.call("/session/create", { method: "POST", body: "{}" })
-    ).json()) as { sessionId: string };
-    const send = (prompt: string) =>
-      bridge.call(`/session/${created.sessionId}/prompt`, {
-        method: "POST",
-        body: JSON.stringify({ prompt, permissionMode: "acceptEdits", model: "haiku" }),
-      });
-    let answered: Promise<Response> | undefined;
-    const firstMs = await fx.untilModelCall(() => (answered = accepted(send("Say ok."))));
-    const firstStatus = (await answered!).status;
-    const settling = performance.now();
-    for (;;) {
-      const state = (await (await bridge.call(`/session/${created.sessionId}`)).json()) as {
-        status?: string;
-      };
-      if (state.status === "idle") break;
-      if (performance.now() - settling > TURN_DEADLINE_MS) {
-        throw new Error(
-          `The bridge session was still ${state.status} after ${TURN_DEADLINE_MS} ms`,
-        );
-      }
-      await Bun.sleep(25);
-    }
-    const followUpMs = await fx.untilModelCall(() => (answered = accepted(send("Say ok again."))));
-    const followUpStatus = (await answered!).status;
-    return { firstMs, followUpMs, firstStatus, followUpStatus };
-  } finally {
-    bridge.stop();
-    await Bun.sleep(100);
-  }
+function bridgeRun(fx: Fixture, cwd: string) {
+  return runBridgeFirstTurn(() => launchBridge(fx, cwd), fx.untilModelCall, {
+    startupMs: BRIDGE_START_DEADLINE_MS,
+    turnMs: TURN_DEADLINE_MS,
+  });
 }
 
 async function compareBridge(fx: Fixture, name: string, cwd: string) {

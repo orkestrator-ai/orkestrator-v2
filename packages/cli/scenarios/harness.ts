@@ -440,10 +440,13 @@ export class CliDriver {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const deadline = setTimeout(
-      () => child.kill("SIGKILL"),
-      options.timeoutMs ?? this.commandTimeoutMs,
-    );
+    let killed = false;
+    const killIfRunning = () => {
+      if (killed || child.exitCode !== null || child.signalCode !== null) return;
+      child.kill("SIGKILL");
+      killed = true;
+    };
+    const deadline = setTimeout(killIfRunning, options.timeoutMs ?? this.commandTimeoutMs);
     const bounded = async (stream: ReadableStream<Uint8Array>) => {
       const text = await new Response(stream).text();
       return text.length > MAX_CAPTURE_BYTES ? text.slice(-MAX_CAPTURE_BYTES) : text;
@@ -467,24 +470,41 @@ export class CliDriver {
         (options.timeoutMs ?? this.commandTimeoutMs) + UNSETTLED_GRACE_MS,
       );
     });
-    const [stdout, stderr, code] = await Promise.race([
-      Promise.all([
-        settling("stdout", bounded(child.stdout)),
-        settling(
-          "stderr",
-          signal
-            ? captureUntilObserving(child.stderr, () => {
-                if (child.exitCode === null && child.signalCode === null) child.kill(signal);
-              })
-            : bounded(child.stderr),
-        ),
-        settling("exit", child.exited),
-      ]),
-      watchdog,
-    ]).finally(() => {
-      clearTimeout(deadline);
-      clearTimeout(unsettled);
-    });
+    const ends = [
+      settling("stdout", bounded(child.stdout)),
+      settling(
+        "stderr",
+        signal
+          ? captureUntilObserving(child.stderr, () => {
+              if (!killed && child.exitCode === null && child.signalCode === null)
+                child.kill(signal);
+            })
+          : bounded(child.stderr),
+      ),
+      settling("exit", child.exited),
+    ] as const;
+    const [stdout, stderr, code] = await Promise.race([Promise.all(ends), watchdog])
+      .catch(async (error: unknown) => {
+        if (!killed) {
+          let drain: ReturnType<typeof setTimeout> | undefined;
+          try {
+            killIfRunning();
+            await Promise.race([
+              Promise.allSettled(ends),
+              new Promise<void>((resolve) => {
+                drain = setTimeout(resolve, UNSETTLED_GRACE_MS);
+              }),
+            ]);
+          } finally {
+            clearTimeout(drain);
+          }
+        }
+        throw error;
+      })
+      .finally(() => {
+        clearTimeout(deadline);
+        clearTimeout(unsettled);
+      });
     const result: CliResult = {
       argv,
       code,

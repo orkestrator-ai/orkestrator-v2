@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import type { ElectronApplication } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 
 /**
  * Names a lost window focus in a failed focus expectation.
@@ -73,22 +73,34 @@ export function readFrontApplication(
   return { kind: "front", application };
 }
 
-/** What the window and the desktop say about focus right now. */
+/**
+ * What the case's host window and the desktop say about focus right now.
+ *
+ * The host is named by its page: `BrowserWindow.getAllWindows()` has no
+ * creation order (on Linux it lists the newest window first), so an index
+ * picks another window as soon as the app has two (flake 10057).
+ */
 export async function readWindowFocus(
   app: ElectronApplication,
+  hostPage: Page,
   readFront: () => FrontApplicationReading = () => readFrontApplication(),
 ): Promise<WindowFocusFacts> {
-  const windows = await app.evaluate(({ BrowserWindow }) => {
-    const host = BrowserWindow.getAllWindows()[0];
-    return {
-      // The .bin/electron launcher is a separate Node process. macOS names
-      // this main process, so sample its identity alongside the window facts.
-      electronPid: process.pid,
-      windowFocused: host !== undefined && !host.isDestroyed() && host.isFocused(),
-      appHasFocusedWindow: BrowserWindow.getFocusedWindow() !== null,
-    };
-  });
-  return { ...windows, front: readFront() };
+  const host = await app.browserWindow(hostPage);
+  try {
+    const windows = await app.evaluate(
+      ({ BrowserWindow }, window) => ({
+        // The .bin/electron launcher is a separate Node process. macOS names
+        // this main process, so sample its identity alongside the window facts.
+        electronPid: process.pid,
+        windowFocused: !window.isDestroyed() && window.isFocused(),
+        appHasFocusedWindow: BrowserWindow.getFocusedWindow() !== null,
+      }),
+      host,
+    );
+    return { ...windows, front: readFront() };
+  } finally {
+    await host.dispose();
+  }
 }
 
 function describeFront(facts: WindowFocusFacts): string {
@@ -140,13 +152,14 @@ function stackFrames(stack: string | undefined): string {
 export async function explainLostFocus(
   error: unknown,
   app: ElectronApplication,
+  hostPage: Page,
   focusedAtStart: boolean | undefined,
   readFront?: () => FrontApplicationReading,
 ): Promise<unknown> {
   if (focusedAtStart === undefined || !(error instanceof Error)) return error;
   let facts: WindowFocusFacts;
   try {
-    facts = await readWindowFocus(app, readFront);
+    facts = await readWindowFocus(app, hostPage, readFront);
   } catch {
     return error;
   }

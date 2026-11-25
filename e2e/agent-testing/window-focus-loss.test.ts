@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ElectronApplication } from "playwright";
+import type { ElectronApplication, Page } from "playwright";
 import {
   describeLostFocus,
   explainLostFocus,
@@ -25,15 +25,50 @@ function facts(overrides: Partial<WindowFocusFacts> = {}): WindowFocusFacts {
   };
 }
 
-/** An Electron app whose main process answers `readWindowFocus` with these windows. */
+const hostPage = { name: "host page" } as unknown as Page;
+
+interface FakeWindow {
+  isDestroyed(): boolean;
+  isFocused(): boolean;
+}
+
+/**
+ * An Electron app that runs `readWindowFocus`'s own main-process function
+ * against a host window and, as on Linux, a newer window listed before it.
+ */
 function fakeApp(
   windows: { windowFocused: boolean; appHasFocusedWindow: boolean },
   mainPid = 1000,
 ) {
-  return {
-    evaluate: async () => ({ ...windows, electronPid: mainPid }),
+  const window = (focused: boolean): FakeWindow => ({
+    isDestroyed: () => false,
+    isFocused: () => focused,
+  });
+  const host = window(windows.windowFocused);
+  const newer = window(windows.appHasFocusedWindow && !windows.windowFocused);
+  const all = [newer, host];
+  const electron = {
+    BrowserWindow: {
+      getAllWindows: () => all,
+      getFocusedWindow: () => all.find((candidate) => candidate.isFocused()) ?? null,
+    },
+  };
+  let disposed = 0;
+  const app = {
+    browserWindow: async (page: Page) => {
+      expect(page).toBe(hostPage);
+      return { host, dispose: async () => void (disposed += 1) };
+    },
+    evaluate: async (
+      read: (
+        modules: typeof electron,
+        window: FakeWindow | undefined,
+      ) => Omit<WindowFocusFacts, "front">,
+      handle?: { host: FakeWindow },
+    ) => ({ ...read(electron, handle?.host), electronPid: mainPid }),
     process: () => ({ pid: 999 }),
   } as unknown as ElectronApplication;
+  return Object.assign(app, { disposedHandles: () => disposed });
 }
 
 describe("window focus loss", () => {
@@ -98,13 +133,25 @@ describe("window focus loss", () => {
     const app = fakeApp({ windowFocused: false, appHasFocusedWindow: true }, 1000);
     expect(app.process().pid).toBe(999);
     const front = () => ({ kind: "front", application: { name: "Electron", pid: 1000 } }) as const;
-    expect((await readWindowFocus(app, front)).electronPid).toBe(1000);
-    const explained = await explainLostFocus(new Error("inactive"), app, true, front);
+    expect((await readWindowFocus(app, hostPage, front)).electronPid).toBe(1000);
+    const explained = await explainLostFocus(new Error("inactive"), app, hostPage, true, front);
     expect(explained).toBeInstanceOf(Error);
     const message = (explained as Error).message;
     expect(message).toContain("macOS still has this Electron app (pid 1000) in front");
     expect(message).not.toContain("another application took the key window");
     expect(message).not.toContain("pid 999");
+  });
+
+  test("reads the named host window, not whichever window the app lists first", async () => {
+    const front = () => ({ kind: "not-macos" }) as const;
+    const behind = fakeApp({ windowFocused: false, appHasFocusedWindow: true });
+    expect(await readWindowFocus(behind, hostPage, front)).toMatchObject({
+      windowFocused: false,
+      appHasFocusedWindow: true,
+    });
+    expect(behind.disposedHandles()).toBe(1);
+    const ahead = fakeApp({ windowFocused: true, appHasFocusedWindow: true });
+    expect((await readWindowFocus(ahead, hostPage, front)).windowFocused).toBe(true);
   });
 
   test("off macOS, names the loss without a front application", () => {
@@ -123,6 +170,7 @@ describe("window focus loss", () => {
     const explained = await explainLostFocus(
       original,
       fakeApp({ windowFocused: false, appHasFocusedWindow: false }),
+      hostPage,
       true,
       () => ({ kind: "front", application: { name: "Other App", pid: 4242 } }),
     );
@@ -141,15 +189,16 @@ describe("window focus loss", () => {
     const original = new Error("unrelated");
     const front = () => ({ kind: "not-macos" }) as const;
     const focused = fakeApp({ windowFocused: true, appHasFocusedWindow: true });
-    expect(await explainLostFocus(original, focused, true, front)).toBe(original);
+    expect(await explainLostFocus(original, focused, hostPage, true, front)).toBe(original);
     const unfocused = fakeApp({ windowFocused: false, appHasFocusedWindow: false });
-    expect(await explainLostFocus(original, unfocused, undefined, front)).toBe(original);
+    expect(await explainLostFocus(original, unfocused, hostPage, undefined, front)).toBe(original);
     const closed = {
+      browserWindow: async () => ({ dispose: async () => undefined }),
       evaluate: async () => {
         throw new Error("Target page, context or browser has been closed");
       },
       process: () => ({ pid: 1000 }),
     } as unknown as ElectronApplication;
-    expect(await explainLostFocus(original, closed, true, front)).toBe(original);
+    expect(await explainLostFocus(original, closed, hostPage, true, front)).toBe(original);
   });
 });

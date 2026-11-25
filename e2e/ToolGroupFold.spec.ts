@@ -196,28 +196,42 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     if (reducedMotion === "no-preference") {
       const reversed = row.evaluate(
         (element, selector) =>
-          new Promise<boolean>((resolve) => {
-            const frame = () => {
-              const body = element.querySelector(selector);
-              const running = body
-                ?.getAnimations()
-                .some((animation) => animation.playState === "running");
-              const button = Array.from(element.querySelectorAll("button")).find((candidate) =>
-                candidate.textContent!.trim().startsWith("Fold 3 tool calls:"),
-              );
-              if (!running || !button) {
-                requestAnimationFrame(frame);
-                return;
-              }
-              button.click();
-              resolve(true);
-            };
-            requestAnimationFrame(frame);
-          }),
+          new Promise<{ time: number; duration: number; height: number; fullHeight: number }>(
+            (resolve) => {
+              const frame = () => {
+                const body = element.querySelector(selector);
+                const opening = body
+                  ?.getAnimations()
+                  .find(
+                    (animation) =>
+                      animation instanceof CSSAnimation &&
+                      animation.animationName === "tool-group-fold-open",
+                  );
+                const time = Number(opening?.currentTime ?? 0);
+                const duration = Number(opening?.effect?.getComputedTiming().activeDuration ?? 0);
+                const height = body?.getBoundingClientRect().height ?? 0;
+                const fullHeight = body?.scrollHeight ?? 0;
+                const button = Array.from(element.querySelectorAll("button")).find((candidate) =>
+                  candidate.textContent!.trim().startsWith("Fold 3 tool calls:"),
+                );
+                if (!(button && time > 0 && time < duration && height > 0 && height < fullHeight)) {
+                  requestAnimationFrame(frame);
+                  return;
+                }
+                button.click();
+                resolve({ time, duration, height, fullHeight });
+              };
+              requestAnimationFrame(frame);
+            },
+          ),
         contentSelector,
       );
       await show.click();
-      expect(await reversed).toBe(true);
+      const { time, duration, height, fullHeight } = await reversed;
+      expect(time).toBeGreaterThan(0);
+      expect(time).toBeLessThan(duration);
+      expect(height).toBeGreaterThan(0);
+      expect(height).toBeLessThan(fullHeight);
     } else {
       await show.click();
       await fold.click();
@@ -283,7 +297,11 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
       // The tail remains inside overscan, so this exercises an actual mounted group.
       const tail = group;
       await expect(tail.getByRole("button", { name: "Exec Command success" })).toHaveCount(2);
-      await startAnchorProbe(scroller, `css:[data-chat-message-index="${anchorIndex}"]`);
+      await startAnchorProbe(
+        scroller,
+        `css:[data-chat-message-index="${anchorIndex}"]`,
+        '[data-chat-message-key="live-fold"] .tool-group-fold-content[data-state="closed"]',
+      );
       await page.getByRole("button", { name: "Grow tool group" }).click();
       await expect(tail.getByRole("button", { name: /^Show 3 tool calls:/ })).toHaveAttribute(
         "aria-expanded",
@@ -292,6 +310,10 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
       await expect(tail.getByRole("button", { name: "Exec Command success" })).toHaveCount(0);
       await settleFold(page);
       const probe = await stopAnchorProbe(scroller);
+      expect(probe.count, "painted anchor samples").toBeGreaterThan(0);
+      if (reducedMotion === "no-preference") {
+        expect(probe.activeCount, "painted anchor samples during the fold").toBeGreaterThan(1);
+      }
       expect(probe.missing).toBe(0);
       expect(probe.maxError).toBeLessThanOrEqual(2);
       await expect.poll(() => bottomGap(page)).toBeGreaterThan(100);

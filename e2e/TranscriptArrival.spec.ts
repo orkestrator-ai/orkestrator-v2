@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { definePaintedFrames, type EachPaintedFrame } from "./painted-frames";
-import { scrollDiagnostics, startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
+import { startAnchorProbe, stopAnchorProbe } from "./transcript-anchor-probe";
 
 const scrollerSelector = '[data-transcript-scroller="true"]';
 const arrivingRow = '[data-chat-message-key^="streamed-turn-"]';
@@ -10,6 +10,7 @@ declare global {
     __arrivalProbe?: {
       samples: Array<{ height: number; distance: number; animating: boolean }>;
       added: Array<{ row: boolean; inGroup: boolean }>;
+      initialHeight: number | null;
       stop: () => void;
     };
   }
@@ -38,10 +39,13 @@ async function distanceFromBottom(page: Page) {
  * scroller's distance from its end, and records every element the entrance
  * attribute is added to.
  */
-async function startArrivalProbe(page: Page, selector = arrivingRow) {
+async function startArrivalProbe(
+  page: Page,
+  { selector = arrivingRow, measureEntrance = false } = {},
+) {
   await page.evaluate(definePaintedFrames);
   await page.evaluate(
-    ({ scrollerSelector, selector }) => {
+    ({ scrollerSelector, selector, measureEntrance }) => {
       const samples: Array<{ height: number; distance: number; animating: boolean }> = [];
       const added: Array<{ row: boolean; inGroup: boolean }> = [];
       const { __eachPaintedFrame: eachPaintedFrame } = window as unknown as {
@@ -70,6 +74,26 @@ async function startArrivalProbe(page: Page, selector = arrivingRow) {
             row: target.hasAttribute("data-chat-message-index"),
             inGroup: target.closest(".tool-group-fold-content") !== null,
           });
+          if (measureEntrance && target.matches(selector)) {
+            const animation = target
+              .getAnimations()
+              .find(
+                (candidate) =>
+                  candidate instanceof CSSAnimation &&
+                  candidate.animationName === "transcript-arrival",
+              );
+            const time = animation?.currentTime;
+            if (animation && time != null) {
+              const startTime = animation.startTime;
+              // Measure the start geometry before paint and restore the live
+              // animation in the same task. The painted-frame probe can miss
+              // the earliest frames under load.
+              animation.currentTime = 0;
+              window.__arrivalProbe!.initialHeight = target.getBoundingClientRect().height;
+              animation.currentTime = time;
+              if (startTime !== null) animation.startTime = startTime;
+            }
+          }
         }
       });
       observer.observe(document.body, {
@@ -81,13 +105,14 @@ async function startArrivalProbe(page: Page, selector = arrivingRow) {
       window.__arrivalProbe = {
         samples,
         added,
+        initialHeight: null,
         stop() {
           stopSampling();
           observer.disconnect();
         },
       };
     },
-    { scrollerSelector, selector },
+    { scrollerSelector, selector, measureEntrance },
   );
 }
 
@@ -95,7 +120,7 @@ async function stopArrivalProbe(page: Page) {
   return page.evaluate(() => {
     const probe = window.__arrivalProbe!;
     probe.stop();
-    return { samples: probe.samples, added: probe.added };
+    return { samples: probe.samples, added: probe.added, initialHeight: probe.initialHeight };
   });
 }
 
@@ -117,23 +142,30 @@ async function openFollowing(page: Page, url: string) {
   await waitForFrames(page, 8);
 }
 
+async function paceSampledEntrances(page: Page) {
+  // Give the probe time to collect multiple valid paints on a busy worker.
+  // The keyframes, easing, and per-frame geometry assertions are the same.
+  await page.addStyleTag({ content: ":root { --transcript-arrival-duration: 900ms }" });
+}
+
 test("a row arriving for a follower grows in while the transcript stays at its end", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await openFollowing(page, "/streaming-transcript?arrivals");
-  await startArrivalProbe(page);
+  await paceSampledEntrances(page);
+  await startArrivalProbe(page, { measureEntrance: true });
   await page.getByRole("button", { name: "Append turn" }).click();
   await expect(page.locator(arrivingRow)).toBeVisible();
   await expect(page.locator("[data-transcript-arrival]")).toHaveCount(0);
   await waitForFrames(page, 4);
-  const { samples, added } = await stopArrivalProbe(page);
+  const { samples, added, initialHeight } = await stopArrivalProbe(page);
 
   expect(added).toEqual([{ row: true, inGroup: false }]);
   const finalHeight = samples.at(-1)!.height;
   expect(finalHeight).toBeGreaterThan(20);
-  // Drawn short first, never at full size before the entrance.
-  expect(samples[0]!.height).toBeLessThan(finalHeight * 0.75);
+  expect(initialHeight, "height at the start of the entrance").not.toBeNull();
+  expect(initialHeight!).toBeLessThan(finalHeight * 0.75);
   expect(samples.filter((sample) => sample.animating).length).toBeGreaterThan(4);
   for (let index = 1; index < samples.length; index++) {
     expect(samples[index]!.height).toBeGreaterThanOrEqual(samples[index - 1]!.height - 0.5);
@@ -193,20 +225,33 @@ test("a detached reader's row holds every painted frame while rows grow in below
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await openFollowing(page, "/streaming-transcript?long=1&arrivals");
+  await paceSampledEntrances(page);
   const scroller = page.locator(scrollerSelector);
-  await releaseFollow(page);
-  await page.getByRole("button", { name: "Scroll to tool history" }).click();
-  await expect(page.locator('[data-chat-message-index="40"]')).toBeVisible();
-  await expect
-    .poll(async () => (await scrollDiagnostics(scroller)).lastOutcome)
-    .toMatch(/converged|clamped/);
-  await startAnchorProbe(scroller, 'css:[data-chat-message-index="40"]');
+  // Stay near enough to the end that new rows mount inside overscan.
+  const box = (await scroller.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -48);
+  await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(20);
+  await waitForFrames(page);
+  const anchorIndex = await scroller.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    return Array.from(element.querySelectorAll<HTMLElement>("[data-chat-message-index]")).find(
+      (row) => row.getBoundingClientRect().bottom > top,
+    )!.dataset.chatMessageIndex;
+  });
+  await startAnchorProbe(
+    scroller,
+    `css:[data-chat-message-index="${anchorIndex}"]`,
+    `${arrivingRow}[data-transcript-arrival]`,
+  );
   for (let index = 0; index < 3; index++) {
     await page.getByRole("button", { name: "Append turn" }).click();
     await expect(page.getByTestId("transcript-row-count")).toHaveText(String(84 + index));
   }
-  await waitForFrames(page, 24);
+  await expect(scroller.locator(`${arrivingRow}[data-transcript-arrival]`)).toHaveCount(0);
+  await waitForFrames(page);
   const probe = await stopAnchorProbe(scroller);
+  expect(probe.activeCount, "painted samples during row entrances").toBeGreaterThan(1);
   expect(probe.missing).toBe(0);
   expect(probe.maxError).toBeLessThanOrEqual(2);
   await expect.poll(() => distanceFromBottom(page)).toBeGreaterThan(100);
@@ -217,20 +262,22 @@ test("a live authentication failure grows its notice and recovery card in one tr
 }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await openFollowing(page, "/streaming-transcript?arrivals");
+  await paceSampledEntrances(page);
   const selector = '[data-chat-message-key^="native-terminal:error:"]';
-  await startArrivalProbe(page, selector);
+  await startArrivalProbe(page, { selector, measureEntrance: true });
   await page.getByRole("button", { name: "Append authentication error" }).click();
   const row = page.locator(selector);
   await expect(row.getByRole("region", { name: "Sign in to Claude", exact: true })).toBeVisible();
   await expect(row).not.toHaveAttribute("data-transcript-arrival");
   await waitForFrames(page);
-  const { samples, added } = await stopArrivalProbe(page);
+  const { samples, added, initialHeight } = await stopArrivalProbe(page);
   const height = samples.at(-1)!.height;
   expect(height).toBeGreaterThan(120);
   expect(added).toEqual([{ row: true, inGroup: false }]);
   // Includes the recovery card: an implicit second grid track would make the
-  // first frame almost full height and leave only the small notice growing.
-  expect(samples[0]!.height).toBeLessThan(height * 0.5);
+  // starting height almost as tall as the finished row.
+  expect(initialHeight, "height at the start of the auth-failure entrance").not.toBeNull();
+  expect(initialHeight!).toBeLessThan(height * 0.5);
   expect(samples.filter((sample) => sample.animating).length).toBeGreaterThan(4);
   for (let i = 1; i < samples.length; i++) {
     expect(samples[i]!.height).toBeGreaterThanOrEqual(samples[i - 1]!.height - 0.5);
@@ -291,7 +338,7 @@ test("content updates and another append preserve an active entrance and followi
 test("an entry entrance settles together with the automatic three-call fold", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await openFollowing(page, "/streaming-transcript?long=1&fold&arrivals");
-  await startArrivalProbe(page, '[data-chat-message-key="live-fold"]');
+  await startArrivalProbe(page, { selector: '[data-chat-message-key="live-fold"]' });
   await page.getByRole("button", { name: "Grow tool group" }).click();
   const show = page.getByRole("button", { name: /^Show 3 tool calls:/ });
   await expect(show).toHaveAttribute("aria-expanded", "false");

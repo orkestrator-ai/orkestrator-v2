@@ -516,6 +516,7 @@ for (const view of ["native", "reviewer"]) {
     await expect(load).toBeVisible();
     await page.waitForTimeout(800);
     const probe = await stopAnchorProbe(list);
+    expect(probe.count, "painted anchor samples across the history merge").toBeGreaterThan(0);
     expect(probe.missing).toBe(0);
     expect(probe.maxError).toBeLessThanOrEqual(2);
   });
@@ -540,6 +541,7 @@ for (const view of ["native", "reviewer"]) {
       await page.waitForTimeout(800);
       const probe = await stopAnchorProbe(list);
       const after = await foldedLine(list);
+      expect(probe.count, "painted anchor samples across the prompt merge").toBeGreaterThan(0);
       expect(probe.missing).toBe(0);
       // Where the list must stand to hold the line, as far as it can scroll.
       const hold = holdPosition(

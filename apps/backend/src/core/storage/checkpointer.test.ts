@@ -184,11 +184,20 @@ describe("startBackgroundCheckpoints", () => {
 });
 
 describe("StorageDatabase background checkpoints", () => {
-  test("are off under bun test unless asked for", async () => {
-    expect(backgroundCheckpointsByDefault()).toBe(false);
-    const db = openBackendDatabase(await dataDir());
-    cleanups.push(() => db.close());
-    expect(autocheckpoint(db.db)).toBe(DEFAULT_AUTOCHECKPOINT_PAGES);
+  test("are off in the test environment unless asked for", async () => {
+    const directory = await dataDir();
+    const previousNodeEnv = process.env.NODE_ENV;
+    // Direct Bun invocations can inherit NODE_ENV=production from the app.
+    process.env.NODE_ENV = "test";
+    try {
+      expect(backgroundCheckpointsByDefault()).toBe(false);
+      const db = openBackendDatabase(directory);
+      cleanups.push(() => db.close());
+      expect(autocheckpoint(db.db)).toBe(DEFAULT_AUTOCHECKPOINT_PAGES);
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   test("a backend database checkpoints off the event loop and stops on close", async () => {

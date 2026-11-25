@@ -424,11 +424,11 @@ function LinearLaneColumn({
       </div>
       <div
         className={cn(
-          "min-h-[200px] flex-1 overflow-y-auto rounded-lg p-1 transition-colors",
+          "min-h-[200px] flex-1 overflow-y-auto rounded-lg transition-colors",
           isTarget ? "bg-accent/20" : "bg-transparent",
         )}
       >
-        <div ref={setContentRef} className="min-h-full">
+        <div ref={setContentRef} className="min-h-full p-1">
           <div className="space-y-2">
             {lane.issues.map((issue) => (
               <LinearBoardCard

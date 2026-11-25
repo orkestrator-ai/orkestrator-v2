@@ -716,6 +716,14 @@ exit 1
             });
           return "queued";
         },
+        claimLinearMergedLabels: (_limit: number, expiresAt: Date) => {
+          const record = ledger[0]!;
+          return [
+            Object.assign(record, {
+              claim: { id: "1", owner: "local", expiresAt: expiresAt.toISOString() },
+            }),
+          ];
+        },
         settleLinearMergedLabel: () => {
           ledger[0]!.status = "applied";
           return true;
@@ -765,6 +773,7 @@ exit 1
             "issue-42",
             "merged",
             expect.any(AbortSignal),
+            expect.any(Function),
           );
           const ghLog = await fs.readFile(logPath, "utf8");
           expect(ghLog).toContain(

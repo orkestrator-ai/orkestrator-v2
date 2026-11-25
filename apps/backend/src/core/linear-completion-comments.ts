@@ -2,12 +2,10 @@
  * The completion comment of a Linear-sourced build (docs/architecture/tickets.md,
  * "Completion comments on Linear issues").
  *
- * The build posts it as it ends (`post_linear_completion_comment`). When that
- * fails (Linear is down, or this machine holds no Linear key) the comment is
- * queued in `linear-pending-comments`, which outlives the pipeline and its
- * environment. The drain here posts it once this machine can reach Linear;
- * on a machine with no key it stays due and the attached command node posts it
- * with its own (`linear-write-relay.ts`).
+ * The build stages its ending in `linear-pending-comments` before posting.
+ * The queue survives restart and environment removal. The local drain and
+ * attached command node use the same lease, and the queue keeps a delivery
+ * receipt until the pipeline status has been reconciled.
  *
  * Posting is safe to repeat: each run's comment carries a hidden marker per
  * ending, and every attempt looks for it first.
@@ -26,18 +24,28 @@ import {
   LINEAR_WRITE_MAX_RETRY_MS,
   LINEAR_WRITE_RETRY_MS,
   LINEAR_WRITE_TIMEOUT_MS,
+  raceAbort,
   LinearDrainLoop,
   linearWriteRetryDelay,
   type LinearDrainClock,
 } from "./linear-write-drain.js";
-import type { KanbanStorage, LinearCommentOutcome, LinearStorage } from "./storage/index.js";
+import {
+  ownsLinearWrite,
+  type KanbanStorage,
+  type LinearCommentOutcome,
+  type LinearStorage,
+  type LinearPendingComment,
+  type LinearWriteClaimRef,
+} from "./storage/index.js";
 
 const log = createLogger("linear");
 
 /** How long this machine's own attempt holds a comment; past it, it is due again. */
-const LOCAL_CLAIM_MS = 2 * LINEAR_WRITE_TIMEOUT_MS;
+const LINEAR_LOCAL_CLAIM_MS = 2 * LINEAR_WRITE_TIMEOUT_MS;
+const LINEAR_LOCAL_OWNER = "local";
 
 export interface LinearCommentsStorage {
+  getProject(projectId: string): Promise<{ id: string } | null>;
   kanban: Pick<
     KanbanStorage,
     "getLinearAuth" | "getLinearCompletionComment" | "saveLinearCompletionComment"
@@ -47,7 +55,9 @@ export interface LinearCommentsStorage {
     | "listLinearPendingComments"
     | "enqueueLinearPendingComment"
     | "claimLinearPendingComments"
-    | "settleLinearPendingComment"
+    | "recordLinearPendingCommentReceipt"
+    | "finishLinearPendingComment"
+    | "isProjectWriteFenced"
     | "deferLinearPendingComment"
   >;
 }
@@ -71,13 +81,22 @@ export type LinearCommentPosted = {
  * recorded. Runs after the pipeline's previous attempt on this machine.
  */
 export function postRecordedLinearCompletionComment(
-  storage: Pick<LinearCommentsStorage, "kanban">,
+  storage: Pick<LinearCommentsStorage, "kanban"> & {
+    linear?: Pick<LinearStorage, "listLinearPendingComments">;
+  },
   locks: Pick<IntegrationLocks, "withLinearCompletionComment">,
   requireApiKey: () => Promise<string>,
   { pipelineId, issueId, body, outcome }: LinearCompletionCommentInput,
   signal?: AbortSignal,
 ): Promise<LinearCompletionCommentResult> {
   return locks.withLinearCompletionComment(pipelineId, async () => {
+    const requireUnqueued = async () => {
+      const pending = await storage.linear?.listLinearPendingComments();
+      if (pending?.some((entry) => entry.pipelineId === pipelineId)) {
+        throw new Error("The Linear completion comment is already queued for delivery.");
+      }
+    };
+    await requireUnqueued();
     const existing = await storage.kanban.getLinearCompletionComment(pipelineId);
     // A failed run's comment says nothing about the completion that followed it.
     if (existing?.status === "posted" && existing.commentId && existing.outcome === outcome) {
@@ -94,6 +113,7 @@ export function postRecordedLinearCompletionComment(
         apiKey,
         { pipelineId, issueId, body, ...ending },
         signal,
+        requireUnqueued,
       );
       await storage.kanban.saveLinearCompletionComment({
         pipelineId,
@@ -106,13 +126,15 @@ export function postRecordedLinearCompletionComment(
       return result;
     } catch (error) {
       const message = sanitizeLinearError(error, apiKey);
-      await storage.kanban.saveLinearCompletionComment({
-        pipelineId,
-        issueId,
-        ...ending,
-        status: "failed",
-        error: message,
-      });
+      if (existing?.status !== "posted") {
+        await storage.kanban.saveLinearCompletionComment({
+          pipelineId,
+          issueId,
+          ...ending,
+          status: "failed",
+          error: message,
+        });
+      }
       throw new Error(message);
     }
   });
@@ -124,6 +146,7 @@ export function postRecordedLinearCompletionComment(
  */
 export class LinearCompletionComments {
   private storage: LinearCommentsStorage | null = null;
+  private readonly stop = new AbortController();
   private readonly loop: LinearDrainLoop;
   private posted: ((comment: LinearCommentPosted) => Promise<void>) | null = null;
 
@@ -149,98 +172,175 @@ export class LinearCompletionComments {
     this.posted = listener;
   }
 
-  /**
-   * A finished Linear-sourced build could not post its comment: keeps it.
-   * Returns what to tell the user, or null when it was not queued. Never throws.
-   */
-  async queue(
+  /** Stage the ending before attempting any mutation, including manual retries. */
+  async submit(
     storage: LinearCommentsStorage,
     pipeline: Pick<BuildPipeline, "id" | "projectId" | "source">,
-    comment: { outcome: LinearCommentOutcome; body: string; error: string },
-  ): Promise<string | null> {
-    const source = pipeline.source;
-    if (this.loop.closed || source?.type !== "linear") return null;
-    this.storage = storage;
+    ending: { outcome: LinearCommentOutcome; body: string },
+  ): Promise<LinearCompletionCommentResult> {
+    if (!(await this.enqueue(storage, pipeline, ending))) {
+      throw new Error("The Linear completion comment could not be queued");
+    }
     try {
-      const connected = Boolean((await storage.kanban.getLinearAuth())?.apiKey);
+      const apiKey = (await storage.kanban.getLinearAuth())?.apiKey;
+      if (!apiKey) {
+        throw new Error(
+          `${LINEAR_NOT_CONNECTED_HERE}. The comment is queued until this machine or its command node can post it.`,
+        );
+      }
       const now = this.loop.now();
-      const queued = storage.linear.enqueueLinearPendingComment(
+      const [record] = storage.linear.claimLinearPendingComments(
+        1,
+        new Date(now + LINEAR_LOCAL_CLAIM_MS),
+        new Date(now),
+        LINEAR_LOCAL_OWNER,
+        { pipelineId: pipeline.id, outcome: ending.outcome },
+      );
+      if (!record) {
+        throw new Error("The Linear completion comment is already queued for delivery.");
+      }
+      try {
+        const signal = AbortSignal.any([
+          this.stop.signal,
+          AbortSignal.timeout(LINEAR_WRITE_TIMEOUT_MS),
+        ]);
+        return await raceAbort((abort) => this.post(storage, apiKey, record, abort), signal);
+      } catch (error) {
+        throw new Error(
+          `${this.defer(storage, record, error, apiKey).replace(/[.\s]+$/, "")}. The comment is queued and will be retried.`,
+        );
+      }
+    } finally {
+      this.loop.request();
+    }
+  }
+
+  /** Restore a retained ending without forcing a retry or changing an existing queue entry. */
+  async restore(
+    storage: LinearCommentsStorage,
+    pipeline: Pick<BuildPipeline, "id" | "projectId" | "source">,
+    ending: { outcome: LinearCommentOutcome; body: string },
+  ): Promise<void> {
+    if (!(await this.enqueue(storage, pipeline, ending))) return;
+    const recorded = await storage.kanban.getLinearCompletionComment(pipeline.id);
+    if (
+      recorded?.status !== "posted" ||
+      recorded.outcome !== ending.outcome ||
+      !recorded.commentId ||
+      pipeline.source?.type !== "linear" ||
+      recorded.issueId !== pipeline.source.issueId
+    )
+      return;
+    const now = this.loop.now();
+    const [record] = storage.linear.claimLinearPendingComments(
+      1,
+      new Date(now + LINEAR_LOCAL_CLAIM_MS),
+      new Date(now),
+      LINEAR_LOCAL_OWNER,
+      { pipelineId: pipeline.id, outcome: ending.outcome },
+    );
+    if (record?.claim) {
+      this.recordReceipt(
+        storage,
+        record.outcome,
+        pipeline.id,
+        record.claim,
         {
-          pipelineId: pipeline.id,
-          projectId: pipeline.projectId,
-          issueId: source.issueId,
-          ...(source.issueIdentifier ? { issueIdentifier: source.issueIdentifier } : {}),
-          outcome: comment.outcome,
-          body: comment.body,
-        },
-        {
-          error: connected ? comment.error : LINEAR_NOT_CONNECTED_HERE,
-          // With no key here there is nothing to back off from: the command
-          // node may take it at its next pass.
-          nextAttemptAt: new Date(connected ? now + LINEAR_WRITE_RETRY_MS : now),
+          commentId: recorded.commentId,
+          postedAt: recorded.postedAt,
         },
         new Date(now),
       );
-      log.warn(
-        queued === "queued" ? "completion-comment.queued" : "completion-comment.queue-full",
-        {
-          pipelineId: pipeline.id,
-          issue: source.issueIdentifier ?? source.issueId,
-          connected,
-          reason: connected ? comment.error : LINEAR_NOT_CONNECTED_HERE,
-        },
-      );
-      if (queued !== "queued") return null;
-      this.loop.request();
-      return connected
-        ? `${comment.error.replace(/[.\s]+$/, "")}. The comment is queued and will be retried.`
-        : `${LINEAR_NOT_CONNECTED_HERE}. The comment is queued until this machine or its command node can post it.`;
-    } catch (error) {
-      log.warn("completion-comment.queue-failed", {
-        pipelineId: pipeline.id,
-        error: formatLogError(error),
-      });
-      return null;
     }
   }
 
-  /** The comment is in Linear, whoever posted it: drops it from the queue and tells the pipeline. */
-  async settle(
+  private async enqueue(
     storage: LinearCommentsStorage,
-    issueId: string,
-    comment: LinearCommentPosted,
-    record = false,
-  ): Promise<void> {
-    if (!storage.linear.settleLinearPendingComment(comment.pipelineId, comment.outcome)) return;
-    if (record) {
-      await storage.kanban.saveLinearCompletionComment({
-        pipelineId: comment.pipelineId,
-        issueId,
-        outcome: comment.outcome,
-        status: "posted",
-        commentId: comment.commentId,
-        postedAt: comment.postedAt ?? new Date(this.loop.now()).toISOString(),
-      });
-    }
-    await this.posted?.(comment).catch((error: unknown) => {
-      log.warn("completion-comment.status-failed", {
-        pipelineId: comment.pipelineId,
-        error: formatLogError(error),
-      });
-    });
+    pipeline: Pick<BuildPipeline, "id" | "projectId" | "source">,
+    ending: { outcome: LinearCommentOutcome; body: string },
+  ): Promise<boolean> {
+    if (this.loop.closed || pipeline.source?.type !== "linear") return false;
+    const source = pipeline.source;
+    if (!(await storage.getProject(pipeline.projectId)) || this.loop.closed) return false;
+    this.storage = storage;
+    const now = new Date(this.loop.now());
+    const queued = storage.linear.enqueueLinearPendingComment(
+      {
+        ...ending,
+        pipelineId: pipeline.id,
+        projectId: pipeline.projectId,
+        issueId: source.issueId,
+        ...(source.issueIdentifier ? { issueIdentifier: source.issueIdentifier } : {}),
+      },
+      { error: "", nextAttemptAt: now },
+      now,
+    );
+    return queued === "queued";
   }
 
-  /** Starts a drain now, or once the running one finishes. */
+  recordReceipt(
+    storage: LinearCommentsStorage,
+    outcome: LinearCommentOutcome,
+    pipelineId: string,
+    claim: LinearWriteClaimRef,
+    result: { commentId: string; postedAt?: string },
+    now: Date,
+  ): boolean {
+    return storage.linear.recordLinearPendingCommentReceipt(
+      pipelineId,
+      outcome,
+      claim,
+      {
+        commentId: result.commentId,
+        postedAt: result.postedAt ?? now.toISOString(),
+      },
+      now,
+    );
+  }
+
+  /** Reconcile a persisted receipt even on a keyless machine. Retain it on storage failure. */
+  async reconcileReceipts(storage: LinearCommentsStorage): Promise<void> {
+    for (const record of await storage.linear.listLinearPendingComments()) {
+      const { receipt, pipelineId, outcome, issueId } = record;
+      if (!receipt || this.loop.closed || storage.linear.isProjectWriteFenced(record.projectId))
+        continue;
+      await this.locks.withLinearCompletionComment(pipelineId, async () => {
+        const current = (await storage.linear.listLinearPendingComments()).find(
+          (entry) =>
+            entry.pipelineId === pipelineId &&
+            entry.outcome === outcome &&
+            entry.receipt?.commentId === receipt.commentId,
+        );
+        if (!current || storage.linear.isProjectWriteFenced(record.projectId)) return;
+        const existing = await storage.kanban.getLinearCompletionComment(pipelineId);
+        if (
+          existing?.status === "posted" &&
+          existing.outcome === "complete" &&
+          outcome === "failed"
+        )
+          return;
+        await storage.kanban.saveLinearCompletionComment({
+          pipelineId,
+          issueId,
+          outcome,
+          status: "posted",
+          ...receipt,
+        });
+      });
+      await this.posted?.({ pipelineId, outcome, ...receipt });
+      storage.linear.finishLinearPendingComment(pipelineId, outcome, receipt.commentId);
+    }
+  }
+
   requestDrain(): void {
     if (this.storage) this.loop.request();
   }
 
-  /** Stops the drain timer; later calls do nothing. */
   shutdown(): void {
+    this.stop.abort(new Error("Completion comment queue stopped"));
     this.loop.stop("Completion comment queue stopped");
   }
 
-  /** Resolves once the current drain (and any it queued) settles. Tests use it. */
   async idle(): Promise<void> {
     while (this.loop.running) await this.loop.running;
   }
@@ -248,72 +348,119 @@ export class LinearCompletionComments {
   private async drain(): Promise<number> {
     const storage = this.storage;
     if (!storage) return Number.POSITIVE_INFINITY;
-    const pending = await storage.linear.listLinearPendingComments();
-    if (pending.length === 0) return Number.POSITIVE_INFINITY;
-    const due = pending.some((record) => Date.parse(record.nextAttemptAt) <= this.loop.now());
-    if (due) {
+    await this.reconcileReceipts(storage);
+    while (!this.loop.closed) {
+      const now = this.loop.now();
+      const pending = await storage.linear.listLinearPendingComments();
+      const next = Math.min(
+        Infinity,
+        ...pending.map((record) =>
+          storage.linear.isProjectWriteFenced(record.projectId)
+            ? now + LINEAR_WRITE_RETRY_MS
+            : Date.parse(record.nextAttemptAt),
+        ),
+      );
+      if (next > now) return next;
       const apiKey = (await storage.kanban.getLinearAuth())?.apiKey;
-      // Left due: the attached command node may claim it, and connecting here
-      // drains at once.
-      if (!apiKey) return this.loop.now() + LINEAR_WRITE_MAX_RETRY_MS;
-      for (;;) {
-        if (this.loop.closed) return Number.POSITIVE_INFINITY;
-        const now = this.loop.now();
-        const [record] = storage.linear.claimLinearPendingComments(
-          1,
-          new Date(now + LOCAL_CLAIM_MS),
-          new Date(now),
-        );
-        if (!record) break;
-        await this.post(storage, apiKey, record);
+      // Keep it due for the command node.
+      if (!apiKey) return now + LINEAR_WRITE_MAX_RETRY_MS;
+      const [record] = storage.linear.claimLinearPendingComments(
+        1,
+        new Date(now + LINEAR_LOCAL_CLAIM_MS),
+        new Date(now),
+        LINEAR_LOCAL_OWNER,
+      );
+      if (!record) return now + LINEAR_WRITE_RETRY_MS;
+      try {
+        await this.loop.bounded((signal) => this.post(storage, apiKey, record, signal));
+      } catch (error) {
+        if (!this.loop.closed) this.defer(storage, record, error, apiKey);
+        continue;
       }
+      await this.reconcileReceipts(storage);
     }
-    const left = await storage.linear.listLinearPendingComments();
-    return Math.min(
-      Number.POSITIVE_INFINITY,
-      ...left.map((record) => Date.parse(record.nextAttemptAt)),
-    );
+    return Number.POSITIVE_INFINITY;
   }
 
   private async post(
     storage: LinearCommentsStorage,
     apiKey: string,
-    record: Awaited<ReturnType<LinearStorage["listLinearPendingComments"]>>[number],
-  ): Promise<void> {
-    const issue = record.issueIdentifier ?? record.issueId;
-    try {
-      const result = await this.loop.bounded((signal) =>
-        postRecordedLinearCompletionComment(
-          storage,
-          this.locks,
-          async () => apiKey,
-          record,
-          signal,
-        ),
+    record: LinearPendingComment,
+    signal: AbortSignal,
+  ): Promise<LinearCompletionCommentResult> {
+    const { claim, pipelineId, outcome, issueId, body } = record;
+    if (!claim) throw new Error("Missing Linear comment claim");
+    const check = async () => {
+      const auth = await storage.kanban.getLinearAuth();
+      const pending = (await storage.linear.listLinearPendingComments()).find(
+        (entry) => entry.pipelineId === pipelineId && entry.outcome === outcome,
       );
-      await this.settle(storage, record.issueId, {
-        pipelineId: record.pipelineId,
-        outcome: record.outcome,
-        commentId: result.commentId,
-        ...(result.postedAt ? { postedAt: result.postedAt } : {}),
-      });
-      log.info("completion-comment.posted", { pipelineId: record.pipelineId, issue });
-    } catch (error) {
-      if (this.loop.closed) return;
-      const attempts = record.attempts + 1;
-      const delay = linearWriteRetryDelay(attempts);
-      const reason = sanitizeLinearError(error, apiKey);
-      storage.linear.deferLinearPendingComment(record.pipelineId, record.outcome, {
+      if (
+        !pending ||
+        storage.linear.isProjectWriteFenced(record.projectId) ||
+        !ownsLinearWrite(pending, claim, new Date(this.loop.now()))
+      ) {
+        throw new Error("Linear comment claim has expired or been revoked");
+      }
+      if (auth?.apiKey !== apiKey) throw new Error("Linear connection changed");
+      signal.throwIfAborted();
+    };
+    return this.locks.withLinearCompletionComment(pipelineId, async () => {
+      await check();
+      const existing = await storage.kanban.getLinearCompletionComment(pipelineId);
+      const result =
+        existing?.status === "posted" &&
+        existing.commentId &&
+        existing.issueId === issueId &&
+        (existing.outcome === outcome || existing.outcome === "complete")
+          ? {
+              status: "already-posted" as const,
+              commentId: existing.commentId,
+              postedAt: existing.postedAt,
+            }
+          : await postLinearCompletionComment(
+              apiKey,
+              { pipelineId, issueId, body, outcome },
+              signal,
+              check,
+            );
+      signal.throwIfAborted();
+      if (
+        !this.recordReceipt(storage, outcome, pipelineId, claim, result, new Date(this.loop.now()))
+      ) {
+        throw new Error("Linear comment claim has expired or been revoked");
+      }
+      return result;
+    });
+  }
+
+  private defer(
+    storage: LinearCommentsStorage,
+    record: LinearPendingComment,
+    error: unknown,
+    apiKey: string,
+  ): string {
+    const reason = sanitizeLinearError(error, apiKey);
+    if (!record.claim) return reason;
+    const now = new Date(this.loop.now());
+    const attempts = record.attempts + 1;
+    const delay = linearWriteRetryDelay(attempts);
+    storage.linear.deferLinearPendingComment(
+      record.pipelineId,
+      record.outcome,
+      {
         error: reason,
-        nextAttemptAt: new Date(this.loop.now() + delay),
-      });
-      log.warn("completion-comment.failed", {
-        pipelineId: record.pipelineId,
-        issue,
-        attempts,
-        retryInMs: delay,
-        reason,
-      });
-    }
+        nextAttemptAt: new Date(now.getTime() + delay),
+      },
+      record.claim,
+      now,
+    );
+    log.warn("completion-comment.failed", {
+      pipelineId: record.pipelineId,
+      issue: record.issueIdentifier ?? record.issueId,
+      attempts,
+      retryInMs: delay,
+    });
+    return reason;
   }
 }

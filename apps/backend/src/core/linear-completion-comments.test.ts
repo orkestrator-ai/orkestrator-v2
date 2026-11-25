@@ -6,11 +6,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { lifecycleMachine } from "./build-pipeline/kanban-transitions-test-support.js";
+import { withService, startInput, mutateStored } from "./build-pipeline/service-test-support.js";
 import { IntegrationLocks } from "./integration-locks.js";
-import {
-  LinearCompletionComments,
-  postRecordedLinearCompletionComment,
-} from "./linear-completion-comments.js";
+import { LinearCompletionComments } from "./linear-completion-comments.js";
 import { LINEAR_WRITE_RETRY_MS } from "./linear-write-drain.js";
 import { StorageService } from "./storage/service.js";
 
@@ -31,7 +29,7 @@ afterEach(async () => {
 });
 
 /** One Linear issue's comments; `down` answers every request with an error. */
-function fakeLinear() {
+function fakeLinear(before: (query: string) => void | Promise<void> = () => {}) {
   const state = { comments: [] as string[], down: false };
   globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
     expect(new Headers(init?.headers).get("Authorization")).toBe(API_KEY);
@@ -44,6 +42,7 @@ function fakeLinear() {
         status: 200,
         headers: { "content-type": "application/json" },
       });
+    await before(query);
     if (state.down) return answer({ errors: [{ message: "Linear is down" }] });
     if (query.includes("query OrkestratorLinearCompletionComments")) {
       return answer({
@@ -108,29 +107,24 @@ async function machine(options: { connected: boolean }) {
   cleanups.push(() => fs.rm(dir, { recursive: true, force: true }));
   const storage = new StorageService(dir);
   await storage.init();
+  await storage.addProject({
+    id: "project-1",
+    name: "Web",
+    gitUrl: "https://github.com/acme/web.git",
+    localPath: null,
+    addedAt: new Date(0).toISOString(),
+    order: 0,
+  });
   cleanups.push(() => storage.close());
   if (options.connected) await storage.kanban.saveLinearAuth(API_KEY);
   const locks = new IntegrationLocks();
   const time = clock();
   const queue = new LinearCompletionComments(locks, time);
   cleanups.push(() => queue.shutdown());
-  const life = await lifecycleMachine(
-    storage,
-    "env-1",
-    "project-1",
-    { onLinearCommentUnposted: (pipeline, comment) => queue.queue(storage, pipeline, comment) },
-    async (args) =>
-      postRecordedLinearCompletionComment(
-        storage,
-        locks,
-        async () => {
-          const apiKey = (await storage.kanban.getLinearAuth())?.apiKey;
-          if (!apiKey) throw new Error("Linear is not connected");
-          return apiKey;
-        },
-        args as never,
-      ),
-  );
+  const life = await lifecycleMachine(storage, "env-1", "project-1", {
+    writeLinearComment: (pipeline, comment) => queue.submit(storage, pipeline, comment),
+    restoreLinearComment: (pipeline, comment) => queue.restore(storage, pipeline, comment),
+  });
   queue.onPosted((comment) => life.recovery.noteLinearCommentPosted(comment));
   const pipeline = life.pipeline("ENG-1", {
     source: {
@@ -148,8 +142,9 @@ async function machine(options: { connected: boolean }) {
 describe("a Linear-sourced build's completion comment", () => {
   test("is posted as the build completes", async () => {
     const linear = fakeLinear();
-    const { storage, life, pipeline, stored } = await machine({ connected: true });
+    const { storage, queue, life, pipeline, stored } = await machine({ connected: true });
     await life.ended(pipeline, "complete");
+    await queue.idle();
     expect(linear.comments).toEqual([expect.stringContaining("✅ Orkestrator build completed")]);
     expect(await stored()).toMatchObject({ completionCommentStatus: "posted" });
     expect(await storage.linear.listLinearPendingComments()).toEqual([]);
@@ -157,10 +152,12 @@ describe("a Linear-sourced build's completion comment", () => {
 
   test("is posted for a completion that follows a failure, once each", async () => {
     const linear = fakeLinear();
-    const { life, pipeline } = await machine({ connected: true });
+    const { life, pipeline, queue } = await machine({ connected: true });
     pipeline.error = "tests failed";
     await life.ended(pipeline, "failed");
+    await queue.idle();
     await life.ended(pipeline, "complete");
+    await queue.idle();
     expect(linear.comments).toEqual([
       expect.stringContaining("❌ Orkestrator build failed"),
       expect.stringContaining("✅ Orkestrator build completed"),
@@ -272,8 +269,6 @@ describe("a Linear-sourced build's completion comment", () => {
     expect(await storage.linear.listLinearPendingComments()).toMatchObject([
       { pipelineId: pipeline.id, outcome: "complete" },
     ]);
-    // A late report about the replaced one leaves the newer one queued.
-    expect(storage.linear.settleLinearPendingComment(pipeline.id, "failed")).toBe(false);
   });
 
   test("a build running again is not marked posted by its previous ending's comment", async () => {
@@ -294,14 +289,7 @@ describe("a Linear-sourced build's completion comment", () => {
   test("goes with its project when the project is removed", async () => {
     fakeLinear();
     const { storage, life, pipeline } = await machine({ connected: false });
-    await storage.addProject({
-      id: "project-1",
-      name: "Web",
-      gitUrl: "https://github.com/acme/web.git",
-      localPath: null,
-      addedAt: new Date(0).toISOString(),
-      order: 0,
-    });
+
     await life.ended(pipeline, "complete");
     expect(await storage.linear.listLinearPendingComments()).toHaveLength(1);
     await storage.removeEnvironment("env-1");
@@ -309,15 +297,119 @@ describe("a Linear-sourced build's completion comment", () => {
     expect(await storage.linear.listLinearPendingComments()).toEqual([]);
   });
 
+  test("a successful completion supersedes the queued failure", async () => {
+    const linear = fakeLinear();
+    const { storage, queue, life, pipeline, time, stored } = await machine({ connected: true });
+    linear.down = true;
+    await life.ended(pipeline, "failed");
+    await queue.idle();
+    linear.down = false;
+    await life.ended(pipeline, "complete");
+    time.advance(LINEAR_WRITE_RETRY_MS);
+    await queue.idle();
+    expect(linear.comments).toEqual([expect.stringContaining("✅ Orkestrator build completed")]);
+    expect(await storage.linear.listLinearPendingComments()).toEqual([]);
+    expect(await stored()).toMatchObject({ completionCommentStatus: "posted" });
+  });
+
+  test("recovery adopts a successful legacy plain-marker comment from a posting snapshot", async () => {
+    const linear = fakeLinear();
+    const { life, pipeline, queue, stored } = await machine({ connected: true });
+    linear.comments.push(
+      `✅ Orkestrator build completed for **Ticket**.\n\n<!-- orkestrator-linear-run:${pipeline.id} -->`,
+    );
+    pipeline.phase = "complete";
+    pipeline.completionCommentStatus = "posting";
+    await life.recovery.reconcileTerminalState(pipeline);
+    await queue.idle();
+    expect(linear.comments).toHaveLength(1);
+    expect(await stored()).toMatchObject({
+      completionCommentStatus: "posted",
+      completionCommentId: "comment-1",
+    });
+  });
+
+  test("startup restores a pre-upgrade failed comment and delivers it without a manual retry", async () => {
+    const linear = fakeLinear();
+    const queue = new LinearCompletionComments(new IntegrationLocks());
+    cleanups.push(() => queue.shutdown());
+    let restoreStorage: StorageService;
+    await withService(
+      async (service, storage) => {
+        restoreStorage = storage;
+        await storage.addProject({
+          id: "project-1",
+          name: "Web",
+          gitUrl: "https://github.com/acme/web.git",
+          localPath: null,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        });
+        const started = await service.start(startInput());
+        await mutateStored(storage, started.id, (pipeline) => {
+          pipeline.phase = "complete";
+          pipeline.source = { type: "linear", issueId: "issue-1", issueIdentifier: "ENG-1" };
+          pipeline.completionCommentStatus = "failed";
+          pipeline.completionCommentError = "Linear is not connected on this machine";
+        });
+        queue.onPosted((comment) => service.noteLinearCommentPosted(comment));
+        await service.init();
+        expect(await storage.linear.listLinearPendingComments()).toMatchObject([
+          { pipelineId: started.id, outcome: "complete" },
+        ]);
+        await storage.kanban.saveLinearAuth(API_KEY);
+        queue.start(storage);
+        await queue.idle();
+        expect(linear.comments).toHaveLength(1);
+        expect((await storage.getBuildPipeline(started.id))?.snapshot).toMatchObject({
+          completionCommentStatus: "posted",
+          completionCommentId: "comment-1",
+        });
+        queue.shutdown();
+      },
+      {
+        restoreLinearComment: (pipeline, comment) =>
+          queue.restore(restoreStorage, pipeline, comment),
+      },
+    );
+  });
+
+  test("disconnect during the first lookup leaves the next comment available for the relay", async () => {
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const linear = fakeLinear(async (query) => {
+      if (query.includes("query OrkestratorLinearCompletionComments")) {
+        reached.resolve();
+        await release.promise;
+      }
+    });
+    const { storage, queue, life, pipeline } = await machine({ connected: false });
+    await life.ended(pipeline, "complete");
+    const second = life.pipeline("ENG-2", { source: pipeline.source });
+    await life.ended(second, "complete");
+    await queue.idle();
+    await storage.kanban.saveLinearAuth(API_KEY);
+    queue.requestDrain();
+    await reached.promise;
+    await storage.kanban.clearLinearAuth();
+    release.resolve();
+    await queue.idle();
+    expect(linear.comments).toEqual([]);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(await storage.linear.listLinearPendingComments()).toContainEqual(
+      expect.objectContaining({ pipelineId: second.id, attempts: 0 }),
+    );
+  });
+
   test("a Kanban build never reaches the queue", async () => {
     const { storage, queue, pipeline } = await machine({ connected: false });
     expect(
-      await queue.queue(
+      queue.submit(
         storage,
         { ...pipeline, source: { type: "kanban", taskId: "task-1" } },
-        { outcome: "complete", body: "Done", error: "no" },
+        { outcome: "complete", body: "Done" },
       ),
-    ).toBeNull();
+    ).rejects.toThrow("could not be queued");
     expect(await storage.linear.listLinearPendingComments()).toEqual([]);
   });
 });

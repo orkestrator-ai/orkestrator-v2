@@ -574,6 +574,7 @@ async function findExistingCompletionComment(
   apiKey: string,
   issueId: string,
   marker: string,
+  legacySuccessMarker: string | undefined,
   signal?: AbortSignal,
 ): Promise<{ id: string; createdAt?: string } | null> {
   let cursor: string | null = null;
@@ -604,7 +605,13 @@ async function findExistingCompletionComment(
     const nodes = Array.isArray(data.issue?.comments?.nodes) ? data.issue.comments.nodes : [];
     for (const node of nodes) {
       if (!isRecord(node)) continue;
-      if (asString(node.body).includes(marker)) {
+      const body = asString(node.body).trim();
+      if (
+        body.endsWith(marker) ||
+        (legacySuccessMarker &&
+          body.endsWith(legacySuccessMarker) &&
+          body.startsWith("✅ Orkestrator build completed"))
+      ) {
         const id = asString(node.id);
         if (id) return { id, createdAt: optionalString(node.createdAt) };
       }
@@ -671,13 +678,24 @@ export async function postLinearCompletionComment(
     outcome?: LinearCommentOutcome;
   },
   signal?: AbortSignal,
+  beforeMutation?: () => Promise<void>,
 ): Promise<LinearCompletionCommentResult> {
   const marker = linearCompletionMarker(params.pipelineId, params.outcome);
-  const existing = await findExistingCompletionComment(apiKey, params.issueId, marker, signal);
+  const legacySuccessMarker =
+    params.outcome === "complete" ? linearCompletionMarker(params.pipelineId) : undefined;
+  const existing = await findExistingCompletionComment(
+    apiKey,
+    params.issueId,
+    marker,
+    legacySuccessMarker,
+    signal,
+  );
   if (existing) {
     return { status: "already-posted", commentId: existing.id, postedAt: existing.createdAt };
   }
 
+  if (beforeMutation) await beforeMutation();
+  signal?.throwIfAborted();
   const body = `${params.body.trim()}\n\n${marker}`;
   const data = await linearGraphql<{
     commentCreate?: {

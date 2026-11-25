@@ -10,7 +10,11 @@ import type { CommandRegistrar } from "./commands-registry-types.js";
 import { ASYNC_HANDLER } from "./commands-registry-async-decode.js";
 import { attachedController } from "./commands-registry-ticket-sync.js";
 import { applyLinearSyncState, readLinearSyncState } from "./linear-sync-state.js";
-import { claimLinearWrites, settleLinearWrites } from "./linear-write-relay.js";
+import {
+  claimLinearWrites,
+  revalidateLinearWrite,
+  settleLinearWrites,
+} from "./linear-write-relay.js";
 
 const log = createLogger("linear");
 
@@ -51,8 +55,15 @@ export function registerLinearSyncCommands(register: CommandRegistrar): void {
   register(
     claimLinearWritesCommand,
     async (args, context) => {
-      attachedController(args, context);
-      return { writes: await claimLinearWrites(context.storage) };
+      const owner = attachedController(args, context);
+      if (args.leased !== true) return { writes: [] };
+      if (args.revalidate !== undefined) {
+        return {
+          writes: [],
+          valid: await revalidateLinearWrite(context.storage, owner, args.revalidate),
+        };
+      }
+      return { writes: await claimLinearWrites(context.storage, owner) };
     },
     ASYNC_HANDLER,
   );
@@ -60,10 +71,11 @@ export function registerLinearSyncCommands(register: CommandRegistrar): void {
   register(
     settleLinearWritesCommand,
     async (args, context) => {
-      attachedController(args, context);
+      const owner = attachedController(args, context);
       const settled = await settleLinearWrites(
         context.storage,
         context.runtime.linearCompletionComments,
+        owner,
         Array.isArray(args.results) ? args.results : [],
       );
       return { settled };

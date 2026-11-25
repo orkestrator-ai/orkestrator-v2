@@ -532,10 +532,14 @@ describe("Linear failures", () => {
     await queue.recordEnvironmentMerge(storage, { id: "env-1", projectId: "project-1" }, PR_URL);
     await queue.idle();
     expect(linear.requests).toEqual([]);
-    expect((await storage.linear.listLinearMergedLabels())[0]).toMatchObject({
+    const [waiting] = await storage.linear.listLinearMergedLabels();
+    expect(waiting).toMatchObject({
       status: "pending",
+      attempts: 0,
+      nextAttemptAt: waiting?.createdAt,
       lastError: "Linear is not connected on this machine",
     });
+    expect(waiting?.claim).toBeUndefined();
   });
 
   test("a pending label survives a restart and lands from the next process's sweep", async () => {

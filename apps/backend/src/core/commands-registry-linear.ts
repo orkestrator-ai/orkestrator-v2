@@ -1,3 +1,4 @@
+import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import {
   connectLinearCommand,
   disconnectLinearCommand,
@@ -157,18 +158,38 @@ export function registerLinearCommands(
   );
   register(
     postLinearCompletionCommentCommand,
-    async ({ pipelineId, issueId, body, outcome }, context) =>
-      postRecordedLinearCompletionComment(
+    async ({ pipelineId, issueId, body, outcome }, context) => {
+      const id = asString(pipelineId, "pipelineId");
+      const target = asString(issueId, "issueId");
+      const message = asString(body, "body");
+      const snapshot = (await context.storage.getBuildPipeline(id))?.snapshot as
+        BuildPipeline | undefined;
+      if (snapshot) {
+        if (
+          snapshot.source?.type !== "linear" ||
+          snapshot.source.issueId !== target ||
+          (snapshot.phase !== "complete" && snapshot.phase !== "failed") ||
+          (outcome !== undefined && outcome !== snapshot.phase)
+        ) {
+          throw new Error("The Linear comment must match the build's issue and current ending.");
+        }
+        return context.runtime.linearCompletionComments.submit(context.storage, snapshot, {
+          outcome: snapshot.phase,
+          body: message,
+        });
+      }
+      return postRecordedLinearCompletionComment(
         context.storage,
         context.runtime.integrationLocks,
         () => requireLinearApiKey(context),
         {
-          pipelineId: asString(pipelineId, "pipelineId"),
-          issueId: asString(issueId, "issueId"),
-          body: asString(body, "body"),
+          pipelineId: id,
+          issueId: target,
+          body: message,
           ...(outcome === "complete" || outcome === "failed" ? { outcome } : {}),
         },
-      ),
+      );
+    },
     ASYNC_HANDLER,
   );
   registerLinearBoardCommands(register);

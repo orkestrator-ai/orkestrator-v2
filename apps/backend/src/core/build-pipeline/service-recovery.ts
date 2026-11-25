@@ -618,11 +618,7 @@ export class BuildPipelineRecovery {
     if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
     await this.ctx.save(pipeline, pipeline.backendRevision);
-    const delivered = completionDeliveryNote(pipeline);
-    const body =
-      pipeline.phase === "complete"
-        ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.${delivered ? ` ${delivered}` : ""}`
-        : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
+    const body = completionCommentBody(pipeline);
     const result =
       source.type === "linear"
         ? await this.postLinearComment(pipeline, source.issueId, body)
@@ -644,34 +640,37 @@ export class BuildPipelineRecovery {
     await this.ctx.save(pipeline, pipeline.backendRevision);
   }
 
-  /**
-   * Posts a Linear build's comment; one that cannot be posted now is kept and
-   * posted later, whatever becomes of this pipeline, and the error says so.
-   */
-  private async postLinearComment(
+  private postLinearComment(
     pipeline: BuildPipeline,
     issueId: string,
     body: string,
   ): Promise<{ commentId?: string; postedAt?: string }> {
     const outcome = pipeline.phase === "complete" ? "complete" : "failed";
-    try {
-      return await this.ctx.invoke("post_linear_completion_comment", {
+    return (
+      this.ctx.options.writeLinearComment?.(pipeline, { outcome, body }) ??
+      this.ctx.invoke("post_linear_completion_comment", {
         pipelineId: pipeline.id,
         issueId,
         body,
         outcome,
-      });
-    } catch (error) {
-      const kept = await this.ctx.options?.onLinearCommentUnposted?.(pipeline, {
-        outcome,
-        body,
-        error: errorMessage(error),
-      });
-      throw kept ? new Error(kept) : error;
-    }
+      })
+    );
   }
 
-  /** A completion comment kept by `onLinearCommentUnposted` is now in Linear. */
+  async restoreLinearComment(pipeline: BuildPipeline): Promise<void> {
+    if (
+      pipeline.source?.type !== "linear" ||
+      pipeline.completionCommentStatus !== "failed" ||
+      (pipeline.phase !== "complete" && pipeline.phase !== "failed")
+    )
+      return;
+    await this.ctx.options.restoreLinearComment?.(pipeline, {
+      outcome: pipeline.phase,
+      body: completionCommentBody(pipeline),
+    });
+  }
+
+  /** A queued completion comment is now in Linear. */
   async noteLinearCommentPosted(comment: {
     pipelineId: string;
     outcome: "complete" | "failed";
@@ -1322,4 +1321,12 @@ function completionDeliveryNote(pipeline: BuildPipeline): string | undefined {
   const stop = pipelineBuildStop(pipeline);
   if (stop) return pipelineBuildStopSummary(stop);
   return pipeline.delivery ? pipelineDeliverySummary(pipeline.delivery) : undefined;
+}
+
+function completionCommentBody(pipeline: BuildPipeline): string {
+  if (pipeline.phase !== "complete") {
+    return `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
+  }
+  const delivered = completionDeliveryNote(pipeline);
+  return `✅ Orkestrator build completed for **${pipeline.taskTitle}**.${delivered ? ` ${delivered}` : ""}`;
 }

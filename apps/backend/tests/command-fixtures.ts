@@ -568,6 +568,7 @@ export async function createCommandFixtures() {
       }),
       storage: {
         getDataDir: () => options.dataDir ?? DEFAULT_DATA_DIR,
+        getBuildPipeline: mock(async () => null),
         kanban: {
           withGitHubCompletionCommentLock: mock(
             async (_pipelineId: string, operation: () => Promise<unknown>) => operation(),
@@ -576,8 +577,10 @@ export async function createCommandFixtures() {
           updateKanbanTask: mock(async () => undefined),
           addKanbanComment: mock(async () => undefined),
         },
-        // No Linear board links and no disconnects recorded.
+        // No Linear board links, queued writes or disconnects recorded.
         linear: {
+          listLinearPendingComments: mock(async () => []),
+          isProjectWriteFenced: mock(() => false),
           listLinearBoardLinks: mock(async () => []),
           getLinearBoardLink: mock(async () => null),
           listLinearRevocations: mock(async () => []),

@@ -122,7 +122,7 @@ const FORMER_KEYS: Record<string, readonly string[]> = {
   apply_linear_sync_state: ["controllerId", "links", "revocations"],
   export_linear_connection: ["controllerId"],
   // Writes a leaf without a Linear key owes, landed by its command node (2026-11-25).
-  claim_linear_writes: ["controllerId"],
+  claim_linear_writes: ["controllerId", "leased", "revalidate"],
   settle_linear_writes: ["controllerId", "results"],
 };
 
@@ -169,6 +169,7 @@ describe("pilot definitions", () => {
       create_node_action_request: ["requestId"],
       begin_node_file_write: ["sha256"],
       apply_ticket_sync: ["reset", "liveIds"],
+      claim_linear_writes: ["leased", "revalidate"],
       send_coordinator_command_node_mail: ["requestId", "attachments", "replyToMessageId"],
     });
   });

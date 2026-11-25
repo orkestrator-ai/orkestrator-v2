@@ -1097,23 +1097,23 @@ in `linear-issue-labels.ts`.
 
 A build started from a Linear issue comments on it as it ends: `✅` when it
 completes (with what was delivered) or `❌` when it fails or is cancelled
-(`postCompletionComment` in `build-pipeline/service-recovery.ts`, through
-`post_linear_completion_comment`).
+(`postCompletionComment` in `build-pipeline/service-recovery.ts`).
 
 - **Once per ending.** Each comment carries a hidden marker naming the
   pipeline, and a completion has its own marker, so a build that failed, was
   retried and then completed gets both comments, and repeating either ending
   adds nothing. A post looks for the marker first, so a lost answer is never a
   second comment.
-- **A failed post is kept.** When Linear fails or this machine has no key, the
-  comment is queued (`linear-pending-comments`, one per pipeline holding its
-  latest ending, at most 500, its text cut at 10,000 characters) by
-  `linear-completion-comments.ts` and owned by
-  `BackendRuntime.linearCompletionComments`. It outlives a restart, the
-  pipeline and its environment, and is retried after a minute, doubling to an
-  hour. The build shows the failure and that the comment is queued
-  (`completionCommentError`), and turns to posted when the comment lands.
-  Retry posts at once. Removing the project deletes its queued comments.
+- **The ending is queued before posting.** There is one
+  `linear-pending-comments` entry per pipeline, holding the latest ending.
+  The queue holds up to 500 entries and limits local comment text to 10,000
+  characters. The queue survives restart and environment removal. Direct retry,
+  background posting and the relay share the same lease. A later completion
+  replaces a queued failure. A successful post leaves a receipt in the queue
+  until the posted comment and pipeline status are reconciled. Linear failures
+  are retried after a minute, doubling to an hour. Startup restores comments
+  from retained terminal snapshots with a failed comment status. Project
+  removal revokes leases and deletes pending writes.
 - **A merge ends conflict resolution.** GitHub reports a merged pull request's
   mergeability as unknown for good, so a build still resolving conflicts when
   its pull request merges completes then, and comments.
@@ -1133,23 +1133,29 @@ command node writes it (`linear-write-relay.ts`):
   `claim_linear_writes`, makes each write with its own key, and reports it
   with `settle_linear_writes`. The key never travels. This does not hold up
   link sync.
-- **Two fixed writes.** A leaf can ask only for the `merged` label on an issue
-  or a pipeline's marked completion comment; the command node checks the shape
-  and bounds of each and ignores anything else.
-- **Claims.** At most eight writes, held for five minutes, so two command
-  nodes do not take the same one; a claim never reported back is due again
-  then. Repeating a write is safe (the label or marker is already there). A
-  refusal is reported with Linear's reason and backed off on the leaf.
+- **The command node authorizes the board.** The repository must have its
+  Linear board linked on the command node. A link learned through sync carries
+  no write authority. The command node resolves the issue using Linear and
+  checks its team and, when configured, its project. Relayed comments use
+  fixed text for completion or failure. Titles and error text stay on the
+  build machine.
+- **Leases.** A poll takes at most eight writes, with slots for both queues
+  when both have work. Each lease expires after five minutes and belongs to
+  the attached command node that took it. The command node rechecks the lease
+  immediately before mutation and bounds the operation by the remaining
+  lifetime. A report with an expired or replaced lease leaves the new work
+  intact. Linear failures go back to the leaf with retry backoff.
 - **A leaf with a key claims nothing out**: it writes for itself, and
   connecting Linear on a machine writes what waited there at once.
-- **An older leaf** answers `unknown-command` (`relay.older-node`) and keeps
-  what it owes until it is updated. With no command node holding a key, writes
+- **A version mismatch leaves the queue intact.** Both machines need the
+  leased relay. An older leaf may answer `unknown-command` (`relay.older-node`). With no command node holding a key, writes
   wait until a machine is connected.
 
 *Why the command node writes rather than handing out its key:* a key leaves a
 machine only when the user asks ("Use it here"), and copying it to every build
-machine would widen who holds it. Relaying moves only the issue id and the
-comment's text. The cost is up to a minute's delay.
+machine would widen who holds it. Relaying moves the repository and issue
+identifiers, lease metadata and the type of write. A write can wait until the
+next sync pass.
 
 *What was wrong before (found 2026-11-25):* each machine wrote only with its
 own key, and builds had moved to machines without one. On one such machine a

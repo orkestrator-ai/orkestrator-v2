@@ -33,15 +33,17 @@ import { sanitizeLinearError } from "./linear.js";
 import {
   LINEAR_NOT_CONNECTED_HERE,
   LINEAR_WRITE_MAX_RETRY_MS,
+  LINEAR_WRITE_TIMEOUT_MS,
   LinearDrainLoop,
   linearWriteRetryDelay,
   type LinearDrainClock,
 } from "./linear-write-drain.js";
-import type {
-  Environment,
-  PersistedBuildPipeline,
-  LinearMergedLabelInput,
-  LinearStorage,
+import {
+  ownsLinearWrite,
+  type Environment,
+  type PersistedBuildPipeline,
+  type LinearMergedLabelInput,
+  type LinearStorage,
 } from "./storage/index.js";
 
 const log = createLogger("linear");
@@ -61,6 +63,8 @@ export interface LinearMergedLabelStorage {
     LinearStorage,
     | "listLinearMergedLabels"
     | "enqueueLinearMergedLabel"
+    | "claimLinearMergedLabels"
+    | "isProjectWriteFenced"
     | "settleLinearMergedLabel"
     | "deferLinearMergedLabel"
     | "noteLinearMergedLabelWaiting"
@@ -74,6 +78,7 @@ export type LinearMergedLabelsOptions = LinearDrainClock & {
     issueId: string,
     name: string,
     signal?: AbortSignal,
+    beforeMutation?: () => Promise<void>,
   ) => Promise<LinearIssueLabelResult>;
 };
 
@@ -283,7 +288,6 @@ export class LinearMergedLabels {
     );
     const now = this.loop.now();
     const due = pending.filter((record) => Date.parse(record.nextAttemptAt) <= now);
-    const apiKey = due.length > 0 ? (await storage.kanban.getLinearAuth())?.apiKey : undefined;
     let nextDue = Number.POSITIVE_INFINITY;
     for (const record of pending) {
       if (this.loop.closed) return Number.POSITIVE_INFINITY;
@@ -291,6 +295,11 @@ export class LinearMergedLabels {
         nextDue = Math.min(nextDue, Date.parse(record.nextAttemptAt));
         continue;
       }
+      if (storage.linear.isProjectWriteFenced(record.projectId)) {
+        nextDue = Math.min(nextDue, now + LINEAR_WRITE_MAX_RETRY_MS);
+        continue;
+      }
+      const apiKey = (await storage.kanban.getLinearAuth())?.apiKey;
       if (!apiKey) {
         // Left due, not deferred: the attached command node may claim it
         // (`linear-write-relay.ts`), and connecting here drains at once.
@@ -303,15 +312,52 @@ export class LinearMergedLabels {
         nextDue = Math.min(nextDue, now + LINEAR_WRITE_MAX_RETRY_MS);
         continue;
       }
-      try {
-        const result = await this.loop.bounded(
-          (signal) => this.addLabel(apiKey, record.issueId, LINEAR_MERGED_LABEL, signal),
-          "Linear label attempt timed out",
+      const started = this.loop.now();
+      const [claimed] = storage.linear.claimLinearMergedLabels(
+        1,
+        new Date(started + LINEAR_WRITE_TIMEOUT_MS + 5_000),
+        new Date(started),
+        "local",
+        record.key,
+      );
+      if (!claimed?.claim) {
+        const current = (await storage.linear.listLinearMergedLabels()).find(
+          (entry) => entry.key === record.key,
         );
+        if (current?.status === "pending") {
+          nextDue = Math.min(
+            nextDue,
+            Math.max(this.loop.now() + 1, Date.parse(current.nextAttemptAt)),
+          );
+        }
+        continue;
+      }
+      const claim = claimed.claim;
+      try {
+        const result = await this.loop.bounded(async (signal) => {
+          const check = async () => {
+            const auth = await storage.kanban.getLinearAuth();
+            const current = (await storage.linear.listLinearMergedLabels()).find(
+              (entry) => entry.key === record.key,
+            );
+            if (
+              !current ||
+              storage.linear.isProjectWriteFenced(current.projectId) ||
+              !ownsLinearWrite(current, claim, new Date(this.loop.now())) ||
+              auth?.apiKey !== apiKey
+            ) {
+              throw new Error("Linear label claim or connection changed");
+            }
+            signal.throwIfAborted();
+          };
+          await check();
+          return this.addLabel(apiKey, record.issueId, LINEAR_MERGED_LABEL, signal, check);
+        }, "Linear label attempt timed out");
         storage.linear.settleLinearMergedLabel(
           record.key,
           result.outcome,
           new Date(this.loop.now()),
+          claim,
         );
         log.info("merged-label.applied", {
           pipelineId: record.pipelineId,
@@ -324,10 +370,15 @@ export class LinearMergedLabels {
         const delay = linearWriteRetryDelay(attempts);
         const reason = sanitizeLinearError(error, apiKey);
         const nextAttemptAt = this.loop.now() + delay;
-        storage.linear.deferLinearMergedLabel(record.key, {
-          error: reason,
-          nextAttemptAt: new Date(nextAttemptAt),
-        });
+        storage.linear.deferLinearMergedLabel(
+          record.key,
+          {
+            error: reason,
+            nextAttemptAt: new Date(nextAttemptAt),
+          },
+          claim,
+          new Date(this.loop.now()),
+        );
         nextDue = Math.min(nextDue, nextAttemptAt);
         log.warn("merged-label.failed", {
           pipelineId: record.pipelineId,

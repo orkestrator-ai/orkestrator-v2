@@ -1,3 +1,4 @@
+import { MAX_LINEAR_PENDING_COMMENTS } from "../storage/index.js";
 import { unsignedLinearFileMarkdown } from "@orkestrator/protocol/linear-files";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
@@ -182,6 +183,7 @@ export class BuildPipelineLifecycle {
   async init(): Promise<void> {
     this.ctx.stopped = false;
     const terminalReconciliations: Promise<void>[] = [];
+    let restoredLinearComments = 0;
     for (const record of await this.ctx.storage.listAllBuildPipelines()) {
       if (!record.snapshot || typeof record.snapshot !== "object") continue;
       const normalized = {
@@ -219,6 +221,20 @@ export class BuildPipelineLifecycle {
         } catch (error) {
           log.warn("restore.skipped", { pipelineId: pipeline.id, error: formatLogError(error) });
           continue;
+        }
+      }
+      if (
+        this.ctx.options.restoreLinearComment &&
+        restoredLinearComments < MAX_LINEAR_PENDING_COMMENTS &&
+        pipeline.source?.type === "linear" &&
+        pipeline.completionCommentStatus === "failed" &&
+        (pipeline.phase === "complete" || pipeline.phase === "failed")
+      ) {
+        restoredLinearComments += 1;
+        try {
+          await this.recovery.restoreLinearComment(pipeline);
+        } catch (error) {
+          log.warn("restore.skipped", { pipelineId: pipeline.id, error: formatLogError(error) });
         }
       }
       if (
@@ -871,10 +887,8 @@ export class BuildPipelineLifecycle {
         delete candidate.pauseCause;
         delete candidate.error;
         delete candidate.failureContext;
-        // The terminal comment for the abandoned outcome has already been
-        // posted. Clearing the bookkeeping lets the eventual new outcome
-        // reconcile again; the post commands dedupe by pipeline id, so this
-        // cannot produce a second comment on the issue.
+        // Let the next ending reconcile. Linear deduplicates per pipeline and ending.
+        // GitHub deduplicates per pipeline.
         delete candidate.completionCommentStatus;
         delete candidate.completionCommentError;
       }

@@ -1139,9 +1139,9 @@
       "since": 1,
       "access": "internal",
       "read": false,
-      "critical": [],
-      "argsDigest": "sha256:57167a617095ad9edc9b86373fd2697e81cb22d9c9d7ee658f72e5db55f64fd1",
-      "resultDigest": "sha256:5b91634a035e33107e88a68733f3378fe19ebf2a119c422a5859b6fb27640351"
+      "critical": ["leased", "revalidate"],
+      "argsDigest": "sha256:66896d9d6648c450fcab750cec02a0834b32c134807b10261d13c2ebfcbcdfd8",
+      "resultDigest": "sha256:5889c3a08b0cddc06751ef6d4f3e32f60a8735988ee3f40ed5fe5611ae57f957"
     },
     "claim_terminal_size": {
       "domain": "terminals",

@@ -306,7 +306,7 @@ export class BuildPipelineService implements KeyedWorkflowOwner {
     return this.lifecycle.retryCompletionComment(pipelineId);
   }
 
-  /** A completion comment queued by `onLinearCommentUnposted` was posted. */
+  /** A queued Linear completion comment was posted. */
   noteLinearCommentPosted(
     comment: Parameters<BuildPipelineRecovery["noteLinearCommentPosted"]>[0],
   ): Promise<void> {

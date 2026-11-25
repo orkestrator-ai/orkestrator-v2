@@ -85,6 +85,10 @@ export {
   type LinearMergedLabelInput,
   type LinearMergedLabelOutcome,
   type LinearRevocation,
+  type LinearPendingComment,
+  type LinearWriteClaimRef,
+  ownsLinearWrite,
+  MAX_LINEAR_PENDING_COMMENTS,
   type LinearStorage,
   MAX_LINEAR_COMMENT_BODY,
 } from "./linear.js";

@@ -155,16 +155,16 @@ export type BuildPipelineServiceOptions = {
    * sweep still queue it.
    */
   onPullRequestMerged?: (pipeline: BuildPipeline, prUrl: string) => void;
-  /**
-   * A Linear-sourced build ended and its completion comment could not be
-   * posted: keeps it to be posted later (`linear-completion-comments.ts`).
-   * Answers what to tell the user, or null when it was not kept. Must not
-   * throw or wait on Linear.
-   */
-  onLinearCommentUnposted?: (
+  /** Queues the ending before attempting the local Linear post. */
+  writeLinearComment?: (
     pipeline: BuildPipeline,
-    comment: { outcome: "complete" | "failed"; body: string; error: string },
-  ) => Promise<string | null>;
+    comment: { outcome: "complete" | "failed"; body: string },
+  ) => Promise<{ commentId?: string; postedAt?: string }>;
+  /** Rebuilds the queue from retained pre-upgrade failures during initialization. */
+  restoreLinearComment?: (
+    pipeline: BuildPipeline,
+    comment: { outcome: "complete" | "failed"; body: string },
+  ) => Promise<void>;
   /**
    * Downloads a Linear-sourced build's ticket files into its workspace before
    * the Build prompt (`linear-files/service.ts`). Bounded in time and never

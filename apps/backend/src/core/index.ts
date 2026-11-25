@@ -1746,8 +1746,10 @@ export class OrkestratorBackend {
           linearFiles.prepareBuild(pipeline, undefined, signal),
         onPullRequestMerged: (pipeline, prUrl) =>
           context.runtime.linearMergedLabels.recordPipelineMerge(storage, pipeline, prUrl),
-        onLinearCommentUnposted: (pipeline, comment) =>
-          context.runtime.linearCompletionComments.queue(storage, pipeline, comment),
+        writeLinearComment: (pipeline, comment) =>
+          context.runtime.linearCompletionComments.submit(storage, pipeline, comment),
+        restoreLinearComment: (pipeline, comment) =>
+          context.runtime.linearCompletionComments.restore(storage, pipeline, comment),
       },
     );
     context.buildPipelines = this.buildPipelines;

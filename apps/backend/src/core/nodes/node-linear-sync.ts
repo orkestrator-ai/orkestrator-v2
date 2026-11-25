@@ -19,9 +19,13 @@ import {
 } from "../linear-sync-state.js";
 import {
   MAX_LINEAR_WRITES_PER_CLAIM,
+  LINEAR_WRITE_CLAIM_MS,
   parseLinearOwedWrite,
   performLinearWrite,
 } from "../linear-write-relay.js";
+
+import type { LinearStorage } from "../storage/index.js";
+import { LINEAR_WRITE_TIMEOUT_MS } from "../linear-write-drain.js";
 
 const log = createLogger("linear");
 
@@ -64,7 +68,7 @@ export interface NodeLinearSyncDeps {
   selfId(): Promise<string>;
   link(nodeId: string): LinearSyncLink | null;
   nodes(): Promise<Array<{ nodeId: string; displayName?: string; available: boolean }>>;
-  storage: LinearSyncStorage;
+  storage: LinearSyncStorage & { linear: Pick<LinearStorage, "getLinearBoardLink"> };
   /** Whether this node is a command node now; a leaf syncs nothing itself. */
   isCommandNode(): boolean;
   debounceMs?: number;
@@ -195,17 +199,61 @@ export class NodeLinearSync {
     if (!link?.connected) return;
     if (!(await this.deps.storage.kanban.getLinearAuth())?.apiKey) return;
     const controllerId = await this.deps.selfId();
-    const claimed = await link.invokeCommand(claimLinearWritesCommand, { controllerId });
+    const clock = () => this.deps.now?.().getTime() ?? performance.now();
+    // Start the budget before the RPC, so transport time and clock skew cannot
+    // let a command node use a lease past the leaf's deadline.
+    const deadline = clock() + LINEAR_WRITE_CLAIM_MS;
+    const claimed = await link.invokeCommand(claimLinearWritesCommand, {
+      controllerId,
+      leased: true,
+    });
     this.withoutRelay.delete(nodeId);
     const writes = Array.isArray(claimed?.writes) ? claimed.writes : [];
     for (const value of writes.slice(0, MAX_LINEAR_WRITES_PER_CLAIM)) {
-      if (this.disposed) return;
+      if (
+        this.disposed ||
+        !this.deps.isCommandNode() ||
+        this.deps.link(nodeId) !== link ||
+        !link.connected
+      )
+        return;
       const write = parseLinearOwedWrite(value);
       if (!write) continue;
       // Read per write: a disconnect during the run stops it.
       const apiKey = (await this.deps.storage.kanban.getLinearAuth())?.apiKey;
       if (!apiKey) return;
-      const result = await performLinearWrite(apiKey, write, this.stop.signal);
+      const remaining = Math.floor(deadline - clock());
+      if (remaining < LINEAR_WRITE_TIMEOUT_MS) return;
+      const result = await performLinearWrite(
+        this.deps.storage,
+        apiKey,
+        write,
+        this.stop.signal,
+        async () => {
+          if (
+            this.disposed ||
+            !this.deps.isCommandNode() ||
+            this.deps.link(nodeId) !== link ||
+            !link.connected ||
+            clock() >= deadline
+          )
+            return false;
+          const response = await link.invokeCommand(claimLinearWritesCommand, {
+            controllerId,
+            leased: true,
+            revalidate: write,
+          });
+          return (
+            response.valid === true &&
+            !this.disposed &&
+            this.deps.isCommandNode() &&
+            this.deps.link(nodeId) === link &&
+            link.connected &&
+            clock() < deadline
+          );
+        },
+        remaining,
+      );
       if (this.disposed) return;
       if (!("error" in result)) {
         log.info("relay.written", { kind: write.kind, issue: write.issueId });

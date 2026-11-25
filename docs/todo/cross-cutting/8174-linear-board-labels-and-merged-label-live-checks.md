@@ -113,9 +113,10 @@ faked Linear API (`apps/backend/tests/linear-two-machines.test.ts`), not
 between two of the user's machines and their workspace.
 
 **Context.** It needs the fixed build on both the command node and the build
-machine. Labels already pending on a build machine land by themselves once
-both are updated; completion comments that failed before the update and went
-with their environment were never kept and cannot be recovered.
+machine. Link the repository’s board on the command node so it can authorize
+relayed writes. Pending labels and comments restored from retained snapshots
+can then land. Pre-upgrade comments whose snapshots went with the environment
+have no inputs to restore.
 
 **Investigation.** On 2026-11-25 beelink held one pending label (DND-97, pull
 request 102) after 55 attempts, each failing with "Linear is not connected on

@@ -1,8 +1,20 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import {
+  LINEAR_WRITE_CLAIM_MS,
+  claimLinearWrites,
+  parseLinearOwedWrite,
+  revalidateLinearWrite,
+  settleLinearWrites,
+} from "../src/core/linear-write-relay";
+import { LINEAR_WRITE_RETRY_MS } from "../src/core/linear-write-drain";
+import { linearBoardLinkKey } from "../src/core/storage/linear";
+import { lifecycleMachine } from "../src/core/build-pipeline/kanban-transitions-test-support";
+import { LinearCompletionComments } from "../src/core/linear-completion-comments";
+import { IntegrationLocks } from "../src/core/integration-locks";
 import { linearKeyFingerprint } from "../src/core/linear-boards";
 import { NodeLinearSync, type LinearSyncLink } from "../src/core/nodes/node-linear-sync";
 import { StorageService } from "../src/core/storage/service";
@@ -23,10 +35,12 @@ const originalFetch = globalThis.fetch;
 const directories: string[] = [];
 const services: StorageService[] = [];
 const syncs: NodeLinearSync[] = [];
+const stopQueues: Array<() => void> = [];
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
   for (const sync of syncs.splice(0)) sync.dispose();
+  for (const stop of stopQueues.splice(0)) stop();
   for (const service of services.splice(0)) service.close();
   await Promise.all(
     directories.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
@@ -51,7 +65,7 @@ const MERGED = { id: "label-merged", name: "merged" };
 const written = { labels: [] as Array<typeof MERGED>, comments: [] as string[] };
 
 /** Linear, answering by operation name; it accepts only `KEY`. */
-function fakeLinear() {
+function fakeLinear(before: (name: string) => void | Promise<void> = () => {}) {
   written.labels = [];
   written.comments = [];
   const requests: GraphqlRequest[] = [];
@@ -61,6 +75,7 @@ function fakeLinear() {
     const request = { ...parsed, key: headers.Authorization ?? "" };
     requests.push(request);
     const name = /(?:query|mutation)\s+(\w+)/.exec(request.query)?.[1] ?? "";
+    await before(name);
     const data =
       request.key !== KEY
         ? null
@@ -68,65 +83,75 @@ function fakeLinear() {
           ? { viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" } }
           : name === "OrkestratorLinearTeam"
             ? { team: TEAM }
-            : name === "OrkestratorLinearIssueLabels"
+            : name === "OrkestratorLinearIssueBoard"
               ? {
                   issue: {
-                    id: "issue-1",
+                    id: request.variables.id,
                     team: { id: "team-1" },
-                    labels: { nodes: written.labels, pageInfo: { hasNextPage: false } },
+                    project: {
+                      id: request.variables.id === "issue-outside" ? "lp-outside" : "lp-1",
+                    },
                   },
                 }
-              : name === "OrkestratorLinearLabelsByName"
-                ? { issueLabels: { nodes: [MERGED], pageInfo: { hasNextPage: false } } }
-                : name === "OrkestratorLinearIssueAddLabel"
-                  ? (written.labels.push(MERGED), { issueAddLabel: { success: true } })
-                  : name === "OrkestratorLinearCompletionComments"
-                    ? {
-                        issue: {
-                          comments: {
-                            nodes: written.comments.map((body, index) => ({
-                              id: `comment-${index + 1}`,
-                              body,
-                            })),
-                            pageInfo: { hasNextPage: false },
-                          },
-                        },
-                      }
-                    : name === "OrkestratorLinearCompletionComment"
-                      ? (written.comments.push(String(request.variables.body)),
-                        {
-                          commentCreate: {
-                            success: true,
-                            comment: {
-                              id: `comment-${written.comments.length}`,
-                              createdAt: "2026-11-25T12:00:00.000Z",
-                            },
-                          },
-                        })
-                      : name === "OrkestratorLinearIssues"
-                        ? {
-                            issues: {
-                              nodes: [
-                                {
-                                  id: "issue-1",
-                                  identifier: "ENG-1",
-                                  title: "Fix the header",
-                                  updatedAt: "2026-11-16T10:00:00.000Z",
-                                  state: {
-                                    id: "state-1",
-                                    name: "Todo",
-                                    type: "unstarted",
-                                    position: 1,
-                                  },
-                                  team: { id: "team-1", key: "ENG", name: "Engineering" },
-                                  project: { id: "lp-1", name: "Website" },
-                                  labels: { nodes: [] },
-                                },
-                              ],
+              : name === "OrkestratorLinearIssueLabels"
+                ? {
+                    issue: {
+                      id: "issue-1",
+                      team: { id: "team-1" },
+                      labels: { nodes: written.labels, pageInfo: { hasNextPage: false } },
+                    },
+                  }
+                : name === "OrkestratorLinearLabelsByName"
+                  ? { issueLabels: { nodes: [MERGED], pageInfo: { hasNextPage: false } } }
+                  : name === "OrkestratorLinearIssueAddLabel"
+                    ? (written.labels.push(MERGED), { issueAddLabel: { success: true } })
+                    : name === "OrkestratorLinearCompletionComments"
+                      ? {
+                          issue: {
+                            comments: {
+                              nodes: written.comments.map((body, index) => ({
+                                id: `comment-${index + 1}`,
+                                body,
+                              })),
                               pageInfo: { hasNextPage: false },
                             },
-                          }
-                        : undefined;
+                          },
+                        }
+                      : name === "OrkestratorLinearCompletionComment"
+                        ? (written.comments.push(String(request.variables.body)),
+                          {
+                            commentCreate: {
+                              success: true,
+                              comment: {
+                                id: `comment-${written.comments.length}`,
+                                createdAt: "2026-11-25T12:00:00.000Z",
+                              },
+                            },
+                          })
+                        : name === "OrkestratorLinearIssues"
+                          ? {
+                              issues: {
+                                nodes: [
+                                  {
+                                    id: "issue-1",
+                                    identifier: "ENG-1",
+                                    title: "Fix the header",
+                                    updatedAt: "2026-11-16T10:00:00.000Z",
+                                    state: {
+                                      id: "state-1",
+                                      name: "Todo",
+                                      type: "unstarted",
+                                      position: 1,
+                                    },
+                                    team: { id: "team-1", key: "ENG", name: "Engineering" },
+                                    project: { id: "lp-1", name: "Website" },
+                                    labels: { nodes: [] },
+                                  },
+                                ],
+                                pageInfo: { hasNextPage: false },
+                              },
+                            }
+                          : undefined;
     if (data === undefined) throw new Error(`Unexpected Linear operation ${name}`);
     const body = data ? { data } : { errors: [{ message: "Authentication required" }] };
     return new Response(JSON.stringify(body), {
@@ -171,11 +196,23 @@ function expectKeyOnlyInExport(linkCalls: LinkCall[]) {
 async function machine(projects: Project[]) {
   const real = await realStorage();
   const { context } = createContext(createEnvironment());
+  stopQueues.push(
+    () => context.runtime.linearCompletionComments.shutdown(),
+    () => context.runtime.linearMergedLabels.shutdown(),
+  );
+  for (const project of projects) {
+    await real.addProject({
+      ...project,
+      localPath: null,
+      addedAt: new Date(0).toISOString(),
+      order: 0,
+    });
+  }
   const loadProjects = mock(async () => projects);
   Object.assign(context.storage, {
     kanban: real.kanban,
     linear: real.linear,
-    getProject: mock(async (id: string) => projects.find((project) => project.id === id) ?? null),
+    getProject: real.getProject.bind(real),
     loadProjects,
   });
   const commands = createCommandRegistry();
@@ -196,7 +233,12 @@ async function machine(projects: Project[]) {
  * A laptop (leaf) and a home server (command node) with the same repository
  * under different project ids, the leaf attached to the command node.
  */
-async function linkedMachines() {
+async function linkedMachines(
+  options: {
+    beforeLink?: (name: string, args: Record<string, unknown>) => void | Promise<void>;
+    now?: () => Date;
+  } = {},
+) {
   const leaf = await machine([
     { id: "laptop-web", name: "Web", gitUrl: "https://github.com/acme/web.git" },
   ]);
@@ -211,6 +253,7 @@ async function linkedMachines() {
     connected: true,
     invokeCommand: (async (def: { name: string }, args: Record<string, unknown>) => {
       const capturedArgs = structuredClone(args);
+      await options.beforeLink?.(def.name, args);
       const result = await leaf.run(def.name, args);
       linkCalls.push({ name: def.name, args: capturedArgs, result: structuredClone(result) });
       return result;
@@ -223,6 +266,7 @@ async function linkedMachines() {
     storage: command.syncStorage,
     isCommandNode: () => true,
     debounceMs: 60_000,
+    now: options.now,
   });
   syncs.push(sync);
   Object.assign(command.context, {
@@ -387,23 +431,38 @@ describe("a build on a machine that is not connected to Linear", () => {
   const PR = "https://github.com/acme/web/pull/12";
 
   /** A leaf that owes a `merged` label and a completion comment, as its queues hold them. */
-  function oweWrites(leaf: Awaited<ReturnType<typeof machine>>) {
+  type Machine = Awaited<ReturnType<typeof machine>>;
+  const boardKey = linearBoardLinkKey({ id: "server-web", gitUrl: "git@github.com:acme/web.git" });
+
+  function locallyAuthorize(command: Machine) {
+    command.real.linear.saveLinearBoardLink(
+      { key: boardKey, projectId: "server-web", teamId: "team-1", linearProjectId: "lp-1" },
+      new Set([boardKey]),
+    );
+  }
+
+  function oweWrites(
+    leaf: Machine,
+    issueId = "issue-1",
+    pipelineId = "pipeline-1",
+    projectId = "laptop-web",
+  ) {
     const now = new Date(Date.now() - 1_000);
     leaf.real.linear.enqueueLinearMergedLabel(
       {
-        issueId: "issue-1",
+        issueId,
         issueIdentifier: "ENG-1",
-        pipelineId: "pipeline-1",
-        projectId: "laptop-web",
+        pipelineId,
+        projectId,
         prUrl: PR,
       },
       now,
     );
     leaf.real.linear.enqueueLinearPendingComment(
       {
-        pipelineId: "pipeline-1",
-        projectId: "laptop-web",
-        issueId: "issue-1",
+        pipelineId,
+        projectId,
+        issueId,
         issueIdentifier: "ENG-1",
         outcome: "complete",
         body: "Build completed",
@@ -417,6 +476,7 @@ describe("a build on a machine that is not connected to Linear", () => {
     fakeLinear();
     const { leaf, command, sync, linkCalls } = await linkedMachines();
     await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
     oweWrites(leaf);
     const posted: unknown[] = [];
     leaf.context.runtime.linearCompletionComments.onPosted(async (comment) => {
@@ -425,10 +485,11 @@ describe("a build on a machine that is not connected to Linear", () => {
 
     await sync.sync(LEAF_ID);
     await sync.deliverWrites(LEAF_ID);
+    await leaf.context.runtime.linearCompletionComments.idle();
 
     expect(written.labels).toEqual([MERGED]);
     expect(written.comments).toEqual([
-      "Build completed\n\n<!-- orkestrator-linear-run:pipeline-1:complete -->",
+      "✅ Orkestrator build completed.\n\n<!-- orkestrator-linear-run:pipeline-1:complete -->",
     ]);
     expect(await leaf.real.linear.listLinearMergedLabels()).toMatchObject([
       { status: "applied", outcome: "added" },
@@ -448,6 +509,7 @@ describe("a build on a machine that is not connected to Linear", () => {
       commentId: "comment-1",
     });
     expect(JSON.stringify(linkCalls)).not.toContain(KEY);
+    expect(JSON.stringify(linkCalls)).not.toContain("Build completed");
     expect(await leaf.real.kanban.getLinearAuth()).toBeNull();
 
     // The next pass finds nothing owed.
@@ -460,6 +522,7 @@ describe("a build on a machine that is not connected to Linear", () => {
     const { leaf, command, sync } = await linkedMachines();
     // A key Linear refuses: every write fails.
     await command.real.kanban.saveLinearAuth("lin_api_wrong_workspace", { id: "v", name: "Ada" });
+    locallyAuthorize(command);
     oweWrites(leaf);
     await sync.deliverWrites(LEAF_ID);
 
@@ -467,41 +530,331 @@ describe("a build on a machine that is not connected to Linear", () => {
     const [label] = await leaf.real.linear.listLinearMergedLabels();
     const [comment] = await leaf.real.linear.listLinearPendingComments();
     expect(label).toMatchObject({ status: "pending", lastError: "Authentication required" });
-    expect(comment).toMatchObject({ attempts: 2, lastError: "Authentication required" });
+    expect(comment).toMatchObject({ attempts: 1, lastError: "Authentication required" });
     for (const record of [label!, comment!]) {
       expect(Date.parse(record.nextAttemptAt)).toBeGreaterThan(Date.now());
     }
   });
 
-  test("a lost report is not a second comment, and two command nodes never take the same write", async () => {
+  test("a lost report, second controller and stale settlements preserve the live claim", async () => {
     fakeLinear();
-    const { leaf, command } = await linkedMachines();
+    let drop = true;
+    const { leaf, command, sync } = await linkedMachines({
+      beforeLink: (name) => {
+        if (drop && name === "settle_linear_writes") throw new Error("Lost settlement");
+      },
+    });
     await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
     oweWrites(leaf);
-    const first = (await leaf.run("claim_linear_writes", { controllerId: COMMAND_ID })) as {
-      writes: Array<{ kind: string }>;
-    };
-    expect(first.writes.map((write) => write.kind)).toEqual(["completion-comment", "merged-label"]);
-    // Claimed: nothing is left for another pass until the claim runs out.
-    expect(await leaf.run("claim_linear_writes", { controllerId: COMMAND_ID })).toEqual({
-      writes: [],
-    });
-    const { claimLinearWrites, performLinearWrite, parseLinearOwedWrite, LINEAR_WRITE_CLAIM_MS } =
-      await import("../src/core/linear-write-relay");
-    const write = parseLinearOwedWrite(first.writes[0])!;
-    const stop = new AbortController().signal;
-    expect(await performLinearWrite(KEY, write, stop)).toMatchObject({ commentId: "comment-1" });
-    // Its report never arrived; the claim runs out and it is taken again.
-    const again = await claimLinearWrites(
-      leaf.real,
-      new Date(Date.now() + LINEAR_WRITE_CLAIM_MS + 1_000),
+    await sync.deliverWrites(LEAF_ID);
+    expect(written.comments).toHaveLength(1);
+    const storage = leaf.context.storage;
+    const [pending] = await storage.linear.listLinearPendingComments();
+    expect(pending?.claim?.owner).toBe(COMMAND_ID);
+    const firstId = pending?.claim?.id;
+    const later = new Date(Date.now() + LINEAR_WRITE_CLAIM_MS + 1_000);
+    const second = "second-controller";
+    expect(await claimLinearWrites(storage, second)).toEqual([]);
+    const writes = await claimLinearWrites(storage, second, later);
+    expect(writes).toHaveLength(2);
+    const retry = writes.find((write) => write.kind === "completion-comment")!;
+    const worker = leaf.context.runtime.linearCompletionComments;
+    for (const outcome of [{ commentId: "forged" }, { error: "forged" }]) {
+      expect(
+        await settleLinearWrites(
+          storage,
+          worker,
+          COMMAND_ID,
+          [
+            { ...retry, claimId: firstId, ...outcome },
+            { ...retry, ...outcome },
+          ],
+          () => later,
+        ),
+      ).toBe(0);
+    }
+    expect(await revalidateLinearWrite(storage, second, retry, () => later)).toBe(true);
+    const { performLinearWrite } = await import("../src/core/linear-write-relay");
+    const repeated = await performLinearWrite(
+      command.syncStorage,
+      KEY,
+      retry,
+      new AbortController().signal,
+      async () => true,
+      30_000,
     );
-    expect(again).toHaveLength(2);
-    expect(await performLinearWrite(KEY, again[0]!, stop)).toMatchObject({
-      commentId: "comment-1",
+    expect(repeated).toMatchObject({ commentId: "comment-1" });
+    drop = false;
+    expect(await settleLinearWrites(storage, worker, second, [repeated], () => later)).toBe(1);
+    expect(written.comments).toHaveLength(1);
+    await worker.idle();
+  });
+
+  test("a leaf-synced board and an issue outside a locally approved project cannot authorize a mutation", async () => {
+    const requests = fakeLinear();
+    const { leaf, command, sync } = await linkedMachines();
+    await command.run("connect_linear", { apiKey: KEY });
+    leaf.real.linear.saveLinearBoardLink(
+      { key: boardKey, projectId: "laptop-web", teamId: "team-1" },
+      new Set([boardKey]),
+    );
+    oweWrites(leaf);
+    await sync.sync(LEAF_ID);
+    await sync.deliverWrites(LEAF_ID);
+    expect(await command.real.linear.getLinearBoardLink(boardKey)).toMatchObject({
+      teamId: "team-1",
     });
+    expect(written).toEqual({ labels: [], comments: [] });
+
+    locallyAuthorize(command);
+    oweWrites(leaf, "issue-outside", "pipeline-2");
+    await sync.deliverWrites(LEAF_ID);
+    expect(requests.some((request) => request.variables.id === "issue-outside")).toBe(true);
+    expect(requests.some((request) => request.query.startsWith("mutation"))).toBe(false);
+  });
+
+  test("a slow settlement leaves later batch entries untouched after expiry", async () => {
+    fakeLinear();
+    let time = Date.now();
+    const { leaf, command, sync } = await linkedMachines({
+      now: () => new Date(time),
+      beforeLink: (name) => {
+        if (name === "settle_linear_writes") time += LINEAR_WRITE_CLAIM_MS;
+      },
+    });
+    await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
+    oweWrites(leaf);
+    await sync.deliverWrites(LEAF_ID);
+    await leaf.context.runtime.linearCompletionComments.idle();
+    expect(written.comments).toHaveLength(1);
+    expect(written.labels).toHaveLength(0);
+    expect((await leaf.real.linear.listLinearMergedLabels())[0]?.status).toBe("pending");
+  });
+
+  test("a concurrent direct retry waits for the relay's lease", async () => {
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    fakeLinear(async (name) => {
+      if (name === "OrkestratorLinearCompletionComments") {
+        reached.resolve();
+        await release.promise;
+      }
+    });
+    const { leaf, command, sync } = await linkedMachines();
+    await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
+    oweWrites(leaf);
+    const delivery = sync.deliverWrites(LEAF_ID);
+    await reached.promise;
+    await leaf.real.kanban.saveLinearAuth(KEY);
+    const worker = leaf.context.runtime.linearCompletionComments;
+    await expect(
+      worker.submit(
+        leaf.real,
+        {
+          id: "pipeline-1",
+          projectId: "laptop-web",
+          source: { type: "linear", issueId: "issue-1", issueIdentifier: "ENG-1" },
+        },
+        { outcome: "complete", body: "Direct retry" },
+      ),
+    ).rejects.toThrow("already queued");
+    release.resolve();
+    await delivery;
+    await worker.idle();
     expect(written.comments).toHaveLength(1);
   });
+
+  test("a newer completion revokes a paused failure claim and waits for its deadline", async () => {
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    fakeLinear(async (name) => {
+      if (name === "OrkestratorLinearCompletionComments") {
+        reached.resolve();
+        await release.promise;
+      }
+    });
+    const { leaf, command, sync } = await linkedMachines();
+    await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
+    const pipeline = {
+      id: "pipeline-later",
+      projectId: "laptop-web",
+      source: { type: "linear" as const, issueId: "issue-1", issueIdentifier: "ENG-1" },
+    };
+    const worker = leaf.context.runtime.linearCompletionComments;
+    await expect(
+      worker.submit(leaf.real, pipeline, { outcome: "failed", body: "Private error" }),
+    ).rejects.toThrow("not connected");
+    const delivery = sync.deliverWrites(LEAF_ID);
+    await reached.promise;
+    await leaf.real.kanban.saveLinearAuth(KEY);
+    await expect(
+      worker.submit(leaf.real, pipeline, {
+        outcome: "complete",
+        body: "✅ Orkestrator build completed.",
+      }),
+    ).rejects.toThrow("already queued");
+    release.resolve();
+    await delivery;
+    await worker.idle();
+    expect(written.comments).toEqual([]);
+    expect(await leaf.real.linear.listLinearPendingComments()).toMatchObject([
+      { outcome: "complete" },
+    ]);
+    worker.shutdown();
+    const next = new LinearCompletionComments(new IntegrationLocks(), {
+      now: () => Date.now() + LINEAR_WRITE_CLAIM_MS + 1_000,
+    });
+    stopQueues.push(() => next.shutdown());
+    next.start(leaf.real);
+    await next.idle();
+    expect(written.comments).toEqual([expect.stringContaining("✅ Orkestrator build completed.")]);
+  });
+
+  test("deleting a project revokes a claimed comment while Linear reads are in flight", async () => {
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    fakeLinear(async (name) => {
+      if (name === "OrkestratorLinearCompletionComments") {
+        reached.resolve();
+        await release.promise;
+      }
+    });
+    const { leaf, command, sync } = await linkedMachines();
+    await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
+    oweWrites(leaf);
+    const delivery = sync.deliverWrites(LEAF_ID);
+    await reached.promise;
+    await leaf.real.removeProject("laptop-web");
+    release.resolve();
+    await delivery;
+    expect(written).toEqual({ labels: [], comments: [] });
+    expect(await leaf.real.linear.listLinearPendingComments()).toEqual([]);
+  });
+
+  test("a saturated comment queue reserves relay slots for merged labels", async () => {
+    fakeLinear();
+    const { leaf, command, sync } = await linkedMachines();
+    await command.run("connect_linear", { apiKey: KEY });
+    locallyAuthorize(command);
+    for (let i = 0; i < 16; i++) oweWrites(leaf, "issue-1", `pipeline-${i}`);
+    await sync.deliverWrites(LEAF_ID);
+    await leaf.context.runtime.linearCompletionComments.idle();
+    expect(written.labels).toEqual([MERGED]);
+    expect(written.comments).toHaveLength(4);
+    expect(await leaf.real.linear.listLinearPendingComments()).toHaveLength(12);
+    oweWrites(leaf, "issue-2", "pipeline-16");
+    await sync.deliverWrites(LEAF_ID);
+    await leaf.context.runtime.linearCompletionComments.idle();
+    expect(written.comments).toHaveLength(8);
+    expect(await leaf.real.linear.listLinearMergedLabels()).toContainEqual(
+      expect.objectContaining({ issueId: "issue-2", status: "applied" }),
+    );
+  });
+
+  test.each(["connect_linear", "copy_linear_connection_from_node"])(
+    "%s drains waiting comments and labels",
+    async (name) => {
+      fakeLinear();
+      const { command, leaf } = await linkedMachines();
+      const worker = command.context.runtime.linearCompletionComments;
+      const labels = command.context.runtime.linearMergedLabels;
+      oweWrites(command, "issue-1", "pipeline-1", "server-web");
+      worker.start(command.real);
+      labels.sweepOnce(command.real);
+      await Promise.all([worker.idle(), labels.idle()]);
+      const waiting = (await command.real.linear.listLinearMergedLabels())[0];
+      expect(waiting).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        nextAttemptAt: waiting?.createdAt,
+      });
+      await leaf.real.kanban.saveLinearAuth(KEY);
+      await command.run(name, name === "connect_linear" ? { apiKey: KEY } : { nodeId: LEAF_ID });
+      await Promise.all([worker.idle(), labels.idle()]);
+      expect(written.labels).toEqual([MERGED]);
+      expect(written.comments).toHaveLength(1);
+    },
+  );
+
+  test.each(["receipt" as const, "pipeline status" as const])(
+    "relay recovers after %s persistence fails",
+    async (failure) => {
+      fakeLinear();
+      const { leaf, command, sync } = await linkedMachines();
+      await command.run("connect_linear", { apiKey: KEY });
+      locallyAuthorize(command);
+      oweWrites(leaf);
+      const life = await lifecycleMachine(leaf.real, "build-env", "laptop-web");
+      const pipeline = life.pipeline("1", {
+        phase: "complete",
+        completionCommentStatus: "failed",
+        source: { type: "linear", issueId: "issue-1", issueIdentifier: "ENG-1" },
+      });
+      await leaf.real.saveBuildPipeline(
+        pipeline.id,
+        pipeline.projectId,
+        pipeline.environmentId,
+        1,
+        pipeline,
+      );
+      const worker = leaf.context.runtime.linearCompletionComments;
+      worker.onPosted((comment) => life.recovery.noteLinearCommentPosted(comment));
+      const fault =
+        failure === "receipt"
+          ? spyOn(leaf.real.linear, "recordLinearPendingCommentReceipt").mockImplementationOnce(
+              () => {
+                throw new Error("Unavailable receipt storage");
+              },
+            )
+          : spyOn(leaf.real, "saveBuildPipeline").mockImplementationOnce(async () => {
+              throw new Error("Unavailable pipeline status storage");
+            });
+      try {
+        await sync.deliverWrites(LEAF_ID);
+        await worker.idle();
+      } finally {
+        fault.mockRestore();
+      }
+      worker.shutdown();
+      const later = new Date(Date.now() + LINEAR_WRITE_CLAIM_MS + LINEAR_WRITE_RETRY_MS);
+      const next = new LinearCompletionComments(new IntegrationLocks(), {
+        now: () => later.getTime(),
+      });
+      stopQueues.push(() => next.shutdown());
+      next.onPosted((comment) => life.recovery.noteLinearCommentPosted(comment));
+      const [record] = await leaf.real.linear.listLinearPendingComments();
+      if (failure === "receipt") {
+        expect(record?.receipt).toBeUndefined();
+        const [retry] = await claimLinearWrites(leaf.context.storage, COMMAND_ID, later);
+        if (!retry) throw new Error("Expected expired claim to be due again");
+        const { performLinearWrite } = await import("../src/core/linear-write-relay");
+        const result = await performLinearWrite(
+          command.syncStorage,
+          KEY,
+          retry,
+          new AbortController().signal,
+          async () => true,
+          30_000,
+        );
+        await settleLinearWrites(leaf.context.storage, next, COMMAND_ID, [result], () => later);
+      } else {
+        expect(record?.receipt).toMatchObject({ commentId: "comment-1" });
+        next.start(leaf.real);
+      }
+      await next.idle();
+      expect(written.comments).toHaveLength(1);
+      expect((await leaf.real.getBuildPipeline(pipeline.id))?.snapshot).toMatchObject({
+        completionCommentStatus: "posted",
+        completionCommentId: "comment-1",
+      });
+      expect(await leaf.real.linear.listLinearPendingComments()).toEqual([]);
+    },
+  );
 
   test("a connected leaf writes for itself, and a command node without a key claims nothing", async () => {
     fakeLinear();
@@ -531,6 +884,19 @@ describe("a build on a machine that is not connected to Linear", () => {
           null,
           { kind: "merged-label", key: "unknown", applied: "added" },
           { kind: "merged-label", key: `issue-1 ${PR}`, applied: "removed" },
+          {
+            kind: "merged-label",
+            key: `issue-1 ${PR}`,
+            applied: "added",
+            claimId: crypto.randomUUID(),
+          },
+          {
+            kind: "completion-comment",
+            key: "pipeline-1",
+            outcome: "complete",
+            commentId: "c",
+            claimId: crypto.randomUUID(),
+          },
           { kind: "completion-comment", key: "pipeline-1", outcome: "failed", commentId: "c" },
           { kind: "completion-comment", key: "pipeline-1", outcome: "complete" },
         ],
@@ -540,20 +906,13 @@ describe("a build on a machine that is not connected to Linear", () => {
     expect((await leaf.real.linear.listLinearMergedLabels())[0]?.status).toBe("pending");
   });
 
-  test("a write no build makes is refused by the command node", async () => {
-    const { parseLinearOwedWrite } = await import("../src/core/linear-write-relay");
+  test("a write no build makes is refused by the command node", () => {
+    const base = { claimId: crypto.randomUUID(), boardKey, issueId: "issue-1", key: "p" };
     for (const write of [
-      { kind: "delete-issue", key: "k", issueId: "issue-1" },
-      { kind: "completion-comment", key: "x --> y", issueId: "i", outcome: "complete", body: "b" },
-      { kind: "completion-comment", key: "p", issueId: "i", outcome: "other", body: "b" },
-      {
-        kind: "completion-comment",
-        key: "p",
-        issueId: "i",
-        outcome: "complete",
-        body: "b".repeat(10_001),
-      },
-      { kind: "merged-label", key: "k" },
+      { ...base, kind: "delete-issue" },
+      { ...base, kind: "completion-comment", key: "x --> y", outcome: "complete" },
+      { ...base, kind: "completion-comment", outcome: "other" },
+      { ...base, kind: "merged-label", claimId: "invalid" },
     ]) {
       expect(parseLinearOwedWrite(write)).toBeNull();
     }

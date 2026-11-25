@@ -3,6 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+// Bun omits passing tests from its output when any of these says an AI agent is
+// running it, and this contract reads the `(pass)` lines.
+const { CLAUDECODE: _c, AGENT: _a, REPL_ID: _r, ...reportingEnv } = process.env;
+
 const preload = resolve(import.meta.dir, "../default-test-timeout.ts");
 
 // Exercise the actual preload in fresh test runners, without the repository's
@@ -27,7 +31,7 @@ test("${name} uses the preload budget", async () => { await Bun.sleep(5100); });
         [process.execPath, "test", "--preload", preload, ...files, ...flags],
         {
           cwd: root,
-          env: { ...process.env, NODE_ENV: "test" },
+          env: { ...reportingEnv, NODE_ENV: "test" },
           stdout: "pipe",
           stderr: "pipe",
           timeout: 45000,

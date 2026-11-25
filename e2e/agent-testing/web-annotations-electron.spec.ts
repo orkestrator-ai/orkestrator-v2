@@ -2433,8 +2433,10 @@ test("focus-loss diagnostics preserve the keyboard failure using real Electron w
   let explained: unknown;
   try {
     await keyboardAnnotationCase(async () => {
-      await s().app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.blur());
-      const facts = await readWindowFocus(s().app);
+      const host = await s().app.browserWindow(s().window);
+      await host.evaluate((window) => window.blur());
+      await host.dispose();
+      const facts = await readWindowFocus(s().app, s().window);
       expect(facts.electronPid).toBe(await s().app.evaluate(() => process.pid));
       expect(facts.electronPid).not.toBe(s().app.process().pid);
       expect(facts.windowFocused).toBe(false);
@@ -2478,7 +2480,7 @@ test("focus-loss diagnostics recognise another window in the same Electron main 
     // X11 reports the new window's focus and the old one's blur as separate
     // events, so for a moment both windows say they are focused.
     await expect.poll(() => host.evaluate((window) => window.isFocused())).toBe(false);
-    const facts = await readWindowFocus(app);
+    const facts = await readWindowFocus(app, s().window);
     expect(facts).toMatchObject({
       electronPid: mainPid,
       windowFocused: false,
@@ -2493,7 +2495,7 @@ test("focus-loss diagnostics recognise another window in the same Electron main 
         true,
       );
     } catch (error) {
-      explained = await explainLostFocus(error, app, true);
+      explained = await explainLostFocus(error, app, s().window, true);
       expect((explained as Error).cause).toBe(error);
     }
     expect(explained).toBeInstanceOf(Error);
@@ -2683,7 +2685,7 @@ async function keyboardAnnotationCase(afterFocusRead?: () => Promise<void>): Pro
   } catch (error) {
     // Another application can take the key window mid-case on a shared
     // desktop. Still fail, but say so rather than report a bare "inactive".
-    throw await explainLostFocus(error, s().app, windowFocused);
+    throw await explainLostFocus(error, s().app, s().window, windowFocused);
   } finally {
     try {
       if (draftKey) {
@@ -3447,14 +3449,20 @@ test("baselines: client selection-to-saved timing and backend command latency", 
   expect(clientTimings.spoolToSaved.length).toBeGreaterThan(0);
 });
 
-/** The selection highlight's border colour (`browser-preview-annotation-script.ts`). */
-const HIGHLIGHT_RGB: [number, number, number] = [38, 132, 255];
+/** The highlight's border colour once selected (`browser-preview-annotation-script.ts`). */
+const SELECTED_HIGHLIGHT_RGB: [number, number, number] = [245, 158, 11];
 /** The marker under the highlight's 10% tint. */
 const TINTED_MARKER_RGB: [number, number, number] = [233, 13, 255];
+/** One opaque red pixel, which shows the byte order `toBitmap()` uses on this platform. */
+const RED_PIXEL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+/** How far around the target, in image pixels, `colorBox` looks for its colours. */
+const CAPTURE_SEARCH_MARGIN = 12;
 
 /**
  * Bounding box, in image pixels, of pixels within `tolerance` of `rgb` inside
- * `within` (image pixels). Accepts BGRA and RGBA bitmaps.
+ * `within` (image pixels), read in the platform's own byte order: the selected
+ * border's amber with red and blue swapped is close to the hover border's blue.
  */
 async function colorBox(
   dataUrl: string,
@@ -3463,14 +3471,15 @@ async function colorBox(
   tolerance = 40,
 ) {
   return s().app.evaluate(
-    ({ nativeImage }, { dataUrl, rgb, within, tolerance }) => {
+    ({ nativeImage }, { dataUrl, redPixel, rgb, within, tolerance }) => {
+      const redAt = nativeImage.createFromDataURL(redPixel).toBitmap()[0] === 255 ? 0 : 2;
       const image = nativeImage.createFromDataURL(dataUrl);
       const { width, height } = image.getSize();
       const bitmap = image.toBitmap();
-      const near = (a: number, b: number, c: number) =>
-        Math.abs(a - rgb[0]) <= tolerance &&
-        Math.abs(b - rgb[1]) <= tolerance &&
-        Math.abs(c - rgb[2]) <= tolerance;
+      const near = (red: number, green: number, blue: number) =>
+        Math.abs(red - rgb[0]) <= tolerance &&
+        Math.abs(green - rgb[1]) <= tolerance &&
+        Math.abs(blue - rgb[2]) <= tolerance;
       let minX = width;
       let minY = height;
       let maxX = -1;
@@ -3482,10 +3491,10 @@ async function colorBox(
       for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
           const offset = (y * width + x) * 4;
-          const p0 = bitmap[offset]!;
-          const p1 = bitmap[offset + 1]!;
-          const p2 = bitmap[offset + 2]!;
-          if (near(p0, p1, p2) || near(p2, p1, p0)) {
+          const red = bitmap[offset + redAt]!;
+          const green = bitmap[offset + 1]!;
+          const blue = bitmap[offset + 2 - redAt]!;
+          if (near(red, green, blue)) {
             if (x < minX) minX = x;
             if (y < minY) minY = y;
             if (x > maxX) maxX = x;
@@ -3497,7 +3506,7 @@ async function colorBox(
         ? null
         : { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
     },
-    { dataUrl, rgb, within, tolerance },
+    { dataUrl, redPixel: RED_PIXEL, rgb, within, tolerance },
   );
 }
 
@@ -3583,8 +3592,12 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
         }
         for (const zoom of [0.8, 1, 1.5]) {
           await setPreviewZoom(zoom);
+          // The white surround covers the search window: the fixture's text
+          // would otherwise show through the highlight's outer ring, where its
+          // LCD antialiasing (native windows only) has highlight-like pixels.
+          const surround = Math.ceil((CAPTURE_SEARCH_MARGIN + 1) / (run.dpr * zoom));
           await inPreview(
-            `(() => { document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); const marker = document.createElement("div"); marker.id = ${JSON.stringify(MARKER_ID)}; Object.assign(marker.style, { position: "fixed", left: "200px", top: "140px", width: "160px", height: "90px", background: "rgb(255, 0, 255)", zIndex: "2147480000" }); document.body.append(marker); return true; })()`,
+            `(() => { document.getElementById(${JSON.stringify(MARKER_ID)})?.remove(); const marker = document.createElement("div"); marker.id = ${JSON.stringify(MARKER_ID)}; Object.assign(marker.style, { position: "fixed", left: "200px", top: "140px", width: "160px", height: "90px", background: "rgb(255, 0, 255)", boxShadow: "0 0 0 ${surround}px white", zIndex: "2147480000" }); document.body.append(marker); return true; })()`,
           );
           const { descriptor, rect } = await captureElement(`#${MARKER_ID}`, 0, zoom, tabId);
           const pending = await readPending(descriptor.captureId);
@@ -3619,12 +3632,12 @@ test("capture pixels stay on the target at preview zoom 0.8, 1 and 1.5 and at DP
             const tolerance = Math.max(2, Math.ceil(scale) + 1);
             const expected = scaled(target, scale);
             const search = {
-              x: expected.x - 12,
-              y: expected.y - 12,
-              width: expected.width + 24,
-              height: expected.height + 24,
+              x: expected.x - CAPTURE_SEARCH_MARGIN,
+              y: expected.y - CAPTURE_SEARCH_MARGIN,
+              width: expected.width + 2 * CAPTURE_SEARCH_MARGIN,
+              height: expected.height + 2 * CAPTURE_SEARCH_MARGIN,
             };
-            const highlight = await colorBox(pending.imageDataUrl!, HIGHLIGHT_RGB, search);
+            const highlight = await colorBox(pending.imageDataUrl!, SELECTED_HIGHLIGHT_RGB, search);
             const marker = await colorBox(pending.imageDataUrl!, TINTED_MARKER_RGB, search);
             record(testInfo, `${label}-pixels`, JSON.stringify({ highlight, marker, expected }));
             const attachCapture = () =>

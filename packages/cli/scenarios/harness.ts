@@ -28,6 +28,8 @@ const BIN = path.join(PACKAGE_ROOT, "bin", "orkestrator.js");
 const READY_TIMEOUT_MS = 60_000;
 const TOOLCHAIN_INSTALL_TIMEOUT_MS = 5 * 60_000;
 const COMMAND_TIMEOUT_MS = 10 * 60_000;
+/** How long a killed command's pipes and exit may take to settle. */
+const UNSETTLED_GRACE_MS = 5_000;
 const HELPER_TIMEOUT_MS = 60_000;
 const MAX_CAPTURE_BYTES = 4 * 1024 * 1024;
 
@@ -410,6 +412,8 @@ export class CliDriver {
     readonly scenario: string,
     readonly env: Record<string, string>,
     readonly manifest: RunManifest,
+    /** How long one command may take when the call names no limit of its own. */
+    private readonly commandTimeoutMs = COMMAND_TIMEOUT_MS,
   ) {}
 
   async run(
@@ -436,25 +440,71 @@ export class CliDriver {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const deadline = setTimeout(
-      () => child.kill("SIGKILL"),
-      options.timeoutMs ?? COMMAND_TIMEOUT_MS,
-    );
+    let killed = false;
+    const killIfRunning = () => {
+      if (killed || child.exitCode !== null || child.signalCode !== null) return;
+      child.kill("SIGKILL");
+      killed = true;
+    };
+    const deadline = setTimeout(killIfRunning, options.timeoutMs ?? this.commandTimeoutMs);
     const bounded = async (stream: ReadableStream<Uint8Array>) => {
       const text = await new Response(stream).text();
       return text.length > MAX_CAPTURE_BYTES ? text.slice(-MAX_CAPTURE_BYTES) : text;
     };
     const signal = options.signalWhenObserving;
-    const [stdout, stderr, code] = await Promise.all([
-      bounded(child.stdout),
-      signal
-        ? captureUntilObserving(child.stderr, () => {
-            if (child.exitCode === null && child.signalCode === null) child.kill(signal);
-          })
-        : bounded(child.stderr),
-      child.exited,
-    ]);
-    clearTimeout(deadline);
+    // Which of the child's three ends has settled, for the failure below.
+    const pending = new Set(["stdout", "stderr", "exit"]);
+    const settling = <T>(end: string, promise: Promise<T>) =>
+      promise.finally(() => pending.delete(end));
+    // A killed child whose ends still do not settle (flake 1001: Bun never saw
+    // it exit) names its stage here, instead of hanging to the test's timeout.
+    let unsettled: ReturnType<typeof setTimeout> | undefined;
+    const watchdog = new Promise<never>((_, reject) => {
+      unsettled = setTimeout(
+        () =>
+          reject(
+            new ScenarioFailure(
+              `[${options.stage}] pid ${child.pid} did not settle (${Array.from(pending).join(", ")} open; exitCode ${child.exitCode}, signal ${child.signalCode})`,
+            ),
+          ),
+        (options.timeoutMs ?? this.commandTimeoutMs) + UNSETTLED_GRACE_MS,
+      );
+    });
+    const ends = [
+      settling("stdout", bounded(child.stdout)),
+      settling(
+        "stderr",
+        signal
+          ? captureUntilObserving(child.stderr, () => {
+              if (!killed && child.exitCode === null && child.signalCode === null)
+                child.kill(signal);
+            })
+          : bounded(child.stderr),
+      ),
+      settling("exit", child.exited),
+    ] as const;
+    const [stdout, stderr, code] = await Promise.race([Promise.all(ends), watchdog])
+      .catch(async (error: unknown) => {
+        if (!killed) {
+          let drain: ReturnType<typeof setTimeout> | undefined;
+          try {
+            killIfRunning();
+            await Promise.race([
+              Promise.allSettled(ends),
+              new Promise<void>((resolve) => {
+                drain = setTimeout(resolve, UNSETTLED_GRACE_MS);
+              }),
+            ]);
+          } finally {
+            clearTimeout(drain);
+          }
+        }
+        throw error;
+      })
+      .finally(() => {
+        clearTimeout(deadline);
+        clearTimeout(unsettled);
+      });
     const result: CliResult = {
       argv,
       code,

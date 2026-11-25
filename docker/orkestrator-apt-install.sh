@@ -44,6 +44,8 @@ APT_PACKAGES_MAX=32
 LOCK_FILE=/root/.orkestrator-apt-install.lock
 LOCK_WAIT_SECONDS=900
 APT_NAME_MAX=100
+# Seconds before each further archive attempt behind a gateway.
+APT_ARCHIVE_RETRY_DELAYS=(5 15 30)
 # Packages that change the container boundary: privilege grants, the
 # firewall, and remote login. Keep in step with APT_PACKAGE_DENYLIST in
 # packages/protocol/src/apt-packages.ts (tests/unit/apt-packages-installer.test.ts).
@@ -148,8 +150,25 @@ run_apt() {
 }
 APT_OPTIONS=(-o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=120)
 
+# Under Restricted the gateway opens the addresses deb.debian.org resolved to
+# when it last looked, and a CDN name can answer with another one: that
+# connection is rejected at once, and apt's own retries reuse the address. A
+# later run looks the name up again, so wait past the record's short TTL.
+retry_archive() {
+    local delay
+    if run_apt apt-get "${APT_OPTIONS[@]}" "$@"; then return 0; fi
+    if [ "$network_mode" = restricted ]; then
+        for delay in "${APT_ARCHIVE_RETRY_DELAYS[@]}"; do
+            echo "Debian's archive could not be reached; trying again in ${delay}s"
+            sleep "$delay"
+            if run_apt apt-get "${APT_OPTIONS[@]}" "$@"; then return 0; fi
+        done
+    fi
+    return 1
+}
+
 echo "Updating the package lists from Debian's archive"
-if ! run_apt apt-get "${APT_OPTIONS[@]}" -q --error-on=any update; then
+if ! retry_archive -q --error-on=any update; then
     echo "orkestrator-apt-install: Debian's archive could not be reached (deb.debian.org)" >&2
     exit 5
 fi
@@ -184,7 +203,17 @@ done <<< "$plan"
 echo "Installing: ${packages[*]}"
 # --no-remove: the plan above removes nothing, and the lock keeps it the plan,
 # but the install itself refuses a removal too.
-if ! run_apt apt-get "${APT_OPTIONS[@]}" install -y -q --no-install-recommends --no-remove \
+install_options=(install -y -q --no-install-recommends --no-remove)
+if [ "$network_mode" = restricted ]; then
+    # Repeat only the archive access. Once dpkg starts, a retry could run
+    # maintainer scripts again after a partial installation.
+    if ! retry_archive "${install_options[@]}" --download-only -- "${packages[@]}"; then
+        echo "orkestrator-apt-install: apt-get could not download the packages" >&2
+        exit 6
+    fi
+    install_options+=(--no-download)
+fi
+if ! run_apt apt-get "${APT_OPTIONS[@]}" "${install_options[@]}" \
     -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -- "${packages[@]}"; then
     echo "orkestrator-apt-install: apt-get install failed" >&2
     exit 6

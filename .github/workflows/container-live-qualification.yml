@@ -336,11 +336,28 @@ jobs:
           ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
         run: docker image inspect "$ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE" > /dev/null && mise run test:logged -- --name preview-worker-container -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-container.test.ts --parallel=1
 
+      # The build the pinned Playwright drives; the runner image's own Chromium
+      # is another one, and the arm64 image has none.
+      - name: Install the pinned Playwright Chromium
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        run: |
+          printf 'Acquire::Retries "5";\nAcquire::http::Timeout "10";\nAcquire::https::Timeout "10";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99orkestrator-ci-timeouts >/dev/null
+          bunx playwright install --with-deps chromium
+
+      # Host Chromium's sandbox needs namespaces that Ubuntu's AppArmor policy
+      # denies. Restore the runner's policy before the next container suite.
       - name: Live PDF print and thumbnail in the fresh preview worker
         if: ${{ !cancelled() }}
         env:
           ORKESTRATOR_ARTIFACT_PREVIEW_IMAGE: orkestrator-artifact-preview-worker:qualification-${{ matrix.name }}
-        run: mise run test:logged -- --name preview-worker-pdf -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-print.test.ts --parallel=1 --test-name-pattern 'prints and previews PDFs inside the network-less container'
+        run: |
+          namespace_policy=$(sysctl -n kernel.apparmor_restrict_unprivileged_userns)
+          trap 'sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns="$namespace_policy"' EXIT
+          sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          unshare --user --map-root-user true
+          mise run test:logged -- --name preview-worker-pdf -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/transcript-artifacts/preview-print.test.ts --parallel=1 --test-name-pattern 'prints and previews PDFs inside the network-less container'
 
       # Numbers only, compared by hand with the Docker Desktop figures
       # (container-qualification.md, "Exec cost and container change signals").

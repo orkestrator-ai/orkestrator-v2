@@ -2475,6 +2475,9 @@ test("focus-loss diagnostics recognise another window in the same Electron main 
       window.focus();
     }, other);
     await expect.poll(() => other.evaluate((window) => window.isFocused())).toBe(true);
+    // X11 reports the new window's focus and the old one's blur as separate
+    // events, so for a moment both windows say they are focused.
+    await expect.poll(() => host.evaluate((window) => window.isFocused())).toBe(false);
     const facts = await readWindowFocus(app);
     expect(facts).toMatchObject({
       electronPid: mainPid,

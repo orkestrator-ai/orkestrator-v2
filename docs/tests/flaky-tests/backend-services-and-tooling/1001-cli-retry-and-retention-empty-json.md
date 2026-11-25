@@ -29,3 +29,10 @@
 - **Reproduced:** yes. Before the change, 4 of 9 plain runs of the owning file hung. With only the fixture's `git` converted, 1 of 22 hung (while `cases.ts` still used `spawnSync`). With every helper converted, 15 of 15 plain runs passed.
 - **Stress:** `mise run test:logged -- --name cli-client-contention -- bun scripts/test-under-contention.ts --burners 6 -- bun test --cwd packages/cli --preload ../../tests/setup-node.ts tests/cli-client.test.ts --rerun-each=8 --parallel=1 --only-failures` passed (macOS, unpinned burners).
 - **Status stays open:** the original symptom above (`project add` printing no stdout after 2.6 s) is a different failure from a hang, and this change does not show that it shared the cause.
+
+## Recurrence (2026-11-23): a hang, and diagnostics for the next one
+
+- **Recurrence check:** `mise run flaky:recurrence -- 1001 --base a2609f28b --registry-ref origin/main`: open.
+- **Observed on CI:** run 45194838352 (pull request #2548, base `a2609f28b`), job 137762423199 `Tests (workspace)`: `scenario: retry-and-retention` timed out after 120,000.38 ms. The runner's lone rerun of `packages/cli/tests/cli-client.test.ts` passed (10.9 s). The output does not say which command hung.
+- **Change (2026-11-24):** `CliDriver.run` (`packages/cli/scenarios/harness.ts`) now fails a command that is still unsettled five seconds after its limit, naming the stage, the pid, which of stdout, stderr and exit never settled, and the exit code Bun holds. `cli-client.test.ts` gives its drivers a 60 s limit, below the file's 120 s test timeout. Covered by `packages/cli/tests/scenario-harness.test.ts`. This adds evidence only; a hang still fails the test.
+- **Verification:** `cli-client.test.ts` and `scenario-harness.test.ts` passed (12 tests, 7.0 s).

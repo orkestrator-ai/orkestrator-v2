@@ -38,6 +38,19 @@ async function recordedInput(page: Page) {
   return page.evaluate(() => (window as unknown as InputRecordingWindow).mobileShellInputEvents);
 }
 
+/**
+ * Opens the shell and closes its projects drawer, which starts open and makes
+ * the rest of the shell inert. An Escape sent before the drawer has mounted
+ * and taken focus is lost, and the shell then stays out of the role tree.
+ */
+async function openShellWithDrawerClosed(page: Page, url: string) {
+  await page.goto(url);
+  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
+  await expect(drawer.locator("button.absolute.right-2")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toHaveCount(0);
+}
+
 async function touchTap(page: Page, trigger: Locator) {
   const box = await trigger.boundingBox();
   if (!box) throw new Error("Expected a rendered touch target");
@@ -168,8 +181,7 @@ test("pen input dismisses the title bubble without touch events or click-through
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   test.skip(browserName !== "chromium", "CDP pen input requires Chromium");
-  await page.goto("/mobile-shell");
-  await page.keyboard.press("Escape");
+  await openShellWithDrawerClosed(page, "/mobile-shell");
   const title = page.getByRole("button", { name: mobileShellTitle });
   const tooltip = page.getByRole("tooltip");
   const client = await page.context().newCDPSession(page);
@@ -219,8 +231,7 @@ test("touch dismissal suppresses compatibility mouse events over an active works
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
-  await page.goto("/mobile-shell");
-  await page.keyboard.press("Escape");
+  await openShellWithDrawerClosed(page, "/mobile-shell");
   await touchTap(page, page.getByRole("button", { name: mobileShellTitle }));
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toBeVisible();
@@ -255,7 +266,6 @@ test("the title uses space released when the optional inbox is hidden", async ({
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
 
   const measure = async () => {
-    await page.keyboard.press("Escape");
     const title = page.getByRole("button", { name: mobileShellTitle });
     const tools = page.getByRole("button", { name: "Open tools" });
     const actions = page.getByTestId("mobile-title-actions");
@@ -270,11 +280,11 @@ test("the title uses space released when the optional inbox is hidden", async ({
     return { actionsBox, titleBox };
   };
 
-  await page.goto("/mobile-shell");
+  await openShellWithDrawerClosed(page, "/mobile-shell");
   const withInbox = await measure();
   await expect(page.getByRole("button", { name: "Agent inbox" })).toBeVisible();
 
-  await page.goto("/mobile-shell?withoutInbox");
+  await openShellWithDrawerClosed(page, "/mobile-shell?withoutInbox");
   const withoutInbox = await measure();
   await expect(page.getByRole("button", { name: "Agent inbox" })).toHaveCount(0);
 
@@ -289,12 +299,7 @@ test("a narrow Electron title remains a native drag region", async ({
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop runtime coverage only");
   test.skip(browserName !== "chromium", "native drag regions are Electron's, so Chromium-only");
   await page.setViewportSize({ width: 700, height: 700 });
-  await page.goto("/mobile-shell?desktop");
-
-  const drawer = page.getByRole("dialog", { name: "Projects and environments" });
-  await expect(drawer.locator("button.absolute.right-2")).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(drawer).toHaveCount(0);
+  await openShellWithDrawerClosed(page, "/mobile-shell?desktop");
 
   const title = page.getByRole("button", { name: mobileShellTitle });
   await expect(title).toHaveAttribute("data-backend-drag-region", "");

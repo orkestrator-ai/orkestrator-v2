@@ -52,7 +52,7 @@ afterEach(() => {
 const APT_GET_STUB = `#!/bin/bash
 dir=__DIR__
 printf '%s\\n' "$*" >> "$dir/apt-get.log"
-cmd=""; sim=0; noremove=0; after=0; names=()
+cmd=""; sim=0; noremove=0; download=0; cacheonly=0; after=0; names=()
 while [ $# -gt 0 ]; do
     if [ "$after" = 1 ]; then names+=("$1"); shift; continue; fi
     case "$1" in
@@ -60,13 +60,21 @@ while [ $# -gt 0 ]; do
         -o) shift ;;
         -s) sim=1 ;;
         --no-remove) noremove=1 ;;
+        --download-only) download=1 ;;
+        --no-download) cacheonly=1 ;;
         -*) ;;
         *) [ -z "$cmd" ] && cmd=$1 ;;
     esac
     shift
 done
 case "$cmd" in
-    update) [ -e "$dir/update-fails" ] && exit 100; exit 0 ;;
+    update)
+        # How many more updates fail; empty means every one.
+        [ -e "$dir/update-fails" ] || exit 0
+        left=$(cat "$dir/update-fails")
+        [ "$left" = 0 ] && exit 0
+        [ -n "$left" ] && echo $((left - 1)) > "$dir/update-fails"
+        exit 100 ;;
     clean) exit 0 ;;
     install) ;;
     *) exit 2 ;;
@@ -86,6 +94,15 @@ if [ "$sim" = 1 ]; then
     for name in "\${names[@]}"; do echo "Inst $name (1.0 Debian:13/stable [amd64])"; done
     exit 0
 fi
+if [ "$download" = 1 ]; then
+    if [ -e "$dir/download-fails-once" ]; then
+        rm "$dir/download-fails-once"
+        exit 100
+    fi
+    touch "$dir/downloaded"
+    exit 0
+fi
+[ "$cacheonly" = 0 ] || [ -e "$dir/downloaded" ] || exit 100
 [ -e "$dir/install-delay" ] && sleep "$(cat "$dir/install-delay")"
 gone=$(removals)
 if [ -n "$gone" ] && [ "$noremove" = 1 ]; then
@@ -153,6 +170,7 @@ function sandbox(input: {
     ["/root/", `${root}/root/`],
     ["/etc/orkestrator/", `${root}/etc/orkestrator/`],
     ["/run/orkestrator-network/", `${root}/run/orkestrator-network/`],
+    ["APT_ARCHIVE_RETRY_DELAYS=(5 15 30)", "APT_ARCHIVE_RETRY_DELAYS=(0.01 0.01 0.01)"],
     ["PATH=/usr/sbin:/usr/bin:/sbin:/bin", `PATH=${stubs}:/usr/sbin:/usr/bin:/sbin:/bin`],
   ] as const) {
     // A rewrite that no longer matches would test the host instead.
@@ -224,7 +242,7 @@ describe.skipIf(skipInstallerPlan)("orkestrator-apt-install after its argument c
         .aptGetCalls()
         .filter((call) => call.includes(" install "))
         .map((call) => call.split(" -- ")[1]),
-    ).toEqual(["hello cowsay", "hello cowsay"]);
+    ).toEqual(["hello cowsay", "hello cowsay", "hello cowsay"]);
   });
 
   test("installs a real package behind a verified gateway, with --no-remove", () => {
@@ -232,9 +250,7 @@ describe.skipIf(skipInstallerPlan)("orkestrator-apt-install after its argument c
     box.setRecords(GATEWAY);
     expect(install(box, "hello").code).toBe(0);
     expect(box.installed()).toEqual(["hello"]);
-    const real = box
-      .aptGetCalls()
-      .find((call) => call.includes("install") && !call.includes(" -s "));
+    const real = box.aptGetCalls().find((call) => call.includes(" --no-download "));
     expect(real).toContain("--no-install-recommends");
     expect(real).toContain("--no-remove");
     expect(real?.endsWith("-- hello")).toBe(true);
@@ -275,12 +291,46 @@ describe.skipIf(skipInstallerPlan)("orkestrator-apt-install after its argument c
     });
   }
 
-  test("an unreachable archive is status 5", () => {
+  const updates = (box: Sandbox) =>
+    box.aptGetCalls().filter((call) => call.endsWith(" update")).length;
+
+  test("an unreachable archive in full mode is status 5 after one update", () => {
+    const box = sandbox({ archive: ["hello"] });
+    box.setRecords({ networkMode: "full" });
+    box.write("update-fails", "");
+    expect(install(box, "hello").code).toBe(5);
+    expect(updates(box)).toBe(1);
+  });
+
+  test("an unreachable archive is status 5, after its bounded retries", () => {
     const box = sandbox({ archive: ["hello"] });
     box.setRecords(GATEWAY);
     box.write("update-fails", "");
     expect(install(box, "hello").code).toBe(5);
+    expect(updates(box)).toBe(4);
     expect(box.installed()).toEqual([]);
+  });
+
+  test("an archive address the gateway does not hold yet costs a retry, not the install", () => {
+    const box = sandbox({ archive: ["hello"] });
+    box.setRecords(GATEWAY);
+    box.write("update-fails", "2");
+    expect(install(box, "hello").code).toBe(0);
+    expect(updates(box)).toBe(3);
+    expect(box.installed()).toEqual(["hello"]);
+  });
+
+  test("retries downloads after a successful update and installs from cache once", () => {
+    const box = sandbox({ archive: ["hello"] });
+    box.setRecords(GATEWAY);
+    box.write("download-fails-once", "");
+    expect(install(box, "hello").code).toBe(0);
+    expect(updates(box)).toBe(1);
+    const installs = box.aptGetCalls().filter((call) => call.includes(" install "));
+    expect(
+      installs.map((call) => call.match(/ -s | --download-only | --no-download /)?.[0]?.trim()),
+    ).toEqual(["-s", "--download-only", "--download-only", "--no-download"]);
+    expect(box.installed()).toEqual(["hello"]);
   });
 
   test("a name the archive does not hold exactly is refused", () => {
@@ -334,6 +384,7 @@ describe.skipIf(skipInstallerPlan)("orkestrator-apt-install after its argument c
     box.setRecords(GATEWAY);
     box.write("sim-blind", "");
     expect(install(box, "postfix").code).toBe(6);
+    expect(box.aptGetCalls().filter((call) => call.includes(" --no-download "))).toHaveLength(1);
     expect(box.installed()).toEqual(["exim4-daemon-light"]);
     expect(box.removed()).toEqual([]);
   });

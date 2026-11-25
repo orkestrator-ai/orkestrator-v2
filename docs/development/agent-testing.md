@@ -1902,7 +1902,11 @@ CI runs that same command, over the whole suite, in
 qualification's schedule (Mondays 04:17 UTC), on demand (`workflow_dispatch`),
 and on pull requests that change the workflow, `playwright.electron.config.ts`
 or `electron-display-setup.ts`. It uses one GitHub-hosted `ubuntu-latest`
-runner and no secrets, sets `ORKESTRATOR_NATIVE_MENU_INPUT=1` (the runner's
+runner and no secrets. Before the suite it lifts AppArmor's user-namespace
+restriction (some specs start Electron or Chromium with the sandbox on),
+installs the pinned Playwright Chromium and builds the backend and renderer
+(the local gateway transport spec starts both). It sets
+`ORKESTRATOR_NATIVE_MENU_INPUT=1` (the runner's
 Xvfb display is an isolated desktop) and uploads
 `output/agent-testing/electron-qualification/electron` (the Playwright JSON
 report, traces and failure screenshots) for 14 days. The opt-in cases stay

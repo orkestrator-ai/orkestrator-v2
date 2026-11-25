@@ -24,14 +24,31 @@ test("a startup button that leaves the page under the click does not fail the ac
   expect(handler).toBeDefined();
   const timeouts: Array<number | undefined> = [];
   // As Playwright's click does when its target is gone: it waits out its timeout and throws.
+  const gone = async (options?: { timeout?: number }) => {
+    timeouts.push(options?.timeout);
+    throw new Error("locator: Timeout exceeded");
+  };
   const vanished = {
-    click: async (options?: { timeout?: number }) => {
-      timeouts.push(options?.timeout);
-      throw new Error("locator.click: Timeout exceeded");
-    },
+    click: gone,
+    dispatchEvent: (_type: string, _init: unknown, options?: { timeout?: number }) => gone(options),
   };
   await expect(handler(vanished)).resolves.toBeUndefined();
-  expect(timeouts).toEqual([5_000]);
+  expect(timeouts).toEqual([5_000, 1_000]);
+});
+
+test("a startup button another modal covers is dismissed without the pointer", async () => {
+  const { app, handlers } = fakeApp();
+  dismissStartupDialogs(app);
+  const events: string[] = [];
+  await handlers.get("Continue without GitHub CLI")!({
+    click: async () => {
+      throw new Error("locator.click: another element intercepts pointer events");
+    },
+    dispatchEvent: async (type: string) => {
+      events.push(type);
+    },
+  });
+  expect(events).toEqual(["click"]);
 });
 
 test("a startup button that is still there is clicked", async () => {

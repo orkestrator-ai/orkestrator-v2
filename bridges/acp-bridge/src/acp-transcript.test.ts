@@ -1623,6 +1623,8 @@ describe("ACP bridge", () => {
     ).toBe(202);
 
     // Observed while the turn is genuinely still open, not by racing its end.
+    // The card exists from its `tool_call`; its arguments come with the
+    // `cursor/task` message after that, so a snapshot between the two is early.
     const running = await waitFor(
       async () =>
         nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
@@ -1635,7 +1637,11 @@ describe("ACP bridge", () => {
         value.status === "running" &&
         value.messages
           .flatMap((message) => message.parts)
-          .some((part) => part.toolUseId === "cursor-task-held"),
+          .some(
+            (part) =>
+              part.toolUseId === "cursor-task-held" &&
+              (part.toolArgs as { description?: unknown } | undefined)?.description !== undefined,
+          ),
     );
     const live = running.messages
       .flatMap((message) => message.parts)

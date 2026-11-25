@@ -360,8 +360,47 @@ describe("CI workflow contracts", () => {
     const install = steps.findIndex((step) => /apt-get install .*xvfb/.test(step.run ?? ""));
     expect(install).toBeGreaterThanOrEqual(0);
     expect(install).toBeLessThan(suite);
+    // What specs in the suite need beyond Electron: a sandbox that can start,
+    // Playwright's own Chromium, and the built backend and renderer. Without
+    // them every run from the first (2026-11-15) failed the same specs.
+    for (const need of [
+      "kernel.apparmor_restrict_unprivileged_userns=0",
+      "bunx playwright install --with-deps chromium",
+      "bun run --cwd apps/backend build",
+      "bun run --cwd apps/web build",
+    ]) {
+      const step = steps.findIndex((candidate) => (candidate.run ?? "").includes(need));
+      expect(step, need).toBeGreaterThanOrEqual(0);
+      expect(step, need).toBeLessThan(suite);
+    }
     // Credential-free: no secret reaches the job.
     expect(source).not.toContain("secrets.");
+  });
+
+  test("only the live PDF step lifts the runner's AppArmor user-namespace restriction", () => {
+    const steps = workflow("container-live-qualification").jobs.engine!.steps!;
+    const install = steps.findIndex((step) =>
+      step.run?.includes("bunx playwright install --with-deps chromium"),
+    );
+    const pdf = steps.findIndex((step) => step.run?.includes("preview-worker-pdf"));
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(pdf).toBeGreaterThan(install);
+    const policy = "kernel.apparmor_restrict_unprivileged_userns";
+    expect(steps.filter((step) => step.run?.includes(policy))).toEqual([steps[pdf]!]);
+    const run = steps[pdf]!.run!;
+    expect(run).toContain(`namespace_policy=$(sysctl -n ${policy})`);
+    const restore = `trap 'sudo sysctl --write ${policy}="$namespace_policy"' EXIT`;
+    expect(run).toContain(restore);
+    expect(run.indexOf(restore)).toBeLessThan(run.indexOf(`${policy}=0`));
+    expect(run.indexOf(`${policy}=0`)).toBeLessThan(
+      run.indexOf("unshare --user --map-root-user true"),
+    );
+    expect(run.indexOf("unshare --user --map-root-user true")).toBeLessThan(
+      run.indexOf("preview-worker-pdf"),
+    );
+    expect(steps.findIndex((step) => step.name?.includes("Docker daemon restart"))).toBeGreaterThan(
+      pdf,
+    );
   });
 
   test("the scheduled live job runs every opt-in live container suite", () => {

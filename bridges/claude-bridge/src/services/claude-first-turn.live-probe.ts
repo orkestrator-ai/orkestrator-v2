@@ -33,6 +33,8 @@ import {
   type SpareProcess,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { runBridgeFirstTurn } from "./claude-first-turn-bridge-probe.js";
+
 const RESULT_SENTINEL = "__FIRST_TURN_RESULT__";
 const CLI_PID_SENTINEL = "__FIRST_TURN_CLI_PID__";
 const STALLED_SENTINEL = "__FIRST_TURN_STALLED__";
@@ -44,6 +46,8 @@ const CONCURRENT = process.argv[3] === "concurrent";
 const STALL = process.argv[4] === "stall";
 /** How long a turn may take once its model request is seen. */
 const TURN_DEADLINE_MS = positiveInteger(process.argv[5]) ?? 60_000;
+/** How long a bridge may take to answer its own token, cold start included. */
+const BRIDGE_START_DEADLINE_MS = 30_000;
 /** How long a child has after SIGTERM, and again after SIGKILL, before cleanup moves on. */
 const CHILD_STOP_GRACE_MS = 2_000;
 /** The one ambient variable a CLI keeps, read before the environment is cleared. */
@@ -209,7 +213,12 @@ async function createFixture(): Promise<Fixture> {
           onModelCall = undefined;
           resolve(Math.round(performance.now() - startedAt));
         };
-        void start();
+        // A start that fails will never call the model.
+        Promise.resolve(start()).catch((error: unknown) => {
+          clearTimeout(timer);
+          onModelCall = undefined;
+          reject(error);
+        });
       });
     },
     isolatedEnv,
@@ -446,8 +455,8 @@ async function compareSdk(fx: Fixture, name: string, cwd: string, extra: Partial
   };
 }
 
-/** A real bridge process on a port of its own. */
-async function startBridge(fx: Fixture, cwd: string) {
+/** Start an owned bridge child on a fresh loopback port. */
+function launchBridge(fx: Fixture, cwd: string) {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = probe.port as number;
   probe.stop(true);
@@ -461,58 +470,34 @@ async function startBridge(fx: Fixture, cwd: string) {
       CWD: cwd,
       CLAUDE_BRIDGE_TOKEN: token,
     },
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderrTail = "";
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString()).slice(-4_000);
   });
   fx.bridgeChildren.add(child);
   child.once("exit", () => fx.bridgeChildren.delete(child));
-  const call = (path: string, init?: RequestInit) =>
-    fetch(`http://127.0.0.1:${port}${path}`, {
-      ...init,
-      headers: { "content-type": "application/json", "X-Orkestrator-Claude-Token": token },
-    });
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    const healthy = await call("/global/health").then(
-      (response) => response.ok,
-      () => false,
-    );
-    if (healthy) break;
-    await Bun.sleep(25);
-  }
-  return { call, stop: () => child.kill() };
+  let spawnFailed = false;
+  child.once("error", (error) => {
+    spawnFailed = true;
+    stderrTail = (stderrTail + error.message).slice(-4_000);
+    fx.bridgeChildren.delete(child);
+  });
+  return {
+    port,
+    token,
+    exited: () => spawnFailed || child.exitCode !== null || child.signalCode !== null,
+    stderr: () => stderrTail,
+    stop: () => stopChild(child),
+  };
 }
 
-async function bridgeRun(fx: Fixture, cwd: string) {
-  const bridge = await startBridge(fx, cwd);
-  try {
-    const created = (await (
-      await bridge.call("/session/create", { method: "POST", body: "{}" })
-    ).json()) as { sessionId: string };
-    const send = (prompt: string) =>
-      bridge.call(`/session/${created.sessionId}/prompt`, {
-        method: "POST",
-        body: JSON.stringify({ prompt, permissionMode: "acceptEdits", model: "haiku" }),
-      });
-    let answered: Promise<Response> | undefined;
-    const firstMs = await fx.untilModelCall(() => {
-      answered = send("Say ok.");
-    });
-    const firstStatus = (await answered!).status;
-    for (let attempt = 0; attempt < 400; attempt += 1) {
-      const state = (await (await bridge.call(`/session/${created.sessionId}`)).json()) as {
-        status?: string;
-      };
-      if (state.status === "idle") break;
-      await Bun.sleep(25);
-    }
-    const followUpMs = await fx.untilModelCall(() => {
-      answered = send("Say ok again.");
-    });
-    const followUpStatus = (await answered!).status;
-    return { firstMs, followUpMs, firstStatus, followUpStatus };
-  } finally {
-    bridge.stop();
-    await Bun.sleep(100);
-  }
+function bridgeRun(fx: Fixture, cwd: string) {
+  return runBridgeFirstTurn(() => launchBridge(fx, cwd), fx.untilModelCall, {
+    startupMs: BRIDGE_START_DEADLINE_MS,
+    turnMs: TURN_DEADLINE_MS,
+  });
 }
 
 async function compareBridge(fx: Fixture, name: string, cwd: string) {

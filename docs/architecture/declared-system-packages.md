@@ -65,10 +65,15 @@ for it takes any arguments. Root enforces every rule, in this order:
    after 15 minutes waiting). Without it two installs could both pass the
    checks below against the same state, and the second could then remove what
    the first installed.
-5. `apt-get update` (exit 5 when the archive is unreachable), then an exact
-   name check with `apt-cache pkgnames`, then a simulated install whose `Inst`
-   and `Remv` lines are checked against the denylist (exit 3), then the
-   install, itself run with `--no-remove` (exit 6 on failure).
+5. `apt-get update` (exit 5 when the archive stays unreachable), an exact name
+   check with `apt-cache pkgnames`, and a simulated install whose `Inst` and
+   `Remv` lines are checked against the denylist (exit 3). Under Restricted,
+   both the update and the download-only pass after simulation retry after 5,
+   15 and 30 seconds. The CDN can answer with an address the gateway has
+   not seen yet, and a later lookup may return one it holds. The Restricted
+   install then uses the downloaded packages. Full access does one update
+   and downloads during installation. Both modes run the install once with
+   `--no-remove` (exit 6 on an exhausted download or failed install).
 
 apt runs under `env -i` with root's `PATH`, `HOME=/root` and a private
 `TMPDIR`, `--no-install-recommends`, and the names after `--`. The checks

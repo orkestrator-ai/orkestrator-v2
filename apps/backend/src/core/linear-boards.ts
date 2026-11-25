@@ -276,6 +276,7 @@ export async function getLinearBoardOptions(
 export async function getLinearIssueBoard(
   apiKey: string,
   issueId: string,
+  signal?: AbortSignal,
 ): Promise<LinearIssueBoard | null> {
   const data = await linearGraphql<{ issue?: unknown }>(
     apiKey,
@@ -288,6 +289,7 @@ export async function getLinearIssueBoard(
       }
     }`,
     { id: issueId },
+    signal,
   );
   const issue = data.issue;
   if (!isRecord(issue) || !asString(issue.id)) return null;

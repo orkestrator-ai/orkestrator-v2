@@ -1746,9 +1746,16 @@ export class OrkestratorBackend {
           linearFiles.prepareBuild(pipeline, undefined, signal),
         onPullRequestMerged: (pipeline, prUrl) =>
           context.runtime.linearMergedLabels.recordPipelineMerge(storage, pipeline, prUrl),
+        writeLinearComment: (pipeline, comment) =>
+          context.runtime.linearCompletionComments.submit(storage, pipeline, comment),
+        restoreLinearComment: (pipeline, comment) =>
+          context.runtime.linearCompletionComments.restore(storage, pipeline, comment),
       },
     );
     context.buildPipelines = this.buildPipelines;
+    context.runtime.linearCompletionComments.onPosted((comment) =>
+      this.buildPipelines.noteLinearCommentPosted(comment),
+    );
     // Fired inside the Kanban write, which must not wait on a pipeline's lock.
     storage.kanban.onDeliveryPolicyChange((taskId, projectId, policy) => {
       void this.buildPipelines
@@ -2749,6 +2756,7 @@ export class OrkestratorBackend {
     await this.buildPipelines.init().catch((error) => {
       log.warn("startup.step-failed", { step: "build-pipelines", error: formatLogError(error) });
     });
+    this.context.runtime.linearCompletionComments.start(this.context.storage);
     await this.multiReviews.init().catch((error) => {
       log.warn("startup.step-failed", { step: "multi-reviews", error: formatLogError(error) });
     });

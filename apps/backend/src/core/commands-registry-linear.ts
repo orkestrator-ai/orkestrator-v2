@@ -1,3 +1,4 @@
+import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import {
   connectLinearCommand,
   disconnectLinearCommand,
@@ -12,7 +13,6 @@ import {
   getLinearIssue,
   listLinearIssues,
   postLinearIssueComment,
-  postLinearCompletionComment,
   sanitizeLinearError,
   verifyLinearConnection,
 } from "./linear.js";
@@ -24,6 +24,7 @@ import {
   requireIssueOnProjectBoard,
   requireProjectLinearBoard,
 } from "./commands-registry-linear-boards.js";
+import { postRecordedLinearCompletionComment } from "./linear-completion-comments.js";
 import { linearKeyFingerprint } from "./linear-boards.js";
 import { nowIso } from "./storage/index.js";
 
@@ -157,46 +158,37 @@ export function registerLinearCommands(
   );
   register(
     postLinearCompletionCommentCommand,
-    async ({ pipelineId, issueId, body }, context) => {
-      const runId = asString(pipelineId, "pipelineId");
-      const targetIssueId = asString(issueId, "issueId");
-      const commentBody = asString(body, "body");
-      return context.runtime.integrationLocks.withLinearCompletionComment(runId, async () => {
-        const existing = await context.storage.kanban.getLinearCompletionComment(runId);
-        if (existing?.status === "posted" && existing.commentId) {
-          return {
-            status: "already-posted",
-            commentId: existing.commentId,
-            postedAt: existing.postedAt,
-          };
+    async ({ pipelineId, issueId, body, outcome }, context) => {
+      const id = asString(pipelineId, "pipelineId");
+      const target = asString(issueId, "issueId");
+      const message = asString(body, "body");
+      const snapshot = (await context.storage.getBuildPipeline(id))?.snapshot as
+        BuildPipeline | undefined;
+      if (snapshot) {
+        if (
+          snapshot.source?.type !== "linear" ||
+          snapshot.source.issueId !== target ||
+          (snapshot.phase !== "complete" && snapshot.phase !== "failed") ||
+          (outcome !== undefined && outcome !== snapshot.phase)
+        ) {
+          throw new Error("The Linear comment must match the build's issue and current ending.");
         }
-
-        const apiKey = await requireLinearApiKey(context);
-        try {
-          const result = await postLinearCompletionComment(apiKey, {
-            pipelineId: runId,
-            issueId: targetIssueId,
-            body: commentBody,
-          });
-          await context.storage.kanban.saveLinearCompletionComment({
-            pipelineId: runId,
-            issueId: targetIssueId,
-            status: "posted",
-            commentId: result.commentId,
-            postedAt: result.postedAt ?? new Date().toISOString(),
-          });
-          return result;
-        } catch (error) {
-          const message = sanitizeLinearError(error, apiKey);
-          await context.storage.kanban.saveLinearCompletionComment({
-            pipelineId: runId,
-            issueId: targetIssueId,
-            status: "failed",
-            error: message,
-          });
-          throw new Error(message);
-        }
-      });
+        return context.runtime.linearCompletionComments.submit(context.storage, snapshot, {
+          outcome: snapshot.phase,
+          body: message,
+        });
+      }
+      return postRecordedLinearCompletionComment(
+        context.storage,
+        context.runtime.integrationLocks,
+        () => requireLinearApiKey(context),
+        {
+          pipelineId: id,
+          issueId: target,
+          body: message,
+          ...(outcome === "complete" || outcome === "failed" ? { outcome } : {}),
+        },
+      );
     },
     ASYNC_HANDLER,
   );

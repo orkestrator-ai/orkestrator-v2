@@ -496,7 +496,8 @@ export class BuildPipelineRecovery {
     if (detection.hasMergeConflicts === true) {
       throw new Error("Merge conflicts could not be fully resolved automatically");
     }
-    if (detection.hasMergeConflicts === null) {
+    // A merged pull request's mergeability stays unknown for good: it is done.
+    if (detection.hasMergeConflicts === null && detection.state !== "merged") {
       // GitHub computes mergeability asynchronously. Keep the durable phase in
       // place until a later supervisor pass has evidence that the conflict is
       // actually gone; an indeterminate answer is not successful resolution.
@@ -617,21 +618,10 @@ export class BuildPipelineRecovery {
     if (pipeline.completionCommentStatus === "posted") return;
     pipeline.completionCommentStatus = "posting";
     await this.ctx.save(pipeline, pipeline.backendRevision);
-    const delivered = completionDeliveryNote(pipeline);
-    const body =
-      pipeline.phase === "complete"
-        ? `✅ Orkestrator build completed for **${pipeline.taskTitle}**.${delivered ? ` ${delivered}` : ""}`
-        : `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
+    const body = completionCommentBody(pipeline);
     const result =
       source.type === "linear"
-        ? await this.ctx.invoke<{ commentId?: string; postedAt?: string }>(
-            "post_linear_completion_comment",
-            {
-              pipelineId: pipeline.id,
-              issueId: source.issueId,
-              body,
-            },
-          )
+        ? await this.postLinearComment(pipeline, source.issueId, body)
         : await this.ctx.invoke<{ commentId?: string; postedAt?: string }>(
             "post_github_completion_comment",
             {
@@ -648,6 +638,57 @@ export class BuildPipelineRecovery {
     pipeline.completionCommentPostedAt = result.postedAt ?? new Date().toISOString();
     delete pipeline.completionCommentError;
     await this.ctx.save(pipeline, pipeline.backendRevision);
+  }
+
+  private postLinearComment(
+    pipeline: BuildPipeline,
+    issueId: string,
+    body: string,
+  ): Promise<{ commentId?: string; postedAt?: string }> {
+    const outcome = pipeline.phase === "complete" ? "complete" : "failed";
+    return (
+      this.ctx.options.writeLinearComment?.(pipeline, { outcome, body }) ??
+      this.ctx.invoke("post_linear_completion_comment", {
+        pipelineId: pipeline.id,
+        issueId,
+        body,
+        outcome,
+      })
+    );
+  }
+
+  async restoreLinearComment(pipeline: BuildPipeline): Promise<void> {
+    if (
+      pipeline.source?.type !== "linear" ||
+      pipeline.completionCommentStatus !== "failed" ||
+      (pipeline.phase !== "complete" && pipeline.phase !== "failed")
+    )
+      return;
+    await this.ctx.options.restoreLinearComment?.(pipeline, {
+      outcome: pipeline.phase,
+      body: completionCommentBody(pipeline),
+    });
+  }
+
+  /** A queued completion comment is now in Linear. */
+  async noteLinearCommentPosted(comment: {
+    pipelineId: string;
+    outcome: "complete" | "failed";
+    commentId: string;
+    postedAt?: string;
+  }): Promise<void> {
+    const stale = (pipeline: BuildPipeline) =>
+      pipeline.phase !== comment.outcome || pipeline.completionCommentStatus === "posted";
+    const record = await this.ctx.storage.getBuildPipeline(comment.pipelineId);
+    // Gone with its environment, or running again: its next ending speaks for it.
+    if (!record || stale(record.snapshot as BuildPipeline)) return;
+    await this.ctx.mutate(comment.pipelineId, (pipeline) => {
+      if (stale(pipeline)) return;
+      pipeline.completionCommentStatus = "posted";
+      pipeline.completionCommentId = comment.commentId;
+      pipeline.completionCommentPostedAt = comment.postedAt ?? new Date().toISOString();
+      delete pipeline.completionCommentError;
+    });
   }
 
   needsTerminalReconciliation(pipeline: BuildPipeline): boolean {
@@ -1280,4 +1321,12 @@ function completionDeliveryNote(pipeline: BuildPipeline): string | undefined {
   const stop = pipelineBuildStop(pipeline);
   if (stop) return pipelineBuildStopSummary(stop);
   return pipeline.delivery ? pipelineDeliverySummary(pipeline.delivery) : undefined;
+}
+
+function completionCommentBody(pipeline: BuildPipeline): string {
+  if (pipeline.phase !== "complete") {
+    return `❌ Orkestrator build failed for **${pipeline.taskTitle}**: ${pipeline.error ?? "Unknown error"}`;
+  }
+  const delivered = completionDeliveryNote(pipeline);
+  return `✅ Orkestrator build completed for **${pipeline.taskTitle}**.${delivered ? ` ${delivered}` : ""}`;
 }

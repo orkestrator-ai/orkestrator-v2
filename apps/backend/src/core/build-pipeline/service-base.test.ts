@@ -1673,6 +1673,31 @@ describe("BuildPipelineService", () => {
     });
   });
 
+  test("completes when the PR merged during conflict resolution, its mergeability unknown for good", async () => {
+    await withService(async (service, storage, _provider, invocations, controls) => {
+      controls.detection = {
+        url: "https://github.com/acme/repo/pull/9",
+        state: "open",
+        hasMergeConflicts: true,
+      };
+      const started = await service.start(
+        startInput({
+          taskId: "linear-1",
+          source: { type: "linear", issueId: "issue-1", issueIdentifier: "ENG-1" },
+        }),
+      );
+      for (let pass = 0; pass < 6; pass += 1) await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("resolving-conflicts");
+      controls.detection = { ...controls.detection, state: "merged", hasMergeConflicts: null };
+      await service.advanceNow(started.id);
+      expect((await pipeline(storage, started.id)).phase).toBe("complete");
+      const comment = invocations.find(
+        ({ command }) => command === "post_linear_completion_comment",
+      );
+      expect(comment?.args).toMatchObject({ issueId: "issue-1", outcome: "complete" });
+    });
+  });
+
   for (const result of ["already-resolved", "stale"] as const) {
     for (const kind of ["question", "permission"] as const) {
       test(`reconciles an ${result} ${kind} to a terminal outcome once it is gone`, async () => {

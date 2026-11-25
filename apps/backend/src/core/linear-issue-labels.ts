@@ -47,6 +47,7 @@ export async function addLinearIssueLabelByName(
   issueId: string,
   name: string,
   signal?: AbortSignal,
+  beforeMutation?: () => Promise<void>,
 ): Promise<LinearIssueLabelResult> {
   const issueData = await linearGraphql<{ issue?: unknown }>(
     apiKey,
@@ -109,6 +110,8 @@ export async function addLinearIssueLabelByName(
   let outcome: LinearMergedLabelOutcome = "added";
 
   if (!labelId) {
+    if (beforeMutation) await beforeMutation();
+    signal?.throwIfAborted();
     const created = await linearGraphql<{
       issueLabelCreate?: { success?: boolean; issueLabel?: { id?: string } };
     }>(
@@ -129,6 +132,8 @@ export async function addLinearIssueLabelByName(
     outcome = "created";
   }
 
+  if (beforeMutation) await beforeMutation();
+  signal?.throwIfAborted();
   const added = await linearGraphql<{ issueAddLabel?: { success?: boolean } }>(
     apiKey,
     `mutation OrkestratorLinearIssueAddLabel($id: String!, $labelId: String!) {

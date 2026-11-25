@@ -598,6 +598,7 @@ export class ProjectsRepository {
     // The fence first: from here no ticket, sync snapshot, label, note or
     // plan can be added for it, so nothing lands behind the deletes below.
     this.repos.kanban.fenceProjectContent(projectId);
+    this.repos.linear.fenceProjectWrites(projectId);
     try {
       // Its tickets, ticket images, labels, notes and feature plans go first
       // (#2295), so a failure keeps the project and a retry finishes them.
@@ -609,6 +610,8 @@ export class ProjectsRepository {
           (pipeline) => pipeline.id,
         ),
       );
+      await this.repos.linear.deleteLinearPendingCommentsForProject(projectId);
+      this.repos.linear.deletePendingLinearMergedLabelsForProject(projectId);
       await this.enqueueProjectMutation(async () => {
         this.context.updateStoreRow(this.files.projectsFile(), projectId, (current) => {
           if (current === undefined) throw new Error(`Project not found: ${projectId}`);
@@ -619,6 +622,8 @@ export class ProjectsRepository {
       // A project that stays keeps working; the fence of one that is gone stays.
       if (await this.getProject(projectId)) this.repos.kanban.releaseProjectContentFence(projectId);
       throw error;
+    } finally {
+      this.repos.linear.releaseProjectWriteFence(projectId);
     }
     await this.repos.drafts.deleteComposeDraftsByProject(projectId);
     // A project's permission rules have nothing left to answer for (todo 0723 (retired)).

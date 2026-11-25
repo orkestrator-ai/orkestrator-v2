@@ -1,5 +1,7 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
+import type { LinearCommentOutcome } from "./storage/index.js";
+
 const log = createLogger("linear");
 type LinearGraphQLError = {
   message?: string;
@@ -572,6 +574,8 @@ async function findExistingCompletionComment(
   apiKey: string,
   issueId: string,
   marker: string,
+  legacySuccessMarker: string | undefined,
+  signal?: AbortSignal,
 ): Promise<{ id: string; createdAt?: string } | null> {
   let cursor: string | null = null;
   const seenCursors = new Set<string>();
@@ -595,12 +599,19 @@ async function findExistingCompletionComment(
         }
       }`,
       { id: issueId, after: cursor },
+      signal,
     );
 
     const nodes = Array.isArray(data.issue?.comments?.nodes) ? data.issue.comments.nodes : [];
     for (const node of nodes) {
       if (!isRecord(node)) continue;
-      if (asString(node.body).includes(marker)) {
+      const body = asString(node.body).trim();
+      if (
+        body.endsWith(marker) ||
+        (legacySuccessMarker &&
+          body.endsWith(legacySuccessMarker) &&
+          body.startsWith("✅ Orkestrator build completed"))
+      ) {
         const id = asString(node.id);
         if (id) return { id, createdAt: optionalString(node.createdAt) };
       }
@@ -649,20 +660,42 @@ export async function postLinearIssueComment(
   return comment;
 }
 
+/**
+ * The hidden marker that makes a run's comment findable, so it is posted once.
+ * A completed run has its own: a build that failed, was retried and then
+ * completed already left a failure comment under the plain marker.
+ */
+function linearCompletionMarker(pipelineId: string, outcome?: LinearCommentOutcome): string {
+  return `<!-- orkestrator-linear-run:${pipelineId}${outcome === "complete" ? ":complete" : ""} -->`;
+}
+
 export async function postLinearCompletionComment(
   apiKey: string,
   params: {
     pipelineId: string;
     issueId: string;
     body: string;
+    outcome?: LinearCommentOutcome;
   },
+  signal?: AbortSignal,
+  beforeMutation?: () => Promise<void>,
 ): Promise<LinearCompletionCommentResult> {
-  const marker = `<!-- orkestrator-linear-run:${params.pipelineId} -->`;
-  const existing = await findExistingCompletionComment(apiKey, params.issueId, marker);
+  const marker = linearCompletionMarker(params.pipelineId, params.outcome);
+  const legacySuccessMarker =
+    params.outcome === "complete" ? linearCompletionMarker(params.pipelineId) : undefined;
+  const existing = await findExistingCompletionComment(
+    apiKey,
+    params.issueId,
+    marker,
+    legacySuccessMarker,
+    signal,
+  );
   if (existing) {
     return { status: "already-posted", commentId: existing.id, postedAt: existing.createdAt };
   }
 
+  if (beforeMutation) await beforeMutation();
+  signal?.throwIfAborted();
   const body = `${params.body.trim()}\n\n${marker}`;
   const data = await linearGraphql<{
     commentCreate?: {
@@ -681,6 +714,7 @@ export async function postLinearCompletionComment(
       }
     }`,
     { issueId: params.issueId, body },
+    signal,
   );
 
   const commentId = data.commentCreate?.comment?.id;

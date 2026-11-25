@@ -23,6 +23,8 @@ import { FeatureBuildTasks } from "./features/index.js";
 import { GitHubCliSelection } from "./git/index.js";
 import { PrMonitorRuntime, type PrMonitorRuntimeOptions } from "./git/pr-monitor-runtime.js";
 import { IntegrationLocks } from "./integration-locks.js";
+import { LinearCompletionComments } from "./linear-completion-comments.js";
+import type { LinearDrainClock } from "./linear-write-drain.js";
 import { LinearMergedLabels, type LinearMergedLabelsOptions } from "./linear-merged-label.js";
 import { LocalServerRuntime, type LocalServerRuntimeOptions } from "./local-server-runtime.js";
 import { PublicApiReconciliations } from "./public-api/index.js";
@@ -54,6 +56,8 @@ export type BackendRuntimeOptions = {
   dockerAvailability?: DockerAvailabilityCacheOptions;
   /** Test seams: the Linear call and the retry clock of the merged-label queue. */
   linearMergedLabels?: LinearMergedLabelsOptions;
+  /** Test seam: the retry clock of the completion-comment queue. */
+  linearCompletionComments?: LinearDrainClock;
 };
 
 /**
@@ -97,6 +101,8 @@ export class BackendRuntime {
   readonly integrationLocks = new IntegrationLocks();
   /** The `merged` label owed to Linear issues whose build's pull request merged, and its retries. */
   readonly linearMergedLabels: LinearMergedLabels;
+  /** Completion comments of Linear-sourced builds still to be posted, and their retries. */
+  readonly linearCompletionComments: LinearCompletionComments;
   /** Feature-build ticket resolutions and title refinements in flight. */
   readonly featureBuilds = new FeatureBuildTasks();
   /** Public API operation reconciliations in flight. */
@@ -129,6 +135,10 @@ export class BackendRuntime {
     this.environments = new EnvironmentOperations();
     this.dockerAvailability = new DockerAvailabilityCache(options.dockerAvailability);
     this.linearMergedLabels = new LinearMergedLabels(options.linearMergedLabels);
+    this.linearCompletionComments = new LinearCompletionComments(
+      this.integrationLocks,
+      options.linearCompletionComments,
+    );
     this.prMonitor = new PrMonitorRuntime({
       ...options.prMonitor,
       gitHubCli: this.gitHubCli,
@@ -178,6 +188,7 @@ export class BackendRuntime {
     this.terminals.shutdown();
     this.prMonitor.shutdown();
     this.linearMergedLabels.shutdown();
+    this.linearCompletionComments.shutdown();
     this.tmux.shutdown();
     this.containerOom.stop();
     this.containerLogs.shutdown();

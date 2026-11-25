@@ -111,6 +111,11 @@ const STORE_LAYOUTS: Record<string, StoreLayout> = {
   "linear-sync": { kind: "document" },
   "linear-issue-creates": { kind: "array", key: "requestKey" },
   "linear-merged-labels": { kind: "array", key: "key" },
+  "linear-pending-comments": {
+    kind: "array",
+    key: "pipelineId",
+    owner: ownerField("projectId"),
+  },
   "github-completion-comments": { kind: "array", key: "pipelineId" },
   "preview-services": { kind: "envelope", collections: ["definitions"] },
   "preview-settings": { kind: "document" },

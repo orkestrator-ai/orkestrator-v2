@@ -511,14 +511,22 @@ export const postLinearIssueCommentCommand = defineCommand({
   critical: [],
 });
 
-/** Posts a pipeline's completion comment once per pipeline (`pipelineId` is the guard). */
+/**
+ * Posts a pipeline's completion comment once per ending (`pipelineId` and
+ * `outcome`, `complete` or `failed`, are the guard).
+ */
 export const postLinearCompletionCommentCommand = defineCommand({
   domain: kanbanDomain,
   name: "post_linear_completion_comment",
   since: 1,
   access: "workspace",
   read: false,
-  args: Schema.Struct({ pipelineId: Schema.String, issueId: Schema.String, body: Schema.String }),
+  args: Schema.Struct({
+    pipelineId: Schema.String,
+    issueId: Schema.String,
+    body: Schema.String,
+    outcome: Schema.optionalKey(Schema.String),
+  }),
   result: LinearCompletionCommentResultSchema,
   critical: [],
 });

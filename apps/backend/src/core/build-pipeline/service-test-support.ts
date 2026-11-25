@@ -242,6 +242,7 @@ export async function withService(
     /** D3 across engines: the shared workspace-holder projection. */
     workspaceWriters?: (storage: StorageService) => WorkspaceWriters;
     prepareLinearFiles?: BuildPipelineServiceOptions["prepareLinearFiles"];
+    restoreLinearComment?: BuildPipelineServiceOptions["restoreLinearComment"];
     /** Each worker's own mail identity on turns without a result tool. */
     resolveWorkerToolConnection?: BuildPipelineServiceOptions["resolveWorkerToolConnection"];
   } = {},
@@ -444,6 +445,7 @@ export async function withService(
       ? { assertAgentToolsReachable: options.assertAgentToolsReachable }
       : {}),
     environmentGit: options.environmentGit,
+    restoreLinearComment: options.restoreLinearComment,
     branchPushState: options.branchPushState,
     environmentFence: options.environmentFence,
     assertEnvironmentQuiescent: options.assertEnvironmentQuiescent,

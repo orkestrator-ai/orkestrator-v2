@@ -308,6 +308,8 @@ export type LinearAuth = {
 export type LinearCompletionComment = {
   pipelineId: string;
   issueId: string;
+  /** Which ending it reports; absent on a record from before comments were kept per ending. */
+  outcome?: "complete" | "failed";
   status: "posted" | "failed";
   commentId?: string;
   postedAt?: string;

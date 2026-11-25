@@ -8,13 +8,13 @@ import path from "node:path";
 import { lifecycleMachine } from "./build-pipeline/kanban-transitions-test-support.js";
 import type { CommandContext } from "./commands-context.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
+import { LinearMergedLabels } from "./linear-merged-label.js";
 import {
-  LINEAR_MERGED_LABEL_MAX_RETRY_MS,
-  LINEAR_MERGED_LABEL_TIMEOUT_MS,
-  LINEAR_MERGED_LABEL_RETRY_MS,
-  LinearMergedLabels,
-  linearMergedLabelRetryDelay,
-} from "./linear-merged-label.js";
+  LINEAR_WRITE_MAX_RETRY_MS,
+  LINEAR_WRITE_RETRY_MS,
+  LINEAR_WRITE_TIMEOUT_MS,
+  linearWriteRetryDelay,
+} from "./linear-write-drain.js";
 import { PrMonitorRuntime } from "./git/pr-monitor-runtime.js";
 import { StorageService } from "./storage/service.js";
 
@@ -431,13 +431,13 @@ describe("Linear failures", () => {
     await queue.idle();
     let [record] = await storage.linear.listLinearMergedLabels();
     expect(record).toMatchObject({ status: "pending", attempts: 1, lastError: "Linear is down" });
-    expect(Date.parse(record!.nextAttemptAt) - time.now()).toBe(LINEAR_MERGED_LABEL_RETRY_MS);
+    expect(Date.parse(record!.nextAttemptAt) - time.now()).toBe(LINEAR_WRITE_RETRY_MS);
     const failure = records.find((entry) => entry.event === "merged-label.failed");
     expect(failure?.fields).toMatchObject({ reason: "Linear is down", attempts: 1 });
     expect(JSON.stringify(records)).not.toContain(API_KEY);
 
     // Not before it is due.
-    time.advance(LINEAR_MERGED_LABEL_RETRY_MS - 1);
+    time.advance(LINEAR_WRITE_RETRY_MS - 1);
     await queue.idle();
     expect((await storage.linear.listLinearMergedLabels())[0]?.attempts).toBe(1);
 
@@ -445,9 +445,9 @@ describe("Linear failures", () => {
     await queue.idle();
     [record] = await storage.linear.listLinearMergedLabels();
     expect(record).toMatchObject({ status: "pending", attempts: 2 });
-    expect(Date.parse(record!.nextAttemptAt) - time.now()).toBe(2 * LINEAR_MERGED_LABEL_RETRY_MS);
+    expect(Date.parse(record!.nextAttemptAt) - time.now()).toBe(2 * LINEAR_WRITE_RETRY_MS);
 
-    time.advance(2 * LINEAR_MERGED_LABEL_RETRY_MS);
+    time.advance(2 * LINEAR_WRITE_RETRY_MS);
     await queue.idle();
     [record] = await storage.linear.listLinearMergedLabels();
     expect(record).toMatchObject({ status: "applied", outcome: "added" });
@@ -532,10 +532,14 @@ describe("Linear failures", () => {
     await queue.recordEnvironmentMerge(storage, { id: "env-1", projectId: "project-1" }, PR_URL);
     await queue.idle();
     expect(linear.requests).toEqual([]);
-    expect((await storage.linear.listLinearMergedLabels())[0]).toMatchObject({
+    const [waiting] = await storage.linear.listLinearMergedLabels();
+    expect(waiting).toMatchObject({
       status: "pending",
+      attempts: 0,
+      nextAttemptAt: waiting?.createdAt,
       lastError: "Linear is not connected on this machine",
     });
+    expect(waiting?.claim).toBeUndefined();
   });
 
   test("a pending label survives a restart and lands from the next process's sweep", async () => {
@@ -550,7 +554,7 @@ describe("Linear failures", () => {
     queue.shutdown();
 
     const next = new LinearMergedLabels({
-      now: () => time.now() + LINEAR_MERGED_LABEL_RETRY_MS,
+      now: () => time.now() + LINEAR_WRITE_RETRY_MS,
       schedule: time.schedule,
       cancel: time.cancel,
     });
@@ -562,9 +566,9 @@ describe("Linear failures", () => {
   });
 
   test("the retry delay doubles from a minute and stops at an hour", () => {
-    expect(linearMergedLabelRetryDelay(1)).toBe(LINEAR_MERGED_LABEL_RETRY_MS);
-    expect(linearMergedLabelRetryDelay(3)).toBe(4 * LINEAR_MERGED_LABEL_RETRY_MS);
-    expect(linearMergedLabelRetryDelay(50)).toBe(LINEAR_MERGED_LABEL_MAX_RETRY_MS);
+    expect(linearWriteRetryDelay(1)).toBe(LINEAR_WRITE_RETRY_MS);
+    expect(linearWriteRetryDelay(3)).toBe(4 * LINEAR_WRITE_RETRY_MS);
+    expect(linearWriteRetryDelay(50)).toBe(LINEAR_WRITE_MAX_RETRY_MS);
   });
 });
 
@@ -613,7 +617,7 @@ describe("merged label recovery regressions", () => {
       if (method === "deferLinearMergedLabel") api.failNext(1);
       queue.recordPipelineMerge(storage, pipeline, PR_URL);
       await queue.idle();
-      time.advance(LINEAR_MERGED_LABEL_RETRY_MS);
+      time.advance(LINEAR_WRITE_RETRY_MS);
       await queue.idle();
       expect((await storage.linear.listLinearMergedLabels())[0]?.status).toBe("applied");
       expect(time.pending()).toBe(0);
@@ -651,7 +655,7 @@ describe("merged label recovery regressions", () => {
       await Bun.sleep(0);
       expect(signal).toBeDefined();
       fakeLinear({ issueLabels: [], labels: [{ id: "merged", name: "merged" }] });
-      time.advance(LINEAR_MERGED_LABEL_TIMEOUT_MS);
+      time.advance(LINEAR_WRITE_TIMEOUT_MS);
       await queue.idle();
       expect(signal?.aborted).toBe(true);
       const records = await storage.linear.listLinearMergedLabels();
@@ -661,7 +665,7 @@ describe("merged label recovery regressions", () => {
       });
       expect(records.find((r) => r.issueId === "later")?.status).toBe("applied");
       expect(time.pending()).toBe(1);
-      time.advance(LINEAR_MERGED_LABEL_RETRY_MS);
+      time.advance(LINEAR_WRITE_RETRY_MS);
       await queue.idle();
       expect(
         (await storage.linear.listLinearMergedLabels()).every((r) => r.status === "applied"),
@@ -733,7 +737,7 @@ describe("merged label recovery regressions", () => {
         queue.recordPipelineMerge(storage, pipeline, PR_URL);
         await queue.idle();
         expect((await storage.linear.listLinearMergedLabels())[0]?.status).toBe("pending");
-        time.advance(LINEAR_MERGED_LABEL_RETRY_MS);
+        time.advance(LINEAR_WRITE_RETRY_MS);
         await queue.idle();
         expect((await storage.linear.listLinearMergedLabels())[0]?.status).toBe("applied");
         expect(state.labels).toHaveLength(1);

@@ -155,6 +155,16 @@ export type BuildPipelineServiceOptions = {
    * sweep still queue it.
    */
   onPullRequestMerged?: (pipeline: BuildPipeline, prUrl: string) => void;
+  /** Queues the ending before attempting the local Linear post. */
+  writeLinearComment?: (
+    pipeline: BuildPipeline,
+    comment: { outcome: "complete" | "failed"; body: string },
+  ) => Promise<{ commentId?: string; postedAt?: string }>;
+  /** Rebuilds the queue from retained pre-upgrade failures during initialization. */
+  restoreLinearComment?: (
+    pipeline: BuildPipeline,
+    comment: { outcome: "complete" | "failed"; body: string },
+  ) => Promise<void>;
   /**
    * Downloads a Linear-sourced build's ticket files into its workspace before
    * the Build prompt (`linear-files/service.ts`). Bounded in time and never

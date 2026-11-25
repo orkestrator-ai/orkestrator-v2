@@ -11,6 +11,10 @@
  * - `export_linear_connection`: the leaf's key, for the one user-initiated
  *   copy `copy_linear_connection_from_node` makes. The only command that
  *   returns a credential to another machine; see command-nodes.md, "Settings".
+ * - `claim_linear_writes`: the `merged` labels and completion comments a leaf
+ *   with no Linear key owes, leased to the command node for a few minutes.
+ *   An optional revalidation request checks one claim before mutation.
+ * - `settle_linear_writes`: what became of each claimed write.
  *
  * An older leaf answers `unknown-command` and keeps its own links.
  *
@@ -76,8 +80,40 @@ export const exportLinearConnectionCommand = defineCommand({
   critical: [],
 });
 
+/** Result entries are checked by the command node (`parseLinearOwedWrite`). */
+export const claimLinearWritesCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "claim_linear_writes",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({
+    controllerId: optionalUnknown,
+    leased: Schema.optionalKey(Schema.Boolean),
+    revalidate: optionalUnknown,
+  }),
+  result: Schema.Struct({
+    writes: mutableArray(Schema.Unknown),
+    valid: Schema.optionalKey(Schema.Boolean),
+  }),
+  critical: ["leased", "revalidate"],
+});
+
+export const settleLinearWritesCommand = defineCommand({
+  domain: ticketSyncDomain,
+  name: "settle_linear_writes",
+  since: 1,
+  access: "internal",
+  read: false,
+  args: Schema.Struct({ controllerId: optionalUnknown, results: optionalUnknown }),
+  result: Schema.Struct({ settled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) }),
+  critical: [],
+});
+
 export const LINEAR_SYNC_COMMANDS = [
   getLinearSyncStateCommand,
   applyLinearSyncStateCommand,
   exportLinearConnectionCommand,
+  claimLinearWritesCommand,
+  settleLinearWritesCommand,
 ] as const;

@@ -52,3 +52,27 @@
   test can exercise the accepted response by holding the command on a file
   that the test creates after `exec` returns. See
   [the public CLI contract](../../../architecture/public-cli.md).
+
+## Recurrence (2026-11-25): same `exec-failed` start response
+
+- **Run:** CI run 45665386522, job `Tests (backend)` (`mise run test:full`,
+  backend group with 2 worker slots), a push to `main` at `bbe74589c`
+  (#2562), so the base is `bbe74589c`. `mise run flaky:recurrence -- 0624
+  --base bbe74589c --registry-ref origin/main` answered "open. Record the
+  failure as a recurrence".
+- **Failure:** line 60, `expect(started).toMatchObject({ ok: true })`, after
+  1124.77 ms. The response was again `ok: false`, `error.code:
+  "exec-failed"`, "The command exited with 3", with a completed receipt whose
+  `execution` says `exitCode: 3`, `evidence: "process-exit"` (started
+  17:32:38.285, finished 17:32:38.293). The other two backend failures in the
+  run were the deterministic `delete-tickets.test.ts` and
+  `writer-guards.test.ts` breakages fixed on
+  `repair-failing-tests-f6ca1b640dea-r1`.
+- **Owning-file rerun:** the runner's rerun alone passed (3.5 s). Locally on
+  2026-11-26 (beelink2, Linux) `bun test
+  src/core/public-api/public-api-exec-processes.test.ts` from `apps/backend`
+  passed: 18 pass, 0 fail.
+- **Assessment:** consistent with the 2026-11-18 explanation: the start
+  control read the already-exited state. The contract decision recorded above
+  is still the next step.
+

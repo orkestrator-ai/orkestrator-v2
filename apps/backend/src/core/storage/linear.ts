@@ -463,17 +463,21 @@ export class LinearRepository {
     owner: string,
     ending?: Pick<LinearPendingComment, "pipelineId" | "outcome">,
   ): LinearPendingComment[] {
-    return this.claimWrites(
+    return this.context.updateStore(
       this.pendingCommentsFile(),
-      parseLinearPendingComment,
-      limit,
-      until,
-      now,
-      owner,
-      (record) =>
-        !record.receipt &&
-        (!ending || (record.pipelineId === ending.pipelineId && record.outcome === ending.outcome)),
-      ending !== undefined,
+      (): unknown[] => [],
+      this.claimDue(
+        parseLinearPendingComment,
+        limit,
+        until,
+        now,
+        owner,
+        (record) =>
+          !record.receipt &&
+          (!ending ||
+            (record.pipelineId === ending.pipelineId && record.outcome === ending.outcome)),
+        ending !== undefined,
+      ),
     );
   }
 
@@ -677,21 +681,29 @@ export class LinearRepository {
     owner: string,
     key?: string,
   ): LinearMergedLabelRecord[] {
-    return this.claimWrites(
+    return this.context.updateStore(
       this.mergedLabelsFile(),
-      parseLinearMergedLabelRecord,
-      limit,
-      until,
-      now,
-      owner,
-      (record) => record.status === "pending" && (key === undefined || record.key === key),
+      (): unknown[] => [],
+      this.claimDue(
+        parseLinearMergedLabelRecord,
+        limit,
+        until,
+        now,
+        owner,
+        (record) => record.status === "pending" && (key === undefined || record.key === key),
+      ),
     );
   }
 
-  private claimWrites<
+  /**
+   * The read-modify-write that claims a queue's due records. Each caller
+   * passes it to `updateStore` with its own store named literally, so the
+   * store-writer guard (`writer-guards.test.ts`) can resolve every store
+   * written; a helper that took the file as a parameter would hide it.
+   */
+  private claimDue<
     T extends { projectId: string; nextAttemptAt: string; claim?: LinearWriteClaim },
   >(
-    file: string,
     parse: (value: unknown) => T | null,
     limit: number,
     until: Date,
@@ -699,25 +711,21 @@ export class LinearRepository {
     owner: string,
     eligible: (record: T) => boolean,
     force = false,
-  ): T[] {
-    return this.context.updateStore(
-      file,
-      (): unknown[] => [],
-      (records) => {
-        const claimed: T[] = [];
-        for (let index = 0; index < records.length && claimed.length < limit; index += 1) {
-          const record = parse(records[index]);
-          if (!record || !eligible(record) || this.isProjectWriteFenced(record.projectId)) continue;
-          if (record.claim && Date.parse(record.claim.expiresAt) > now.getTime()) continue;
-          if (!force && Date.parse(record.nextAttemptAt) > now.getTime()) continue;
-          record.claim = { id: randomUUID(), owner, expiresAt: until.toISOString() };
-          record.nextAttemptAt = record.claim.expiresAt;
-          records[index] = record;
-          claimed.push(record);
-        }
-        return claimed;
-      },
-    );
+  ): (records: unknown[]) => T[] {
+    return (records) => {
+      const claimed: T[] = [];
+      for (let index = 0; index < records.length && claimed.length < limit; index += 1) {
+        const record = parse(records[index]);
+        if (!record || !eligible(record) || this.isProjectWriteFenced(record.projectId)) continue;
+        if (record.claim && Date.parse(record.claim.expiresAt) > now.getTime()) continue;
+        if (!force && Date.parse(record.nextAttemptAt) > now.getTime()) continue;
+        record.claim = { id: randomUUID(), owner, expiresAt: until.toISOString() };
+        record.nextAttemptAt = record.claim.expiresAt;
+        records[index] = record;
+        claimed.push(record);
+      }
+      return claimed;
+    };
   }
 
   private updateMergedLabel(

@@ -1930,15 +1930,16 @@ position stays anchored to the rows visible at send time, and its echo is
 detected against the transcript at dispatch time. A stopped send removes its
 own row and the composer shows the draft again. A failed turn's Retry is
 drawn the same way, before the check, and dispatched after it under the
-failure's own request ID; it never touches the draft. A Retry stopped by the
-check, or whose failure is no longer the latest row when the check answers,
-removes its row and leaves the failed turn and its Retry as they were. A
-message that will join a running turn's queue is drawn when the queue accepts
-it. The panel holds each
-opening prompt under its own request ID across pane remounts, assignment and
-dispatch. If another turn is already active when the agent binds, the panel
-reports why the opening prompt was returned to the composer. It also reports
-assignment failures after a pane remount. The backend waits for the
+failure's own request ID. The draft stays in the composer. During the check,
+the Retry button keeps keyboard focus and cannot be activated again. If the
+check stops the retry, the provisional row is removed and the same Retry
+button becomes available again. A newer transcript row retires the failure's
+Retry and the provisional row is removed when the check answers. A message
+that will join a running turn's queue is drawn when the queue accepts it. The
+panel holds each opening prompt under its own request ID across pane remounts,
+assignment and dispatch. If another turn is already active when the agent
+binds, the panel reports why the opening prompt was returned to the composer.
+It also reports assignment failures after a pane remount. The backend waits for the
 fetch for at most three seconds (`coordinator/message-upstream.ts`). When it
 is slower, or fails, the backend fast-forwards the checkout itself to the
 upstream commit it has already fetched (`fastForwardToFetchedUpstream`, a

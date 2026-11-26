@@ -1991,7 +1991,8 @@ export function SharedNativeAgentController({
   );
 
   const beforeSendPendingRef = useRef(false);
-  const [preparingSend, setPreparingSend] = useState(false);
+  const [preflight, setPreflight] = useState<{ retryPromptId?: string } | null>(null);
+  const preparingSend = preflight !== null;
   const composerLifetimeRef = useRef<object | null>(null);
   useEffect(() => {
     composerLifetimeRef.current = {};
@@ -2481,7 +2482,7 @@ export function SharedNativeAgentController({
         const lifetime = composerLifetimeRef.current;
         const pendingDraft = nativeComposeDraft(composeDrafts.getState(), sessionKey);
         beforeSendPendingRef.current = true;
-        setPreparingSend(true);
+        setPreflight(failureRetry && shownAsSent ? { retryPromptId: optimisticId } : {});
         /*
          * Shown as sent now, dispatched after the check. The session is left
          * open until then: this prompt goes to whichever one the tab holds at
@@ -2521,7 +2522,7 @@ export function SharedNativeAgentController({
           return false;
         } finally {
           beforeSendPendingRef.current = false;
-          if (composerLifetimeRef.current === lifetime) setPreparingSend(false);
+          if (composerLifetimeRef.current === lifetime) setPreflight(null);
           // The draft never left the store, so uncovering it restores all of it.
           if (shownAsSent && !proceeding) {
             removeSubmittedRow();
@@ -2836,9 +2837,20 @@ export function SharedNativeAgentController({
     },
     [composeDrafts, projection?.sessionId, sessionKey, submit],
   );
+  const pendingRetryPromptId = preflight?.retryPromptId;
+  // Keep the failure's controls mounted while its own provisional row is last,
+  // so a stopped check leaves focus on the same Retry button.
+  const failureRecoveryMessages = useMemo(
+    () =>
+      pendingRetryPromptId && messages.at(-1)?.id === pendingRetryPromptId
+        ? messages.slice(0, -1)
+        : messages,
+    [messages, pendingRetryPromptId],
+  );
   const failureRecovery = useProviderFailureRecovery({
-    messages,
+    messages: failureRecoveryMessages,
     sendPrepared: sendPreparedRetry,
+    retryPending: pendingRetryPromptId !== undefined,
     draftInUse:
       draft.text.trim().length > 0 || draft.attachments.length > 0 || draft.annotations.length > 0,
     sendUnavailableReason:

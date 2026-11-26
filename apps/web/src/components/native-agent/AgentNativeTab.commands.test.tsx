@@ -897,6 +897,27 @@ describe("composer preflight", () => {
   });
 });
 
+/** A pre-send check that answers only when the test says so. */
+function heldPreflight() {
+  let settle!: (proceed?: boolean) => void;
+  let fail!: (error: Error) => void;
+  const beforeSend = mock(
+    () =>
+      new Promise<void | boolean>((resolve, reject) => {
+        settle = resolve;
+        fail = reject;
+      }),
+  );
+  return {
+    beforeSend,
+    settle: (proceed?: boolean) => settle(proceed),
+    fail: (e: Error) => fail(e),
+  };
+}
+
+const transcript = () => screen.getByTestId("transcript-region");
+const rowsWith = (text: string) => (transcript().textContent ?? "").split(text).length - 1;
+
 describe("a prompt shown while its preflight runs", () => {
   const EARLIER: NativeMessage = {
     id: "earlier",
@@ -906,25 +927,6 @@ describe("a prompt shown while its preflight runs", () => {
     parts: [{ type: "text", content: "Ready" }],
   };
 
-  function heldPreflight() {
-    let settle!: (proceed?: boolean) => void;
-    let fail!: (error: Error) => void;
-    const beforeSend = mock(
-      () =>
-        new Promise<void | boolean>((resolve, reject) => {
-          settle = resolve;
-          fail = reject;
-        }),
-    );
-    return {
-      beforeSend,
-      settle: (proceed?: boolean) => settle(proceed),
-      fail: (e: Error) => fail(e),
-    };
-  }
-
-  const transcript = () => screen.getByTestId("transcript-region");
-  const rowsWith = (text: string) => (transcript().textContent ?? "").split(text).length - 1;
   const composerText = () => screen.getByRole("textbox").textContent;
   const dockCentered = () => screen.getByTestId("compose-dock").className.includes("top-1/2");
 
@@ -1219,39 +1221,176 @@ const FAILURE_ROW: NativeMessage = {
 };
 
 describe("transcript recovery through the composer", () => {
-  test.each([false, true])(
-    "Retry waits for preflight (allowed=%s) and keeps the draft clean",
-    async (allowed) => {
-      projectionOptions = { messages: [FAILURE_ROW] };
-      let release!: (allowed: boolean) => void;
-      const beforeSend = mock(
-        () =>
-          new Promise<boolean>((resolve) => {
-            release = resolve;
-          }),
-      );
-      const tabId = "failure-retry";
-      await renderTab(tabId, "codex", beforeSend);
-      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
-      expect(beforeSend).toHaveBeenCalledTimes(1);
-      expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
-      await act(async () => release(allowed));
-      if (allowed) {
-        expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
-        expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
-          prompt: PROVIDER_FAILURE_RETRY_PROMPT,
-          command: { kind: "literal" },
-          requestId: providerFailureRetryRequestId(FAILURE_ROW.id, FAILURE_ROW.createdAt),
-          failureSessionId: "codex-session",
-        });
-      } else {
-        expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
-      }
-      expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
-      expect(draftFor(tabId)?.requestId).toBeUndefined();
-      expect(draftFor(tabId)?.text ?? "").toBe("");
-    },
-  );
+  const RETRY_REQUEST_ID = providerFailureRetryRequestId(FAILURE_ROW.id, FAILURE_ROW.createdAt);
+  const retryButton = () => screen.queryByRole("button", { name: "Retry" });
+  const publish = (tabId: string, messages: NativeMessage[], revision: number) => {
+    projectionOptions = { messages };
+    act(() =>
+      appCommandStore(nativeAgentProjectionStore)
+        .getState()
+        .setProjection(createSessionKey("env-1", tabId), {
+          ...projectionFor("codex"),
+          revision,
+        }),
+    );
+  };
+
+  test("Retry is on screen at once and dispatched once, after the check, under its own id", async () => {
+    projectionOptions = { messages: [FAILURE_ROW] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "failure-retry-shown";
+    const { input } = await renderTab(tabId, "codex", beforeSend);
+    let accept!: () => void;
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (intent) =>
+        new Promise((resolve) => {
+          accept = () => resolve({ outcome: "accepted", requestId: intent.requestId });
+        }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+
+    // Drawn as sent before the check answers, with the usual waiting indicator.
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(1);
+    expect(transcript().textContent).toMatch(
+      /Fetch failed.*The previous turn ended with an error/s,
+    );
+    expect(transcript().textContent).toContain("Codex is thinking...");
+    expect(beforeSend).toHaveBeenCalledTimes(1);
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    // The retry owns no draft, and a second press has nothing to press.
+    expect(draftFor(tabId)?.text ?? "").toBe("");
+    expect(retryButton()).toBeNull();
+    fireEvent.click(screen.getByTitle("Send"));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(beforeSend).toHaveBeenCalledTimes(1);
+
+    const row = screen.getByText(PROVIDER_FAILURE_RETRY_PROMPT);
+    await act(async () => settle());
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: PROVIDER_FAILURE_RETRY_PROMPT,
+      command: { kind: "literal" },
+      requestId: RETRY_REQUEST_ID,
+      failureSessionId: "codex-session",
+    });
+    // The same row carries on through the dispatch.
+    expect(screen.getByText(PROVIDER_FAILURE_RETRY_PROMPT) === row).toBe(true);
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(1);
+    expect(transcript().textContent).toContain("Codex is thinking...");
+
+    await act(async () => accept());
+    publish(
+      tabId,
+      [
+        FAILURE_ROW,
+        {
+          id: "retry-echo",
+          createdAt: "2026-11-19T10:01:00.000Z",
+          role: "user",
+          content: PROVIDER_FAILURE_RETRY_PROMPT,
+          parts: [{ type: "text", content: PROVIDER_FAILURE_RETRY_PROMPT }],
+        },
+      ],
+      2,
+    );
+    await waitFor(() => expect(transcript().textContent).not.toContain("Codex is thinking..."));
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(1);
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    expect(enqueuePromptQueueMessageMock).not.toHaveBeenCalled();
+    expect(draftFor(tabId)?.requestId).toBeUndefined();
+    expect(draftFor(tabId)?.text ?? "").toBe("");
+  });
+
+  test.each([
+    { label: "declines", error: null },
+    { label: "throws", error: "Upstream check failed" },
+  ])("Retry is withdrawn and offered again when the check $label", async ({ label, error }) => {
+    projectionOptions = { messages: [FAILURE_ROW] };
+    const { beforeSend, settle, fail } = heldPreflight();
+    const tabId = `failure-retry-${label}`;
+    await renderTab(tabId, "codex", beforeSend);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(1);
+
+    await act(async () => {
+      if (error) fail(new Error(error));
+      else settle(false);
+    });
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(0);
+    expect(transcript().textContent).not.toContain("is thinking");
+    expect(transcript().textContent).toContain("Fetch failed");
+    expect(retryButton()).toBeTruthy();
+    expect(draftFor(tabId)?.requestId).toBeUndefined();
+    expect(draftFor(tabId)?.text ?? "").toBe("");
+    if (error) expect(await screen.findByText(new RegExp(error))).toBeTruthy();
+  });
+
+  test("Retry is withdrawn when the failure moves on during the check", async () => {
+    projectionOptions = { messages: [FAILURE_ROW] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "failure-retry-stale";
+    await renderTab(tabId, "codex", beforeSend);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    publish(
+      tabId,
+      [
+        FAILURE_ROW,
+        {
+          id: "other-window",
+          createdAt: "2026-11-19T10:01:00.000Z",
+          role: "user",
+          content: "From another window",
+          parts: [{ type: "text", content: "From another window" }],
+        },
+      ],
+      2,
+    );
+    await waitFor(() => expect(transcript().textContent).toContain("From another window"));
+
+    await act(async () => settle());
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(0);
+    expect(await screen.findByText(/That failure is no longer current/)).toBeTruthy();
+  });
+
+  test("a remount during the Retry check dispatches nothing twice", async () => {
+    projectionOptions = { messages: [FAILURE_ROW] };
+    const { beforeSend, settle } = heldPreflight();
+    const tabId = "failure-retry-remount";
+    const first = await renderTab(tabId, "codex", beforeSend);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(1);
+    first.unmount();
+
+    await renderTab(tabId, "codex", beforeSend);
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(0);
+    // The check started before the remount answers into a tab that has gone.
+    await act(async () => settle());
+    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(rowsWith(PROVIDER_FAILURE_RETRY_PROMPT)).toBe(1);
+    await act(async () => settle());
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      requestId: RETRY_REQUEST_ID,
+    });
+  });
+
+  test("Retry in a tab with no preflight dispatches at once", async () => {
+    projectionOptions = { messages: [FAILURE_ROW] };
+    const tabId = "failure-retry-no-preflight";
+    await renderTab(tabId);
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
+      prompt: PROVIDER_FAILURE_RETRY_PROMPT,
+      requestId: RETRY_REQUEST_ID,
+      failureSessionId: "codex-session",
+    });
+    expect(draftFor(tabId)?.text ?? "").toBe("");
+  });
 
   test("Change model opens the composer picker", async () => {
     projectionOptions = {

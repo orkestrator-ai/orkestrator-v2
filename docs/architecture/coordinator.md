@@ -1928,8 +1928,13 @@ indicator, before the check is asked, and the composer looks empty while the
 draft stays stored. It is dispatched only after the check. Its transcript
 position stays anchored to the rows visible at send time, and its echo is
 detected against the transcript at dispatch time. A stopped send removes its
-own row and the composer shows the draft again. A message that will join a
-running turn's queue is drawn when the queue accepts it. The panel holds each
+own row and the composer shows the draft again. A failed turn's Retry is
+drawn the same way, before the check, and dispatched after it under the
+failure's own request ID; it never touches the draft. A Retry stopped by the
+check, or whose failure is no longer the latest row when the check answers,
+removes its row and leaves the failed turn and its Retry as they were. A
+message that will join a running turn's queue is drawn when the queue accepts
+it. The panel holds each
 opening prompt under its own request ID across pane remounts, assignment and
 dispatch. If another turn is already active when the agent binds, the panel
 reports why the opening prompt was returned to the composer. It also reports

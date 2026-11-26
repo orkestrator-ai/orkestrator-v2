@@ -476,6 +476,12 @@ export function SharedNativeAgentController({
    * pre-send check, from the moment the prompt is drawn until it settles.
    */
   const [draftInTranscript, setDraftInTranscript] = useState<string | null>(null);
+  /**
+   * The session with a prompt drawn as sent before its dispatch has settled:
+   * a typed prompt (alongside `draftInTranscript`) or a failed turn's Retry,
+   * which owns no draft. The transcript's waiting indicator shows meanwhile.
+   */
+  const [promptInTranscript, setPromptInTranscript] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
   // Why steering left a queued prompt where it is, by queue item id, so its
@@ -2046,9 +2052,31 @@ export function SharedNativeAgentController({
     [composeScope, data.environmentId, platform, sessionKey],
   );
 
-  const latestFailure = messages.at(-1);
+  /*
+   * A Retry is drawn as sent while its pre-send check runs, and that row must
+   * not retire the failure it answers before the retry is dispatched. Only a
+   * row still waiting on its check is passed over; anything else that arrives
+   * after the failure still makes it no longer current.
+   */
+  const awaitingCheckIds = useMemo(
+    () =>
+      new Set(
+        reconciledPrompts
+          .filter((prompt) => prompt.shownBeforeDispatch && !prompt.requestId && !prompt.echoId)
+          .map((prompt) => prompt.id),
+      ),
+    [reconciledPrompts],
+  );
+  const retryTargetMessages = useMemo(
+    () =>
+      awaitingCheckIds.size === 0
+        ? messages
+        : messages.filter((message) => !awaitingCheckIds.has(message.id)),
+    [awaitingCheckIds, messages],
+  );
+  const latestFailure = retryTargetMessages.at(-1);
   const latestFailureRequestId =
-    latestFailure && actionableProviderFailureId(messages)
+    latestFailure && actionableProviderFailureId(retryTargetMessages)
       ? providerFailureRetryRequestId(latestFailure.id, latestFailure.createdAt)
       : undefined;
   const currentRetryTarget = useRef({
@@ -2410,12 +2438,25 @@ export function SharedNativeAgentController({
       }
       if (!prompt || sendLocked || isDispatching) return false;
       const failureRetry = submitOptions?.failureSessionId !== undefined;
-      // A failed turn's Retry belongs to its own row and never owns the draft,
-      // and a queued prompt belongs to the queue, where the running turn it
-      // waits behind also means the check has nothing to fetch.
+      const retryStillCurrent = () =>
+        currentRetryTarget.current.requestId === requestId &&
+        currentRetryTarget.current.sessionId === submitOptions?.failureSessionId;
+      if (failureRetry && !retryStillCurrent()) {
+        reportSendError("That failure is no longer current. No retry was sent.");
+        return false;
+      }
+      // A queued prompt belongs to the queue, where the running turn it waits
+      // behind also means the check has nothing to fetch. A failed turn's
+      // Retry is drawn as sent like a typed prompt, but never owns the draft.
       const openingPrompt = submitOptions?.openingPrompt;
       const preflighted = submitOptions?.preflight === true && beforeSend !== undefined;
-      const shownAsSent = beforeSend !== undefined && !failureRetry && !canQueue;
+      const shownAsSent = beforeSend !== undefined && !canQueue;
+      const hidesDraft = shownAsSent && !failureRetry;
+      const showInTranscript = (shown: boolean) => {
+        const shownSession = shown ? sessionKey : null;
+        setPromptInTranscript(shownSession);
+        if (hidesDraft) setDraftInTranscript(shownSession);
+      };
       const submittedAt = openingPrompt?.createdAt ?? new Date().toISOString();
       const optimisticId = openingPrompt
         ? coordinatorOpeningPromptMessageId(sessionKey, openingPrompt.requestId)
@@ -2455,7 +2496,7 @@ export function SharedNativeAgentController({
             priorDisplayIds,
             shownBeforeDispatch: true,
           });
-          setDraftInTranscript(sessionKey);
+          showInTranscript(true);
         }
         let proceeding = false;
         try {
@@ -2484,7 +2525,7 @@ export function SharedNativeAgentController({
           // The draft never left the store, so uncovering it restores all of it.
           if (shownAsSent && !proceeding) {
             removeSubmittedRow();
-            setDraftInTranscript(null);
+            showInTranscript(false);
           }
         }
       }
@@ -2495,11 +2536,12 @@ export function SharedNativeAgentController({
             messageIds: visibleAuthoritativeMessageIds,
             displayIds: visibleDisplayMessageIds,
           };
-      if (
-        submitOptions?.failureSessionId &&
-        (currentRetryTarget.current.requestId !== requestId ||
-          currentRetryTarget.current.sessionId !== submitOptions.failureSessionId)
-      ) {
+      // The failure can move on while the check runs; its row is still shown.
+      if (failureRetry && !retryStillCurrent()) {
+        if (shownAsSent) {
+          removeSubmittedRow();
+          showInTranscript(false);
+        }
         reportSendError("That failure is no longer current. No retry was sent.");
         return false;
       }
@@ -2513,7 +2555,7 @@ export function SharedNativeAgentController({
         updateDraft(sessionKey, { requestId: dispatchRequestId });
       reportSendError(null);
       transcriptConfirmedRequestIdRef.current = null;
-      if (shownAsSent) setDraftInTranscript(sessionKey);
+      if (shownAsSent) showInTranscript(true);
       const options = {
         requestId: dispatchRequestId,
         ...(submitOptions?.failureSessionId
@@ -2680,7 +2722,7 @@ export function SharedNativeAgentController({
         openingFallback?.release();
         submitInFlightRef.current = false;
         setIsSubmitting(false);
-        if (shownAsSent) setDraftInTranscript(null);
+        if (shownAsSent) showInTranscript(false);
         if (restoreComposerFocus) {
           queueMicrotask(() => inputRef.current?.focus());
         }
@@ -4374,8 +4416,8 @@ export function SharedNativeAgentController({
       respondToAsyncQuestion={platform === "codex" ? respondToAsyncQuestion : undefined}
       // The opening prompt is on screen before its turn exists; the indicator
       // says the response is on its way rather than leaving the prompt inert.
-      // So is a prompt whose pre-send check has not answered.
-      isLoading={isTurnActive || startupPromptPreview !== null || draftInTranscript === sessionKey}
+      // So is a prompt (or a failed turn's Retry) whose pre-send check has not answered.
+      isLoading={isTurnActive || startupPromptPreview !== null || promptInTranscript === sessionKey}
       statusLabel={phaseStatusLabel}
       elapsedSeconds={null}
       elapsedStartedAt={elapsedStartedAt}

@@ -90,8 +90,9 @@ describe("copy plan", () => {
     await withDockerScript(
       `#!/bin/sh
 if [ "$1" = cp ]; then seq 1 400000; exit 0; fi
+# BSD head can consume bytes beyond its output limit on a pipe.
 i=0
-while [ $i -lt 20 ]; do head -c 4096; sleep 0.02; i=$((i+1)); done > "$0.part"
+while [ $i -lt 20 ]; do dd bs=4096 count=1 2>/dev/null; sleep 0.02; i=$((i+1)); done > "$0.part"
 cat >> "$0.part"
 seq 1 400000 | cmp -s - "$0.part" && echo intact
 `,

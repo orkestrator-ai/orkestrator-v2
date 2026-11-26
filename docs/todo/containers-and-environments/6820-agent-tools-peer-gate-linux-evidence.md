@@ -24,7 +24,7 @@ Analysed 2026-11-06 against main at `66f7b743eabd03603c43a401d4afec8291dc60a8`; 
 - **Where to run it?**
   - **On a Linux Engine host such as beelink or omarchy-hp, once, recording the JSON here (recommended).**
     - Pros: the one topology where the gate decides on subnets; a single command.
-    - Cons: needs a free Docker address pool on that host (see to-dos 0241 and 3320, retired 2026-11-10, and [disk usage](../../development/disk-usage.md#what-you-clean-yourself)).
+    - Cons: needs a free Docker address pool on that host (see to-dos 0241 and 3320, retired 2026-11-10, and [disk usage](../../development/disk-usage.md#what-you-clean-yourself)); the probe-network sweep freed both hosts' pools on 2026-11-26 ([container qualification](../../development/container-qualification.md#probe-network-sweep-on-beelinks-backlog-2026-11-26)).
   - **Add it to the "Container live qualification" workflow.**
     - Pros: repeats on every relevant PR on both architectures.
     - Cons: a new live case in a workflow that is already not a required check; task 3 already covers the path the backend uses.

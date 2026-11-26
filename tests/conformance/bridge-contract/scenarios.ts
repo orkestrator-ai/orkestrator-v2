@@ -260,6 +260,25 @@ export const CONTRACT_SCENARIOS = [
     },
   },
   {
+    id: "capability-evidence-in-band",
+    title: "the optional capability evidence route answers missing and unloaded sessions in band",
+    requires: [],
+    async run(bridge) {
+      const missing = unseenId("capability-evidence");
+      expect(
+        await bridge.request("GET", `/session/${encode(missing)}/capability-evidence`),
+      ).toEqual({
+        status: 200,
+        body: { state: "missing" },
+      });
+      const id = await bridge.createSession();
+      expect(await bridge.request("GET", `/session/${encode(id)}/capability-evidence`)).toEqual({
+        status: 200,
+        body: { state: "none" },
+      });
+    },
+  },
+  {
     id: "close-retains-then-missing",
     title: "close answers retained, and a repeated close answers missing in band",
     requires: [],

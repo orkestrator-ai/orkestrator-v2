@@ -134,6 +134,27 @@ describe("which components a session can receive alone", () => {
     }
   });
 
+  test("Pi on a host, for skills only (its bridge loads the plugin's skills folder)", () => {
+    const host = { provider: "pi" as const };
+    expect(sessionPrivateDeliverable(state, host, component({}))).toBe(true);
+    expect(
+      sessionPrivateDeliverable(state, host, component({ providerHints: ["pi", "claude"] })),
+    ).toBe(true);
+    for (const kind of ["command", "prompt", "subagent", "hook", "mcp-server"] as const) {
+      expect(sessionPrivateDeliverable(state, host, component({ kind }))).toBe(false);
+    }
+    expect(
+      sessionPrivateDeliverable(
+        state,
+        { provider: "pi", environmentIncarnation: "container-1" },
+        component({}),
+      ),
+    ).toBe(false);
+    expect(sessionPrivateDeliverable(state, host, component({ providerHints: ["claude"] }))).toBe(
+      false,
+    );
+  });
+
   test("never another provider, a container, or a component meant for another provider", () => {
     expect(sessionPrivateDeliverable(state, { provider: "codex" }, component({}))).toBe(false);
     expect(
@@ -541,6 +562,70 @@ describe("session launch on a host", () => {
     expect(entry?.status).toBe("installed-next-session");
     expect(entry?.reason).toContain("this session only");
     expect(entry?.liveSemantics).toBe("new-session-required");
+  });
+
+  test("a required session-only skill reaches that Pi session alone, as its own skill folder", async () => {
+    const { command } = await fleet();
+    const { inspection } = await sessionToolkit(command, true);
+    const effective = await command.service.preflightSession({
+      environmentId: "env-1",
+      provider: "pi",
+      sessionKey: "s1",
+    });
+    expect(effective?.launchBlockers).toEqual([]);
+    expect(effective?.resolvedPackages.map((entry) => entry.id)).toEqual([inspection.packageId]);
+    // Nothing reached the shared Pi home or the cross-provider skill directory.
+    expect(await Bun.file(skillFile(command, ".pi/agent", "private-skill")).exists()).toBe(false);
+    expect(await Bun.file(skillFile(command, ".agents", "private-skill")).exists()).toBe(false);
+
+    const [directory] = await command.service.sessionPlugins("s1", "env-1", "pi");
+    expect(path.dirname(directory!)).toBe(sessionPluginsRoot(path.join(command.dir, "data")));
+    // The Pi bridge loads `<directory>/skills` as that session's skill path.
+    expect(
+      await fs.readFile(path.join(directory!, "skills", "private-skill", "SKILL.md"), "utf8"),
+    ).toContain("Only for this session.");
+    expect(await command.service.sessionPlugins("s2", "env-1", "pi")).toEqual([]);
+    // A Claude session of the same key launched nothing.
+    expect(await command.service.sessionPlugins("s1", "env-1", "claude")).toEqual([]);
+
+    const view = await command.service.getSessionView({
+      sessionKey: "s1",
+      target: { provider: "pi" },
+    });
+    const entry = view.components.find((item) => item.componentId === inspection.components[0]?.id);
+    expect(entry?.status).toBe("installed-next-session");
+    expect(entry?.reason).toContain("this session only");
+    expect(entry?.liveSemantics).toBe("new-session-required");
+  });
+
+  test("a Pi selection that is not session-only is unchanged: no private delivery", async () => {
+    const { command } = await fleet();
+    const inspection = await command.service.authorPackage({
+      kind: "skill",
+      name: "machine-wide-pi",
+      content: "Instructions.",
+    });
+    await command.service.reconciler.idle();
+    command.storage.capabilities.mutateCapabilityState((state) => {
+      applyChangeToState(state, {
+        kind: "add-to-setup",
+        setupId: "my-setup",
+        inspectionId: state.inspections[inspection.inspectionId]!.id,
+      });
+      return { changed: true, result: undefined };
+    });
+    const launch = await command.service.preflightSession({
+      environmentId: "env-1",
+      sessionKey: "s1",
+      provider: "pi",
+    });
+    expect(launch?.warnings.join(" ")).toContain("not verified");
+    expect(await command.service.sessionPlugins("s1", "env-1", "pi")).toEqual([]);
+    expect(
+      Object.values((await command.storage.capabilities.loadCapabilityState()).launches).find(
+        (row) => row.sessionKey === "s1",
+      )?.privatePlugin,
+    ).toBeUndefined();
   });
 
   test("the plugin is frozen at launch: a later setup change does not reach the running session", async () => {

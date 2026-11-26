@@ -324,21 +324,35 @@ review), whose boundary admits no skill frontmatter hooks or tool grants.
   answering, and lists the items in its answer; the leaf stages the plugin
   from its own artifact cache. A transfer that fails drops an optional item
   (reported unsupported) and blocks a required one.
+- **Pi.** A Pi session on a host receives its launch-only skills the same way
+  (skills only: Pi has no plugin or command directory in the session plugin).
+  The backend stages the same directory and sends it on every Pi prompt as
+  `capabilityPlugins`; the Pi bridge (`bridges/pi-bridge/src/capability-skills.ts`)
+  accepts it only from inside the same root, as a content-addressed child that
+  is neither a link nor outside it, and passes its `skills/` folder to that
+  session's resource loader as `additionalSkillPaths`, which the pinned SDK
+  keeps per session. Nothing is written into `~/.pi/agent` or
+  `~/.agents/skills`, and another Pi session never sees it. Pi fixes a
+  session's skills when it builds the session, so the bridge rebuilds a live
+  session at the start of a turn whose set differs from the one it was built
+  with; a read-only turn or a coordinator loads none. The session's resource
+  loader gives private skills precedence over shared skills with the same
+  name, preserving both copies on disk. The conformance test
+  (`capability-session-skills-conformance.test.ts`) drives the real bridge,
+  SDK and pi-ai's faux model.
 - **Not delivered this way:** hooks and MCP servers (their own approval and
   lifecycle), native plugins, and any part a native plugin carries (the plugin
-  delivers it whole). Other providers have no per-session plugin channel in
-  their pinned bridges, so a launch-only selection for Codex, Cursor, Grok,
-  OpenCode or Pi, or for a container, is still reported as unsupported and a
-  required one stops the launch. Re-checked 2026-11-22 against the pins: Codex
+  delivers it whole), and for Pi anything but skills. Other providers have no
+  per-session plugin channel in their pinned bridges, so a launch-only
+  selection for Codex, Cursor, Grok or OpenCode, or for a container, is still
+  reported as unsupported and a required one stops the launch. Re-checked 2026-11-22 against the pins: Codex
   app-server 0.169.0 has `skills/extraRoots/set`, but it sets one list per
   app-server connection, and the bridge runs one app-server for every session
   of an environment; the Cursor SDK 1.4.1 loads skills from `local.dirs` only
   with the `project` setting source, which on the host also loads the
   repository's rules and MCP servers and is off unless the environment trusts
   project resources; Grok (ACP) and OpenCode 2 take no per-session skill or
-  plugin set. The Pi SDK 1.5.2's `additionalSkillPaths` is per session, but
-  the bridge passes it only for coordinator project skills; carrying a
-  session-private set through it is a Pi bridge change.
+  plugin set.
 
 **Added accounts.** Added Claude and Codex accounts link their `skills`,
 `commands`, `agents` (Claude) and `skills`, `prompts` (Codex) directories to
@@ -535,6 +549,7 @@ credential-free listing. Run 2026-11-19 on Linux x64:
 | Claude Code 2.1.326 | A session plugin staged by `session-delivery.ts` is listed as `orkestrator-session:<skill>` only when passed with `--plugin-dir`; nothing lands in `CLAUDE_CONFIG_DIR` | `init` event with and without `--plugin-dir` | pass |
 | Pi SDK 1.5.2 (same version as the pinned `pi` binary) | Skills in `~/.pi/agent/skills` and `~/.agents/skills` and templates in `~/.pi/agent/prompts` are listed, also with project resources off; the repository's `.pi/` resources are not; `~/.claude/skills` is never read | the bridge's resource-only loader (`readResourceCommands`), `bridges/pi-bridge/src/capability-delivery-conformance.test.ts`, default tier | pass |
 | Claude Code 2.1.326 | The `init` event reports the session plugin's content-addressed directory, which `loadedPrivatePlugin` (`runtime-proof.ts`) matches; without `--plugin-dir` it does not | `init` event `plugins[].path` | pass |
+| Pi SDK 1.5.2 | A session plugin's `skills/` passed as that session's `additionalSkillPaths` is in its system prompt and resolved skills, at the staged path; another session and the shared Pi homes do not see it; the same set keeps the build, a turn naming none rebuilds without it; read-only turns, paths outside the root and links load nothing | the real bridge, SDK and pi-ai's faux model, `/session/:id/capability-evidence`, `bridges/pi-bridge/src/capability-session-skills-conformance.test.ts`, default tier | pass |
 | Grok Build 1.0.88 | Executor skills in `~/.grok/skills` and `~/.agents/skills` are listed at their installed `SKILL.md` paths, graded `advertised` by path, and gone after removal | `grok inspect --json` (no login needed) | pass |
 | Cursor SDK 1.4.1 | Executor skill in `~/.cursor/skills` (the isolated profile's own HOME) is in an authenticated run's skill list by its nonce name, with no tool used; after removal the directory is gone and a new session answers `NONE`. Rechecked on macOS arm64 in the `cap-cursor-review-8314` profile, two billed turns | an authenticated Cursor run (`e2e/agent-testing/capability-cursor-live.spec.ts`; the SDK has no credential-free listing) | pass |
 
@@ -698,6 +713,15 @@ Catalogue names are insufficient to identify the installed revision.
   from the owning backend, which grades it using the launch it actually recorded.
   The same read identifies the worktree or staged container incarnation for
   scoped checks. A container chip uses the manifest staged for that incarnation.
+- **Pi sessions.** The Pi bridge records the skills its resource loader
+  resolved on attach and on command reload, and serves their `SKILL.md`
+  paths on the same no-touch route as `loadedSkills`. A session-private skill
+  is `load-confirmed` when the reported path exactly matches the launch's
+  expected `SKILL.md` under the owning backend's canonical staging root.
+  Private paths get priority in the bounded report. If rows were omitted,
+  a missing path leaves the load unconfirmed. Pi has no skill tool to observe,
+  so nothing is `observed-in-use`. A bridge that answers 404 or 405 cannot
+  report what it loaded.
 - **Grok.** `grok inspect --json` is Grok's own discovery for the machine. A
   listed `SKILL.md` inside a receipt's installed directory, whose bytes the
   inventory just matched, is `advertised` for the next Grok session. Grok has
@@ -762,9 +786,9 @@ private plugin stays frozen.
     native MCP definitions have no capability receipt and are reported as
     unsupported for managed delivery.
   A session-only selection without a verified scoped copy is delivered to a
-  Claude host session alone ("Session-private delivery" above); for any
-  other provider or a container it is reported as unsupported, and a
-  required selection in that state stops the launch.
+  Claude or Pi host session alone ("Session-private delivery" above; skills
+  only for Pi); for any other provider or a container it is reported as
+  unsupported, and a required selection in that state stops the launch.
   The launch manifest records the selected revisions for diagnostics.
   Shared provider homes stay shared, but a write there waits while work that
   reads it is in flight ("Running work" above); an idle session sees a
@@ -962,12 +986,13 @@ the setup together with the approved operation.
 ## Not yet qualified
 
 Runtime
-proof for providers other than Claude sessions and Grok's machine listing, a live
+proof for providers other than Claude and Pi sessions and Grok's machine listing, a live
 Orkestrator OpenCode 2 session loading delivered agents and commands, switching
 another machine's Codex plugins from this window, per-session delivery for
-providers other than Claude (Codex, Cursor, Grok, OpenCode and Pi bridges have
+providers other than Claude and Pi (Codex, Cursor, Grok and OpenCode bridges have
 no per-session plugin channel, so exclusive claims for them are reported as
-not enforceable), a session-private plugin on a read-only turn,
+not enforceable), Pi prompt templates delivered per session, a session-private
+plugin on a read-only turn,
 writing into a running container (a
 container takes a changed setup on its next rebuild, which the environment
 card offers) and adopting a worktree copy's local changes as a new revision
@@ -1012,9 +1037,16 @@ by `scripts/qa-capabilities-two-machine.ts` (2026-11-22, macOS and Linux:
 isolated backends of one commit linked through an SSH forward; delivery,
 offline convergence to the latest revision, handover with epoch 2 and the
 old controller refused). The check observes the copies on disk after reconnect.
-It does not measure intermediate installations. Not proven on real machines: a leaf launch, a third
-machine moving with the handover (the forward is a loopback route, which does
-not move), and an unknown outcome from a write cut off mid-flight. Capability authority moves with the handover as a whole:
+It does not measure intermediate installations. A leaf launch across two
+backends running as separate processes is proven by
+`scripts/qa-capabilities-leaf-launch.ts` (2026-11-26, Linux: a native Pi
+session on the leaf with a fake OpenAI-compatible model, a session-scoped
+required skill resolved by the command node, staged on the leaf, loaded by
+that session alone and graded `load-confirmed` by Test on the command node).
+Not proven on real machines: a leaf launch between two machines, a third
+machine moving with the handover (only HTTPS routes to a non-loopback name and
+SSH routes move, `remoteRoutes` in `nodes/node-service.ts`; the forward and
+loopback routes do not), and an unknown outcome from a write cut off mid-flight. Capability authority moves with the handover as a whole:
 machines the user leaves behind with the old command node keep what they last
 applied but get no new plans until they join the new one, and a node that
 handed over does not take the authority back unless command is handed back to

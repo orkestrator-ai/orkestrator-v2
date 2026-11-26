@@ -339,6 +339,8 @@ export const BRIDGE_LOG_AREAS = defineLogAreas({
   "bridge.pi": {
     description: "The Pi bridge: its routes, sessions and saved state.",
     events: {
+      "capability-skills.refused":
+        "A prompt's Agent Capabilities session plugin was outside the backend's root or was a link; its skills were not loaded (`reason`, `count`).",
       "http.route-failed":
         "An HTTP route failed unexpectedly; its error is not logged because it can hold content.",
       "session.policy-widening-refused":

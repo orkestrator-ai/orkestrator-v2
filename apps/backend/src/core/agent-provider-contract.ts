@@ -601,9 +601,11 @@ export interface ProviderSendOptions {
     artifacts?: { token: string };
   };
   /**
-   * Claude only: plugin directories Orkestrator staged for this session
-   * alone (Agent Capabilities session-private delivery). Frozen at launch;
-   * every turn of the session passes the same directories.
+   * Claude and Pi (`takesCapabilitySessionPlugins`): plugin directories
+   * Orkestrator staged for this session alone (Agent Capabilities
+   * session-private delivery). Frozen at launch; every turn of the session
+   * passes the same directories. Claude loads them as inline plugins, Pi
+   * loads their `skills/` as the session's own skill paths.
    */
   capabilityPlugins?: string[];
 }

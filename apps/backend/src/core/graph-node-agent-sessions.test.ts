@@ -86,37 +86,45 @@ function continueTemplate(from = "draft"): GraphTemplateV1 {
 }
 
 describe("session: continue", () => {
-  test("the continuing step sends its turn into the source step's provider session", async () => {
-    const approved = new Map<string, string>();
-    world = await graphAgentWorld({
-      script: submittingScript(),
-      capabilityPreflight: async ({ sessionKey, graphNode }) => {
-        approved.set(sessionKey, `/approved/${graphNode}`);
-        return null;
-      },
-      capabilitySessionPlugins: async (sessionKey) => {
-        const plugin = approved.get(sessionKey);
-        return plugin ? [plugin] : [];
-      },
-    });
-    world.start();
-    const run = await world.launch(continueTemplate(), { ticket: TEST_TICKET });
-    const done = await world.drive(run.id);
-    expect(done.status).toBe("complete");
-    const draft = activationOf(done, "draft");
-    const refine = activationOf(done, "refine");
-    expect(refine.session?.providerSessionId).toBe(draft.session?.providerSessionId);
-    expect(refine.session?.continuedFrom).toBe(draft.key);
-    expect(world.provider.sessions.size).toBe(1);
-    const turns = world.provider.turns();
-    expect(turns).toHaveLength(2);
-    expect(turns[1]!.prompt).toContain("Refine your draft.");
-    expect(turns[0]!.options.capabilityPlugins).toEqual([...approved.values()].slice(0, 1));
-    expect(turns[1]!.options.capabilityPlugins).toEqual([...approved.values()].slice(1));
-    expect(turns[1]!.options.capabilityPlugins).not.toEqual(turns[0]!.options.capabilityPlugins);
-    // The continued session's earlier usage is not counted twice.
-    expect(done.usage.tokens).toBe(0);
-  });
+  test.each(["claude", "pi"] as const)(
+    "the continuing step sends each activation's staged skills to its %s session",
+    async (agent) => {
+      const approved = new Map<string, string>();
+      const lookups: Array<[string, string]> = [];
+      world = await graphAgentWorld({
+        agent,
+        script: submittingScript(),
+        capabilityPreflight: async ({ sessionKey, graphNode, provider }) => {
+          expect(provider).toBe(agent);
+          approved.set(sessionKey, `/approved/${graphNode}`);
+          return null;
+        },
+        capabilitySessionPlugins: async (sessionKey, _environmentId, provider) => {
+          lookups.push([sessionKey, provider]);
+          const plugin = approved.get(sessionKey);
+          return plugin ? [plugin] : [];
+        },
+      });
+      world.start();
+      const run = await world.launch(continueTemplate(), { ticket: TEST_TICKET });
+      const done = await world.drive(run.id);
+      expect(done.status).toBe("complete");
+      const draft = activationOf(done, "draft");
+      const refine = activationOf(done, "refine");
+      expect(refine.session?.providerSessionId).toBe(draft.session?.providerSessionId);
+      expect(refine.session?.continuedFrom).toBe(draft.key);
+      expect(world.provider.sessions.size).toBe(1);
+      const turns = world.provider.turns();
+      expect(turns).toHaveLength(2);
+      expect(turns[1]!.prompt).toContain("Refine your draft.");
+      expect(turns[0]!.options.capabilityPlugins).toEqual([...approved.values()].slice(0, 1));
+      expect(turns[1]!.options.capabilityPlugins).toEqual([...approved.values()].slice(1));
+      expect(turns[1]!.options.capabilityPlugins).not.toEqual(turns[0]!.options.capabilityPlugins);
+      // The continued session's earlier usage is not counted twice.
+      expect(done.usage.tokens).toBe(0);
+      expect(lookups).toEqual(Array.from(approved.keys(), (key) => [key, agent]));
+    },
+  );
 
   test("the compiler enforces the §5.2 constraints", () => {
     const template = continueTemplate("draft");

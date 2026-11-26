@@ -102,7 +102,7 @@ export interface GraphAgentExecutorDependencies {
   capabilitySessionPlugins?: (
     sessionKey: string,
     environmentId: string,
-    provider: "claude",
+    provider: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
   ) => Promise<string[]>;
   storage: { getEnvironment(environmentId: string): Promise<Environment | null> };
   providers: GraphAgentProviders;

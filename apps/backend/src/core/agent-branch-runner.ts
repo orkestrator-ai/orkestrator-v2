@@ -29,6 +29,7 @@
  */
 import { beginCapabilityTurn } from "./capabilities/running-work.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import { takesCapabilitySessionPlugins } from "@orkestrator/protocol/capability-resources";
 import { REVIEW_FANOUT_MAX_FINAL_USAGE_POLLS } from "@orkestrator/protocol/review-fanout";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
 import { randomUUID } from "node:crypto";
@@ -515,8 +516,9 @@ export class AgentBranchRunner<B extends AgentBranchRecord> {
     if (toolTransport && host.prepareResult) {
       await host.prepareResult(branch, requestId, host.resultSchema(branch));
     }
-    const capabilityPlugins =
-      branch.agent === "claude" ? ((await host.capabilityPlugins?.(branch)) ?? []) : [];
+    const capabilityPlugins = takesCapabilitySessionPlugins(branch.agent)
+      ? ((await host.capabilityPlugins?.(branch)) ?? [])
+      : [];
     let reviewShellPolicy: NativeAgentExecutionPolicy | undefined;
     if (host.mode === "plan" && branch.agent === "opencode") {
       try {

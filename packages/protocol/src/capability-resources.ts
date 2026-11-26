@@ -112,14 +112,26 @@ export const PACKAGE_SOURCE_KINDS: readonly PackageSourceKind[] = Object.freeze(
 
 /**
  * Session-private delivery: the directory, under the backend's data
- * directory, that holds the plugins Orkestrator stages for one Claude session
- * alone. The backend names it to a local Claude bridge in this variable, and
- * the bridge passes a prompt's `capabilityPlugins` only from inside it.
+ * directory, that holds the plugins Orkestrator stages for one session
+ * alone. The backend names it to a local bridge in this variable, and the
+ * bridge passes a prompt's `capabilityPlugins` only from inside it: Claude
+ * as inline plugins, Pi as the session's own skill paths (the plugin's
+ * `skills/`).
  */
 export const CAPABILITY_SESSION_PLUGINS_DIR_ENV = "ORKESTRATOR_CAPABILITY_SESSION_PLUGINS_DIR";
 export const CAPABILITY_SESSION_PLUGINS_DIRECTORY = "capability-session-plugins";
 /** How many plugin directories one prompt may pass. */
 export const MAX_CAPABILITY_SESSION_PLUGINS = 4;
+/** The providers whose bridges take a session's private plugin on its prompts. */
+export const CAPABILITY_SESSION_PLUGIN_PROVIDERS: readonly AgentPlatform[] = Object.freeze([
+  "claude",
+  "pi",
+]);
+
+/** Whether `agent`'s bridge takes a session's private plugin (`capabilityPlugins`). */
+export function takesCapabilitySessionPlugins(agent: string): boolean {
+  return (CAPABILITY_SESSION_PLUGIN_PROVIDERS as readonly string[]).includes(agent);
+}
 
 /** Bounds every reader and writer of the capability records shares. */
 export const CAPABILITY_LIMITS = Object.freeze({

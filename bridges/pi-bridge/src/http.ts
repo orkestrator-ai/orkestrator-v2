@@ -129,6 +129,11 @@ import {
 } from "./branch-switch.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
+  capabilityEvidenceBody,
+  capabilitySessionSkillPaths,
+  parseCapabilityPlugins,
+} from "./capability-skills.js";
+import {
   applyComposerPatch,
   applyComposerToSession,
   createSession,
@@ -146,6 +151,7 @@ import {
   parseComposerPatch,
   piReadiness,
   reconcileAgentMcp,
+  reconcileCapabilitySkills,
   refreshSessionCommands,
   resumeSession,
   runDeferredCommandReload,
@@ -562,7 +568,7 @@ async function routeGlobal(
 }
 
 const SESSION_ROUTE =
-  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|human-prompts|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?(?:\/(hold))?$/;
+  /^\/session\/([^/]+)(?:\/(close|messages|transcript|status|activity|human-prompts|prompt|attach|dispatch|cancel|abort|hard-abort|structured-output|interactions|config|approvals|compact|fork|steer|queue|runtime-health|capability-evidence|commands|mcp|rewind-messages|branches|title))?(?:\/([^/]+))?(?:\/(hold))?$/;
 
 async function routeSession(
   request: IncomingMessage,
@@ -599,6 +605,10 @@ async function routeSession(
     // "this bridge predates the route" — a 404 here would have it delete a
     // live session mapping against an older bridge.
     if (action === "activity") return json(response, 200, sessionActivityObservation(match[1]!));
+    // Agent Capabilities runtime proof, likewise in band (`capability-skills.ts`).
+    if (action === "capability-evidence" && !subject && request.method === "GET") {
+      return json(response, 200, capabilityEvidenceBody(undefined));
+    }
     // Same reasoning: a 404 here would read as "this bridge predates the
     // route" and fail the environment. Health is optional metadata, so an
     // unknown session answers empty rather than failing.
@@ -716,6 +726,11 @@ async function routeSession(
   if (action === "activity" && request.method === "GET") {
     // Shared with `POST /sessions/activity`; see `sessionActivityObservation`.
     return json(response, 200, sessionActivityObservation(match[1]!));
+  }
+  if (action === "capability-evidence" && !subject && request.method === "GET") {
+    // Agent Capabilities runtime proof: the skills the latest build's resource
+    // loader resolved. A read like `/activity`: no touch, hydrate or attach.
+    return json(response, 200, capabilityEvidenceBody(state));
   }
   if (action === "runtime-health" && request.method === "GET") {
     // A read, like `/activity`: it must not touch liveness, hydrate, or
@@ -1672,12 +1687,19 @@ async function handleAdmittedPrompt(
     files = await resolvePromptFiles(attachments, workingDirectory);
     stopIfCancelled();
     if (typeof body.readOnly === "boolean") await setSessionReadOnly(state, body.readOnly);
+    // The skills this session's launch delivered to it alone. Every prompt of
+    // such a session names them; one that names none holds none.
+    state.capabilitySkillPaths = await capabilitySessionSkillPaths(
+      parseCapabilityPlugins(body.capabilityPlugins),
+    );
+    stopIfCancelled();
     applyComposerPatch(state, parseComposerPatch(body));
     // A rotated tab credential has to rebuild the SDK session before the turn
     // is dispatched, or the model reaches the mailbox under the previous
     // identity while `/mcp` already reports the new one. A saved MCP
     // configuration change is adopted at this same boundary.
     await reconcileAgentMcp(state, { atTurnStart: true });
+    await reconcileCapabilitySkills(state);
     stopIfCancelled();
     session = await ensureSession(state);
     await applyComposerToSession(state);

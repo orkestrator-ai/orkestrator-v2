@@ -1,3 +1,4 @@
+import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 /**
  * One graph agent activation as the shared agent branch runner's host
@@ -464,13 +465,14 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
     );
   }
 
-  async capabilityPlugins(): Promise<string[]> {
+  async capabilityPlugins(branch: AgentBranchRecord): Promise<string[]> {
+    if (!isAgentPlatform(branch.agent)) return [];
     const launchKey = graphAgentSessionKey(this.context.run.id, this.context.activation.key);
     return (
       (await this.dependencies.capabilitySessionPlugins?.(
         launchKey,
         this.context.environmentId,
-        "claude",
+        branch.agent,
       )) ?? []
     );
   }

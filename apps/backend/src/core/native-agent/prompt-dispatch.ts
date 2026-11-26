@@ -66,6 +66,7 @@ import {
   type NativeAgentCommandIntent,
 } from "@orkestrator/protocol/native-agent";
 import { bugReportIdFromRuntimeId } from "@orkestrator/protocol/bug-report";
+import { takesCapabilitySessionPlugins } from "@orkestrator/protocol/capability-resources";
 import { nativeAgentObservationGroupKey } from "./observation.js";
 import { deliverMissedSteer } from "./missed-steer.js";
 import { randomUUID } from "node:crypto";
@@ -1325,7 +1326,10 @@ export class NativeAgentPromptDispatch {
       await this.prepareEnvironmentFirstPrompt(input, session, provider);
       // What the session's launch delivered to it alone, before the at-most-once window.
       let capabilityPlugins: string[] = [];
-      if (session.agent === "claude" && this.host.options.capabilitySessionPlugins) {
+      if (
+        takesCapabilitySessionPlugins(session.agent) &&
+        this.host.options.capabilitySessionPlugins
+      ) {
         try {
           capabilityPlugins = await this.host.options.capabilitySessionPlugins(
             session.logicalSessionKey,

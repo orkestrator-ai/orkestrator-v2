@@ -30,6 +30,7 @@ const sessionKey = nativeAgentSessionStorageKey(
  */
 function harness(
   input: {
+    agent?: "codex" | "pi";
     session?: Partial<PersistedNativeAgentSession>;
     provider?: Record<string, unknown>;
     storage?: Record<string, unknown>;
@@ -37,9 +38,15 @@ function harness(
     host?: Partial<NativeAgentPromptDispatchHost>;
   } = {},
 ) {
+  const sessionIdentity = { ...identity, agent: input.agent ?? identity.agent };
+  const sessionKey = nativeAgentSessionStorageKey(
+    sessionIdentity.environmentId,
+    sessionIdentity.agent,
+    sessionIdentity.logicalSessionKey,
+  );
   const events: string[] = [];
   let session = {
-    ...identity,
+    ...sessionIdentity,
     key: sessionKey,
     providerSessionId: "provider-session",
     origin: "workflow",
@@ -48,7 +55,7 @@ function harness(
     ...input.session,
   } as PersistedNativeAgentSession;
   const provider = {
-    agent: identity.agent,
+    agent: sessionIdentity.agent,
     status: async () => "idle",
     send: async (_id: string, _prompt: string, options: { requestId: string }) => {
       events.push(`send:${options.requestId}`);
@@ -218,6 +225,57 @@ describe("NativeAgentPromptDispatch", () => {
       "environment:exit",
       "bridge:exit",
     ]);
+  });
+
+  test("Pi receives its staged capabilities on each turn", async () => {
+    const plugins = ["/staged/selected"];
+    const lookups: unknown[][] = [];
+    const sent: unknown[] = [];
+    const { dispatch } = harness({
+      agent: "pi",
+      host: {
+        options: {
+          capabilitySessionPlugins: async (...args) => {
+            lookups.push(args);
+            return plugins;
+          },
+        },
+      },
+      provider: {
+        send: async (_id: string, _prompt: string, options: { capabilityPlugins?: string[] }) => {
+          sent.push(options.capabilityPlugins);
+        },
+      },
+    });
+    for (const requestId of ["pi-1", "pi-2"]) {
+      await dispatch.dispatchPrompt({ ...identity, agent: "pi", prompt: "hello", requestId });
+    }
+    const expected = [identity.logicalSessionKey, identity.environmentId, "pi"];
+    expect(lookups).toEqual([expected, expected]);
+    expect(sent).toEqual([plugins, plugins]);
+  });
+
+  test("a failed Pi capabilities lookup refuses the turn before journaling or submitting", async () => {
+    const { dispatch, events } = harness({
+      agent: "pi",
+      host: {
+        options: {
+          capabilitySessionPlugins: async () => {
+            throw new Error("staging unavailable");
+          },
+        },
+      },
+    });
+    await expect(
+      dispatch.dispatchPrompt({
+        ...identity,
+        agent: "pi",
+        prompt: "hello",
+        requestId: "pi-failure",
+      }),
+    ).rejects.toThrow("capabilities could not be prepared");
+    expect(events).not.toContain("lease:enter");
+    expect(events).not.toContain("send:pi-failure");
   });
 
   test("the intent path takes the mutation intent before the same inner order", async () => {

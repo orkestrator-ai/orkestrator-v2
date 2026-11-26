@@ -56,6 +56,12 @@ import { piWithheldGitHubCredential, withheldShellToolDefinitions } from "./gith
 import { requestToolApproval } from "./interactions.js";
 import { excludeConfiguredPackages } from "./project-extensions.js";
 import {
+  capabilitySkillsNeedRebuild,
+  effectiveCapabilitySkillPaths,
+  noteCapabilityLoad,
+  preferCapabilitySkills,
+} from "./capability-skills.js";
+import {
   closePiMcp,
   mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
@@ -501,17 +507,22 @@ export async function ensureSession(state: SessionState): Promise<AgentSession> 
 }
 
 async function attach(state: SessionState): Promise<AgentSession> {
+  // The private skill set this build's resource loader takes (read by
+  // `piResourceLoaderPolicy` below); recorded with what it resolved.
+  const capabilitySkills = effectiveCapabilitySkillPaths(state);
   try {
     const session = agentSessionTestHooks.createAgentSession
       ? await agentSessionTestHooks.createAgentSession(state)
-      : await createPiAgentSession(state);
+      : await createPiAgentSession(state, capabilitySkills);
 
     // Before `publishAttachedSession`, which is where the command list is read:
     // binding is what runs `resources_discover`, so an extension-contributed
     // prompt template only exists on the session afterwards.
     await bindSessionExtensions(state, session);
     applyPiToolPolicy(session, state.policy);
-    return publishAttachedSession(state, session);
+    const published = publishAttachedSession(state, session);
+    noteCapabilityLoad(state, capabilitySkills, session.resourceLoader?.getSkills?.().skills ?? []);
+    return published;
   } catch (error) {
     await closePiMcp(state);
     throw error;
@@ -563,6 +574,21 @@ export async function reconcileAgentMcp(
 }
 
 /**
+ * Rebuild an attached session whose session-private skill set (Agent
+ * Capabilities) differs from what the latest prompt named. Pi fixes a
+ * session's skills when it builds the resource loader, so the set moves only
+ * through a detach, and only at a turn's start, which the prompt path has
+ * already claimed. A session with no live runtime takes the set on attach.
+ */
+export async function reconcileCapabilitySkills(state: SessionState): Promise<void> {
+  // An attach in flight read the set when it started; let it publish first.
+  await state.attaching?.catch(() => undefined);
+  if (!state.session || state.attaching) return;
+  if (!capabilitySkillsNeedRebuild(state)) return;
+  await detachSession(state);
+}
+
+/**
  * What Orkestrator appends to Pi's system prompt: the instructions every
  * provider receives (not for a read-only coordinator, as on the other
  * providers), then the connected MCP servers' own instructions.
@@ -582,8 +608,9 @@ export async function createPiSessionServices(
     Parameters<typeof createAgentSessionServices>[0],
     "resourceLoaderOptions" | "resourceLoaderReloadOptions"
   >,
+  capabilitySkills = effectiveCapabilitySkillPaths(state),
 ): ReturnType<typeof createAgentSessionServices> {
-  const loaderPolicy = piResourceLoaderPolicy(state, options.cwd);
+  const loaderPolicy = piResourceLoaderPolicy(state, options.cwd, capabilitySkills);
   const settingsManager =
     options.settingsManager ??
     SettingsManager.create(options.cwd, options.agentDir, {
@@ -597,6 +624,15 @@ export async function createPiSessionServices(
       // Project resources can execute arbitrary code or replace built-in tools.
       // Read-only sessions exclude them even inside trusted containers.
       ...loaderPolicy.discovery,
+      ...(capabilitySkills.length > 0
+        ? {
+            skillsOverride: preferCapabilitySkills(
+              capabilitySkills,
+              options.cwd,
+              options.agentDir ?? getAgentDir(),
+            ),
+          }
+        : {}),
       // Kept after any `APPEND_SYSTEM.md` Pi discovers, which passing
       // `appendSystemPrompt` itself would switch off. Re-run on every reload,
       // after `preparePiMcp`, so it sees this attach's MCP connections.
@@ -615,7 +651,10 @@ export async function createPiSessionServices(
   return services;
 }
 
-async function createPiAgentSession(state: SessionState): Promise<AgentSession> {
+async function createPiAgentSession(
+  state: SessionState,
+  capabilitySkills: string[],
+): Promise<AgentSession> {
   // Checked before anything expensive: an environment with no authenticated
   // provider must say so, rather than failing inside the first turn the user
   // paid to start.
@@ -649,12 +688,11 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       settingsManager,
       () => state.autoCompaction,
     );
-    const services = await createPiSessionServices(state, {
-      cwd,
-      agentDir: runtimeAgentDir,
-      settingsManager,
-      modelRuntime: runtime,
-    });
+    const services = await createPiSessionServices(
+      state,
+      { cwd, agentDir: runtimeAgentDir, settingsManager, modelRuntime: runtime },
+      capabilitySkills,
+    );
     const preferredModelIds = defaultModelIds(state, cwd, runtimeAgentDir);
     const model = await resolveModelForSession(state.composer.selectedModelId, preferredModelIds);
     state.composer = await hydrateComposerForSession(
@@ -898,6 +936,11 @@ function reloadSessionCommands(
       if (state.session !== session) {
         return { outcome: "deferred", message: "Pi reads its commands again on its next attach." };
       }
+      noteCapabilityLoad(
+        state,
+        state.capabilitySkillPathsLoaded ?? [],
+        session.resourceLoader?.getSkills?.().skills ?? [],
+      );
       // A reload rebuilds the tool registry; the session's tool policy must
       // not be widened by it.
       applyPiToolPolicy(session, state.policy);
@@ -1018,8 +1061,9 @@ export function coordinatorProjectSkillPaths(cwd: string = workingDirectory): st
 
 /** What a session's resource loader discovers, and whether it trusts the project. */
 export function piResourceLoaderPolicy(
-  state: Pick<SessionState, "policy" | "readOnly">,
+  state: Pick<SessionState, "policy" | "readOnly" | "capabilitySkillPaths">,
   cwd: string = workingDirectory,
+  privateSkills = effectiveCapabilitySkillPaths(state),
 ): {
   discovery: ReturnType<typeof projectResourceDiscoveryOptions> & {
     additionalSkillPaths?: string[];
@@ -1039,10 +1083,21 @@ export function piResourceLoaderPolicy(
   const coordinator =
     state.policy?.id === "coordinator-read-only" &&
     process.env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only";
+  if (coordinator) {
+    return {
+      discovery: {
+        ...discovery,
+        noSkills: false,
+        additionalSkillPaths: coordinatorProjectSkillPaths(cwd),
+      },
+      projectTrusted: state.policy?.projectResources === true,
+    };
+  }
+  // Skills Agent Capabilities delivered to this session alone: per session in
+  // the SDK, never written into the shared Pi home (`capability-skills.ts`).
   return {
-    discovery: coordinator
-      ? { ...discovery, noSkills: false, additionalSkillPaths: coordinatorProjectSkillPaths(cwd) }
-      : discovery,
+    discovery:
+      privateSkills.length > 0 ? { ...discovery, additionalSkillPaths: privateSkills } : discovery,
     projectTrusted: state.policy?.projectResources === true,
   };
 }

@@ -107,6 +107,13 @@ export function bridgePromptBody(
               reasoningEffort: options.effort ?? connection.effort,
               mode: options.mode,
               agentMcp,
+              // Pi loads a session's private plugin's skills as that session's
+              // own skill paths; a prompt that names none holds none.
+              ...(agent === "pi" &&
+              options.capabilityPlugins &&
+              options.capabilityPlugins.length > 0
+                ? { capabilityPlugins: options.capabilityPlugins }
+                : {}),
               // These bridges gate tools themselves, so a read-only turn needs
               // to know which attempt's tools it may let through.
               ...workflowResultTurnFields(options),

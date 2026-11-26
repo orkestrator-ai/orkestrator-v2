@@ -238,16 +238,17 @@ on reveal, WebSocket reconnect, and reload.
 The tables below record the original harness runs. The original probe could
 wait five seconds after it had already recorded an echo. It also accepted
 cells without checking the requested load, and an empty metrics response
-could look like zero stalls. The full comparison needs to be repeated with
-the corrected harness before these figures inform a backend-worker decision.
+could look like zero stalls. The backend-worker decision rests on the
+corrected runs instead: the busy level in the transcript-growth section and
+the heavy level in [its own section](#heavy-load-backend-only-with-the-corrected-harness-8312-task-1).
 
 A review follow-up ran one round at the original busy load with the corrected
 probe and load checks. All five cells recorded 200 measured keys with no
 timeouts. The backend monitor advanced in every cell and recorded zero ticks
 at least 100 ms late. Idle p95/p99 were 27.0/28.3 ms and backend-only p95/p99
 were 32.9/37.4 ms. This run verifies that the harness can measure the busy
-shape. The multi-round comparison and the heavy backend-only run still need
-repeating.
+shape. The multi-round busy comparison (2026-11-22) and the heavy
+backend-only comparison (2026-11-26) were repeated afterwards; both are below.
 
 **Load shape.** The loopback benchmark's `busy` level, minus observers:
 three fixture terminals running `producer.ts build` at 256 KiB/s, two running
@@ -308,8 +309,8 @@ What the original runs suggested:
 
 - **The backend-only and idle timings were close.** At the busy level they
   were similar, and at the heavy terminal level the backend-only p99 was
-  about 6 ms slower. The backend-worker task (8312 task 1) stays open pending
-  a verified comparison.
+  about 6 ms slower. The corrected harness found no difference at either
+  level (below), so the backend worker (8312 task 1) was not built.
 - **The renderer's largest cost is a visible streaming agent**, not terminals:
   showing one beside the typing terminal adds about 40 ms at p95 and 50 ms at
   p99, with about a second of long tasks per run.
@@ -412,6 +413,48 @@ against 26.5 to 27.3 ms. The echo itself waits behind the same deferred
 frame, so in headless Chromium at 60 Hz the timer costs no echo time once
 keys are not phase-locked. The timer was left at 8 ms.
 
+### Heavy load, backend only, with the corrected harness (8312 task 1)
+
+Measured on 2026-11-26 on `beelink2` (Linux x64, 16 threads, load average
+about 1 to 2), against `main` at `8950e12e2`, with a credential-free profile:
+six build and three tool terminals plus four fake-model agents, all in other
+environments, against idle; two runs of three rounds, the second in the
+opposite variant order; 200 measured keys per cell, no timeouts, every cell's
+load verified to cover its typing window.
+
+```bash
+ORKESTRATOR_AGENT_TEST_PROFILE=echo8312h ORKESTRATOR_AGENT_TEST_LIVE_TERMINAL_ECHO=1 \
+  ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43312 \
+  ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS=idle,backend-only ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS=3 \
+  ORKESTRATOR_AGENT_TEST_ECHO_BUILD=6 ORKESTRATOR_AGENT_TEST_ECHO_TOOL=3 ORKESTRATOR_AGENT_TEST_ECHO_AGENTS=4 \
+  mise run test:logged -- --name terminal-echo-heavy -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts terminal-echo-latency-live.spec.ts
+```
+
+The rule for a felt backend load was recorded before the first heavy cell:
+felt if the median of backend-only's per-round p95s (or p99s) is more than
+5 ms above idle's, and backend-only is more than 5 ms worse than the same
+round's idle on that percentile in at least two of three rounds; or if the
+backend's monitor records any tick at least 100 ms late in a backend-only
+cell. The reasons for its thresholds are in
+[8312](../todo/cross-cutting/8312-terminal-echo-under-load-follow-ups.md).
+
+| Run | Variant | Means, r1 / r2 / r3 ms | p95, r1 / r2 / r3 ms | p99, r1 / r2 / r3 ms | Late ticks (≥100 ms) | Keystroke server time p99, ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | idle | 27.2 / 27.2 / 27.1 | 34.8 / 34.6 / 34.4 | 35.8 / 37.3 / 35.3 | 0 / 0 / 0 | 4.1 / 1.0 / 0.9 |
+| 1 | backend-only | 26.6 / 26.6 / 26.9 | 34.2 / 34.4 / 34.1 | 35.1 / 35.5 / 34.9 | 0 / 0 / 0 | 1.8 / 2.8 / 3.5 |
+| 2 | idle | 27.1 / 27.0 / 27.4 | 34.6 / 34.0 / 34.3 | 35.4 / 34.5 / 35.0 | 0 / 0 / 0 | 1.0 / 1.0 / 1.0 |
+| 2 | backend-only | 26.8 / 27.0 / 26.9 | 34.3 / 34.5 / 34.7 | 35.4 / 35.4 / 35.3 | 0 / 0 / 0 | 4.0 / 3.1 / 3.8 |
+
+Backend-only was never more than 1 ms worse than idle at p95 or p99 in any
+round, and no cell recorded a late tick or stall: **not felt**. The load does
+register on the backend, as the keystroke request's server time (resource
+timing) shows: p99 about 2 to 4 ms against about 1 ms idle. That is less than
+the wait for the frame that paints the echo, which still lands one or two
+60 Hz frames after its key, so the page sees none of it. No production code
+changed. 8312 task 1 keeps the worker design and the trigger that would
+reopen it.
+
 ## Limitations
 
 - The loopback benchmark has no real browser or renderer: its typing client's
@@ -426,7 +469,12 @@ keys are not phase-locked. The timer was left at 8 ms.
 - Observers count desync notices and exercise snapshot reads under load. They do
   not reconstruct a renderer or reapply the returned screen.
 - Variation between runs is a few milliseconds at p95 and up to about 15 ms
-  at p99 under heavy load; compare medians of several runs.
+  at p99 under heavy load in the loopback benchmark; compare medians of
+  several runs. The corrected browser spec varies less (under 1 ms at p95
+  and about 3 ms at p99 between identical idle cells).
+- The heavy browser comparison covers one 16-thread host, loopback, and nine
+  load terminals. A slower host, a remote client or more terminals have not
+  been measured.
 - Echo latency is frame-quantised: an echo paints one or two frames after its
   key, depending on the key's phase in the frame. A median of such a
   distribution moves by a whole cluster when the phase shifts, which is why

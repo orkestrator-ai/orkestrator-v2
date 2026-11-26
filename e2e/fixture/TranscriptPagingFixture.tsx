@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   nativeAgentCapabilities,
+  NATIVE_AGENT_LIVE_UPDATE_VERSION,
   type NativeAgentViewIdentity,
 } from "@orkestrator/protocol/native-agent";
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
@@ -262,6 +263,53 @@ function installBackend() {
       } as never,
     ],
   });
+  const stateUpdate = (knownToken: unknown) => {
+    const token = "state-1";
+    if (knownToken === token) return { viewVersion: 1, status: "unchanged", token, identity };
+    return {
+      viewVersion: 1,
+      status: "snapshot",
+      token,
+      value: {
+        identity,
+        connection: "connected",
+        turn: { phase: stream ? "running" : "idle" },
+        interactions: [],
+        composerControls: [],
+        capabilities: nativeAgentCapabilities("claude"),
+        notices: [],
+      },
+    };
+  };
+  const transcriptUpdate = (knownToken: unknown) => {
+    transcriptReads += 1;
+    const live = liveTail();
+    const token = churn ? `transcript-churn-${transcriptReads}` : (live.token ?? "transcript-1");
+    if (knownToken === token) return { viewVersion: 1, status: "unchanged", token, identity };
+    return {
+      viewVersion: 1,
+      status: "snapshot",
+      token,
+      value: {
+        identity,
+        freshness: "current",
+        messages: live.messages,
+        ...(churn ? { historyReconciliationToken: `row-digest-${transcriptReads}` } : {}),
+        historyEpoch: "epoch-1",
+        historyCursor: live.cursor,
+        historyComplete: false,
+        messageWindow: bounded
+          ? {
+              limit: 100,
+              truncated: true,
+              truncationReason: "bytes",
+              omittedMessages: tailStart,
+              canLoadEarlier: true,
+            }
+          : { limit: 100, truncated: true, canLoadEarlier: true },
+      },
+    };
+  };
   window.orkestrator = {
     ...window.orkestrator!,
     listen: () => () => {},
@@ -272,49 +320,18 @@ function installBackend() {
           result = {};
           break;
         case "get_native_agent_session_state_update":
+          result = stateUpdate(args?.knownToken);
+          break;
+        case "get_native_agent_transcript_update":
+          result = transcriptUpdate(args?.knownToken);
+          break;
+        case "get_native_agent_live_update":
           result = {
-            viewVersion: 1,
-            status: "snapshot",
-            token: "state-1",
-            value: {
-              identity,
-              connection: "connected",
-              turn: { phase: stream ? "running" : "idle" },
-              interactions: [],
-              composerControls: [],
-              capabilities: nativeAgentCapabilities("claude"),
-              notices: [],
-            },
+            viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+            transcript: transcriptUpdate(args?.transcriptToken),
+            state: stateUpdate(args?.stateToken),
           };
           break;
-        case "get_native_agent_transcript_update": {
-          transcriptReads += 1;
-          const live = liveTail();
-          result = {
-            viewVersion: 1,
-            status: "snapshot",
-            token: live.token ?? (churn ? `transcript-${transcriptReads}` : "transcript-1"),
-            value: {
-              identity,
-              freshness: "current",
-              messages: live.messages,
-              ...(churn ? { historyReconciliationToken: `row-digest-${transcriptReads}` } : {}),
-              historyEpoch: "epoch-1",
-              historyCursor: live.cursor,
-              historyComplete: false,
-              messageWindow: bounded
-                ? {
-                    limit: 100,
-                    truncated: true,
-                    truncationReason: "bytes",
-                    omittedMessages: tailStart,
-                    canLoadEarlier: true,
-                  }
-                : { limit: 100, truncated: true, canLoadEarlier: true },
-            },
-          };
-          break;
-        }
         case "get_native_agent_message_page":
           pageRequests.push(String(args?.before));
           await pause();

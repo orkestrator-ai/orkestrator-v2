@@ -100,7 +100,7 @@ async function setup(
                   "node-attachment": 1,
                   "node-coordinator-build-origin": 1,
                 },
-                ...(options.domains ? { domains: options.domains } : {}),
+                domains: options.domains ?? { "node-mail": { min: 1, max: 1 } },
               },
             }
           : null,

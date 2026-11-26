@@ -533,6 +533,13 @@ describe("ticket-sync domain client (plan item 1010)", () => {
     for (const { args } of collects) expect(args.features).toEqual(["images"]);
   });
 
+  test("a leaf with a domain-less hello receives no ticket-sync requests", async () => {
+    const f = await fleet({ domains: null });
+    await f.command.kanban.addKanbanTask(f.commandProject.id, "Keep local", "");
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("update-required");
+    expect(f.received).toEqual([]);
+  });
+
   test("a leaf whose range has no version in common is reported as needing an update", async () => {
     const f = await fleet({ domains: { "ticket-sync": { min: 2, max: 3 } } });
     expect((await f.sync.sync(LEAF_ID)).state).toBe("update-required");

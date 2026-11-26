@@ -447,7 +447,7 @@ test("deferred notice retries retain exponential backoff", async () => {
     nodeName: async () => "Leaf",
     link: () => ({
       connected: true,
-      hello: { capabilities: { "coordinator-notices": 1 } },
+      hello: { domains: { "node-mail": { min: 1, max: 1 } } },
       invoke: async <T>() => {
         reads++;
         return {

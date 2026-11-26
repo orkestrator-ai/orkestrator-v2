@@ -2,13 +2,17 @@ import { describe, expect, mock, test } from "bun:test";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
 import type { BackendClient } from "@/lib/backend/client";
 import { createDockerSkillsApi } from "@/lib/backend/docker-skills";
-import { createSignal } from "@/lib/node-scope/signal";
+import { createWorkflowsApi } from "@/lib/backend/workflows";
+import { createSignal, type WritableSignal } from "@/lib/node-scope/signal";
 import { nativeSessions } from "./native-sessions";
 
 function fakeClient(
   domains: NegotiatedDomains | null,
   answer: (command: string) => unknown = () => null,
-): BackendClient & { invokeRaw: ReturnType<typeof mock> } {
+): BackendClient & {
+  invokeRaw: ReturnType<typeof mock>;
+  domains: WritableSignal<NegotiatedDomains | null>;
+} {
   return {
     invokeRaw: mock(async (command: string) => answer(command)) as never,
     domains: createSignal<NegotiatedDomains | null>(domains),
@@ -16,7 +20,7 @@ function fakeClient(
   };
 }
 
-const identity = { environmentId: "env-1", agent: "codex", logicalSessionKey: "tab-1" };
+const identity = { environmentId: "env-1", agent: "codex", logicalSessionKey: "tab-1" } as const;
 
 describe("native-sessions over a lib/backend client", () => {
   test("a node with the domain gets typed calls with the envelope", async () => {
@@ -48,6 +52,45 @@ describe("native-sessions over a lib/backend client", () => {
     await nativeSessions(client).syncCapabilities();
     await nativeSessions(client).handoffCapabilities();
     expect(client.invokeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  test("opens a progressive session before hello against a backend with the probe retired", async () => {
+    const view = {
+      viewVersion: 1,
+      status: "unchanged",
+      token: "state-1",
+      identity: {
+        backendInstanceId: "backend-1",
+        environmentId: identity.environmentId,
+        platform: identity.agent,
+        logicalSessionKey: identity.logicalSessionKey,
+        providerSessionId: "provider-1",
+        sourceGeneration: "generation-1",
+      },
+    } as const;
+    const client = fakeClient(null, (command) => {
+      if (command === "get_native_agent_session_state_update") return view;
+      throw Object.assign(new Error(`Unknown backend command: ${command}`), {
+        code: "unknown-command",
+      });
+    });
+    const api = createWorkflowsApi(client);
+    const input = { ...identity, viewVersion: 1, knownToken: view.token } as const;
+    for (const domains of [null, { "native-sessions": { min: 1, max: 6 } }]) {
+      client.domains.set(domains);
+      expect(await api.getNativeAgentSyncCapabilities()).toMatchObject({
+        progressiveViewVersions: [1],
+      });
+      expect(await api.getNativeAgentSessionStateUpdate(input)).toEqual(view);
+    }
+    expect(client.invokeRaw.mock.calls).toEqual([
+      ["get_native_agent_session_state_update", input],
+      [
+        "get_native_agent_session_state_update",
+        input,
+        { envelope: { domain: "native-sessions", version: 6 } },
+      ],
+    ]);
   });
 
   test("a client that carries no negotiation answers the handoff capabilities itself", async () => {

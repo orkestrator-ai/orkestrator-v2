@@ -95,7 +95,7 @@ async function setup(options: { ignoresLabels?: boolean } = {}) {
     get connected() {
       return state.connected;
     },
-    hello: { capabilities },
+    hello: { capabilities, domains: { "ticket-sync": { min: 1, max: 1 } } },
     invoke: async <T>(name: string, args: Record<string, unknown> = {}) => {
       if (!state.connected) throw new Error("fetch failed");
       return (await runOnLeaf(name, args)) as T;

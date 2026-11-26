@@ -1,4 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
+import {
+  isNativeAgentLiveUpdate,
+  type NativeAgentLiveUpdate,
+} from "@orkestrator/protocol/native-agent";
 
 /**
  * Whether a render of the native tab reaches `<Virtuoso>`. The library
@@ -58,6 +62,30 @@ async function expectNoNestedUpdates(page: Page) {
 }
 
 test.skip(({ hasTouch }) => hasTouch, "render counts need the one layout");
+
+test("transcript fixtures answer a combined poll with both unchanged tokens", async ({ page }) => {
+  for (const [route, lastMessage] of [
+    ["/transcript-list-renders", "Fixture row 99"],
+    ["/transcript-paging", "Trail complete"],
+  ] as const) {
+    await page.goto(route);
+    await expect(page.getByText(lastMessage, { exact: true })).toBeVisible();
+    const update = await page.evaluate(async () => {
+      const invoke = window.orkestrator!.invoke;
+      const initial = await invoke<NativeAgentLiveUpdate>("get_native_agent_live_update");
+      if (initial.transcript.status !== "snapshot" || initial.state.status !== "snapshot") {
+        throw new Error("Expected the first combined read to return two snapshots");
+      }
+      return invoke<NativeAgentLiveUpdate>("get_native_agent_live_update", {
+        transcriptToken: initial.transcript.token,
+        stateToken: initial.state.token,
+      });
+    });
+    expect(isNativeAgentLiveUpdate(update)).toBe(true);
+    expect(update.transcript.status).toBe("unchanged");
+    expect(update.state.status).toBe("unchanged");
+  }
+});
 
 test("a render that changes nothing the list shows causes no nested update", async ({ page }) => {
   await openTranscript(page);

@@ -4177,7 +4177,6 @@ printf '%s' ${JSON.stringify(
     process.env.OPENCODE_CONFIG_CONTENT = userOpenCodeConfigContent;
 
     try {
-      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
       const result = (await commands.get("start_local_opencode_server_cmd")?.(
         { environmentId: environment.id },
         context,

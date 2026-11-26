@@ -122,7 +122,12 @@ async function link(
       status: async () => ({ nodeId: "bk_cmd", mode: "command" }),
       link: (nodeId: string) =>
         nodeId === "bk_leaf"
-          ? { hello: { capabilities: options.capabilities ?? ALL_CAPABILITIES } }
+          ? {
+              hello: {
+                capabilities: options.capabilities ?? ALL_CAPABILITIES,
+                domains: { "node-mail": { min: 1, max: 1 } },
+              },
+            }
           : null,
     },
     nodePortal: {
@@ -156,7 +161,10 @@ async function link(
         nodeId === "bk_leaf"
           ? {
               connected: true,
-              hello: { capabilities: ALL_CAPABILITIES },
+              hello: {
+                capabilities: ALL_CAPABILITIES,
+                domains: { "node-mail": { min: 1, max: 1 } },
+              },
               invoke: (name: string, args: Record<string, unknown>) => leafCall(name, args),
             }
           : null,

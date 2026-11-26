@@ -2,8 +2,8 @@
  * The `accounts` domain client over a `lib/backend` factory client (plan
  * item 7008), against fake nodes: the client's own node takes version 1 when
  * it advertises the domain (envelope, critical keys, decoded results) and
- * version 0 otherwise (today's call, with the arguments object
- * `machineInvoke` always sent); another machine is always version 0.
+ * the unnegotiated call otherwise (today's call, with the arguments object
+ * `machineInvoke` always sent); another machine is always called unnegotiated.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
@@ -61,7 +61,7 @@ describe("accounts domain client", () => {
     await expect(accountsOn(client)().get_agent_account_login({})).rejects.toThrow();
   });
 
-  test("a pre-contract node, or a client without negotiation, gets today's call", async () => {
+  test("a client without negotiation gets today's call", async () => {
     for (const domains of [null, undefined]) {
       const { client, invokeRaw } = fakeClient({ older: "shape" }, domains);
       expect(await accountsOn(client)().list_agent_accounts({})).toEqual({
@@ -71,7 +71,7 @@ describe("accounts domain client", () => {
     }
   });
 
-  test("another machine goes through the command node, version 0, whatever this node speaks", async () => {
+  test("another machine goes through the command node unnegotiated, whatever this node speaks", async () => {
     const { client, invokeRaw } = fakeClient(progress, { accounts: { min: 1, max: 1 } });
     await accountsOn(client)("leaf").get_agent_account_login({});
     await accountsOn(client)(null).cancel_agent_account_login({ operationId: "op-1" });

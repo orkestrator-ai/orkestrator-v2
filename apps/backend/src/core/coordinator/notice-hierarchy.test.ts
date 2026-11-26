@@ -214,6 +214,7 @@ async function fleet(
         ? {
             connected: true,
             hello: {
+              domains: { "node-mail": { min: 1, max: 1 } },
               capabilities: {
                 "node-coordinator-mail": 1,
                 [BACKEND_CAPABILITIES.coordinatorNotices]: 1,

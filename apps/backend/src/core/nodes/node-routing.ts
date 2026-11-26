@@ -110,7 +110,6 @@ export const NODE_ROUTING_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set([
   "coordinator_node_ticket",
   "launch_coordinator_node_multi_review",
   "coordinator_node_multi_review_surface",
-  "start_coordinator_node_multi_review",
   // Worker surfaces of a coordinator on this node (coordinator.md, "Worker surfaces"), and the
   // apply step only the user's approval of a request runs.
   "launch_coordinator_terminal",

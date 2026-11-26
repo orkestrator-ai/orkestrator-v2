@@ -156,9 +156,9 @@ describe("nodes definitions", () => {
     expect(decodeCommandResult(listNodesCommand, { ...list, revision: "3" })._tag).toBe("Failure");
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapter 1", () => {
     expect(DOMAIN_CLIENTS).toContain(nodesClient);
-    expect(nodesClient.versions).toEqual([1, 0]);
+    expect(nodesClient.versions).toEqual([1]);
   });
 });
 
@@ -208,16 +208,5 @@ describe("nodes client", () => {
     await expect(
       createDomainClient(nodesClient, node.options).api().forget_node({ nodeId: "bk_a" }),
     ).rejects.toThrow("Invalid result from forget_node");
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const older = { revision: 1, nodes: [], olderShape: true };
-    const node = fakeNode(undefined, () => older);
-    const client = createDomainClient(nodesClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect<unknown>(client.api().list_nodes(undefined as never)).resolves.toBe(older);
-    expect(node.invoked).toEqual([{ command: "list_nodes", args: undefined }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["nodes", 0]]);
   });
 });

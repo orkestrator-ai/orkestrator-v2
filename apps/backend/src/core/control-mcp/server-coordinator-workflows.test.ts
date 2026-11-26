@@ -605,7 +605,6 @@ describe("Orkestrator control MCP server", () => {
       ui: { status: "opened" },
       workflow,
     }));
-    overrides.set("start_coordinator_multi_review", () => workflow);
     const reviewers = [
       { agent: "codex", model: "gpt-5.6-codex", lens },
       { agent: "codex", model: "gpt-5.6-codex" },

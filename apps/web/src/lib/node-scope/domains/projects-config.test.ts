@@ -23,7 +23,7 @@ function fakeClient(
   };
 }
 
-const CURRENT = { projects: { min: 1, max: 1 }, config: { min: 1, max: 1 } };
+const CURRENT = { projects: { min: 1, max: 2 }, config: { min: 1, max: 2 } };
 
 const PROJECT = {
   id: "p1",
@@ -66,11 +66,11 @@ describe("projects over a lib/backend client", () => {
     expect(client.invokeRaw).toHaveBeenCalledWith(
       "add_project",
       { gitUrl: PROJECT.gitUrl, cloneOnly: true },
-      { envelope: { domain: "projects", version: 1, critical: ["cloneOnly"] } },
+      { envelope: { domain: "projects", version: 2, critical: ["cloneOnly"] } },
     );
   });
 
-  test("a pre-contract node gets today's calls, without arguments where there are none", async () => {
+  test("a client without negotiation gets today's calls, without arguments where there are none", async () => {
     const answer = [{ id: "p1", older: true }];
     const client = fakeClient(null, () => answer);
     await expect(projects(client)().get_projects({})).resolves.toBe(answer as never);
@@ -85,7 +85,7 @@ describe("config over a lib/backend client", () => {
     await expect(config(client)().get_config({})).resolves.toEqual(stored);
     await config(client)().clientStateCapabilities();
     expect(client.invokeRaw.mock.calls).toEqual([
-      ["get_config", {}, { envelope: { domain: "config", version: 1 } }],
+      ["get_config", {}, { envelope: { domain: "config", version: 2 } }],
     ] as never);
   });
 
@@ -98,8 +98,8 @@ describe("config over a lib/backend client", () => {
     const commandWrite = commandNode.invokeRaw.mock.calls.find(
       (call: unknown[]) => call[0] === "update_global_config",
     );
-    expect(commandWrite?.[2]).toEqual({ envelope: { domain: "config", version: 1 } });
-    // The machine is pre-contract here: today's call, `preserveInheritedSettings` and all.
+    expect(commandWrite?.[2]).toEqual({ envelope: { domain: "config", version: 2 } });
+    // The machine carries no negotiation here: today's call, `preserveInheritedSettings` and all.
     const nodeWrite = node.invokeRaw.mock.calls.find(
       (call: unknown[]) => call[0] === "update_global_config",
     );

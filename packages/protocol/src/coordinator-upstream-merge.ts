@@ -8,11 +8,6 @@ import type { ProjectGitStatus } from "./coordinator.js";
  * to the upstream commit already fetched itself and answers `fast-forwarded`. Nothing is merged under a running turn or into a checkout a
  * fast-forward would not apply to (local commits, uncommitted changes, an
  * unfinished operation). Browser-safe.
- *
- * Earlier releases asked first, remembered declines
- * (`decline_coordinator_upstream_merge`) and kept an "always merge" setting
- * (`get/set_coordinator_upstream_auto_merge`). The backend still answers those
- * commands for older clients, but neither changes the decision any more.
  */
 
 /** Why a behind checkout cannot be fast-forwarded, or null when it can. */
@@ -27,12 +22,6 @@ export function behindFastForwardBlocker(
     return "it has uncommitted changes.";
   }
   return status.repositoryOperationBlockedReason;
-}
-
-/** The upstream tip an older client declined to merge (kept for compatibility only). */
-export interface DeclinedUpstreamMerge {
-  upstream: string;
-  upstreamCommit: string;
 }
 
 /**
@@ -115,39 +104,4 @@ export function parseCoordinatorUpstreamMergeCheck(
     };
   }
   return null;
-}
-
-/** Bounds on a stored decline (an upstream ref and a commit id). */
-export const UPSTREAM_DECLINE_LIMITS = Object.freeze({
-  upstreamChars: 1024,
-  commitChars: 128,
-});
-
-export function isDeclinedUpstreamMerge(value: unknown): value is DeclinedUpstreamMerge {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    typeof record.upstream === "string" &&
-    record.upstream.length > 0 &&
-    record.upstream.length <= UPSTREAM_DECLINE_LIMITS.upstreamChars &&
-    typeof record.upstreamCommit === "string" &&
-    record.upstreamCommit.length > 0 &&
-    record.upstreamCommit.length <= UPSTREAM_DECLINE_LIMITS.commitChars
-  );
-}
-
-/**
- * The retired "always merge" setting (`get/set_coordinator_upstream_auto_merge`),
- * still answered for older clients. It no longer changes anything.
- */
-export interface CoordinatorUpstreamAutoMerge {
-  enabled: boolean;
-}
-
-export function parseCoordinatorUpstreamAutoMerge(
-  value: unknown,
-): CoordinatorUpstreamAutoMerge | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const enabled = (value as Record<string, unknown>).enabled;
-  return typeof enabled === "boolean" ? { enabled } : null;
 }

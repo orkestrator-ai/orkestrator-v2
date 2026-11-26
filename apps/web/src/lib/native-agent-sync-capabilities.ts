@@ -1,6 +1,6 @@
 /**
- * The native-agent sync protocol a node's backend speaks
- * (`get_native_agent_sync_capabilities`), cached per node scope (plan item
+ * The native-agent sync protocol a node's backend speaks (folded into the
+ * `native-sessions` domain, so answered without asking), cached per node scope (plan item
  * 3016). It used to be module state in `useNativeAgentSession.ts`, one answer
  * for the whole page; now each node scope holds its own, so a second live
  * node is never read with the first one's protocol. A caller that names no
@@ -8,14 +8,13 @@
  * plan item 3009 scopes them.
  *
  * The renderer reads sessions only through progressive views v1, which every
- * release since the support floor (v2.21.0) advertises. A backend that lacks
- * them, or predates the command, is too old: there is
+ * release since the support floor advertises. A backend that lacks them is
+ * too old: there is
  * no full-projection fallback any more, and the session hook reports
  * {@link NativeAgentSyncUnsupportedError} on the pane's error surface instead.
  * See docs/architecture/version-compatibility.md ("The support window").
  */
 
-import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { NATIVE_AGENT_LIVE_UPDATE_VERSION } from "@orkestrator/protocol/native-agent";
 import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
@@ -93,40 +92,27 @@ export async function nativeAgentProgressiveSyncSupported(scope?: NodeScope): Pr
   }
   if (state.request?.generation === generation) return state.request.promise;
   const promise = (async () => {
-    try {
-      const capabilities = await backendApiForScope(target, createWorkflowsApi, {
-        getNativeAgentSyncCapabilities,
-      }).getNativeAgentSyncCapabilities();
-      const supported = capabilities.progressiveViewVersions?.includes(1) === true;
-      if (generation === state.generation) {
-        state.value = {
-          supported,
-          observationEvents:
-            capabilities.observationEventVersions?.includes(
-              NATIVE_AGENT_OBSERVATION_EVENT_VERSION,
-            ) === true,
-          transcriptPatches:
-            capabilities.transcriptPatchVersions?.includes(
-              NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION,
-            ) === true,
-          liveUpdate:
-            capabilities.liveUpdateVersions?.includes(NATIVE_AGENT_LIVE_UPDATE_VERSION) === true,
-          checkedAt: Date.now(),
-          generation,
-        };
-      }
-      return supported;
-    } catch (error) {
-      if (
-        incompatibility(error, "get_native_agent_sync_capabilities")?.code === "unknown-command"
-      ) {
-        if (generation === state.generation) {
-          state.value = { supported: false, checkedAt: Date.now(), generation };
-        }
-        return false;
-      }
-      throw error;
+    const capabilities = await backendApiForScope(target, createWorkflowsApi, {
+      getNativeAgentSyncCapabilities,
+    }).getNativeAgentSyncCapabilities();
+    const supported = capabilities.progressiveViewVersions?.includes(1) === true;
+    if (generation === state.generation) {
+      state.value = {
+        supported,
+        observationEvents:
+          capabilities.observationEventVersions?.includes(
+            NATIVE_AGENT_OBSERVATION_EVENT_VERSION,
+          ) === true,
+        transcriptPatches:
+          capabilities.transcriptPatchVersions?.includes(NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION) ===
+          true,
+        liveUpdate:
+          capabilities.liveUpdateVersions?.includes(NATIVE_AGENT_LIVE_UPDATE_VERSION) === true,
+        checkedAt: Date.now(),
+        generation,
+      };
     }
+    return supported;
   })();
   const request = { generation, promise };
   state.request = request;

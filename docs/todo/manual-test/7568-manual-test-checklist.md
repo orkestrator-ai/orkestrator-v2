@@ -23,7 +23,7 @@ moot (0015 (retired) task 1's mixed-version pairings and the compatibility count
 readings of 7570 (retired) task 2, 0050 task 1 and 0232 task 4).
 Updated 2026-11-15: the legacy-retirement sweep (8108 and 7570, both retired)
 added one decision, how the contract tooling follows the retirement (8304
-task 1), and one live check, stored legacy URL preview tabs on the user's own
+(retired) task 1), and one live check, stored legacy URL preview tabs on the user's own
 installs (8108 (retired) task 3).
 
 Updated 2026-11-15: 0050 and 8110 were retired once 0050 task 1 (the
@@ -121,6 +121,11 @@ for the agent-test range on beelink (`sudo ufw allow proto tcp from
 172.16.0.0/12 to any port 31500:31509`), so its item left the decisions
 section. The signal-confirmed Linux Engine run it unblocked passed the same
 day, and 7080 and 0020 were retired.
+
+Updated 2026-11-26: the user answered 8304 task 1 (a one-time support floor
+at the first release built from the sweep, then delete the pinned paths; the
+60-day window stays for later changes). The build that applied it retired
+8304, so its item is ticked here with the decision and cites it as retired.
 
 Updated 2026-11-26: 0039 task 6's Cursor cells and task 5's real-login Pi
 rerun ran on mbp3 with real logins and left this file; their results are in
@@ -328,12 +333,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 34 | 2 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 106 | 9 |
+| Cross-cutting | 106 | 8 |
 | Design canvas | 5 | 0 |
 | MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 369 | 21 |
+| **Total** | 369 | 20 |
 
 
 
@@ -1022,12 +1027,12 @@ None open (both answered on 2026-11-14).
 
   Record: the choice and its reason, in 2181's Assumptions and decisions or as a reply to the coordinator. An agent then builds the relay under a new to-do or closes the question in 2181.
 
-- [ ] **[8304](../cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1: decide how the contract tooling follows the 2026-11-14 legacy retirement.** The sweep (8108, retired 2026-11-15) removed every compatibility path it could, but `mise run contract:ci` still applies the 60-day support window, so the domain client adapters below each domain's current version, three capability commands and about twenty commands kept registered for older clients cannot go without failing it. Choose:
+- [x] **8304 (retired) task 1: decide how the contract tooling follows the 2026-11-14 legacy retirement.** The sweep (8108, retired 2026-11-15) removed every compatibility path it could, but `mise run contract:ci` still applied the 60-day support window, so the domain client adapters below each domain's current version, three capability commands and about twenty commands kept registered for older clients could not go without failing it. Choose:
   - record a one-time floor at the first release built from the sweep in `scripts/contract-ci.ts`, then delete those paths (recommended);
   - keep the 60-day window and let them retire on its schedule;
   - drop the window and the contract CI checks altogether.
 
-  Record: the choice, and whether later changes still need older-version adapters (the forward policy), in 8304's Assumptions and decisions or as a reply to the coordinator. An agent then does 8304 task 1.
+  Decided 2026-11-26 by the user: the one-time floor, then delete the paths; later changes keep the 60-day window, so an older-version adapter inside the window is still required (the forward policy). Done the same day: the floor is v2.39.1-beta (published 2026-11-16), the first release whose tag contains the sweep's merge (#2319, `8821695c8`; v2.39.0-beta was tagged before it), recorded as `ONE_TIME_SUPPORT_FLOOR` in `scripts/contract-ci.ts`, and the adapters, the three capability commands and twenty commands it freed were deleted ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)). What 8304 listed that needs a wire or schema change moved to [8334](../cross-cutting/8334-schema-pinned-compatibility-paths.md), an agent's to-do.
 
 #### Design canvas
 

@@ -247,7 +247,7 @@ describe("reads go to their own node", () => {
       {
         [COORDINATOR_ACTIVITY_COMMAND]: { projects: { "project-1": "working" } },
         [COORDINATOR_LAUNCH_OVERRIDES_COMMAND]: { overrides: [] },
-        get_client_state_capabilities: { coordinatorPaneLayouts: false },
+        get_coordinator_pane_layout: null,
       },
     );
     await b.store(coordinatorActivityStore).getState().refresh();
@@ -256,7 +256,7 @@ describe("reads go to their own node", () => {
     expect(b.store(coordinatorActivityStore).getState().projects.get("project-1")).toBe("working");
     expect(clientB.calls(COORDINATOR_ACTIVITY_COMMAND)).toHaveLength(1);
     expect(clientB.calls(COORDINATOR_LAUNCH_OVERRIDES_COMMAND)).toHaveLength(1);
-    expect(clientB.calls("get_client_state_capabilities")).toHaveLength(1);
+    expect(clientB.calls("get_coordinator_pane_layout")).toHaveLength(1);
     expect(b.store(coordinatorPaneLayoutStore).getState().entries["project-1"]?.ready).toBe(true);
     expect(clientA.invocations).toHaveLength(0);
   });

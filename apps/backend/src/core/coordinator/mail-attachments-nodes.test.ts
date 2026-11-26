@@ -16,6 +16,7 @@ import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
 import type { CommandContext } from "../commands/context.js";
 import { createCommandRegistry } from "../commands/registry.js";
 import type { Environment } from "../models.js";
+import type { ContractEnvelope } from "../nodes/node-link.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";
 import {
   addPipelineEnvironment,
@@ -57,7 +58,7 @@ async function spoolEmpties(world: MailWorld) {
 
 async function link(
   options: {
-    capabilities?: Record<string, number>;
+    domains?: Record<string, { min: number; max: number }> | null;
     leafExec?: typeof runCommand;
     leafWorkers?: boolean;
   } = {},
@@ -82,11 +83,23 @@ async function link(
     /** Commands the link loses, by name, as a node going away would. */
     failing: new Set<string>(),
   };
-  const routed: Array<{ command: string; args: Record<string, unknown> }> = [];
+  const routed: Array<{
+    command: string;
+    args: Record<string, unknown>;
+    envelope?: ContractEnvelope;
+  }> = [];
+  const domains =
+    options.domains === undefined
+      ? { "node-mail": { min: 1, max: 1 }, "node-files": { min: 1, max: 1 } }
+      : options.domains;
+  const hello = { capabilities: ALL_CAPABILITIES, ...(domains ? { domains } : {}) };
   const fence = { beginMutation: () => () => undefined };
 
-  const leafInvoke = (name: string, args: Record<string, unknown> = {}) =>
-    leafRegistry.get(name)!(args, leafContext) as Promise<any>;
+  const leafInvoke = (
+    name: string,
+    args: Record<string, unknown> = {},
+    envelope?: ContractEnvelope,
+  ) => leafRegistry.get(name)!(args, leafContext, envelope) as Promise<any>;
   const leafCoordination = new NodeCoordination({
     storage: leaf.storage,
     nodes: {
@@ -119,10 +132,14 @@ async function link(
     },
   } as unknown as CommandContext;
 
-  const overLink = async (name: string, args: Record<string, unknown> = {}) => {
-    routed.push({ command: name, args });
+  const overLink = async (
+    name: string,
+    args: Record<string, unknown> = {},
+    options?: { envelope?: ContractEnvelope },
+  ) => {
+    routed.push({ command: name, args, envelope: options?.envelope });
     if (state.failing.has(name)) throw new Error("The connection to Build box was lost.");
-    return leafInvoke(name, structuredClone(args));
+    return leafInvoke(name, structuredClone(args), options?.envelope);
   };
   const hint = repositoryHint((await leaf.storage.getProject(leaf.projectId))!.gitUrl);
   const portal = {
@@ -138,9 +155,12 @@ async function link(
         },
       ],
     }),
-    invokeOnNode: async (input: { command: string; args: Record<string, unknown> }) => ({
+    invokeOnNode: async (
+      input: { command: string; args: Record<string, unknown> },
+      options?: { envelope?: ContractEnvelope },
+    ) => ({
       outcome: "ok",
-      result: await overLink(input.command, input.args),
+      result: await overLink(input.command, input.args, options),
     }),
   };
   const commandInvoke = (name: string, args: Record<string, unknown> = {}) =>
@@ -154,7 +174,7 @@ async function link(
         nodeId === "bk_leaf"
           ? {
               connected: state.available,
-              hello: { capabilities: options.capabilities ?? ALL_CAPABILITIES },
+              hello,
               invoke: overLink,
             }
           : null,
@@ -177,10 +197,7 @@ async function link(
     },
     nodes: {
       status: async () => ({ nodeId: "bk_cmd", mode: "command" }),
-      link: (nodeId: string) =>
-        nodeId === "bk_leaf"
-          ? { hello: { capabilities: options.capabilities ?? ALL_CAPABILITIES } }
-          : null,
+      link: (nodeId: string) => (nodeId === "bk_leaf" ? { hello } : null),
     },
     nodePortal: portal,
   } as unknown as CommandContext;
@@ -319,6 +336,13 @@ describe("a command node's coordinator sending to a leaf", () => {
     });
 
     const [message] = await world.inbox(world.leaf, { environmentId, tabId });
+    expect(
+      world.routed.find(({ command }) => command === "deliver_node_mail")?.envelope,
+    ).toMatchObject({
+      domain: "node-mail",
+      version: 1,
+      critical: expect.arrayContaining(["attachments"]),
+    });
     expect(message!.attachments![0]!.path.startsWith(worktree)).toBe(true);
     expect((await fs.readFile(message!.attachments![0]!.path)).equals(PNG)).toBe(true);
   });
@@ -437,18 +461,22 @@ describe("a command node's coordinator sending to a leaf", () => {
     expect(await world.inbox(world.leaf, worker)).toEqual([]);
   });
 
-  test("a leaf that cannot take images fails the send; no message goes without them", async () => {
-    const world = await link({
-      capabilities: { "node-attachment": 1, "node-mail-steer": 1, "node-coordinator-mail": 1 },
-    });
+  test.each([
+    ["a leaf with a domain-less hello", null],
+    ["a leaf whose hello omits node-mail", { "node-files": { min: 1, max: 1 } }],
+  ] as const)("%s refuses images before transfer or delivery", async (_leaf, domains) => {
+    const world = await link({ domains });
     const { worker } = await world.leafWorker();
     const attachments = [await world.paste(world.command, world.commandMain)];
     for (const toEnvironmentId of [worker.environmentId, "coordinator"]) {
       await expect(
         world.sendDown({ requestId: `r-${toEnvironmentId}`, toEnvironmentId, attachments }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "unsupported-version" });
     }
+    expect(world.count("prepare_node_mail_attachments")).toBe(0);
+    expect(world.count("begin_node_file_write")).toBe(0);
     expect(world.count("deliver_node_mail")).toBe(0);
+    expect(await world.inbox(world.leaf, worker)).toEqual([]);
   });
 
   test("another conversation's attachment is refused before the node hears of it", async () => {

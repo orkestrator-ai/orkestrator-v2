@@ -1194,36 +1194,6 @@ export class CoordinatorsRepository {
   }
 
   /**
-   * Hide finished rows from the Work panel. The records stay: retention,
-   * replay and mail routing still read them. Returns how many changed.
-   */
-  async hideCoordinatorWork(
-    projectId: string,
-    associationIds: ReadonlySet<string>,
-  ): Promise<number> {
-    return this.enqueueCoordinatorMutation(async () => {
-      const store = await this.loadCoordinatorStore();
-      const at = new Date().toISOString();
-      let hidden = 0;
-      for (const association of store.workflows) {
-        if (
-          association.projectId !== projectId ||
-          association.workHiddenAt ||
-          !associationIds.has(association.id)
-        )
-          continue;
-        association.workHiddenAt = at;
-        hidden += 1;
-      }
-      if (hidden === 0) return 0;
-      store.revision += 1;
-      await this.context.saveSensitiveJson(this.files.coordinatorsFile(), store);
-      this.context.changes.announce("coordinator", projectId, projectId);
-      return hidden;
-    });
-  }
-
-  /**
    * Several associations' bookkeeping in one write (a sweep's worker outcome
    * watches). Each mutation returns whether it changed its association; the
    * store is written once, and only when one did. Never for a delegation's
@@ -1587,7 +1557,6 @@ export type CoordinatorsStorage = Pick<
   | "markCoordinatorDelegationWakeFailed"
   | "updateCoordinatorWorkflowAssociation"
   | "updateCoordinatorWorkflowAssociations"
-  | "hideCoordinatorWork"
   | "followCoordinatorPullRequest"
   | "markCoordinatorWorkflowNotified"
   | "adoptCoordinatorWorkflowAssociation"

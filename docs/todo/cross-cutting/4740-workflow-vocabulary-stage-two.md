@@ -6,6 +6,7 @@ Analysed 2026-11-04 against `main` at `67db62362`.
 Updated 2026-11-14 for the user's legacy-retirement decision.
 Updated 2026-11-17 against `main` at `0265e7882`: task 1 done.
 Updated 2026-11-18 against `main` at `b2c91abb9`: tasks 3, 4 and 5 done; task 6 added.
+Updated 2026-11-26 against `main` at `f80c75e10`: task 6 no longer waits; 8304 (retired) settled the contract tooling.
 
 ### Tasks
 
@@ -13,7 +14,7 @@ Updated 2026-11-18 against `main` at `b2c91abb9`: tasks 3, 4 and 5 done; task 6 
 3. **Rename the public names**: coordinator tools and their fields, CLI wire fields, `submit_fix_result`, graph template names. Status: done (2026-11-18; storage migrations 13 and 14).
 4. **Give package preparation its own phase**: stop storing the preparation session as phase `rework`. Status: done (2026-11-18; storage migration 12).
 5. **Retire the compatibility paths**: the former names and readers, once nothing needs them. Status: done (2026-11-18; what stays reads stored user state, see Assumptions and decisions).
-6. **Rename the two coordinator backend commands**: `open_coordinator_multi_review_fix` and `custom_fix_coordinator_multi_review_action`. Status: open (waits on 8304's contract tooling decision).
+6. **Rename the two coordinator backend commands**: `open_coordinator_multi_review_fix` and `custom_fix_coordinator_multi_review_action`. Status: open.
 
 ### 1. Flip stored and transmitted values and fields to the new names
 
@@ -107,17 +108,17 @@ Updated 2026-11-18 against `main` at `b2c91abb9`: tasks 3, 4 and 5 done; task 6 
 
 **Context.** Only Orkestrator itself calls these commands: the Control MCP tools in `apps/backend/src/core/control-mcp/review-actions.ts` and node routing in `nodes/node-routing.ts`. A rename is a removal to the contract CI job (`mise run contract:ci`), which fails until the coordinator domain is bumped and a register or Retired row in `docs/architecture/version-compatibility.md` names the removed command.
 
-**Investigation.** Task 3 renamed them first, and `contract:ci` refused both as removed commands in releases v2.21.0 to v2.39.5-beta, asking for a coordinator domain bump (coordinator is version 1). The names were restored, with a comment on each definition. Whether to-do 8304's decision on how the contract tooling follows the 2026-11-14 legacy retirement makes the bump unnecessary is not settled.
+**Investigation.** Task 3 renamed them first, and `contract:ci` refused both as removed commands in releases v2.21.0 to v2.39.5-beta, asking for a coordinator domain bump (coordinator is version 1). The names were restored, with a comment on each definition. 8304 (retired 2026-11-26) settled it: the contract CI job applies a one-time support floor at v2.39.1-beta, the first release built from the 2026-11-14 sweep, and keeps the 60-day window above it ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)). Every release from v2.39.1-beta still registers both names, so a rename still needs the coordinator domain bump, a version-1 adapter and a register row, until the floor passes the last release that registers them.
 
 **Decisions.**
 
 - **How to rename them?**
-  - **Wait for 8304's tooling decision, then rename with whatever it requires (recommended).**
-    - Pros: one decision covers every command the retirement left pinned; no throwaway adapter.
-    - Cons: the old word stays in two internal command names until then.
+  - **Wait until the support floor passes the last release that registers the old names, then rename without a bump (recommended).**
+    - Pros: no throwaway adapter or register row for two commands no user or script calls by name.
+    - Cons: the old word stays in two internal command names until a Stable release past them is 60 days old.
   - **Bump the coordinator domain now, with a version-1 adapter and a register row.**
     - Pros: the names flip at once.
-    - Cons: an adapter and a row for two commands no user or script calls by name.
+    - Cons: an adapter and a row for two commands no user or script calls by name; the 60-day window still requires them (8304 (retired)'s forward policy).
 
 ## Assumptions and decisions
 
@@ -240,4 +241,4 @@ Stage one is in: visible text, agent prompts, internal functions, types and file
 - [`docs/architecture/build-pipeline-view.md`](../../architecture/build-pipeline-view.md)
 - [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 2, confirming every machine and client runs a stage-one build) moved there on 2026-11-10; task 2 was answered on 2026-11-14 by the user's legacy-retirement decision, so that item goes.
 - 8108 (retired): the 2026-11-14 legacy-retirement sweep.
-- [8304](8304-contract-pinned-compatibility-paths.md): how the contract tooling follows the legacy retirement (task 6 waits on it).
+- 8304 (retired 2026-11-26): the one-time support floor and the forward policy task 6 follows ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)).

@@ -219,14 +219,30 @@ export interface RetirementScheduleInput {
   readonly now: Date;
   readonly register: RegisterDocument;
   readonly windowDays?: number;
+  /**
+   * The one-time floor (`ONE_TIME_SUPPORT_FLOOR` in `contract-ci.ts`).
+   * Its release qualifies from the day the floor was recorded, including
+   * in schedules generated after the rolling floor takes over.
+   */
+  readonly oneTimeFloor?: { readonly release: StableRelease; readonly recorded: string };
 }
 
 /** Every adapter below its domain's current version and every listed capability command. */
 export function retirementSchedule(input: RetirementScheduleInput): RetirementSchedule {
   const windowDays = input.windowDays ?? SUPPORT_WINDOW_DAYS;
+  const oneTime = input.oneTimeFloor;
+  const qualifying = oneTime === undefined ? input.stable : [...input.stable, oneTime.release];
   const timing = (domain: string, domainVersion: number) => {
-    const first = firstStableAdvertising(input.stable, domain, domainVersion);
-    const reaches = first === null ? null : floorReachesOn(input.stable, first.version, windowDays);
+    const first = firstStableAdvertising(qualifying, domain, domainVersion);
+    let reaches = first === null ? null : floorReachesOn(input.stable, first.version, windowDays);
+    if (
+      first !== null &&
+      oneTime !== undefined &&
+      compareVersions(oneTime.release.version, first.version) >= 0
+    ) {
+      const recorded = new Date(`${oneTime.recorded}T00:00:00Z`);
+      if (reaches === null || recorded < reaches) reaches = recorded;
+    }
     const status: RetirementStatus =
       first !== null && compareVersions(input.floor, first.version) >= 0
         ? "due"
@@ -234,7 +250,7 @@ export function retirementSchedule(input: RetirementScheduleInput): RetirementSc
           ? "waiting"
           : "scheduled";
     return {
-      condition: `the floor passes the first Stable release that ${advertises(domain, domainVersion)}: ${windowDays} days after it is published`,
+      condition: `the floor passes the first Stable release${oneTime === undefined ? "" : ` (or the one-time floor v${oneTime.release.version})`} that ${advertises(domain, domainVersion)}: ${windowDays} days after it is published${oneTime === undefined ? "" : `, or on ${oneTime.recorded} for the one-time floor`}`,
       firstRelease:
         first === null ? null : { version: first.version, publishedAt: first.publishedAt },
       earliest: reaches === null ? null : reaches.toISOString(),

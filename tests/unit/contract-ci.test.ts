@@ -15,15 +15,18 @@ import {
   CONTRACT_CI_STAGE_2,
   checkAdapters,
   checkDomainRegister,
+  checkOneTimeFloorCommands,
   checkNewRequiredFields,
   checkReleaseIndex,
   checkRemovedCommands,
   fixtureCases,
+  ONE_TIME_SUPPORT_FLOOR,
   parseArguments,
   runContractCi,
   supportFloor,
   windowReleases,
   type CiManifest,
+  type OneTimeSupportFloor,
 } from "../../scripts/contract-ci";
 import {
   checkRegisterCounters,
@@ -31,6 +34,7 @@ import {
   rowAdapters,
   rowCounterIds,
 } from "../../scripts/contract-ci-register";
+import type { RetirementSchedule } from "../../scripts/contract-ci-retirements";
 import {
   checkSchemaStore,
   documentDigest,
@@ -194,6 +198,243 @@ describe("support floor", () => {
   });
 });
 
+describe("one-time support floor (to-do 8304 (retired))", () => {
+  test("stands at v2.39.1-beta, the first release built from the 2026-11-14 sweep", () => {
+    expect(ONE_TIME_SUPPORT_FLOOR.version).toBe("2.39.1-beta");
+    const floor = supportFloor(
+      committedIndex,
+      new Date("2026-11-26T12:00:00Z"),
+      ONE_TIME_SUPPORT_FLOOR,
+    );
+    expect(floor).toMatchObject({ version: "2.39.1-beta", source: "one-time" });
+    expect(floor.release?.publishedAt).toBe("2026-11-16T15:33:34Z");
+    // Every release below it leaves the window; v2.39.0-beta predates the sweep.
+    const inWindow = windowReleases(committedIndex, floor.version).map((entry) => entry.version);
+    expect(inWindow).not.toContain("2.39.0-beta");
+    expect(inWindow).not.toContain("2.36.1");
+    expect(inWindow[0]).toBe("2.39.1-beta");
+  });
+
+  const oneTime: OneTimeSupportFloor = {
+    version: "2.30.0-beta",
+    recorded: "2026-11-26",
+    commandsForOlderClients: ["old_only"],
+  };
+  const releases = index([
+    { version: "2.21.0", publishedAt: "2026-01-01T00:00:00Z" },
+    { version: "2.30.0-beta", publishedAt: "2026-02-01T00:00:00Z" },
+    { version: "2.40.0", publishedAt: "2026-06-01T00:00:00Z" },
+  ]);
+
+  test("the 60-day window takes over once it passes the one-time floor", () => {
+    expect(supportFloor(releases, new Date("2026-03-15T00:00:00Z"), oneTime)).toMatchObject({
+      version: "2.30.0-beta",
+      source: "one-time",
+    });
+    expect(supportFloor(releases, new Date("2026-08-15T00:00:00Z"), oneTime)).toMatchObject({
+      version: "2.40.0",
+      source: "window",
+    });
+    // Without it the window alone applies.
+    expect(supportFloor(releases, new Date("2026-03-15T00:00:00Z")).version).toBe("2.21.0");
+  });
+
+  test("names a release the index has", () => {
+    expect(() =>
+      supportFloor(releases, new Date("2026-03-15T00:00:00Z"), { ...oneTime, version: "2.31.0" }),
+    ).toThrow("is not in releases/index.json");
+  });
+
+  test("its commands must be deleted and named by a row", () => {
+    const retired = register([], ["| `old_only` | 2026-11-26 | Only older clients called it. |"]);
+    const still = manifest({ old_only: { domain: "nodes", untyped: true } });
+    expect(checkOneTimeFloorCommands(oneTime, still, retired).join("\n")).toContain(
+      "old_only is kept only for clients below the one-time floor v2.30.0-beta",
+    );
+    expect(checkOneTimeFloorCommands(oneTime, manifest({}), emptyRegister).join("\n")).toContain(
+      "no register or retired row",
+    );
+    expect(checkOneTimeFloorCommands(oneTime, manifest({}), retired)).toEqual([]);
+    expect(checkOneTimeFloorCommands(null, still, emptyRegister)).toEqual([]);
+  });
+
+  // The forward policy: the 60-day window still guards everything above the floor.
+  test("a later change that drops what an in-window release above the floor uses still fails", async () => {
+    const dir = await temporaryDir();
+    const contracts = path.join(dir, "packages/protocol/contracts");
+    await mkdir(path.join(contracts, "releases"), { recursive: true });
+    const mail = (name: string) =>
+      [name, { domain: "node-mail", entry: { untyped: true, read: false } }] as const;
+    writeReleaseSnapshot(contracts, {
+      version: "2.21.0",
+      preContract: true,
+      source: "registry",
+      commands: [mail("send_mail"), mail("below_floor"), mail("old_only")],
+    });
+    writeReleaseSnapshot(contracts, {
+      version: "2.30.0-beta",
+      preContract: true,
+      source: "registry",
+      commands: [mail("send_mail"), mail("old_only")],
+    });
+    writeReleaseSnapshot(contracts, {
+      version: "2.31.0-beta",
+      preContract: true,
+      source: "registry",
+      commands: [mail("send_mail"), mail("above_floor")],
+    });
+    writeReleaseIndex(
+      contracts,
+      index([
+        { version: "2.21.0", publishedAt: "2026-10-16T15:32:43Z" },
+        { version: "2.30.0-beta", publishedAt: "2026-11-01T00:00:00Z" },
+        { version: "2.31.0-beta", publishedAt: "2026-11-20T00:00:00Z" },
+      ]),
+    );
+    await writeFile(
+      path.join(contracts, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        domains: {},
+        commands: { send_mail: { domain: "node-mail", untyped: true, read: false } },
+      }),
+    );
+    await writeFile(
+      path.join(contracts, "adapters.json"),
+      JSON.stringify(adapterList({ "node-mail": { current: 1, adapters: [1, 0] } })),
+    );
+    await writeFile(
+      path.join(contracts, "retirements.json"),
+      JSON.stringify({ schemaVersion: 1, capabilityCommands: {} }),
+    );
+    await mkdir(path.join(dir, "docs/architecture"), { recursive: true });
+    await writeFile(
+      path.join(dir, "docs/architecture/version-compatibility.md"),
+      [
+        ...HEADER,
+        "",
+        "### Retired",
+        "",
+        "| Path | Retired | Why it could go |",
+        "| --- | --- | --- |",
+        "| `old_only` | 2026-11-26 | Only clients below the floor called it. |",
+        "",
+      ].join("\n"),
+    );
+    const run = async () => {
+      const lines: string[] = [];
+      const status = await runContractCi({
+        root: dir,
+        now: new Date("2026-11-26T12:00:00Z"),
+        stage2: false,
+        counterIds: [],
+        legacyCapabilityCommands: {},
+        oneTimeFloor: oneTime,
+        log: (line) => lines.push(line),
+      });
+      return { status, output: lines.join("\n") };
+    };
+
+    const dropped = await run();
+    expect(dropped.output).toContain(
+      "Support floor on 2026-11-26: v2.30.0-beta (the one-time floor",
+    );
+    expect(dropped.status).toBe(1);
+    // Above the floor: still guarded.
+    expect(dropped.output).toContain(
+      "above_floor (node-mail) is in 2.31.0-beta but no longer registered",
+    );
+    // Below the floor, or kept only for clients below it: no longer required.
+    expect(dropped.output).not.toContain("below_floor");
+    expect(dropped.output).not.toContain("old_only");
+
+    // Registering it again (or a row and, for a versioned domain, a bump) passes.
+    const manifestFile = path.join(contracts, "manifest.json");
+    const current = JSON.parse(readFileSync(manifestFile, "utf8")) as {
+      commands: Record<string, unknown>;
+    };
+    current.commands.above_floor = { domain: "node-mail", untyped: true, read: false };
+    await writeFile(manifestFile, JSON.stringify(current));
+    const kept = await run();
+    expect(kept.output).toContain("Contract CI passed");
+    expect(kept.status).toBe(0);
+  });
+
+  test("the retirement report keeps the one-time release dates after the rolling floor passes it", async () => {
+    const dir = await temporaryDir();
+    const contracts = path.join(dir, "packages/protocol/contracts");
+    const docs = path.join(dir, "docs/architecture");
+    const domains = { "node-mail": { version: 1, min: 1 } };
+    await mkdir(docs, { recursive: true });
+    for (const version of ["2.30.0-beta", "2.40.0"]) {
+      writeReleaseSnapshot(contracts, {
+        version,
+        preContract: false,
+        source: "registry",
+        commands: [["send_mail", { domain: "node-mail", entry: { untyped: true, read: false } }]],
+        domains,
+      });
+    }
+    writeReleaseIndex(
+      contracts,
+      index([
+        { version: "2.30.0-beta", publishedAt: "2026-11-16T00:00:00Z" },
+        { version: "2.40.0", publishedAt: "2026-12-01T00:00:00Z" },
+      ]),
+    );
+    await writeFile(path.join(contracts, "manifest.json"), JSON.stringify(manifest({}, domains)));
+    await writeFile(path.join(contracts, "adapters.json"), JSON.stringify(adapterList({})));
+    await writeFile(
+      path.join(contracts, "retirements.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        capabilityCommands: {
+          legacy_probe: {
+            domain: "node-mail",
+            retireAtDomainVersion: 1,
+            why: "The domain version answers the probe locally.",
+            retired: "2026-11-26",
+          },
+        },
+      }),
+    );
+    await writeFile(path.join(docs, "version-compatibility.md"), HEADER.join("\n"));
+
+    const lines: string[] = [];
+    const status = await runContractCi({
+      root: dir,
+      now: new Date("2027-02-15T00:00:00Z"),
+      oneTimeFloor: oneTime,
+      retirements: "json",
+      log: (line) => lines.push(line),
+    });
+    expect(status).toBe(0);
+    const schedule = JSON.parse(lines.join("\n")) as RetirementSchedule;
+    expect(schedule.floor).toBe("2.40.0");
+    expect(schedule.entries).toMatchObject([
+      {
+        command: "legacy_probe",
+        firstRelease: { version: "2.30.0-beta", publishedAt: "2026-11-16T00:00:00Z" },
+        earliest: "2026-11-26T00:00:00.000Z",
+        status: "retired",
+      },
+    ]);
+  });
+
+  test("an in-window release above the floor still needs its adapter", () => {
+    const aboveFloor = release(
+      "2.39.2-beta",
+      { send_mail: { domain: "node-mail", untyped: true } },
+      { "node-mail": { version: 1, min: 1 } },
+    );
+    expect(
+      checkAdapters([aboveFloor], adapterList({ "node-mail": { current: 2, adapters: [2] } })).join(
+        "\n",
+      ),
+    ).toContain("speaks node-mail v1");
+  });
+});
+
 describe("client adapters", () => {
   const preContract = release("2.21.0", { send_mail: { domain: "node-mail", untyped: true } });
   const contract = release(
@@ -333,7 +574,7 @@ describe("register", () => {
     const document = parseRegisterDocument(
       readFileSync(path.join(root, "docs/architecture/version-compatibility.md"), "utf8"),
     );
-    expect(document.register.length).toBeGreaterThan(20);
+    expect(document.register.length).toBeGreaterThan(10);
     expect(checkRegisterCounters(document, new Set(COMPATIBILITY_PATH_IDS))).toEqual([]);
   });
 
@@ -691,6 +932,7 @@ describe("runContractCi", () => {
       root: dir,
       now: new Date("2026-11-07T12:00:00Z"),
       counterIds: [],
+      oneTimeFloor: null,
       log: (line) => lines.push(line),
     });
     const output = lines.join("\n");
@@ -710,6 +952,7 @@ describe("runContractCi", () => {
       now: new Date("2026-11-07T12:00:00Z"),
       stage2: true,
       counterIds: [],
+      oneTimeFloor: null,
       runFixtures: async (cases) => {
         ran = true;
         return { checked: cases.length, unconstrained: 0, failures: [] };

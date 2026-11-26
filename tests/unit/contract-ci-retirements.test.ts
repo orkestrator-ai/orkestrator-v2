@@ -13,6 +13,7 @@ import path from "node:path";
 import { parseAdapterList, type AdapterList } from "@orkestrator/protocol/contract/client-adapters";
 import {
   checkRemovedCommands,
+  ONE_TIME_SUPPORT_FLOOR,
   parseArguments,
   runContractCi,
   supportFloor,
@@ -32,7 +33,10 @@ import {
   type StableRelease,
 } from "../../scripts/contract-ci-retirements";
 import {
+  CONTRACTS_DIRECTORY,
   emptyReleaseIndex,
+  readReleaseIndex,
+  readReleaseSnapshot,
   withReleaseIndexEntries,
   writeReleaseIndex,
   writeReleaseSnapshot,
@@ -133,6 +137,37 @@ function scheduleOn(
     register: REGISTER,
   });
 }
+
+describe("the one-time floor (to-do 8304 (retired))", () => {
+  test("its release counts as qualifying from the day the floor was recorded", () => {
+    const now = new Date("2026-11-26T12:00:00Z");
+    const floorRelease: StableRelease = {
+      version: "2.39.1-beta",
+      publishedAt: "2026-11-16T15:33:34Z",
+      domains: { "node-mail": { version: 1 } },
+    };
+    const schedule = retirementSchedule({
+      adapters: adapterList({ "node-mail": { current: 2, adapters: [2, 1, 0] } }),
+      list: LIST,
+      stable: STABLE.slice(0, 2),
+      floor: "2.39.1-beta",
+      now,
+      register: REGISTER,
+      oneTimeFloor: { release: floorRelease, recorded: "2026-11-26" },
+    });
+    const adapter = (version: number) =>
+      schedule.entries.find((entry) => entry.domain === "node-mail" && entry.adapter === version);
+    // The floor release advertises node-mail v1: adapter 0 is unreachable from today.
+    expect(adapter(0)).toMatchObject({
+      status: "due",
+      firstRelease: { version: "2.39.1-beta" },
+      earliest: "2026-11-26T00:00:00.000Z",
+    });
+    // Nothing at or below the floor advertises v2 yet: adapter 1 waits on the window.
+    expect(adapter(1)).toMatchObject({ status: "waiting", firstRelease: null });
+    expect(checkRetirements(schedule).join("\n")).toContain("adapter node-mail v0 is unreachable");
+  });
+});
 
 describe("dates", () => {
   test("the first Stable release with the domain at a version, and when the floor reaches it", () => {
@@ -395,7 +430,7 @@ describe("retirement list", () => {
     ]);
   });
 
-  test("the committed list classifies every legacy capability command, and nothing is due today", () => {
+  test("the committed list classifies every legacy capability command, and nothing is due at the one-time floor", () => {
     const list = parseRetirementList(readJson(RETIREMENT_LIST_PATH)) as RetirementList;
     const manifest = readJson("packages/protocol/contracts/manifest.json") as {
       commands: Record<string, { domain: string }>;
@@ -405,14 +440,30 @@ describe("retirement list", () => {
     );
     expect(checkRetirementList(list, manifest.commands, document)).toEqual([]);
     const adapters = parseAdapterList(readJson("packages/protocol/contracts/adapters.json"))!;
-    const now = new Date("2026-11-07T12:00:00Z");
+    // As the job computes it on the day the one-time floor was recorded.
+    const now = new Date("2026-11-26T12:00:00Z");
+    const contracts = path.join(root, CONTRACTS_DIRECTORY);
+    const releaseIndex = readReleaseIndex(contracts);
+    const floor = supportFloor(releaseIndex, now, ONE_TIME_SUPPORT_FLOOR);
+    expect(floor.version).toBe(ONE_TIME_SUPPORT_FLOOR.version);
+    const asStable = (version: string, publishedAt: string | null): StableRelease => ({
+      version,
+      publishedAt,
+      domains: readReleaseSnapshot(contracts, version).domains,
+    });
     const schedule = retirementSchedule({
       adapters,
       list,
-      stable: [],
-      floor: "2.21.0",
+      stable: releaseIndex.releases
+        .filter((entry) => entry.channel === "stable")
+        .map((entry) => asStable(entry.version, entry.publishedAt)),
+      floor: floor.version,
       now,
       register: document,
+      oneTimeFloor: {
+        release: asStable(floor.version, floor.release!.publishedAt),
+        recorded: ONE_TIME_SUPPORT_FLOOR.recorded,
+      },
     });
     expect(checkRetirements(schedule)).toEqual([]);
     const adapterEntries = schedule.entries.filter((entry) => entry.kind === "adapter");
@@ -492,6 +543,7 @@ describe("runContractCi", () => {
       stage2: false,
       counterIds: [],
       legacyCapabilityCommands: {},
+      oneTimeFloor: null,
       ...(retirements === undefined ? {} : { retirements }),
       log: (line) => lines.push(line),
     });

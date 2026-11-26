@@ -4,25 +4,20 @@
  * (`api.get_projects(args)`). The web binds it per `lib/backend` client
  * (`apps/web/src/lib/node-scope/domains/projects.ts`).
  *
- * No `projects` command was capability-gated and the domain has no
- * capability command, so both adapters call the same commands:
+ * The domain has no capability command. **Version 2** (a node whose hello
+ * advertises `projects`): calls carry the envelope (the domain version and
+ * the critical keys the arguments hold) and results are decoded with the
+ * command's schema.
  *
- * - **Version 1** (a node whose hello advertises `projects`): calls carry the
- *   envelope (the domain version and the critical keys the arguments hold)
- *   and results are decoded with the command's schema.
- * - **Version 0** (a pre-contract node): today's untyped call by name,
- *   without an envelope, answered as the node sent it. An older node's
- *   results are the shapes its callers already read; a command such a node
- *   lacks (`arrange_projects_by_intent` before it existed) answers
- *   `unknown-command`, which the caller reads with `incompatibility()` as
- *   before.
- *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `projects` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
+import { domainClient, type CommandCall } from "../../client.js";
 import type { ArgsOf, ResultOf } from "../../command.js";
 import { PROJECTS_COMMANDS } from "./commands.js";
 import { projectsDomain } from "./domain.js";
@@ -46,16 +41,6 @@ function projectsApi(
 const currentApi = (call: CommandCall): ProjectsApi =>
   projectsApi((command, args) => call(command, args as ArgsOf<typeof command>));
 
-const legacyApi = (_call: CommandCall, context: DomainAdapterContext): ProjectsApi =>
-  projectsApi((command, args) =>
-    context.invoke(command.name, args as Readonly<Record<string, unknown>> | undefined),
-  );
-
 export const projectsClient = domainClient(projectsDomain, {
   2: currentApi,
-  // Version 2 only removed commands nothing called (2026-11-10), so version 1
-  // peers take the same API. Adapter 1 goes when the support floor passes the
-  // first Stable release with version 2.
-  1: currentApi,
-  0: legacyApi,
 });

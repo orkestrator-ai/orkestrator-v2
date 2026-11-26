@@ -4,7 +4,6 @@ import {
   behindFastForwardBlocker,
   canFastForwardUpstream,
   decideUpstreamMergeOffer,
-  parseCoordinatorUpstreamAutoMerge,
   parseCoordinatorUpstreamMergeCheck,
 } from "./coordinator-upstream-merge.js";
 
@@ -97,9 +96,6 @@ describe("decideUpstreamMergeOffer", () => {
     expect(
       parseCoordinatorUpstreamMergeCheck({ offer: true, status: behind, automatic: "yes" }),
     ).toEqual({ offer: true, status: behind });
-    expect(parseCoordinatorUpstreamAutoMerge({ enabled: true })).toEqual({ enabled: true });
-    expect(parseCoordinatorUpstreamAutoMerge({ enabled: "true" })).toBeNull();
-    expect(parseCoordinatorUpstreamAutoMerge(null)).toBeNull();
     expect(parseCoordinatorUpstreamMergeCheck({ offer: true, status: behind })).toEqual({
       offer: true,
       status: behind,

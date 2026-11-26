@@ -390,12 +390,6 @@ export const CoordinatorUpstreamMergeCheckSchema = Schema.Union([
   }),
 ]) as unknown as Schema.Codec<CoordinatorUpstreamMergeCheck>;
 
-/** `DeclinedUpstreamMerge`: retired, still answered for older clients. */
-export const DeclinedUpstreamMergeSchema = Schema.Struct({
-  upstream: Schema.String,
-  upstreamCommit: Schema.String,
-});
-
 /** `CoordinatorUpstreamAutoMerge`: the retired "always merge" setting. */
 export const CoordinatorUpstreamAutoMergeSchema = Schema.Struct({ enabled: Schema.Boolean });
 

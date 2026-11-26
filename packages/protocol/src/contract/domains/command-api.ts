@@ -8,10 +8,10 @@
  *
  * - {@link commandApi} is a current adapter: `call` sends the envelope and
  *   decodes the result with the command's schema.
- * - {@link legacyCommandApi} is the version-0 adapter for a pre-contract
- *   node: today's untyped `invoke(command, args)`, answered as sent. Such a
- *   node's results are the shapes its callers already normalise; decoding
- *   them would refuse an older node's variations the callers accept.
+ * - {@link legacyCommandApi} is the version-0 adapter for a node that does
+ *   not advertise the domain (`capabilities` and `rich-interactions`, whose
+ *   domains releases in the support window may predate): today's untyped
+ *   `invoke(command, args)`, answered as sent.
  *
  * Browser-safe.
  */

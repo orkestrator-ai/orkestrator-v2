@@ -28,8 +28,9 @@ import { readViewRevisionStamp, type ViewRevisionStamp } from "./view-sync.js";
 export const NATIVE_AGENT_ACTIVITY_EVENT = "native-agent-session-activity";
 
 /**
- * Advertised in `get_native_agent_sync_capabilities.observationEventVersions`
- * by a backend that stamps and scopes activity announcements.
+ * Part of `native-sessions` version 1 (`NATIVE_SESSIONS_SYNC_CAPABILITIES`):
+ * every backend that advertises the domain stamps and scopes activity
+ * announcements.
  */
 export const NATIVE_AGENT_OBSERVATION_EVENT_VERSION = 1;
 

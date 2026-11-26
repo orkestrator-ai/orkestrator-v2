@@ -9,7 +9,6 @@ import { TERMINAL_ACTIVITY_SETTLE_MS } from "../src/core/terminals/runtime";
 import { CONTAINER_INTERACTIVE_SHELL_COMMAND } from "../src/core/containers/scripts";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { OPENCODE2_CONTAINER_CLI_PATH } from "../src/core/opencode2/container-server";
-import { MAX_TEXT_FILE_BYTES } from "../src/core/path-safety";
 
 import { createCommandFixtures } from "./command-fixtures";
 
@@ -905,77 +904,6 @@ describe("Electron backend command registry", () => {
     });
   });
 
-  test("reads local branch files from origin and returns null for files missing in the base", async () => {
-    const { worktree } = await createGitWorktreeWithOrigin();
-    await fs.writeFile(path.join(worktree, "tracked.txt"), "local branch content\n");
-    await runGit(worktree, ["add", "tracked.txt"]);
-    await runGit(worktree, ["commit", "-m", "local-only-main-change"]);
-    await fs.writeFile(path.join(worktree, "feature-only.txt"), "feature content\n");
-    const commands = createCommandRegistry();
-
-    await expect(
-      commands.get("read_local_file_at_branch")?.(
-        { worktreePath: worktree, filePath: "tracked.txt", branch: "main" },
-        createContext(createEnvironment()).context,
-      ),
-    ).resolves.toMatchObject({
-      path: "tracked.txt",
-      content: "base\n",
-      language: "txt",
-    });
-
-    await expect(
-      commands.get("read_local_file_at_branch")?.(
-        { worktreePath: worktree, filePath: "feature-only.txt", branch: "main" },
-        createContext(createEnvironment()).context,
-      ),
-    ).resolves.toBeNull();
-
-    await expect(
-      commands.get("read_local_file_at_branch")?.(
-        { worktreePath: worktree, filePath: "../outside.txt", branch: "main" },
-        createContext(createEnvironment()).context,
-      ),
-    ).rejects.toThrow("Invalid filePath");
-  });
-
-  test("validates local branch blobs before returning editor text", async () => {
-    const { worktree } = await createGitWorktreeWithOrigin();
-    await fs.writeFile(path.join(worktree, "empty.txt"), "");
-    await fs.writeFile(path.join(worktree, "nul.dat"), Buffer.from([65, 0, 66]));
-    await fs.writeFile(path.join(worktree, "invalid.txt"), Buffer.from([0xff, 0xfe, 0xfd]));
-    await fs.writeFile(path.join(worktree, "latin1.dat"), Buffer.alloc(2 * 1024 * 1024, 0xe9));
-    await fs.writeFile(
-      path.join(worktree, "oversized.txt"),
-      Buffer.alloc(MAX_TEXT_FILE_BYTES + 1, 97),
-    );
-    await runGit(worktree, [
-      "add",
-      "empty.txt",
-      "nul.dat",
-      "invalid.txt",
-      "latin1.dat",
-      "oversized.txt",
-    ]);
-    await runGit(worktree, ["commit", "-m", "editor-read-fixtures"]);
-    const fixtureCommit = await currentGitCommit(worktree);
-    const commands = createCommandRegistry();
-    const context = createContext(createEnvironment()).context;
-    const read = (filePath: string) =>
-      commands.get("read_local_file_at_branch")?.(
-        { worktreePath: worktree, filePath, branch: fixtureCommit },
-        context,
-      );
-
-    await expect(read("empty.txt")).resolves.toMatchObject({ content: "" });
-    await expect(read("nul.dat")).rejects.toThrow(
-      "Binary files cannot be opened in the text editor",
-    );
-    await expect(read("invalid.txt")).rejects.toThrow("File is not valid UTF-8 text");
-    await expect(read("latin1.dat")).rejects.toThrow("File is not valid UTF-8 text");
-    await expect(read("oversized.txt")).rejects.toThrow("File is too large to open in the editor");
-  }, 30_000);
-
   test("reverts tracked and newly added local files to the target branch", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     await fs.writeFile(path.join(worktree, "tracked.txt"), "changed\n");
@@ -1421,12 +1349,6 @@ exit 1
       await expect(
         commands.get("get_local_git_status")?.(
           { worktreePath: worktree, targetBranch: branch },
-          context,
-        ),
-      ).rejects.toThrow("Invalid target branch");
-      await expect(
-        commands.get("read_local_file_at_branch")?.(
-          { worktreePath: worktree, filePath: "tracked.txt", branch },
           context,
         ),
       ).rejects.toThrow("Invalid target branch");

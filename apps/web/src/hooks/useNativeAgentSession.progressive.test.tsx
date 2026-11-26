@@ -427,12 +427,6 @@ describe("a backend without progressive views", () => {
         transcriptPatchVersions: [] as number[],
       }),
     ],
-    [
-      "predates the capability command",
-      async (): Promise<never> => {
-        throw new Error("Unknown backend command: get_native_agent_sync_capabilities");
-      },
-    ],
   ] as const)("is reported as incompatible when it %s", async (_label, answer) => {
     getNativeAgentSyncCapabilitiesMock.mockImplementationOnce(answer);
 

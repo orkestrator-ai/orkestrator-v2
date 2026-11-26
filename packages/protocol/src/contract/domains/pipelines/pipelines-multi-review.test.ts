@@ -18,7 +18,6 @@ import {
   validateCommandResult,
   type AnyCommandDef,
 } from "../../command.js";
-import { unknownCommand } from "../../errors.js";
 import {
   MULTI_REVIEW_COMMANDS,
   getMultiReviewWorkflowCommand,
@@ -270,27 +269,5 @@ describe("pipelines and multi-review clients", () => {
         workflowId: "w1",
       }),
     ).rejects.toThrow("Invalid result from cancel_multi_review");
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacy = { id: "w1", older: true, phase: 7 };
-    const node = fakeNode(undefined, () => legacy);
-    const client = createDomainClient(multiReviewClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect(client.api().cancel_multi_review({ workflowId: "w1" })).resolves.toBe(
-      legacy as never,
-    );
-    expect(node.invoked).toEqual([{ command: "cancel_multi_review", args: { workflowId: "w1" } }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["multi-review", 0]]);
-  });
-
-  it("version 0: an older node's unknown-command passes through for the caller's fallback", async () => {
-    const node = fakeNode(undefined, () => {
-      throw unknownCommand("launch_build_pipeline");
-    });
-    await expect(
-      createDomainClient(pipelinesClient, node.options).api().launch_build_pipeline({}),
-    ).rejects.toMatchObject({ code: "unknown-command" });
   });
 });

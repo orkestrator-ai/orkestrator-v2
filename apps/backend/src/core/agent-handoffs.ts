@@ -33,13 +33,6 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("native-agent");
 
-/** What this backend does with handoffs on its own; a renderer does the rest. */
-export const AGENT_HANDOFF_CAPABILITIES = {
-  create: true,
-  delivery: true,
-  pruning: true,
-} as const;
-
 export interface CreateAgentHandoffInput {
   handoffId: string;
   environmentId: string;

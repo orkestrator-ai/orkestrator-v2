@@ -2006,11 +2006,12 @@ Earlier releases asked *"Merge N upstream commits?"*, remembered declines
 (`decline_coordinator_upstream_merge`, store `coordinator-upstream-declines`)
 and offered an **Always merge** setting
 (`get/set_coordinator_upstream_auto_merge`, store
-`coordinator-upstream-auto-merge`). The backend still answers those commands
-for older clients, but neither a decline nor the setting changes the check,
-and `coordinatorUpstreamAutoMerge` is no longer advertised, so a client that
-knows it hides its toggle. A browser's own copy of the declines is deleted on
-the first check.
+`coordinator-upstream-auto-merge`). All three commands were deleted with the
+one-time support floor on 2026-11-26
+([version-compatibility.md](version-compatibility.md#retired)). Project removal
+still deletes rows from both stores. `coordinatorUpstreamAutoMerge` is no longer
+advertised, so a client that knows it hides its toggle. A browser's own copy of
+the declines is deleted on the first check.
 
 ### Branch switch and Sync while a turn runs
 
@@ -2054,11 +2055,13 @@ earn its space, and the conversation now takes the full width. The coordinator
 itself still sees its work through `list_workflows` and its wakes, and the user
 through mail tiles, the workers' prompts banner below, and each environment.
 
-What the panel used stays in the backend, unchanged, for the coordinator and
-for an older renderer still running against this backend: `hide_coordinator_work`
-and `workHiddenAt`, `stop_coordinator_worker_turn` with `stoppedBy: "user"`, and
-the delegation request summary (`normalizeCoordinatorDelegationRequest`). No
-renderer in this release calls the first two. A device that had folded a
+What the coordinator still uses stays in the backend:
+`stop_coordinator_worker_turn` with `stoppedBy: "user"` and the delegation
+request summary (`normalizeCoordinatorDelegationRequest`). The panel's own
+`hide_coordinator_work` command, kept a while for older renderers, was deleted
+with the one-time support floor on 2026-11-26
+([version-compatibility.md](version-compatibility.md#retired)); a stored
+record's `workHiddenAt` field is still decoded but nothing sets it. A device that had folded a
 section of the panel kept that choice as `collapsedWorkBuckets` in the persisted
 `uiStore`; the store now drops the field when it loads, and the next write
 leaves it out.

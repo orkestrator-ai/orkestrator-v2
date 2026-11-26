@@ -209,12 +209,6 @@ export const FeaturePlanSchema = openRecord({
 
 export const FeaturePlanListSchema = mutableArray(FeaturePlanSchema);
 
-/** `claim_feature_plan_build`: whether this call reserved the plan's build. */
-export const FeaturePlanBuildClaimSchema = Schema.Struct({
-  claimed: Schema.Boolean,
-  feature: FeaturePlanSchema,
-}).annotate({ identifier: "FeaturePlanBuildClaim" });
-
 // --- Linear ---------------------------------------------------------------------
 
 /** `LinearViewer`: who the stored key belongs to. Never the key. */

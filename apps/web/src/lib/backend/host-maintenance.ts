@@ -18,7 +18,7 @@ import { commandBackendClient, type BackendClient } from "./client";
 export function createHostMaintenanceApi(client: BackendClient) {
   const system = () => systemApi(client);
   const systemOn = (machine: AccountMachine) => systemApiOn(client, machine);
-  /** Today's call without an arguments object (the version-0 adapter sends exactly that). */
+  /** Today's call without an arguments object (the unnegotiated call sends exactly that). */
   const noArgs = undefined as never;
 
   /**

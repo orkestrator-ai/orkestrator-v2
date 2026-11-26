@@ -16,7 +16,7 @@ function fakeClient(
   };
 }
 
-const AGENT_SERVERS = { "agent-servers": { min: 1, max: 1 } };
+const AGENT_SERVERS = { "agent-servers": { min: 1, max: 2 } };
 
 describe("agent-servers over a lib/backend client", () => {
   test("a node with the domain gets typed calls with the envelope and its critical keys", async () => {
@@ -27,7 +27,7 @@ describe("agent-servers over a lib/backend client", () => {
     expect(client.invokeRaw).toHaveBeenCalledWith(
       "get_codex_server_log",
       { containerId: "c1", previous: true },
-      { envelope: { domain: "agent-servers", version: 1, critical: ["previous"] } },
+      { envelope: { domain: "agent-servers", version: 2, critical: ["previous"] } },
     );
   });
 
@@ -38,7 +38,7 @@ describe("agent-servers over a lib/backend client", () => {
     ).rejects.toThrow("Invalid result from get_local_pi_server_status");
   });
 
-  test("a pre-contract node gets today's calls, answered as sent", async () => {
+  test("a client without negotiation gets today's calls, answered as sent", async () => {
     const answer = { anything: "as sent" };
     const client = fakeClient(null, () => answer);
     const api = createDockerSkillsApi(client);

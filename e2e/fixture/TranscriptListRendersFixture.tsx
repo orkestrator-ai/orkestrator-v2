@@ -18,6 +18,7 @@ import { Profiler, useState } from "react";
 import { AGENT_INTERACTION_CONTRACT_VERSION } from "@orkestrator/protocol/agent-interactions";
 import {
   nativeAgentCapabilities,
+  NATIVE_AGENT_LIVE_UPDATE_VERSION,
   type NativeAgentViewIdentity,
   type NativeAgentBackgroundTaskSummary,
 } from "@orkestrator/protocol/native-agent";
@@ -330,6 +331,55 @@ function installBackend(): void {
     ...window.orkestrator!,
     listen: () => () => {},
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
+      const stateUpdate = (knownToken: unknown) => {
+        const tab = tabForSession(args);
+        const token = `state-${tab.stateRevision}`;
+        tab.stateSeen = tab.stateRevision;
+        if (knownToken === token) {
+          return { viewVersion: 1, status: "unchanged", token, identity: tab.identity };
+        }
+        return {
+          viewVersion: 1,
+          status: "snapshot",
+          token,
+          value: {
+            identity: tab.identity,
+            connection: "connected",
+            turn: tab.turn,
+            interactions: tab.interactions,
+            backgroundTasks: tab.backgroundTasks,
+            composerControls: [],
+            capabilities: nativeAgentCapabilities(platform),
+            notices: [],
+          },
+        };
+      };
+      const transcriptUpdate = (knownToken: unknown) => {
+        const tab = tabForSession(args);
+        const token = `transcript-${tab.transcriptRevision}`;
+        tab.transcriptSeen = tab.transcriptRevision;
+        if (knownToken === token) {
+          return { viewVersion: 1, status: "unchanged", token, identity: tab.identity };
+        }
+        return {
+          viewVersion: 1,
+          status: "snapshot",
+          token,
+          value: {
+            identity: tab.identity,
+            freshness: "current",
+            messages: tab.messages,
+            historyEpoch: "epoch-1",
+            ...(tab.historyLoaded
+              ? { historyComplete: true }
+              : {
+                  historyCursor: "before-earlier",
+                  historyComplete: false,
+                  messageWindow: { limit: 100, truncated: true, canLoadEarlier: true },
+                }),
+          },
+        };
+      };
       let result: unknown;
       switch (command) {
         case "native_agent_subork_transcript":
@@ -340,68 +390,22 @@ function installBackend(): void {
             messages: tabs[0]!.messages,
           };
           break;
-        case "get_native_agent_sync_capabilities":
-          result = {
-            historyPagingVersions: [1],
-            progressiveViewVersions: [1],
-          };
-          break;
         case "adopt_native_agent_session":
           result = {};
           break;
-        case "get_native_agent_session_state_update": {
-          const tab = tabForSession(args);
-          const token = `state-${tab.stateRevision}`;
-          tab.stateSeen = tab.stateRevision;
-          if (args?.knownToken === token) {
-            result = { viewVersion: 1, status: "unchanged", token, identity: tab.identity };
-            break;
-          }
+        case "get_native_agent_session_state_update":
+          result = stateUpdate(args?.knownToken);
+          break;
+        case "get_native_agent_transcript_update":
+          result = transcriptUpdate(args?.knownToken);
+          break;
+        case "get_native_agent_live_update":
           result = {
-            viewVersion: 1,
-            status: "snapshot",
-            token,
-            value: {
-              identity: tab.identity,
-              connection: "connected",
-              turn: tab.turn,
-              interactions: tab.interactions,
-              backgroundTasks: tab.backgroundTasks,
-              composerControls: [],
-              capabilities: nativeAgentCapabilities(platform),
-              notices: [],
-            },
+            viewVersion: NATIVE_AGENT_LIVE_UPDATE_VERSION,
+            transcript: transcriptUpdate(args?.transcriptToken),
+            state: stateUpdate(args?.stateToken),
           };
           break;
-        }
-        case "get_native_agent_transcript_update": {
-          const tab = tabForSession(args);
-          const token = `transcript-${tab.transcriptRevision}`;
-          tab.transcriptSeen = tab.transcriptRevision;
-          if (args?.knownToken === token) {
-            result = { viewVersion: 1, status: "unchanged", token, identity: tab.identity };
-            break;
-          }
-          result = {
-            viewVersion: 1,
-            status: "snapshot",
-            token,
-            value: {
-              identity: tab.identity,
-              freshness: "current",
-              messages: tab.messages,
-              historyEpoch: "epoch-1",
-              ...(tab.historyLoaded
-                ? { historyComplete: true }
-                : {
-                    historyCursor: "before-earlier",
-                    historyComplete: false,
-                    messageWindow: { limit: 100, truncated: true, canLoadEarlier: true },
-                  }),
-            },
-          };
-          break;
-        }
         case "get_native_agent_message_page": {
           await new Promise((resolve) => setTimeout(resolve, EARLIER_PAGE_DELAY_MS));
           const tab = tabForSession(args);

@@ -7,12 +7,12 @@
  * adapter from its negotiated `domains` (version 1 sends the envelope and
  * decodes results); `null` (the command node over the portal) and a node id
  * (routed through the command node) carry no negotiated range, so they use
- * version 0, today's call. Calls on the client's own node keep the
+ * the unnegotiated call, today's call. Calls on the client's own node keep the
  * arguments object `machineInvoke` always sent (`withArgumentsObject`).
  *
  * `commandNodeSettingClient` is the same domain over
  * `invokeCommandNodeSetting` (the overview, the preferred login and the
- * command node's automatic-switching ticks), also version 0.
+ * command node's automatic-switching ticks), also unnegotiated.
  *
  * See `./domain-api.ts` for the adapter choice.
  */
@@ -41,6 +41,6 @@ export const commandNodeSettingClient: BackendClient = {
       : invokeCommandNodeSetting<T>(command, args as Record<string, unknown>),
 };
 
-/** The `accounts` API on the command node's settings target (version 0, today's calls). */
+/** The `accounts` API on the command node's settings target (unnegotiated, today's calls). */
 export const commandNodeAccounts: () => AccountsApi = () =>
   domainApi(commandNodeSettingClient, accountsClient);

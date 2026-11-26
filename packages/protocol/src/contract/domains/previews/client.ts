@@ -1,31 +1,26 @@
 /**
  * The `previews` domain client (plan item 7004; §11.2 "Client adapters").
  *
- * Previews were never gated by version, only by whether the backend has the
- * preview commands at all (`get_preview_capabilities` answering
- * `unknown-command`), and they keep their own
- * response-level versioning: `protocolVersion`, per-surface availability and
- * the backend epoch in `get_preview_capabilities`, the registry revision in
- * every snapshot. So both adapters offer the same calls:
- *
- * - **Version 1** sends the envelope (the critical `operationId`,
- *   `expectedRevision` and `serviceId` keys) and decodes each result with its
- *   command's schema. A node that advertises the domain has every command.
- * - **Version 0**, for a pre-contract node, is today's call: the command by
- *   name without an envelope, its answer not decoded, so an older backend's
- *   shapes are taken as they always were and the callers' own checks
- *   (the store's capability validation) keep working.
+ * Previews keep their own response-level versioning: `protocolVersion`,
+ * per-surface availability and the backend epoch in
+ * `get_preview_capabilities`, the registry revision in every snapshot.
+ * **Version 1** sends the envelope (the critical `operationId`,
+ * `expectedRevision` and `serviceId` keys) and decodes each result with its
+ * command's schema. A node that advertises the domain has every command.
  *
  * `get_preview_capabilities` stays registered and is still read on every
  * version: it reports runtime state (the access kill switch, which surfaces
  * are listening), not support.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `previews` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
+import { domainClient, type CommandCall } from "../../client.js";
 import type { AnyCommandDef, ArgsOf, ResultOf } from "../../command.js";
 import {
   createPreviewAttachmentCommand,
@@ -100,15 +95,6 @@ export function previewsApiV1(call: CommandCall): PreviewsApi {
   return previewsApi(call);
 }
 
-/** Version 0: today's untyped call, without an envelope or decoding (see the module comment). */
-export function previewsApiLegacy(_call: CommandCall, context: DomainAdapterContext): PreviewsApi {
-  return previewsApi(
-    <C extends AnyCommandDef>(def: C, args: ArgsOf<C>) =>
-      context.invoke(def.name, args as Readonly<Record<string, unknown>>) as Promise<ResultOf<C>>,
-  );
-}
-
 export const previewsClient = domainClient(previewsDomain, {
   1: previewsApiV1,
-  0: previewsApiLegacy,
 });

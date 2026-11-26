@@ -73,14 +73,13 @@ const CRITICAL: Record<string, readonly string[]> = {
   send_coordinator_node_mail: ["requestId", "attachments", "deliverNow", "replyToMessageId"],
   start_coordinator_node_build_pipeline: ["requestId"],
   coordinator_node_multi_review_surface: ["requestId", "addressFindingsModel"],
-  start_coordinator_node_multi_review: ["requestId", "buildPipelineId"],
 };
 
 describe("coordinator controller definitions", () => {
-  it("defines 36 commands once each, at version 1, all in the domain's list", () => {
+  it("defines 35 commands once each, at version 1, all in the domain's list", () => {
     const names = COORDINATOR_CONTROLLER_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(36);
-    expect(new Set(names).size).toBe(36);
+    expect(names).toHaveLength(35);
+    expect(new Set(names).size).toBe(35);
     expect(coordinatorDomain).toMatchObject({ name: "coordinator", version: 1, min: 1 });
     for (const def of COORDINATOR_CONTROLLER_COMMANDS) {
       expect(def.domain).toBe(coordinatorDomain);
@@ -162,9 +161,9 @@ describe("coordinator controller definitions", () => {
     expect(launched._tag === "Success" && launched.success).toEqual(job);
   });
 
-  it("lists the domain client in DOMAIN_CLIENTS with adapters 1 and 0", () => {
+  it("lists the domain client in DOMAIN_CLIENTS with adapter 1", () => {
     expect(DOMAIN_CLIENTS).toContain(coordinatorClient);
-    expect(coordinatorClient.versions).toEqual([1, 0]);
+    expect(coordinatorClient.versions).toEqual([1]);
   });
 });
 
@@ -226,17 +225,5 @@ describe("coordinator client, controller commands", () => {
         .api()
         .send_coordinator_node_mail({ body: "hi" }),
     ).rejects.toThrow(`Invalid result from ${sendCoordinatorNodeMailCommand.name}`);
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacy = { outcome: 7, older: true };
-    const node = fakeNode(undefined, () => legacy);
-    const client = createDomainClient(coordinatorClient, node.options);
-    expect(client.version()).toBe(0);
-    const answer: unknown = await client.api().get_control_mcp_settings(undefined as never);
-    expect(answer).toBe(legacy);
-    expect(node.invoked).toEqual([{ command: "get_control_mcp_settings", args: undefined }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["coordinator", 0]]);
   });
 });

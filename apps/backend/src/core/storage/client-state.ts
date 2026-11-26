@@ -7,10 +7,6 @@ import {
   type CoordinatorPaneLayoutSaveResult,
 } from "@orkestrator/protocol/coordinator-pane-layout";
 import {
-  isDeclinedUpstreamMerge,
-  type DeclinedUpstreamMerge,
-} from "@orkestrator/protocol/coordinator-upstream-merge";
-import {
   COORDINATOR_ACTION_MARK_LIMITS,
   isCoordinatorActionCardId,
   normalizeCoordinatorActionCardIds,
@@ -27,17 +23,6 @@ import { isRecord, nowIso } from "./shared.js";
 
 /** The single key of the notice dismissal announcement. */
 export const NOTICE_DISMISSALS_RESOURCE_ID = "notice-dismissals";
-
-interface StoredUpstreamDecline extends DeclinedUpstreamMerge {
-  projectId: string;
-  declinedAt: string;
-}
-
-interface StoredUpstreamAutoMerge {
-  projectId: string;
-  enabled: true;
-  updatedAt: string;
-}
 
 interface StoredNoticeDismissals {
   revision: number;
@@ -102,10 +87,12 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
  *   `coordinator-pane-layout` with the project id.
  * - `coordinator-upstream-declines`: one row per project, the upstream tip an
  *   older client's user chose not to merge before messaging the coordinator.
- *   Retired: still written for those clients, but no decision reads it now
- *   that every mergeable checkout is merged. Not announced.
+ *   Retired with the one-time support floor. Project removal still deletes
+ *   a stored row.
  * - `coordinator-upstream-auto-merge`: one row per project an older client set
- *   to always merge upstream commits. Retired in the same way; not announced.
+ *   to always merge upstream commits. Retired: nothing writes it since its
+ *   commands were deleted with the one-time support floor, and nothing reads
+ *   it; project removal still deletes a row. Not announced.
  * - `notice-dismissals`: one document, notices dismissed per session identity,
  *   bounded in both dimensions; announces `notice-dismissal`.
  * - `coordinator-action-marks`: one row per coordinator conversation, owned by
@@ -128,6 +115,11 @@ export class ClientStateRepository {
     return this.context.file("coordinator-upstream-declines.json");
   }
 
+  /**
+   * The retired "always merge" setting's rows. Nothing writes them since its
+   * two commands were deleted with the one-time support floor (to-do 8304 (retired));
+   * project removal still deletes a project's row.
+   */
   private autoMergeFile(): string {
     return this.context.file("coordinator-upstream-auto-merge.json");
   }
@@ -182,63 +174,6 @@ export class ClientStateRepository {
       this.context.changes.announce("coordinator-pane-layout", projectId, projectId);
     }
     return result;
-  }
-
-  getCoordinatorUpstreamDecline(projectId: string): DeclinedUpstreamMerge | null {
-    const stored = this.context.loadStoreRow(this.declinesFile(), projectId);
-    return isDeclinedUpstreamMerge(stored)
-      ? { upstream: stored.upstream, upstreamCommit: stored.upstreamCommit }
-      : null;
-  }
-
-  /**
-   * Remembers the upstream tip a project's merge question was declined for.
-   * `onlyIfAbsent` (a browser's one-time migration) never replaces a newer
-   * answer another client already gave. Returns the decline now in force.
-   */
-  recordCoordinatorUpstreamDecline(
-    projectId: string,
-    decline: DeclinedUpstreamMerge,
-    options: { onlyIfAbsent?: boolean } = {},
-  ): DeclinedUpstreamMerge {
-    if (!isDeclinedUpstreamMerge(decline)) throw new Error("decline is not a valid upstream tip");
-    return this.context.updateStoreRow<DeclinedUpstreamMerge>(
-      this.declinesFile(),
-      projectId,
-      (current) => {
-        if (options.onlyIfAbsent && isDeclinedUpstreamMerge(current)) {
-          return {
-            result: { upstream: current.upstream, upstreamCommit: current.upstreamCommit },
-          };
-        }
-        const stored: StoredUpstreamDecline = {
-          projectId,
-          upstream: decline.upstream,
-          upstreamCommit: decline.upstreamCommit,
-          declinedAt: nowIso(),
-        };
-        return {
-          result: { upstream: decline.upstream, upstreamCommit: decline.upstreamCommit },
-          value: stored,
-        };
-      },
-    );
-  }
-
-  /** Whether a project merges upstream commits before coordinator messages without asking. */
-  getCoordinatorUpstreamAutoMerge(projectId: string): boolean {
-    const stored = this.context.loadStoreRow(this.autoMergeFile(), projectId);
-    return isRecord(stored) && stored.enabled === true;
-  }
-
-  /** Turns "always merge" on or off for a project; off deletes the row. Returns the setting now in force. */
-  setCoordinatorUpstreamAutoMerge(projectId: string, enabled: boolean): boolean {
-    return this.context.updateStoreRow<boolean>(this.autoMergeFile(), projectId, (current) => {
-      if (!enabled)
-        return current === undefined ? { result: false } : { result: false, delete: true };
-      const stored: StoredUpstreamAutoMerge = { projectId, enabled: true, updatedAt: nowIso() };
-      return { result: true, value: stored };
-    });
   }
 
   /** A coordinator conversation's manual action marks; revision 0 when none are stored. */
@@ -452,10 +387,6 @@ export type ClientStateStorage = Pick<
   ClientStateRepository,
   | "getCoordinatorPaneLayout"
   | "saveCoordinatorPaneLayout"
-  | "getCoordinatorUpstreamDecline"
-  | "recordCoordinatorUpstreamDecline"
-  | "getCoordinatorUpstreamAutoMerge"
-  | "setCoordinatorUpstreamAutoMerge"
   | "listNoticeDismissals"
   | "dismissNotices"
   | "reconcileNoticeDismissals"

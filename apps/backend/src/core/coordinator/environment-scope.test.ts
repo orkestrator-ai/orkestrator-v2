@@ -96,7 +96,12 @@ beforeEach(async () => {
     coordinators: world.coordinator,
     nodes: {
       status: async () => ({ nodeId: "bk_command", mode: "command" }),
-      link: () => ({ hello: { capabilities: { "node-coordinator-build-origin": 1 } } }),
+      link: () => ({
+        hello: {
+          capabilities: { "node-coordinator-build-origin": 1 },
+          domains: { "node-mail": { min: 1, max: 1 } },
+        },
+      }),
     },
     nodePortal: {
       summaries: async () => ({

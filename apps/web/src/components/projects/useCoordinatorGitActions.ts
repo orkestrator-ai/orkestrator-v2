@@ -4,14 +4,8 @@ import type {
   ProjectGitStatus,
   ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
-import {
-  activeCoordinatorTurnLabel,
-  projectHomeEnvironmentIds,
-} from "@/lib/coordinator-active-turn";
 import { checkUpstreamMergeOffer } from "@/lib/coordinator-upstream-check";
 import { useNodeScope } from "@/lib/node-scope/providers";
-import { environmentStore } from "@/stores/environmentStore";
-import { nativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
 import type { RunCoordinatorAction } from "./useCoordinatorActions";
 import { useScopeBackend } from "@/hooks/useScopeBackend";
 
@@ -123,16 +117,6 @@ export function useCoordinatorGitActions({
       const lifetime = upstreamCheckLifetimeRef.current;
       if (!lifetime || lifetime.signal.aborted) return false;
       if (conversation.role === "side") return;
-      // Only an older backend needs this panel to judge running turns itself.
-      const turnRunning = () =>
-        activeCoordinatorTurnLabel({
-          workspace: snapshotRef.current?.workspace,
-          homeEnvironmentIds: projectHomeEnvironmentIds(
-            scope.store(environmentStore).getState().environments,
-            projectId,
-          ),
-          projections: scope.store(nativeAgentProjectionStore).getState().projections,
-        }) !== null;
       let cancel!: () => void;
       const cancelled = new Promise<false>((resolve) => {
         cancel = () => resolve(false);
@@ -146,7 +130,6 @@ export function useCoordinatorGitActions({
           cancelled,
           checkUpstreamMergeOffer(projectId, {
             scope,
-            turnRunning,
             onStatus: (fetched) => {
               if (!lifetime.signal.aborted) setGit(fetched);
             },

@@ -6,37 +6,29 @@
  * and the config layering (`lib/portal/command-node-config.ts`) sends its
  * reads and split saves through it on both nodes.
  *
- * - **Version 1** (a node whose hello advertises `config`): calls carry the
- *   envelope and results are decoded with the command's schema. The settings
- *   records are open (`config/models.ts`), so a decode keeps every setting a
- *   newer node sends and a whole-object save never deletes one.
- *   `get_client_state_capabilities` is folded into the version: every build
- *   that advertises the domain owns the shared client state this build knows
- *   ({@link CONFIG_CLIENT_STATE_CAPABILITIES}), so `clientStateCapabilities()`
- *   answers without a round trip.
- * - **Version 0** (a pre-contract node): today's untyped call by name, without
- *   an envelope, answered as sent; `clientStateCapabilities()` asks the
- *   command and reads the answer with `parseClientStateCapabilities` on every
- *   call, as before (anything unreadable is "every capability off"; a node
- *   that predates the command answers `unknown-command`, thrown to the caller
- *   as before).
+ * **Version 2** (a node whose hello advertises `config`): calls carry the
+ * envelope and results are decoded with the command's schema. The settings
+ * records are open (`config/models.ts`), so a decode keeps every setting a
+ * newer node sends and a whole-object save never deletes one. The client
+ * state capability read is answered from the domain version: every build
+ * that advertises it owns the shared client state this build knows
+ * ({@link CONFIG_CLIENT_STATE_CAPABILITIES}), so `clientStateCapabilities()`
+ * answers without a round trip.
  *
  * The config-echo compatibility path (`isGlobalConfigEcho`, counter
  * `workspace-grant.config-echo`) is the receiving node's and is unchanged: an
  * older realm's unchanged settings write is still answered with the current
  * settings.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `config` domain; `get_client_state_capabilities`
- * stays registered for pre-contract clients until its register row retires.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import {
-  CLIENT_STATE_CAPABILITIES_COMMAND,
-  parseClientStateCapabilities,
-} from "../../../client-state.js";
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
+import { domainClient, type CommandCall } from "../../client.js";
 import type { ArgsOf, ResultOf } from "../../command.js";
 import { CONFIG_COMMANDS } from "./commands.js";
 import { configDomain } from "./domain.js";
@@ -51,8 +43,7 @@ export type ConfigCommandApi = {
 };
 
 /**
- * The shared client state `config` version 1 includes, and what
- * `get_client_state_capabilities` answers on this build. The "always merge"
+ * The shared client state every `config` node owns. The "always merge"
  * setting is retired: every mergeable checkout is merged.
  */
 export const CONFIG_CLIENT_STATE_CAPABILITIES: Readonly<ClientStateCapabilities> = Object.freeze({
@@ -83,21 +74,6 @@ function currentApi(call: CommandCall): ConfigApi {
   });
 }
 
-function legacyApi(_call: CommandCall, context: DomainAdapterContext): ConfigApi {
-  return Object.freeze({
-    ...commandApi((command, args) =>
-      context.invoke(command.name, args as Readonly<Record<string, unknown>> | undefined),
-    ),
-    clientStateCapabilities: async () =>
-      parseClientStateCapabilities(await context.invoke(CLIENT_STATE_CAPABILITIES_COMMAND)),
-  });
-}
-
 export const configClient = domainClient(configDomain, {
   2: currentApi,
-  // Version 2 only removed commands nothing called (2026-11-10), so version 1
-  // peers take the same API. Adapter 1 goes when the support floor passes the
-  // first Stable release with version 2.
-  1: currentApi,
-  0: legacyApi,
 });

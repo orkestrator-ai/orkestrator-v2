@@ -37,10 +37,10 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("agent-servers definitions", () => {
-  it("defines the domain's 81 commands once each, Antigravity's since version 2", () => {
+  it("defines the domain's 75 commands once each, Antigravity's since version 2", () => {
     const names = AGENT_SERVERS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(81);
-    expect(new Set(names).size).toBe(81);
+    expect(names).toHaveLength(75);
+    expect(new Set(names).size).toBe(75);
     expect(agentServersDomain).toMatchObject({ name: "agent-servers", version: 2, min: 1 });
     for (const def of AGENT_SERVERS_COMMANDS) {
       expect(def.domain).toBe(agentServersDomain);
@@ -163,9 +163,9 @@ describe("agent-servers definitions", () => {
     );
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 2, 1 and 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapter 2", () => {
     expect(DOMAIN_CLIENTS).toContain(agentServersClient);
-    expect(agentServersClient.versions).toEqual([2, 1, 0]);
+    expect(agentServersClient.versions).toEqual([2]);
   });
 });
 
@@ -213,26 +213,11 @@ describe("agent-servers client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it("version 1: a result that does not match its schema is refused", async () => {
-    const node = fakeNode({ "agent-servers": { min: 1, max: 1 } }, () => ({ running: "yes" }));
+  it("version 2: a result that does not match its schema is refused", async () => {
+    const node = fakeNode({ "agent-servers": { min: 1, max: 2 } }, () => ({ running: "yes" }));
     const api = createDomainClient(agentServersClient, node.options).api();
     await expect(api.get_pi_server_status({ containerId: "c1" })).rejects.toThrow(
       "Invalid result from get_pi_server_status",
     );
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacy = { running: "older shape" };
-    const node = fakeNode(undefined, () => legacy);
-    const client = createDomainClient(agentServersClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect(client.api().get_pi_server_status({ containerId: "c1" })).resolves.toBe(
-      legacy as never,
-    );
-    expect(node.invoked).toEqual([
-      { command: "get_pi_server_status", args: { containerId: "c1" } },
-    ]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["agent-servers", 0]]);
   });
 });

@@ -60,14 +60,13 @@ describe("recordRendererDomainAdapterUsage", () => {
     }
   });
 
-  // The pilot domains (plan item 1010) are the first listed clients.
-  test("counts the listed legacy adapters and drops the current version and unlisted pairs", () => {
+  test("counts the listed older adapters and drops the current version and unlisted pairs", () => {
     const usage = new CompatibilityPathUsage(at);
     expect(
       recordRendererDomainAdapterUsage(
         [
-          { domain: "node-mail", version: 0, count: 1 },
-          { domain: "node-mail", version: 1, count: 1 },
+          { domain: "native-sessions", version: 3, count: 1 },
+          { domain: "native-sessions", version: 6, count: 1 },
           // Every domain has a client since 7006-7009: a version no adapter
           // list holds is the unlisted pair.
           { domain: "git", version: 7, count: 1 },
@@ -75,7 +74,9 @@ describe("recordRendererDomainAdapterUsage", () => {
         { usage },
       ),
     ).toEqual({ accepted: 1, dropped: 2 });
-    expect(Object.keys(usage.snapshot().paths)).toEqual(["domain-adapter.renderer.node-mail.v0"]);
+    expect(Object.keys(usage.snapshot().paths)).toEqual([
+      "domain-adapter.renderer.native-sessions.v3",
+    ]);
   });
 });
 

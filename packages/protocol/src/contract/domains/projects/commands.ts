@@ -199,18 +199,6 @@ export const arrangeProjectsByIntentCommand = defineCommand({
   critical: [],
 });
 
-/** Kept for older clients and nodes: order and folders in one write. */
-export const arrangeProjectsCommand = defineCommand({
-  domain: projectsDomain,
-  name: "arrange_projects",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ projectIds: optionalUnknown, folders: optionalUnknown }),
-  result: ProjectListSchema,
-  critical: [],
-});
-
 /** Whether `url` is an HTTPS, SSH or git@ remote. */
 export const validateGitUrlCommand = defineCommand({
   domain: projectsDomain,
@@ -468,7 +456,6 @@ export const PROJECTS_COMMANDS = [
   updateProjectCommand,
   reorderProjectsCommand,
   arrangeProjectsByIntentCommand,
-  arrangeProjectsCommand,
   validateGitUrlCommand,
   getGitRemoteUrlCommand,
   listHostDirectoryCommand,

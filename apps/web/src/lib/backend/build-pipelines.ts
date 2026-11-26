@@ -293,10 +293,10 @@ export function createBuildPipelinesApi(client: BackendClient) {
     return conditionalResponse<T>(response);
   }
 
-  /** Checks a `get_build_pipeline` answer; a pre-contract node's is not decoded. */
+  /** Checks a `get_build_pipeline` answer; an unnegotiated one is not decoded. */
   function conditionalResponse<T>(response: unknown): ConditionalBuildPipeline<T> {
-    // A version-1 answer is already decoded; a pre-contract node's answer is
-    // checked here as before.
+    // A negotiated answer is already decoded; an unnegotiated one (a client
+    // without the node's `domains`) is checked here as before.
     if (response === null) return null;
     if (!isRecord(response)) {
       throw new Error("Invalid get_build_pipeline response");

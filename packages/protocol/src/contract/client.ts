@@ -29,7 +29,11 @@
  * no defined commands on it yet. It may consult the hello's `capabilities` or
  * the domain's own capability command ({@link LEGACY_CAPABILITY_COMMANDS})
  * through its {@link DomainAdapterContext}. Its calls carry no envelope, so a
- * pre-contract node gets today's `{ command, args }`.
+ * pre-contract node gets today's `{ command, args }`. Since the one-time
+ * support floor v2.39.1-beta (to-do 8304 (retired)) only `capabilities` and
+ * `rich-interactions` keep one; a client without it, over a transport that
+ * carries no negotiation, uses its lowest adapter unnegotiated
+ * ({@link createDomainClient}).
  *
  * Retirement: an adapter for version `v` is deleted when the support floor
  * passes the first Stable release with `v + 1`. Until then every call through
@@ -75,6 +79,13 @@ export interface DomainAdapterContext {
   readonly version: number;
   /** The node's advertised range for the domain, or `null` when it gives none. */
   readonly range: NegotiatedDomainRange | null;
+  /**
+   * The transport carries no negotiation, so this adapter's calls go without
+   * an envelope ({@link createDomainClient}): the node cannot refuse a
+   * critical key it does not know, and an adapter refuses what it must not
+   * send blind (pull-requests' destination guards).
+   */
+  readonly unnegotiated: boolean;
   /** The hello's `capabilities`, when the transport passed them. */
   readonly capabilities: ReadonlySet<string> | null;
   /**
@@ -96,19 +107,17 @@ export interface DomainAdapterContext {
 export type DomainAdapter<Api> = (call: CommandCall, context: DomainAdapterContext) => Api;
 
 /**
- * The per-domain capability commands that exist today (plan item 1009 Notes),
- * which a domain's legacy adapter may read. Each is folded into its domain's
- * version during Phase 7 and leaves this list with its legacy adapter.
+ * The per-domain capability commands that still exist (plan item 1009 Notes).
+ * Each reports runtime state a domain version cannot say, so it stays
+ * (`retireAtDomainVersion: null` in `contracts/retirements.json`, which the
+ * contract CI job checks against this list). The three folded into their
+ * domain's version went with the one-time support floor (to-do 8304, retired);
+ * these domains' legacy adapters went with it too.
  */
 export const LEGACY_CAPABILITY_COMMANDS: Readonly<Partial<Record<DomainName, readonly string[]>>> =
   Object.freeze({
-    config: Object.freeze(["get_client_state_capabilities"]),
     design: Object.freeze(["design_capabilities"]),
     git: Object.freeze(["changes_get_capabilities"]),
-    "native-sessions": Object.freeze([
-      "get_agent_handoff_capabilities",
-      "get_native_agent_sync_capabilities",
-    ]),
     previews: Object.freeze(["get_preview_capabilities"]),
     transcripts: Object.freeze(["transcript_artifact_capabilities"]),
     "web-annotations": Object.freeze(["web_annotations_capabilities"]),
@@ -283,6 +292,12 @@ interface Selection<Api> {
   readonly capabilities: unknown;
   readonly version: number | null;
   readonly range: NegotiatedDomainRange | null;
+  /**
+   * The transport carries no negotiation at all (`domains` is `null` or
+   * `undefined`) and the client has no version-0 adapter: see
+   * {@link createDomainClient}.
+   */
+  readonly unnegotiated: boolean;
   api?: Api;
 }
 
@@ -313,6 +328,19 @@ export function contractEnvelopeFields<C extends AnyCommandDef>(
  * adapters"). See the module comment for the selection, caching and legacy
  * rules.
  *
+ * **A transport without negotiation.** When `domains` is `null` or
+ * `undefined` (a routed, machine or portal client that carries no range, or
+ * a node client whose hello has not arrived yet) and the client has no
+ * version-0 adapter, its lowest adapter's API is used over an unnegotiated
+ * call: the command by name, without an envelope (so no `since` check), its
+ * answer not decoded, and not counted. Every node at or above the support
+ * floor accepts that call for every command it has, and answers
+ * `unknown-command` for one it lacks. This is how such transports always
+ * called; it is not a path for nodes below the floor (the version-0 adapters
+ * of most domains went with the one-time floor v2.39.1-beta, to-do 8304 (retired)).
+ * A node whose hello advertises `domains` without this one is refused with
+ * `unsupported-version`.
+ *
  * An adapter's `call` refuses a command from another domain (its envelope
  * would name the wrong version) and, from version 1 up, a command whose
  * `since` is newer than the adapter's version. Results are decoded with the
@@ -339,17 +367,21 @@ export function createDomainClient<Domain extends AnyDomainDef, Api>(
       return cached;
     }
     const range = ownRange(domains, domain.name);
+    const picked = pickVersion(def.versions, range);
+    const unnegotiated = picked === null && (domains === null || domains === undefined);
     cached = {
       domains,
       capabilities,
       range,
-      version: pickVersion(def.versions, range),
+      version: unnegotiated ? def.versions.at(-1)! : picked,
+      unnegotiated,
     };
     return cached;
   };
 
   const build = (selection: Selection<Api>, version: number): Api => {
-    const counted = version < domain.version;
+    const unnegotiated = selection.unnegotiated;
+    const counted = version < domain.version && !unnegotiated;
     const count = () => {
       if (!counted || !options.usage) return;
       try {
@@ -372,15 +404,17 @@ export function createDomainClient<Domain extends AnyDomainDef, Api>(
           `Domain client ${domain.name}: ${command.name} belongs to the ${command.domain.name} domain.`,
         );
       }
-      if (version > 0 && command.since > version) {
+      if (version > 0 && !unnegotiated && command.since > version) {
         throw new Error(
           `Domain client ${domain.name}: ${command.name} arrived in version ${command.since}; adapter ${version} cannot call it.`,
         );
       }
       count();
       const wire = args as EncodedArgsOf<typeof command>;
-      const envelope = version === 0 ? undefined : contractEnvelopeFields(command, wire, version);
+      const envelope =
+        version === 0 || unnegotiated ? undefined : contractEnvelopeFields(command, wire, version);
       const raw = await options.call(command, wire, envelope);
+      if (unnegotiated) return raw as ResultOf<typeof command>;
       if (command.hotPath && options.validateHotPathResults === false) {
         return raw as ResultOf<typeof command>;
       }
@@ -395,6 +429,7 @@ export function createDomainClient<Domain extends AnyDomainDef, Api>(
       domain: domain.name,
       version,
       range: selection.range,
+      unnegotiated,
       capabilities: capabilitySet,
       invoke: (command: string, args?: Readonly<Record<string, unknown>>) => {
         count();

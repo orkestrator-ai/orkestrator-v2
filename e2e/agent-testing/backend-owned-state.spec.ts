@@ -1,8 +1,4 @@
 import { expect, test } from "./browser-test";
-import {
-  AGENT_HANDOFF_VERSION,
-  createAgentHandoffSnapshot,
-} from "@orkestrator/protocol/agent-handoff";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import {
   authenticatedInvoke,
@@ -13,7 +9,7 @@ import {
 
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
 
-test("backend-owned settings patches, handoff retries and pane layouts survive browser reload", async ({
+test("backend-owned settings patches, handoff refusals and pane layouts survive browser reload", async ({
   page,
 }) => {
   const status = profileStatus(profile);
@@ -47,36 +43,6 @@ test("backend-owned settings patches, handoff retries and pane layouts survive b
     expect(Object.hasOwn(reset.global, "claudeBackgroundCommandLimitHours")).toBe(false);
     expect(reset.global.terminalScrollback).toBe(4321);
 
-    // A historical transfer staged by an older client must be reused by the
-    // current create command even after its source session is no longer present.
-    const snapshot = createAgentHandoffSnapshot({
-      id: handoffId,
-      environmentId: environment.id,
-      sourceProvider: "claude",
-      destinationProvider: "codex",
-      sourceSessionId: source.sourceSessionId,
-      messages: [
-        {
-          id: "historical-user",
-          role: "user",
-          content: "Keep the saved context",
-          parts: [],
-          createdAt: new Date(0).toISOString(),
-        },
-      ],
-    });
-    const saved = await invoke("save_agent_handoff", {
-      handoffId,
-      environmentId: environment.id,
-      version: AGENT_HANDOFF_VERSION,
-      snapshot,
-    });
-    expect(await invoke("create_agent_handoff", source)).toEqual(saved);
-    expect(await invoke("get_agent_handoff_capabilities")).toMatchObject({
-      create: true,
-      delivery: true,
-      pruning: true,
-    });
     const layout = {
       version: PANE_LAYOUT_VERSION,
       containerId: null,
@@ -108,7 +74,6 @@ test("backend-owned settings patches, handoff retries and pane layouts survive b
       environmentId: environment.id,
     });
     expect(persisted).toMatchObject(layout);
-    expect(await invoke("create_agent_handoff", source)).toEqual(saved);
     const reloaded = await invoke<{ global: Record<string, unknown> }>("get_config");
     expect(Object.hasOwn(reloaded.global, "claudeBackgroundCommandLimitHours")).toBe(false);
     expect(reloaded.global.terminalScrollback).toBe(4321);

@@ -23,7 +23,6 @@ import { defineCommand } from "../../command.js";
 import { kanbanDomain } from "./domain.js";
 import { LINEAR_BOARD_COMMANDS } from "./linear-commands.js";
 import {
-  FeaturePlanBuildClaimSchema,
   FeaturePlanListSchema,
   FeaturePlanningRecordSchema,
   FeaturePlanSchema,
@@ -352,18 +351,6 @@ export const updateFeaturePlanCommand = defineCommand({
   critical: [],
 });
 
-/** Reserves the plan's build for `taskId` (renderers before `start_feature_plan_build`). */
-export const claimFeaturePlanBuildCommand = defineCommand({
-  domain: kanbanDomain,
-  name: "claim_feature_plan_build",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ featureId: Schema.String, taskId: Schema.String }),
-  result: FeaturePlanBuildClaimSchema,
-  critical: [],
-});
-
 const planMessageFields = {
   role: optionalUnknown,
   content: Schema.String,
@@ -553,7 +540,6 @@ export const KANBAN_COMMANDS = [
   getFeaturePlansCommand,
   createFeaturePlanCommand,
   updateFeaturePlanCommand,
-  claimFeaturePlanBuildCommand,
   appendFeaturePlanMessageCommand,
   appendFeatureStoryMessageCommand,
   startFeaturePlanningCommand,

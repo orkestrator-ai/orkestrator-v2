@@ -9,10 +9,8 @@
  */
 import * as Schema from "effect/Schema";
 import { defineCommand } from "../../command.js";
-import { mutableArray } from "../../model-schema.js";
 import { nativeSessionsDomain } from "./domain.js";
 import {
-  AgentHandoffCapabilitiesSchema,
   AgentHandoffSchema,
   ComposeDraftSchema,
   conditionalSnapshotOf,
@@ -293,23 +291,6 @@ export const getAgentHandoffCommand = defineCommand({
   critical: [],
 });
 
-/** A renderer-built handoff: only a renderer older than `create_agent_handoff` sends one. */
-export const saveAgentHandoffCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "save_agent_handoff",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    handoffId: Schema.String,
-    environmentId: Schema.String,
-    version: Schema.Finite,
-    snapshot: optionalUnknown,
-  }),
-  result: AgentHandoffSchema,
-  critical: [],
-});
-
 /** Builds a handoff from the source session's transcript and stores it (idempotent). */
 export const createAgentHandoffCommand = defineCommand({
   domain: nativeSessionsDomain,
@@ -333,48 +314,6 @@ export const createAgentHandoffCommand = defineCommand({
   critical: [],
 });
 
-/**
- * What this backend does for handoffs (a capability command). All of it is
- * part of `native-sessions` version 1; the command stays for pre-contract
- * clients until the register row retires.
- */
-export const getAgentHandoffCapabilitiesCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "get_agent_handoff_capabilities",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({}),
-  result: AgentHandoffCapabilitiesSchema,
-  critical: [],
-});
-
-/** Older renderers still delete their handoffs; current ones leave it to the backend. */
-export const deleteAgentHandoffCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "delete_agent_handoff",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ handoffId: Schema.String, environmentId: Schema.String }),
-  result: Schema.Boolean,
-  critical: [],
-});
-
-/** Deletes the environment's handoffs no layout references; answers their ids. */
-export const pruneAgentHandoffsCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "prune_agent_handoffs",
-  since: 1,
-  access: "workspace",
-  read: false,
-  // `referencedHandoffIds` is checked strictly by the handler (a non-array must
-  // never read as "nothing is referenced").
-  args: Schema.Struct({ environmentId: Schema.String, referencedHandoffIds: optionalUnknown }),
-  result: mutableArray(Schema.String),
-  critical: [],
-});
-
 export const PROMPT_COMMANDS = [
   getPromptQueueCommand,
   listPromptQueuesCommand,
@@ -393,9 +332,5 @@ export const PROMPT_COMMANDS = [
   saveFileDraftCommand,
   deleteFileDraftCommand,
   getAgentHandoffCommand,
-  saveAgentHandoffCommand,
   createAgentHandoffCommand,
-  getAgentHandoffCapabilitiesCommand,
-  deleteAgentHandoffCommand,
-  pruneAgentHandoffsCommand,
 ] as const;

@@ -20,7 +20,6 @@ import {
   getNativeAgentSessionCommand,
   getNativeAgentSessionStateUpdateCommand,
   getNativeAgentSignInResendCommand,
-  getNativeAgentSyncCapabilitiesCommand,
   getNativeAgentToolDetailsCommand,
   getNativeAgentToolOutputCommand,
   getNativeAgentTranscriptUpdateCommand,
@@ -47,7 +46,6 @@ import {
   NATIVE_AGENT_DISCOVERY_SECTIONS,
   NATIVE_AGENT_LIVE_UPDATE_VERSION,
 } from "@orkestrator/protocol/native-agent";
-import { NATIVE_AGENT_OBSERVATION_EVENT_VERSION } from "@orkestrator/protocol/native-agent-observation";
 import { NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION } from "@orkestrator/protocol/native-agent-transcript-patch";
 import { BUILD_PIPELINE_AGENTS } from "@orkestrator/protocol/build-pipeline";
 import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
@@ -262,21 +260,6 @@ export function registerNativeAgentCommands(
       logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     });
   });
-
-  register(getNativeAgentSyncCapabilitiesCommand, (_args, context) => ({
-    historyPagingVersions: [1],
-    progressiveViewVersions: [1],
-    // Additive (step 07): activity announcements name their session and carry
-    // the observer's stamp; `observation` anchors a client's gap detection.
-    observationEventVersions: [NATIVE_AGENT_OBSERVATION_EVENT_VERSION],
-    // Part-level message patches inside transcript deltas (efficiency step 14).
-    transcriptPatchVersions: [NATIVE_AGENT_TRANSCRIPT_PATCH_VERSION],
-    // One request for transcript and state (`get_native_agent_live_update`).
-    liveUpdateVersions: [NATIVE_AGENT_LIVE_UPDATE_VERSION],
-    ...(context.nativeAgents
-      ? { observation: context.nativeAgents.observationStatus().stamp }
-      : {}),
-  }));
 
   // Which of an environment's sessions have a turn in flight, for the tab
   // strip's working tint. Reads only the activity observer's retained answers

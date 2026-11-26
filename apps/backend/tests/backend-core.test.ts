@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "../src/core/index";
 import { BackendRuntime } from "../src/core/backend-runtime";
-import { UnknownCommandError, incompatibility } from "@orkestrator/protocol/contract/errors";
+import {
+  UnknownCommandError,
+  fromWire,
+  incompatibility,
+} from "@orkestrator/protocol/contract/errors";
+import retirements from "../../../packages/protocol/contracts/retirements.json";
+import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
 const tempDirs: string[] = [];
 
@@ -26,7 +32,7 @@ describe("OrkestratorBackend", () => {
     const dataDir = path.join(root, "data");
     const toolchainBinDir = path.join(root, "toolchains", "bin");
     await mkdir(toolchainBinDir, { recursive: true });
-    await writeFile(path.join(toolchainBinDir, "codex"), "managed codex");
+    await writeFile(path.join(toolchainBinDir, "claude"), "managed claude");
 
     const backend = new OrkestratorBackend({
       dataDir,
@@ -39,7 +45,7 @@ describe("OrkestratorBackend", () => {
     await backend.init();
 
     try {
-      await expect(backend.invoke("check_codex_cli")).resolves.toBe(true);
+      await expect(backend.invoke("check_claude_cli")).resolves.toBe(true);
       await expect(backend.invoke<{ version: string }>("get_config")).resolves.toMatchObject({
         version: "1.0.0",
       });
@@ -91,5 +97,46 @@ describe("OrkestratorBackend", () => {
     await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
       "Backend is shutting down",
     );
+  });
+
+  test("retired startup probes from published renderers get unknown-command before hello", async () => {
+    const root = await createTempDir("ork-backend-core-retired-probes-");
+    const backend = new OrkestratorBackend({
+      dataDir: path.join(root, "data"),
+      toolchainBinDir: path.join(root, "toolchains", "bin"),
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+    });
+    await backend.init();
+    try {
+      const { info } = await startGateway({ backend });
+      const url = new URL("/__orkestrator/invoke", info.url).toString();
+      const probes = Object.entries(retirements.capabilityCommands).filter(
+        ([, entry]) =>
+          "retired" in entry && (entry.domain === "config" || entry.domain === "native-sessions"),
+      );
+      expect(probes).toHaveLength(3);
+      // Replay the released adapter-0 request shape without fetching hello.
+      // This pins the coordinated rollout policy at the gateway boundary.
+      for (const [command] of probes) {
+        expect(backend.hasCommand(command)).toBe(false);
+        const response = await requestUrl(url, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ command, args: {} }),
+        });
+        expect(response.status).toBe(500);
+        expect(incompatibility(fromWire(response.json()), command)).toEqual({
+          code: "unknown-command",
+          command,
+        });
+      }
+    } finally {
+      await backend.shutdown();
+    }
   });
 });

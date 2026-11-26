@@ -525,46 +525,19 @@ describe("ticket-sync domain client (plan item 1010)", () => {
     });
   });
 
-  test("a pre-contract leaf with the capability gets today's body, with no envelope", async () => {
-    const f = await fleet({ domains: null });
-    await f.command.kanban.addKanbanTask(f.commandProject.id, "Legacy", "");
-    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
-    expect(f.envelopes.every(({ envelope }) => envelope === undefined)).toBe(true);
-  });
-
-  test("a pre-contract leaf syncs ticket changes both ways, and collection sends only the keys its handler accepted", async () => {
-    const f = await fleet({ domains: null });
-    const down = await f.command.kanban.addKanbanTask(f.commandProject.id, "From the board", "");
-    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
-    expect((await f.leafTicket(down.id))?.title).toBe("From the board");
-    // Changes made on the leaf go up through the outbox the board collects.
-    await f.leaf.kanban.updateKanbanTask(down.id, {
-      title: "Edited on the leaf",
-      status: "review",
-    });
-    const up = await f.leaf.kanban.addKanbanTask(f.leafProject.id, "From the leaf", "");
-    expect((await f.sync.sync(LEAF_ID)).state).toBe("in-sync");
-    expect(await f.commandTicket(down.id)).toMatchObject({
-      title: "Edited on the leaf",
-      status: "review",
-    });
-    expect((await f.commandTicket(up.id))?.title).toBe("From the leaf");
-    // A 2.36.x handler refused any other key, `features` included.
-    const collects = f.requests.filter(({ command }) => command === "collect_ticket_sync_outbox");
-    expect(collects.length).toBeGreaterThan(0);
-    for (const { args } of collects) {
-      expect(Object.keys(args).every((key) => key === "controllerId" || key === "after")).toBe(
-        true,
-      );
-    }
-  });
-
   test("a current leaf is asked for image operations when collecting", async () => {
     const f = await fleet();
     await f.sync.sync(LEAF_ID);
     const collects = f.requests.filter(({ command }) => command === "collect_ticket_sync_outbox");
     expect(collects.length).toBeGreaterThan(0);
     for (const { args } of collects) expect(args.features).toEqual(["images"]);
+  });
+
+  test("a leaf with a domain-less hello receives no ticket-sync requests", async () => {
+    const f = await fleet({ domains: null });
+    await f.command.kanban.addKanbanTask(f.commandProject.id, "Keep local", "");
+    expect((await f.sync.sync(LEAF_ID)).state).toBe("update-required");
+    expect(f.received).toEqual([]);
   });
 
   test("a leaf whose range has no version in common is reported as needing an update", async () => {
@@ -575,14 +548,6 @@ describe("ticket-sync domain client (plan item 1010)", () => {
 });
 
 describe("older leaves", () => {
-  test("a leaf that cannot sync fails like any other error and receives nothing", async () => {
-    const f = await fleet({ capability: false, domains: null });
-    await f.command.kanban.addKanbanTask(f.commandProject.id, "Not for old leaves", "");
-    const result = await f.sync.sync(LEAF_ID);
-    expect(result.state).toBe("error");
-    expect(f.received).toEqual([]);
-  });
-
   test("a detached command node's copies become the leaf's own tickets", async () => {
     const f = await fleet();
     const ticket = await f.command.kanban.addKanbanTask(f.commandProject.id, "Keep me", "");

@@ -31,7 +31,6 @@ import type { CommandRegistrar, RegistryDependencies } from "./registry-types.js
 import {
   addProjectCommand,
   arrangeProjectsByIntentCommand,
-  arrangeProjectsCommand,
   createProjectFromScratchCommand,
   getGitRemoteUrlCommand,
   getProjectCommand,
@@ -567,22 +566,6 @@ export function registerProjectCommands(
   // under the store lock, so a client's stale copy cannot undo another's work.
   register(arrangeProjectsByIntentCommand, async (args, { storage }) => {
     return storage.arrangeProjectsByIntent(parseProjectArrangementIntent(args.intent));
-  });
-  // Kept for older clients and nodes; current clients send the intent above.
-  // One command rather than a reorder plus N updates: the sidebar derives a
-  // folder's position from its first member, so a half-applied arrangement is
-  // a visibly wrong tree rather than a slightly stale one.
-  register(arrangeProjectsCommand, (args, { storage }) => {
-    const folders: Record<string, string | null> = {};
-    if (args.folders !== undefined) {
-      for (const [projectId, folder] of Object.entries(asRecord(args.folders, "folders"))) {
-        if (folder !== null && typeof folder !== "string") {
-          throw new Error(`folders.${projectId} must be a string or null`);
-        }
-        folders[projectId] = folder;
-      }
-    }
-    return storage.arrangeProjects(asStringArray(args.projectIds), folders);
   });
   register(validateGitUrlCommand, ({ url }) => isGitRemoteUrl(url));
   register(getGitRemoteUrlCommand, async ({ path: repoPath }) => {

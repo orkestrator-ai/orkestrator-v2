@@ -6,10 +6,11 @@
  * backend to backend, so their clients live here, on the sending side: one
  * client per peer and domain, which picks an adapter from the peer's hello
  * once per connection generation. A peer whose hello advertises the domain
- * gets version 1, with the contract envelope (`domain`, `version`,
- * `critical`); a pre-contract peer gets the legacy adapter, version 0, which
- * keeps today's capability gating and sends today's `{ command, args }`.
- * Calls through an adapter below the current version are counted as
+ * gets the highest version both sides speak, with the contract envelope
+ * (`domain`, `version`, `critical`). If a received hello lacks the domain's
+ * range, these domains refuse with `unsupported-version`. Their legacy
+ * adapters went with the one-time support floor v2.39.1-beta,
+ * to-do 8304 (retired). Calls through an adapter below the current version are counted as
  * `domain-adapter.backend.<domain>.v<version>` (`backendDomainAdapterUsage`).
  *
  * Two transports reach a peer: the node link itself (the mail collector and
@@ -36,6 +37,7 @@ export interface PeerHello {
   readonly domains?: NegotiatedDomains;
 }
 
+const NO_PEER_DOMAINS: NegotiatedDomains = Object.freeze({});
 const capabilitySets = new WeakMap<object, ReadonlySet<string>>();
 
 /**
@@ -71,7 +73,11 @@ export function peerDomainClient<Api>(
 ): DomainClient<Api> {
   return createDomainClient(def, {
     call: peer.call,
-    domains: () => peer.hello()?.domains,
+    domains: () => {
+      const hello = peer.hello();
+      // A received pre-contract hello is distinct from a transport awaiting hello.
+      return hello ? (hello.domains ?? NO_PEER_DOMAINS) : undefined;
+    },
     capabilities: () => helloCapabilitySet(peer.hello()),
     ...(peer.invoke ? { invoke: peer.invoke } : {}),
     usage: backendDomainAdapterUsage,

@@ -8,7 +8,6 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CommandContext } from "../src/core/commands/context";
-import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_SIZE_LABEL } from "../src/core/path-safety";
 import * as realPty from "../src/core/pty";
 import { runCommand } from "../src/core/shell";
@@ -1142,12 +1141,6 @@ case "$*" in
   *"/workspace/src/oversized.txt"*) printf 'File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})\\n' >&2; exit 1 ;;
   *"/workspace/.env"*) printf 'Rk9PPWJhcg==\\n' ;;
   *"/workspace/src/app.ts"*) printf 'ZXhwb3J0IGNvbnN0IHZhbHVlID0gMjsK\\n' ;;
-  *"'main:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDI0CmV4cG9ydCBjb25zdCB2YWx1ZSA9IDE7Cgo=\\n' ;;
-  *"'missing:src/app.ts' | git cat-file --batch"*) printf 'bWlzc2luZzpzcmMvYXBwLnRzIG1pc3NpbmcK\\n' ;;
-  *"'empty:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDAKCg==\\n' ;;
-  *"'binary:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDIKAAEK\\n' ;;
-  *"'invalid:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDMK//79Cg==\\n' ;;
-  *"'oversized:src/app.ts' | git cat-file --batch"*) printf 'YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYSBibG9iIDUyNDI4ODEK\\n' ;;
   *"/workspace/assets/blob.bin"*) printf 'AAEC\\n' ;;
   *"mkdir -p '/workspace/generated'"*) ;;
   *"exec -i container-1 bash -lc node -e"*"/workspace/generated/out.bin"*) cat > "$FAKE_DOCKER_STDIN" ;;
@@ -1227,51 +1220,6 @@ esac
       ).rejects.toThrow(
         `File is too large to open in the editor (maximum size is ${MAX_TEXT_FILE_SIZE_LABEL})`,
       );
-      const branchReads = () =>
-        compatibilityPathUsage.snapshot().paths["retired-command.read-file-at-branch"]?.count ?? 0;
-      const branchReadsBefore = branchReads();
-      await expect(
-        commands.get("read_file_at_branch")?.(
-          { containerId: "container-1", filePath: "src/app.ts", branch: "main" },
-          context,
-        ),
-      ).resolves.toEqual({
-        path: "src/app.ts",
-        content: "export const value = 1;\n",
-        language: "typescript",
-      });
-      await expect(
-        commands.get("read_file_at_branch")?.(
-          { containerId: "container-1", filePath: "src/app.ts", branch: "missing" },
-          context,
-        ),
-      ).resolves.toBeNull();
-      await expect(
-        commands.get("read_file_at_branch")?.(
-          { containerId: "container-1", filePath: "src/app.ts", branch: "empty" },
-          context,
-        ),
-      ).resolves.toMatchObject({ content: "" });
-      await expect(
-        commands.get("read_file_at_branch")?.(
-          { containerId: "container-1", filePath: "src/app.ts", branch: "binary" },
-          context,
-        ),
-      ).rejects.toThrow("Binary files cannot be opened in the text editor");
-      await expect(
-        commands.get("read_file_at_branch")?.(
-          { containerId: "container-1", filePath: "src/app.ts", branch: "invalid" },
-          context,
-        ),
-      ).rejects.toThrow("File is not valid UTF-8 text");
-      await expect(
-        commands.get("read_file_at_branch")?.(
-          { containerId: "container-1", filePath: "src/app.ts", branch: "oversized" },
-          context,
-        ),
-      ).rejects.toThrow("File is too large to open in the editor");
-      // Only v2.21.0 to v2.23.0 renderers ask; every call is counted (to-do 8304).
-      expect(branchReads()).toBe(branchReadsBefore + 6);
       await expect(
         commands.get("read_container_file_base64")?.(
           { containerId: "container-1", filePath: "assets/blob.bin" },
@@ -1291,12 +1239,6 @@ esac
       expect(dockerLog).toContain(
         `/workspace/src/app.ts' ${MAX_TEXT_FILE_BYTES} editor '${MAX_TEXT_FILE_SIZE_LABEL}'`,
       );
-      // One exec, one cat-file process per branch read.
-      expect(dockerLog).toContain(
-        "printf '%s\\n' 'main:src/app.ts' | git cat-file --batch 2>/dev/null | head -c",
-      );
-      expect(dockerLog).not.toContain("git show");
-      expect(dockerLog).not.toContain("cat-file -s");
       // Staged in a temporary sibling and renamed over the target, never
       // truncated in place before the payload has arrived.
       expect(dockerLog).toContain("exec -i container-1 bash -lc node -e");
@@ -1426,7 +1368,6 @@ printf 'd\\t.turbo/cache\\000f\\t.turbo/cache/run.log\\000t\\t.turbo\\000'
     await expect(
       commands.get("get_local_codex_server_status")?.({ environmentId: "env-1" }, context),
     ).resolves.toEqual({ running: false, port: 4103, pid: 5103 });
-    expect(commands.get("cleanup_stale_local_servers_cmd")?.({}, context)).toBeUndefined();
 
     expect(() =>
       commands.get("get_local_codex_server_status")?.({ environmentId: 1 }, context),

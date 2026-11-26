@@ -28,8 +28,8 @@ import { commandBackendClient, scopeBackendClient, type BackendClient } from "./
  * The commands are the `git` domain's (plan item 7006): each call goes
  * through the domain client (`@/lib/node-scope/domains/git`), which picks
  * the node's adapter. Version 1 decodes results with the protocol schemas,
- * whose types are the `change-resources` types used here; version 0 is
- * today's call, answered as sent.
+ * whose types are the `change-resources` types used here; without
+ * negotiation the call is today's, answered as sent.
  */
 
 /** A call that sends no arguments object, as today's `invoke(command)`. */

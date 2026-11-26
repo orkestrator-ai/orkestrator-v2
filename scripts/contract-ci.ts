@@ -11,10 +11,12 @@
  *
  * The support floor is the newest Stable release published at least 60 days
  * before `now`, otherwise v2.21.0 (`docs/architecture/version-compatibility.md`,
- * "The support window"), from `packages/protocol/contracts/releases/index.json`.
- * Every snapshotted release at or above the floor is in the window, including
- * one whose `publishedAt` is still `null` (versioned, not yet published),
- * which is never the floor.
+ * "The support window"), from `packages/protocol/contracts/releases/index.json`,
+ * and never below the one-time floor {@link ONE_TIME_SUPPORT_FLOOR} (v2.39.1-beta,
+ * the first release built from the 2026-11-14 legacy-retirement sweep). Every
+ * snapshotted release at or above the floor is in the window, including one
+ * whose `publishedAt` is still `null` (versioned, not yet published), which
+ * is never the window floor.
  *
  * Stage 1 (on):
  *
@@ -30,7 +32,8 @@
  *    current manifest no longer has must be named by a register or retired
  *    row, and its domain must be at a higher version now than in that release
  *    (unless the domain is unversioned on both sides, or the snapshot has no
- *    domain for it: there is nothing to bump).
+ *    domain for it: there is nothing to bump). A command the one-time floor
+ *    lists as kept only for older clients needs no bump, and must be gone.
  * 4. **Register:** every register row with a counter names ids in
  *    `COMPATIBILITY_PATH_IDS` (or domain adapter ids); every domain bump past
  *    an in-window release's version has a register row naming the old
@@ -43,7 +46,8 @@
  * 6. **Retirements** (plan item 7013, `scripts/contract-ci-retirements.ts`):
  *    an adapter whose version no in-window peer speaks any more (the floor
  *    has passed the first Stable release that advertises the domain at
- *    `v + 1`), or a capability command whose retirement condition the floor
+ *    `v + 1`; the one-time floor's release counts from the day it was
+ *    recorded), or a capability command whose retirement condition the floor
  *    has passed, fails as unreachable; `contracts/retirements.json` lists
  *    every legacy capability command.
  *
@@ -132,18 +136,105 @@ export interface CiManifest {
   };
 }
 
+/**
+ * A floor recorded once by a decision, below which no release is supported
+ * whatever the 60-day window says. The window keeps moving on its own and
+ * takes over as soon as it passes this version.
+ */
+export interface OneTimeSupportFloor {
+  /** The release the floor stands at; it must be in the release index. */
+  readonly version: string;
+  /** The day (`YYYY-MM-DD`) the floor was recorded. */
+  readonly recorded: string;
+  /**
+   * Commands that releases at or above the floor still registered, but only
+   * for clients below it: no client of a release at or above the floor calls
+   * them. They leave without a domain bump (like a retired capability
+   * command), still need a register or retired row naming them, and must not
+   * be registered any more.
+   */
+  readonly commandsForOlderClients: readonly string[];
+}
+
+/**
+ * The one-time floor of the 2026-11-14 legacy-retirement sweep (to-do 8304 (retired),
+ * decided by the user on 2026-11-26).
+ *
+ * The user decided on 2026-11-14 that all legacy support retires at once,
+ * with every machine and client updated together. The sweep (#2319, to-do
+ * 8108 (retired)) merged (`8821695c8`) on 2026-11-16; v2.39.0-beta
+ * was tagged before it and v2.39.1-beta (published 2026-11-16) is the first
+ * release whose tag contains it, so no supported client predates the sweep.
+ * Every machine in the user's fleet ran v2.39.13-beta or newer when this was
+ * recorded. The floor let the domain client adapters for versions no release
+ * at or above it speaks, the three pre-contract capability commands and the
+ * commands below be deleted (version-compatibility.md, "The support window").
+ *
+ * Forward policy: the 60-day window still applies above this floor, so a
+ * later change that drops something a release at or above it uses still
+ * fails this job (adapters, removed commands, register, schemas). Nothing
+ * may be added to {@link OneTimeSupportFloor.commandsForOlderClients} except
+ * by a new decision of the user.
+ */
+export const ONE_TIME_SUPPORT_FLOOR: OneTimeSupportFloor = Object.freeze({
+  version: "2.39.1-beta",
+  recorded: "2026-11-26",
+  // Each was checked against the v2.39.1-beta tree: only its own definition,
+  // registration and usage counter name it, or (`prune_agent_handoffs`) its
+  // renderer caller runs only against a backend without `native-sessions`.
+  commandsForOlderClients: Object.freeze([
+    // Retired coordinator commands (plan item 7009).
+    "hide_coordinator_work",
+    "associate_coordinator_workflow",
+    "start_coordinator_multi_review",
+    "start_coordinator_node_multi_review",
+    // Retired per-provider CLI checks and the no-op server cleanup (plan item 7009).
+    "check_opencode_cli",
+    "check_codex_cli",
+    "check_cursor_cli",
+    "check_grok_cli",
+    "check_pi_cli",
+    "cleanup_stale_local_servers_cmd",
+    // The diff viewer of v2.21.0 to v2.23.0.
+    "read_file_at_branch",
+    "read_local_file_at_branch",
+    // The retired "always merge" setting, asked by renderers before v2.36.0.
+    "get_coordinator_upstream_auto_merge",
+    "set_coordinator_upstream_auto_merge",
+    "decline_coordinator_upstream_merge",
+    // Renderer-built handoffs, before `native-sessions` built them itself.
+    "save_agent_handoff",
+    "delete_agent_handoff",
+    "prune_agent_handoffs",
+    // The feature-plan build's renderer sequence, before the one-request launch.
+    "claim_feature_plan_build",
+    // The whole-arrangement write, before `arrange_projects_by_intent`.
+    "arrange_projects",
+  ]),
+});
+
 export interface SupportFloor {
   readonly version: string;
-  /** The Stable release that set it; `null` while none is old enough (v2.21.0). */
+  /**
+   * The release that set it: the Stable release 60 days old, or the one-time
+   * floor's release; `null` while neither applies (v2.21.0).
+   */
   readonly release: ReleaseIndexEntry | null;
+  /** Which rule set it: the 60-day window, the first published release, or the one-time floor. */
+  readonly source: "window" | "first-release" | "one-time";
 }
 
 /**
  * The newest Stable release published at least {@link SUPPORT_WINDOW_DAYS}
- * days before `now`, otherwise v2.21.0. A release with no publication time
- * is never the floor.
+ * days before `now`, otherwise v2.21.0, raised to `oneTime` while that is
+ * higher. A release with no publication time is never the window floor.
+ * Throws when `oneTime` names a release the index does not have.
  */
-export function supportFloor(index: ReleaseIndex, now: Date): SupportFloor {
+export function supportFloor(
+  index: ReleaseIndex,
+  now: Date,
+  oneTime: OneTimeSupportFloor | null = null,
+): SupportFloor {
   const cutoff = now.getTime() - SUPPORT_WINDOW_DAYS * DAY_MS;
   let floor: ReleaseIndexEntry | null = null;
   for (const entry of index.releases) {
@@ -152,10 +243,44 @@ export function supportFloor(index: ReleaseIndex, now: Date): SupportFloor {
     if (!Number.isFinite(published) || published > cutoff) continue;
     if (floor === null || compareVersions(entry.version, floor.version) > 0) floor = entry;
   }
-  if (floor === null || compareVersions(floor.version, FIRST_PUBLISHED_RELEASE) < 0) {
-    return { version: FIRST_PUBLISHED_RELEASE, release: null };
+  const window: SupportFloor =
+    floor === null || compareVersions(floor.version, FIRST_PUBLISHED_RELEASE) < 0
+      ? { version: FIRST_PUBLISHED_RELEASE, release: null, source: "first-release" }
+      : { version: floor.version, release: floor, source: "window" };
+  if (oneTime === null) return window;
+  const recorded = index.releases.find((entry) => entry.version === oneTime.version);
+  if (recorded === undefined) {
+    throw new Error(
+      `the one-time support floor v${oneTime.version} is not in releases/index.json.`,
+    );
   }
-  return { version: floor.version, release: floor };
+  if (compareVersions(oneTime.version, window.version) <= 0) return window;
+  return { version: oneTime.version, release: recorded, source: "one-time" };
+}
+
+/**
+ * The one-time floor's commands that are still registered: each must be
+ * deleted (it is kept only for clients below the floor).
+ */
+export function checkOneTimeFloorCommands(
+  oneTime: OneTimeSupportFloor | null,
+  manifest: CiManifest,
+  register: RegisterDocument,
+): string[] {
+  if (oneTime === null) return [];
+  const problems: string[] = [];
+  for (const command of oneTime.commandsForOlderClients) {
+    if (Object.hasOwn(manifest.commands, command)) {
+      problems.push(
+        `${command} is kept only for clients below the one-time floor v${oneTime.version} (ONE_TIME_SUPPORT_FLOOR), but it is still registered: delete it.`,
+      );
+    } else if (!rowsNaming(register, command)) {
+      problems.push(
+        `${command} left with the one-time floor v${oneTime.version}, but no register or retired row in ${REGISTER_DOCUMENT} names \`${command}\`: add a Retired row.`,
+      );
+    }
+  }
+  return problems;
 }
 
 /** Every indexed release at or above the floor, unpublished ones included. */
@@ -265,9 +390,10 @@ function rowsNaming(register: RegisterDocument, name: string): boolean {
 
 /**
  * Check 3: no command of an in-window release disappeared without a bump and
- * a row. A capability command retired on schedule (`retired`, plan item
- * 7013) needs no bump: every in-window renderer has the domain and never
- * calls it.
+ * a row. A command in `retired` needs no bump: a capability command retired
+ * on schedule (plan item 7013), whose callers every in-window renderer
+ * answers from the domain version, or one the one-time floor lists as kept
+ * only for clients below it.
  */
 export function checkRemovedCommands(
   window: readonly ReleaseContract[],
@@ -482,6 +608,11 @@ export interface ContractCiOptions {
   readonly counterIds?: Iterable<string>;
   /** The capability commands the list must classify. Defaults to `LEGACY_CAPABILITY_COMMANDS`. */
   readonly legacyCapabilityCommands?: Readonly<Partial<Record<string, readonly string[]>>>;
+  /**
+   * The one-time floor. Defaults to {@link ONE_TIME_SUPPORT_FLOOR}; `null`
+   * applies the 60-day window alone (fixtures with their own release index).
+   */
+  readonly oneTimeFloor?: OneTimeSupportFloor | null;
   /** Print the retirement schedule instead of checking (`--retirements`). */
   readonly retirements?: "text" | "json";
   /** Runs the fixtures. Defaults to the sandboxed registry child. */
@@ -545,7 +676,14 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
     : [];
   sections.push(["Release index", checkReleaseIndex(index, snapshotVersions)]);
 
-  const floor = supportFloor(index, now);
+  const oneTimeFloor =
+    options.oneTimeFloor === undefined ? ONE_TIME_SUPPORT_FLOOR : options.oneTimeFloor;
+  let floor: SupportFloor;
+  try {
+    floor = supportFloor(index, now, oneTimeFloor);
+  } catch (error) {
+    return fatal(error instanceof Error ? error.message : String(error));
+  }
   const inWindow = windowReleases(index, floor.version);
   const window: ReleaseContract[] = [];
   const unreadable: string[] = [];
@@ -559,10 +697,13 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
   sections.push(["Release snapshots", unreadable]);
 
   // Every Stable release, also below the floor: the first one that advertises
-  // a domain version dates its older adapter's retirement.
+  // a domain version dates its older adapter's retirement. The one-time
+  // floor's release counts as one too, from the day the floor was recorded.
   const stable: StableRelease[] = [];
+  let oneTimeRelease: StableRelease | null = null;
   for (const entry of index.releases) {
-    if (entry.channel !== "stable") continue;
+    const isOneTimeRelease = entry.version === oneTimeFloor?.version;
+    if (entry.channel !== "stable" && !isOneTimeRelease) continue;
     const snapshot =
       window.find((release) => release.version === entry.version) ??
       (() => {
@@ -572,13 +713,14 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
           return null; // reported by the index check when the file is missing
         }
       })();
-    if (snapshot !== null) {
-      stable.push({
-        version: entry.version,
-        publishedAt: entry.publishedAt,
-        domains: snapshot.domains,
-      });
-    }
+    if (snapshot === null) continue;
+    const release = {
+      version: entry.version,
+      publishedAt: entry.publishedAt,
+      domains: snapshot.domains,
+    };
+    if (entry.channel === "stable") stable.push(release);
+    if (isOneTimeRelease) oneTimeRelease = release;
   }
   const schedule =
     typeof retirementList === "string"
@@ -590,6 +732,9 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
           floor: floor.version,
           now,
           register,
+          ...(oneTimeFloor === null || oneTimeRelease === null
+            ? {}
+            : { oneTimeFloor: { release: oneTimeRelease, recorded: oneTimeFloor.recorded } }),
         });
   if (options.retirements !== undefined) {
     if (schedule === null) return fatal(retirementList as string);
@@ -599,20 +744,32 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
   }
 
   const unpublished = inWindow.filter((entry) => entry.publishedAt === null).length;
+  const floorReason =
+    floor.source === "one-time"
+      ? `the one-time floor recorded on ${oneTimeFloor!.recorded}, the first release built from the 2026-11-14 legacy-retirement sweep; the ${SUPPORT_WINDOW_DAYS}-day window takes over once it passes it`
+      : floor.source === "window"
+        ? `the newest Stable release published at least ${SUPPORT_WINDOW_DAYS} days earlier, ${floor.release!.publishedAt}`
+        : `no Stable release is ${SUPPORT_WINDOW_DAYS} days old yet`;
   log(
-    `Support floor on ${now.toISOString().slice(0, 10)}: v${floor.version} (${floor.release ? `the newest Stable release published at least ${SUPPORT_WINDOW_DAYS} days earlier, ${floor.release.publishedAt}` : `no Stable release is ${SUPPORT_WINDOW_DAYS} days old yet`}). In the window: ${inWindow.length} snapshotted releases${inWindow.length > 0 ? `, v${inWindow[0]!.version} to v${inWindow.at(-1)!.version}` : ""}${unpublished > 0 ? `, ${unpublished} not yet published` : ""}.`,
+    `Support floor on ${now.toISOString().slice(0, 10)}: v${floor.version} (${floorReason}). In the window: ${inWindow.length} snapshotted releases${inWindow.length > 0 ? `, v${inWindow[0]!.version} to v${inWindow.at(-1)!.version}` : ""}${unpublished > 0 ? `, ${unpublished} not yet published` : ""}.`,
   );
 
   const knownIds = new Set<string>(options.counterIds ?? COMPATIBILITY_PATH_IDS);
   sections.push(["Client adapters", checkAdapters(window, adapters)]);
   sections.push([
     "Removed commands",
-    checkRemovedCommands(
-      window,
-      manifest,
-      register,
-      schedule === null ? undefined : retiredCommands(schedule),
-    ),
+    [
+      ...checkRemovedCommands(
+        window,
+        manifest,
+        register,
+        new Set([
+          ...(schedule === null ? [] : retiredCommands(schedule)),
+          ...(oneTimeFloor?.commandsForOlderClients ?? []),
+        ]),
+      ),
+      ...checkOneTimeFloorCommands(oneTimeFloor, manifest, register),
+    ],
   ]);
   sections.push([
     "Register",

@@ -112,9 +112,9 @@ describe("previews definitions", () => {
 });
 
 describe("previewsClient", () => {
-  it("is listed with adapters 1 and 0", () => {
+  it("is listed with adapter 1", () => {
     expect(DOMAIN_CLIENTS).toContain(previewsClient);
-    expect(previewsClient.versions).toEqual([1, 0]);
+    expect(previewsClient.versions).toEqual([1]);
   });
 
   function fakeNode(domains: Record<string, { min: number; max: number }> | null) {
@@ -151,17 +151,6 @@ describe("previewsClient", () => {
       },
     ]);
     expect(node.untyped).toEqual([]);
-  });
-
-  it("version 0 makes today's untyped call, without an envelope or decoding", async () => {
-    const node = fakeNode(null);
-    expect(node.client.version()).toBe(0);
-    const result = await node.client.api().revokeAccess({ serviceId: "svc_1" });
-    expect(result).toEqual({ revoked: 1, extra: "dropped by the decoder" } as never);
-    expect(node.untyped).toEqual([
-      { command: "revoke_preview_access", args: { serviceId: "svc_1" } },
-    ]);
-    expect(node.typed).toEqual([]);
   });
 
   it("a node outside the range refuses with the coded unsupported-version", () => {

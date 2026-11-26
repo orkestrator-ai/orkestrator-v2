@@ -29,13 +29,10 @@ import { CREDENTIAL_COMMANDS } from "./credential-commands.js";
 import {
   AppConfigSchema,
   ApproveAndRememberResultSchema,
-  ClientStateCapabilitiesSchema,
   ConfigReadSchema,
   CoordinatorPaneLayoutRecordSchema,
   CoordinatorPaneLayoutSaveResultSchema,
-  CoordinatorUpstreamAutoMergeSchema,
   CoordinatorUpstreamMergeCheckSchema,
-  DeclinedUpstreamMergeSchema,
   DesktopConnectionsSchema,
   ExternalPermissionRulesSnapshotSchema,
   GlobalSettingSourcesSchema,
@@ -268,22 +265,6 @@ export const saveDesktopConnectionsCommand = defineCommand({
 
 // --- Shared client state ------------------------------------------------------
 
-/**
- * Which shared client state this backend owns. Folded into version 1: the
- * domain client answers it without asking (`CONFIG_CLIENT_STATE_CAPABILITIES`).
- * Kept registered for pre-contract clients.
- */
-export const getClientStateCapabilitiesCommand = defineCommand({
-  domain: configDomain,
-  name: "get_client_state_capabilities",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({}),
-  result: ClientStateCapabilitiesSchema,
-  critical: [],
-});
-
 /** One project's coordinator tab groups, or null. */
 export const getCoordinatorPaneLayoutCommand = defineCommand({
   domain: configDomain,
@@ -324,47 +305,6 @@ export const checkCoordinatorUpstreamMergeCommand = defineCommand({
   read: true,
   args: Schema.Struct({ projectId: optionalUnknown }),
   result: CoordinatorUpstreamMergeCheckSchema,
-  critical: [],
-});
-
-/** Retired, kept for clients that still send it: a decline changes nothing. */
-export const declineCoordinatorUpstreamMergeCommand = defineCommand({
-  domain: configDomain,
-  name: "decline_coordinator_upstream_merge",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    projectId: optionalUnknown,
-    upstream: optionalUnknown,
-    upstreamCommit: optionalUnknown,
-    onlyIfAbsent: optionalUnknown,
-  }),
-  result: DeclinedUpstreamMergeSchema,
-  critical: [],
-});
-
-/** Retired "always merge" setting, still answered. */
-export const getCoordinatorUpstreamAutoMergeCommand = defineCommand({
-  domain: configDomain,
-  name: "get_coordinator_upstream_auto_merge",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({ projectId: optionalUnknown }),
-  result: CoordinatorUpstreamAutoMergeSchema,
-  critical: [],
-});
-
-/** Retired "always merge" setting, still accepted; it changes nothing. */
-export const setCoordinatorUpstreamAutoMergeCommand = defineCommand({
-  domain: configDomain,
-  name: "set_coordinator_upstream_auto_merge",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({ projectId: optionalUnknown, enabled: optionalUnknown }),
-  result: CoordinatorUpstreamAutoMergeSchema,
   critical: [],
 });
 
@@ -497,13 +437,9 @@ export const CONFIG_COMMANDS = [
   patchRepositorySettingsCommand,
   getDesktopConnectionsCommand,
   saveDesktopConnectionsCommand,
-  getClientStateCapabilitiesCommand,
   getCoordinatorPaneLayoutCommand,
   saveCoordinatorPaneLayoutCommand,
   checkCoordinatorUpstreamMergeCommand,
-  declineCoordinatorUpstreamMergeCommand,
-  getCoordinatorUpstreamAutoMergeCommand,
-  setCoordinatorUpstreamAutoMergeCommand,
   listNoticeDismissalsCommand,
   dismissNoticesCommand,
   reconcileNoticeDismissalsCommand,

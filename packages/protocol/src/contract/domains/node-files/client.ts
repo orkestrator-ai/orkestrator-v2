@@ -5,15 +5,16 @@
  * destination node. Built per node over the node link
  * (`apps/backend/src/core/nodes/node-domain-clients.ts`).
  *
- * The file commands were never capability-gated, so both adapters call the
- * same commands. Version 1 sends the envelope (`sha256` on
- * `begin_node_file_write` is critical); version 0, for a pre-contract node,
- * sends today's `{ command, args }`. The `mailAttachments` scope is gated by
- * the `node-mail-attachments` capability where the images are pushed
+ * Version 1 sends the envelope (`sha256` on `begin_node_file_write` is
+ * critical). The `mailAttachments` scope is gated by the
+ * `node-mail-attachments` capability where the images are pushed
  * (`coordinator/mail-attachments.ts`), not here.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `node-files` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
@@ -40,7 +41,7 @@ export interface NodeFilesApi {
   abortWrite: Call<typeof abortNodeFileWriteCommand>;
 }
 
-/** The API over any command call: both adapters, and a node's own local commands. */
+/** The API over any command call: the adapter, and a node's own local commands. */
 export function nodeFilesApi(call: CommandCall): NodeFilesApi {
   return {
     stat: (args) => call(statNodeFileCommand, args),
@@ -54,5 +55,4 @@ export function nodeFilesApi(call: CommandCall): NodeFilesApi {
 
 export const nodeFilesClient = domainClient(nodeFilesDomain, {
   1: nodeFilesApi,
-  0: nodeFilesApi,
 });

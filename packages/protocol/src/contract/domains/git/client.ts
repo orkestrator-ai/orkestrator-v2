@@ -4,13 +4,9 @@
  * (`api.changes_get_view({ resourceKey })`). The web binds it per
  * `lib/backend` client (`apps/web/src/lib/node-scope/domains/git.ts`).
  *
- * - **Versions 2 and 1** (a node whose hello advertises `git`): calls carry the
+ * - **Version 2** (a node whose hello advertises `git`): calls carry the
  *   envelope (`pathIds` on `changes_prepare_restore` is critical) and results
  *   are decoded with the command's schema.
- * - **Version 0** (a pre-contract node): today's untyped call, `{ command,
- *   args }`, answered as sent (`legacyCommandApi`). An older node's answers
- *   are the shapes the callers in `lib/backend/changes.ts` and
- *   `lib/backend/files-sessions.ts` already read.
  *
  * **Capability.** `changes_get_capabilities` gated the Changes surfaces on
  * the `change-tracking-v1` protocol. Version 1 and later include that
@@ -20,17 +16,19 @@
  * `strictCheckpoints` and `policyVersion` are the backend's change-tracking
  * policy, which a version cannot say, so the command stays (typed) in the
  * API and is still asked for them; a backend without change tracking answers
- * it with an error, which callers read as "unavailable". The command stays
- * registered for pre-contract clients until its register row retires.
+ * it with an error, which callers read as "unavailable".
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `git` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
 import { CHANGE_TRACKING_PROTOCOL_CAPABILITY } from "../../../change-resources.js";
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { GIT_COMMANDS } from "./commands.js";
 import { gitDomain } from "./domain.js";
 
@@ -45,14 +43,7 @@ export const GIT_CHANGE_TRACKING_PROTOCOL = Object.freeze({
 });
 
 const gitApi = (call: CommandCall): GitApi => commandApi(call, GIT_COMMANDS);
-const legacyGitApi = (_call: CommandCall, context: DomainAdapterContext): GitApi =>
-  legacyCommandApi(context, GIT_COMMANDS);
 
 export const gitClient = domainClient(gitDomain, {
   2: gitApi,
-  // Version 2 only removed `refresh_environment_diff_stats`, which only tests
-  // called (2026-11-13), so version 1 peers take the same API. Adapter 1 goes
-  // when the support floor passes the first Stable release with version 2.
-  1: gitApi,
-  0: legacyGitApi,
 });

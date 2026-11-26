@@ -57,15 +57,10 @@ export function createAgentHandoffsApi(client: BackendClient) {
   }
 
   /**
-   * The backend's handoff capabilities. A backend that predates the command
-   * answers "Unknown backend command": it builds, delivers and prunes nothing,
-   * so the renderer keeps doing the delivery and pruning it always did.
-   * Any other failure is rethrown; guessing "legacy" on a transient error would
-   * prepend history the backend also prepends.
+   * The backend's handoff capabilities: folded into `native-sessions`, so every
+   * supported node builds, delivers and prunes handoffs and nothing is asked.
    */
   async function getAgentHandoffCapabilities(): Promise<AgentHandoffCapabilities> {
-    // Folded into native-sessions version 1; version 0 asks the node and reads
-    // its "Unknown backend command" as a node that does none of it.
     return native().handoffCapabilities();
   }
 
@@ -82,27 +77,11 @@ export function createAgentHandoffsApi(client: BackendClient) {
     return native().get_native_agent_sign_in_resend(input);
   }
 
-  /**
-   * Deletes every stored handoff for an environment that the restored pane layout
-   * no longer references. Used only against a backend without `pruning`, which
-   * otherwise reclaims them itself.
-   */
-  async function pruneAgentHandoffs(
-    environmentId: string,
-    referencedHandoffIds: string[],
-  ): Promise<string[]> {
-    return native().prune_agent_handoffs({
-      environmentId,
-      referencedHandoffIds,
-    });
-  }
-
   return {
     getAgentHandoff,
     createAgentHandoff,
     getAgentHandoffCapabilities,
     getNativeAgentSignInResend,
-    pruneAgentHandoffs,
   };
 }
 
@@ -114,5 +93,4 @@ export const {
   createAgentHandoff,
   getAgentHandoffCapabilities,
   getNativeAgentSignInResend,
-  pruneAgentHandoffs,
 } = createAgentHandoffsApi(commandBackendClient);

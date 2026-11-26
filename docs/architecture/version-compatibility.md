@@ -15,8 +15,10 @@ keeps it).
 
 **Supported versions are every published release at or after the floor.** The
 floor is the newest Stable release that was published at least **60 days**
-ago. While no Stable release is that old, the floor is **v2.21.0**, the first
-published release (2026-10-16).
+ago, but never below the **one-time floor v2.39.1-beta** (see
+[One-time floor, 2026-11-26](#one-time-floor-2026-11-26)). While no Stable
+release is that old, the window part of the floor is **v2.21.0**, the first
+published release (2026-10-16), so the floor itself is v2.39.1-beta.
 
 - *Published* means a non-draft GitHub release on `orkestrator-ai/orkestrator-v2`
   on any channel ([releasing.md](../development/releasing.md#update-channels)).
@@ -27,16 +29,18 @@ published release (2026-10-16).
   published as a release or on npm, so only source builds ever ran it.
 - Prereleases are ordered by version, so a Beta or Unstable release at or
   after the floor is covered like any other.
-- The floor moves by itself: it becomes v2.21.1 on 2026-12-15, v2.22.3 on
-  2026-12-16 and v2.23.0 on 2026-12-18. Nobody needs to announce it.
-- **Until 2026-12-15 the floor is v2.21.0.** To find it on another day, take
-  the newest Stable release published at least 60 days earlier, or v2.21.0
-  if there is none.
+- The window part moves by itself, but every Stable release published so far
+  (the newest is v2.36.1) is below the one-time floor, so the floor stays
+  **v2.39.1-beta** until a Stable release at or above it has been published
+  for 60 days. Nobody needs to announce it.
+- To find the floor on another day, take the newest Stable release published
+  at least 60 days earlier, or v2.21.0 if there is none, and then the higher
+  of that and v2.39.1-beta. `mise run contract:ci` prints it.
 
 A compatibility path that exists for peers older than version X may be removed
 once the floor is at or above X: that is, 60 days after the first Stable
-release at or above X was published. For anything older than v2.21.0 that is
-already true.
+release at or above X was published. For anything older than v2.39.1-beta
+that is already true.
 
 **One-time sweep, 2026-11-14.** The user (maintainer) decided that all legacy
 support retires now, everywhere in the repository: every machine and client
@@ -45,20 +49,16 @@ qualification workflow and scenarios retire with it. The sweep was done on
 2026-11-15 (to-dos 8108 and 7570, both retired): each removed path's register
 row moved to [Retired](#retired). Three kinds of row stay in the register:
 
-- Paths the contract CI job still pins (the domain client adapters below each
-  domain's current version, the capability commands and commands kept
+- Paths the contract CI job still pinned (the domain client adapters below
+  each domain's current version, the capability commands and commands kept
   registered for older clients, and schema fields whose change needs a domain
-  version bump). They wait on
-  [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md),
-  which asks the user how the tooling follows the retirement.
+  version bump). The one-time floor below freed the adapters and commands;
+  the schema and wire changes moved to
+  [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md).
 - Paths owned by another open to-do (0050, 0232, 0042, 4740 and 5800).
 - Readers of stored user state (records an older backend stored, bridges a
   container still runs from an older image) and the site installer's run of a
   release the user names, which are not version skew between running peers.
-
-This records the sweep only. Whether later changes still need older-version
-adapters is not settled, and the window above stays the written policy until
-the user approves a replacement.
 
 Why this shape: releases ship several times a week, so a count of releases
 would last days, while hosts update on their own schedule, a remote backend
@@ -70,9 +70,60 @@ are the evidence for revising the figure. One window covers every pairing
 because they all ride the same release train, and separate windows would
 multiply the conditions owners must check.
 
+### One-time floor, 2026-11-26
+
+The user decided on 2026-11-26 how the contract tooling follows the sweep
+(to-do 8304, retired the same day): a one-time floor at the first release
+built from the sweep, then delete what the 60-day window was still pinning.
+
+- **The floor is v2.39.1-beta**, published 2026-11-16: the sweep merged as
+  #2319 (`8821695c8`) on 2026-11-16, v2.39.0-beta was tagged before it, and
+  v2.39.1-beta is the first release whose tag contains it. Every machine in
+  the user's fleet ran v2.39.13-beta or newer when it was recorded.
+- `ONE_TIME_SUPPORT_FLOOR` in `scripts/contract-ci.ts` records it, with the
+  commands that releases at or above it still registered only for clients
+  below it. The job takes the higher of the window floor and this one, so
+  releases below v2.39.1-beta are no longer checked, and its release counts
+  as a qualifying release for the retirement schedule from the day it was
+  recorded.
+- **Deleted with it** (moved to [Retired](#retired)): every domain client
+  adapter for a version no release at or above the floor speaks (adapter 0 of
+  each domain but `capabilities` and `rich-interactions`, which v2.39.1-beta
+  to v2.39.x predate, and the older-version adapters of the 2026-11-10,
+  2026-11-13 and 2026-11-15 removals), the three capability commands kept for
+  pre-contract renderers, and twenty commands kept registered only for
+  older clients, with their usage counters.
+- **Forward policy: the 60-day window stays.** Above the floor every change is
+  checked as before: a change that drops a command, schema or adapter an
+  in-window release uses still fails `mise run contract:ci`, so it needs a
+  domain bump with an older-version adapter and a register row, or must wait
+  for the window. Kept for that reason: the `native-sessions` adapters 3 to 5
+  and the `pull-requests` adapter 3 (rows below). Only a new decision of the
+  user adds to the floor's command list or raises the floor again.
+- A domain client asked to call before it knows the node's `domains` (no
+  hello yet, a renderer hello without a domains map, or a routed or portal
+  client that carries none) uses its lowest adapter without an envelope, as
+  adapter 0 used to. A domains map that omits the domain yields
+  `unsupported-version`. Backend peer clients also refuse a received hello
+  without a domains map.
+
+**Rollout requirement for the capability command retirement.** Use the renderer
+built from this retirement change (or a later build) with the upgraded backend.
+The published v2.39.14-beta renderer and earlier builds in the window can still
+send the retired native-agent sync and client-state capability probes before
+hello arrives. The backend keeps no special case for them (no back-compat
+shims): they get `unknown-command` like any other missing command. Such a
+renderer can then leave an already-open session pane showing an upgrade error
+until it checks again, and can treat the coordinator's tab groups as
+browser-only until it is reloaded. Upgrade desktops that connect to remote
+backends before upgrading those backends, and reload open browser tabs into the
+matching renderer after the backend serves the new bundle and before resuming
+session work. An upgrade of a bundled desktop replaces both components
+together. The v2.39.1-beta floor still applies to the contract tooling.
+
 ### What must work across the window
 
-Only the pairings a rolling upgrade produces, never a combinatorial matrix.
+The pairings below apply subject to the capability retirement rollout requirement above.
 
 | Pairing | Rule |
 | --- | --- |
@@ -160,42 +211,23 @@ supported peer already has the newer behaviour.
 | --- | --- | --- | --- | --- | --- |
 | Backends without shared Manual ordering return no `manualOrderSupported` on `get_portal_layout`. The renderer uses By machine and reserves `update_repository_environment_order` for capable nodes. Older layout writers leave the separate Manual store intact during a downgrade | `lib/portal/portal-layout.ts`, `storage/nodes.ts` | None (renderer capability check) | Command nodes before EL01’s per-repository save command | Revisit the renderer fallback once the support floor advertises Manual. Keep the separate store for downgrade safety | Sidebar layout |
 | The shared per-window preview partition | `browserPreviewPartitionForWindow` (`desktop-window-lifecycle.ts`) | None (desktop side) | Desktops with the service-preview transport off; the legacy loopback route that also used it was retired on 2026-11-15 (Retired) | 0042 task 9 removes it | [0042](../todo/previews-and-annotations/0042-service-preview-rollout.md) task 9 |
-| Pre-contract node-mail leaves without `node-mail-turn-origin` reject `turnOrigin`: adapter 0 omits it only without that capability; capable v2.36.5-beta and v2.36.6-beta leaves and version 1 preserve it | `node-mail/client.ts` | `domain-adapter.backend.node-mail.v0` | Leaves without a `node-mail` domain, including strict v2.36.1 and capable v2.36.5-beta/v2.36.6-beta | Retire the legacy capability read with adapter 0 and mixed-version qualification under to-do 8304; current hello advertisement is retired | Coordinator mail |
 
 | Former Fix names in stored user state outside the database: a saved `fixReviewIssues` action default and a saved `fix-result` kind in the workflow result tools setting (config.json, which has no migrations), and the former `Fix` tab title in restored layouts | `normalizeActionDefaults` (`action-defaults.ts`) reads a saved `fixReviewIssues` as `addressFindings`; `normalizeWorkflowResultToolsSettings` (`workflow-results.ts`) reads a saved `fix-result` as `address-findings-result`; both write only the new names, so the next settings write drops the old ones. `workflow-tab-title.ts` reads the former `Fix` tab title | None (read normalizations and restored layouts) | Settings saved and tabs restored by earlier builds, not version skew between peers. Stored workflow records and the values sent between peers flipped on 2026-11-17, the public coordinator, CLI and graph names on 2026-11-18 (Retired) | Settings and layouts gain a one-way upgrade of their own, or no saved settings file or layout from before 2026-11-18 is left | [4740](../todo/cross-cutting/4740-workflow-vocabulary-stage-two.md) |
 | Releases without a published lockfile, first run through the site's `install.sh`: it runs them through `bun x`, so their transitive dependencies resolve afresh | The branch in `main` of `apps/web-public/public/install.sh` that finds no `resources/release-runtime/` in the fetched package | None (runs on the user's host before any backend) | `PINNED_RELEASE` 2.36.1, the pin at the time of writing, and any `ORKESTRATOR_INSTALL_VERSION` older than `resources/release-runtime/` (2026-11-04), v2.36.3-beta and earlier | `PINNED_RELEASE` is a Stable release with `resources/release-runtime/`, and older releases are outside the window | to-do 5022 (retired 2026-11-14; `git show $(git log -1 --diff-filter=D --format=%h -- docs/todo/cross-cutting/5022-release-chain-live-evidence.md)^:docs/todo/cross-cutting/5022-release-chain-live-evidence.md`) task 4 |
 | Capability evidence is optional. Claude and Pi answer the no-touch `GET /session/:id/capability-evidence` with HTTP 200 and `state: "missing"`, `"none"` or `"evidence"`. HTTP 404 or 405 means the bridge cannot report what the session loaded. For Pi, `loadedSkillsIncomplete: true` means an omitted row is inconclusive. Older readers ignore the additive field. | `http-bridge/capability-evidence.ts`, `@orkestrator/protocol/capability-evidence` | None | Older Claude or Pi bridges and providers without a runtime report | Keep while any supported provider lacks the route. | [Agent Capabilities](agent-capabilities-management.md#runtime-proof) |
 | Container bridges holding a plain token: a bridge an older backend started, or any bridge on an image without `bridge-credential`, keeps its token in a `node`-readable `/tmp` file and in its environment, and its token may have no `okb_` prefix. The same goes for OpenCode's server password, which has its own file there. `BRIDGE_TOKEN_PATTERN` accepts both forms, `readContainerBridgeToken` falls back to the `/tmp` file, and each bridge still takes `<TOKEN_ENV>` from an older backend | `containers/bridge-credential.ts`, `local-server-runtime.ts`, `loadBridgeCredential` (`bridge-credential.ts`) | `bridge-credential.token-file` (counts reads that found a token in `/tmp`) | Running bridges from before the verifier (2026-11-04), and images that predate it, whose containers keep the agent-readable token until rebuilt | The floor is at or above the first Stable release with `bridge-credential=1`, no supported backend starts a bridge with a plain token, and the counter is quiet. The `bridge-credential` image check stays for older images, as unmigrated state | To-do 3930 (deleted 2026-11-06) |
-| Realms from before `patch_global_config` saving a model favourite: a workspace client (a client grant, or the relay) may not change global settings, but an `update_global_config` or `patch_global_config` that would change nothing on the machine is answered with its current settings instead of refused. Any change is still refused with 403 | `GatewayHandlers.handleInvoke` (`gateway-handlers.ts`), `answerConfigEcho` (`nodes/node-relay.ts`), `isGlobalConfigEcho` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (counts answered echoes) | Command nodes through v2.35.1-beta, whose realms write a favourite to the command node and then send the leaf's own settings back unchanged with `preserveInheritedSettings`. Unaffected by the `config` domain ([7005](../../plans/unified/7005-domain-projects-config.md), 2026-11-07): the gateway and the relay decide from the raw arguments before the registry runs, and both writes stay registered, now as defined `admin` commands | The floor is at or above v2.36.0, the first Stable release whose realms use `patch_global_config`, and the counter is quiet; then the two config writes are refused outright | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Clients that still send `experimentalCodexRawEventLogging`, the retired Codex raw event logging setting: a workspace client's write is not refused for that key alone, because an older form sends it whatever the machine stores. Nothing reads the key; a direct save stores it as it stores any unknown key, and a stored one stays in `config.json` for a downgrade | `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (shared with the row above) | Clients from before the setting's removal (2026-11-05). A downgrade reads the key as before, and a client that finds none falls back to its old default, on, which captures nothing | The floor is at or above the first Stable release without the setting; then remove the set. The stored key is harmless and needs no migration | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Clients that still send `openCodeProtocol`, the retired "Use OpenCode 2 for new sessions" setting: a workspace client's write is not refused for that key alone, because an older form sends it whatever the machine stores. Nothing reads the key: OpenCode 2 runs every session since OpenCode 1.x was retired. The field stays in the `config` schema, and the native-session record's `openCodeProtocol` marker stays in the `native-sessions` schema (records the preview wrote still carry `v2`), so neither domain's schema changed | `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`); the two schema fields (`contract/domains/config/models.ts`, `contract/domains/native-sessions/schemas.ts`) | `workspace-grant.config-echo` (shared with the row above) | Clients from before the retirement (2026-11-11); their settings page still shows the switch, which no longer does anything | The floor is at or above the first Stable release without the setting; then remove the key from the set and both fields from the schemas with a domain version bump | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Backends without `get_client_state_capabilities`: coordinator tab groups, upstream-merge declines and notice dismissals stay in the browser's copy, the renderer decides the merge question itself, and the "agent stopped" sound is inferred from `hasUnreadWork` edges | `coordinatorPaneLayoutStore.ts`, `coordinator-upstream-check.ts`, `nativeNoticeDismissalStore.ts`, `useNotificationSoundService.ts` | `domain-adapter.renderer.config.v0` (renderer calls through that adapter) | Backends before the client state repository (2026-11-01). Mechanical since 2026-11-07 ([7005](../../plans/unified/7005-domain-projects-config.md)): the capabilities are part of `config` version 1 (`CONFIG_CLIENT_STATE_CAPABILITIES`), so only a pre-contract backend is asked `get_client_state_capabilities`, through the client's version-0 adapter | The floor is a release with the capability. The one-time import of browser copies is unmigrated user state, not skew, and goes separately once no supported renderer can hold one | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Renderers before `config` (pre-contract): the backend keeps `get_client_state_capabilities` registered, now as a defined command, although a renderer with the domain never calls it | `commands/registry-client-state.ts` | None (every renderer in the window is pre-contract and calls it; a renderer with `config` answers it from the version) | Renderers before `config` version 1 (2026-11-07, [7005](../../plans/unified/7005-domain-projects-config.md)) | The floor is at or above the first Stable release that advertises `config`; then the command goes with the client's version-0 adapter | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Backends whose `get_file_subtree` and `get_local_file_subtree` ignore `knownDigest` and return the directory itself: the renderer reads that as changed, with no digest to send next time | `normalizeFileSubtreeSnapshot` (`files-sessions.ts`), on the answer of the `files` domain client's version-0 adapter, which passes such a backend's answer through as sent (plan item 7002) | `domain-adapter.renderer.files.v0` (renderer calls through that adapter) | Backends before conditional folder reads (2026-11-04) | The floor is at or above the first Stable release that answers `knownDigest` on both commands; the adapter goes when the floor passes the first Stable release that advertises `files` | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Backends that do not list `liveUpdateVersions` in `get_native_agent_sync_capabilities`: a background round sends `get_native_agent_transcript_update` and `get_native_agent_session_state_update` separately, and is never sent `get_native_agent_live_update`. A backend that advertised it and then answers the command as unknown (a downgrade before the next resync) falls back in the same round | `nativeLiveUpdateSupported`, `readLiveUpdate` (`useNativeAgentSession.ts`) | `domain-adapter.renderer.native-sessions.v0` (renderer calls through that adapter) | Backends before the combined read (E8, 2026-11-04). Mechanical since 2026-11-07 ([7001](../../plans/unified/7001-domain-native-sessions.md)): the capability is part of `native-sessions` version 1, so only a pre-contract backend, one whose hello has no `native-sessions` range, is asked `get_native_agent_sync_capabilities`, through the client's version-0 adapter | The floor is at or above the first Stable release that advertises `liveUpdateVersions` | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
+| Realms from before `patch_global_config` saving a model favourite: a workspace client (a client grant, or the relay) may not change global settings, but an `update_global_config` or `patch_global_config` that would change nothing on the machine is answered with its current settings instead of refused. Any change is still refused with 403 | `GatewayHandlers.handleInvoke` (`gateway-handlers.ts`), `answerConfigEcho` (`nodes/node-relay.ts`), `isGlobalConfigEcho` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (counts answered echoes) | Command nodes through v2.35.1-beta, whose realms write a favourite to the command node and then send the leaf's own settings back unchanged with `preserveInheritedSettings`. Unaffected by the `config` domain ([7005](../../plans/unified/7005-domain-projects-config.md), 2026-11-07): the gateway and the relay decide from the raw arguments before the registry runs, and both writes stay registered, now as defined `admin` commands | The floor is at or above v2.36.0, the first Stable release whose realms use `patch_global_config`, and the counter is quiet; then the two config writes are refused outright | [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md) task 1 |
+| Clients that still send `experimentalCodexRawEventLogging`, the retired Codex raw event logging setting: a workspace client's write is not refused for that key alone, because an older form sends it whatever the machine stores. Nothing reads the key; a direct save stores it as it stores any unknown key, and a stored one stays in `config.json` for a downgrade | `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`) | `workspace-grant.config-echo` (shared with the row above) | Clients from before the setting's removal (2026-11-05). A downgrade reads the key as before, and a client that finds none falls back to its old default, on, which captures nothing | The floor is at or above the first Stable release without the setting; then remove the set. The stored key is harmless and needs no migration | [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md) task 2 |
+| Clients that still send `openCodeProtocol`, the retired "Use OpenCode 2 for new sessions" setting: a workspace client's write is not refused for that key alone, because an older form sends it whatever the machine stores. Nothing reads the key: OpenCode 2 runs every session since OpenCode 1.x was retired. The field stays in the `config` schema, and the native-session record's `openCodeProtocol` marker stays in the `native-sessions` schema (records the preview wrote still carry `v2`), so neither domain's schema changed | `RETIRED_GLOBAL_SETTING_KEYS` (`nodes/workspace-grant-scope.ts`); the two schema fields (`contract/domains/config/models.ts`, `contract/domains/native-sessions/schemas.ts`) | `workspace-grant.config-echo` (shared with the row above) | Clients from before the retirement (2026-11-11); their settings page still shows the switch, which no longer does anything | The floor is at or above the first Stable release without the setting; then remove the key from the set and both fields from the schemas with a domain version bump | [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md) task 2 |
 | Claude and Codex bridges that send no `errorCode`: a failed turn's usage limit is recognised from its error text, as it always was | `turnOutcomeFailureKind` (`agent-usage-limits.ts`), `usageLimitFailure` (`@orkestrator/protocol/agent-usage-limits`) | `usage-limit.text-classified` (counts Claude and Codex outcomes recorded as a usage limit from text alone) | Bridges before the structured signal (2026-11-05), typically a container that predates the backend upgrade, and Claude refusals that arrive without a rejected `rate_limit_event` | The text classifier itself is permanent: Grok, OpenCode, Pi and Cursor have no signal, and outcomes recorded before the field carry none. Once the floor is at or above the first Stable release with the signal, a counter still rising shows a refusal path the code misses, which needs its own signal rather than retiring anything | [agent-accounts.md](agent-accounts.md#usage-limit-signal) |
 | Backends that record a startup failure on the workspace, and records such a backend stored: the panel keeps its workspace-level banner, whose Retry runs `ensure_project_coordinator`, and holds sending in every pane, for `lifecycleState: "error"` and `lastStartupError`. A new backend writes neither, and still recovers a stored `error` on `ensure` | The `lifecycleState === "error"` banner (`CoordinatorPanel.tsx`), `sendingHeldReason` (`CoordinatorConversationPane.tsx`), `heldCoordinatorConversation` (`coordinator/runtime.ts`), `ensure` | None (renderer side) | Backends before the field (C6, 2026-11-05). A downgrade ignores `startupError`, which is additive, so that backend simply tries the conversation again; a later upgrade shows the old error until the next start or Retry clears it | The floor is at or above the first Stable release with `retry_coordinator_conversation`. The `ensure` recovery of a stored `error` stays while a data directory can hold one | [coordinator.md](coordinator.md#when-a-conversation-fails-to-start) |
-| Backends whose `docker_cleanup_preview` has no `legacyRuntimes`: the cleanup review shows no older-containers section and makes no claim about them. Each environment's own inputs section still reports `host-mounts` | `DockerCleanupReview.tsx` | None (renderer side) | Backends before the list (S-0080, 2026-11-05). A renderer older than the list ignores the two fields | The floor is at or above the first Stable release with `legacyRuntimes`; the field can then stop being optional | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Machines whose environment summaries have no `deleteFailure` or `deletingSince`: a failed delete on such a machine reads as still `deleting` and spins, and a slow one never says how long it has run, which is all they ever did. A client older than the fields ignores them and reads `deleting: true`, keeping the tombstone unavailable and showing its old spinner. Current rows use `deleteFailure` to stop spinning and offer Retry. The failure field contains a fixed message, never the raw error. `deletionError` is an additive record field: a downgraded backend ignores it and its row spins again, while restart recovery still finishes the delete. `deletingStep` (from the additive record field `deletionStep`, 2026-11-06) is relayed only for a running delete and only as one of the known stage names; a client drops a stage it does not know, and an older machine simply never says which stage a slow delete is on | `nodeEnvironmentRowFacts` (`environment-row-facts.ts`) | None (renderer side) | Backends before delete failure reporting (2026-11-05) | The floor is at or above the first Stable release with the fields; they can then stop being optional | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Renderers that build, deliver and prune "Continue in…" handoffs themselves: `save_agent_handoff`, `delete_agent_handoff` and `prune_agent_handoffs` stay registered | `commands/registry-prompts.ts` | `agent-handoff.renderer-saved` | Renderers before `create_agent_handoff` (2026-11-01) | The floor is at or above the first Stable release with it and the counter is quiet. Stored handoffs need no migration: the record is unchanged, and the destination's transcript proves whether one was already delivered | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Backends that do not deliver or prune handoffs: the renderer prepends the history, marks the tab consumed and prunes on hydration when `get_agent_handoff_capabilities` says so (an answer that cannot be read counts as delivery, and the backend leaves a prompt that already holds the carrier alone). Continue in… itself reports that the backend must be updated | `useAgentHandoff.ts`, `AgentNativeTab.controller.tsx`, `pruneUnreferencedAgentHandoffs` (`paneLayoutStore.ts`), `createAgentHandoff` (`lib/agent-handoff.ts`) | `domain-adapter.renderer.native-sessions.v0` (renderer calls through that adapter) | Backends before `create_agent_handoff` (2026-11-01). Mechanical since 2026-11-07 ([7001](../../plans/unified/7001-domain-native-sessions.md)): creating, delivering and pruning are part of `native-sessions` version 1, so only a pre-contract backend is asked `get_agent_handoff_capabilities`, through the client's version-0 adapter | The floor is a release with `get_agent_handoff_capabilities` | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Renderers before `native-sessions` (pre-contract): the backend keeps `get_native_agent_sync_capabilities` and `get_agent_handoff_capabilities` registered, now as defined commands, although a renderer with the domain never calls them | `commands/registry-native.ts`, `commands/registry-prompts.ts` | None (every renderer in the window is pre-contract and calls them; a renderer with `native-sessions` answers both from the version) | Renderers before `native-sessions` version 1 (2026-11-07, [7001](../../plans/unified/7001-domain-native-sessions.md)) | The floor is at or above the first Stable release that advertises `native-sessions`; then both commands go with the client's version-0 adapter | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Backends whose `transcript_media_open_stream` requires an `environmentId`: a detached transcript's host media, sent with none, is refused with `invalid_input`, and the renderer reads the bounded base64 copy instead | `mediaStreamFailure` (`media-presentation.ts`) treating `invalid_input` as fallback, used by `FilePreview.tsx` | None (renderer side) | Backends before readable-roots streams (batch E-0580, 2026-11-05). Mechanical since 2026-11-07 ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)): every backend that advertises `transcripts` accepts the stream without an `environmentId`, so only a node on the client's version-0 adapter refuses it (`domain-adapter.renderer.transcripts.v0`) | The floor is at or above the first Stable release with readable-roots streams | [5800](../todo/cross-cutting/5800-file-read-streaming-leftovers.md) |
-| Renderers before #1889 (v2.36.5-beta) send `hide_coordinator_work` from the Work panel's "Clear finished"; it stays registered, as a defined command | `commands/registry-coordinator.ts` | `retired-command.hide-coordinator-work` | Renderers before v2.36.5-beta | The floor is at or above the first Stable release without the Work panel's "Clear finished" and the counter is quiet; then remove the command | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| `associate_coordinator_workflow` stays registered, as a defined command, although nothing has called it since #592 (launches record their own associations) | `commands/registry-coordinator.ts` | `retired-command.associate-coordinator-workflow` | No known caller; external scripts only | The counter is quiet for one Stable release; then remove the command | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| `start_coordinator_multi_review` stays registered, as a defined command, although its last caller (Control MCP's `launch_multi_review`, in process) moved off it in #1809 (v2.36.4-beta) | `commands/registry-coordinator.ts` | `retired-command.start-coordinator-multi-review` | No cross-process caller | The counter is quiet for one Stable release; then remove the command | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| `start_coordinator_node_multi_review` stays registered, as a defined command, although its only caller (Control MCP's `launch_multi_review` on the same command node) moved to `launch_coordinator_node_multi_review` in #1809 (v2.36.4-beta) | `commands/registry-coordinator-nodes.ts` | `retired-command.start-coordinator-node-multi-review` | No cross-process caller | The counter is quiet for one Stable release; then remove the command | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| `check_opencode_cli`, `check_codex_cli`, `check_cursor_cli`, `check_grok_cli` and `check_pi_cli` stay registered, as defined commands, although the web stopped calling them in 6a3912cf4 (v2.21.0 calls only `check_claude_cli`, `check_github_cli` and `check_any_ai_cli`) | `commands/registry-tools.ts` | `retired-command.provider-cli-check` | No renderer in the window; external callers only | The counter is quiet for one Stable release; then remove the five commands | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| `cleanup_stale_local_servers_cmd` stays registered, as a defined command that does nothing, since the Electron migration | `commands/registry-pr.ts` | `retired-command.cleanup-stale-local-servers` | Nothing since the Electron migration | The counter is quiet for one Stable release; then remove the command | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Peers at version 1 of `agent-mail`, `agent-servers`, `config`, `design`, `docker`, `environments`, `kanban`, `native-sessions`, `projects`, `pull-requests`, `system`, `terminals`: version 2 only removed commands nothing called (Retired, 2026-11-10), so each client keeps a version-1 adapter with the same API, and backends accept `min: 1` | The `1:` adapter of each domain's client (`packages/protocol/src/contract/domains/<domain>/client.ts`) | `domain-adapter.renderer.agent-mail.v1`, `domain-adapter.renderer.agent-servers.v1`, `domain-adapter.renderer.config.v1`, `domain-adapter.renderer.design.v1`, `domain-adapter.renderer.docker.v1`, `domain-adapter.renderer.environments.v1`, `domain-adapter.renderer.kanban.v1`, `domain-adapter.renderer.native-sessions.v1`, `domain-adapter.renderer.projects.v1`, `domain-adapter.renderer.pull-requests.v1`, `domain-adapter.renderer.system.v1`, `domain-adapter.renderer.terminals.v1` (renderer calls through those adapters) | Renderers and backends v2.37.0-alpha to the first release with version 2, the releases that advertise these domains at version 1 | The floor is at or above the first Stable release that advertises the domains at version 2 (the contract CI job then reports each adapter due) | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Peers at version 2 of `pull-requests` or version 1 of `git`: `pull-requests` version 3 and `git` version 2 only removed commands only tests called (Retired, 2026-11-13), so each client keeps an adapter for the older version with the same API, and backends accept `min: 1` | The `2:` adapter of the `pull-requests` client and the `1:` adapter of the `git` client (`packages/protocol/src/contract/domains/{pull-requests,git}/client.ts`) | `domain-adapter.renderer.pull-requests.v2`, `domain-adapter.renderer.git.v1` (renderer calls through those adapters) | Renderers and backends that advertise `pull-requests` at version 2 (v2.37.5-beta to the first release with version 3) or `git` at version 1 (v2.37.0-alpha to the first release with version 2) | The floor is at or above the first Stable release that advertises `pull-requests` at version 3 and `git` at version 2 (the contract CI job then reports each adapter due) | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Peers at version 3 of `pull-requests` keep their existing commands. Version 4 adds critical fields for PR identity and destination checks on merge and auto-merge. Older contract peers refuse the guarded calls, and the pre-contract adapter refuses them before sending. | `packages/protocol/src/contract/domains/pull-requests/client.ts` | `domain-adapter.renderer.pull-requests.v3` | Backends advertising `pull-requests` at version 3 | The floor is at or above the first Stable release advertising `pull-requests` version 4 | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Peers at version 1 of `pipelines` or `graphs`, or version 2 of `native-sessions`: `pipelines` version 2, `graphs` version 2 and `native-sessions` version 3 only removed commands no current client calls (Retired, 2026-11-15; an older renderer's startup import of a legacy localStorage key still sends `import_legacy_build_pipelines` and now logs its `unknown-command`), so each client keeps an adapter for the older version with the same API, and backends accept `min: 1` | The `1:` adapter of the `pipelines` and `graphs` clients and the `2:` adapter of the `native-sessions` client (`packages/protocol/src/contract/domains/{pipelines,graphs,native-sessions}/client.ts`) | `domain-adapter.renderer.pipelines.v1`, `domain-adapter.renderer.graphs.v1`, `domain-adapter.renderer.native-sessions.v2` (renderer calls through those adapters) | Renderers and backends that advertise `pipelines` or `graphs` at version 1 (v2.37.0-alpha to the first release with version 2) or `native-sessions` at version 2 (v2.37.5-beta to the first release with version 3) | The floor is at or above the first Stable release that advertises `pipelines` and `graphs` at version 2 and `native-sessions` at version 3 (the contract CI job then reports each adapter due), or the legacy-retirement sweep (8108, retired) removes them first | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Peers at version 3 of `native-sessions`: version 4 removed `get_native_agent_projection_update`, the `projectionSyncVersions` capability and the view's `historyPaging` flag (Retired, 2026-11-16). The current client keeps a version-3 adapter for the remaining commands, and backends accept `min: 1`. This does not preserve paging for older renderers: v2.39.x renderers through v2.39.1-beta require `historyPaging: "direct"` to adopt `historyCursor`, so against a version-4 backend they cannot load earlier history or reconcile held history. Upgrade renderers and backends together | The `3:` adapter of the `native-sessions` client (`packages/protocol/src/contract/domains/native-sessions/client.ts`) | `domain-adapter.renderer.native-sessions.v3` (renderer calls through that adapter) | Renderers and backends that advertise `native-sessions` at version 3 (v2.39.0-beta to the first release with version 4) | The floor is at or above the first Stable release that advertises `native-sessions` at version 4 (the contract CI job then reports the adapter due) | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| Peers at version 4 of `native-sessions`: ordinary dispatch remains available. Failure Retry requires the version-5 admission guard | The `4:` adapter of the [native-sessions client](../../packages/protocol/src/contract/domains/native-sessions/client.ts) refuses guarded Retry before making a remote call | `domain-adapter.renderer.native-sessions.v4` | Backends advertising version 4 | The floor is at or above the first Stable release that advertises `native-sessions` version 5 | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
+| Backends whose `docker_cleanup_preview` has no `legacyRuntimes`: the cleanup review shows no older-containers section and makes no claim about them. Each environment's own inputs section still reports `host-mounts` | `DockerCleanupReview.tsx` | None (renderer side) | Backends before the list (S-0080, 2026-11-05). A renderer older than the list ignores the two fields | The floor is at or above the first Stable release with `legacyRuntimes`; the field can then stop being optional | [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md) task 3 |
+| Machines whose environment summaries have no `deleteFailure` or `deletingSince`: a failed delete on such a machine reads as still `deleting` and spins, and a slow one never says how long it has run, which is all they ever did. A client older than the fields ignores them and reads `deleting: true`, keeping the tombstone unavailable and showing its old spinner. Current rows use `deleteFailure` to stop spinning and offer Retry. The failure field contains a fixed message, never the raw error. `deletionError` is an additive record field: a downgraded backend ignores it and its row spins again, while restart recovery still finishes the delete. `deletingStep` (from the additive record field `deletionStep`, 2026-11-06) is relayed only for a running delete and only as one of the known stage names; a client drops a stage it does not know, and an older machine simply never says which stage a slow delete is on | `nodeEnvironmentRowFacts` (`environment-row-facts.ts`) | None (renderer side) | Backends before delete failure reporting (2026-11-05) | The floor is at or above the first Stable release with the fields; they can then stop being optional | [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md) task 3 |
+| Backends whose `transcript_media_open_stream` requires an `environmentId`: a detached transcript's host media, sent with none, is refused with `invalid_input`, and the renderer reads the bounded base64 copy instead | `mediaStreamFailure` (`media-presentation.ts`) treating `invalid_input` as fallback, used by `FilePreview.tsx` | None (renderer side) | Backends before readable-roots streams (batch E-0580, 2026-11-05). Mechanical since 2026-11-07 ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)): every backend that advertises `transcripts` accepts the stream without an `environmentId`, so only a node on the client's version-0 adapter refused it; that adapter was deleted with the one-time floor (2026-11-26), so no supported node refuses it any more and the fallback can go | The floor is at or above the first Stable release with readable-roots streams | [5800](../todo/cross-cutting/5800-file-read-streaming-leftovers.md) |
+| Peers at version 3 of `pull-requests` keep their existing commands. Version 4 adds critical fields for PR identity and destination checks on merge and auto-merge. Older contract peers refuse the guarded calls, and a call made before the node's `domains` are known (no envelope) refuses them before sending. | `packages/protocol/src/contract/domains/pull-requests/client.ts` | `domain-adapter.renderer.pull-requests.v3` | Backends advertising `pull-requests` at version 3 | The floor is at or above the first Stable release advertising `pull-requests` version 4 | The one-time floor's forward policy ([One-time floor, 2026-11-26](#one-time-floor-2026-11-26)) |
+| Peers at version 3 of `native-sessions`: version 4 removed `get_native_agent_projection_update`, the `projectionSyncVersions` capability and the view's `historyPaging` flag (Retired, 2026-11-16). The current client keeps a version-3 adapter for the remaining commands, and backends accept `min: 1`. This does not preserve paging for older renderers: v2.39.x renderers through v2.39.1-beta require `historyPaging: "direct"` to adopt `historyCursor`, so against a version-4 backend they cannot load earlier history or reconcile held history. Upgrade renderers and backends together | The `3:` adapter of the `native-sessions` client (`packages/protocol/src/contract/domains/native-sessions/client.ts`) | `domain-adapter.renderer.native-sessions.v3` (renderer calls through that adapter) | Renderers and backends that advertise `native-sessions` at version 3 (v2.39.0-beta to the first release with version 4) | The floor is at or above the first Stable release that advertises `native-sessions` at version 4 (the contract CI job then reports the adapter due) | The one-time floor's forward policy ([One-time floor, 2026-11-26](#one-time-floor-2026-11-26)) |
+| Peers at version 4 of `native-sessions`: ordinary dispatch remains available. Failure Retry requires the version-5 admission guard | The `4:` adapter of the [native-sessions client](../../packages/protocol/src/contract/domains/native-sessions/client.ts) refuses guarded Retry before making a remote call | `domain-adapter.renderer.native-sessions.v4` | Backends advertising version 4 | The floor is at or above the first Stable release that advertises `native-sessions` version 5 | The one-time floor's forward policy ([One-time floor, 2026-11-26](#one-time-floor-2026-11-26)) |
 | Peers at version 5 of `native-sessions` retain their existing commands. Version 6 adds the critical tool-output `messageId` argument to distinguish each occurrence of a reused tool call ID. The renderer uses row details on older peers | The `5:` adapter of the [native-sessions client](../../packages/protocol/src/contract/domains/native-sessions/client.ts) refuses occurrence-aware reads before making a remote call | `domain-adapter.renderer.native-sessions.v5` | Backends advertising version 5 | The floor is at or above the first Stable release that advertises `native-sessions` version 6 | [8102](../todo/transcripts-and-observation/8102-push-event-layer.md) task 4 |
-| `read_file_at_branch` and `read_local_file_at_branch` stay registered, as defined commands, for the diff viewer of v2.21.0 to v2.23.0; no later renderer calls them | `commands/registry-terminal.ts` | `retired-command.read-file-at-branch` | Renderers v2.21.0 to v2.23.0 | Kept for the contract CI job's window ([8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md)); then remove both commands | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
-| `get_coordinator_upstream_auto_merge` and `set_coordinator_upstream_auto_merge` stay registered, as defined commands, for the retired "always merge" setting | `commands/registry-client-state.ts` | `retired-command.coordinator-upstream-auto-merge` | Renderers before v2.36.0 (v2.35.5-beta is the last that calls them) | Kept for the contract CI job's window ([8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md)); then remove both commands | [8304](../todo/cross-cutting/8304-contract-pinned-compatibility-paths.md) task 1 |
 
 Not governed by the window (listed so nobody waits on it):
 
@@ -346,6 +378,10 @@ the window includes a release that needs them:
 | The sync-v1 projection read `get_native_agent_projection_update` with its renderer wrapper (`getNativeAgentProjectionUpdate`, `lib/backend/workflows.ts`), the backend's revision store (`getProjectionUpdate`, `projectionSync`, the `NATIVE_SYNC_*` revision and delta bounds, `native-agent/transcript-projection.ts`), the protocol's projection delta (`NativeAgentProjectionUpdate`, `applyNativeAgentProjectionDelta`), the `projectionSyncVersions` sync capability, and the transcript view's `historyPaging` flag | 2026-11-16 | Nothing in the product called the read once joined history paging retired (previous row): the last two renderer callers, the joined-cursor mint and the coordinator's action-history scan, read the transcript view instead, and the user's legacy-retirement decision (2026-11-14) updates every client together. `native-sessions` went to version 4 (min 1), see the register row for its version-3 adapter. A client that still sends the command gets `unknown-command`; a pre-contract renderer that asks `get_native_agent_sync_capabilities` finds no `projectionSyncVersions` and reports the backend as too old. The whole-transcript `"detail-recovery"` representation that tool-detail recovery re-reads stays (formerly `"sync-v1"`). Every `historyCursor` was already direct, so `historyPaging` said nothing the cursor did not. Current renderers still accept a view that carries it, but v2.39.x renderers through v2.39.1-beta adopt a cursor only with `historyPaging: "direct"` and also require that flag for held-history reconciliation. Against a version-4 backend, those older renderers cannot load earlier history or reconcile held history, even though their domain version is accepted. Upgrade renderers and backends together; the version-3 adapter does not restore the flag (to-do 8173 (retired) tasks 1 and 2). |
 | Stage one of the Rework and Address Findings rename: `workflow-vocabulary.ts`, which the renderer's stores and the backend's start commands ran to read the new stored and transmitted names while writing `fix`, `fixing`, `address`, `addressing`, `fixModel` and the rest; and the start requests' former `autoFix`/`fixModel` keys in the `multi-review` contract | 2026-11-17 | Every build now writes and reads only the new names (to-do 4740 task 1), under the user's legacy-retirement decision (2026-11-14). Records older builds stored are rewritten once by the storage migration (schema 11, a downgrade fence); session keys are left as written, so transcripts stay reachable. |
 | Stage two of the Rework and Address Findings rename, public names: the coordinator tools `open_multi_review_fix` and `custom_fix_multi_review`, their `fixModel`/`autoFix` fields and the `fixTabId`/`autoFix`/`fixModel` answers, the Multi Review surface `fix` and controller surface `custom-fix`, the build step `address`, the CLI's former flags (`--fix-model`, `--auto-fix`/`--no-auto-fix`, `review open --fix`) and the translators that mapped them (`launchActionInputFromPublicFields`, `buildStepKeyForPublicStep`); the result kind and graph type `fix-result`, the tool `submit_fix_result`, the `<address-fix-result-json>` frame, the graph role `fixer`, the prompts `pipeline-fix`, `fix-review-issues` and `address-review`, the parameter `autoFix`, the action default `fixReviewIssues` and the built-in node ids `fix` and `address`; and build pipeline package preparation stored as Rework | 2026-11-18 | To-do 4740 tasks 3 to 5, under the user's legacy-retirement decision (2026-11-14): every client updates together, so the old names were replaced with no support window. Stored graph templates and runs, workflow results, scheduled launches and coordinator receipts are rewritten once (storage schemas 13 and 14), and preparation sessions move to `package-preparation`/`preparing-package` (schema 12); session keys stay as written. The backend commands `open_coordinator_multi_review_fix` and `custom_fix_coordinator_multi_review_action` keep their registered names, because renaming them needs a coordinator domain bump (4740 task 6). |
+| Renderer reads of a pre-contract backend's capabilities through the domain clients' adapter 0: `get_client_state_capabilities` (coordinator tab groups, upstream-merge declines and notice dismissals kept in the browser's copy, the "agent stopped" sound inferred from `hasUnreadWork` edges), `get_native_agent_sync_capabilities` (separate transcript and state reads without `liveUpdateVersions`), `get_agent_handoff_capabilities` (the renderer delivering and pruning handoffs, `pruneUnreferencedAgentHandoffs`), and a `files` answer passed through as sent (a backend ignoring `knownDigest`) | 2026-11-26 | The one-time support floor: every backend from v2.39.1-beta advertises `config`, `native-sessions` and `files`, so the clients answer these capabilities from the domain version. The renderer branches that still test the now-constant flags (`coordinatorPaneLayoutStore.ts`, `nativeNoticeDismissalStore.ts`, `useNotificationSoundService.ts`, `useNativeAgentSession.ts`'s live-update fallback, `useAgentHandoff.ts`, `normalizeFileSubtreeSnapshot`) never take the old path any more; [8334](../todo/cross-cutting/8334-schema-pinned-compatibility-paths.md) task 5 removes them. |
+| Domain client adapters for versions no release at or above the one-time floor speaks: adapter 0 (the pre-contract adapter) of every domain except `capabilities` and `rich-interactions`, with what lived only in it (node-mail's hello-capability check for leaves without `node-mail-turn-origin`, ticket-sync's for leaves, the capability reads of `config` and `native-sessions`); the version-1 adapters of `agent-mail`, `agent-servers`, `config`, `design`, `docker`, `environments`, `kanban`, `native-sessions`, `projects`, `pull-requests`, `system` and `terminals` (2026-11-10 removals); `pull-requests` 2 and `git` 1 (2026-11-13); `pipelines` 1, `graphs` 1 and `native-sessions` 2 (2026-11-15); and their `domain-adapter.*` counters | 2026-11-26 | The one-time support floor ([One-time floor, 2026-11-26](#one-time-floor-2026-11-26)): every release from v2.39.1-beta advertises each of these domains at a version above the deleted adapters (`packages/protocol/contracts/adapters.json`, checked by `mise run contract:ci`). A call made before a node's `domains` are known uses the lowest remaining adapter without an envelope. |
+| Capability commands kept for pre-contract renderers: `get_client_state_capabilities`, `get_native_agent_sync_capabilities` and `get_agent_handoff_capabilities` (marked `retired` in `packages/protocol/contracts/retirements.json`) | 2026-11-26 | The one-time support floor: renderers with negotiated `config` and `native-sessions` answer locally. A renderer built with this retirement also answers locally while hello is pending; the backend answers any other caller `unknown-command`. See the rollout requirement under [One-time floor](#one-time-floor-2026-11-26). |
+| Commands kept registered only for older clients: `hide_coordinator_work`, `associate_coordinator_workflow`, `start_coordinator_multi_review`, `start_coordinator_node_multi_review`, `check_opencode_cli`, `check_codex_cli`, `check_cursor_cli`, `check_grok_cli`, `check_pi_cli`, `cleanup_stale_local_servers_cmd`, `read_file_at_branch`, `read_local_file_at_branch`, `get_coordinator_upstream_auto_merge`, `set_coordinator_upstream_auto_merge`, `decline_coordinator_upstream_merge`, `save_agent_handoff`, `delete_agent_handoff`, `prune_agent_handoffs`, `claim_feature_plan_build` and `arrange_projects`, with their handlers and the counters `retired-command.*` and `agent-handoff.renderer-saved` | 2026-11-26 | The one-time support floor: releases from v2.39.1-beta still registered them, but none of their clients calls them (checked against the v2.39.1-beta tree; its renderer prunes handoffs only for a backend without `native-sessions`), so `ONE_TIME_SUPPORT_FLOOR.commandsForOlderClients` lets them go without a domain bump. `update_global_config` stays: v2.39.1-beta renderers still send it. |
 
 ## Renderer–backend skew
 
@@ -432,7 +468,8 @@ export const nodeMail = defineDomain({ name: "node-mail", version: 2, min: 1 });
 - `version` is the newest version this build speaks; `min` is the oldest it
   still accepts from a peer, and defaults to `version`, so accepting older
   peers is always declared. Versions are integers from 1 to 1000. Version 0 is
-  reserved for the legacy adapter (see [Client adapters](#client-adapters)).
+  reserved for the legacy adapter, which only `capabilities` and
+  `rich-interactions` still have (see [Client adapters](#client-adapters)).
 - A backend accepts the range `[min, version]` of each domain that has at
   least one defined command (`CommandRegistry.domainRanges`), and advertises it
   in its hello.
@@ -645,14 +682,16 @@ It is always sent (`{}` while no command is defined), is a top-level field
 rather than a capability, and leaves `schemaVersion` at 1. `parseHelloDomains`
 drops the whole field when any entry is malformed (more than 64 entries, a
 bad name or range), and the hello still parses. A hello without `domains`,
-or no hello at all, is a **pre-contract** backend (`isPreContract`); every
-release in the window today is one. `domainRange(hello, name)` reads one
-range.
+or no hello at all, is a **pre-contract** backend (`isPreContract`); no
+release in the window is one (every release from v2.39.1-beta advertises
+`domains`). `domainRange(hello, name)` reads one range.
 
 Every renderer `NodeClient` reads its node's hello once per connection
 generation and exposes the result as `client.domains` (the ranges, `null`
-while unknown and for a pre-contract node) and `client.capabilities` (the
-hello's capability names, which legacy adapters gate on)
+while unknown and for a pre-contract node; a domain client then calls
+unnegotiated, [Client adapters](#client-adapters)) and `client.capabilities`
+(the hello's capability names, which the remaining legacy adapters may gate
+on)
 ([2011](../../plans/unified/2011-scope-domain-negotiation.md),
 `apps/web/src/lib/node-scope/negotiation.ts`):
 
@@ -816,28 +855,45 @@ it can speak (`domainClient` in
 export const nodeMailClient = domainClient(nodeMail, {
   2: (call) => ({ deliver: (mail) => call(deliverNodeMail, mail) }),
   1: (call) => ({ deliver: (mail) => call(deliverNodeMailV1, toV1(mail)) }),
-  0: (call) => legacyNodeMailApi(call), // today's capability gating
 });
 ```
 
 - An adapter for the domain's current version is required, and adapter keys
   must be `0..domain.version`.
 - `pickVersion(versions, range)` takes the highest client version inside the
-  node's advertised range; no range (a pre-contract node, or a domain the node
-  does not advertise) means version 0 only, and disjoint ranges give `null`.
+  node's advertised range; no range for the domain means version 0 only, and
+  disjoint ranges give `null`.
 - **Version 0 is the legacy adapter**: today's capability-gated behaviour
   (the per-domain `*_capabilities` commands or the hello `capabilities`) for
-  nodes without a range, so callers are already version-agnostic.
+  a node without a range. Since the one-time support floor v2.39.1-beta
+  ([The support window](#the-support-window), to-do 8304) only `capabilities`
+  and `rich-interactions` keep one: releases in the window (v2.39.1-beta
+  onwards) predate those two domains. Every other domain's adapters below the
+  versions those releases speak were deleted.
+- **A transport without negotiation.** When a client carries no `domains` at
+  all (`null` or `undefined`: a routed, machine or portal client, or a node
+  client whose hello has not arrived yet) and the domain has no adapter 0,
+  `createDomainClient` uses the client's lowest adapter over an unnegotiated
+  call: the command by name, without an envelope (so no `since` check), its
+  answer not decoded and not counted. That is how such transports always
+  called, and every node at or above the floor accepts it; a node lacking a
+  command answers `unknown-command`. The adapter sees
+  `context.unnegotiated`, so it can refuse what must not be sent blind:
+  `pull-requests` refuses a destination-guarded merge (`expectedBaseRef`)
+  there, as a node without an envelope cannot refuse the unknown critical
+  key. A node whose hello advertises `domains` without this domain is
+  refused with `unsupported-version`.
 - `createDomainClient(def, { call, domains, capabilities?, invoke?, usage? })`
   binds a definition to one node's transport. `client.api()` picks once per
   connection generation (per `domains` object identity; `reset()` forgets it),
   caches the adapter and throws the coded `unsupported-version`, with the
   node's range, when nothing overlaps. `call(def, args, envelope)` gets the
   envelope fields `{ domain, version, critical? }` without `args` (they stay
-  under desktop IPC's 4096-character bound), and none for adapter 0, so a
-  pre-contract node gets today's body. Results are decoded tolerantly with the
-  command's schema. Adapter 0's context has the hello `capabilities`, an
-  untyped `invoke`, and `capability(command)`, which reads one of the domain's
+  under desktop IPC's 4096-character bound), and none for adapter 0 or an
+  unnegotiated call, which sends today's body. Results are decoded tolerantly
+  with the command's schema (not for an unnegotiated call). Adapter 0's
+  context has the hello `capabilities`, an untyped `invoke`, and
+  `capability(command)`, which reads one of the domain's
   `LEGACY_CAPABILITY_COMMANDS` once per generation (`null` when the node
   predates it). Node scopes expose it as `scope.domain(def)`, memoised per
   scope over the scope's client ([Hello `domains`](#hello-domains)).
@@ -851,11 +907,12 @@ export const nodeMailClient = domainClient(nodeMail, {
   `sha256` on `begin_node_file_write`, `reset`/`liveIds` on
   `apply_ticket_sync` and `requestId` on `create_node_action_request` are
   critical. Version 1 includes every capability that gated these commands
-  before (`NODE_MAIL_FEATURES`, `ticket-sync`), so `supports()` and `syncs`
-  answer `true`; version 0 keeps the hello-capability checks for
-  pre-contract leaves and refuses a field such a leaf would drop with the
-  same typed error a contract node answers. The register rows these served
-  are marked mechanical; their counters stay until their conditions are met.
+  before (the hello's node-mail and `ticket-sync` capabilities), so the
+  clients no longer read capabilities: their adapter 0, with the
+  hello-capability checks for pre-contract leaves and the client-side
+  refusals of what such a leaf would drop, went with the one-time floor
+  (to-do 8304). A received peer hello without a domains map is treated as an
+  empty advertisement, so these clients refuse with `unsupported-version`.
   The four lenient neighbours 1010 left as string commands
   (`prepare_node_mail_attachments`, `place_node_mail_attachments` and
   `send_coordinator_command_node_mail` in `node-mail`, `coordinator_node_ticket`
@@ -865,8 +922,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   checks still give the error text; `requestId`, `attachments` and
   `replyToMessageId` on `send_coordinator_command_node_mail` are critical. A
   command node asks a leaf which images it still needs through the client's
-  `prepareAttachments` (version 0: `unknown-command` without
-  `node-mail-attachments`); the other three are called in process by name.
+  `prepareAttachments`; the other three are called in process by name.
 - **`public-api`**
   ([7009](../../plans/unified/7009-domain-coordinator-servers-system.md)):
   `public_action` is defined at version 1 (min 1), `admin`, with every
@@ -886,9 +942,10 @@ export const nodeMailClient = domainClient(nodeMail, {
   every other key survives a tolerant decode. The four spliced transcript
   reads are `encoded: true`. The client's API is one function per command,
   keyed by name, plus `handoffCapabilities()` and `syncCapabilities()`, which
-  version 1 answers without asking (both capability commands are folded into
-  the version); version 0 sends today's calls by name without an envelope and
-  returns the answer as sent. The web binds it per `lib/backend` client
+  every adapter answers without asking (both capability commands were folded
+  into the domain and retired with the one-time floor). The client keeps
+  adapters 6 to 3: releases in the window speak versions 3 to 6. The web
+  binds it per `lib/backend` client
   (`lib/node-scope/domains/native-sessions.ts`). The domain is at version 6
   (min 1): versions 2 to 4 only removed commands no client called (version
   4 also the `projectionSyncVersions` capability; see Retired). Version 5
@@ -904,10 +961,9 @@ export const nodeMailClient = domainClient(nodeMail, {
   the renderer through `apps/web/src/lib/node-scope/domains/` over the
   `lib/backend` factory's client. Their clients' API is the command list
   keyed by name (`commandApi`, `contract/domains/command-api.ts`):
-  `terminals(client).terminal_write({ sessionId, data })`. Version 1 sends
-  the envelope and decodes results; version 0 (`legacyCommandApi`) is
-  today's untyped call answered as sent, since none of these commands was
-  capability-gated and their callers already normalise older answers.
+  `terminals(client).terminal_write({ sessionId, data })`. The current
+  version sends the envelope and decodes results; none of these commands was
+  capability-gated.
   Critical keys: `requestId` on `launch_terminal_job`, `expected` on both
   file writes, `digest` on `delete_container_annotation_evidence`, and the
   expected prompt on `claude_tmux_answer_selection_prompt`. The terminal
@@ -923,9 +979,8 @@ export const nodeMailClient = domainClient(nodeMail, {
   `ClientEnvironment` in `models.ts`; other results are in `results.ts` and
   `docker/models.ts`. Optional result fields are `Schema.optional`, because
   handlers return records with fields set to `undefined`. Each client's API
-  is one method per command (`environmentsClient`, `dockerClient`); version 1
-  sends the envelope and decodes results, version 0 sends today's call and
-  answers as sent (`answeredAsSent`). The web calls them through
+  is one method per command (`environmentsClient`, `dockerClient`); the
+  current version sends the envelope and decodes results. The web calls them through
   `domainApi(client, def)` (`lib/node-scope/domains/domain-api.ts`, the
   web's one domain-client helper since 7010), with
   `machineBackendClient` (`lib/backend/client.ts`) or
@@ -981,11 +1036,11 @@ export const nodeMailClient = domainClient(nodeMail, {
   scheduled-job actor, a coordinator's delegation presentation) are carried
   across decoding on the invocation by a `beforeDecode` wrapper, so only
   in-process callers can still set them. Each client's API is one function
-  per command, keyed by name; version 0 is today's call by name. The web
+  per command, keyed by name. The web
   calls them through `lib/node-scope/domains/{coordinator,agent-servers,
   system,nodes}.ts`; the portal's un-negotiated channel uses
-  `nodesApiOver(invoke)` and always takes version 0. Ten commands are
-  retired with counters (see the register).
+  `nodesApiOver(invoke)` and always calls unnegotiated. The commands retired
+  with counters went with the one-time floor (see Retired).
 - **Previews, web annotations, transcript artifacts and design**
   ([7004](../../plans/unified/7004-domain-previews-annotations-artifacts-design.md)):
   `previews` (17 commands), `web-annotations` (37), `design` (35) and the
@@ -1005,8 +1060,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   `expectedResultRevision` on `web_annotation_resolve`, `textOnly` and
   `retargetOf` on `web_annotation_request_prepare`, and `expectedTabId` on
   `design_session_resume`. None of these domains was version-gated, so each
-  client's version 1 sends the envelope and decodes results, and version 0
-  is today's call by name, answered as sent; the four capability commands
+  client's current version sends the envelope and decodes results; the four capability commands
   stay registered and are read on every version because they report runtime
   state (storage, rollout, renderer, surfaces), except what only gated
   support (the web annotation contract version, design's flags), which
@@ -1036,9 +1090,9 @@ export const nodeMailClient = domainClient(nodeMail, {
   `update_global_config`, `unset` on both patches, `expectedRevision` on
   `save_coordinator_pane_layout`, `expiresInMs` on
   `approve_native_agent_interaction_and_remember`. Each client's API is one
-  function per command, keyed by name; `config` version 1 answers
-  `clientStateCapabilities()` itself (`CONFIG_CLIENT_STATE_CAPABILITIES`),
-  version 0 asks `get_client_state_capabilities`. The web calls them through
+  function per command, keyed by name; `config` answers
+  `clientStateCapabilities()` itself (`CONFIG_CLIENT_STATE_CAPABILITIES`;
+  `get_client_state_capabilities` retired with the one-time floor). The web calls them through
   `lib/node-scope/domains/{projects,config}.ts`, and the config layering
   (`lib/portal/command-node-config.ts`) sends every `config` command on both
   of its nodes through the client. The config-echo path
@@ -1078,9 +1132,9 @@ export const nodeMailClient = domainClient(nodeMail, {
   web calls them through `lib/node-scope/domains/{git,pull-requests}.ts`
   from `lib/backend/{changes,github-pull-requests,files-sessions,config-integrations}.ts`,
   and `lib/federation/node-change-projections.ts` reads another machine's
-  change views through the git client over the routed call (version 0). The
-  only register rows for these domains are the older-version adapters left
-  by the command removals; the conditional snapshot reads
+  change views through the git client over the routed call (unnegotiated).
+  The client keeps `pull-requests` adapter 3 for releases in the window that
+  speak version 3; the conditional snapshot reads
   (`knownGeneration`/`knownRevision`, `knownDigest`) keep answering the
   legacy bare shapes, which the result schemas include.
 - **Kanban, agent mail, accounts and MCP**
@@ -1118,7 +1172,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   newer command answers `unknown-command`, which the callers already read.
   Each client is one function per command (`commandApi`); the web calls them
   through `lib/node-scope/domains/{kanban,agent-mail,accounts,mcp}.ts`, the
-  per-machine account and MCP functions (`accountsOn`, `mcpOn`) on version 0
+  per-machine account and MCP functions (`accountsOn`, `mcpOn`) unnegotiated
   for another machine. No register row is served by these domains: the
   feature-plan build fallback, the MCP bridge report and the usage-limit
   text rows are renderer or bridge paths and are unaffected.
@@ -1153,16 +1207,15 @@ export const nodeMailClient = domainClient(nodeMail, {
   the workflow result metrics and rollout read (`admin`) and the review validation lifecycle
   the supervisors drive in-process (`internal`). No command was
   capability-gated, so nothing is folded into a version; each client is one
-  function per command (`commandApi`), version 0 today's call by name. The
+  function per command (`commandApi`). The
   web calls them through `lib/node-scope/domains/{pipelines,graphs,multi-review}.ts`;
   `lib/backend/workflows.ts` is split into `build-pipelines.ts` and
   `multi-reviews.ts`, which `createWorkflowsApi` and its named exports still
   include. Register rows: the renderer fallbacks for backends without
   `launch_build_pipeline` or `start_feature_plan_build`, the Rework and
   Address Findings vocabulary, the Address session text report and the
-  hydration fallback are **unaffected** (a pre-contract node's
-  `unknown-command` reaches the caller through version 0, as before); none
-  retires.
+  hydration fallback are **unaffected** (a node's `unknown-command` reaches
+  the caller unchanged); none retires.
 - **Adapter list.** Every domain client is defined under
   `packages/protocol/src/contract/domains/`, one per domain, and listed in
   `DOMAIN_CLIENTS` (`contract/client-adapters.ts`).
@@ -1171,7 +1224,7 @@ export const nodeMailClient = domainClient(nodeMail, {
   `mise run contract:adapters`; `mise run contract:adapters:check` fails on
   drift and runs in CI next to `contract:check`. The contract CI job reads it.
 - **Usage counters.** Every call through an adapter below its domain's current
-  version is counted, names and numbers only. The backend's own clients count
+  version is counted, names and numbers only (an unnegotiated call is not). The backend's own clients count
   into the compatibility-path counters as
   `domain-adapter.backend.<domain>.v<version>` (`backendDomainAdapterUsage`);
   a desktop window's renderer counts into a bounded ring
@@ -1186,14 +1239,17 @@ export const nodeMailClient = domainClient(nodeMail, {
   register's usual rule: 60 days after that release, or a later Stable
   release, is published. The legacy adapter 0 goes when the floor passes the
   first Stable release that advertises the domain, and with it the
-  client-side capability gating it packaged. A per-domain capability command
-  the backend keeps for pre-contract renderers (`get_client_state_capabilities`,
+  client-side capability gating it packaged. While the one-time floor is in
+  force, its release (v2.39.1-beta) counts as such a release from the day the
+  floor was recorded. The per-domain capability commands kept for
+  pre-contract renderers (`get_client_state_capabilities`,
   `get_native_agent_sync_capabilities`, `get_agent_handoff_capabilities`)
-  goes at the same time; the five that report runtime state
+  went with the one-time floor; the five that report runtime state
   (`changes_get_capabilities`, `design_capabilities`,
   `get_preview_capabilities`, `transcript_artifact_capabilities`,
-  `web_annotations_capabilities`) stay, and only leave
-  `LEGACY_CAPABILITY_COMMANDS` with their adapter 0.
+  `web_annotations_capabilities`) stay in `LEGACY_CAPABILITY_COMMANDS`,
+  which the job checks `retirements.json` against, although their domains'
+  adapter 0 went with the one-time floor.
   `packages/protocol/contracts/retirements.json` (kept by hand) classifies
   every capability command: `retireAtDomainVersion` is the domain version
   whose first Stable release retires it, `null` when it stays, and `why`;
@@ -1201,11 +1257,14 @@ export const nodeMailClient = domainClient(nodeMail, {
   still has the command.
   Contract CI fails on the day an adapter or command becomes unreachable, and
   prints the schedule on request (see
-  [Retirement schedule](#the-manifest-the-ratchet-and-ci)). **As of
-  2026-11-07 nothing can be deleted:** no Stable release advertises
-  `domains` yet (v2.36.1 is pre-contract), so every adapter 0 and the three
-  kept commands wait for "60 days after the first Stable release that
-  advertises `domains`".
+  [Retirement schedule](#the-manifest-the-ratchet-and-ci)). **On 2026-11-26**
+  the one-time floor deleted every adapter that no release at or above
+  v2.39.1-beta speaks: each domain's adapter 0 except `capabilities` and
+  `rich-interactions`, every version-1 adapter of a domain now at version 2,
+  `native-sessions` 1 and 2, and `pull-requests` 1 and 2 (to-do 8304). The
+  remaining older adapters (`native-sessions` 5, 4 and 3, `pull-requests` 3,
+  and adapter 0 of `capabilities` and `rich-interactions`) follow the 60-day
+  window.
 
 ### The manifest, the ratchet and CI
 
@@ -1258,9 +1317,13 @@ export const nodeMailClient = domainClient(nodeMail, {
   `mise run contract:ci`, every PR). It computes the
   [support floor](#the-support-window) from `releases/index.json` and today's
   date (`--now <date>` to try another day): the newest `stable` entry whose
-  `publishedAt` is at least 60 days old, otherwise v2.21.0. Every snapshotted
-  release at or above it is in the window, including one whose `publishedAt`
-  is still `null`, which is never the floor. Stage 1 then fails when:
+  `publishedAt` is at least 60 days old, otherwise v2.21.0, raised to the
+  one-time floor `ONE_TIME_SUPPORT_FLOOR` (v2.39.1-beta,
+  [One-time floor, 2026-11-26](#one-time-floor-2026-11-26)) while that is
+  higher; the job cannot run if the one-time floor's release is not in the
+  index. Every snapshotted release at or above it is in the window, including
+  one whose `publishedAt` is still `null`, which is never the window floor.
+  Stage 1 then fails when:
   - the index and the `releases/*.json` files disagree, or an in-window
     snapshot does not verify;
   - an in-window release speaks a (domain, version) that the domain's client
@@ -1274,7 +1337,10 @@ export const nodeMailClient = domainClient(nodeMail, {
     at a higher version than in that release. The bump is not required when
     the domain is unversioned on both sides, or when the snapshot has no
     domain for the command (pre-contract names the current map does not
-    place);
+    place), or when `ONE_TIME_SUPPORT_FLOOR.commandsForOlderClients` names
+    it (registered by releases at or above the floor only for clients below
+    it). Such a command also fails while it is still registered or no row
+    names it;
   - a register row's Counter cell is not "None ..." and names no id, or an id
     that is neither in `COMPATIBILITY_PATH_IDS` nor a domain adapter id, or a
     row does not have the six columns;
@@ -1289,7 +1355,8 @@ export const nodeMailClient = domainClient(nodeMail, {
     unreachable: delete it and move its register rows to Retired" once the
     floor has passed the first Stable release that advertises the domain at
     *n + 1* (the same for a capability command whose `retireAtDomainVersion`
-    the floor has passed), or `retirements.json` does not list a
+    the floor has passed; the one-time floor's release counts as such a
+    release from the day the floor was recorded), or `retirements.json` does not list a
     `LEGACY_CAPABILITY_COMMANDS` command, lists one that is no longer
     registered (without `retired`) or under another domain, marks one
     `retired` that is still registered or whose condition the floor has not

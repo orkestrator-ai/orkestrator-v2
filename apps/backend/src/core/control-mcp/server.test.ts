@@ -147,9 +147,6 @@ describe("Orkestrator control MCP server", () => {
           ui: { status: "opened" },
           workflow: await saveStarted("multi-review", "launched"),
         }));
-        overrides.set("start_coordinator_multi_review", () =>
-          saveStarted("multi-review", "started"),
-        );
         overrides.set("start_coordinator_build_pipeline", () =>
           saveStarted("build-pipeline", "build"),
         );

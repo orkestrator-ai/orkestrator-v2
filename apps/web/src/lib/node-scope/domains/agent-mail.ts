@@ -4,14 +4,14 @@
  *
  * The client's own node picks the adapter from its negotiated `domains`
  * (version 1 sends the envelope and decodes results with the protocol's mail
- * schemas); a pre-contract node, or a client without negotiation, uses
- * version 0, today's call (`invokeRaw(command, args)`, or `invokeRaw(command)`
+ * schemas); a client without negotiation uses the unnegotiated call,
+ * today's call (`invokeRaw(command, args)`, or `invokeRaw(command)`
  * for a call without arguments). See `./domain-api.ts` for the
  * adapter choice.
  *
  * `commandNodeAgentMail` is the same domain over `invokeCommandNodeSetting`
  * (the messaging settings are the command node's, which its leaves inherit),
- * also version 0.
+ * also unnegotiated.
  */
 import {
   agentMailClient,
@@ -28,6 +28,6 @@ export function agentMail(client: BackendClient): () => AgentMailApi {
   return () => domainApi(client, agentMailClient);
 }
 
-/** The `agent-mail` API on the command node's settings target (version 0, today's calls). */
+/** The `agent-mail` API on the command node's settings target (unnegotiated, today's calls). */
 export const commandNodeAgentMail: () => AgentMailApi = () =>
   domainApi(commandNodeSettingClient, agentMailClient);

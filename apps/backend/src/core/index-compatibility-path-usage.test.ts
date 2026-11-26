@@ -39,8 +39,8 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
     const before = await first.invoke<CompatibilityPathUsageSnapshot>(
       "get_compatibility_path_usage",
     );
-    const prior = before.paths["agent-handoff.renderer-saved"]?.count ?? 0;
-    compatibilityPathUsage.record("agent-handoff.renderer-saved");
+    const prior = before.paths["workspace-grant.config-echo"]?.count ?? 0;
+    compatibilityPathUsage.record("workspace-grant.config-echo");
     // No snapshot: shutdown itself must persist the pending use.
     await first.shutdown();
     const database = openBackendDatabase(dataDir);
@@ -49,18 +49,16 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
         (
           database.readStore(COMPATIBILITY_PATH_USAGE_STORE)!
             .value as CompatibilityPathUsageSnapshot
-        ).paths["agent-handoff.renderer-saved"]?.count,
+        ).paths["workspace-grant.config-echo"]?.count,
       ).toBe(prior + 1);
-      compatibilityPathUsage.record("agent-handoff.renderer-saved");
-      expect(compatibilityPathUsage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(
-        1,
-      );
+      compatibilityPathUsage.record("workspace-grant.config-echo");
+      expect(compatibilityPathUsage.snapshot().paths["workspace-grant.config-echo"]?.count).toBe(1);
       // Recording after shutdown must stay in memory, not reopen the database.
       expect(
         (
           database.readStore(COMPATIBILITY_PATH_USAGE_STORE)!
             .value as CompatibilityPathUsageSnapshot
-        ).paths["agent-handoff.renderer-saved"]?.count,
+        ).paths["workspace-grant.config-echo"]?.count,
       ).toBe(prior + 1);
     } finally {
       database.close();
@@ -70,8 +68,8 @@ test("backend lifecycle persists compatibility counts, detaches on shutdown, and
     const restarted = await second.invoke<CompatibilityPathUsageSnapshot>(
       "get_compatibility_path_usage",
     );
-    expect(restarted.paths["agent-handoff.renderer-saved"]?.count).toBe(prior + 2);
-    expect(Object.keys(restarted.paths["agent-handoff.renderer-saved"]!).sort()).toEqual([
+    expect(restarted.paths["workspace-grant.config-echo"]?.count).toBe(prior + 2);
+    expect(Object.keys(restarted.paths["workspace-grant.config-echo"]!).sort()).toEqual([
       "count",
       "firstSeenAt",
       "lastSeenAt",

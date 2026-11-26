@@ -2,19 +2,19 @@
  * The `agent-servers` domain client (plan item 7009; §11.2 "Client adapters"): one
  * function per command (`commandApi`), keyed by command name.
  *
- * - Version 1 sends the envelope and decodes results with the commands'
+ * - Version 2 sends the envelope and decodes results with the commands'
  *   schemas.
- * - Version 0 (a node that advertises no `agent-servers` range: a pre-contract
- *   node, or a client without negotiation) is today's untyped call,
- *   `{ command, args }`, answered as sent (`legacyCommandApi`).
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `agent-servers` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { AGENT_SERVERS_COMMANDS } from "./commands.js";
 import { agentServersDomain } from "./domain.js";
 
@@ -22,16 +22,7 @@ export type AgentServersApi = CommandApi<typeof AGENT_SERVERS_COMMANDS>;
 
 const agentServersApi = (call: CommandCall): AgentServersApi =>
   commandApi(call, AGENT_SERVERS_COMMANDS);
-const legacyAgentServersApi = (
-  _call: CommandCall,
-  context: DomainAdapterContext,
-): AgentServersApi => legacyCommandApi(context, AGENT_SERVERS_COMMANDS);
 
 export const agentServersClient = domainClient(agentServersDomain, {
   2: agentServersApi,
-  // Version 2 only removed commands nothing called (2026-11-10), so version 1
-  // peers take the same API. Adapter 1 goes when the support floor passes the
-  // first Stable release with version 2.
-  1: agentServersApi,
-  0: legacyAgentServersApi,
 });

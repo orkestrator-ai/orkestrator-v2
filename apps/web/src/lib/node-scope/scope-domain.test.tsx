@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { domainClient } from "@orkestrator/protocol/contract/client";
-import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import {
   getNodeProjectCoordinatorCommand,
   nodeMailClient,
@@ -46,17 +45,17 @@ describe("scope.domain(def)", () => {
     const mail = scope.domain(nodeMailClient);
     expect(scope.domain(nodeMailClient)).toBe(mail);
 
-    // Pre-contract (no hello yet): the version-0 adapter, without an envelope, counted.
-    expect(mail.version()).toBe(0);
+    // No hello yet: the lowest adapter, unnegotiated (no envelope, not counted).
+    expect(mail.version()).toBe(1);
     const legacyApi = mail.api();
     expect(await legacyApi.projectCoordinator({ projectId: "p1" })).toEqual(COORDINATOR);
     expect(client.invocations.at(-1)).toEqual({
       command: "get_node_project_coordinator",
       args: { projectId: "p1" },
     });
-    expect(usage).toHaveBeenCalledWith("node-mail", 0);
+    expect(usage).not.toHaveBeenCalled();
 
-    // Reconnect to an upgraded backend: the new hello's ranges pick version 1.
+    // The hello arrives: its ranges pick version 1, with the envelope.
     client.setHello({ domains: CURRENT, capabilities: [] });
     expect(mail.version()).toBe(1);
     const currentApi = mail.api();
@@ -67,7 +66,7 @@ describe("scope.domain(def)", () => {
       args: { projectId: "p1" },
       envelope: { domain: "node-mail", version: 1 },
     });
-    expect(usage).toHaveBeenCalledTimes(1);
+    expect(usage).not.toHaveBeenCalled();
     // The same generation keeps the same API.
     expect(mail.api()).toBe(currentApi);
   });
@@ -84,7 +83,10 @@ describe("scope.domain(def)", () => {
 
   test("a node whose range has no adapter refuses with unsupported-version", () => {
     const newerOnly = domainClient(nodeMailDomain, { 1: () => ({ ok: true }) });
-    const { scope } = openScope(new FakeNodeClient({ nodeId: NODE }));
+    // The hello names other domains only: this one is not on the node.
+    const { scope } = openScope(
+      new FakeNodeClient({ nodeId: NODE, domains: { "ticket-sync": { min: 1, max: 1 } } }),
+    );
     expect(scope.domain(newerOnly).version()).toBeNull();
     let error: unknown;
     try {
@@ -168,8 +170,7 @@ function CoordinatorBadge({ projectId }: { projectId: string }) {
   const load = async () => {
     const api = mail.api();
     const answer = await api.projectCoordinator({ projectId });
-    const steer = api.supports(BACKEND_CAPABILITIES.nodeMailSteer) ? "steer" : "no steer";
-    setText(`v${mail.version()} ${answer.main?.title ?? "none"} ${steer}`);
+    setText(`v${mail.version()} ${answer.main?.title ?? "none"}`);
   };
   return (
     <button type="button" onClick={() => void load()}>
@@ -188,23 +189,7 @@ describe("Done when: a scoped component calls scope.domain(nodeMail)", () => {
     });
     renderInNodeScope(<CoordinatorBadge projectId="p1" />, { client, role: "leaf" });
     await act(async () => screen.getByRole("button").click());
-    await waitFor(() => expect(screen.getByRole("button").textContent).toBe("v1 Lead steer"));
+    await waitFor(() => expect(screen.getByRole("button").textContent).toBe("v1 Lead"));
     expect(client.invocations[0]?.envelope).toEqual({ domain: "node-mail", version: 1 });
-  });
-
-  test("against a pre-contract node", async () => {
-    const client = new FakeNodeClient({
-      nodeId: NODE,
-      domains: null,
-      capabilities: [BACKEND_CAPABILITIES.nodeCoordinatorMail],
-      invoke: { get_node_project_coordinator: COORDINATOR },
-    });
-    renderInNodeScope(<CoordinatorBadge projectId="p1" />, { client, role: "leaf" });
-    await act(async () => screen.getByRole("button").click());
-    await waitFor(() => expect(screen.getByRole("button").textContent).toBe("v0 Lead no steer"));
-    expect(client.invocations[0]).toEqual({
-      command: "get_node_project_coordinator",
-      args: { projectId: "p1" },
-    });
   });
 });

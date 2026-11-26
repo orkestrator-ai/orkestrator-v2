@@ -8,7 +8,7 @@
  * `lib/command-handover.ts`) call the window's command scope
  * (`commandScopeInvoke`, plan item 5004) or an injected invoke, not a
  * negotiated client: {@link nodesApiOver} binds the
- * API to such a call. It carries no `domains`, so it always takes version 0,
+ * API to such a call. It carries no `domains`, so it always goes unnegotiated,
  * which sends exactly today's `invoke(command, args)` and returns the answer
  * as sent; the calls are typed by the definitions.
  */
@@ -27,7 +27,7 @@ export function nodesApi(client: BackendClient): NodesApi {
 /** A command call in `commandScopeInvoke`'s shape. */
 export type NodesInvoke = CommandInvoke;
 
-/** The `nodes` API over a bare command call (version 0: today's untyped call). */
+/** The `nodes` API over a bare command call (unnegotiated: today's untyped call). */
 export function nodesApiOver(invoke: NodesInvoke): NodesApi {
   return nodesApi(backendClientOver(invoke));
 }

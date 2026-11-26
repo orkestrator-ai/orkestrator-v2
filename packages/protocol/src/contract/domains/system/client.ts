@@ -2,34 +2,26 @@
  * The `system` domain client (plan item 7009; §11.2 "Client adapters"): one
  * function per command (`commandApi`), keyed by command name.
  *
- * - Version 1 sends the envelope and decodes results with the commands'
+ * - Version 2 sends the envelope and decodes results with the commands'
  *   schemas.
- * - Version 0 (a node that advertises no `system` range: a pre-contract
- *   node, or a client without negotiation) is today's untyped call,
- *   `{ command, args }`, answered as sent (`legacyCommandApi`).
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `system` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26). A domains map
+ * that omits this domain yields `unsupported-version`. Without a domains
+ * map, calls use the lowest adapter unnegotiated. Later bumps keep an
+ * adapter for every version a release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { SYSTEM_COMMANDS } from "./commands.js";
 import { systemDomain } from "./domain.js";
 
 export type SystemApi = CommandApi<typeof SYSTEM_COMMANDS>;
 
 const systemApi = (call: CommandCall): SystemApi => commandApi(call, SYSTEM_COMMANDS);
-const legacySystemApi = (_call: CommandCall, context: DomainAdapterContext): SystemApi =>
-  legacyCommandApi(context, SYSTEM_COMMANDS);
 
 export const systemClient = domainClient(systemDomain, {
   2: systemApi,
-  // Version 2 only removed `get_resource_revision_manifest`, which no
-  // renderer in the support window reaches (2026-11-10), so version 1 peers
-  // take the same API. Adapter 1 goes when the support floor passes the first
-  // Stable release with version 2.
-  1: systemApi,
-  0: legacySystemApi,
 });

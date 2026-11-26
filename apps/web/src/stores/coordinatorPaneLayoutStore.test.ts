@@ -318,30 +318,6 @@ describe("against a backend that owns coordinator layouts", () => {
     expect(localStorage.getItem(key)).not.toBeNull();
   });
 
-  test("an edit made while capabilities were unknown is saved over the stored layout", async () => {
-    const stored = single();
-    const edited = reconcileCoordinatorLayout(null, ["main", "other"]);
-    const server = fakeBackend();
-    server.remoteSave("p", stored);
-    const healthy = invokeMock.getMockImplementation()!;
-    resetClientStateCapabilitiesForTests();
-    invokeMock.mockImplementation(async () => {
-      throw new Error("transport closed");
-    });
-    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
-    appCommandStore(coordinatorPaneLayoutStore).getState().setLayout("p", edited);
-
-    resetClientStateCapabilitiesForTests(capabilities(true));
-    invokeMock.mockImplementation(healthy);
-    await appCommandStore(coordinatorPaneLayoutStore).getState().hydrate("p");
-    await flushPromises();
-
-    expect(server.records.get("p")?.layout).toEqual(edited);
-    expect(
-      selectCoordinatorPaneLayout("p")(appCommandStore(coordinatorPaneLayoutStore).getState()),
-    ).toEqual(edited);
-  });
-
   test("a failed read is not ready, so nothing is reconciled against it", async () => {
     invokeMock.mockImplementation(async () => {
       throw new Error("transport closed");
@@ -427,7 +403,6 @@ describe("against a backend that owns coordinator layouts", () => {
     const client = new FakeNodeClient({
       nodeId: "bk_pane-layout-dispose" as BackendId,
       invoke: {
-        get_client_state_capabilities: capabilities(true),
         get_coordinator_pane_layout: () =>
           new Promise((_, reject) => {
             rejectRead = reject;

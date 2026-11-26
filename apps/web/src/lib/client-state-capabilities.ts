@@ -1,9 +1,4 @@
-import {
-  CLIENT_STATE_CAPABILITIES_COMMAND,
-  NO_CLIENT_STATE_CAPABILITIES,
-  type ClientStateCapabilities,
-} from "@orkestrator/protocol/client-state";
-import { isUnknownViewCommandError } from "@orkestrator/protocol/view-sync";
+import type { ClientStateCapabilities } from "@orkestrator/protocol/client-state";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createClientStateApi, getClientStateCapabilities } from "@/lib/backend/client-state";
 import { NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
@@ -60,11 +55,11 @@ const capabilityCache = defineScopedSlot<ClientStateCapabilityCache>(
 
 /**
  * Which formerly browser-local state `scope`'s backend owns (default: the
- * command node; `@orkestrator/protocol/client-state`). An older backend
- * answers "unknown command", which turns every capability off. Any other
- * failure rejects: it says nothing about this backend, so callers decide
- * nothing from it and ask again on their next call. Each node scope caches
- * its own answer.
+ * command node; `@orkestrator/protocol/client-state`). Folded into the
+ * `config` domain, which answers without asking the node (the command that
+ * asked an older backend retired with the one-time support floor
+ * v2.39.1-beta, to-do 8304 (retired)). Each node scope caches its own answer, which a
+ * test can set (`resetClientStateCapabilitiesForTests`).
  */
 export async function clientStateCapabilities(scope?: NodeScope): Promise<ClientStateCapabilities> {
   const target = scope ?? appCommandScope();
@@ -82,24 +77,12 @@ export async function clientStateCapabilities(scope?: NodeScope): Promise<Client
   }
   if (state.request?.generation === current) return state.request.promise;
   const api = backendApiForScope(target, createClientStateApi, { getClientStateCapabilities });
-  const promise = api.getClientStateCapabilities().then(
-    (value) => {
-      if (current === state.generation) {
-        state.cached = { generation: current, value, checkedAt: Date.now() };
-      }
-      return value;
-    },
-    (error: unknown) => {
-      if (isUnknownViewCommandError(error, CLIENT_STATE_CAPABILITIES_COMMAND)) {
-        const value = { ...NO_CLIENT_STATE_CAPABILITIES };
-        if (current === state.generation) {
-          state.cached = { generation: current, value, checkedAt: Date.now() };
-        }
-        return value;
-      }
-      throw error;
-    },
-  );
+  const promise = api.getClientStateCapabilities().then((value) => {
+    if (current === state.generation) {
+      state.cached = { generation: current, value, checkedAt: Date.now() };
+    }
+    return value;
+  });
   const entry = { generation: current, promise };
   state.request = entry;
   try {

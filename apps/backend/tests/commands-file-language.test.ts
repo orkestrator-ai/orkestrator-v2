@@ -16,29 +16,19 @@ afterEach(() => transport?.mockRestore());
 let transport: ReturnType<typeof spyOn<typeof helpers, "dockerExec">> | undefined;
 
 for (const filePath of ["src/app.ts", ".env", ".env.local", "config/production.env"]) {
-  for (const command of ["read_container_file", "read_file_at_branch"]) {
-    test(`${command} normalizes the language for ${filePath}`, async () => {
-      const content = "EXAMPLE=value\n";
-      transport = spyOn(helpers, "dockerExec").mockImplementation(async (_id, script) =>
-        script.includes("git cat-file --batch")
-          ? Buffer.from(
-              `${"a".repeat(40)} blob ${Buffer.byteLength(content)}\n${content}\n`,
-            ).toString("base64")
-          : Buffer.from(content).toString("base64"),
-      );
-      const handler = commands.get(command)!;
-      expect(
-        await handler(
-          { containerId: "fixture-container", filePath, branch: "main" },
-          {} as CommandContext,
-        ),
-      ).toEqual({
-        path: filePath,
-        content,
-        language: filePath.endsWith(".ts") ? "typescript" : "dotenv",
-      });
-      // A branch read is one exec: size and body come from one cat-file.
-      expect(transport).toHaveBeenCalledTimes(1);
+  test(`read_container_file normalizes the language for ${filePath}`, async () => {
+    const content = "EXAMPLE=value\n";
+    transport = spyOn(helpers, "dockerExec").mockImplementation(async () =>
+      Buffer.from(content).toString("base64"),
+    );
+    const handler = commands.get("read_container_file")!;
+    expect(
+      await handler({ containerId: "fixture-container", filePath }, {} as CommandContext),
+    ).toEqual({
+      path: filePath,
+      content,
+      language: filePath.endsWith(".ts") ? "typescript" : "dotenv",
     });
-  }
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
 }

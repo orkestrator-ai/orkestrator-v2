@@ -673,24 +673,6 @@ export const coordinatorNodeMultiReviewSurfaceCommand = defineCommand({
   critical: ["requestId", "addressFindingsModel"],
 });
 
-/** A coordinator starts a Multi Review after a build on a node it controls. */
-export const startCoordinatorNodeMultiReviewCommand = defineCommand({
-  domain: coordinatorDomain,
-  name: "start_coordinator_node_multi_review",
-  since: 1,
-  access: "internal",
-  read: false,
-  args: Schema.Struct({
-    scope: arg,
-    requestId: arg,
-    nodeId: arg,
-    buildPipelineId: arg,
-    input: arg,
-  }),
-  result: ControllerWorkflowSnapshotSchema,
-  critical: ["requestId", "buildPipelineId"],
-});
-
 /** The controller part of `COORDINATOR_COMMANDS`. */
 export const COORDINATOR_CONTROLLER_COMMANDS = [
   getControlMcpSettingsCommand,
@@ -728,5 +710,4 @@ export const COORDINATOR_CONTROLLER_COMMANDS = [
   startCoordinatorNodeBuildPipelineCommand,
   launchCoordinatorNodeMultiReviewCommand,
   coordinatorNodeMultiReviewSurfaceCommand,
-  startCoordinatorNodeMultiReviewCommand,
 ] as const;

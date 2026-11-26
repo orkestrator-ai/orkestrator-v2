@@ -2,7 +2,7 @@
 // Re-export by name (never `export *`) so the surface stays reviewable.
 //
 // The domain is the Git, GitHub and pull-request code: local Git helpers
-// (`blob-read.ts`, `fsmonitor.ts`, `noninteractive-env.ts`, …), the GitHub API
+// (`fsmonitor.ts`, `noninteractive-env.ts`, …), the GitHub API
 // and CLI clients (`github*.ts`) and the pull-request monitor and auto-merge
 // (`pr-*.ts`).
 //
@@ -30,7 +30,6 @@ export {
   backgroundFetchRefspec,
   NO_WRITE_FETCH_HEAD,
 } from "./background-fetch.js";
-export { containerGitBlobReadCommand, decodeGitBatchOutput, readGitBlob } from "./blob-read.js";
 export {
   parseGitDiffSummary,
   parseGitFileChanges,

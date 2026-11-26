@@ -262,18 +262,18 @@ describe("environments commands", () => {
 });
 
 describe("environments client", () => {
-  it("is listed with adapters 2, 1 and 0", () => {
+  it("is listed with adapter 2", () => {
     expect(DOMAIN_CLIENTS).toContain(environmentsClient);
-    expect(environmentsClient.versions).toEqual([2, 1, 0]);
+    expect(environmentsClient.versions).toEqual([2]);
   });
 
   it("sends the envelope with the carried critical keys to a node with the domain", async () => {
     const node = fakeNode(
-      { environments: { min: 1, max: 1 } },
+      { environments: { min: 1, max: 2 } },
       { start_environment: { setupStarted: false, environment } },
     );
     const client = createDomainClient(environmentsClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     const result = await client.api().startEnvironment({
       environmentId: "env-1",
       operationId: "01890a5d-ac96-774b-bcce-b302099a8057",
@@ -283,31 +283,14 @@ describe("environments client", () => {
       {
         command: "start_environment",
         args: { environmentId: "env-1", operationId: "01890a5d-ac96-774b-bcce-b302099a8057" },
-        envelope: { domain: "environments", version: 1, critical: ["operationId"] },
+        envelope: { domain: "environments", version: 2, critical: ["operationId"] },
       },
     ]);
   });
 
-  it("sends today's body to a pre-contract node and answers as it was sent", async () => {
-    const node = fakeNode(null, {});
-    const invoked: Array<{ command: string; args: unknown }> = [];
-    const client = createDomainClient(environmentsClient, {
-      ...node.options,
-      invoke: async (command, args) => {
-        invoked.push({ command, args });
-        return [{ ...environment, extra: "kept" }];
-      },
-    });
-    expect(client.version()).toBe(0);
-    const environments = await client.api().getEnvironments({ projectId: "project-1" });
-    expect(environments[0]).toHaveProperty("extra", "kept");
-    expect(invoked).toEqual([{ command: "get_environments", args: { projectId: "project-1" } }]);
-    expect(node.sent).toEqual([]);
-  });
-
   it("refuses an answer that is not an environment from a node with the domain", async () => {
     const node = fakeNode(
-      { environments: { min: 1, max: 1 } },
+      { environments: { min: 1, max: 2 } },
       { create_environment: { id: "env-1" } },
     );
     const client = createDomainClient(environmentsClient, node.options);

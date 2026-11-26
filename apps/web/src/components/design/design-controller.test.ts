@@ -780,29 +780,6 @@ describe("design canvas controller regressions", () => {
     }
   });
 
-  test("a backend without an intent queue still runs and rebases edits, keeping nothing in localStorage", async () => {
-    backend.intentsEnabled = false;
-    const controller = designController("env-1", canvasId);
-    const release = controller.acquire();
-    await controller.refresh();
-    const gate = deferred();
-    let first = true;
-    backend.executeBarrier = async () => {
-      if (first) {
-        first = false;
-        await gate.promise;
-      }
-    };
-    controller.submit(geometry(frameA, 1, { x: 1 }, "one"));
-    controller.submit(geometry(frameA, 1, { y: 2 }, "two"));
-    gate.resolve();
-    await until(() => controller.projection.intents.length === 0, 5000);
-    expect(backend.frames.get(frameA)!.frame).toMatchObject({ x: 1, y: 2, revision: 3 });
-    expect(backend.calls.some((call) => call.command.startsWith("design_intent_"))).toBe(false);
-    expect(window.localStorage.getItem(DRAFTS_KEY)).toBeNull();
-    release();
-  });
-
   test("a restored in-flight token is reconciled, never re-prepared, and does not block new edits", async () => {
     const token = backend.prepareToken({
       input: { kind: "update_frame", frameId: frameA, patch: { x: 9 } },

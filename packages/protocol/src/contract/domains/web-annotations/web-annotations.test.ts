@@ -321,11 +321,11 @@ describe("web-annotations client", () => {
     return { client, calls, legacy };
   }
 
-  it("is listed once in the adapter list, with adapters 1 and 0", () => {
+  it("is listed once in the adapter list, with adapter 1", () => {
     expect(DOMAIN_CLIENTS.filter((def) => def.domain.name === "web-annotations")).toEqual([
       webAnnotationsClient,
     ]);
-    expect(webAnnotationsClient.versions).toEqual([1, 0]);
+    expect(webAnnotationsClient.versions).toEqual([1]);
   });
 
   it("version 1 sends the envelope with the critical keys present and decodes the result", async () => {
@@ -352,19 +352,5 @@ describe("web-annotations client", () => {
     await expect(bad.client.api().run("web_annotation_create", createArgs)).rejects.toThrow(
       "Invalid result from web_annotation_create",
     );
-  });
-
-  it("version 0 is today's call: by name, no envelope, the answer as sent", async () => {
-    const older = { contractVersion: 1, storage: "ready", olderShape: true };
-    const { client, calls, legacy } = node(null, older);
-    const api = client.api();
-    expect(api.version).toBe(0);
-    expect(await api.run("web_annotations_capabilities", { environmentId: "env-a" })).toEqual(
-      older as never,
-    );
-    expect(calls).toEqual([]);
-    expect(legacy).toEqual([
-      { command: "web_annotations_capabilities", args: { environmentId: "env-a" } },
-    ]);
   });
 });

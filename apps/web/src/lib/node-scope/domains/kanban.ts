@@ -2,8 +2,8 @@
  * The `kanban` domain on a `lib/backend` factory's client (plan item 7008):
  * `kanban(client).get_kanban_tasks({ projectId })`. See `./domain-api.ts` for
  * the adapter choice: a node that advertises the domain gets version 1 (the
- * envelope travels and results are decoded); any other node gets version 0,
- * exactly today's call.
+ * envelope travels and results are decoded); a client without negotiation
+ * gets the unnegotiated call, exactly today's call.
  *
  * Kanban ticket ids are the same on every node, so a caller keeps what it
  * reads under the node it asked: one client per node scope.

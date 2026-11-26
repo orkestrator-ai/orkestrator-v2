@@ -53,7 +53,7 @@ export async function fleet(
     /**
      * The leaf's hello `domains` (plan item 1010). Absent is a current leaf
      * (`CURRENT_TICKET_SYNC_DOMAINS`); `null` is a pre-contract leaf whose
-     * hello has no `domains`, which the command node calls at version 0.
+     * hello has no `domains`, which the command node refuses.
      */
     domains?: Record<string, { min: number; max: number }> | null;
     /** How long the leaf waits for an image it asked for. */

@@ -1,25 +1,17 @@
 import {
   checkCoordinatorUpstreamMergeCommand,
-  CONFIG_CLIENT_STATE_CAPABILITIES,
-  declineCoordinatorUpstreamMergeCommand,
   dismissNoticesCommand,
-  getClientStateCapabilitiesCommand,
   getCoordinatorPaneLayoutCommand,
-  getCoordinatorUpstreamAutoMergeCommand,
   listNoticeDismissalsCommand,
   reconcileNoticeDismissalsCommand,
   saveCoordinatorPaneLayoutCommand,
-  setCoordinatorUpstreamAutoMergeCommand,
 } from "@orkestrator/protocol/contract/domains/config";
 import {
   getCoordinatorActionMarksCommand,
   setCoordinatorActionMarkCommand,
 } from "@orkestrator/protocol/contract/domains/coordinator";
 import { COORDINATOR_ACTION_MARK_LIMITS } from "@orkestrator/protocol/coordinator-action-marks";
-import type {
-  CoordinatorUpstreamAutoMerge,
-  CoordinatorUpstreamMergeCheck,
-} from "@orkestrator/protocol/coordinator-upstream-merge";
+import type { CoordinatorUpstreamMergeCheck } from "@orkestrator/protocol/coordinator-upstream-merge";
 import {
   isNoticeOccurrenceId,
   isNoticeSessionIdentity,
@@ -28,7 +20,6 @@ import {
 } from "@orkestrator/protocol/notice-dismissals";
 import type { CommandContext } from "./context.js";
 import { asNonBlankString } from "./helpers.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { checkUpstreamBeforeMessage } from "../coordinator/index.js";
 import type { CommandRegistrar } from "./registry-types.js";
 
@@ -37,7 +28,6 @@ import type { CommandRegistrar } from "./registry-types.js";
  * their own localStorage (storage/client-state.ts), and the backend-side
  * decisions that went with it.
  *
- * - `get_client_state_capabilities` → which of these this backend owns.
  * - `get_coordinator_pane_layout {projectId}` → the stored record, or null.
  * - `save_coordinator_pane_layout {projectId, layout, expectedRevision}` →
  *   `saved` with the record, or `conflict` with the stored one.
@@ -47,12 +37,6 @@ import type { CommandRegistrar } from "./registry-types.js";
  *   and answers every mergeable checkout `automatic`: it is always merged.
  *   A slow or failed fetch is answered by fast-forwarding to the upstream
  *   commit already fetched (`coordinator/message-upstream.ts`).
- * - `decline_coordinator_upstream_merge {projectId, upstream, upstreamCommit,
- *   onlyIfAbsent?}`, `get_coordinator_upstream_auto_merge {projectId}` and
- *   `set_coordinator_upstream_auto_merge {projectId, enabled}`: retired, kept
- *   for clients that still ask. Neither a decline nor the setting changes the
- *   check any more, and the capability is no longer advertised, so a client
- *   that knows it hides its "always merge" toggle.
  * - `list_notice_dismissals`, `dismiss_notices {sessions}`,
  *   `reconcile_notice_dismissals {sessionIdentity, activeOccurrenceIds}` →
  *   the dismissal snapshot.
@@ -60,14 +44,10 @@ import type { CommandRegistrar } from "./registry-types.js";
  *   `set_coordinator_action_mark {projectId, conversationId, cardId, done}`
  *   (`coordinator` domain) → the conversation's manual action marks. The
  *   conversation must belong to the project's coordinator, open or closed.
+ *
+ * The config domain client answers which of these the backend owns from the
+ * domain version (`CONFIG_CLIENT_STATE_CAPABILITIES`).
  */
-
-/**
- * What `get_client_state_capabilities` answers: the set `config` version 1
- * includes, so the domain client answers it without asking. The "always
- * merge" setting is retired: every mergeable checkout is merged.
- */
-const CAPABILITIES = CONFIG_CLIENT_STATE_CAPABILITIES;
 
 async function existingProjectId(value: unknown, context: CommandContext): Promise<string> {
   const projectId = asNonBlankString(value, "projectId");
@@ -94,8 +74,6 @@ async function existingConversationId(
 }
 
 export function registerClientStateCommands(register: CommandRegistrar): void {
-  register(getClientStateCapabilitiesCommand, () => ({ ...CAPABILITIES }));
-
   register(getCoordinatorPaneLayoutCommand, async ({ projectId }, context) =>
     context.storage.clientState.getCoordinatorPaneLayout(
       await existingProjectId(projectId, context),
@@ -127,44 +105,6 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
       return checkUpstreamBeforeMessage(projectGit, await existingProjectId(projectId, context));
     },
   );
-  register(
-    declineCoordinatorUpstreamMergeCommand,
-    async ({ projectId, upstream, upstreamCommit, onlyIfAbsent }, context) =>
-      context.storage.clientState.recordCoordinatorUpstreamDecline(
-        await existingProjectId(projectId, context),
-        {
-          upstream: asNonBlankString(upstream, "upstream"),
-          upstreamCommit: asNonBlankString(upstreamCommit, "upstreamCommit"),
-        },
-        { onlyIfAbsent: onlyIfAbsent === true },
-      ),
-  );
-
-  register(
-    getCoordinatorUpstreamAutoMergeCommand,
-    async ({ projectId }, context): Promise<CoordinatorUpstreamAutoMerge> => {
-      compatibilityPathUsage.record("retired-command.coordinator-upstream-auto-merge");
-      return {
-        enabled: context.storage.clientState.getCoordinatorUpstreamAutoMerge(
-          await existingProjectId(projectId, context),
-        ),
-      };
-    },
-  );
-  register(
-    setCoordinatorUpstreamAutoMergeCommand,
-    async ({ projectId, enabled }, context): Promise<CoordinatorUpstreamAutoMerge> => {
-      compatibilityPathUsage.record("retired-command.coordinator-upstream-auto-merge");
-      if (typeof enabled !== "boolean") throw new Error("enabled must be a boolean");
-      return {
-        enabled: context.storage.clientState.setCoordinatorUpstreamAutoMerge(
-          await existingProjectId(projectId, context),
-          enabled,
-        ),
-      };
-    },
-  );
-
   register(getCoordinatorActionMarksCommand, async ({ projectId, conversationId }, context) => {
     const project = await existingProjectId(projectId, context);
     return context.storage.clientState.getCoordinatorActionMarks(

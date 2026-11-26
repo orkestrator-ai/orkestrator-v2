@@ -1727,7 +1727,7 @@ sleep 5
         path.join(os.tmpdir(), "orkestrator-electron-toolchain-"),
       );
       directories.push(dataDir, toolchainBinDir);
-      await writeFile(path.join(toolchainBinDir, "codex"), "managed codex");
+      await writeFile(path.join(toolchainBinDir, "claude"), "managed claude");
       const backendProcess = new BackendProcess();
       processes.push(backendProcess);
 
@@ -1747,7 +1747,7 @@ sleep 5
       const optionIndex = child.spawnargs.indexOf("--toolchain-bin-dir");
       expect(optionIndex).toBeGreaterThan(0);
       expect(child.spawnargs[optionIndex + 1]).toBe(toolchainBinDir);
-      await expect(client.invoke("check_codex_cli")).resolves.toBe(true);
+      await expect(client.invoke("check_claude_cli")).resolves.toBe(true);
     },
     SPAWN_TIMEOUT_MS,
   );

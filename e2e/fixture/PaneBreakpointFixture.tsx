@@ -160,12 +160,6 @@ function installBackend() {
     invoke: async <T,>(command: string, args?: Record<string, unknown>) => {
       let result: unknown;
       switch (command) {
-        case "get_native_agent_sync_capabilities":
-          result = {
-            historyPagingVersions: [1],
-            progressiveViewVersions: [1],
-          };
-          break;
         case "adopt_native_agent_session":
           result = {};
           break;

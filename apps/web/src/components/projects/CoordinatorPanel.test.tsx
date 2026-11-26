@@ -9,6 +9,7 @@ import {
   type ProjectGitStatus,
   type ProjectGitSwitchConfirmation,
 } from "@orkestrator/protocol/coordinator";
+import { decideUpstreamMergeOffer } from "@orkestrator/protocol/coordinator-upstream-merge";
 import type { HumanPromptEntry } from "@orkestrator/protocol/human-prompts";
 import type {
   NativeAgentDispatchOutcome,
@@ -460,6 +461,10 @@ describe("CoordinatorPanel", () => {
     resetUpstreamCheckForTests();
     resetClientStateCapabilitiesForTests();
     checkUpstream.mockReset();
+    // The backend's decision over its own fetch (`check_coordinator_upstream_merge`).
+    checkUpstream.mockImplementation(async () =>
+      decideUpstreamMergeOffer((await fetchGit()) as ProjectGitStatus),
+    );
     runCommand.mockClear();
   });
 
@@ -1728,87 +1733,6 @@ describe("CoordinatorPanel", () => {
       await waitFor(() => expect(sentPrompts()).toEqual(["Send with the button"]));
       expect(syncGit).toHaveBeenCalledTimes(1);
     });
-
-    test("a recovering sibling prevents the first-send merge", async () => {
-      const unassigned = { ...snapshot.workspace.conversations[0]!, agent: undefined };
-      ensuredSnapshot = {
-        ...snapshot,
-        workspace: {
-          ...snapshot.workspace,
-          conversations: [
-            unassigned,
-            {
-              ...snapshot.workspace.conversations[0]!,
-              id: "recovering",
-              tabId: "recovering-tab",
-              role: "side",
-            },
-          ],
-        },
-      };
-      ensuredGit = behindGit();
-      appCommandStore(nativeAgentProjectionStore)
-        .getState()
-        .setProjection(
-          createSessionKey(coordinatorRuntimeId("coordinator-1", "recovering"), "recovering-tab"),
-          launchProjection("recovering"),
-        );
-      renderInAppCommandScope(<CoordinatorPanel projectId="project-1" />);
-      await screen.findByTestId("native-agent");
-      const fetches = await fetchesAfterOpen();
-      fireEvent.click(screen.getByRole("button", { name: "Assign claude" }));
-      await waitFor(() => expect(assignAgent).toHaveBeenCalledTimes(1));
-      expect(fetchGit.mock.calls.length).toBe(fetches);
-      expect(syncGit).not.toHaveBeenCalled();
-      expect(mergeDialog() === null).toBe(true);
-    });
-
-    test.each(["recovering", "project-home"] as const)(
-      "does not merge during %s activity",
-      async (kind) => {
-        ensuredGit = behindGit();
-        await renderAssigned();
-        const fetches = await fetchesAfterOpen();
-        const previousEnvironments = appCommandStore(environmentStore).getState().environments;
-        try {
-          act(() => {
-            if (kind === "recovering") {
-              appCommandStore(nativeAgentProjectionStore)
-                .getState()
-                .setProjection(launchSessionKey, launchProjection("recovering", [], 50));
-            } else {
-              appCommandStore(environmentStore).setState({
-                environments: [
-                  ...previousEnvironments,
-                  {
-                    id: "home",
-                    projectId: "project-1",
-                    projectHome: true,
-                    name: "Home",
-                    order: 0,
-                  } as never,
-                ],
-              });
-              appCommandStore(nativeAgentProjectionStore)
-                .getState()
-                .setProjection(createSessionKey("home", "home-tab"), {
-                  ...launchProjection("running"),
-                  environmentId: "home",
-                });
-            }
-          });
-          await sendFollowUp("Send while checkout is in use");
-          if (kind === "project-home")
-            await waitFor(() => expect(sentPrompts()).toEqual(["Send while checkout is in use"]));
-          else expect(dispatchIntent).not.toHaveBeenCalled();
-          expect(fetchGit.mock.calls.length).toBe(fetches);
-          expect(syncGit).not.toHaveBeenCalled();
-          expect(mergeDialog() === null).toBe(true);
-        } finally {
-          appCommandStore(environmentStore).setState({ environments: previousEnvironments });
-        }
-      },
-    );
 
     test("busy admission at the merge sends without syncing", async () => {
       ensuredGit = behindGit();

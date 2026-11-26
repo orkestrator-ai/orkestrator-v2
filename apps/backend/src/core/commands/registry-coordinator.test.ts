@@ -24,8 +24,7 @@ import {
 import { parseBackendId } from "@orkestrator/protocol/federation";
 import { NodeCoordinatorRemote } from "../nodes/node-coordinator-remote.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "../coordinator/workflow-retention.js";
-import { seedStore, readStoredValue } from "../storage/test-support.js";
+import { seedStore } from "../storage/test-support.js";
 import { multiReviewInputWithDefaults } from "../coordinator/launch-defaults.js";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
@@ -595,7 +594,7 @@ describe("coordinator command registry", () => {
     expect(await storage.coordinators.listCoordinatorWorkflowAssociations(project.id)).toEqual([]);
   });
 
-  test("requires a matching worker commit and a completed build before downstream workflows", async () => {
+  test("requires a matching worker commit before a build", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
@@ -635,27 +634,6 @@ describe("coordinator command registry", () => {
         context,
       ),
     ).rejects.toThrow("was not created from the requested delegation commit");
-
-    context.multiReviews = {
-      start: mock(async () => ({})),
-    } as unknown as CommandContext["multiReviews"];
-    await expect(
-      commands.get("start_coordinator_multi_review")!(
-        {
-          scope,
-          requestId: "review-1",
-          buildPipelineId: "missing-build",
-          input: {
-            environmentId: environment.id,
-            projectId: project.id,
-            targetBranch: "main",
-            reviewers: [{ agent: "claude", model: "opus" }],
-            addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
-          },
-        },
-        context,
-      ),
-    ).rejects.toThrow("completed successfully");
   });
 
   test("deduplicates concurrent build starts", async () => {
@@ -779,73 +757,7 @@ describe("coordinator command registry", () => {
     );
   });
 
-  for (const phase of ["preparing", "complete"]) {
-    test(`recovers a ${phase} review after receipt failure and defaults change`, async () => {
-      const project = await storage.addProject(createProject("remote", checkout));
-      const snapshot = await coordinator.ensure(project.id);
-      const scope = {
-        projectId: project.id,
-        coordinatorId: snapshot.workspace.id,
-        conversationId: snapshot.workspace.conversations[0]!.id,
-      };
-      const environment = createEnvironment(project.id, {
-        name: "worker",
-        environmentType: "local",
-      });
-      await storage.addEnvironment(environment);
-      storage.getBuildPipeline = mock(async () => ({
-        snapshot: {
-          projectId: project.id,
-          environmentId: environment.id,
-          phase: "complete",
-        },
-      })) as unknown as typeof storage.getBuildPipeline;
-      let saved: Record<string, unknown> | undefined;
-      const start = mock(async (input: Record<string, unknown>, id?: string) => {
-        saved = { ...input, id, phase };
-        await storage.createMultiReviewWorkflowIfNoActive(id!, environment.id, 1, saved);
-        return saved;
-      });
-      context.multiReviews = { start } as unknown as CommandContext["multiReviews"];
-      const complete = storage.coordinators.completeCoordinatorWorkflowAssociation.bind(
-        storage.coordinators,
-      );
-      let fail = true;
-      storage.coordinators.completeCoordinatorWorkflowAssociation = async (...args) => {
-        if (fail) {
-          fail = false;
-          throw new Error("receipt write failed");
-        }
-        return complete(...args);
-      };
-      const args = {
-        scope,
-        requestId: "crash-retry",
-        buildPipelineId: "build-1",
-        input: { projectId: project.id, environmentId: environment.id, targetBranch: "main" },
-      };
-      const launch = commands.get("start_coordinator_multi_review")!;
-      await expect(launch(args, context)).rejects.toThrow("receipt write failed");
-      const config = await storage.loadConfig();
-      await storage.updateGlobalConfig({
-        ...config.global,
-        agentSettings: {
-          actionDefaults: { review: { platform: "claude", model: "changed-model" } },
-          multiReview: { reviewerCount: 4 },
-        },
-      });
-      commands.set("get_native_agent_model_catalog", () => {
-        throw new Error("changed catalogue unavailable");
-      });
-      expect(await launch(args, context)).toEqual(saved);
-      expect(start).toHaveBeenCalledTimes(1);
-      expect(
-        await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
-      ).toContainEqual(expect.objectContaining({ resourceId: saved!.id, pending: false }));
-    });
-  }
-
-  test("omitted build and Multi Review choices run the saved defaults", async () => {
+  test("omitted build choices run the saved defaults", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
     const snapshot = await coordinator.ensure(project.id);
     const conversation = snapshot.workspace.conversations[0]!;
@@ -947,51 +859,6 @@ describe("coordinator command registry", () => {
           verify: { agent: "claude", model: "sonnet" },
         }),
       }),
-      expect.any(String),
-    );
-
-    const environment = createEnvironment(project.id, { name: "worker", environmentType: "local" });
-    environment.id = "worker-defaults";
-    await storage.addEnvironment(environment);
-    storage.getBuildPipeline = mock(async () => ({
-      snapshot: {
-        id: "pipeline-defaults",
-        projectId: project.id,
-        environmentId: environment.id,
-        phase: "complete",
-      },
-    })) as unknown as typeof storage.getBuildPipeline;
-    commands.set("get_native_agent_model_catalog", async () => [
-      { platform: "claude", id: "opus", label: "Opus", reasoning: [{ id: "high", label: "High" }] },
-      {
-        platform: "codex",
-        id: "gpt-5.6",
-        label: "GPT-5.6",
-        reasoning: [{ id: "medium", label: "Medium" }],
-      },
-    ]);
-    const startReview = mock(async () => ({ id: "review-defaults" }));
-    context.multiReviews = { start: startReview } as unknown as CommandContext["multiReviews"];
-    await commands.get("start_coordinator_multi_review")!(
-      {
-        scope,
-        requestId: "review-defaults",
-        buildPipelineId: "pipeline-defaults",
-        input: { environmentId: environment.id, projectId: project.id, targetBranch: "main" },
-      },
-      context,
-    );
-    expect(startReview).toHaveBeenCalledWith(
-      {
-        environmentId: environment.id,
-        projectId: project.id,
-        targetBranch: "main",
-        reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
-        reviewModel: opus,
-        addressFindingsModel: fix,
-        autoAddressFindings: true,
-        autoPr: false,
-      },
       expect.any(String),
     );
   });
@@ -1371,67 +1238,22 @@ describe("coordinator command registry", () => {
     expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
   });
 
-  test("hide_coordinator_work marks this project's records only, and keeps them", async () => {
+  test("workflow bookkeeping announces only real changes", async () => {
     const project = await storage.addProject(createProject("remote", checkout));
-    const other = await storage.addProject(createProject("other", checkout));
     const snapshot = await coordinator.ensure(project.id);
-    const elsewhere = await coordinator.ensure(other.id);
-    const follow = (projectId: string, coordinatorId: string, requestId: string) =>
-      storage.coordinators.followCoordinatorPullRequest({
-        projectId,
-        coordinatorId,
-        environmentId: "gone-env",
-        requestId,
-        source: "create-pr",
-        prUrl: "https://github.com/o/r/pull/1",
-      });
-    const mine = await follow(project.id, snapshot.workspace.id, "mine");
-    const theirs = await follow(other.id, elsewhere.workspace.id, "theirs");
+    const mine = await storage.coordinators.followCoordinatorPullRequest({
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      environmentId: "gone-env",
+      requestId: "mine",
+      source: "create-pr",
+      prUrl: "https://github.com/o/r/pull/1",
+    });
     const announced: string[] = [];
     storage.addResourceChangeListener((change) => {
       if (change.resource === "coordinator") announced.push(change.id);
     });
 
-    const next = (await commands.get("hide_coordinator_work")!(
-      { projectId: project.id, associationIds: [mine.id, theirs.id] },
-      context,
-    )) as Awaited<ReturnType<CoordinatorService["get"]>>;
-
-    expect(next?.workflows.find((item) => item.id === mine.id)?.workHiddenAt).toEqual(
-      expect.any(String),
-    );
-    expect(announced).toContain(project.id);
-    expect(announced).not.toContain(other.id);
-    const [untouched] = await storage.coordinators.listCoordinatorWorkflowAssociations(other.id);
-    expect(untouched?.id).toBe(theirs.id);
-    expect(untouched?.workHiddenAt).toBeUndefined();
-
-    const stored = () => readStoredValue(root + "/data", "coordinators.json");
-    const before = stored();
-    const announcedBefore = announced.length;
-    for (const associationIds of [
-      [],
-      [mine.id],
-      Array(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS).fill(mine.id),
-    ]) {
-      await commands.get("hide_coordinator_work")!(
-        { projectId: project.id, associationIds },
-        context,
-      );
-      expect(stored()).toEqual(before);
-      expect(announced).toHaveLength(announcedBefore);
-    }
-    await expect(
-      commands.get("hide_coordinator_work")!(
-        {
-          projectId: project.id,
-          associationIds: Array(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS + 1).fill(mine.id),
-        },
-        context,
-      ),
-    ).rejects.toThrow("bounded list");
-
-    announced.length = 0;
     await storage.coordinators.markCoordinatorWorkflowNotified(mine.id, 1);
     expect(announced).toEqual([project.id]);
     await storage.coordinators.markCoordinatorWorkflowNotified(mine.id, 1);
@@ -1445,12 +1267,5 @@ describe("coordinator command registry", () => {
       return true;
     });
     expect(announced).toEqual([project.id, project.id]);
-
-    await expect(
-      commands.get("hide_coordinator_work")!(
-        { projectId: project.id, associationIds: "everything" },
-        context,
-      ),
-    ).rejects.toThrow("associationIds");
   });
 });

@@ -66,7 +66,6 @@ const NARROWED: Readonly<Record<string, "admin" | "internal">> = {
   send_coordinator_agent_mail: "internal",
   start_coordinator_build_pipeline: "internal",
   start_coordinator_graph_run: "internal",
-  start_coordinator_multi_review: "internal",
 };
 
 describe("the manifest's workspace set and the grant allow-list", () => {
@@ -87,13 +86,15 @@ describe("the manifest's workspace set and the grant allow-list", () => {
   });
 
   test("every command a realm sent in 0006's live pass stays on the allow-list", () => {
-    // `plans/unified/0006-grant-scope-live-evidence.md` (Notes), names only.
+    // `plans/unified/0006-grant-scope-live-evidence.md` (Notes), names only,
+    // less the two capability commands that pre-contract realm sent, deleted
+    // with the one-time support floor (to-do 8304 (retired)).
     const observed = `apply_pane_layout_intent changes_get_view check_claude_cli check_claude_config
       check_docker check_github_cli create_local_terminal_session create_session
       delete_compose_draft ensure_project_coordinator ensure_project_home_environment
-      fetch_project_git get_agent_handoff_capabilities get_agent_mail_summary
+      fetch_project_git get_agent_mail_summary
       get_agent_model_catalog_cache get_available_ai_cli get_backend_profile get_bug_report
-      get_client_state_capabilities get_compose_draft get_config get_container_host_reachability
+      get_compose_draft get_config get_container_host_reachability
       get_coordinator_checkout_turn get_coordinator_pane_layout get_environment
       get_environment_process_usage get_environment_snapshot get_environment_snapshots
       get_environments get_feature_plans get_github_cli_status get_kanban_tasks
@@ -109,7 +110,7 @@ describe("the manifest's workspace set and the grant allow-list", () => {
       sync_all_environments_with_docker update_session_activity`
       .split(/\s+/u)
       .filter(Boolean);
-    expect(observed).toHaveLength(63);
+    expect(observed).toHaveLength(61);
     expect(observed.filter((name) => !allowList.has(name))).toEqual([]);
   });
 

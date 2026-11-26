@@ -6,10 +6,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { BackendId } from "@orkestrator/protocol/federation";
-import {
-  CLIENT_STATE_CAPABILITIES_COMMAND,
-  NO_CLIENT_STATE_CAPABILITIES,
-} from "@orkestrator/protocol/client-state";
 import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
 import { invoke } from "@/lib/native/backend";
 import { getWindowScope } from "@/lib/node-scope/app-window-scope";
@@ -228,73 +224,43 @@ describe("one window budget is shared", () => {
 });
 
 describe("a scope's capability cache is independent", () => {
-  test("client-state, change-tracking, design, sync and artifact capabilities are per scope", async () => {
+  test("change-tracking and design capabilities are per scope", async () => {
     const a = openLeaf(NODE_A, {
-      [CLIENT_STATE_CAPABILITIES_COMMAND]: {
-        ...NO_CLIENT_STATE_CAPABILITIES,
-        noticeDismissals: true,
-      },
       changes_get_capabilities: { capability: "change-tracking", history: true },
       design_capabilities: { ok: true, value: { library: true } },
-      get_native_agent_sync_capabilities: {
-        historyPagingVersions: [1],
-        progressiveViewVersions: [1],
-      },
     });
-    // The command node is an older backend without any of these.
+    // The command node has neither service.
     invokeMock.mockImplementation((command: string) =>
       Promise.reject(new Error(`Unknown backend command: ${command}`)),
     );
-    resetClientStateCapabilitiesForTests();
     resetChangeTrackingCapabilitiesForTests();
     resetCapabilities();
-    invalidateNativeAgentSyncCapability();
 
-    expect((await clientStateCapabilities(a.scope)).noticeDismissals).toBe(true);
-    expect((await clientStateCapabilities()).noticeDismissals).toBe(false);
     expect(await getChangeTrackingCapabilities(a.scope)).toMatchObject({ history: true });
     expect(await getChangeTrackingCapabilities()).toBeNull();
-    expect(await getCapabilities("key", a.scope)).toEqual({ library: true } as never);
+    expect(await getCapabilities("key", a.scope)).toMatchObject({ library: true });
     await expect(getCapabilities("key")).rejects.toThrow(/too old for the design canvas/);
-    expect(await nativeAgentProgressiveSyncSupported(a.scope)).toBe(true);
-    expect(await nativeAgentProgressiveSyncSupported()).toBe(false);
-    // The command node predates the sync protocol: an incompatible backend.
-    await expect(requireNativeAgentProgressiveSync()).rejects.toThrow(/Update it\./);
 
     // Cached on the scope: asking again does not read A again.
-    await clientStateCapabilities(a.scope);
     await getChangeTrackingCapabilities(a.scope);
     await getCapabilities("key", a.scope);
-    await nativeAgentProgressiveSyncSupported(a.scope);
-    for (const command of [
-      CLIENT_STATE_CAPABILITIES_COMMAND,
-      "changes_get_capabilities",
-      "design_capabilities",
-      "get_native_agent_sync_capabilities",
-    ]) {
+    for (const command of ["changes_get_capabilities", "design_capabilities"]) {
       expect(a.client.calls(command)).toHaveLength(1);
     }
 
     // Resetting the command scope's answers leaves A's.
-    resetClientStateCapabilitiesForTests();
     resetChangeTrackingCapabilitiesForTests();
     resetCapabilities();
-    invalidateNativeAgentSyncCapability();
+    expect(await getChangeTrackingCapabilities(a.scope)).toMatchObject({ history: true });
+    expect(a.client.calls("changes_get_capabilities")).toHaveLength(1);
+  });
+
+  test("client-state and sync capabilities are the domains' own answers", async () => {
+    const a = openLeaf(NODE_A, {});
+    resetClientStateCapabilitiesForTests(undefined, a.scope);
+    invalidateNativeAgentSyncCapability(a.scope);
     expect((await clientStateCapabilities(a.scope)).noticeDismissals).toBe(true);
-    expect(a.client.calls(CLIENT_STATE_CAPABILITIES_COMMAND)).toHaveLength(1);
-
-    // A reconnect of A's event stream makes only A ask again.
-    a.client.emit("native-event-stream-connected", {});
-    await clientStateCapabilities(a.scope);
-    expect(a.client.calls(CLIENT_STATE_CAPABILITIES_COMMAND)).toHaveLength(2);
-
-    // A disposed scope takes its answers (and its listener) with it.
-    a.scope.dispose();
-    expect(a.client.listenerCount()).toBe(0);
-    const reopened = openLeaf(NODE_A, {
-      [CLIENT_STATE_CAPABILITIES_COMMAND]: { ...NO_CLIENT_STATE_CAPABILITIES },
-    });
-    expect((await clientStateCapabilities(reopened.scope)).noticeDismissals).toBe(false);
-    expect(reopened.client.calls(CLIENT_STATE_CAPABILITIES_COMMAND)).toHaveLength(1);
+    expect(await nativeAgentProgressiveSyncSupported(a.scope)).toBe(true);
+    await expect(requireNativeAgentProgressiveSync(a.scope)).resolves.toBeUndefined();
   });
 });

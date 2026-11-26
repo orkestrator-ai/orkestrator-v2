@@ -254,22 +254,6 @@ export const readLocalFileCommand = defineCommand({
   critical: [],
 });
 
-export const readLocalFileAtBranchCommand = defineCommand({
-  domain: filesDomain,
-  name: "read_local_file_at_branch",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({
-    worktreePath: Schema.String,
-    filePath: Schema.String,
-    branch: Schema.String,
-  }),
-  // `null`: the branch has no such file.
-  result: Schema.NullOr(FileContentSchema),
-  critical: [],
-});
-
 export const readContainerFileCommand = defineCommand({
   domain: filesDomain,
   name: "read_container_file",
@@ -278,21 +262,6 @@ export const readContainerFileCommand = defineCommand({
   read: true,
   args: Schema.Struct({ filePath: Schema.String, containerId: Schema.String }),
   result: FileContentSchema,
-  critical: [],
-});
-
-export const readFileAtBranchCommand = defineCommand({
-  domain: filesDomain,
-  name: "read_file_at_branch",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({
-    filePath: Schema.String,
-    branch: Schema.String,
-    containerId: Schema.String,
-  }),
-  result: Schema.NullOr(FileContentSchema),
   critical: [],
 });
 
@@ -654,9 +623,7 @@ export const FILES_COMMANDS = [
   getLocalFileSubtreeCommand,
   getWorktreeSnapshotRevisionsCommand,
   readLocalFileCommand,
-  readLocalFileAtBranchCommand,
   readContainerFileCommand,
-  readFileAtBranchCommand,
   readContainerFileBase64Command,
   readFileBase64Command,
   readEnvironmentFileBase64Command,

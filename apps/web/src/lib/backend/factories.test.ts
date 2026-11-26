@@ -37,6 +37,16 @@ const ALSO_COMMAND_NODE = new Set([
   "setAgentAccountAutoSwitchIncluded",
 ]);
 
+/**
+ * Capability reads folded into their domains: every supported node has them,
+ * so the client answers without a call (to-do 8304 (retired)).
+ */
+const ANSWERED_LOCALLY = new Set([
+  "getAgentHandoffCapabilities",
+  "getClientStateCapabilities",
+  "getNativeAgentSyncCapabilities",
+]);
+
 function factoryName(file: string): string {
   const base = file.replace(/\.ts$/, "");
   return `create${base
@@ -81,6 +91,12 @@ describe("lib/backend factories", () => {
       for (const [fnName, fn] of functions) {
         // The command-bound named export is the same function over the command scope.
         expect(typeof module[fnName], `${file} keeps ${fnName} as a named export`).toBe("function");
+        if (ANSWERED_LOCALLY.has(fnName)) {
+          invokeRaw.mockClear();
+          await call(fn, []);
+          expect(invokeRaw.mock.calls, `${fnName} asks nothing`).toEqual([]);
+          continue;
+        }
         const values = Array.from({ length: fn.length }, () => "value");
         // A trailing `machine` of "value" asks another node through the
         // command node; without one the call is for the client's own node.

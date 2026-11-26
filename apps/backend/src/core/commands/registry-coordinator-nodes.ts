@@ -33,7 +33,6 @@ import {
   openCoordinatorNodeDelegationCommand,
   sendCoordinatorNodeMailCommand,
   startCoordinatorNodeBuildPipelineCommand,
-  startCoordinatorNodeMultiReviewCommand,
   transferCoordinatorAttachmentsCommand,
 } from "@orkestrator/protocol/contract/domains/coordinator";
 import { createLogger } from "@orkestrator/protocol/logger";
@@ -60,8 +59,6 @@ import {
   type MultiReviewActionResult,
 } from "@orkestrator/protocol/multi-review";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
-import { BACKEND_CAPABILITIES } from "@orkestrator/protocol/backend-profile";
 import { isBackendId } from "@orkestrator/protocol/federation";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import type { ResultOf } from "@orkestrator/protocol/contract/command";
@@ -822,11 +819,10 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
               prior.delegation.workerTabId !== args.toTabId.trim()))
         )
           throw new Error(COORDINATOR_REQUEST_ID_REUSED_ERROR);
-        // deliverNow reaches the worker only through a leaf that knows `steer`;
-        // a pre-contract one would refuse the whole message over the unknown
-        // field. A leaf with the node-mail domain gets it as a critical field.
+        // deliverNow reaches the worker as `steer`, a critical field of the
+        // node-mail domain.
         const mail = target.nodeMail(`mail:${caller.coordinatorId}:${requestId}`);
-        const steer = args.deliverNow === true && mail.supports(BACKEND_CAPABILITIES.nodeMailSteer);
+        const steer = args.deliverNow === true;
         const recipient = await target.environment(toEnvironmentId);
         const requestedTab = typeof args.toTabId === "string" ? args.toTabId.trim() : "";
         const release = context.runtime.coordinatorRequests.workerTabs.beginDelegation(
@@ -1415,62 +1411,4 @@ export function registerCoordinatorNodeCommands(register: CommandRegistrar): voi
       },
     } satisfies MultiReviewActionResult;
   });
-
-  register(
-    startCoordinatorNodeMultiReviewCommand,
-    // Retired (plan item 7009): Control MCP's `launch_multi_review` moved to
-    // `launch_coordinator_node_multi_review` in v2.36.4-beta. Kept, counted,
-    // until its register row retires.
-    async ({ scope, requestId, nodeId, buildPipelineId, input }, context) => {
-      compatibilityPathUsage.record("retired-command.start-coordinator-node-multi-review");
-      const caller = await identity(scope, context);
-      const stableRequestId = asNonBlankString(requestId, "requestId");
-      const pipelineId = asNonBlankString(buildPipelineId, "buildPipelineId");
-      const target = await coordinatorNodeTarget(
-        context,
-        caller,
-        asNonBlankString(nodeId, "nodeId"),
-      );
-      if (!record(input) || typeof input.environmentId !== "string") {
-        throw new Error("Invalid scoped multi-review request");
-      }
-      await target.environment(input.environmentId);
-      const payloadHash = actionHash({ nodeId: target.nodeId, input, buildPipelineId: pipelineId });
-      return once(`${caller.coordinatorId}\0${stableRequestId}`, async () => {
-        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
-          id: randomUUID(),
-          ...caller,
-          kind: "multi-review",
-          resourceId: randomUUID(),
-          nodeId: target.nodeId,
-          requestId: stableRequestId,
-          payloadHash,
-          dependsOnResourceId: pipelineId,
-          createdAt: new Date().toISOString(),
-        });
-        if (!receipt.claimed && receipt.association.pending) {
-          throw new Error("Multi-review creation is already in progress; retry this requestId");
-        }
-        const workflow = await target.call<JsonRecord>(
-          "start_controller_multi_review",
-          {
-            input: { ...input, projectId: target.projectId },
-            reservedId: receipt.association.resourceId,
-            buildPipelineId: pipelineId,
-          },
-          `review:${caller.coordinatorId}:${stableRequestId}`,
-        );
-        if (!record(workflow) || typeof workflow.id !== "string") {
-          throw new Error("Multi-review creation returned an invalid workflow");
-        }
-        if (receipt.association.pending) {
-          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
-            receipt.association.id,
-            workflow.id,
-          );
-        }
-        return workflow as ResultOf<typeof startCoordinatorNodeMultiReviewCommand>;
-      });
-    },
-  );
 }

@@ -337,6 +337,21 @@ The backend learns that a session moved without reading it (to-do 8102 task
   project trust (`projectTrusted`); a read-only turn loads none. Agent
   Capabilities delivers into exactly those user directories, and
   `src/capability-delivery-conformance.test.ts` pins this against the SDK.
+- Agent Capabilities session-private skills (`src/capability-skills.ts`)
+  arrive on every prompt of such a session as `capabilityPlugins`: directories
+  the backend staged under `ORKESTRATOR_CAPABILITY_SESSION_PLUGINS_DIR`.
+  Accept them only as that root's own content-addressed children (no link,
+  nothing outside it), and pass only their `skills/` to that session's
+  resource loader as `additionalSkillPaths`; never copy them into
+  `~/.pi/agent` or `~/.agents/skills`, which every session reads. A prompt
+  that names none holds none, and the set moves only by rebuilding the session
+  at a turn's start (`reconcileCapabilitySkills`), never mid-turn. A read-only
+  turn and a coordinator load none. Every build records the skills the loader
+  resolved, with their `SKILL.md` paths, for the no-touch
+  `GET /session/:id/capability-evidence` route, which answers an unknown
+  session in band as `missing` and must never touch, hydrate or attach.
+  `src/capability-session-skills-conformance.test.ts` proves loading and
+  isolation against the SDK with pi-ai's faux model.
 - Pi's SDK sessions load no MCP client (only its CLI loads the built-in `mcp`
   extension) and have no plan/build mode. The bridge owns an MCP client (`src/mcp.ts`) and registers tools through the inline
   `orkestrator-mcp` extension: Orkestrator from env / per-tab `agentMcp`,

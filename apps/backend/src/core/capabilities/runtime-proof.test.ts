@@ -8,7 +8,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { CapabilitySessionEvidenceRead } from "@orkestrator/protocol/capability-evidence";
+import {
+  parseCapabilitySessionEvidence,
+  type CapabilitySessionEvidenceRead,
+} from "@orkestrator/protocol/capability-evidence";
 import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 
 import { StorageService } from "../storage/service.js";
@@ -209,7 +212,10 @@ describe("running work holds shared writes", () => {
 });
 
 describe("runtime proof", () => {
-  async function withPrivateLaunch(evidence: () => CapabilitySessionEvidenceRead) {
+  async function withPrivateLaunch(
+    evidence: () => CapabilitySessionEvidenceRead,
+    provider: "claude" | "pi" = "claude",
+  ) {
     const node = await machine({ evidence });
     const { inspection } = await addSkill(node.service, "review");
     const state = await node.storage.capabilities.loadCapabilityState();
@@ -218,7 +224,7 @@ describe("runtime proof", () => {
     node.storage.capabilities.mutateCapabilityState((current) => {
       current.launches["sess-1"] = {
         sessionKey: "sess-1",
-        target: { nodeId: NODE, provider: "claude", environmentId: "env-1", sessionId: "sess-1" },
+        target: { nodeId: NODE, provider, environmentId: "env-1", sessionId: "sess-1" },
         manifestDigest: "sha256:m",
         permissionPolicyDigest: "sha256:p",
         packages: [{ id: pkg.id, artifactDigest: pkg.artifactDigest }],
@@ -243,7 +249,7 @@ describe("runtime proof", () => {
     const verify = () =>
       node.service.verify({
         consent: true,
-        target: { nodeId: NODE, provider: "claude", environmentId: "env-1", sessionId: "sess-1" },
+        target: { nodeId: NODE, provider, environmentId: "env-1", sessionId: "sess-1" },
         componentIds: [componentId],
       });
     return { ...node, componentId, verify };
@@ -304,6 +310,57 @@ describe("runtime proof", () => {
     });
     const state = await node.storage.capabilities.loadCapabilityState();
     expect(Object.keys(state.observations)).toHaveLength(0);
+    expect(result.checks[0]?.detail).toContain("does not report which skills it loaded");
+  });
+
+  /** A Pi session's report: each loaded skill with the `SKILL.md` it came from. */
+  const piLoaded = (path: string): CapabilitySessionEvidenceRead =>
+    parseCapabilitySessionEvidence({
+      state: "evidence",
+      generation: 2,
+      loadedAt: "2026-11-26T10:01:00.000Z",
+      plugins: [],
+      skills: ["review"],
+      loadedSkills: [{ name: "review", path }],
+      usedSkills: [],
+    });
+
+  test("a Pi skill loaded from the session's own directory is load-confirmed", async () => {
+    const node = await withPrivateLaunch(
+      () =>
+        piLoaded("/data/capability-session-plugins/0123456789abcdef0123/skills/review/SKILL.md"),
+      "pi",
+    );
+    const result = await node.verify();
+    expect(result.checks).toEqual([
+      expect.objectContaining({
+        componentId: node.componentId,
+        level: "load-confirmed",
+        status: "ready",
+      }),
+    ]);
+    expect(result.checks[0]?.detail).toContain("own skill directory");
+    const state = await node.storage.capabilities.loadCapabilityState();
+    expect(
+      Object.values(state.observations).find((entry) => entry.componentId === node.componentId),
+    ).toMatchObject({ level: "load-confirmed", generation: "pi:2:2026-11-26T10:01:00.000Z" });
+  });
+
+  test("a Pi skill of the same name loaded from a shared home is never confirmed", async () => {
+    const node = await withPrivateLaunch(
+      () => piLoaded("/home/user/.pi/agent/skills/review/SKILL.md"),
+      "pi",
+    );
+    const result = await node.verify();
+    expect(result.checks[0]).toMatchObject({ level: "present", status: "failed" });
+    expect(result.checks[0]?.detail).toContain("shared skill of the same name");
+  });
+
+  test("a Pi bridge without the route reports that loading cannot be confirmed", async () => {
+    const node = await withPrivateLaunch(() => ({ state: "unsupported" }), "pi");
+    const result = await node.verify();
+    expect(result.checks[0]).toMatchObject({ level: "present", status: "installed-next-session" });
+    expect(result.checks[0]?.detail).toContain("does not report which skills it loaded");
   });
 
   test("Grok's own discovery listing of the installed path is advertised; a name alone is not", async () => {

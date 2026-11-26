@@ -16,11 +16,24 @@ describe("capabilityPlugins in the prompt body", () => {
     expect(body.capabilityPlugins).toEqual(["/data/capability-session-plugins/abc"]);
   });
 
+  test("a Pi prompt carries them too: its bridge loads their skills as the session's own", () => {
+    const body = bridgePromptBody(
+      "pi",
+      connection,
+      "hi",
+      { requestId: "r1", capabilityPlugins: ["/data/capability-session-plugins/abc"] },
+      [],
+    );
+    expect(body.capabilityPlugins).toEqual(["/data/capability-session-plugins/abc"]);
+  });
+
   test("an empty list is not sent, and no other bridge receives the field", () => {
-    expect(
-      bridgePromptBody("claude", connection, "hi", { requestId: "r1", capabilityPlugins: [] }, []),
-    ).not.toHaveProperty("capabilityPlugins");
-    for (const agent of ["codex", "cursor", "grok", "pi"] as const) {
+    for (const agent of ["claude", "pi"] as const) {
+      expect(
+        bridgePromptBody(agent, connection, "hi", { requestId: "r1", capabilityPlugins: [] }, []),
+      ).not.toHaveProperty("capabilityPlugins");
+    }
+    for (const agent of ["codex", "cursor", "grok"] as const) {
       expect(
         bridgePromptBody(
           agent,

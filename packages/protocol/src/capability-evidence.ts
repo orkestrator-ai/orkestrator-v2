@@ -5,7 +5,9 @@
  * A bridge answers `GET /session/:id/capability-evidence` from what its
  * provider itself reported: the plugins the latest query loaded (with their
  * directories, so a content-addressed directory names the exact bytes), the
- * skills it listed, and the skills the agent invoked. The route is no-touch
+ * skills it listed (Pi: with each skill's `SKILL.md` path, since its
+ * session-private skills arrive as skill paths rather than a plugin), and the
+ * skills the agent invoked. The Claude and Pi bridges serve it. The route is no-touch
  * like `/activity`: it never resolves, hydrates or re-attaches a session, and
  * an unknown session is answered in band as `missing`, never 404.
  *
@@ -34,6 +36,12 @@ export interface CapabilitySessionEvidence {
   plugins: Array<{ name: string; path?: string }>;
   /** Skill names the load listed (plugin skills are `plugin:skill`). */
   skills: string[];
+  /**
+   * The skills the load resolved with the file each one loads from, for a
+   * provider that reports them (Pi). A path inside a content-addressed
+   * directory binds the loaded bytes, as a plugin directory does.
+   */
+  loadedSkills?: Array<{ name: string; path: string }>;
   /** Skill names the agent invoked in this bridge process, oldest first. */
   usedSkills: string[];
 }
@@ -90,6 +98,16 @@ export function parseCapabilitySessionEvidence(body: unknown): CapabilitySession
       plugins.push({ name, ...(path ? { path } : {}) });
     }
   }
+  const loadedSkills: NonNullable<CapabilitySessionEvidence["loadedSkills"]> = [];
+  if (Array.isArray(record.loadedSkills)) {
+    for (const candidate of record.loadedSkills.slice(0, MAX_CAPABILITY_EVIDENCE_ENTRIES)) {
+      if (!candidate || typeof candidate !== "object") continue;
+      const row = candidate as Record<string, unknown>;
+      const name = text(row.name, MAX_CAPABILITY_EVIDENCE_NAME);
+      const path = text(row.path, MAX_CAPABILITY_EVIDENCE_PATH);
+      if (name && path) loadedSkills.push({ name, path });
+    }
+  }
   const providerVersion = text(record.providerVersion, 128);
   return {
     state: "evidence",
@@ -98,6 +116,7 @@ export function parseCapabilitySessionEvidence(body: unknown): CapabilitySession
     ...(providerVersion ? { providerVersion } : {}),
     plugins,
     skills: names(record.skills),
+    ...(Array.isArray(record.loadedSkills) ? { loadedSkills } : {}),
     usedSkills: names(record.usedSkills),
   };
 }

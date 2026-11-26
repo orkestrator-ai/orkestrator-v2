@@ -58,6 +58,10 @@ import type {
 
 const log = createLogger("capabilities");
 
+/** A private component's check when the session's bridge cannot report what it loaded. */
+const UNREPORTED_PRIVATE_DETAIL =
+  "Delivered to this session alone. This agent's bridge does not report which skills it loaded, so loading cannot be confirmed.";
+
 export class CapabilityPreflight {
   /** The observed deliveries behind a launch's effective resources, for its record. */
   private readonly launchEvidence = new WeakMap<
@@ -103,7 +107,7 @@ export class CapabilityPreflight {
         : undefined;
     const remoteProofs = new Map(remote?.checks.map((check) => [check.componentId, check]));
     // What the provider itself reported: never inferred from what was sent.
-    const proofs = local
+    const proofs: Map<string, RuntimeProof> & { unreported?: boolean } = local
       ? await this.sessionProofs(target, launch, componentIds, state)
       : new Map<string, RuntimeProof>();
     const checks: CapabilityVerification["checks"] = [];
@@ -135,8 +139,9 @@ export class CapabilityPreflight {
                 componentId,
                 level: "present",
                 status: "installed-next-session",
-                detail:
-                  "Delivered to this session alone. The session has not reported loading it yet, so loading is not confirmed.",
+                detail: proofs.unreported
+                  ? UNREPORTED_PRIVATE_DETAIL
+                  : "Delivered to this session alone. The session has not reported loading it yet, so loading is not confirmed.",
               },
         );
         continue;
@@ -301,7 +306,9 @@ export class CapabilityPreflight {
         : undefined,
       componentIds.length > 0
         ? this.sessionProofs(target, frozen, componentIds, state)
-        : new Map<string, RuntimeProof>(),
+        : (new Map<string, RuntimeProof>() as Map<string, RuntimeProof> & {
+            unreported?: boolean;
+          }),
     ]);
     const checks = componentIds.map((componentId) => {
       const proof = proofs.get(componentId);
@@ -309,7 +316,11 @@ export class CapabilityPreflight {
         componentId,
         level: proof?.level ?? "present",
         status: proof?.status ?? "installed-next-session",
-        detail: proof?.detail ?? "Delivered to this session alone. Loading is unconfirmed.",
+        detail:
+          proof?.detail ??
+          (proofs.unreported
+            ? UNREPORTED_PRIVATE_DETAIL
+            : "Delivered to this session alone. Loading is unconfirmed."),
       };
     });
     return {
@@ -332,13 +343,18 @@ export class CapabilityPreflight {
     await pruneSessionPlugins(sessionPluginsRoot(this.ctx.deps.dataDir), referenced);
   }
 
-  /** A Claude session's own report, graded (`runtime-proof.ts`); empty without one. */
+  /**
+   * A Claude or Pi session's own report, graded (`runtime-proof.ts`); empty
+   * without one. `unreported` marks a bridge that cannot report what it loaded
+   * (the route answered 404 or 405), so a private component's check says so
+   * rather than looking merely not reported yet.
+   */
   private async sessionProofs(
     target: CapabilityTarget,
     launch: CapabilityLaunchRecord | undefined,
     componentIds: readonly string[],
     state: CapabilityState,
-  ): Promise<Map<string, RuntimeProof>> {
+  ): Promise<Map<string, RuntimeProof> & { unreported?: boolean }> {
     const read = this.ctx.deps.sessionEvidence;
     if (!read || !target.sessionId || !target.environmentId) return new Map();
     const evidence = await read({
@@ -346,8 +362,18 @@ export class CapabilityPreflight {
       provider: target.provider,
       sessionKey: target.sessionId,
     }).catch(() => ({ state: "none" }) as const);
-    if (evidence.state !== "evidence") return new Map();
-    return gradeSessionEvidence({ launch, evidence, componentIds, state });
+    if (evidence.state !== "evidence") {
+      return Object.assign(new Map<string, RuntimeProof>(), {
+        unreported: evidence.state === "unsupported",
+      });
+    }
+    return gradeSessionEvidence({
+      launch,
+      evidence,
+      componentIds,
+      state,
+      provider: target.provider,
+    });
   }
 
   /** Grok's own discovery listing on this machine, graded; empty when it cannot say. */

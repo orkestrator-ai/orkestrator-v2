@@ -56,6 +56,11 @@ import { piWithheldGitHubCredential, withheldShellToolDefinitions } from "./gith
 import { requestToolApproval } from "./interactions.js";
 import { excludeConfiguredPackages } from "./project-extensions.js";
 import {
+  capabilitySkillsNeedRebuild,
+  effectiveCapabilitySkillPaths,
+  noteCapabilityLoad,
+} from "./capability-skills.js";
+import {
   closePiMcp,
   mcpConfigNeedsRefresh,
   mcpConnectionNeedsRefresh,
@@ -501,6 +506,9 @@ export async function ensureSession(state: SessionState): Promise<AgentSession> 
 }
 
 async function attach(state: SessionState): Promise<AgentSession> {
+  // The private skill set this build's resource loader takes (read by
+  // `piResourceLoaderPolicy` below); recorded with what it resolved.
+  const capabilitySkills = effectiveCapabilitySkillPaths(state);
   try {
     const session = agentSessionTestHooks.createAgentSession
       ? await agentSessionTestHooks.createAgentSession(state)
@@ -511,7 +519,9 @@ async function attach(state: SessionState): Promise<AgentSession> {
     // prompt template only exists on the session afterwards.
     await bindSessionExtensions(state, session);
     applyPiToolPolicy(session, state.policy);
-    return publishAttachedSession(state, session);
+    const published = publishAttachedSession(state, session);
+    noteCapabilityLoad(state, capabilitySkills, session.resourceLoader?.getSkills?.().skills ?? []);
+    return published;
   } catch (error) {
     await closePiMcp(state);
     throw error;
@@ -560,6 +570,21 @@ export async function reconcileAgentMcp(
   ) {
     await detachSession(state);
   }
+}
+
+/**
+ * Rebuild an attached session whose session-private skill set (Agent
+ * Capabilities) differs from what the latest prompt named. Pi fixes a
+ * session's skills when it builds the resource loader, so the set moves only
+ * through a detach, and only at a turn's start, which the prompt path has
+ * already claimed. A session with no live runtime takes the set on attach.
+ */
+export async function reconcileCapabilitySkills(state: SessionState): Promise<void> {
+  // An attach in flight read the set when it started; let it publish first.
+  await state.attaching?.catch(() => undefined);
+  if (!state.session || state.attaching) return;
+  if (!capabilitySkillsNeedRebuild(state)) return;
+  await detachSession(state);
 }
 
 /**
@@ -1018,7 +1043,7 @@ export function coordinatorProjectSkillPaths(cwd: string = workingDirectory): st
 
 /** What a session's resource loader discovers, and whether it trusts the project. */
 export function piResourceLoaderPolicy(
-  state: Pick<SessionState, "policy" | "readOnly">,
+  state: Pick<SessionState, "policy" | "readOnly" | "capabilitySkillPaths">,
   cwd: string = workingDirectory,
 ): {
   discovery: ReturnType<typeof projectResourceDiscoveryOptions> & {
@@ -1039,10 +1064,22 @@ export function piResourceLoaderPolicy(
   const coordinator =
     state.policy?.id === "coordinator-read-only" &&
     process.env[BRIDGE_EXECUTION_POLICY_ENV] === "coordinator-read-only";
+  if (coordinator) {
+    return {
+      discovery: {
+        ...discovery,
+        noSkills: false,
+        additionalSkillPaths: coordinatorProjectSkillPaths(cwd),
+      },
+      projectTrusted: state.policy?.projectResources === true,
+    };
+  }
+  // Skills Agent Capabilities delivered to this session alone: per session in
+  // the SDK, never written into the shared Pi home (`capability-skills.ts`).
+  const privateSkills = effectiveCapabilitySkillPaths(state);
   return {
-    discovery: coordinator
-      ? { ...discovery, noSkills: false, additionalSkillPaths: coordinatorProjectSkillPaths(cwd) }
-      : discovery,
+    discovery:
+      privateSkills.length > 0 ? { ...discovery, additionalSkillPaths: privateSkills } : discovery,
     projectTrusted: state.policy?.projectResources === true,
   };
 }

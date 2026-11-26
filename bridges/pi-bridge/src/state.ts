@@ -328,6 +328,24 @@ export interface SessionState {
    */
   agentMcp?: { url: string; token: string; artifacts?: { token: string } };
   /**
+   * The session-private skill directories (Agent Capabilities) the latest
+   * prompt named, after validation (`capability-skills.ts`). Runtime-only:
+   * every prompt of such a session names them again, and the next turn
+   * rebuilds the session when they differ from what it was built with.
+   */
+  capabilitySkillPaths?: string[];
+  /** The private skill directories the attached session was built with. */
+  capabilitySkillPathsLoaded?: string[];
+  /**
+   * What the latest build's resource loader resolved, for the no-touch
+   * `/capability-evidence` route. Names and paths only. Runtime-only.
+   */
+  capabilityEvidence?: {
+    generation: number;
+    loadedAt: string;
+    loadedSkills: Array<{ name: string; path: string }>;
+  };
+  /**
    * The workflow-result attempt the current turn runs for, from its prompt.
    * Runtime-only and replaced by every prompt: it scopes the read-only and
    * approval exemption for that attempt's own tools to this turn.

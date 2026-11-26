@@ -543,9 +543,12 @@ export const BASELINE_CAPABILITY_SUPPORT: Readonly<
     ),
   },
   pi: {
+    // Machine-wide copies are shared. A selection made for one session, graph
+    // node or template is delivered to that session alone instead, as the
+    // session's own skill paths (`privateDelivery` in capabilityLiveSemantics).
     skill: skillSupport(
       no(
-        "Pi reads ~/.agents/skills, which Codex, Cursor, Grok and OpenCode also read, as well as its own ~/.pi/agent/skills.",
+        "Pi reads ~/.agents/skills, which Codex, Cursor, Grok and OpenCode also read, as well as its own ~/.pi/agent/skills. A selection made for one session, graph node or template is delivered to that Pi session alone, as its own skill paths.",
       ),
       NO_LIVE_SKILL_INVENTORY,
       no("Pi has no per-skill enable switch."),

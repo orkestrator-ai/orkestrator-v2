@@ -99,7 +99,9 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
  *   Retired: still written for those clients, but no decision reads it now
  *   that every mergeable checkout is merged. Not announced.
  * - `coordinator-upstream-auto-merge`: one row per project an older client set
- *   to always merge upstream commits. Retired in the same way; not announced.
+ *   to always merge upstream commits. Retired: nothing writes it since its
+ *   commands were deleted with the one-time support floor, and nothing reads
+ *   it; project removal still deletes a row. Not announced.
  * - `notice-dismissals`: one document, notices dismissed per session identity,
  *   bounded in both dimensions; announces `notice-dismissal`.
  * - `coordinator-action-marks`: one row per coordinator conversation, owned by

@@ -122,9 +122,14 @@ for the agent-test range on beelink (`sudo ufw allow proto tcp from
 section. The signal-confirmed Linux Engine run it unblocked passed the same
 day, and 7080 and 0020 were retired.
 
+Updated 2026-11-26: 0039 task 6's Cursor cells and task 5's real-login Pi
+rerun ran on mbp3 with real logins and left this file; their results are in
+[0039's live apply record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
+0039 task 4 (Grok) stays: the host Grok login had expired.
+
 ### Tasks
 
-1. **Manual tests and live checks** (368 items): run each check under
+1. **Manual tests and live checks** (366 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -309,10 +314,10 @@ agent can apply it.
 | Coordinator and Multi Review | 87 | 3 |
 | Cross-cutting | 102 | 9 |
 | Design canvas | 5 | 0 |
-| MCP | 10 | 1 |
+| MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 364 | 24 |
+| **Total** | 362 | 24 |
 
 
 
@@ -866,12 +871,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
   - start a Grok session there and read its live MCP inventory in the panel, and the probe server's own log.
 
   Record in 0039's evidence, as a new "Live apply record: Grok" section: the per-scope pass/fail and the apply outcomes. The expected outcome is `restart-required`, then `applied` after the bridge process is replaced. Also record the path of `output/agent-testing/<run>/mcp-apply-live/grok.json`, and whether the untrusted session listed or started the project server (expected: not started, matching `grok mcp doctor`).
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 6: Cursor's corrected probe cells.** On a host with a current Cursor login, start a fresh profile: `mise run dev:test --profile <profile> --fixture --credential-source cursor --agent-platforms cursor --headless`. Run the corrected spec for Cursor only: `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=cursor bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts`. It covers the user `~/.cursor/mcp.json` scope and the project `.cursor/mcp.json` scope with project resources on. Record in 0039's completion matrix one row per scope:
-  - Add, Edit (A, B), Rename (new / old) and Remove (A, B);
-  - Busy: whether the shell `sleep` was seen running before the save and the turn ended `BUSY-DONE`;
-  - Restart and restore, and the apply outcome (expected: `pending-next-turn`, then `applied` per tab);
-  - the path of `output/agent-testing/<run>/mcp-apply-live/cursor.json`.
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 5: Pi user-scope rerun with a real login.** Billed. The fake-model rerun passed on 2026-11-06 (every user-scope rebuild offered the server); this run shows whether a real model calls it. Start a disposable profile with a Pi login whose provider accepts the model: `mise run dev:test --profile <profile> --fixture --credential-source pi --agent-platforms pi --headless`, and check afterwards that the host's Pi `auth.json` is unchanged. Run the live apply spec for Pi only, naming the model (a ChatGPT login uses `openai-codex/…` ids): `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=pi ORKESTRATOR_AGENT_TEST_MCP_MODELS=pi=openai-codex/<model> ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 mise run test:logged -- --name mcp-live-pi -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts --workers=1`. For each failed user-scope probe read its `diagnosis` in `output/agent-testing/<run>/mcp-apply-live/pi.json`: `not-offered` after `applied` is a Pi bridge bug (open a to-do); `offered-not-called` is the model and qualifies the scope only if a repeat passes; `turn-failed` needs a successful rerun first. Record: the Pi version, model, per-scope pass/fail, each failure's diagnosis and the `pi.json` path, in 0039's task 5 ("What the Pi rerun needs").
+
+  Not run on 2026-11-26: on mbp3 the host `~/.grok/auth.json` had expired on 2026-10-31, so the profile snapshot was withheld, and an agent may not renew the host login. The sign-in on the host is still the first step.
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 7: inactive-environment spec in full mode on a real model.** Billed. Both specs passed on the loopback fake model on 2026-11-06; this proves a real model's tool calls after the edit, the removal, a bridge restart and the shared save. In a disposable profile with a Claude login that is not rate limited (`mise run dev:test --profile <profile> --fixture --credential-source claude --agent-platforms claude --headless`), run `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 mise run test:logged -- --name mcp-inactive-real -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-inactive.spec.ts --workers=1 --trace off` (no `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`, no `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL`). Optionally repeat with a Codex login and `mcp-apply-inactive-codex.spec.ts`. Record: the date, CLI versions, models, pass/fail per spec and the marker-file counts the spec reports, in 0039's "Qualification" (inactive environment).
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 12: a running Claude account session sees an editor save.** Needs a real Claude login on an added agent account. In a disposable profile, add a Claude account in Settings (under the provider's accounts) and sign it in, then start a short Claude session on that account. In Settings → MCP, add a server to `claude:user`; send a turn and check in the agent panel that the running CLI loaded it. Remove it and send another turn: it is gone. Then let the CLI idle out (10 minutes) and send a turn: the removed server does not come back. Finally add a server only to the account's own `.claude.json` copy and check the panel reports it stale and refuses its tools. Check the source header shows the "Added Claude accounts use their own copy" note. Record: the date, the Claude CLI version and pass/fail per check, in 0039's task 12 ("Not proven").
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 13: Claude MCP reconnect on a running CLI with a real login.** Billed. The fake-model case passed on 2026-11-06 (`mcp-ui-matrix.spec.ts` skips it on a profile with a Claude credential, so this run is by hand). In a disposable profile with a real Claude login (`mise run dev:test --profile <profile> --fixture --credential-source claude --agent-platforms claude --headless`), give a fixture environment a `.mcp.json` with one healthy and one failing stdio server. Send a short turn so the CLI stays warm, fix the failing server and reconnect its row: the whole list comes from the live session, the `orkestrator` row is kept, the layers read `project` and `orkestrator`, and the open panel refreshes without a reload. Wait for the idle release (10 minutes), reconnect the row again (it runs through a probe), send another turn, and hard-reload: the running CLI's report replaces the list and it is still right after the reload. Record: the date, the Claude CLI version and pass/fail per step, in 0039's task 13.
@@ -1027,9 +1028,10 @@ None open (both answered on 2026-11-14).
 
 #### MCP
 
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`; all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) and Cursor (task 6) items above. The recommended option is to keep all-on for Claude, Codex, OpenCode and Cursor, and to decide Grok and Pi apply from their runs, narrowing them to write-only if they fail. Inputs:
+- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`; all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) item above; Cursor's cells (task 6) ran on 2026-11-26. The recommended option is to keep all-on for Claude, Codex, OpenCode and Cursor, and to decide Grok and Pi apply from their runs, narrowing them to write-only if they fail. Inputs:
   - Claude, Codex, Pi and OpenCode pass every probe cell, but only against the loopback fake model (2026-11-06 and 2026-11-10).
-  - Grok and Cursor's corrected cells depend on the two live items above.
+  - On real logins (2026-11-26, [0039's record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)): Pi passed every probe in both scopes (`pending-next-turn` → `applied`); Cursor went `pending-next-turn` → `applied` in both scopes with 14 of 15 probes passed, the failed one a removal that worked but whose reply the harness's exact-match rule rejected.
+  - Grok's cells still depend on the Grok live item above (host login expired).
 
   Record: the decision and the provider lists, in 0039's "Assumptions and decisions". If you narrow, reply to the coordinator so an agent can make the one-line default change.
 

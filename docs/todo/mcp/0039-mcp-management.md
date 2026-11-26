@@ -33,14 +33,19 @@ the loopback model only, reached through a custom OpenCode provider (see
 Task 1's agent part (the standalone repro) done on 2026-11-11 against `main`
 at `14df96544` (pins: Claude 2.1.319, Agent SDK 0.3.319), credential-free;
 only the canary flip, which waits on an upstream fix, is left.
+Task 5's real-login Pi rerun and task 6's Cursor cells run on 2026-11-26
+against `main` at `f80c75e10` (pins: Cursor SDK 1.4.1, Pi 1.5.2) with real
+logins and billed turns; Grok (task 4) skipped again for an expired host
+login (see
+[Live apply record: Cursor and Pi on real logins](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
 
 ### Tasks
 
 1. **Replaced Claude server processes linger (code item 8)**: `setMcpServers` replacing a server under the same name leaves the old process alive. Agent part: write a standalone repro for the drafted upstream report, and flip the canary once an upstream release stops the old process. Status: open (depends on the user filing the report, now in [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md) and ready to post as a comment on anthropics/claude-code#79740 since 2026-11-15, and an upstream Claude Code fix). The repro is done (2026-11-11: `claude-mcp-replace-linger.live-probe.ts`, run beside the canary; at 2.1.319 a server loaded at launch lingers when replaced, one added through `setMcpServers` does not); only the canary flip is left.
 2. **Re-derive Grok rules at 1.0.70**: trust rule, source and precedence table were derived at 1.0.52; the pin is now 1.0.70. Status: done (2026-10-31; trust rule unchanged, three catalogue gaps fixed).
 3. **Parity guards for Codex and Grok**: the mirrored rules for these two have no test that fails when the pinned provider moves. Status: done (2026-10-31; `verify:codex:mcp-live`, `verify:grok:mcp-live`).
-5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed: that real-login rerun is a 7568 item, 0039 task 5).
-6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor's cells moved to the manual-test checklist (7568) on 2026-11-10: they need a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in.
+5. **Pi user-scope failure and rerun**: find out whether a user-scope Pi rebuild offers the tool, then rerun Pi. Status: done (2026-11-06, fake model: at Pi 1.4.0 every user-scope rebuild offered the server and every probe passed, so the 2026-10-22 failures were not a bridge that rebuilt without the tool; whether a real model looks is not claimed: that real-login rerun is a 7568 item, 0039 task 5). Real-login rerun done 2026-11-26: Pi 1.5.2 on `openai-codex/gpt-6.1-sol` passed every probe in both scopes.
+6. **Corrected live probes and completion matrix**: rerun busy-turn, negative, Claude warm SSE, OpenCode in-place reload, Codex `applied` and OpenCode rename checks under the corrected harness. Status: done for every provider a loopback model reaches (2026-11-06, fake model: Claude, Codex and Pi passed every scope, busy and negative check, Claude's warm SSE hook and Codex `applied`; 2026-11-10, fake model through a custom OpenCode provider: OpenCode passed both scopes, busy and negative checks included, with the project scope `applied` by the in-place reload, the user scope `restart-required`, and the renamed server's old name refused); Cursor's cells moved to the manual-test checklist (7568) on 2026-11-10: they need a Cursor login, because Cursor's SDK talks only to Cursor's own service and has no loopback stand-in. Cursor done on a real login 2026-11-26: both scopes `pending-next-turn` → `applied`, 14 of 15 probes passed, the one failure a harness reply judgement on a removal that worked (follow-ups: that judgement, and Cursor's inventory re-reading restored calls as live).
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task; the real-model full run is a 7568 item, 0039 task 7).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into 0040's task 3, now the 7568 item "0040 (retired) task 3").
@@ -257,7 +262,7 @@ option, first half.
   policies that restrict user MCP servers, which the live spec does not set.
 
 **What the Pi rerun needs** (not done here: it needs a real login and billed
-turns; it is the 7568 item "0039 task 5"):
+turns; it was the 7568 item "0039 task 5", done on 2026-11-26, outcome below):
 
 - A Pi login with a provider and model the login accepts, shared into a
   disposable profile as in the [Pi record](#live-apply-record-pi-2026-10-22):
@@ -294,6 +299,16 @@ command and table are in the
   it; the fake always does. If a real-login Pi run repeats "unavailable"
   with `offered-not-called`, that is the model.
 - Project scope passed the same way.
+
+**Outcome (2026-11-26): the real-login rerun.** Pi 1.5.2, host ChatGPT
+login shared in place, model `openai-codex/gpt-6.1-sol`, run
+`mcp0039-live-pi`: 1 passed in 351 s, every probe in both scopes reached or
+was refused as expected by the probe server's own log, every save
+`pending-next-turn` → `applied` per tab, and no probe needed a `diagnosis`.
+The 2026-10-22 user-scope failures did not recur. The host `auth.json` was
+unchanged. Record:
+[Live apply record: Cursor and Pi on real logins](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26);
+`output/agent-testing/mcp0039-live-pi/mcp-apply-live/pi.json`.
 
 ### 6. Corrected live probes and completion matrix
 
@@ -382,6 +397,18 @@ It passed in 141 s, with every probe judged from the probe servers' own logs:
 - Cursor's cells (they need a Cursor login) moved to the manual-test
   checklist (7568) on 2026-11-10. These are fake-model
   observations, not evidence of how a real model behaves.
+
+**Outcome (2026-11-26): Cursor on a real login.** Cursor SDK 1.4.1, run
+`mcp0039-live-cursor` (9.9 min). Both scopes, user `~/.cursor/mcp.json` and
+project `.cursor/mcp.json` with project resources on, went
+`pending-next-turn` → `applied` per tab at every save, and the busy check,
+restart and restore, rename and removals all behaved. 14 of 15 probes
+passed; the failed one (user remove, tab B) reached no server and was not
+offered, but its reply carried narration before `MCPQ-UNAVAILABLE`, which
+the exact-match judgement rejects. Two harness or panel follow-ups, no apply
+defect: details in
+[Live apply record: Cursor and Pi on real logins](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26);
+`output/agent-testing/mcp0039-live-cursor/mcp-apply-live/cursor.json`.
 
 ### 7. Inactive environment, full mode and process-wide variant
 
@@ -991,7 +1018,11 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   runtime `applied` while the model answered "unavailable" without a tool
   call. On 2026-11-06 a fake-model rerun at Pi 1.4.0 passed every probe in
   both scopes, so the rebuild offers the tool (task 5); a real-login rerun
-  would only add model behaviour (7568, 0039 task 5). Claude, Codex, OpenCode and Cursor have
+  would only add model behaviour. That real-login rerun passed every probe on
+  2026-11-26 (Pi 1.5.2, `openai-codex/gpt-6.1-sol`), as did Cursor's cells
+  but one harness reply judgement
+  ([record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
+  The Grok run is still open (host login expired). Claude, Codex and OpenCode have
   historical observations, with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
@@ -1325,6 +1356,101 @@ Result: 0 passed, 0 skipped, 1 failed in 258.9 s (exit 1). Evidence:
 `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Jr9kqq/mcp-full-live.log.gz`.
 The profile was stopped and reset after the run; browser evidence is retained
 under `output/`, outside the disposable profile state.
+
+## Live apply record: Cursor and Pi on real logins (2026-11-26)
+
+Run on mbp3 (macOS, Apple Silicon) against `main` at `f80c75e10` (pins:
+Cursor SDK 1.4.1, Pi 1.5.2, Grok 1.0.88), with **real logins and real
+models**, the user having approved billed turns for this run. One fresh
+disposable profile per provider, each stopped and reset afterwards:
+
+```bash
+mise run dev:test --profile mcp0039-live-cursor --fixture --credential-source cursor --agent-platforms cursor --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-live-cursor ORKESTRATOR_AGENT_TEST_RUN_ID=mcp0039-live-cursor \
+  ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=cursor \
+  ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 \
+  mise run test:logged -- --name mcp-live-cursor -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts --workers=1
+
+mise run dev:test --profile mcp0039-live-pi --fixture --credential-source pi --agent-platforms pi --headless
+ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-live-pi ORKESTRATOR_AGENT_TEST_RUN_ID=mcp0039-live-pi \
+  ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=pi \
+  ORKESTRATOR_AGENT_TEST_MCP_MODELS=pi=openai-codex/gpt-6.1-sol \
+  ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 \
+  mise run test:logged -- --name mcp-live-pi -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts --workers=1 --trace off
+```
+
+### Runs
+
+| Provider | Login | Result | Time | Record |
+| --- | --- | --- | --- | --- |
+| Cursor | host Cursor SDK login (minted key, valid about 2.5 h at start) | 1 failed: 14 of 15 probes passed; the one failure is the harness's reply judgement (below) | 9.9 min | `output/agent-testing/mcp0039-live-cursor/mcp-apply-live/cursor.json` |
+| Pi | host Pi `openai-codex` ChatGPT OAuth, shared in place; model `openai-codex/gpt-6.1-sol` | 1 passed: every probe | 5.9 min | `output/agent-testing/mcp0039-live-pi/mcp-apply-live/pi.json` |
+| Grok | **skipped**: the host `~/.grok/auth.json` expired on 2026-10-31, so `restrictGrokAuthSnapshot` withholds it; renewing it would rewrite the host's Grok login, which this run was not allowed to do | — | — | — |
+
+The Cursor run also ended with an `ArtifactBoundError` in global teardown:
+its Playwright trace exceeded the 64 MiB sanitizer bound (as task 7's note
+warns), and the oversize trace was not kept. The Pi run used `--trace off`.
+
+### Completion matrix (real models)
+
+Every "reached" cell is the probe server's own log line for that call and
+nonce; every "fails" cell is a settled turn with no server call logged.
+
+| Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Cursor · user `~/.cursor/mcp.json` (profile home) | reached v1 | reached v2 both | answers / fails | fails A; **B judged failed** (see below) | passed: the foreground `sleep 45` was seen running before the save, the turn ended `BUSY-DONE` | reached v2 after the bridge restart | `pending-next-turn` → `applied` per tab after its turn |
+| Cursor · project `.cursor/mcp.json`, project resources on (`allowed`) | reached v1 | reached v2 both | answers / fails | fails both | — | — | same |
+| Pi · user `~/.pi/agent/mcp.json` (profile agent dir) | reached v1 | reached v2 both | answers / fails | fails both | passed (same check) | reached v2 after the bridge restart | `pending-next-turn` → `applied` per tab after its turn |
+| Pi · project `.pi/mcp.json`, project resources on (`allowed`) | reached v1 | reached v2 both | answers / fails | fails both | — | — | same |
+
+No save on either provider reported `restart-required`, `excluded` or
+`blocked-policy`.
+
+### Findings
+
+- **Cursor apply holds on a real model.** Every save went
+  `pending-next-turn` ("Reconnects MCP servers before the session's next
+  message.") and each probed tab then `applied` ("The session rebuilt its
+  MCP servers from the saved configuration."), and the next turn saw exactly
+  the saved state, including the old name refused after a rename.
+- **The one Cursor failure is the reply judgement, not apply.** User scope,
+  remove, tab B: the probe server logged no call, the session's inventory did
+  not list `mqu0_beta` (`diagnosis: not-offered`), and the model ended with
+  `MCPQ-UNAVAILABLE` after searching (`grep`, `glob`). Its reply was
+  `I'll look up … Namespace isn't listed yet — checking tool search … .MCPQ-UNAVAILABLE`:
+  the bridge joins the turn's narration and the marker into one reply, and
+  `judgeProbe` (`e2e/agent-testing/mcp-apply-live-support.ts:130`) requires
+  the trimmed reply to equal the marker exactly. The removal worked; the
+  cell would pass under a judgement that accepts the marker as the reply's
+  final line. Not rerun (the brief allowed at most one repeat, and the
+  evidence already settles the cell).
+- **Cursor inventory reports a renamed-away server as connected after a
+  bridge restart.** In that same probe the session's live inventory listed
+  `mqu0_alpha` (the name before the rename) as `connected`, though neither
+  name was configured. `seedObservedMcpTools`
+  (`bridges/cursor-bridge/src/mcp.ts:736`) re-reads every MCP call in the
+  recovered transcript as fresh evidence after a restart, and tab B's
+  transcript held `mcp__mqu0_alpha__probe` calls from before the rename;
+  only a live reattach moves evidence to history
+  (`retireMcpObservations`). This is the panel's status only: the model was
+  not offered the server and no call reached it. Follow-up for an agent:
+  seed restored observations as retired (history) rather than live.
+- **Pi passes on a real model where it failed on 2026-10-22.** Every
+  user-scope probe that failed then (edit B, rename, restart and restore,
+  remove) passed, each reaching the server by its log. So with Pi 1.5.2 and
+  the corrected harness, the earlier user-scope failures do not recur; no
+  probe needed a `diagnosis`.
+- **Host files untouched.** Pi shares the host `auth.json` in place: its
+  SHA-256, `settings.json` and `models-store.json` were identical before and
+  after, and the host `~/.pi/agent` gained no `mcp.json`. The Cursor profile
+  read only the host SDK login's minted key into its own data directory.
+
+### Billed turns
+
+Each provider ran 18 turns: two warm-up turns (one per tab), 15 probes and
+one busy `sleep` turn, so 36 in all. Neither run was repeated.
 
 ## Live apply record: Pi (2026-10-22)
 
@@ -1676,6 +1802,36 @@ directory and were deleted with it.
   session on a real signed-in account is still unrun (7568, 0039 task 12).
 
 ## Assumptions and decisions
+
+### 2026-11-26: tasks 4, 5 and 6, real-login runs
+
+Live runs approved by the user for this machine (mbp3); results in
+[Live apply record: Cursor and Pi on real logins](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
+
+#### Task 4: Grok skipped, not signed in
+
+The host Grok login expired on 2026-10-31, and the profile snapshot refuses
+an expired login. Renewing it means running `grok` against the host's own
+login, which the brief forbade, so neither the apply probes nor the
+untrusted-project check ran. Task 4 stays on 7568.
+
+#### Task 5: the Pi model
+
+`openai-codex/gpt-6.1-sol`, the model the 2026-10-22 record ran on this
+ChatGPT plan; that record says the plan refuses `openai-codex/gpt-5.5`,
+which is the host's saved Pi default, so the default was not used.
+
+#### Task 6: no Cursor rerun
+
+The one failed Cursor cell is settled by the probe server's log and the
+session inventory (not reached, not offered), so a second billed run would
+only have retested the reply wording. Not repeated.
+
+#### Tasks 5 and 6: follow-ups left to the coordinator
+
+The strict `MCPQ-UNAVAILABLE` judgement and Cursor's restored-calls
+inventory are recorded as findings, not opened as to-dos: this run was
+limited to recording results.
 
 ### 2026-11-11: task 1, the standalone repro
 
@@ -2190,7 +2346,7 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10; task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10 (Cursor's cells and task 5's real-login Pi rerun ran and left it on 2026-11-26); task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).

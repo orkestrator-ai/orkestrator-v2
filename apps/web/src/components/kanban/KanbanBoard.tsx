@@ -28,7 +28,8 @@ import {
   type BuildPhase,
 } from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
-import { KanbanCard } from "./KanbanCard";
+import { KanbanCard, isKanbanBuildRunning } from "./KanbanCard";
+import { KanbanCardBuildLauncher, KanbanCardDeleteConfirm } from "./KanbanBoardTicketActions";
 import { TicketSyncStrip, useTicketSyncLeafStatus, useTicketSyncStatus } from "./TicketSyncStrip";
 import { GraphLaunchDialog } from "@/components/graph-launch/GraphLaunchDialog";
 import { openLaunchedGraphRun } from "@/components/graph-launch/open-launched-run";
@@ -77,6 +78,8 @@ function DroppableColumn({
   syncedFromByControllerId,
   shareWith,
   onShareTask,
+  onBuildTask,
+  onDeleteTask,
 }: {
   column: (typeof COLUMNS)[number];
   tasks: KanbanTask[];
@@ -90,6 +93,8 @@ function DroppableColumn({
   syncedFromByControllerId: ReadonlyMap<string, string>;
   shareWith?: string;
   onShareTask?: (task: KanbanTask) => void;
+  onBuildTask: (task: KanbanTask) => void;
+  onDeleteTask: (task: KanbanTask) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
 
@@ -145,6 +150,8 @@ function DroppableColumn({
                 }
                 shareWith={shareWith}
                 onShare={onShareTask}
+                onBuild={onBuildTask}
+                onDelete={onDeleteTask}
               />
             );
           })}
@@ -172,6 +179,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const loadTasks = useKanbanStore((s) => s.loadTasks);
   const moveTask = useKanbanStore((s) => s.moveTask);
   const clearTaskBuildStatus = useKanbanStore((s) => s.clearTaskBuildStatus);
+  const deleteTask = useKanbanStore((s) => s.deleteTask);
   const screenTab = useUIStore((s) => s.projectBoardTab);
   const setScreenTab = useUIStore((s) => s.setProjectBoardTab);
 
@@ -232,6 +240,9 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  // A card's right-click Build… and Delete…: the ticket each is acting on.
+  const [buildTask, setBuildTask] = useState<KanbanTask | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<KanbanTask | null>(null);
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
@@ -431,6 +442,8 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     syncedFromByControllerId={syncedFromByControllerId}
                     shareWith={leafSync?.unshared ? shareWith : undefined}
                     onShareTask={shareTask}
+                    onBuildTask={setBuildTask}
+                    onDeleteTask={setTaskToDelete}
                   />
                 ))}
               </div>
@@ -507,6 +520,25 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
               : {}),
           })
         }
+      />
+
+      <KanbanCardBuildLauncher
+        projectId={projectId}
+        task={buildTask}
+        onClose={() => setBuildTask(null)}
+      />
+
+      <KanbanCardDeleteConfirm
+        task={taskToDelete}
+        buildRunning={
+          taskToDelete ? isKanbanBuildRunning(buildPhaseByTaskId.get(taskToDelete.id)) : false
+        }
+        onCancel={() => setTaskToDelete(null)}
+        onConfirm={(task) => {
+          setTaskToDelete(null);
+          if (selectedTask?.id === task.id) setDialogOpen(false);
+          void deleteTask(task.id);
+        }}
       />
 
       {/* Create Task Dialog */}

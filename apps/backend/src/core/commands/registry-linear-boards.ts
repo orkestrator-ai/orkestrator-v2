@@ -2,6 +2,7 @@ import {
   clearLinearBoardLinkCommand,
   copyLinearConnectionFromNodeCommand,
   createLinearIssueCommand,
+  deleteLinearIssueCommand,
   getLinearBoardLinkCommand,
   getLinearBoardOptionsCommand,
   getLinearIssueFilesCommand,
@@ -21,6 +22,7 @@ import { requireLinearApiKey } from "./validation.js";
 import { sanitizeLinearError, verifyLinearConnection, type LinearBoardFilter } from "../linear.js";
 import {
   createLinearIssue,
+  deleteLinearIssue,
   getLinearBoardOptions,
   getLinearIssueBoard,
   getLinearIssueWithIds,
@@ -296,6 +298,17 @@ export function registerLinearBoardCommands(register: CommandRegistrar): void {
       withLinearKey(context, async (apiKey) => {
         await requireIssueOnProjectBoard(context, apiKey, projectId, issueId);
         return updateLinearIssue(apiKey, issueId, input);
+      }),
+    ASYNC_HANDLER,
+  );
+
+  register(
+    deleteLinearIssueCommand,
+    async ({ projectId, issueId }, context) =>
+      withLinearKey(context, async (apiKey) => {
+        await requireIssueOnProjectBoard(context, apiKey, projectId, issueId);
+        await deleteLinearIssue(apiKey, issueId);
+        return { deleted: true };
       }),
     ASYNC_HANDLER,
   );

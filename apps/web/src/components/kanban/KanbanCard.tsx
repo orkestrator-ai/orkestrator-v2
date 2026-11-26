@@ -19,12 +19,7 @@ import {
   type BuildPhase,
 } from "@/stores/buildPipelineStore";
 import { Button } from "@/components/ui/button";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import { ContextMenuItem } from "@/components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -35,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { useMinuteClock } from "@/hooks/useMinuteClock";
 import { ticketCardTime } from "./ticket-view/ticket-times";
 import { ticketLabelClassName } from "./ticket-label-style";
+import { TicketContextMenu } from "./TicketContextMenu";
 
 /** Labels a card names before folding the rest into "+N". */
 const CARD_LABEL_LIMIT = 3;
@@ -160,6 +156,15 @@ interface KanbanCardProps {
    */
   shareWith?: string;
   onShare?: (task: KanbanTask) => void;
+  /** Build… on the card's right-click menu: opens the build launcher for this ticket. */
+  onBuild?: (task: KanbanTask) => void;
+  /** Delete… on the card's right-click menu: the board confirms before deleting. */
+  onDelete?: (task: KanbanTask) => void;
+}
+
+/** Whether a ticket's build still holds it: the ticket dialog's Build… is off until it ends. */
+export function isKanbanBuildRunning(phase: BuildPhase | undefined): boolean {
+  return phase !== undefined && phase !== "complete" && phase !== "failed";
 }
 
 export function KanbanCard({
@@ -174,6 +179,8 @@ export function KanbanCard({
   syncedFrom,
   shareWith,
   onShare,
+  onBuild,
+  onDelete,
 }: KanbanCardProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: task.id,
@@ -444,19 +451,40 @@ export function KanbanCard({
     </div>
   );
 
-  if (isDragOverlay || !canClearStatus) {
-    return card;
-  }
-
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{card}</ContextMenuTrigger>
-      <ContextMenuContent className="w-44">
-        <ContextMenuItem onSelect={() => onClearStatus?.(task)}>
-          <RotateCcw className="h-4 w-4" />
-          Clear status
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
+    <TicketContextMenu
+      ticketLabel={task.title}
+      disabled={isDragOverlay}
+      onOpen={onClick}
+      onBuild={onBuild ? () => onBuild(task) : undefined}
+      buildDisabledReason={
+        isKanbanBuildRunning(buildPhase) ? "A build of this ticket is still running" : undefined
+      }
+      onDelete={onDelete ? () => onDelete(task) : undefined}
+      extraItems={
+        <>
+          {onRunGraph && (
+            <ContextMenuItem onSelect={() => onRunGraph(task)}>
+              <Network className="h-4 w-4" />
+              Run graph…
+            </ContextMenuItem>
+          )}
+          {canClearStatus && (
+            <ContextMenuItem onSelect={() => onClearStatus?.(task)}>
+              <RotateCcw className="h-4 w-4" />
+              Clear status
+            </ContextMenuItem>
+          )}
+          {canShare && (
+            <ContextMenuItem onSelect={() => onShare?.(task)}>
+              <Share2 className="h-4 w-4" />
+              Share with {shareWith}
+            </ContextMenuItem>
+          )}
+        </>
+      }
+    >
+      {card}
+    </TicketContextMenu>
   );
 }

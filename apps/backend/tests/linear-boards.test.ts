@@ -380,6 +380,9 @@ describe("Linear board commands", () => {
         context,
       ),
     ).rejects.toThrow(refusal);
+    await expect(
+      commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "OPS-9" }, context),
+    ).rejects.toThrow(refusal);
     // Nothing was written to Linear.
     expect(requests.every((request) => !request.query.includes("mutation"))).toBe(true);
   });
@@ -581,6 +584,51 @@ describe("Linear board commands", () => {
         context,
       ),
     ).resolves.toMatchObject({ status: "Done", stateId: "state-2" });
+  });
+
+  test("deletes an issue on the board by moving it to Linear's trash", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    const requests = fakeLinear({
+      OrkestratorLinearIssueBoard: () => ({
+        issue: { id: "issue-1", identifier: "ENG-1", team: { id: "team-1" } },
+      }),
+      OrkestratorLinearIssueDelete: (variables) => {
+        // Never `permanentlyDelete`: a trashed issue can be restored for 30 days.
+        expect(variables).toEqual({ id: "issue-1" });
+        return { issueDelete: { success: true } };
+      },
+    });
+    await expect(
+      commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "issue-1" }, context),
+    ).resolves.toEqual({ deleted: true });
+    expect(operations(requests)).toEqual([
+      "OrkestratorLinearIssueBoard",
+      "OrkestratorLinearIssueDelete",
+    ]);
+    expect(requests.some((request) => request.query.includes("permanentlyDelete"))).toBe(false);
+  });
+
+  test("a delete Linear does not confirm is an error", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    fakeLinear({
+      OrkestratorLinearIssueBoard: () => ({
+        issue: { id: "issue-1", identifier: "ENG-1", team: { id: "team-1" } },
+      }),
+      OrkestratorLinearIssueDelete: () => ({ issueDelete: { success: false } }),
+    });
+    await expect(
+      Promise.resolve(
+        commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "issue-1" }, context),
+      ),
+    ).rejects.toThrow("Linear did not confirm the issue was deleted.");
   });
 
   test("Linear errors never carry the key", async () => {

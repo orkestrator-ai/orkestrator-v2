@@ -1,7 +1,7 @@
 /**
  * `kanban` commands for Linear boards (docs/architecture/tickets.md, "Linear"):
  * which Linear board a project uses, the picker's teams, the ids a write can
- * use, and creating and updating issues on that board.
+ * use, and creating, updating and deleting issues on that board.
  *
  * Every write names a `projectId` and is refused unless the issue is on that
  * project's linked board, so neither the Linear tab nor a coordinator can
@@ -177,6 +177,26 @@ export const updateLinearIssueCommand = defineCommand({
 });
 
 /**
+ * Moves an issue on the project's board to Linear's trash, where Linear keeps
+ * it restorable for 30 days (it is never deleted permanently from here).
+ * Refused unless the issue is on that board. An older node answers
+ * `unknown-command`.
+ */
+export const deleteLinearIssueCommand = defineCommand({
+  domain: kanbanDomain,
+  name: "delete_linear_issue",
+  since: 2,
+  access: "workspace",
+  read: false,
+  args: Schema.Struct({
+    projectId: Schema.String,
+    issueId: Schema.String,
+  }),
+  result: Schema.Struct({ deleted: Schema.Boolean }),
+  critical: [],
+});
+
+/**
  * On a command node: each other machine's Linear connection as it was last
  * read (signed in as whom, and the key's fingerprint). Never a key.
  */
@@ -217,6 +237,7 @@ export const LINEAR_BOARD_COMMANDS = [
   getLinearIssueFilesCommand,
   createLinearIssueCommand,
   updateLinearIssueCommand,
+  deleteLinearIssueCommand,
   getLinearNodeConnectionsCommand,
   copyLinearConnectionFromNodeCommand,
 ] as const;

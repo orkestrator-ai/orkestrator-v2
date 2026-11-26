@@ -1,7 +1,8 @@
 /**
  * The Linear calls a linked board needs beyond `linear.ts`: the teams and
  * projects for the board picker, a board's workflow states, labels and
- * members, which board an issue is on, and creating and updating issues.
+ * members, which board an issue is on, and creating, updating and deleting
+ * issues.
  * Every call goes through `linearGraphql`, so errors are sanitized the same
  * way and the key never leaves this process.
  */
@@ -433,4 +434,24 @@ export async function updateLinearIssue(
     throw new Error("Linear did not confirm the issue was updated.");
   }
   return issue;
+}
+
+/**
+ * Moves an issue to Linear's trash (`issueDelete` without `permanentlyDelete`),
+ * along with the unarchived sub-issues the key can reach. Linear keeps trashed
+ * issues restorable for 30 days, so a mistaken delete can be undone in Linear.
+ */
+export async function deleteLinearIssue(apiKey: string, issueId: string): Promise<void> {
+  const data = await linearGraphql<{ issueDelete?: { success?: boolean } }>(
+    apiKey,
+    `mutation OrkestratorLinearIssueDelete($id: String!) {
+      issueDelete(id: $id) {
+        success
+      }
+    }`,
+    { id: issueId },
+  );
+  if (!data.issueDelete?.success) {
+    throw new Error("Linear did not confirm the issue was deleted.");
+  }
 }

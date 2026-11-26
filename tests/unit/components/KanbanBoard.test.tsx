@@ -300,3 +300,71 @@ describe("KanbanBoard experimental graphs", () => {
     expect(within(openCardMenu()).getByRole("menuitem", { name: "Run graph…" })).toBeTruthy();
   });
 });
+
+describe("KanbanBoard card right-click menu", () => {
+  const openContextMenu = async (title: string) => {
+    fireEvent.contextMenu(screen.getByText(title));
+    return await waitFor(() => {
+      const menu = document.querySelector<HTMLElement>('[data-testid="ticket-context-menu"]');
+      expect(menu).toBeTruthy();
+      return menu!;
+    });
+  };
+
+  test("Delete… asks first, then deletes the ticket", async () => {
+    const deleteTaskMock = mock(async () => undefined);
+    appCommandStore(kanbanStore).setState({
+      tasks: [makeTask({ title: "Doomed ticket" })],
+      deleteTask: deleteTaskMock as unknown as KanbanState["deleteTask"],
+    });
+
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+
+    const menu = await openContextMenu("Doomed ticket");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Open", "Build…", "Delete…"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText("Delete this ticket?")).toBeTruthy();
+    expect(deleteTaskMock).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete ticket" }));
+
+    expect(deleteTaskMock).toHaveBeenCalledWith("task-1");
+  });
+
+  test("cancelling Delete… keeps the ticket", async () => {
+    const deleteTaskMock = mock(async () => undefined);
+    appCommandStore(kanbanStore).setState({
+      tasks: [makeTask({ title: "Kept ticket" })],
+      deleteTask: deleteTaskMock as unknown as KanbanState["deleteTask"],
+    });
+
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+
+    const menu = await openContextMenu("Kept ticket");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
+    expect(deleteTaskMock).not.toHaveBeenCalled();
+  });
+
+  test("Build… opens the build launcher without opening the ticket", async () => {
+    appCommandStore(kanbanStore).setState({ tasks: [makeTask({ title: "Build me" })] });
+
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+
+    const menu = await openContextMenu("Build me");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Build…" }));
+
+    const launcher = await screen.findByRole("dialog");
+    expect(within(launcher).getByRole("button", { name: /Start build/ })).toBeTruthy();
+    // The ticket view did not open.
+    expect(screen.queryByRole("tab", { name: "Ticket" }) === null).toBe(true);
+  });
+});

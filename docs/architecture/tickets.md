@@ -495,6 +495,18 @@ side.
 A ticket opened from the Review column with Notes opens on the Notes tab;
 every other ticket opens on Ticket (`defaultTicketViewTab`).
 
+**A card's right-click menu** (`TicketContextMenu`, shared with the Linear
+tab) has Open (the ticket view), Build…, Run graph… (when graphs are on),
+Clear status (when the build has stopped), Share (on a leaf that has not
+shared the ticket yet) and Delete…. Build… opens the same launcher as the
+ticket view's, over the board, with the same "Environment already exists"
+question (`KanbanCardBuildLauncher`), and is disabled while a build of the
+ticket runs. Delete… asks first, then removes the ticket, its comments and
+images (`delete_kanban_task`, as the ticket view's Delete button does); its
+environment, branch and pull request are kept, and a running build carries
+on, which the question says. Right-clicking does not pick a card up: only the
+primary button starts a drag.
+
 **Created and updated times.** Every ticket records `createdAt` and
 `updatedAt`. `updatedAt` equals `createdAt` on a new ticket and is refreshed
 by every change to the ticket's content or state: title, sections, criteria
@@ -876,6 +888,23 @@ settles and rolls back on its own (including neighbours assigned fresh positions
 names the ones Linear refused. A card with a move in flight cannot be
 selected.
 
+**Right-click menu.** Right-clicking a board card or a list row opens the
+ticket menu the Kanban board shares (`TicketContextMenu`): Open (the issue
+detail, as a click does), Build… and Delete…. It acts on that one issue,
+whatever is selected. Build… reads the issue (a build needs its detail) and
+opens the build launcher over the board, so the board stays on screen; the
+launch is the detail view's, including its check that no machine is already
+building the issue. Build… is disabled, with the reason under it, while a
+build of the issue runs, while build status from every machine is not known
+yet, or while another build is starting. Delete… asks first, then calls
+`delete_linear_issue`, which the backend refuses for an issue off the
+project's board, as it does every write. It is Linear's `issueDelete`
+without `permanentlyDelete`: the issue and its sub-issues go to Linear's
+trash, restorable there for 30 days. A project with no linked board offers
+no Delete. `delete_linear_issue` is a new `kanban` command (no domain
+version change); an older backend answers `unknown-command`, shown as the
+failure toast. Coordinators have no delete tool.
+
 **Sync.** `NodeLinearSync` (`nodes/node-linear-sync.ts`) runs on the command
 node beside Kanban sync, at the same moments: a (re)connect, a leaf's project
 list being read, shortly after a change here, and the minute reconcile. For
@@ -888,7 +917,8 @@ commands and `export_linear_connection` are link-only
 (`NODE_ROUTING_EXCLUDED_COMMANDS`) and check the caller is an attached command
 node. An older leaf answers `unknown-command` and keeps its own links.
 
-**Writes stay on the board.** `create_linear_issue`, `update_linear_issue` and,
+**Writes stay on the board.** `create_linear_issue`, `update_linear_issue`,
+`delete_linear_issue` and,
 with a `projectId`, `get_linear_issue` and `post_linear_issue_comment` refuse
 an issue that is not on the project's linked board (its team, and its Linear
 project when the link names one). `create_linear_issue` records its

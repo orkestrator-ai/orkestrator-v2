@@ -89,7 +89,14 @@ import {
   useLinearIssueFiles,
 } from "./LinearIssueFiles";
 import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
-import { LinearIssueBoard, LinearLanesMenu, type LinearBoardMove } from "./LinearIssueBoard";
+import {
+  LinearIssueBoard,
+  LinearLanesMenu,
+  type LinearBoardMove,
+  type LinearIssueMenuActions,
+} from "./LinearIssueBoard";
+import { LinearIssueDeleteDialog } from "./LinearIssueDeleteDialog";
+import { TicketContextMenu } from "@/components/kanban/TicketContextMenu";
 import {
   type LinearBoardState,
   forgetLinearBoardSnapshot,
@@ -278,6 +285,17 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   const [connectOpen, setConnectOpen] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
+  /**
+   * Build… from a ticket's right-click menu on the board or list: the issue,
+   * and its detail once read (the launcher opens then), without leaving the board.
+   */
+  const [menuBuild, setMenuBuild] = useState<{
+    issueId: string;
+    detail: LinearIssueDetail | null;
+  } | null>(null);
+  /** Delete… from a ticket's right-click menu, awaiting confirmation. */
+  const [issueToDelete, setIssueToDelete] = useState<LinearIssueListItem | null>(null);
+  const [deletingIssue, setDeletingIssue] = useState(false);
   const [retryingCompletionComment, setRetryingCompletionComment] = useState(false);
   const [commentBody, setCommentBody, clearCommentDraft] = useDurableComposeDraft({
     ownerType: "project",
@@ -332,7 +350,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   };
   const { catalog: launchCatalog, defaults: launchDefaults } = useBuildLaunchOptions(
     projectId,
-    selectedIssueId !== null,
+    selectedIssueId !== null || menuBuild !== null,
   );
 
   /**
@@ -790,8 +808,11 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     });
   };
 
-  const handleStartBuild = async (selection: BuildLaunchSelection) => {
-    if (!detail) return;
+  const handleStartBuild = async (
+    selection: BuildLaunchSelection,
+    issue: LinearIssueDetail | null = detail,
+  ) => {
+    if (!issue) return;
     if (isBuildStarting) return;
     setBuildDialogOpen(false);
     setIsBuildStarting(true);
@@ -801,13 +822,13 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
       const remote = await remoteBuilds.refresh();
       const activePipeline = getIssuePipeline(
         new Map([...pipelineStore.getState().pipelines, ...remote]),
-        detail.id,
+        issue.id,
       );
       if (activePipeline && isActivePipeline(activePipeline)) {
         await navigateToPipeline(activePipeline);
         return;
       }
-      await startBuildFromLinearIssue(detail, projectId, selection.environmentType, {
+      await startBuildFromLinearIssue(issue, projectId, selection.environmentType, {
         steps: selection.steps,
         reviewers: selection.reviewers,
         reviewPreparation: selection.reviewPreparation,
@@ -824,6 +845,55 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     } finally {
       setIsBuildStarting(false);
     }
+  };
+
+  /** Build… on a ticket's menu: reads the issue (a build needs its detail), then opens the launcher. */
+  const requestMenuBuild = (issue: LinearIssueListItem) => {
+    setMenuBuild({ issueId: issue.id, detail: null });
+    nodeBackend.getLinearIssue(issue.id, boardProjectId).then(
+      (issueDetail) =>
+        setMenuBuild((current) =>
+          current?.issueId === issue.id ? { issueId: issue.id, detail: issueDetail } : current,
+        ),
+      (error: unknown) => {
+        setMenuBuild((current) => (current?.issueId === issue.id ? null : current));
+        toast.error(`Could not load ${issue.identifier} to build it`, {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+  };
+
+  const handleDeleteIssue = async (issue: LinearIssueListItem) => {
+    if (deletingIssue) return;
+    setDeletingIssue(true);
+    try {
+      await nodeBackend.deleteLinearIssue(projectId, issue.id);
+      setIssues((current) => current.filter((candidate) => candidate.id !== issue.id));
+      toast.success(`${issue.identifier} moved to Linear's trash`);
+      setIssueToDelete(null);
+    } catch (error) {
+      toast.error(`Could not delete ${issue.identifier}`, {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setDeletingIssue(false);
+    }
+  };
+
+  const menuActions: LinearIssueMenuActions = {
+    onBuild: requestMenuBuild,
+    buildDisabledReason: (issue) => {
+      if (isActivePipeline(getIssuePipeline(pipelines, issue.id))) {
+        return "A build of this ticket is still running";
+      }
+      if (remoteBuilds.unavailable) return "Waiting for build status from all machines";
+      if (isBuildStarting || menuBuild !== null) return "Another build is starting";
+      return undefined;
+    },
+    // Deletes are refused for an issue off the project's linked board, so a
+    // project without one offers none.
+    ...(boardState === "linked" ? { onDelete: setIssueToDelete } : {}),
   };
 
   const handlePostComment = async () => {
@@ -1491,6 +1561,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
               // only that ticket order places cards.
               reorderable={issueOrder === "manual"}
               movingIssueIds={movingIssueIds}
+              menuActions={menuActions}
             />
           ) : (
             <ScrollArea className="min-h-0 flex-1">
@@ -1544,29 +1615,39 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                       {group.map((issue, index) => {
                         const pipeline = getIssuePipeline(pipelines, issue.id);
                         return (
-                          <button
+                          <TicketContextMenu
                             key={issue.id}
-                            type="button"
-                            className={cn(
-                              "block w-full p-3 text-left transition-colors hover:bg-muted/50",
-                              index > 0 && "border-t border-border",
-                            )}
-                            onClick={() => handleSelectIssue(issue.id)}
+                            ticketLabel={`${issue.identifier} ${issue.title}`}
+                            onOpen={() => handleSelectIssue(issue.id)}
+                            onBuild={() => menuActions.onBuild?.(issue)}
+                            buildDisabledReason={menuActions.buildDisabledReason?.(issue)}
+                            onDelete={
+                              menuActions.onDelete ? () => menuActions.onDelete?.(issue) : undefined
+                            }
                           >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="min-w-0 space-y-1">
-                                <div className="truncate text-sm font-medium text-foreground">
-                                  {issue.title}
-                                </div>
-                                <IssueMetadata issue={issue} />
-                              </div>
-                              {pipeline && (
-                                <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                  {pipeline.phase}
-                                </span>
+                            <button
+                              type="button"
+                              className={cn(
+                                "block w-full p-3 text-left transition-colors hover:bg-muted/50",
+                                index > 0 && "border-t border-border",
                               )}
-                            </div>
-                          </button>
+                              onClick={() => handleSelectIssue(issue.id)}
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="min-w-0 space-y-1">
+                                  <div className="truncate text-sm font-medium text-foreground">
+                                    {issue.title}
+                                  </div>
+                                  <IssueMetadata issue={issue} />
+                                </div>
+                                {pipeline && (
+                                  <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                    {pipeline.phase}
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          </TicketContextMenu>
                         );
                       })}
                     </div>
@@ -1577,6 +1658,41 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
           )}
         </>
       )}
+
+      <BuildLaunchDialog
+        open={menuBuild?.detail != null}
+        onOpenChange={(open) => {
+          if (!open) setMenuBuild(null);
+        }}
+        catalog={launchCatalog}
+        busy={isBuildStarting}
+        machines={buildMachines}
+        localEnvironmentAvailable={localEnvironmentAvailable}
+        commentContext={
+          menuBuild?.detail && menuBuild.detail.comments.length > 0
+            ? { count: menuBuild.detail.comments.length }
+            : undefined
+        }
+        deliveryPolicy={
+          menuBuild ? getIssuePipeline(pipelines, menuBuild.issueId)?.deliveryPolicy : undefined
+        }
+        {...launchDefaults}
+        onConfirm={(selection) => {
+          const issue = menuBuild?.detail ?? null;
+          setMenuBuild(null);
+          void handleStartBuild(selection, issue);
+        }}
+      />
+
+      <LinearIssueDeleteDialog
+        issue={issueToDelete}
+        deleting={deletingIssue}
+        buildRunning={
+          issueToDelete ? isActivePipeline(getIssuePipeline(pipelines, issueToDelete.id)) : false
+        }
+        onCancel={() => setIssueToDelete(null)}
+        onConfirm={(issue) => void handleDeleteIssue(issue)}
+      />
 
       <LinearConnectDialog
         open={connectOpen}

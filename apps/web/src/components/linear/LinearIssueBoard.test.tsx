@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { LinearIssueListItem } from "@/types/linear";
-import { LinearIssueBoard, type LinearBoardMove } from "./LinearIssueBoard";
+import {
+  LinearIssueBoard,
+  type LinearBoardMove,
+  type LinearIssueMenuActions,
+} from "./LinearIssueBoard";
 import type { LinearLane } from "./linear-issue-order";
 import {
   dragLinearCard,
@@ -516,5 +520,75 @@ describe("LinearIssueBoard card assignee", () => {
   test("an unassigned card shows no avatar", () => {
     renderCards([issue("eng-5", "Nobody", "Todo")]);
     expect(avatarOf("Nobody") === null).toBe(true);
+  });
+});
+
+describe("LinearIssueBoard right-click menu", () => {
+  function renderWithMenu(menuActions?: LinearIssueMenuActions) {
+    const onSelectIssue = mock((_id: string) => undefined);
+    render(
+      <LinearIssueBoard
+        lanes={lanes(true)}
+        hidden={new Set()}
+        onShowAll={() => undefined}
+        onSelectIssue={onSelectIssue}
+        pipelinePhase={() => undefined}
+        onMoveIssues={() => undefined}
+        menuActions={menuActions}
+      />,
+    );
+    return { onSelectIssue };
+  }
+
+  async function openMenu() {
+    fireEvent.contextMenu(screen.getByText("Header"));
+    return await waitFor(() => {
+      const menu = document.querySelector<HTMLElement>('[data-testid="ticket-context-menu"]');
+      expect(menu).toBeTruthy();
+      return menu!;
+    });
+  }
+
+  test("offers Open, Build… and Delete… for the card right-clicked", async () => {
+    const onBuild = mock((_issue: LinearIssueListItem) => undefined);
+    const onDelete = mock((_issue: LinearIssueListItem) => undefined);
+    const { onSelectIssue } = renderWithMenu({ onBuild, onDelete });
+
+    let menu = await openMenu();
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Open", "Build…", "Delete…"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open" }));
+    expect(onSelectIssue).toHaveBeenCalledWith("eng-1");
+
+    menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Build…" }));
+    expect(onBuild.mock.calls[0]?.[0].id).toBe("eng-1");
+
+    menu = await openMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+    expect(onDelete.mock.calls[0]?.[0].id).toBe("eng-1");
+  });
+
+  test("Build… shows why it is off, and Delete… is absent without a handler", async () => {
+    const onBuild = mock((_issue: LinearIssueListItem) => undefined);
+    renderWithMenu({
+      onBuild,
+      buildDisabledReason: () => "A build of this ticket is still running",
+    });
+
+    const menu = await openMenu();
+    const build = within(menu).getByRole("menuitem", { name: /Build…/ });
+    expect(build.hasAttribute("data-disabled")).toBe(true);
+    expect(build.textContent).toContain("A build of this ticket is still running");
+    expect(within(menu).queryByRole("menuitem", { name: /Delete/ }) === null).toBe(true);
+  });
+
+  test("right-clicking does not open the issue", async () => {
+    const { onSelectIssue } = renderWithMenu({});
+    await openMenu();
+    expect(onSelectIssue).not.toHaveBeenCalled();
   });
 });

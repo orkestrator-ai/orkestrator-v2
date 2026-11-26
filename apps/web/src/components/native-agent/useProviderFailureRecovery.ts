@@ -16,6 +16,8 @@ export interface ProviderFailureRecoveryInput {
    * applies to a retry too.
    */
   sendPrepared: (text: string, requestId: string) => Promise<boolean>;
+  /** Whether a Retry is waiting on its pre-send check. */
+  retryPending?: boolean;
   /** Whether the composer holds anything a retry would carry or overwrite. */
   draftInUse: boolean;
   /** Why sending is not possible right now, or undefined when it is. */
@@ -37,6 +39,7 @@ export interface ProviderFailureRecoveryInput {
 export function useProviderFailureRecovery({
   messages,
   sendPrepared,
+  retryPending,
   draftInUse,
   sendUnavailableReason,
   modelChangeAvailable,
@@ -63,10 +66,18 @@ export function useProviderFailureRecovery({
     () => ({
       ...(actionableFailureId ? { actionableFailureId } : {}),
       retry,
+      ...(retryPending ? { retryPending: true } : {}),
       ...(retryUnavailableReason ? { retryUnavailableReason } : {}),
       ...(modelChangeAvailable ? { changeModel } : {}),
     }),
-    [actionableFailureId, changeModel, modelChangeAvailable, retry, retryUnavailableReason],
+    [
+      actionableFailureId,
+      changeModel,
+      modelChangeAvailable,
+      retry,
+      retryPending,
+      retryUnavailableReason,
+    ],
   );
   return { actions, modelPickerOpenRequest };
 }

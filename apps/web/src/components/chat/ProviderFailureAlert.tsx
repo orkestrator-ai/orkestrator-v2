@@ -156,8 +156,14 @@ export function ProviderFailureAlert({
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={actions.retryUnavailableReason !== undefined}
-                        onClick={() => actions.retry?.(failureId!, occurredAt!)}
+                        disabled={
+                          !actions.retryPending && actions.retryUnavailableReason !== undefined
+                        }
+                        aria-disabled={actions.retryPending || undefined}
+                        className="aria-disabled:opacity-50 aria-disabled:hover:bg-transparent"
+                        onClick={() => {
+                          if (!actions.retryPending) actions.retry?.(failureId!, occurredAt!);
+                        }}
                       >
                         <RotateCcw aria-hidden="true" />
                         Retry

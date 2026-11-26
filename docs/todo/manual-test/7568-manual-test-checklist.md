@@ -127,14 +127,35 @@ at the first release built from the sweep, then delete the pinned paths; the
 60-day window stays for later changes). The build that applied it retired
 8304, so its item is ticked here with the decision and cites it as retired.
 
+Updated 2026-11-26: 0039 task 6's Cursor cells and task 5's real-login Pi
+rerun ran on mbp3 with real logins and left this file; their results are in
+[0039's live apply record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
+0039 task 4 (Grok) ran later that day after the user signed in; its item
+stays open for the user-scope edit cells the harness could not exercise.
+
+Updated 2026-11-26: with the user's one-off go-ahead, an agent ran the
+probe-network sweep on omarchy-hp (0241 (retired) task 1). It removed the 29
+pre-fix probe networks and nothing else, and a container fixture then got a
+default-pool network. The item left the decisions section. The evidence is in
+[container qualification](../../development/container-qualification.md#probe-network-sweep-on-omarchy-hps-pre-fix-backlog-2026-11-26).
+It unblocks the reference-host runs of 0729 task 5 and 0870 task 3.
+
+Updated 2026-11-26: with the user's one-off go-ahead, an agent then ran the
+same sweep on beelink (3320 (retired) task 2). The 29 networks the item
+described were already gone; it removed the 20 probe networks that had built
+up since (2026-11-06 to 2026-11-20) and nothing else, and a container fixture
+then got a default-pool network. The item left the decisions section. The
+evidence is in
+[container qualification](../../development/container-qualification.md#probe-network-sweep-on-beelinks-backlog-2026-11-26).
+
 ### Tasks
 
-1. **Manual tests and live checks** (368 items): run each check under
+1. **Manual tests and live checks** (369 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (23 items): make each call
+2. **Decisions, approvals and outward actions** (21 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -308,16 +329,16 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 71 | 3 |
+| Agent engines and provider SDKs | 74 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 34 | 5 |
+| Containers and environments | 34 | 2 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 102 | 8 |
+| Cross-cutting | 106 | 8 |
 | Design canvas | 5 | 0 |
-| MCP | 10 | 1 |
+| MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 364 | 23 |
+| **Total** | 369 | 20 |
 
 
 
@@ -871,12 +892,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
   - start a Grok session there and read its live MCP inventory in the panel, and the probe server's own log.
 
   Record in 0039's evidence, as a new "Live apply record: Grok" section: the per-scope pass/fail and the apply outcomes. The expected outcome is `restart-required`, then `applied` after the bridge process is replaced. Also record the path of `output/agent-testing/<run>/mcp-apply-live/grok.json`, and whether the untrusted session listed or started the project server (expected: not started, matching `grok mcp doctor`).
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 6: Cursor's corrected probe cells.** On a host with a current Cursor login, start a fresh profile: `mise run dev:test --profile <profile> --fixture --credential-source cursor --agent-platforms cursor --headless`. Run the corrected spec for Cursor only: `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=cursor bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts`. It covers the user `~/.cursor/mcp.json` scope and the project `.cursor/mcp.json` scope with project resources on. Record in 0039's completion matrix one row per scope:
-  - Add, Edit (A, B), Rename (new / old) and Remove (A, B);
-  - Busy: whether the shell `sleep` was seen running before the save and the turn ended `BUSY-DONE`;
-  - Restart and restore, and the apply outcome (expected: `pending-next-turn`, then `applied` per tab);
-  - the path of `output/agent-testing/<run>/mcp-apply-live/cursor.json`.
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 5: Pi user-scope rerun with a real login.** Billed. The fake-model rerun passed on 2026-11-06 (every user-scope rebuild offered the server); this run shows whether a real model calls it. Start a disposable profile with a Pi login whose provider accepts the model: `mise run dev:test --profile <profile> --fixture --credential-source pi --agent-platforms pi --headless`, and check afterwards that the host's Pi `auth.json` is unchanged. Run the live apply spec for Pi only, naming the model (a ChatGPT login uses `openai-codex/…` ids): `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=pi ORKESTRATOR_AGENT_TEST_MCP_MODELS=pi=openai-codex/<model> ORKESTRATOR_TEST_NO_PROGRESS_TIMEOUT_MS=1800000 ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=3600000 mise run test:logged -- --name mcp-live-pi -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts --workers=1`. For each failed user-scope probe read its `diagnosis` in `output/agent-testing/<run>/mcp-apply-live/pi.json`: `not-offered` after `applied` is a Pi bridge bug (open a to-do); `offered-not-called` is the model and qualifies the scope only if a repeat passes; `turn-failed` needs a successful rerun first. Record: the Pi version, model, per-scope pass/fail, each failure's diagnosis and the `pi.json` path, in 0039's task 5 ("What the Pi rerun needs").
+
+  Run on 2026-11-26 on mbp3 after the user signed in (profile `grok-mcp-live-4`, Grok Build 1.0.88, `main` at `76cd71b58`; [record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26)): exit 1 with 9 failures, every one from two harness gaps, none from apply. Both scopes went `restart-required`, then `applied` after the bridge restart. The project scope passed on runtime evidence; the user scope is partial, because the busy check does not recognise Grok's `run_terminal_command` shell tool, so the edit never saved and its rename-to-v2 and restore checks are unproven. Saved `enabled` and SSE were not exercised (the Grok target reports both unsupported). The untrusted project server was not started (no probe log, null inventory, `grok mcp doctor`: "folder untrusted"), though the management snapshot listed it as `effective`. This item stays open for the user-scope edit cells once the busy check knows Grok's shell tool.
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 7: inactive-environment spec in full mode on a real model.** Billed. Both specs passed on the loopback fake model on 2026-11-06; this proves a real model's tool calls after the edit, the removal, a bridge restart and the shared save. In a disposable profile with a Claude login that is not rate limited (`mise run dev:test --profile <profile> --fixture --credential-source claude --agent-platforms claude --headless`), run `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 mise run test:logged -- --name mcp-inactive-real -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-inactive.spec.ts --workers=1 --trace off` (no `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`, no `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL`). Optionally repeat with a Codex login and `mcp-apply-inactive-codex.spec.ts`. Record: the date, CLI versions, models, pass/fail per spec and the marker-file counts the spec reports, in 0039's "Qualification" (inactive environment).
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 12: a running Claude account session sees an editor save.** Needs a real Claude login on an added agent account. In a disposable profile, add a Claude account in Settings (under the provider's accounts) and sign it in, then start a short Claude session on that account. In Settings → MCP, add a server to `claude:user`; send a turn and check in the agent panel that the running CLI loaded it. Remove it and send another turn: it is gone. Then let the CLI idle out (10 minutes) and send a turn: the removed server does not come back. Finally add a server only to the account's own `.claude.json` copy and check the panel reports it stale and refuses its tools. Check the source header shows the "Added Claude accounts use their own copy" note. Record: the date, the Claude CLI version and pass/fail per check, in 0039's task 12 ("Not proven").
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 13: Claude MCP reconnect on a running CLI with a real login.** Billed. The fake-model case passed on 2026-11-06 (`mcp-ui-matrix.spec.ts` skips it on a profile with a Claude credential, so this run is by hand). In a disposable profile with a real Claude login (`mise run dev:test --profile <profile> --fixture --credential-source claude --agent-platforms claude --headless`), give a fixture environment a `.mcp.json` with one healthy and one failing stdio server. Send a short turn so the CLI stays warm, fix the failing server and reconnect its row: the whole list comes from the live session, the `orkestrator` row is kept, the layers read `project` and `orkestrator`, and the open panel refreshes without a reload. Wait for the idle release (10 minutes), reconnect the row again (it runs through a probe), send another turn, and hard-reload: the running CLI's report replaces the list and it is still right after the reload. Record: the date, the Claude CLI version and pass/fail per step, in 0039's task 13.
@@ -978,15 +995,6 @@ None open (both answered on 2026-11-14).
 #### Containers and environments
 
 - [ ] **0796 (retired) task 3: live GitHub evidence for the "ready to merge" `mergeStateStatus` mapping (see [github-pull-requests.md](../../architecture/github-pull-requests.md#ready-to-merge)).** Decide whether to approve a GitHub write: a throwaway private repository whose ruleset requires one review and one status check, plus a second account that can review. If you approve, open four PRs in it: clean and mergeable; required review outstanding; a failing non-required check; a draft. Read each with the monitor's exact lookup, `gh pr view <url> --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName`, on the host and inside a container of the current workspace image with `gh` authenticated. Then delete the repository. Record: the approval (or refusal), the four `mergeStateStatus`/`isDraft` values (expected `CLEAN`, `BLOCKED`, `UNSTABLE`, draft), the image's `gh` version, and whether its lookup exited 0, in github-pull-requests.md's "Ready to merge" section (or reply to the coordinator). Any mismatch with the mapping is a new to-do.
-- [ ] **3320 (retired) task 2: clear the leaked probe networks on beelink (see [disk-usage.md](../../development/disk-usage.md#what-you-clean-yourself)).** This removes Docker networks other runs created on a shared daemon, so it is your call. On beelink, record `docker network ls --filter label=orkestrator-resource-role=host-reachability-probe --format '{{.ID}} {{.Name}} {{.CreatedAt}}'` and `docker network ls | wc -l`. Run `mise run disk:report` (its `probe networks` row), then `mise run disk:report -- --fix probe-networks`, and repeat the listing. Then start a throwaway `dev:test` profile with `--fixture-environments local,container`, confirm the container fixture creates its environment network, and `dev:stop` and `dev:reset` it. Record: the before and after counts, any network the sweep kept and why (newer than a day, or a container attached), and the fixture result, in [container-qualification.md](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06) (or reply to the coordinator).
-- [ ] **0241 (retired) task 1: run the probe-network sweep on omarchy-hp's pre-fix backlog (see [disk-usage.md](../../development/disk-usage.md#what-you-clean-yourself)).** This is the sweep's first unguarded run on a real backlog, and it removes other owners' networks, so it is your call (run it yourself, or tell an agent to go ahead). The backlog is 29 unattached `ork-<owner>-reach-probe-net` networks created on 2026-10-28, which fill all 31 default address pools. On omarchy-hp:
-  1. Record `docker network ls --filter label=orkestrator-resource-role=host-reachability-probe --format '{{.ID}} {{.Name}} {{.CreatedAt}}'` and `docker network ls | wc -l`.
-  2. Run `mise run disk:report` and check that its `probe networks` row counts the backlog and how many are unattached and over a day old.
-  3. Run `mise run disk:report -- --fix probe-networks`, then repeat step 1. Every pre-fix network should be gone, and any newer than a day, or with a container attached, should remain.
-  4. Start a throwaway `dev:test` profile with `--fixture-environments local,container` (never the production instance), confirm the container fixture creates its environment network, then `dev:stop` and `dev:reset` it.
-
-  Record: the counts from each step and the fixture result in [container-qualification.md](../../development/container-qualification.md) (or reply to the coordinator). This unblocks [0729](../containers-and-environments/0729-container-benchmark-target-misses.md) task 5 and [0870](../containers-and-environments/0870-container-start-poll-quantisation.md) task 3.
-
 - [ ] **[7420](../containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md) task 3: release-note line for the removed telemetry hosts.** When cutting the next release, add: "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; Claude Code, Codex, OpenCode, Pi, Grok and Cursor completed fake-provider turns without them. Existing allowlists keep them; remove them in Settings to close the channel." Record: the release version that carried the line, in 7420.
 
 #### Coordinator and Multi Review
@@ -1032,9 +1040,11 @@ None open (both answered on 2026-11-14).
 
 #### MCP
 
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`; all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) and Cursor (task 6) items above. The recommended option is to keep all-on for Claude, Codex, OpenCode and Cursor, and to decide Grok and Pi apply from their runs, narrowing them to write-only if they fail. Inputs:
-  - Claude, Codex, Pi and OpenCode pass every probe cell, but only against the loopback fake model (2026-11-06 and 2026-11-10).
-  - Grok and Cursor's corrected cells depend on the two live items above.
+- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`, all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) item above. The recommended option is to keep all-on for Claude, Codex, OpenCode, Cursor and Pi, and decide Grok apply from its run, narrowing it to write-only if it fails. Use these results.
+  - The loopback fake-model runs passed every probe cell for Claude, Codex and Pi on 2026-11-06 and for OpenCode on 2026-11-10.
+  - Pi 1.5.2 passed every probe in both scopes on a real login on 2026-11-26, with `pending-next-turn` → `applied` per probed tab. See [0039's real-login record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
+  - Cursor reported `pending-next-turn` → `applied` in both scopes on a real login on 2026-11-26, and 14 of 15 probes passed. The user-removal probe on tab B reached no server with its nonce, and the panel omitted the removed name. The exact-match rule rejected its reply, which ended with `MCPQ-UNAVAILABLE` after narration on the same line. The panel evidence leaves tool availability inconclusive. See [0039's real-login record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
+  - Grok 1.0.88 reported `restart-required` → `applied` in both scopes on a real login on 2026-11-26. The project scope passed on runtime evidence; the user scope's edit, rename-to-v2 and restore cells are unproven because the harness's busy check missed Grok's shell tool, and the six "must fail" probes logged no call but were rejected by the same exact-match rule as Cursor's. The untrusted project server was not started. See [0039's Grok record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26).
 
   Record: the decision and the provider lists, in 0039's "Assumptions and decisions". If you narrow, reply to the coordinator so an agent can make the one-line default change.
 

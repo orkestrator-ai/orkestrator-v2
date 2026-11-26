@@ -281,6 +281,13 @@ a transcript.
   the other typed stages. An Address Findings session from before the typed handoff has
   no report there either, and Verify is told none is available. A round with no Address Findings
   (a clean review) gives Verify no report.
+- **Pre-existing failures.** With Settings → Review's "Address Findings also
+  fixes pre-existing test failures on the base branch" switch on (off by
+  default), Address Findings also repairs recorded failures labelled
+  `pre-existing`, each in its own commit, and Verify counts those repairs. The
+  Address Findings session records the choice it ran with
+  (`addressFindingsPreExistingFailures`). See
+  [Repairing pre-existing failures](review-preparation.md#repairing-pre-existing-failures-opt-in).
 - **Fan-out.** The live pass reads `reviewFanout.reviewers`: status, queue
   position ("queued · #3 of 7"), "starting", the error, issue counts. Reviewers
   with no session yet are nodes too. Once the pass is retired, each reviewer

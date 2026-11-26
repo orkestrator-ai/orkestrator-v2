@@ -44,6 +44,7 @@ import {
 import {
   GraphBuiltInPromptError,
   graphBuiltInPromptText,
+  GRAPH_ADDRESS_FINDINGS_BUILT_INS,
   type GraphBuiltInPromptContext,
   type GraphBuiltInPromptInputValue,
 } from "./graph-agent-builtins.js";
@@ -602,6 +603,26 @@ describe("equivalence with the bound builders", () => {
         testCoverageGaps: [],
       } as StructuredReviewReport),
     );
+  });
+
+  test("both Address built-ins add the pre-existing repair rule only for a recorded repair policy", () => {
+    const report = example<StructuredReviewReport>("review-report");
+    const reviewPackage = example<ReviewPackageReference>("review-package");
+    const inputs = {
+      report: artifact("report", "review-report", report),
+      package: artifact("package", "review-package", reviewPackage),
+    };
+    for (const builtIn of ["address-findings", "pipeline-address-findings"] as const) {
+      expect(GRAPH_ADDRESS_FINDINGS_BUILT_INS.has(builtIn)).toBe(true);
+      const base = { ...exampleContext(builtIn), inputs };
+      const off = graphBuiltInPromptText(base);
+      expect(graphBuiltInPromptText({ ...base, addressFindingsPreExisting: "excuse" })).toBe(off);
+      expect(off).not.toContain("**Pre-existing failures**");
+      const on = graphBuiltInPromptText({ ...base, addressFindingsPreExisting: "repair" });
+      expect(on).toContain("**Pre-existing failures**");
+      expect(on).toContain("Commit each pre-existing repair on its own");
+    }
+    expect(GRAPH_ADDRESS_FINDINGS_BUILT_INS.has("verify")).toBe(false);
   });
 
   test("address-findings frames a custom report's value", () => {

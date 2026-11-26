@@ -60,7 +60,14 @@ import {
   REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
 } from "../review/index.js";
 import type { BuildPipelineContext } from "./context.js";
-import { verificationAddressFindingsReport } from "./address-findings-report.js";
+import {
+  roundAddressFindingsSession,
+  verificationAddressFindingsReport,
+} from "./address-findings-report.js";
+import {
+  addressFindingsPreExistingFailurePolicy,
+  type AddressFindingsPreExistingFailurePolicy,
+} from "@orkestrator/protocol/address-findings-pre-existing";
 import { usesPackagePreparationSession } from "./stages.js";
 
 /** A stage's opening prompt, its result schema and the images it is sent with. */
@@ -68,6 +75,12 @@ export interface StagePrompt {
   prompt: string;
   schema?: JsonSchema;
   images: BuildPipeline["taskSnapshot"]["images"];
+  /**
+   * An Address prompt's pre-existing failure policy, read from Settings →
+   * Review as the session opens. The supervisor records it on the session so
+   * the prompt can be reproduced and Verify reads the same choice.
+   */
+  addressFindingsPreExistingFailures?: AddressFindingsPreExistingFailurePolicy;
 }
 
 export class BuildPipelineStagePrompts {
@@ -175,16 +188,20 @@ export class BuildPipelineStagePrompts {
           BUILD_PIPELINE_HANDOFF_TAIL_MESSAGES,
         ),
       });
+      // The value in force now: a change made while this pipeline was
+      // reviewing applies, and the choice is recorded with the session.
+      const preExisting = addressFindingsPreExistingFailurePolicy(config.global);
       return {
         prompt: prependReviewHandoff(
           handoff,
           addressFindingsReportPrompt(
             pipeline.structuredReview,
-            addressFindingsValidationInstruction(pipeline.reviewPackage, reviewTarget),
+            addressFindingsValidationInstruction(pipeline.reviewPackage, reviewTarget, preExisting),
           ),
         ),
         schema: REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA,
         images: [],
+        addressFindingsPreExistingFailures: preExisting,
       };
     }
     if (phase === "verify") {
@@ -196,6 +213,7 @@ export class BuildPipelineStagePrompts {
           worktree,
           verificationAddressFindingsReport(pipeline),
           await this.validationAncestry(pipeline, worktree),
+          roundAddressFindingsSession(pipeline)?.addressFindingsPreExistingFailures,
         ),
         schema: VERIFICATION_SCHEMA,
         images: pipeline.taskSnapshot.images,

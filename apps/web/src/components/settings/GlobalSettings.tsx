@@ -167,6 +167,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     reviewInstruction: getSavedReviewInstruction(global.reviewInstruction),
     reviewLensPresets: resolveReviewLensPresets(global.reviewLensPresets),
     multiReviewEngine: global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
+    addressFindingsRepairsPreExisting: global.addressFindingsRepairsPreExisting === true,
   };
 }
 
@@ -258,6 +259,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     getSavedReviewInstruction(global.reviewInstruction),
     resolveReviewLensPresets(global.reviewLensPresets),
     global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
+    global.addressFindingsRepairsPreExisting === true,
     // Canonical shape, so an edit that only reorders keys is not a change.
     normalizeAgentSettings(global.agentSettings),
   ]);
@@ -411,6 +413,9 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   );
   const [multiReviewEngine, setMultiReviewEngine] = useState<MultiReviewEngine>(
     global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
+  );
+  const [addressFindingsRepairsPreExisting, setAddressFindingsRepairsPreExisting] = useState(
+    global.addressFindingsRepairsPreExisting === true,
   );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
@@ -571,6 +576,10 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sync(setReviewInstruction, (global) => getSavedReviewInstruction(global.reviewInstruction));
     sync(setReviewLensPresets, (global) => resolveReviewLensPresets(global.reviewLensPresets));
     sync(setMultiReviewEngine, (global) => global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE);
+    sync(
+      setAddressFindingsRepairsPreExisting,
+      (global) => global.addressFindingsRepairsPreExisting === true,
+    );
   }, [global]);
 
   // Entering the web-client section starts a fresh status load, and entering
@@ -759,6 +768,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       reviewInstruction,
       reviewLensPresets,
       multiReviewEngine,
+      addressFindingsRepairsPreExisting,
     }),
     [
       envPatterns,
@@ -802,6 +812,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       reviewInstruction,
       reviewLensPresets,
       multiReviewEngine,
+      addressFindingsRepairsPreExisting,
     ],
   );
   const localCoreSignature = useMemo(() => JSON.stringify(localCoreFields), [localCoreFields]);
@@ -980,6 +991,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       // rejected edit. Keep a newer edit made while this request was in flight.
       setAutoSteer((current) =>
         current === autoSteer ? (newConfig.global.autoSteer ?? false) : current,
+      );
+      setAddressFindingsRepairsPreExisting((current) =>
+        current === addressFindingsRepairsPreExisting
+          ? newConfig.global.addressFindingsRepairsPreExisting === true
+          : current,
       );
       setLogDetailKeepRaised((current) =>
         current === logDetailKeepRaised ? newConfig.global.logDetailKeepRaised === true : current,
@@ -1254,6 +1270,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     setReviewLensPresets,
     multiReviewEngine,
     setMultiReviewEngine,
+    addressFindingsRepairsPreExisting,
+    setAddressFindingsRepairsPreExisting,
     webClientStatus,
     setWebClientStatus,
     webClientApplyError,

@@ -133,6 +133,61 @@ automatic Address Findings even when the consolidated report is empty.
 The clean-review shortcut to Auto-PR requires both an empty report and no
 recorded validation to triage.
 
+## Repairing pre-existing failures (opt-in)
+
+Settings → Review has a switch, **Address Findings also fixes pre-existing
+test failures on the base branch** (global `addressFindingsRepairsPreExisting`,
+`packages/protocol/src/address-findings-pre-existing.ts`). It is **off by
+default**, for new and existing installs; a config without the field, and an
+older client or backend that does not know it, reads as off. It is a review
+preference, so a command node hands it to the machines it controls
+(`INHERITED_GLOBAL_SETTING_KEYS`) and it can be reset to the default.
+
+- **Off.** Every Address Findings prompt and Verify prompt is byte-for-byte what
+  it was before the switch existed: the repair rule fixes failures related to
+  the ticket or branch and the excuse rule lets the rest be left with evidence.
+  `build-pipeline/prompts-pre-existing.test.ts` pins those texts by digest.
+- **On.** After the unchanged repair and excuse rules, the prompt adds a
+  pre-existing rule (`preExistingFailureRepairRule` in
+  `build-pipeline/prompts.ts`): repair each recorded failure the validation
+  report labels `pre-existing` (in a package without `validationReport`, a
+  triage reason `failed-on-merge-base`) by fixing its cause, never by weakening,
+  skipping or deleting the test; commit each such repair on its own, apart from
+  the branch's own fixes; rerun only the repaired check; and list each repair
+  separately (a `Pre-existing repair:` note in the pipeline's Address Findings
+  result, or its own entry in Multi Review's summary). A failure labelled
+  `flaky` is never hidden by a code change: it is recorded in the repository's
+  flaky-test register as its instructions describe, or left with its evidence.
+  `unrelated` and `undetermined` failures keep today's handling. The rule is
+  given only with recorded validation, where those labels exist.
+- **Verify.** When this round's Address Findings ran with the switch on, the
+  pipeline's Verify adds `VERIFICATION_PRE_EXISTING_REPAIR_RULE`: a
+  pre-existing failure repaired by a commit after the validated headRef, still
+  present at HEAD, counts as repaired; one Address Findings left follows the
+  usual excuse rule; a "repair" that weakens or skips the test does not count.
+
+**When it is read, and where it is recorded.** Each Address Findings run takes
+the value in force when it starts, so a change made while a review is running
+applies to the next Address Findings, and the choice is kept with the run so
+its prompt can be reproduced:
+
+| Run | Read when | Recorded on |
+| --- | --- | --- |
+| Build pipeline | its Address Findings session opens (`build-pipeline/stage-prompts.ts`) | the session, `addressFindingsPreExistingFailures` (`excuse` or `repair`); Verify of the same round reads it there |
+| Multi Review | Address Findings is queued (manual, automatic, custom or restarted) or an unattended Address Findings request is created (`review/service.ts`) | the workflow, `addressFindingsPreExistingFailures`; every dispatch, retry and session replacement (`review/address-findings-dispatch.ts`) reads the recorded value, never the live setting |
+| Graph Address node (`address-findings`, `pipeline-address-findings`) | the activation is first dispatched (`graph-node-agent.ts`) | the activation, `addressFindingsPreExistingFailures` |
+
+Multi Review workflows and graph activations record the field only for
+`repair`: their guards refuse unknown keys, so a review on the default keeps
+the exact shape an older reader accepts. A graph's Verify node does not know
+the Address node's choice and keeps today's rule.
+
+**The trade-off.** Repairing pre-existing failures makes pull requests larger
+and mixes unrelated fixes into a change, even in their own commits; and builds
+running in parallel on the same base can each repair the same failing test and
+then conflict. That is why the switch is off by default (chosen on
+2026-11-26).
+
 ## Fresh discovery for arbitrary repositories
 
 There is deliberately no cross-round command-plan or result cache. Each round

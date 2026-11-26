@@ -50,6 +50,7 @@ export const RESETTABLE_GLOBAL_SETTING_KEYS = [
   "terminalLinkDefaultTarget",
   "reviewInstruction",
   "reviewLensPresets",
+  "addressFindingsRepairsPreExisting",
   "coordinatorWebResearch",
   "coordinatorResearchMcpServers",
   "experimentalGraphs",

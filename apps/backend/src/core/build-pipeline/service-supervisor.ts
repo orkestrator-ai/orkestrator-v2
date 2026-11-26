@@ -1792,7 +1792,7 @@ export class BuildPipelineSupervisor {
         provider: agent,
         fence: sessionKey,
       });
-      const stagePrompt = override
+      const stagePrompt: StagePrompt = override
         ? { prompt: override.prompt, images: override.images, schema: override.schema }
         : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
       const prompt = withUnattendedPolicy(
@@ -1844,6 +1844,10 @@ export class BuildPipelineSupervisor {
         // The marker Verify reads to choose the typed report over the text.
         ...(sessionPhase === "address-findings" && dispatchResultKind === "address-findings-result"
           ? { addressFindingsReportKind: PIPELINE_ADDRESS_FINDINGS_REPORT_KIND }
+          : {}),
+        // The pre-existing failure policy its prompt was built with.
+        ...(sessionPhase === "address-findings" && stagePrompt.addressFindingsPreExistingFailures
+          ? { addressFindingsPreExistingFailures: stagePrompt.addressFindingsPreExistingFailures }
           : {}),
         ...sessionWorkspaceBaselineFields(validationWorktree),
         ...(reworkWorktreeFingerprint

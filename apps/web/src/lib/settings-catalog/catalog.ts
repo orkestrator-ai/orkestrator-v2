@@ -615,6 +615,23 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
     ),
   },
   {
+    id: "review.address-findings-pre-existing",
+    section: "review",
+    label: "Address Findings also fixes pre-existing test failures on the base branch",
+    description:
+      "Address Findings repairs recorded test failures that also fail on the base branch, in separate commits, instead of only excusing them. Pull requests get larger and parallel builds may race to fix the same test.",
+    aliases: [
+      "pre-existing failures",
+      "base branch failures",
+      "fix failing tests",
+      "flaky",
+      "address findings",
+      "validation failures",
+    ],
+    appliesWhen: "new-sessions",
+    value: stored("addressFindingsRepairsPreExisting", false, onOff),
+  },
+  {
     id: "review.instruction",
     section: "review",
     label: "Code review instruction",

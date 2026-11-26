@@ -36,6 +36,10 @@ import {
   type ReviewWorktreeSnapshotRecord,
 } from "./review-fanout.js";
 import { isWorkflowResultSubmissionState } from "./workflow-results.js";
+import {
+  isAddressFindingsPreExistingFailurePolicy,
+  type AddressFindingsPreExistingFailurePolicy,
+} from "./address-findings-pre-existing.js";
 import { READ_ONLY_COMMAND_SANDBOX_REASON_MAX_CHARS } from "./native-agent-policy-effects.js";
 
 export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
@@ -547,6 +551,13 @@ export interface MultiReviewWorkflow {
     { kind: "default" } | { kind: "custom"; instruction: string; model: MultiReviewModelSelection };
   /** Relaunch Address Findings after an explicitly restarted upstream step reconsolidates. */
   restartAddressFindingsAfterConsolidation?: boolean;
+  /**
+   * The pre-existing failure policy the current Address Findings launch took
+   * from Settings → Review when it started (`address-findings-pre-existing.ts`).
+   * Written only for `repair`, so a review on the default keeps the shape an
+   * older reader accepts; absent is `excuse`.
+   */
+  addressFindingsPreExistingFailures?: AddressFindingsPreExistingFailurePolicy;
   activeRequest?: {
     kind: MultiReviewStepKind;
     requestId: string;
@@ -1123,6 +1134,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "presentationError",
       "addressFindingsLaunch",
       "restartAddressFindingsAfterConsolidation",
+      "addressFindingsPreExistingFailures",
       "activeRequest",
       "pendingResultConsumptions",
       "cancellingSince",
@@ -1220,6 +1232,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
             !isMultiReviewModelSelection(value.addressFindingsLaunch.model)))) ||
     (value.restartAddressFindingsAfterConsolidation !== undefined &&
       typeof value.restartAddressFindingsAfterConsolidation !== "boolean") ||
+    (value.addressFindingsPreExistingFailures !== undefined &&
+      !isAddressFindingsPreExistingFailurePolicy(value.addressFindingsPreExistingFailures)) ||
     !optionalString(value.error, 4_096) ||
     (value.consolidatedReport !== undefined &&
       !isStructuredReviewReport(value.consolidatedReport)) ||

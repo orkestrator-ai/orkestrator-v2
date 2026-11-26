@@ -1,3 +1,4 @@
+import { addressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import { createRichInteractionService } from "./rich-interactions/index.js";
 import type { RichInteractionService } from "./rich-interactions/service.js";
 import {
@@ -2023,6 +2024,8 @@ export class OrkestratorBackend {
         ),
       projectNotes: async (projectId) =>
         (await storage.kanban.getProjectNotes(projectId)).content || undefined,
+      addressFindingsPreExistingFailures: async () =>
+        addressFindingsPreExistingFailurePolicy((await storage.loadConfig()).global),
       artifactDispatch,
       // The run view's activation transcripts (item 211).
       captureTranscript: createGraphRunTranscriptCapture({ storage }),

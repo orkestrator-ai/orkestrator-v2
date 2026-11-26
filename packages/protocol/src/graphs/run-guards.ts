@@ -30,6 +30,7 @@ import {
   type FieldValidation,
 } from "../field-validation.js";
 import { isNativeAgentExecutionPolicy } from "../native-agent.js";
+import { ADDRESS_FINDINGS_PRE_EXISTING_FAILURE_POLICIES } from "../address-findings-pre-existing.js";
 import { parseUtcTimestamp } from "../workflow-snapshot.js";
 import {
   GRAPH_DIGEST_PATTERN,
@@ -717,6 +718,7 @@ const ACTIVATION_FIELDS = [
   "baseline",
   "worktree",
   "guards",
+  "addressFindingsPreExistingFailures",
   "blocked",
   "error",
   "errorCause",
@@ -798,6 +800,14 @@ function checkActivation(
     );
   }
   checkText(value.enforcementReason, joinPath(path, "enforcementReason"), errors, 512);
+  if (value.addressFindingsPreExistingFailures !== undefined) {
+    checkEnum(
+      value.addressFindingsPreExistingFailures,
+      joinPath(path, "addressFindingsPreExistingFailures"),
+      errors,
+      ADDRESS_FINDINGS_PRE_EXISTING_FAILURE_POLICIES,
+    );
+  }
   if (value.baseline !== undefined)
     checkBaseline(value.baseline, joinPath(path, "baseline"), errors);
   if (value.worktree !== undefined) {

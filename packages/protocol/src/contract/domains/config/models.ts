@@ -187,6 +187,11 @@ export const globalSettingsFields = {
   reviewInstruction: optionalString,
   /** Reviewer focus presets; absent means the shipped five. */
   reviewLensPresets: Schema.optional(mutableArray(ownedObject<ReviewLensPreset>())),
+  /**
+   * Address Findings also repairs recorded failures that already fail on the
+   * base branch (`address-findings-pre-existing.ts`). Off when absent.
+   */
+  addressFindingsRepairsPreExisting: optionalBoolean,
   agentMessaging: Schema.optional(ownedObject<AgentMessagingSettings>()),
   agentAccountAutoSwitch: Schema.optional(ownedObject<AgentAccountAutoSwitchSettings>()),
   /** Machine-local standing permission for coordinators to switch accounts. */

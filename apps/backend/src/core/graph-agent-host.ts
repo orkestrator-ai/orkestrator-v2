@@ -1,3 +1,4 @@
+import type { AddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { isGraphReviewConsolidationNode } from "./graph-agent-builtins.js";
 /**
@@ -226,6 +227,8 @@ export interface GraphAgentCallFacts {
   worktree?: GraphActivationWorktree;
   /** The activation's guard results (item 209), newest per guard. */
   guards?: GraphGuardResult[];
+  /** An Address Findings activation's recorded pre-existing failure policy (`repair` only). */
+  addressFindingsPreExistingFailures?: AddressFindingsPreExistingFailurePolicy;
 }
 
 /** What the host needs from its executor across calls. */
@@ -950,6 +953,9 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       ...(capability ? { capability } : {}),
       resultTools: this.resultTools(),
       validationPlan: (await this.light()).reviewed?.plan,
+      ...(this.input.facts.addressFindingsPreExistingFailures
+        ? { addressFindingsPreExisting: this.input.facts.addressFindingsPreExistingFailures }
+        : {}),
       ...(this.input.facts.worktree
         ? {
             worktree: {
@@ -1033,6 +1039,9 @@ export class GraphAgentBranchHost implements AgentBranchHost<AgentBranchRecord> 
       ...(facts.baseline ? { baseline: facts.baseline } : {}),
       ...(facts.worktree ? { worktree: facts.worktree } : {}),
       ...(facts.guards ? { guards: facts.guards } : {}),
+      ...(facts.addressFindingsPreExistingFailures
+        ? { addressFindingsPreExistingFailures: facts.addressFindingsPreExistingFailures }
+        : {}),
       ...(session ? { session } : {}),
     };
   }

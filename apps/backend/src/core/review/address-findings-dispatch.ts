@@ -9,6 +9,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { createHash } from "node:crypto";
+import { recordedAddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import {
   NativeAgentProviderSessionMissingError,
   type NativeAgentService,
@@ -89,6 +90,8 @@ async function validationInstruction(
     workflow.targetBranch,
     includeRerunRule,
     checks,
+    // The policy the launch recorded when it started, never the live setting.
+    recordedAddressFindingsPreExistingFailurePolicy(workflow.addressFindingsPreExistingFailures),
   );
 }
 

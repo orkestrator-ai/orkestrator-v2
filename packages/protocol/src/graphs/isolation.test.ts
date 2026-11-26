@@ -308,6 +308,19 @@ describe("the run record", () => {
     expect(validateGraphRun(run(worktree)).ok).toBe(true);
   });
 
+  test("an Address Findings activation's recorded pre-existing policy is kept, junk refused", () => {
+    const withPolicy = (policy: unknown) => {
+      const record = run(worktree);
+      (
+        record.activations[0] as unknown as Record<string, unknown>
+      ).addressFindingsPreExistingFailures = policy;
+      return validateGraphRun(record);
+    };
+    expect(withPolicy("repair").ok).toBe(true);
+    expect(withPolicy("excuse").ok).toBe(true);
+    expect(withPolicy("always").ok).toBe(false);
+  });
+
   test("a worktree of another run or outside our directory is refused", () => {
     const other = graphBranchWorktreePath("other-run", position);
     expect(validateGraphRun(run({ ...worktree, path: other })).ok).toBe(false);

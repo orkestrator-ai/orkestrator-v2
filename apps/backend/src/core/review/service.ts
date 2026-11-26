@@ -1,4 +1,9 @@
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import {
+  addressFindingsPreExistingFailurePolicy,
+  recordedAddressFindingsPreExistingFailurePolicy,
+  type AddressFindingsPreExistingFailurePolicy,
+} from "@orkestrator/protocol/address-findings-pre-existing";
 import { MultiReviewWorkerMail } from "./worker-mail.js";
 import {
   addressFindingsReportPrompt,
@@ -463,7 +468,25 @@ function addressFindingsStepHasStarted(workflow: MultiReviewWorkflow): boolean {
   );
 }
 
-function queueDefaultAddressFindings(workflow: MultiReviewWorkflow): void {
+/**
+ * Records the pre-existing failure policy an Address Findings launch takes
+ * when it starts, so every later dispatch, retry and replacement of that
+ * launch builds the same prompt. Written only for `repair`: absent is
+ * `excuse`, which keeps a default workflow in the shape older readers accept.
+ */
+function recordAddressFindingsPreExistingFailures(
+  workflow: MultiReviewWorkflow,
+  policy: AddressFindingsPreExistingFailurePolicy,
+): void {
+  if (policy === "repair") workflow.addressFindingsPreExistingFailures = policy;
+  else delete workflow.addressFindingsPreExistingFailures;
+}
+
+function queueDefaultAddressFindings(
+  workflow: MultiReviewWorkflow,
+  preExisting: AddressFindingsPreExistingFailurePolicy,
+): void {
+  recordAddressFindingsPreExistingFailures(workflow, preExisting);
   supersedePendingAutoPr(workflow);
   workflow.phase = "interactive";
   workflow.addressFindingsLaunch = { kind: "default" };
@@ -479,7 +502,11 @@ function queueDefaultAddressFindings(workflow: MultiReviewWorkflow): void {
   delete workflow.error;
 }
 
-function queueRestartedAddressFindings(workflow: MultiReviewWorkflow): void {
+function queueRestartedAddressFindings(
+  workflow: MultiReviewWorkflow,
+  preExisting: AddressFindingsPreExistingFailurePolicy,
+): void {
+  recordAddressFindingsPreExistingFailures(workflow, preExisting);
   const launch = workflow.addressFindingsLaunch ?? { kind: "default" as const };
   workflow.addressFindingsLaunch = launch;
   const launchId = randomUUID();
@@ -1487,7 +1514,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // supervisor adopts the idle consolidation session and dispatches the
         // prompt from `advance`; a renderer can disappear immediately after this
         // save without delaying or losing the work.
-        queueDefaultAddressFindings(workflow);
+        queueDefaultAddressFindings(workflow, await this.addressFindingsPreExistingFailures());
         const saved = await this.save(workflow, token);
         this.addressFindingsDispatchRetryAt.delete(workflow.id);
         this.foregroundAddressFindingsDispatches.add(workflow.id);
@@ -1554,6 +1581,10 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           instruction,
           model: workflow.customAddressFindingsModel,
         };
+        recordAddressFindingsPreExistingFailures(
+          workflow,
+          addressFindingsPreExistingFailurePolicy(config.global),
+        );
         supersedePendingAutoPr(workflow);
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
@@ -2386,6 +2417,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
       const shouldReplayAddressFindings =
         kind !== "address-findings" && addressFindingsStepHasStarted(workflow);
+      // Read before any session is abandoned; a relaunch takes the value now.
+      const preExisting = await this.addressFindingsPreExistingFailures();
       const preserveSharedAddressFindingsSession =
         kind === "address-findings" &&
         restartedModel === undefined &&
@@ -2468,7 +2501,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             };
           }
         }
-        queueRestartedAddressFindings(workflow);
+        queueRestartedAddressFindings(workflow, preExisting);
       }
 
       if (kind === "prepare" && restartedModel) {
@@ -3326,6 +3359,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     ) {
       await this.advanceAddressFindingsModel(workflow, token);
     }
+  }
+
+  /** The pre-existing failure policy Settings → Review gives a launch starting now. */
+  private async addressFindingsPreExistingFailures(): Promise<AddressFindingsPreExistingFailurePolicy> {
+    return addressFindingsPreExistingFailurePolicy((await this.storage.loadConfig()).global);
   }
 
   /** Retry a pause whose validation process or provider session did not confirm its stop. */
@@ -4783,6 +4821,13 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           ? "address-findings"
           : "consolidate";
       await this.workflowRollout.refresh();
+      // An unattended Address Findings turn takes the setting as it starts.
+      if (kind === "address-findings") {
+        recordAddressFindingsPreExistingFailures(
+          workflow,
+          await this.addressFindingsPreExistingFailures(),
+        );
+      }
       workflow.activeRequest = {
         kind,
         requestId,
@@ -4862,6 +4907,9 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                 workflow.targetBranch,
                 false,
                 checks,
+                recordedAddressFindingsPreExistingFailurePolicy(
+                  workflow.addressFindingsPreExistingFailures,
+                ),
               ),
               workflow.reviewPackage ? MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING : "",
             ]
@@ -5407,11 +5455,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.assertFence(workflow.id, token);
       if (workflow.restartAddressFindingsAfterConsolidation) {
         delete workflow.restartAddressFindingsAfterConsolidation;
-        queueRestartedAddressFindings(workflow);
+        queueRestartedAddressFindings(workflow, await this.addressFindingsPreExistingFailures());
       } else if (multiReviewAutoAddressFindingsDue(workflow, validationNeedsAttention)) {
         // Save the report and fix intent atomically, so a restart cannot lose
         // the handoff or send it twice. The supervisor owns delivery.
-        queueDefaultAddressFindings(workflow);
+        queueDefaultAddressFindings(workflow, await this.addressFindingsPreExistingFailures());
       } else {
         workflow.phase = "ready";
         // Nothing to fix, so auto-PR moves straight on to the PR.

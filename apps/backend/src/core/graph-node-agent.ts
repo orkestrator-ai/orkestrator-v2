@@ -64,6 +64,8 @@ import {
   type GraphLsRemote,
 } from "./graph-agent-guards.js";
 import { graphAgentFloorProblem, graphAgentPolicy } from "./graph-agent-policy.js";
+import { GRAPH_ADDRESS_FINDINGS_BUILT_INS } from "./graph-agent-builtins.js";
+import type { AddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import type { GraphAgentProviders } from "./graph-agent-providers.js";
 import type { GraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import type { GraphGuardPeerSource } from "./graph-agent-remote-attribution.js";
@@ -155,6 +157,11 @@ export interface GraphAgentExecutorDependencies {
   /** The branch the work targets (built-in prompts). Default the environment's base branch. */
   targetBranch?(environment: Environment): string;
   projectNotes?(projectId: string): Promise<string | undefined>;
+  /**
+   * The pre-existing failure policy (Settings → Review) an Address Findings
+   * activation records when it starts. Without it every activation excuses.
+   */
+  addressFindingsPreExistingFailures?(): Promise<AddressFindingsPreExistingFailurePolicy>;
   /** Per-turn transcript artifact grants for nodes that opt into the artifacts group. */
   artifactDispatch?: ArtifactTurnDispatch;
   /**
@@ -378,6 +385,11 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
             ...(activation.baseline ? { baseline: activation.baseline } : {}),
             ...(activation.worktree ? { worktree: activation.worktree } : {}),
             ...(activation.guards ? { guards: activation.guards } : {}),
+            ...(activation.addressFindingsPreExistingFailures
+              ? {
+                  addressFindingsPreExistingFailures: activation.addressFindingsPreExistingFailures,
+                }
+              : {}),
           }
         : {
             policy: decision.compiled.policy,
@@ -430,6 +442,16 @@ export class GraphAgentNodeExecutor implements GraphNodeExecutor {
             ? error.message
             : "Required graph capabilities could not be verified";
         return failed(message, "guard-violation", facts);
+      }
+      // An Address Findings node takes Settings → Review's pre-existing
+      // failure policy as it starts and records it before dispatch, so a
+      // retry rebuilds the same prompt. Only `repair` is written.
+      if (
+        "builtIn" in node.prompt &&
+        GRAPH_ADDRESS_FINDINGS_BUILT_INS.has(node.prompt.builtIn) &&
+        (await this.dependencies.addressFindingsPreExistingFailures?.()) === "repair"
+      ) {
+        facts.addressFindingsPreExistingFailures = "repair";
       }
       // Every guard fails closed: no baseline, no dispatch.
       try {

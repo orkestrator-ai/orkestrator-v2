@@ -86,6 +86,7 @@ import type {
 import type { GraphEnforcementTier } from "@orkestrator/protocol/graphs/template";
 import type { GraphErrorCause } from "@orkestrator/protocol/graphs/types";
 import type { NativeAgentExecutionPolicy } from "@orkestrator/protocol/native-agent";
+import type { AddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import type { GraphArtifactStore } from "./graph-artifacts.js";
 import type { AdmissionLease } from "./work-admission.js";
 
@@ -128,6 +129,8 @@ export interface GraphActivationFacts {
   worktree?: GraphActivationWorktree;
   /** Replaces the activation's guard results (at most 8). */
   guards?: GraphGuardResult[];
+  /** An Address Findings activation's recorded pre-existing failure policy (`repair` only). */
+  addressFindingsPreExistingFailures?: AddressFindingsPreExistingFailurePolicy;
   /** Human nodes (item 208): the wait the activation keeps until a person answers. */
   human?: GraphHumanWait;
   /** Usage since the previous report; added to the run's usage. */

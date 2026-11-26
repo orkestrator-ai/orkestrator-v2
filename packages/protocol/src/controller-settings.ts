@@ -25,6 +25,7 @@ export const INHERITED_GLOBAL_SETTING_KEYS = [
   "favoriteModels",
   "reviewInstruction",
   "reviewLensPresets",
+  "addressFindingsRepairsPreExisting",
   "openCodeModelProviders",
   "codexMaxConcurrentThreads",
   "claudeBackgroundCommandLimitHours",

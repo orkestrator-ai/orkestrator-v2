@@ -168,6 +168,8 @@ export function applyGraphActivationReport(
   if (report.enforcementReason !== undefined) next.enforcementReason = report.enforcementReason;
   if (report.baseline) next.baseline = { ...report.baseline };
   if (report.worktree) next.worktree = { ...report.worktree };
+  if (report.addressFindingsPreExistingFailures)
+    next.addressFindingsPreExistingFailures = report.addressFindingsPreExistingFailures;
   if (report.guards) next.guards = report.guards.slice(-GRAPH_RUN_BOUNDS.maxGuardResults);
   if (report.human) next.human = { ...report.human };
   if ((target === "running" || target === "awaiting-human") && next.startedAt === undefined) {

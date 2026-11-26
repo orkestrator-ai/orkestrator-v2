@@ -423,6 +423,35 @@ test("MultiReviewService releases the controller lease when it hands off", async
   );
 });
 
+test.each([
+  [true, "repair"],
+  [false, undefined],
+] as const)(
+  "MultiReviewService records the pre-existing repair setting (%p) on the Address Findings launch",
+  async (enabled, recorded) => {
+    const provider = new Provider();
+    await withService(
+      "env-address-pre-existing",
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        if (enabled) await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: true });
+
+        await service.address(started.id);
+        expect((await snapshot(started.id))?.addressFindingsPreExistingFailures).toBe(recorded);
+        // A later change applies to the next launch, not this one.
+        await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: !enabled });
+        await service.advanceNow(started.id);
+        expect((await snapshot(started.id))?.addressFindingsPreExistingFailures).toBe(recorded);
+      },
+    );
+  },
+);
+
 // The keyed supervisor settles the interactive Address Findings handoff with no
 // renderer attached.
 test("MultiReviewService settles the interactive Address Findings card in the background with final usage", async () => {

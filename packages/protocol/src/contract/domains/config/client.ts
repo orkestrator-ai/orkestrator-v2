@@ -9,8 +9,8 @@
  * **Version 2** (a node whose hello advertises `config`): calls carry the
  * envelope and results are decoded with the command's schema. The settings
  * records are open (`config/models.ts`), so a decode keeps every setting a
- * newer node sends and a whole-object save never deletes one. The retired
- * `get_client_state_capabilities` is folded into the domain: every build
+ * newer node sends and a whole-object save never deletes one. The client
+ * state capability read is answered from the domain version: every build
  * that advertises it owns the shared client state this build knows
  * ({@link CONFIG_CLIENT_STATE_CAPABILITIES}), so `clientStateCapabilities()`
  * answers without a round trip.

@@ -12,9 +12,8 @@
  * **Versions 6, 5, 4 and 3** (a node whose hello advertises
  * `native-sessions`): calls are typed by their definitions, carry the
  * envelope (version and the critical keys the arguments hold), and results
- * are decoded with the command's schema. The two retired capability commands
- * (`get_agent_handoff_capabilities`, `get_native_agent_sync_capabilities`)
- * are folded into the domain: every build that advertises it builds,
+ * are decoded with the command's schema. Both capability reads are answered
+ * from the domain version: every build that advertises it builds,
  * delivers and prunes handoffs, and speaks the sync protocols this build
  * knows ({@link NATIVE_SESSIONS_SYNC_CAPABILITIES}), so neither is asked.
  *

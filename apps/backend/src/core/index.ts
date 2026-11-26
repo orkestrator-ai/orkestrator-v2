@@ -17,7 +17,7 @@ import {
 } from "./coordinator/index.js";
 import { usageLimitAccountRouting } from "./coordinator/usage-limit-account-routing.js";
 import type { BackendStartupProgress } from "./backend-startup-progress.js";
-import { unknownCommand } from "@orkestrator/protocol/contract/errors";
+import { unknownCommand, UnsupportedVersionError } from "@orkestrator/protocol/contract/errors";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { agentTestTerminalSurvival } from "./agent-test-fixtures.js";
 import { agentTestDispatchHold, installAgentTestDispatchHold } from "./agent-test-dispatch-hold.js";
@@ -3479,9 +3479,30 @@ export class OrkestratorBackend {
   ): Promise<T> {
     if (this.shuttingDown) throw new Error("Backend is shutting down");
     const handler = this.commands.get(command);
-    // Coded (plan item 1005), with the legacy text, so older clients still match it.
-    if (!handler) throw unknownCommand(command, invocation?.domain);
+    if (!handler) throw this.missingCommand(command, invocation?.domain);
     return (await handler(args, this.context, invocation)) as T;
+  }
+
+  private missingCommand(command: string, invocationDomain?: string): Error {
+    // Published renderers can send these probes before hello. An unknown-command
+    // response makes them cache a native sync refusal or enable browser-only
+    // layout. Refuse the probe as a version mismatch so they can retry safely.
+    const domain =
+      command === "get_native_agent_sync_capabilities"
+        ? "native-sessions"
+        : command === "get_client_state_capabilities"
+          ? "config"
+          : undefined;
+    const range = domain && this.commands.domainRanges.get(domain);
+    if (domain && range) {
+      return new UnsupportedVersionError({
+        command,
+        domain,
+        range,
+        message: "Reload this browser tab or update the desktop app to match the backend.",
+      });
+    }
+    return unknownCommand(command, invocationDomain);
   }
 
   private startLogPolicy(): void {

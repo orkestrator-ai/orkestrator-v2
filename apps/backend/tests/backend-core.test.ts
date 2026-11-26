@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { OrkestratorBackend } from "../src/core/index";
 import { BackendRuntime } from "../src/core/backend-runtime";
-import { UnknownCommandError, incompatibility } from "@orkestrator/protocol/contract/errors";
+import {
+  fromWire,
+  incompatibilityIpcMessage,
+  UnknownCommandError,
+  incompatibility,
+} from "@orkestrator/protocol/contract/errors";
+import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
 const tempDirs: string[] = [];
 
@@ -91,5 +97,54 @@ describe("OrkestratorBackend", () => {
     await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
       "Backend is shutting down",
     );
+  });
+
+  test("refuses published renderer capability probes before hello without triggering legacy fallback", async () => {
+    const root = await createTempDir("ork-backend-core-retired-probes-");
+    const backend = new OrkestratorBackend({
+      dataDir: path.join(root, "data"),
+      toolchainBinDir: path.join(root, "toolchains", "bin"),
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+    });
+    await backend.init();
+    try {
+      const { info } = await startGateway({ backend });
+      const domains = (await backend.backendHelloIdentity()).domains;
+      for (const [command, domain] of [
+        ["get_native_agent_sync_capabilities", "native-sessions"],
+        ["get_client_state_capabilities", "config"],
+      ] as const) {
+        expect(backend.hasCommand(command)).toBe(false);
+        // v2.39.14-beta adapter 0 sends a bare invoke while hello is pending.
+        // Both of its capability caches only fall back on unknown-command.
+        const response = await requestUrl(`${info.url}__orkestrator/invoke`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ command, args: {} }),
+        });
+        expect(response.status).toBe(500);
+        const error = fromWire(response.json());
+        const expected = {
+          code: "unsupported-version",
+          command,
+          domain,
+          range: domains[domain],
+        } as const;
+        expect(incompatibility(error, command)).toEqual(expected);
+        expect(error?.message).toContain("Reload this browser tab or update the desktop app");
+
+        // Routed desktop calls carry the same refusal through IPC's message form.
+        const ipcMessage = incompatibilityIpcMessage(error);
+        expect(incompatibility(ipcMessage, command)).toEqual(expected);
+        expect(ipcMessage).toContain("Reload this browser tab or update the desktop app");
+      }
+    } finally {
+      await backend.shutdown();
+    }
   });
 });

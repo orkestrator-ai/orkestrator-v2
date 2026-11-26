@@ -109,13 +109,15 @@ built from the sweep, then delete what the 60-day window was still pinning.
 **Rollout requirement for the capability command retirement.** Use the renderer
 built from this retirement change (or a later build) with the upgraded backend.
 The published v2.39.14-beta renderer and earlier builds in the window can still
-send the retired native-agent sync capability probe before hello arrives. An
-`unknown-command` response can leave an already-open session pane showing an
-upgrade error until it checks again. Upgrade desktops that connect to remote
-backends before upgrading those backends, and reload open browser tabs into the
-matching renderer after the backend serves the new bundle and before resuming
-session work. An upgrade of a bundled desktop replaces both components together.
-The v2.39.1-beta floor still applies to the contract tooling.
+send the retired native-agent sync and client-state capability probes before
+hello arrives. The backend refuses these requests with `unsupported-version`
+and a reload or update message. The native session can retry without caching a
+negative capability answer. The coordinator keeps tab-group editing gated until
+it can read the saved layout. Upgrade desktops that connect to remote backends
+before upgrading those backends, and reload open browser tabs into the matching
+renderer after the backend serves the new bundle. An upgrade of a bundled
+desktop replaces both components together. The v2.39.1-beta floor still applies
+to the contract tooling.
 
 ### What must work across the window
 
@@ -729,7 +731,7 @@ Version skew is reported with a code, never detected from message text
 
 | Code | Class | Details |
 | --- | --- | --- |
-| `unknown-command` | `UnknownCommandError` (`unknownCommand(command, domain?)`) | The `command` and, when the call's envelope named one, its `domain`. The message stays `Unknown backend command: <name>` for older clients. Every backend site that misses a command throws it, nested in-process calls included. |
+| `unknown-command` | `UnknownCommandError` (`unknownCommand(command, domain?)`) | The `command` and, when the call's envelope named one, its `domain`. The message stays `Unknown backend command: <name>` for older clients. Backend dispatch uses this for missing commands, with the version refusal for the two retired probes described under [One-time floor](#one-time-floor-2026-11-26). |
 | `unsupported-version` | `UnsupportedVersionError` (`unsupportedVersion`) | `domain`, the backend's `range` `{ min, max }` and the `command`. |
 | `unsupported-field` | `UnsupportedFieldError` (`unsupportedField`) | `domain`, the critical `field` (at most 64 characters) and the `command`. |
 

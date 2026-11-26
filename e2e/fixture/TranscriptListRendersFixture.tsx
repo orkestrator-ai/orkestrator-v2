@@ -340,12 +340,6 @@ function installBackend(): void {
             messages: tabs[0]!.messages,
           };
           break;
-        case "get_native_agent_sync_capabilities":
-          result = {
-            historyPagingVersions: [1],
-            progressiveViewVersions: [1],
-          };
-          break;
         case "adopt_native_agent_session":
           result = {};
           break;

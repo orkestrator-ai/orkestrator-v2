@@ -235,11 +235,9 @@ describe("a repository with no coordinator on this node", () => {
     Object.assign(new Error("No open coordinator"), { code: "no-coordinator" });
   function collecting(
     items: OutboxItem[],
-    options: { capable?: boolean; deliverError?: () => Error; returnFails?: boolean } = {},
+    options: { deliverError?: () => Error; returnFails?: boolean } = {},
   ) {
     const calls: Array<{ command: string; args: Record<string, unknown> }> = [];
-    const capabilities: Record<string, number> =
-      options.capable === false ? {} : { "node-mail-return": 1 };
     let pending = items;
     const collector = new NodeMailCollector({
       retryDelayMs: 1000,
@@ -247,7 +245,7 @@ describe("a repository with no coordinator on this node", () => {
       nodeName: async () => "Leaf",
       link: () => ({
         connected: true,
-        hello: { capabilities },
+        hello: { capabilities: {}, domains: { "node-mail": { min: 1, max: 1 } } },
         invoke: async <T>(command: string, args: Record<string, unknown> = {}) => {
           calls.push({ command, args });
           if (command === "collect_node_outbox") return { items: pending, more: false } as T;
@@ -321,14 +319,6 @@ describe("a repository with no coordinator on this node", () => {
     } finally {
       world.collector.dispose();
     }
-  });
-
-  test("an older leaf is never asked, and its mail keeps waiting", async () => {
-    const world = collecting([item(1)], { capable: false });
-    expect(await world.collector.collect("bk_leaf" as never)).toBe(false);
-    expect(world.returned()).toEqual([]);
-    expect(world.pending()).toEqual([1]);
-    world.collector.dispose();
   });
 
   test("a transient failure is retried here, not handed back", async () => {
@@ -537,11 +527,5 @@ describe("node-mail domain client (plan item 1010)", () => {
       args: { upTo: 1, sequences: [1], coordinatorMail: true, attachmentMail: true },
       envelope: { domain: "node-mail", version: 1 },
     });
-  });
-
-  test("a pre-contract leaf is sent only the flags its capabilities name, as before", async () => {
-    const calls = await collectFrom({ capabilities: { "node-coordinator-mail": 1 } });
-    expect(calls[0]!.args).toEqual({ controllerId: "bk_cmd", after: 0, coordinatorMail: true });
-    expect(calls[0]).not.toHaveProperty("envelope");
   });
 });

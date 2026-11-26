@@ -82,7 +82,6 @@ import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import {
   awaitBridgeReadyCommand,
-  cleanupStaleLocalServersCommand,
   getLocalAntigravityServerStatusCommand,
   getLocalClaudeServerStatusCommand,
   getLocalCodexServerStatusCommand,
@@ -107,7 +106,6 @@ import {
   stopLocalOpencodeServerCommand,
   stopLocalPiServerCommand,
 } from "@orkestrator/protocol/contract/domains/agent-servers";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { LocalServerKind } from "../local-server-runtime.js";
 
 const log = createLogger("pull-request");
@@ -661,12 +659,6 @@ export function registerPullRequestCommands(
       getLocalServerStatus(environmentId, context, kind),
     );
   }
-  // Retired (plan item 7009): a no-op since the Electron migration, counted
-  // until it is removed.
-  register(cleanupStaleLocalServersCommand, () => {
-    compatibilityPathUsage.record("retired-command.cleanup-stale-local-servers");
-  });
-
   register(awaitBridgeReadyCommand, (args, context) => {
     const environmentId = asNonBlankString(args.environmentId, "environmentId");
     if (!isAgentBridgeKind(args.agent)) {

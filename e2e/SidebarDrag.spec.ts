@@ -114,7 +114,7 @@ for (const collapsed of [false, true]) {
     }
     await expect(page.getByTestId("sidebar-writes")).toHaveText("[]");
     await page.mouse.up();
-    await expect(page.getByTestId("sidebar-writes")).toContainText("arrange_projects");
+    await expect(page.getByTestId("sidebar-writes")).toContainText("arrange_projects_by_intent");
     await expect(page.locator("[data-project-folder]").first()).toHaveAttribute(
       "data-project-folder",
       "Target",
@@ -134,7 +134,7 @@ test("local project header drop reorders expanded projects and survives reload",
   await expect(page.getByText("p-env-3", { exact: true })).toBeVisible();
   await expect(page.getByText("q-env-3", { exact: true })).toBeVisible();
   await drag(page, project(page, "q"), project(page, "p"));
-  await expect(page.getByTestId("sidebar-writes")).toContainText("arrange_projects");
+  await expect(page.getByTestId("sidebar-writes")).toContainText("arrange_projects_by_intent");
   const write = JSON.parse((await page.getByTestId("sidebar-writes").textContent())!)[0];
   expect(write.args.projectIds).toEqual(["q", "p"]);
   expect((await project(page, "q").boundingBox())!.y).toBeLessThan(

@@ -1,8 +1,8 @@
 /**
  * The `pipelines` and `multi-review` domain clients over a `lib/backend`
- * factory client (plan item 7007), against fake nodes: version 0 for a client
- * without negotiation or a pre-contract node (today's exact calls, answered as
- * sent), version 1 for a node that advertises the domain (envelope with its
+ * factory client (plan item 7007), against fake nodes: the unnegotiated call
+ * for a client without negotiation (today's exact calls, answered as sent),
+ * the current version for a node that advertises the domain (envelope with its
  * critical keys, decoded results), and the `lib/backend` factories on top.
  */
 import { describe, expect, mock, test } from "bun:test";
@@ -15,7 +15,7 @@ import { multiReview } from "./multi-review";
 import { pipelines } from "./pipelines";
 
 const CURRENT: NegotiatedDomains = {
-  pipelines: { min: 1, max: 1 },
+  pipelines: { min: 1, max: 2 },
   "multi-review": { min: 1, max: 1 },
 };
 
@@ -59,7 +59,7 @@ describe("pipelines and multi-review domain clients over a lib/backend client", 
     ] as never);
   });
 
-  test("a pre-contract node (no domains) takes version 0 too", async () => {
+  test("a node with no negotiated domains is called unnegotiated too", async () => {
     const { client, invokeRaw } = fakeClient(() => null, null);
     await expect(createBuildPipelinesApi(client).getBuildPipeline("p1")).resolves.toBeNull();
     expect(invokeRaw.mock.calls).toEqual([["get_build_pipeline", { pipelineId: "p1" }]] as never);
@@ -79,7 +79,7 @@ describe("pipelines and multi-review domain clients over a lib/backend client", 
     expect(invokeRaw.mock.calls[0]).toEqual([
       "restart_build_pipeline_step",
       { pipelineId: "p1", stageId: "s1", selection: { agent: "codex", model: "m" } },
-      { envelope: { domain: "pipelines", version: 1, critical: ["selection"] } },
+      { envelope: { domain: "pipelines", version: 2, critical: ["selection"] } },
     ] as never);
     await expect(
       createMultiReviewsApi(client).getMultiReviewWorkflowConditional("w1", 1),

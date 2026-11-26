@@ -2,8 +2,8 @@
  * The `git` and `pull-requests` domain clients over a `lib/backend` factory
  * client (plan item 7006), against fake nodes: version 1 for a node that
  * advertises the domain (envelope with its critical keys, decoded results),
- * version 0 for a pre-contract node or a client without negotiation (today's
- * exact calls, answered as sent).
+ * the unnegotiated call for a client without negotiation (today's exact
+ * calls, answered as sent).
  */
 import { describe, expect, mock, test } from "bun:test";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
@@ -16,8 +16,8 @@ import { git as gitDomain } from "./git";
 import { pullRequests } from "./pull-requests";
 
 const CURRENT: NegotiatedDomains = {
-  git: { min: 1, max: 1 },
-  "pull-requests": { min: 1, max: 1 },
+  git: { min: 1, max: 2 },
+  "pull-requests": { min: 1, max: 4 },
 };
 
 function fakeClient(answer: (command: string) => unknown, domains?: NegotiatedDomains | null) {
@@ -38,7 +38,7 @@ function fakeClient(answer: (command: string) => unknown, domains?: NegotiatedDo
 const ref = { owner: "acme", repo: "widgets", number: 7 };
 
 describe("git and pull-requests clients over a lib/backend client", () => {
-  test("version 0 sends today's calls and returns the answers as sent", async () => {
+  test("without negotiation, today's calls are sent and answered as sent", async () => {
     const { client, invokeRaw } = fakeClient((command) =>
       command === "changes_get_view" ? { kind: "unchanged", legacy: true } : { older: "shape" },
     );
@@ -56,7 +56,7 @@ describe("git and pull-requests clients over a lib/backend client", () => {
     ] as never);
   });
 
-  test("a pre-contract node (no domains) takes version 0 too", async () => {
+  test("a node with no negotiated domains is called unnegotiated too", async () => {
     const { client, invokeRaw } = fakeClient(() => null, null);
     await gitDomain(client).changes_refresh({ resourceKey: "k" });
     await pullRequests(client).pr_monitor_watch({ environmentId: "env-1", mode: "normal" });
@@ -78,7 +78,7 @@ describe("git and pull-requests clients over a lib/backend client", () => {
     expect(invokeRaw.mock.calls[0]).toEqual([
       "changes_prepare_restore",
       { measurementId: "m1", pathIds: ["p1"] },
-      { envelope: { domain: "git", version: 1, critical: ["pathIds"] } },
+      { envelope: { domain: "git", version: 2, critical: ["pathIds"] } },
     ] as never);
     // A model record keeps every key it does not declare.
     expect(restore as unknown).toEqual({
@@ -91,7 +91,7 @@ describe("git and pull-requests clients over a lib/backend client", () => {
       expectedHeadSha: "a".repeat(40),
     });
     expect(invokeRaw.mock.calls[1]?.[2]).toEqual({
-      envelope: { domain: "pull-requests", version: 1, critical: ["expectedHeadSha"] },
+      envelope: { domain: "pull-requests", version: 4, critical: ["expectedHeadSha"] },
     } as never);
     // A closed result drops what it does not declare.
     expect(merged).toEqual({ outcome: "merged", cleanupOutcome: "not-requested" });

@@ -26,7 +26,6 @@ import { useTerminalPortalStore } from "./terminalPortalStore";
 import { claudeTmuxStore, createClaudeTmuxStateKey } from "./claudeTmuxStore";
 import { nativeComposeStore } from "./nativeComposeStore";
 import * as backend from "@/lib/backend";
-import { createAgentHandoffsApi } from "@/lib/backend/agent-handoffs";
 import { backendApiForScope } from "@/lib/backend/client";
 import { createTerminalsApi } from "@/lib/backend/terminals";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
@@ -380,13 +379,6 @@ function tabTeardownBackend(scope: NodeScope) {
   return backendApiForScope(scope, createTerminalsApi, { teardownTab: backend.teardownTab });
 }
 
-function agentHandoffBackend(scope: NodeScope) {
-  return backendApiForScope(scope, createAgentHandoffsApi, {
-    getAgentHandoffCapabilities: backend.getAgentHandoffCapabilities,
-    pruneAgentHandoffs: backend.pruneAgentHandoffs,
-  });
-}
-
 function cleanupTerminalTab(
   scope: NodeScope,
   envId: string,
@@ -610,32 +602,6 @@ function forgetUnreferencedAgentHandoffs(
 }
 
 /**
- * Reclaims stored handoffs on a backend that does not prune them itself.
- *
- * Current backends prune on every layout write and sweep periodically, so this
- * is a no-op against them: one client's copy of a layout cannot race another's.
- * An older backend only ever pruned when a renderer asked, so without this a
- * sensitive transcript would stay on disk until the environment was deleted.
- */
-function pruneUnreferencedAgentHandoffs(scope: NodeScope, envId: string, root: PaneNode): void {
-  const referenced = getAllLeaves(root)
-    .flatMap((leaf) => leaf.tabs)
-    .flatMap(tabHandoffIds);
-  void Promise.resolve()
-    .then(async () => {
-      const api = agentHandoffBackend(scope);
-      const capabilities = await api.getAgentHandoffCapabilities();
-      if (!capabilities.pruning) await api.pruneAgentHandoffs(envId, referenced);
-    })
-    .catch((error) => {
-      log.debug("handoffs.prune-failed", () => ({
-        environmentId: envId,
-        error: formatLogError(error),
-      }));
-    });
-}
-
-/**
  * One node's pane layouts (plan item 3013). Pane ids (`"default"`) and tab ids
  * are only unique within a node, so every node scope has its own instance:
  * two nodes' identical ids never meet. Tab teardown reaches the scope's own
@@ -758,13 +724,6 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>("pane-layout",
 
       if (!restored) {
         set({ hydration });
-        // Nothing was restored, so no tab in this environment references a
-        // handoff. Any stored record is orphaned.
-        pruneUnreferencedAgentHandoffs(
-          scope,
-          environmentId,
-          state.environments.get(environmentId)?.root ?? createInitialLayout(),
-        );
         return;
       }
 
@@ -775,7 +734,6 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>("pane-layout",
       );
       environments.set(environmentId, reconciled);
       set({ environments, hydration });
-      pruneUnreferencedAgentHandoffs(scope, environmentId, reconciled.root);
     },
 
     applyAuthoritativeLayout: (environmentId, restored) => {
@@ -807,7 +765,6 @@ export const paneLayoutStore = defineScopedStore<PaneLayoutState>("pane-layout",
       if (current) {
         forgetUnreferencedAgentHandoffs(scope, current.root, restored.root);
       }
-      pruneUnreferencedAgentHandoffs(scope, environmentId, restored.root);
     },
 
     addTab: (paneId, tab, environmentId, options) => {

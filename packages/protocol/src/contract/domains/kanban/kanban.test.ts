@@ -71,7 +71,6 @@ const HANDLER_KEYS: Record<string, readonly string[]> = {
   get_feature_plans: ["projectId", "knownManifestGeneration", "knownResourceRevision"],
   create_feature_plan: ["projectId"],
   update_feature_plan: ["featureId", "updates"],
-  claim_feature_plan_build: ["featureId", "taskId"],
   append_feature_plan_message: ["featureId", "role", "content", "stateApplication", "modelId"],
   append_feature_story_message: [
     "featureId",
@@ -166,9 +165,9 @@ function argsError(def: AnyCommandDef, raw: unknown): string {
 }
 
 describe("kanban definitions", () => {
-  it("cover the 44 commands once, the Linear board ones since version 2", () => {
-    expect(ALL).toHaveLength(44);
-    expect(new Set(ALL.map((def) => def.name)).size).toBe(44);
+  it("cover the 43 commands once, the Linear board ones since version 2", () => {
+    expect(ALL).toHaveLength(43);
+    expect(new Set(ALL.map((def) => def.name)).size).toBe(43);
     expect(ALL.map((def) => def.name).sort()).toEqual(Object.keys(HANDLER_KEYS).sort());
     for (const def of ALL) {
       expect({ name: def.name, since: def.since, domain: def.domain.name }).toEqual({
@@ -313,9 +312,9 @@ function fakeTransport(domains: NegotiatedDomains | null) {
 }
 
 describe("kanban client", () => {
-  it("version 1 sends the envelope with the critical keys it carries and decodes", async () => {
-    const { client, calls, invoked } = fakeTransport({ kanban: { min: 1, max: 1 } });
-    expect(client.version()).toBe(1);
+  it("version 2 sends the envelope with the critical keys it carries and decodes", async () => {
+    const { client, calls, invoked } = fakeTransport({ kanban: { min: 1, max: 2 } });
+    expect(client.version()).toBe(2);
     const created = await client.api().add_kanban_task({
       projectId: "p-1",
       title: "Ticket",
@@ -327,27 +326,9 @@ describe("kanban client", () => {
       {
         command: "add_kanban_task",
         args: { projectId: "p-1", title: "Ticket", description: "", requestId: "req-1" },
-        envelope: { domain: "kanban", version: 1, critical: ["requestId"] },
+        envelope: { domain: "kanban", version: 2, critical: ["requestId"] },
       },
     ]);
     expect(invoked).toEqual([]);
-  });
-
-  it("version 0 is today's call by name, without an envelope, answered as sent", async () => {
-    const { client, calls, invoked } = fakeTransport(null);
-    expect(client.version()).toBe(0);
-    const tickets = await client.api().get_kanban_tasks({ projectId: "p-1" });
-    expect(tickets).toEqual([task]);
-    await client.api().delete_kanban_task({ taskId: "t-1" });
-    expect(calls).toEqual([]);
-    expect(invoked).toEqual([
-      { command: "get_kanban_tasks", args: { projectId: "p-1" } },
-      { command: "delete_kanban_task", args: { taskId: "t-1" } },
-    ]);
-  });
-
-  it("a node advertising another domain only is version 0", () => {
-    const { client } = fakeTransport({ "node-mail": { min: 1, max: 1 } });
-    expect(client.version()).toBe(0);
   });
 });

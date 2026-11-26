@@ -65,9 +65,9 @@ const CRITICAL: Record<string, readonly string[]> = {
 };
 
 describe("terminals, files and claude-tmux definitions", () => {
-  it("define 27, 31 and 29 commands, each since version 1 of its domain or added in 2", () => {
+  it("define 27, 29 and 29 commands, each since version 1 of its domain or added in 2", () => {
     expect(TERMINALS_COMMANDS).toHaveLength(27);
-    expect(FILES_COMMANDS).toHaveLength(31);
+    expect(FILES_COMMANDS).toHaveLength(29);
     expect(CLAUDE_TMUX_COMMANDS).toHaveLength(29);
     expect(new Set(ALL.map((def) => def.name)).size).toBe(ALL.length);
     for (const def of ALL) {
@@ -163,11 +163,11 @@ describe("terminals, files and claude-tmux definitions", () => {
     });
   });
 
-  it("are listed in the adapter list with a legacy adapter each", () => {
+  it("are listed in the adapter list with their current adapter only", () => {
     for (const client of [terminalsClient, filesClient, claudeTmuxClient]) {
       expect(DOMAIN_CLIENTS).toContain(client);
       const current = client.domain.name === "terminals" ? 2 : 1;
-      const versions = current === 2 ? [2, 1, 0] : [1, 0];
+      const versions = [current];
       expect(client.versions).toEqual(versions);
       expect(buildAdapterList().domains[client.domain.name]).toEqual({
         current,
@@ -244,27 +244,6 @@ describe("terminals client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it("version 0: a pre-contract node gets today's body, and the call is counted", async () => {
-    const node = fakeNode(() => undefined);
-    const client = createDomainClient(terminalsClient, node.options(null));
-    expect(client.version()).toBe(0);
-    await expect(client.api().terminal_write({ sessionId: "s", data: "x" })).resolves.toBe(
-      undefined,
-    );
-    expect(node.sent).toEqual([
-      { command: "terminal_write", args: { sessionId: "s", data: "x" }, envelope: undefined },
-    ]);
-    expect(node.usage).toEqual([["terminals", 0]]);
-  });
-
-  it("version 0 answers as sent: a pre-contract node's own shapes are not decoded", async () => {
-    const node = fakeNode(() => ({ sessionId: "s", created: "yes", legacy: 1 }));
-    const created = await createDomainClient(terminalsClient, node.options(null))
-      .api()
-      .create_terminal_session({ containerId: "c" });
-    expect(created).toEqual({ sessionId: "s", created: "yes", legacy: 1 } as never);
-  });
-
   it("decodes hot-path results unless the transport opts out", async () => {
     // A malformed answer is refused when decoding, and passed through when not.
     const node = fakeNode(() => ({ delivered: "yes" }));
@@ -287,7 +266,7 @@ describe("terminals client", () => {
 });
 
 describe("files client", () => {
-  it("sends the write precondition as critical to a node with the domain, today's body otherwise", async () => {
+  it("sends the write precondition as critical", async () => {
     const node = fakeNode(() => "src/a.ts");
     const args = {
       worktreePath: "/w",
@@ -296,10 +275,8 @@ describe("files client", () => {
       expected: { sha256: "0".repeat(64) },
     };
     await createDomainClient(filesClient, node.options(CURRENT)).api().write_local_file(args);
-    await createDomainClient(filesClient, node.options({})).api().write_local_file(args);
     expect(node.sent.map((sent) => sent.envelope)).toEqual([
       { domain: "files", version: 1, critical: ["expected"] },
-      undefined,
     ]);
   });
 
@@ -328,8 +305,8 @@ describe("files client", () => {
 });
 
 describe("claude-tmux client", () => {
-  it("sends the expected prompt as critical and reads a pre-paging node's array", async () => {
-    const node = fakeNode((command) => (command === "claude_tmux_transcript" ? [] : undefined));
+  it("sends the expected prompt as critical", async () => {
+    const node = fakeNode(() => undefined);
     const current = createDomainClient(claudeTmuxClient, node.options(CURRENT)).api();
     await current.claude_tmux_answer_selection_prompt({
       environmentId: "e",
@@ -344,10 +321,5 @@ describe("claude-tmux client", () => {
       "expectedRevision",
       "expectedPromptFingerprint",
     ]);
-    const legacy = createDomainClient(claudeTmuxClient, node.options(null)).api();
-    await expect(
-      legacy.claude_tmux_transcript({ environmentId: "e", tabId: "t", page: {} }),
-    ).resolves.toEqual([]);
-    expect(node.sent[1]?.envelope).toBeUndefined();
   });
 });

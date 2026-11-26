@@ -661,22 +661,15 @@ describe("CoordinatorPanel tab strip", () => {
   test("tab groups that cannot be read show no groups and a Retry, never a default grouping", async () => {
     const invokeMock = nativeInvoke as unknown as ReturnType<typeof mock>;
     const healthy = invokeMock.getMockImplementation();
-    let capabilityReads = 0;
+    let layoutReads = 0;
     const saves: unknown[] = [];
     let failing = true;
     invokeMock.mockImplementation(async (command: string, args: Record<string, unknown>) => {
-      if (command === "get_client_state_capabilities") {
-        capabilityReads += 1;
+      if (command === "get_coordinator_pane_layout") {
+        layoutReads += 1;
         if (failing) throw new Error("transport closed");
-        return {
-          coordinatorPaneLayouts: true,
-          coordinatorUpstreamMerge: false,
-          coordinatorUpstreamAutoMerge: false,
-          noticeDismissals: false,
-          environmentAttention: false,
-        };
+        return null;
       }
-      if (command === "get_coordinator_pane_layout") return null;
       if (command === "save_coordinator_pane_layout") {
         saves.push(command);
         const record = {
@@ -699,10 +692,10 @@ describe("CoordinatorPanel tab strip", () => {
       expect(saves).toEqual([]);
 
       failing = false;
-      const reads = capabilityReads;
+      const reads = layoutReads;
       fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
       expect(await screen.findByRole("tab", { name: "Side 1, Codex" })).toBeTruthy();
-      expect(capabilityReads).toBeGreaterThan(reads);
+      expect(layoutReads).toBeGreaterThan(reads);
       expect(
         screen.queryByRole("heading", { name: "Could not load the tab groups" }) === null,
       ).toBe(true);

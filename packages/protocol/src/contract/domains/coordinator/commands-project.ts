@@ -23,7 +23,7 @@
  * Control MCP tool steps that trust the scope their caller names and that no
  * client sends: `launch_coordinator_environment`,
  * `open_coordinator_delegation`, `start_coordinator_build_pipeline`,
- * `start_coordinator_graph_run`, `start_coordinator_multi_review`,
+ * `start_coordinator_graph_run`,
  * `send_coordinator_agent_mail` and `ask_coordinator_suborks`. Every other
  * command is `workspace`.
  * `read` is `isNodeReadCommand(name)`.
@@ -50,7 +50,6 @@ import {
   CoordinatorGraphTemplatesSchema,
   CoordinatorLaunchOverridesSnapshotSchema,
   CoordinatorMailResultSchema,
-  CoordinatorMultiReviewWorkflowSchema,
   CoordinatorPullRequestWatchSchema,
   CoordinatorSnapshotSchema,
   CoordinatorViewOutcomeSchema,
@@ -268,27 +267,6 @@ export const closeCoordinatorConversationCommand = defineCommand({
   critical: [],
 });
 
-/**
- * The Work panel's "Clear finished": hides rows, never removes records.
- * Retired: its last caller, the Work panel, left in v2.36.5-beta; counted
- * (`retired-command.hide-coordinator-work`) until its register row retires. Was
- * strict (`assertOnlyKeys`); tolerant now. `associationIds` keeps its own
- * bounded-list message.
- */
-export const hideCoordinatorWorkCommand = defineCommand({
-  domain: coordinatorDomain,
-  name: "hide_coordinator_work",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    projectId: Schema.String,
-    associationIds: optionalUnknown,
-  }),
-  result: NullableCoordinatorSnapshotSchema,
-  critical: [],
-});
-
 /** Pauses the coordinator. */
 export const pauseProjectCoordinatorCommand = defineCommand({
   domain: coordinatorDomain,
@@ -445,32 +423,6 @@ export const writeCoordinatorAttachmentCommand = defineCommand({
   critical: [],
 });
 
-/**
- * Records a workflow a coordinator follows. `kind` keeps its own message.
- * Retired: no release calls it (launches record their own associations);
- * counted (`retired-command.associate-coordinator-workflow`) until its
- * register row retires.
- */
-export const associateCoordinatorWorkflowCommand = defineCommand({
-  domain: coordinatorDomain,
-  name: "associate_coordinator_workflow",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    projectId: Schema.String,
-    coordinatorId: Schema.String,
-    conversationId: optionalUnknown,
-    kind: optionalUnknown,
-    resourceId: Schema.String,
-    requestId: Schema.String,
-    baseBranch: optionalUnknown,
-    baseCommit: optionalUnknown,
-  }),
-  result: CoordinatorWorkflowAssociationSchema,
-  critical: [],
-});
-
 /** Moves a workflow to another conversation of the same coordinator. */
 export const adoptCoordinatorWorkflowCommand = defineCommand({
   domain: coordinatorDomain,
@@ -575,28 +527,6 @@ export const startCoordinatorBuildPipelineCommand = defineCommand({
     input: optionalUnknown,
   }),
   result: CoordinatorBuildPipelineSchema,
-  critical: ["requestId"],
-});
-
-/**
- * A Multi Review after a coordinator's completed build pipeline. Retired: no
- * caller since Control MCP's `launch_multi_review` moved off it (v2.36.4-beta);
- * counted (`retired-command.start-coordinator-multi-review`) until its register
- * row retires.
- */
-export const startCoordinatorMultiReviewCommand = defineCommand({
-  domain: coordinatorDomain,
-  name: "start_coordinator_multi_review",
-  since: 1,
-  access: "internal",
-  read: false,
-  args: Schema.Struct({
-    scope: optionalUnknown,
-    requestId: Schema.String,
-    input: optionalUnknown,
-    buildPipelineId: Schema.String,
-  }),
-  result: CoordinatorMultiReviewWorkflowSchema,
   critical: ["requestId"],
 });
 
@@ -1237,7 +1167,6 @@ export const COORDINATOR_PROJECT_COMMANDS = [
   assignCoordinatorConversationAgentCommand,
   selectCoordinatorConversationCommand,
   closeCoordinatorConversationCommand,
-  hideCoordinatorWorkCommand,
   pauseProjectCoordinatorCommand,
   resumeProjectCoordinatorCommand,
   getProjectGitStatusCommand,
@@ -1248,14 +1177,12 @@ export const COORDINATOR_PROJECT_COMMANDS = [
   prepareProjectGitBranchSwitchCommand,
   switchProjectGitBranchCommand,
   writeCoordinatorAttachmentCommand,
-  associateCoordinatorWorkflowCommand,
   adoptCoordinatorWorkflowCommand,
   launchCoordinatorEnvironmentCommand,
   getCoordinatorLaunchEnvironmentCommand,
   assertCoordinatorDelegationAvailableCommand,
   openCoordinatorDelegationCommand,
   startCoordinatorBuildPipelineCommand,
-  startCoordinatorMultiReviewCommand,
   launchCoordinatorMultiReviewActionCommand,
   openCoordinatorMultiReviewCommand,
   openCoordinatorMultiReviewAddressFindingsCommand,

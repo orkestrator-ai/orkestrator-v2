@@ -1,22 +1,25 @@
 {
   "schemaVersion": 1,
   "maintainedBy": "hand (plan item 7013); checked by scripts/contract-ci.ts (mise run contract:ci). The schedule with dates: mise run contract:ci -- --retirements [--json]",
-  "adapters": "Every adapter in adapters.json below its domain's current version. Adapter v is deleted when the support floor passes the first Stable release that advertises the domain at v + 1 or higher (adapter 0: the first Stable release that advertises the domain).",
+  "adapters": "Every adapter in adapters.json below its domain's current version. Adapter v is deleted when the support floor passes the first Stable release (or the one-time floor's release, ONE_TIME_SUPPORT_FLOOR in scripts/contract-ci.ts) that advertises the domain at v + 1 or higher (adapter 0: the first such release that advertises the domain).",
   "capabilityCommands": {
     "get_client_state_capabilities": {
       "domain": "config",
       "retireAtDomainVersion": 1,
-      "why": "Kept registered for renderers before config v1 (pre-contract), which ask it; a renderer with config answers it from the version."
+      "why": "Kept registered for renderers before config v1 (pre-contract), which ask it; a renderer with config answers it from the version.",
+      "retired": "2026-11-26"
     },
     "get_native_agent_sync_capabilities": {
       "domain": "native-sessions",
       "retireAtDomainVersion": 1,
-      "why": "Kept registered for renderers before native-sessions v1 (pre-contract), which ask it; a renderer with native-sessions answers it from the version."
+      "why": "Kept registered for renderers before native-sessions v1 (pre-contract), which ask it; a renderer with native-sessions answers it from the version.",
+      "retired": "2026-11-26"
     },
     "get_agent_handoff_capabilities": {
       "domain": "native-sessions",
       "retireAtDomainVersion": 1,
-      "why": "Kept registered for renderers before native-sessions v1 (pre-contract), which ask it; a renderer with native-sessions answers it from the version."
+      "why": "Kept registered for renderers before native-sessions v1 (pre-contract), which ask it; a renderer with native-sessions answers it from the version.",
+      "retired": "2026-11-26"
     },
     "changes_get_capabilities": {
       "domain": "git",

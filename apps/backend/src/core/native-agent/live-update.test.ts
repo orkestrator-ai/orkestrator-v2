@@ -174,7 +174,7 @@ describe("readNativeAgentLiveUpdate", () => {
 });
 
 describe("get_native_agent_live_update", () => {
-  test("is advertised, validates its window and passes the tokens on", async () => {
+  test("validates its window and passes the tokens on", async () => {
     const received: NativeAgentLiveUpdateInput[] = [];
     const nativeAgents = {
       observationStatus: () => ({ stamp: { generation: "g", revision: 0 } }),
@@ -186,11 +186,6 @@ describe("get_native_agent_live_update", () => {
     const registry = createCommandRegistry();
     const invoke = (command: string, args: Record<string, unknown>) =>
       registry.get(command)!(args, { nativeAgents } as never);
-    const capabilities = (await invoke("get_native_agent_sync_capabilities", {})) as {
-      liveUpdateVersions?: number[];
-    };
-    expect(capabilities.liveUpdateVersions).toEqual([1]);
-
     const args = { ...input } as unknown as Record<string, unknown>;
     await invoke("get_native_agent_live_update", args);
     expect(received).toEqual([input]);

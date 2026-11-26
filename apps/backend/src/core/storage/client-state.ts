@@ -33,12 +33,6 @@ interface StoredUpstreamDecline extends DeclinedUpstreamMerge {
   declinedAt: string;
 }
 
-interface StoredUpstreamAutoMerge {
-  projectId: string;
-  enabled: true;
-  updatedAt: string;
-}
-
 interface StoredNoticeDismissals {
   revision: number;
   sessions: NoticeDismissalSession[];
@@ -128,6 +122,11 @@ export class ClientStateRepository {
     return this.context.file("coordinator-upstream-declines.json");
   }
 
+  /**
+   * The retired "always merge" setting's rows. Nothing writes them since its
+   * two commands were deleted with the one-time support floor (to-do 8304 (retired));
+   * project removal still deletes a project's row.
+   */
   private autoMergeFile(): string {
     return this.context.file("coordinator-upstream-auto-merge.json");
   }
@@ -223,22 +222,6 @@ export class ClientStateRepository {
         };
       },
     );
-  }
-
-  /** Whether a project merges upstream commits before coordinator messages without asking. */
-  getCoordinatorUpstreamAutoMerge(projectId: string): boolean {
-    const stored = this.context.loadStoreRow(this.autoMergeFile(), projectId);
-    return isRecord(stored) && stored.enabled === true;
-  }
-
-  /** Turns "always merge" on or off for a project; off deletes the row. Returns the setting now in force. */
-  setCoordinatorUpstreamAutoMerge(projectId: string, enabled: boolean): boolean {
-    return this.context.updateStoreRow<boolean>(this.autoMergeFile(), projectId, (current) => {
-      if (!enabled)
-        return current === undefined ? { result: false } : { result: false, delete: true };
-      const stored: StoredUpstreamAutoMerge = { projectId, enabled: true, updatedAt: nowIso() };
-      return { result: true, value: stored };
-    });
   }
 
   /** A coordinator conversation's manual action marks; revision 0 when none are stored. */
@@ -454,8 +437,6 @@ export type ClientStateStorage = Pick<
   | "saveCoordinatorPaneLayout"
   | "getCoordinatorUpstreamDecline"
   | "recordCoordinatorUpstreamDecline"
-  | "getCoordinatorUpstreamAutoMerge"
-  | "setCoordinatorUpstreamAutoMerge"
   | "listNoticeDismissals"
   | "dismissNotices"
   | "reconcileNoticeDismissals"

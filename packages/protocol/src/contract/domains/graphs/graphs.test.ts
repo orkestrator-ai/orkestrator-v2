@@ -220,17 +220,6 @@ describe("graphs client", () => {
     ).rejects.toThrow("Invalid result from graph_run_launch");
   });
 
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacyAnswer = { runId: 7, older: true };
-    const node = fakeNode(undefined, () => legacyAnswer);
-    const client = createDomainClient(graphsClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect(client.api().graph_run_launch(launch)).resolves.toBe(legacyAnswer as never);
-    expect(node.invoked).toEqual([{ command: "graph_run_launch", args: launch }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["graphs", 0]]);
-  });
-
   it("decodes a template detail and keeps every key", () => {
     const template = graphTemplateExample("multi-review");
     const detail = {

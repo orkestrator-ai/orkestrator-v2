@@ -5,21 +5,16 @@
  * These commands were never gated by version: callers read
  * `transcript_artifact_capabilities` for runtime state (authoring, the
  * preview renderer's isolation, rollout flags, the content origin), and an
- * older backend's missing command answers `unknown-command`. So both
- * adapters offer the same calls:
- *
- * - **Version 1** sends the envelope (the critical `containerId` of the media
- *   reads) and decodes each result with its command's schema.
- * - **Version 0**, for a pre-contract node, is today's call by name without
- *   an envelope, its answer not decoded, so an older backend's shapes are
- *   taken as they always were.
+ * older backend's missing command answers `unknown-command`. **Version 1**
+ * sends the envelope (the critical `containerId` of the media reads) and
+ * decodes each result with its command's schema.
  *
  * `transcript_artifact_capabilities` stays registered and is read on every
  * version, because it reports runtime state rather than support.
  *
  * Browser-safe.
  */
-import type { CommandCall, DomainAdapterContext } from "../../client.js";
+import type { CommandCall } from "../../client.js";
 import type { AnyCommandDef, ArgsOf, ResultOf } from "../../command.js";
 import {
   transcriptArtifactCapabilitiesCommand,
@@ -88,15 +83,4 @@ function artifactsApi(send: Send): TranscriptArtifactsApi {
 /** Version 1: typed calls with the envelope, results decoded. */
 export function transcriptArtifactsApiV1(call: CommandCall): TranscriptArtifactsApi {
   return artifactsApi(call);
-}
-
-/** Version 0: today's untyped call, without an envelope or decoding. */
-export function transcriptArtifactsApiLegacy(
-  _call: CommandCall,
-  context: DomainAdapterContext,
-): TranscriptArtifactsApi {
-  return artifactsApi(
-    <C extends AnyCommandDef>(def: C, args: ArgsOf<C>) =>
-      context.invoke(def.name, args as Readonly<Record<string, unknown>>) as Promise<ResultOf<C>>,
-  );
 }

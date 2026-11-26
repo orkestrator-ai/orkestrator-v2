@@ -32,7 +32,7 @@ describe("nodes over a lib/backend client", () => {
     );
   });
 
-  test("a pre-contract node gets today's calls, answered as sent", async () => {
+  test("a client without negotiation gets today's calls, answered as sent", async () => {
     const answer = { older: true };
     const client = fakeClient(null, () => answer);
     await expect<unknown>(nodesApi(client).get_node_status(NO_ARGS)).resolves.toBe(answer);
@@ -41,7 +41,7 @@ describe("nodes over a lib/backend client", () => {
     expect(client.invokeRaw).toHaveBeenLastCalledWith("reconnect_node", { nodeId: "bk_a" });
   });
 
-  test("the portal's bare invoke takes version 0 with today's arguments", async () => {
+  test("the portal's bare invoke calls unnegotiated with today's arguments", async () => {
     const invoke = mock(async (..._call: unknown[]) => ({ revision: 1, nodes: [] }));
     const api = nodesApiOver(invoke as never);
     await api.list_nodes(NO_ARGS);

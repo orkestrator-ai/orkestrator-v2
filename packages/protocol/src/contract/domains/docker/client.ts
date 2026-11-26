@@ -2,18 +2,16 @@
  * The `docker` domain client (plan item 7003; §11.2 "Client adapters"): one
  * method per command, over any command call.
  *
- * No docker command was ever capability-gated and the domain has no
- * capability command, so both adapters call the same commands. Version 1
- * sends the envelope (`operationId`/`expectedRevision` on
- * `provision_environment` and `selectionToken` on `docker_cleanup_execute`
- * are critical); version 0, for a node that advertises no `docker` range (a
- * pre-contract node, or a renderer client without negotiation), sends today's
- * `{ command, args }` and answers the result as sent, like the environments
- * client's version 0: an older node's answers are the shapes callers already
- * handle. Version 1 decodes results with the commands' schemas.
+ * The domain has no capability command. Version 2 sends the envelope
+ * (`operationId`/`expectedRevision` on `provision_environment` and
+ * `selectionToken` on `docker_cleanup_execute` are critical) and decodes
+ * results with the commands' schemas.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `docker` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
@@ -44,7 +42,6 @@ import {
   reattachContainerCommand,
 } from "./commands.js";
 import { dockerDomain } from "./domain.js";
-import { answeredAsSent } from "../environments/client.js";
 
 type Call<C extends AnyCommandDef> = (args: ArgsOf<C>) => Promise<ResultOf<C>>;
 type NoArgsCall<C extends AnyCommandDef> = () => Promise<ResultOf<C>>;
@@ -74,7 +71,7 @@ export interface DockerApi {
   propagateGithubToken: NoArgsCall<typeof propagateGithubTokenToContainersCommand>;
 }
 
-/** The API over any command call: both adapters, and a node's own local commands. */
+/** The API over any command call: the adapter, and a node's own local commands. */
 export function dockerApi(call: CommandCall): DockerApi {
   return {
     checkDocker: () => call(checkDockerCommand, {}),
@@ -104,10 +101,4 @@ export function dockerApi(call: CommandCall): DockerApi {
 
 export const dockerClient = domainClient(dockerDomain, {
   2: dockerApi,
-  // Version 2 only removed commands nothing called (2026-11-10), so version 1
-  // peers take the same API. Adapter 1 goes when the support floor passes the
-  // first Stable release with version 2.
-  1: dockerApi,
-  // Today's call, answered as sent (`answeredAsSent`, as the environments client).
-  0: (_call, context) => dockerApi(answeredAsSent(context)),
 });

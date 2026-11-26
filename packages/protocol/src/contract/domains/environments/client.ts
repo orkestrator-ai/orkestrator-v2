@@ -4,26 +4,20 @@
  * answering its result. The web's `lib/backend` functions call it
  * (`apps/web/src/lib/node-scope/domains/domain-api.ts`).
  *
- * No environments command was capability-gated and the domain has no
- * capability command, so both adapters call the same commands:
+ * The domain has no capability command. Version 2 sends the envelope (with
+ * the critical keys a call carries) and decodes each result with the
+ * command's schema. A command a node in the window lacks answers
+ * `unknown-command`, which the caller reads with `incompatibility()`.
  *
- * - version 1 sends the envelope (with the critical keys a call carries) and
- *   decodes each result with the command's schema;
- * - version 0, for a node without an `environments` range (pre-contract),
- *   sends today's `{ command, args }` and answers the result as sent
- *   ({@link answeredAsSent}), as 7001 and 7002's legacy adapters do: such a
- *   node's records are the shapes its callers already handle, and decoding
- *   them would refuse an older node's variation those callers accept.
- *
- * A command a node in the window lacks answers `unknown-command`, which the
- * caller reads with `incompatibility()` as before.
- *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `environments` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
+import { domainClient, type CommandCall } from "../../client.js";
 import type { AnyCommandDef, ArgsOf, ResultOf } from "../../command.js";
 import {
   getLogDirectoryCommand,
@@ -221,21 +215,6 @@ export function environmentsApi(call: CommandCall): EnvironmentsApi {
   };
 }
 
-/**
- * A version-0 adapter's call: the command by name, without an envelope,
- * answered as the node sent it (not decoded). Shared with the `docker`
- * client.
- */
-export function answeredAsSent(context: DomainAdapterContext): CommandCall {
-  return ((command: AnyCommandDef, args: unknown) =>
-    context.invoke(command.name, args as Readonly<Record<string, unknown>>)) as CommandCall;
-}
-
 export const environmentsClient = domainClient(environmentsDomain, {
   2: environmentsApi,
-  // Version 2 only removed commands nothing called (2026-11-10), so version 1
-  // peers take the same API. Adapter 1 goes when the support floor passes the
-  // first Stable release with version 2.
-  1: environmentsApi,
-  0: (_call, context) => environmentsApi(answeredAsSent(context)),
 });

@@ -755,8 +755,6 @@ describe("direct backend command registry coverage", () => {
       getFileDraft: value("getFileDraft", fileDraft),
       deleteFileDraft: value("deleteFileDraft", undefined),
       getAgentHandoff: value("getAgentHandoff", handoff),
-      deleteAgentHandoff: value("deleteAgentHandoff", true),
-      pruneAgentHandoffs: value("pruneAgentHandoffs", ["handoff-2"]),
     });
 
     const cases: Array<{
@@ -889,31 +887,12 @@ describe("direct backend command registry coverage", () => {
         expected: handoff,
         call: { method: "getAgentHandoff", args: ["handoff-1"] },
       },
-      {
-        command: "delete_agent_handoff",
-        args: { handoffId: "handoff-1", environmentId: "env-1" },
-        expected: true,
-        call: { method: "deleteAgentHandoff", args: ["handoff-1", "env-1"] },
-      },
-      {
-        command: "prune_agent_handoffs",
-        args: { environmentId: "env-1", referencedHandoffIds: ["keep-1"] },
-        expected: ["handoff-2"],
-        call: { method: "pruneAgentHandoffs", args: ["env-1", ["keep-1"]] },
-      },
     ];
 
     for (const item of cases) {
       await expect(invoke(item.command, item.args, context)).resolves.toEqual(item.expected);
       expect(calls.at(-1)).toEqual(item.call);
     }
-    await expect(
-      invoke(
-        "prune_agent_handoffs",
-        { environmentId: "env-1", referencedHandoffIds: "keep-1" },
-        context,
-      ),
-    ).rejects.toThrow("Expected referencedHandoffIds to be an array");
   });
 
   test("deleting a multi review delegates its complete teardown to the supervisor", async () => {
@@ -1011,21 +990,6 @@ describe("direct backend command registry coverage", () => {
     ).resolves.toEqual({
       path: "src/app.ts",
       content: "export const value = 2;\n",
-      language: "typescript",
-    });
-    await expect(
-      invoke(
-        "read_local_file_at_branch",
-        {
-          worktreePath: worktree,
-          filePath: "src/app.ts",
-          branch: "main",
-        },
-        context,
-      ),
-    ).resolves.toEqual({
-      path: "src/app.ts",
-      content: "export const value = 1;\n",
       language: "typescript",
     });
     await expect(
@@ -1140,57 +1104,5 @@ describe("direct backend command registry coverage", () => {
         context,
       ),
     ).rejects.toThrow("Environment not found: missing");
-  });
-
-  test("delegates feature build claims and preserves storage conflict results", async () => {
-    const claimFeaturePlanBuild = mock(async (featureId: string, taskId: string) => ({
-      claimed: taskId === "task-winner",
-      feature: {
-        id: featureId,
-        status: "building",
-        buildTaskId: "task-winner",
-      },
-    }));
-    const context = contextWithStorage({
-      kanban: {
-        claimFeaturePlanBuild,
-      },
-    });
-
-    await expect(
-      invoke(
-        "claim_feature_plan_build",
-        {
-          featureId: "feature-1",
-          taskId: "task-winner",
-        },
-        context,
-      ),
-    ).resolves.toMatchObject({ claimed: true });
-    await expect(
-      invoke(
-        "claim_feature_plan_build",
-        {
-          featureId: "feature-1",
-          taskId: "task-loser",
-        },
-        context,
-      ),
-    ).resolves.toMatchObject({
-      claimed: false,
-      feature: { buildTaskId: "task-winner" },
-    });
-    expect(claimFeaturePlanBuild).toHaveBeenNthCalledWith(1, "feature-1", "task-winner");
-    expect(claimFeaturePlanBuild).toHaveBeenNthCalledWith(2, "feature-1", "task-loser");
-    await expect(
-      invoke(
-        "claim_feature_plan_build",
-        {
-          featureId: "feature-1",
-          taskId: 7,
-        },
-        context,
-      ),
-    ).rejects.toThrow("Expected taskId to be a string");
   });
 });

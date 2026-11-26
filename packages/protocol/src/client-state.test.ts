@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { parseClientStateCapabilities } from "./client-state.js";
 import {
   parseCoordinatorPaneLayoutRecord,
   parseCoordinatorPaneLayoutSaveResult,
@@ -19,21 +18,6 @@ const layout: CoordinatorPaneLayout = {
   root: { kind: "leaf", id: "pane", conversationIds: ["a"], activeConversationId: "a" },
   activePaneId: "pane",
 };
-
-describe("client state capabilities", () => {
-  test("anything but an explicit true is unsupported", () => {
-    expect(parseClientStateCapabilities(undefined)).toEqual({
-      coordinatorPaneLayouts: false,
-      coordinatorUpstreamMerge: false,
-      coordinatorUpstreamAutoMerge: false,
-      noticeDismissals: false,
-      environmentAttention: false,
-    });
-    expect(
-      parseClientStateCapabilities({ coordinatorPaneLayouts: true, noticeDismissals: "yes" }),
-    ).toMatchObject({ coordinatorPaneLayouts: true, noticeDismissals: false });
-  });
-});
 
 describe("coordinator pane layout records", () => {
   test("parse a stored record and reject malformed ones", () => {

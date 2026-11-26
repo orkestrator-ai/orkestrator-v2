@@ -96,19 +96,6 @@ describe("client state storage", () => {
     });
   });
 
-  test("auto-merge is set per project and turning it off removes the row", async () => {
-    await withTemporaryStorage(async (storage) => {
-      const state = storage.clientState;
-      expect(state.getCoordinatorUpstreamAutoMerge("p")).toBe(false);
-      expect(state.setCoordinatorUpstreamAutoMerge("p", true)).toBe(true);
-      expect(state.getCoordinatorUpstreamAutoMerge("p")).toBe(true);
-      expect(state.getCoordinatorUpstreamAutoMerge("q")).toBe(false);
-      expect(state.setCoordinatorUpstreamAutoMerge("p", false)).toBe(false);
-      expect(state.getCoordinatorUpstreamAutoMerge("p")).toBe(false);
-      expect(state.setCoordinatorUpstreamAutoMerge("p", false)).toBe(false);
-    });
-  });
-
   test("a project's layout and decline are deleted with it", async () => {
     await withTemporaryStorage(async (storage) => {
       const project = await storage.addProject(createProject("https://example.invalid/r.git"));
@@ -117,24 +104,9 @@ describe("client state storage", () => {
         upstream: "origin/main",
         upstreamCommit: "c1",
       });
-      storage.clientState.setCoordinatorUpstreamAutoMerge(project.id, true);
       await storage.removeProject(project.id);
       expect(storage.clientState.getCoordinatorPaneLayout(project.id)).toBeNull();
       expect(storage.clientState.getCoordinatorUpstreamDecline(project.id)).toBeNull();
-      expect(storage.clientState.getCoordinatorUpstreamAutoMerge(project.id)).toBe(false);
-    });
-  });
-
-  test("auto merge preferences survive reopening storage", async () => {
-    await withTemporaryStorage(async (storage, dataDir) => {
-      storage.clientState.setCoordinatorUpstreamAutoMerge("enabled", true);
-      storage.clientState.setCoordinatorUpstreamAutoMerge("disabled", true);
-      storage.clientState.setCoordinatorUpstreamAutoMerge("disabled", false);
-      const reopened = new StorageService(dataDir);
-      await reopened.init();
-      expect(reopened.clientState.getCoordinatorUpstreamAutoMerge("enabled")).toBe(true);
-      expect(reopened.clientState.getCoordinatorUpstreamAutoMerge("disabled")).toBe(false);
-      expect(reopened.clientState.getCoordinatorUpstreamAutoMerge("absent")).toBe(false);
     });
   });
 
@@ -301,18 +273,6 @@ describe("client state commands", () => {
     });
   }
 
-  test("advertise every capability but the retired auto-merge setting", async () => {
-    await withCommands({}, async (call) => {
-      expect(await call("get_client_state_capabilities")).toEqual({
-        coordinatorPaneLayouts: true,
-        coordinatorUpstreamMerge: true,
-        coordinatorUpstreamAutoMerge: false,
-        noticeDismissals: true,
-        environmentAttention: true,
-      });
-    });
-  });
-
   test("a mergeable checkout is always merged automatically, except under a running turn", async () => {
     let busy = false;
     let fetches = 0;
@@ -343,7 +303,7 @@ describe("client state commands", () => {
     });
   });
 
-  test("a decline or the auto-merge setting an older client stores no longer holds a merge back", async () => {
+  test("a decline an older client stores no longer holds a merge back", async () => {
     const projectGit = { isCheckoutBusy: async () => false, fetch: async () => behind };
     await withCommands(projectGit, async (call, projectId) => {
       await call("decline_coordinator_upstream_merge", {
@@ -351,21 +311,11 @@ describe("client state commands", () => {
         upstream: "origin/main",
         upstreamCommit: behind.upstreamCommit,
       });
-      expect(
-        await call("set_coordinator_upstream_auto_merge", { projectId, enabled: false }),
-      ).toEqual({ enabled: false });
       expect(await call("check_coordinator_upstream_merge", { projectId })).toEqual({
         offer: true,
         status: behind,
         automatic: true,
       });
-      // The retired commands still validate what older clients send.
-      await expect(
-        call("set_coordinator_upstream_auto_merge", { projectId, enabled: "yes" }),
-      ).rejects.toThrow("enabled must be a boolean");
-      await expect(
-        call("set_coordinator_upstream_auto_merge", { projectId: "missing", enabled: true }),
-      ).rejects.toThrow("Project not found");
     });
   });
 

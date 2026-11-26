@@ -41,7 +41,6 @@ const NAMES = [
   "ask_coordinator_suborks",
   "assert_coordinator_delegation_available",
   "assign_coordinator_conversation_agent",
-  "associate_coordinator_workflow",
   "cancel_coordinator_graph_run",
   "clear_coordinator_worker_goal",
   "close_coordinator_conversation",
@@ -60,7 +59,6 @@ const NAMES = [
   "get_project_coordinator",
   "get_project_coordinator_view",
   "get_project_git_status",
-  "hide_coordinator_work",
   "launch_coordinator_environment",
   "launch_coordinator_feature_plan",
   "launch_coordinator_multi_review_action",
@@ -93,7 +91,6 @@ const NAMES = [
   "set_coordinator_worker_goal",
   "start_coordinator_build_pipeline",
   "start_coordinator_graph_run",
-  "start_coordinator_multi_review",
   "stop_controller_worker_turn",
   "stop_coordinator_worker_turn",
   "switch_project_git_branch",
@@ -117,7 +114,6 @@ const INTERNAL = new Set([
   "send_coordinator_agent_mail",
   "start_coordinator_build_pipeline",
   "start_coordinator_graph_run",
-  "start_coordinator_multi_review",
   "answer_project_worker_question",
   "apply_project_root_changes",
   "clear_coordinator_worker_goal",
@@ -155,7 +151,6 @@ const CRITICAL: Record<string, readonly string[]> = {
   send_coordinator_agent_mail: ["requestId", "deliverNow", "attachments"],
   start_coordinator_build_pipeline: ["requestId"],
   start_coordinator_graph_run: ["requestId"],
-  start_coordinator_multi_review: ["requestId"],
 };
 
 describe("coordinator project definitions", () => {
@@ -282,7 +277,7 @@ const mail = {
 };
 
 describe("coordinator client", () => {
-  it("is listed with adapters 1 and 0", () => {
+  it("is listed in DOMAIN_CLIENTS", () => {
     expect(DOMAIN_CLIENTS).toContain(coordinatorClient);
   });
 
@@ -316,20 +311,5 @@ describe("coordinator client", () => {
     await expect(api.get_project_coordinator({ projectId: "p1" })).rejects.toThrow(
       "Invalid result from get_project_coordinator",
     );
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacyAnswer = { workspace: 7, older: true };
-    const node = fakeNode(undefined, () => legacyAnswer);
-    const client = createDomainClient(coordinatorClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect<unknown>(client.api().get_project_coordinator({ projectId: "p1" })).resolves.toBe(
-      legacyAnswer,
-    );
-    expect(node.invoked).toEqual([
-      { command: "get_project_coordinator", args: { projectId: "p1" } },
-    ]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["coordinator", 0]]);
   });
 });

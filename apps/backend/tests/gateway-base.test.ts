@@ -727,7 +727,7 @@ describe("remote gateway", () => {
     };
 
     /*
-     * Durable snapshots — agent handoffs above all — routinely exceed the 1 MiB
+     * Durable snapshots — file drafts above all — routinely exceed the 1 MiB
      * body limit the other JSON routes use. This route has to clear the 32 MB
      * storage limit or those limits are unreachable and a legitimate save fails
      * as a transport error.
@@ -737,20 +737,20 @@ describe("remote gateway", () => {
       method: "POST",
       headers,
       body: JSON.stringify({
-        command: "save_agent_handoff",
+        command: "save_file_draft",
         args: { snapshot: largeSnapshot },
       }),
     });
     expect(accepted.status).toBe(200);
     expect(accepted.json()).toEqual({
-      result: { command: "save_agent_handoff", snapshotLength: largeSnapshot.length },
+      result: { command: "save_file_draft", snapshotLength: largeSnapshot.length },
     });
 
     const oversized = await requestUrl(`${info!.url}__orkestrator/invoke`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        command: "save_agent_handoff",
+        command: "save_file_draft",
         args: { snapshot: "x".repeat(49 * 1024 * 1024) },
       }),
     });

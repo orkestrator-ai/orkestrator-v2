@@ -773,12 +773,10 @@ exit 0
       await fs.writeFile(path.join(root, "codex"), "managed codex");
       // OpenCode is the managed 2.x binary; a managed or PATH `opencode` is not it.
       await fs.writeFile(path.join(root, "opencode"), "an OpenCode 1.x");
-      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("codex");
       await fs.writeFile(path.join(root, "opencode2"), "managed opencode2");
 
       await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(true);
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("opencode");
 
@@ -802,8 +800,6 @@ exit 0
       }
       process.env.PATH = `${pathTools}:/usr/bin:/bin`;
 
-      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
 
@@ -816,13 +812,11 @@ exit 0
       );
       await fs.mkdir(path.dirname(cursorBridgeEntrypoint), { recursive: true });
       await fs.writeFile(cursorBridgeEntrypoint, "// packaged Cursor SDK bridge");
-      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
 
       // Cursor still outranks the managed Grok CLI.
       await fs.writeFile(path.join(root, "grok"), "managed grok");
-      await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
       await fs.rm(cursorBridgeEntrypoint, { force: true });
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("grok");
@@ -850,40 +844,40 @@ exit 0
     const warn = spyOn(console, "warn").mockImplementation(() => {});
 
     try {
-      await fs.writeFile(path.join(managedRoot, "codex"), "managed codex");
+      await fs.writeFile(path.join(managedRoot, "claude"), "managed claude");
       process.env.PATH = "";
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(true);
 
-      expect(info.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
-        [["[host] tool.available tool=codex source=managed"]],
-      );
+      expect(
+        info.mock.calls.filter(([message]) => String(message).includes("tool=claude")),
+      ).toEqual([["[host] tool.available tool=claude source=managed"]]);
 
-      await fs.rm(path.join(managedRoot, "codex"));
-      await fs.writeFile(path.join(pathRoot, "codex"), "#!/bin/sh\nexit 0\n");
-      await fs.chmod(path.join(pathRoot, "codex"), 0o755);
+      await fs.rm(path.join(managedRoot, "claude"));
+      await fs.writeFile(path.join(pathRoot, "claude"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(pathRoot, "claude"), 0o755);
       process.env.PATH = `${pathRoot}:/usr/bin:/bin`;
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(true);
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(true);
 
-      expect(info.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
-        [
-          ["[host] tool.available tool=codex source=managed"],
-          ["[host] tool.available tool=codex source=path"],
-        ],
-      );
+      expect(
+        info.mock.calls.filter(([message]) => String(message).includes("tool=claude")),
+      ).toEqual([
+        ["[host] tool.available tool=claude source=managed"],
+        ["[host] tool.available tool=claude source=path"],
+      ]);
 
-      await fs.rm(path.join(pathRoot, "codex"));
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_codex_cli")?.({}, secondContext)).resolves.toBe(false);
+      await fs.rm(path.join(pathRoot, "claude"));
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
+      await expect(commands.get("check_claude_cli")?.({}, secondContext)).resolves.toBe(false);
 
-      expect(warn.mock.calls.filter(([message]) => String(message).includes("tool=codex"))).toEqual(
-        [
-          ["[host] tool.missing tool=codex source=missing"],
-          ["[host] tool.missing tool=codex source=missing"],
-        ],
-      );
+      expect(
+        warn.mock.calls.filter(([message]) => String(message).includes("tool=claude")),
+      ).toEqual([
+        ["[host] tool.missing tool=claude source=missing"],
+        ["[host] tool.missing tool=claude source=missing"],
+      ]);
     } finally {
       info.mockRestore();
       warn.mockRestore();
@@ -912,9 +906,6 @@ exit 0
       process.env.PATH = `${pathRoot}:/usr/bin:/bin`;
 
       await expect(commands.get("check_claude_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_opencode_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_pi_cli")?.({}, context)).resolves.toBe(false);
-      await expect(commands.get("check_codex_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("codex");
 
       await fs.rm(path.join(managedRoot, "codex"));

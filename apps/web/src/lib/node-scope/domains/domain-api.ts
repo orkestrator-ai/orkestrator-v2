@@ -16,14 +16,19 @@
  * - a node that advertises the domain gets its version: the envelope travels
  *   with the call (`invokeRaw(command, args, { envelope })`) and results are
  *   decoded with the command's schema, so callers get the protocol's types;
- * - any other node (pre-contract, or a client that carries no negotiation,
- *   such as a routed, machine or portal client) gets version 0, whose calls
- *   are exactly today's `invokeRaw(command, args)`, or `invokeRaw(command)`
- *   for a call without arguments (`undefined` or an empty object: every
- *   transport sends both as `args: {}`, so the two are the same call; a
- *   function that always sent `{}` keeps doing so over
+ * - a client that carries no negotiation (a routed, machine or portal
+ *   client, or a node client before its hello arrives) gets the client's
+ *   lowest adapter unnegotiated (`createDomainClient`), or version 0 for the
+ *   two domains that keep one (`capabilities`, `rich-interactions`); either
+ *   way its calls are exactly today's `invokeRaw(command, args)`, or
+ *   `invokeRaw(command)` for a call without arguments (`undefined` or an
+ *   empty object: every transport sends both as `args: {}`, so the two are
+ *   the same call; a function that always sent `{}` keeps doing so over
  *   `withArgumentsObject(client)`). Suites that mock `invoke` see the same
- *   calls as before.
+ *   calls as before;
+ * - a node whose hello advertises `domains` without this domain is refused
+ *   with `unsupported-version` (since the one-time support floor v2.39.1-beta,
+ *   to-do 8304 (retired), every supported node advertises every domain but those two).
  *
  * Call {@link domainApi} per use: the client is made once per factory client
  * and definition (a `WeakMap`), and the API it answers is the adapter for the
@@ -35,9 +40,11 @@
  * validates results only there (plan item 1003): the keystroke path gains no
  * per-call validation in production.
  *
- * Version-0 calls are counted (`domain-adapter-usage-ring.ts`) only for a
- * client that carries the node's `domains`: one without negotiation cannot
- * tell the node's range, and counting it would keep the adapter alive.
+ * Calls through an adapter below the current version are counted
+ * (`domain-adapter-usage-ring.ts`) only for a client that carries the node's
+ * `domains`: one without negotiation cannot tell the node's range, and
+ * counting it would keep the adapter alive. Unnegotiated calls are never
+ * counted.
  */
 import {
   createDomainClient,
@@ -69,7 +76,7 @@ function isEmptyArgs(args: unknown): boolean {
 
 /**
  * The wire call: with an envelope the arguments object is always sent; without
- * one (version 0) today's body, without an arguments object when there are none.
+ * one (unnegotiated, or version 0) today's body, without an arguments object when there are none.
  */
 function invokeWire(
   client: BackendClient,

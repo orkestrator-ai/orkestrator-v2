@@ -7,7 +7,7 @@
  * the adapter from its negotiated `domains` (version 1 sends the envelope and
  * decodes results with the protocol's schemas); `null` (the command node over
  * the portal) and a node id (routed through the command node) carry no
- * negotiated range, so they use version 0, today's call. Calls on the
+ * negotiated range, so they use the unnegotiated call, today's call. Calls on the
  * client's own node keep the arguments object `machineInvoke` always sent
  * (`withArgumentsObject`). See `./domain-api.ts`.
  */

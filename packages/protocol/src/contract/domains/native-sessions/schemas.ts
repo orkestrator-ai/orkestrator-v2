@@ -363,13 +363,6 @@ export const AgentHandoffSchema = openRecord({
 });
 export type PersistedAgentHandoff = Mutable<typeof AgentHandoffSchema.Type>;
 
-/** `AGENT_HANDOFF_CAPABILITIES` (backend `agent-handoffs.ts`). */
-export const AgentHandoffCapabilitiesSchema = openRecord({
-  create: optionalBoolean,
-  delivery: optionalBoolean,
-  pruning: optionalBoolean,
-});
-
 /** `EnvironmentHydrationPart<T>` (environment-hydration.ts). */
 const HydrationPartSchema = Schema.Union([
   Schema.Struct({ status: Schema.Literal("ok"), records: Schema.Array(OpenObject) }),
@@ -800,22 +793,6 @@ export const SuborkTranscriptSchema = openRecord({
 export const ViewRevisionStampSchema = Schema.Struct({
   generation: Schema.String,
   revision: Schema.Finite,
-});
-
-const VersionList = Schema.Array(Schema.Int);
-
-/**
- * `get_native_agent_sync_capabilities`: the sync protocols the backend
- * speaks. Folded into `native-sessions` version 1; kept for pre-contract
- * clients.
- */
-export const SyncCapabilitiesSchema = openRecord({
-  historyPagingVersions: VersionList,
-  progressiveViewVersions: Schema.optional(VersionList),
-  observationEventVersions: Schema.optional(VersionList),
-  transcriptPatchVersions: Schema.optional(VersionList),
-  liveUpdateVersions: Schema.optional(VersionList),
-  observation: Schema.optional(ViewRevisionStampSchema),
 });
 
 /** `NativeAgentViewIdentity` (native-agent.ts). */

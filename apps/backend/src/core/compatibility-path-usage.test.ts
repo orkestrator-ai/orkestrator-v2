@@ -48,17 +48,17 @@ describe("CompatibilityPathUsage", () => {
       merge(pending) {
         merges += 1;
         if (pending.size > 0) writes += 1;
-        return { version: 1, paths: { "agent-handoff.renderer-saved": stored } };
+        return { version: 1, paths: { "workspace-grant.config-echo": stored } };
       },
     });
-    expect(usage.peek().paths["agent-handoff.renderer-saved"]?.count).toBe(5);
+    expect(usage.peek().paths["workspace-grant.config-echo"]?.count).toBe(5);
     expect(merges).toBe(1);
 
-    usage.record("agent-handoff.renderer-saved");
+    usage.record("workspace-grant.config-echo");
     usage.record("bridge-credential.token-file");
     for (let index = 0; index < 3; index += 1) {
       const { paths } = usage.peek();
-      expect(paths["agent-handoff.renderer-saved"]?.count).toBe(6);
+      expect(paths["workspace-grant.config-echo"]?.count).toBe(6);
       expect(paths["bridge-credential.token-file"]?.count).toBe(1);
     }
     expect(merges).toBe(1);
@@ -82,7 +82,7 @@ describe("CompatibilityPathUsage", () => {
     usage.record("bridge-credential.token-file");
     time.advance(1_000);
     usage.record("bridge-credential.token-file");
-    usage.record("agent-handoff.renderer-saved");
+    usage.record("workspace-grant.config-echo");
 
     expect(usage.snapshot()).toEqual({
       version: 1,
@@ -92,7 +92,7 @@ describe("CompatibilityPathUsage", () => {
           firstSeenAt: "2026-10-24T10:00:00.000Z",
           lastSeenAt: "2026-10-24T10:00:01.000Z",
         },
-        "agent-handoff.renderer-saved": {
+        "workspace-grant.config-echo": {
           count: 1,
           firstSeenAt: "2026-10-24T10:00:01.000Z",
           lastSeenAt: "2026-10-24T10:00:01.000Z",
@@ -181,14 +181,14 @@ describe("CompatibilityPathUsage", () => {
         }),
       );
       usage.attach(sink);
-      usage.record("agent-handoff.renderer-saved");
+      usage.record("workspace-grant.config-echo");
       expect(usage.snapshot().paths).not.toHaveProperty("future.path");
       usage.detach(sink);
       expect(database.readStore(COMPATIBILITY_PATH_USAGE_STORE)?.value).toEqual({
         version: 1,
         paths: {
           "future.path": future,
-          "agent-handoff.renderer-saved": { ...future, count: 1 },
+          "workspace-grant.config-echo": { ...future, count: 1 },
         },
       });
     } finally {
@@ -211,12 +211,12 @@ describe("CompatibilityPathUsage", () => {
     const usage = new CompatibilityPathUsage(clock().now, 5);
     usage.attach(sink);
     try {
-      usage.record("agent-handoff.renderer-saved");
+      usage.record("workspace-grant.config-echo");
       const deadline = Date.now() + 1_000;
       while (attempts < 2 && Date.now() < deadline) await Bun.sleep(5);
       expect(attempts).toBe(2);
       expect(
-        normalizeCompatibilityPathUsage(stored).paths["agent-handoff.renderer-saved"]?.count,
+        normalizeCompatibilityPathUsage(stored).paths["workspace-grant.config-echo"]?.count,
       ).toBe(1);
     } finally {
       usage.detach(sink);
@@ -233,13 +233,13 @@ describe("CompatibilityPathUsage", () => {
     };
     const usage = new CompatibilityPathUsage(clock().now, 5);
     usage.attach(sink);
-    usage.record("agent-handoff.renderer-saved");
+    usage.record("workspace-grant.config-echo");
     usage.snapshot();
     usage.detach(sink);
     const detachedAttempts = attempts;
     await Bun.sleep(25);
     expect(attempts).toBe(detachedAttempts);
-    expect(usage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(1);
+    expect(usage.snapshot().paths["workspace-grant.config-echo"]?.count).toBe(1);
   });
 
   test("failed snapshots include historical totals plus pending counts without double counting", () => {
@@ -255,16 +255,16 @@ describe("CompatibilityPathUsage", () => {
     const usage = new CompatibilityPathUsage(time.now);
     usage.attach(sink);
     try {
-      usage.record("agent-handoff.renderer-saved");
+      usage.record("workspace-grant.config-echo");
       usage.record("bridge-credential.token-file");
       const original = usage.snapshot();
       time.advance(1_000);
-      usage.record("agent-handoff.renderer-saved");
+      usage.record("workspace-grant.config-echo");
       fail = true;
       for (let i = 0; i < 2; i++) {
         expect(usage.snapshot().paths).toEqual({
           "bridge-credential.token-file": original.paths["bridge-credential.token-file"],
-          "agent-handoff.renderer-saved": {
+          "workspace-grant.config-echo": {
             count: 2,
             firstSeenAt: "2026-10-24T10:00:00.000Z",
             lastSeenAt: "2026-10-24T10:00:01.000Z",
@@ -272,9 +272,9 @@ describe("CompatibilityPathUsage", () => {
         });
       }
       fail = false;
-      expect(usage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(2);
+      expect(usage.snapshot().paths["workspace-grant.config-echo"]?.count).toBe(2);
       fail = true;
-      expect(usage.snapshot().paths["agent-handoff.renderer-saved"]?.count).toBe(2);
+      expect(usage.snapshot().paths["workspace-grant.config-echo"]?.count).toBe(2);
     } finally {
       usage.detach(sink);
     }
@@ -352,7 +352,7 @@ describe("normalizeCompatibilityPathUsage", () => {
             firstSeenAt: "2026-10-20T00:00:00.000Z",
             lastSeenAt: "2026-10-20T00:00:00.000Z",
           },
-          "agent-handoff.renderer-saved": { count: -1, firstSeenAt: "x", lastSeenAt: "y" },
+          "workspace-grant.config-echo": { count: -1, firstSeenAt: "x", lastSeenAt: "y" },
         },
       }),
     ).toEqual({

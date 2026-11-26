@@ -22,7 +22,7 @@ const snapshot = {
 
 describe("system over a lib/backend client", () => {
   test("a node with the domain gets typed calls with the envelope and decoded results", async () => {
-    const client = fakeClient({ system: { min: 1, max: 1 } }, () => ({
+    const client = fakeClient({ system: { min: 1, max: 2 } }, () => ({
       kind: "browser",
       url: "https://github.com/x/y/issues/new",
       bodyInUrl: true,
@@ -39,11 +39,11 @@ describe("system over a lib/backend client", () => {
     expect(client.invokeRaw).toHaveBeenCalledWith(
       "file_bug_report",
       { reportId: "r1", title: "T", body: "B", via: "browser" },
-      { envelope: { domain: "system", version: 1, critical: ["via"] } },
+      { envelope: { domain: "system", version: 2, critical: ["via"] } },
     );
   });
 
-  test("a pre-contract node gets today's calls, answered as sent", async () => {
+  test("a client without negotiation gets today's calls, answered as sent", async () => {
     const client = fakeClient(null, () => snapshot);
     await expect(systemApi(client).get_bug_report(undefined as never)).resolves.toBe(snapshot);
     expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["get_bug_report"]);

@@ -1,7 +1,7 @@
 /**
  * The `design` domain (plan item 7004): every command defined once with the
  * keys its handler reads, the routing read class, tolerant decoding, and the
- * client's version-1 and legacy adapters against fakes.
+ * client's adapter against fakes.
  */
 import { describe, expect, it } from "bun:test";
 import * as Schema from "effect/Schema";
@@ -264,35 +264,11 @@ describe("design client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it("version 1 refuses a result that is not the command's shape", async () => {
-    const node = fakeNode({ design: { min: 1, max: 1 } }, () => ({ value: "?" }));
+  it("version 2 refuses a result that is not the command's shape", async () => {
+    const node = fakeNode({ design: { min: 1, max: 2 } }, () => ({ value: "?" }));
     const design = createDomainClient(designClient, node.options).api();
     await expect(
       design.command(designSnapshotCommand, { environmentId: "e", canvasId: CANVAS }),
     ).rejects.toThrow("Invalid result from design_snapshot");
-  });
-
-  it("version 0: today's calls by name, answers as sent, today's capability flags, counted", async () => {
-    // An older backend's answer: no `intents` flag and a field this build does not know.
-    const older = { ok: true as const, value: { ...CAPABILITIES, legacyOnly: 1 } };
-    const node = fakeNode(undefined, (command) =>
-      command === "design_capabilities" ? older : { anything: "goes" },
-    );
-    const client = createDomainClient(designClient, node.options);
-    expect(client.version()).toBe(0);
-    const design = client.api();
-    expect(await design.capabilities()).toEqual(older);
-    expect(
-      await design.command(designSnapshotCommand, { environmentId: "e", canvasId: CANVAS }),
-    ).toEqual({ anything: "goes" } as never);
-    expect(node.sent).toEqual([]);
-    expect(node.invoked).toEqual([
-      { command: "design_capabilities", args: {} },
-      { command: "design_snapshot", args: { environmentId: "e", canvasId: CANVAS } },
-    ]);
-    expect(node.usage).toEqual([
-      ["design", 0],
-      ["design", 0],
-    ]);
   });
 });

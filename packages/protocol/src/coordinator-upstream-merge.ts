@@ -9,10 +9,9 @@ import type { ProjectGitStatus } from "./coordinator.js";
  * fast-forward would not apply to (local commits, uncommitted changes, an
  * unfinished operation). Browser-safe.
  *
- * Earlier releases asked first, remembered declines
- * (`decline_coordinator_upstream_merge`) and kept an "always merge" setting
- * (`get/set_coordinator_upstream_auto_merge`). The backend still answers those
- * commands for older clients, but neither changes the decision any more.
+ * Earlier releases asked first and remembered declines
+ * (`decline_coordinator_upstream_merge`). The backend still answers that
+ * command for older clients, but it no longer changes the decision.
  */
 
 /** Why a behind checkout cannot be fast-forwarded, or null when it can. */
@@ -134,20 +133,4 @@ export function isDeclinedUpstreamMerge(value: unknown): value is DeclinedUpstre
     record.upstreamCommit.length > 0 &&
     record.upstreamCommit.length <= UPSTREAM_DECLINE_LIMITS.commitChars
   );
-}
-
-/**
- * The retired "always merge" setting (`get/set_coordinator_upstream_auto_merge`),
- * still answered for older clients. It no longer changes anything.
- */
-export interface CoordinatorUpstreamAutoMerge {
-  enabled: boolean;
-}
-
-export function parseCoordinatorUpstreamAutoMerge(
-  value: unknown,
-): CoordinatorUpstreamAutoMerge | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const enabled = (value as Record<string, unknown>).enabled;
-  return typeof enabled === "boolean" ? { enabled } : null;
 }

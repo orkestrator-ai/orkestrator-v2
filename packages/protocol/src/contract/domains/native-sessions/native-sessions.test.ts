@@ -2,8 +2,7 @@
  * The `native-sessions` domain (plan item 7001): its definitions classify
  * reads as the routing classifier does, keep model records open (every key
  * the backend sends survives a tolerant decode), and its client sends typed,
- * enveloped calls to a node with the domain while a pre-contract node gets
- * today's untyped calls and capability reads.
+ * enveloped calls to a node with the domain.
  */
 import { describe, expect, it } from "bun:test";
 import * as Schema from "effect/Schema";
@@ -18,9 +17,7 @@ import {
   validateCommandResult,
   type AnyCommandDef,
 } from "../../command.js";
-import { unknownCommand } from "../../errors.js";
 import {
-  LEGACY_HANDOFF_CAPABILITIES,
   NATIVE_SESSIONS_COMMANDS,
   NATIVE_SESSIONS_HANDOFF_CAPABILITIES,
   NATIVE_SESSIONS_SYNC_CAPABILITIES,
@@ -43,10 +40,10 @@ const ENCODED = new Set([
 ]);
 
 describe("native-sessions definitions", () => {
-  it("defines the domain's 86 commands once each, since version 1 unless added later", () => {
+  it("defines the domain's 81 commands once each, since version 1 unless added later", () => {
     const names = NATIVE_SESSIONS_COMMANDS.map((def) => def.name);
-    expect(names).toHaveLength(86);
-    expect(new Set(names).size).toBe(86);
+    expect(names).toHaveLength(81);
+    expect(new Set(names).size).toBe(81);
     expect(nativeSessionsDomain).toMatchObject({ name: "native-sessions", version: 6, min: 1 });
     const addedSince: Record<string, number> = { get_native_agent_tool_output: 5 };
     for (const def of NATIVE_SESSIONS_COMMANDS) {
@@ -153,9 +150,9 @@ describe("native-sessions definitions", () => {
     expect(result._tag).toBe("Success");
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 6 to 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapters 6 to 3", () => {
     expect(DOMAIN_CLIENTS).toContain(nativeSessionsClient);
-    expect(nativeSessionsClient.versions).toEqual([6, 5, 4, 3, 2, 1, 0]);
+    expect(nativeSessionsClient.versions).toEqual([6, 5, 4, 3]);
   });
 });
 
@@ -187,7 +184,7 @@ function fakeNode(
   return { sent, invoked, usage, options };
 }
 
-const NATIVE_SESSIONS_V1 = { "native-sessions": { min: 1, max: 1 } };
+const NATIVE_SESSIONS_V3 = { "native-sessions": { min: 1, max: 3 } };
 const NATIVE_SESSIONS_CURRENT = { "native-sessions": { min: 1, max: 6 } };
 
 const dispatch = {
@@ -230,7 +227,7 @@ describe("native-sessions client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it.each([undefined, { "native-sessions": { min: 1, max: 4 } }])(
+  it.each([NATIVE_SESSIONS_V3, { "native-sessions": { min: 1, max: 4 } }])(
     "refuses guarded Retry without calling older peers",
     async (domains) => {
       const node = fakeNode(domains);
@@ -246,8 +243,8 @@ describe("native-sessions client", () => {
     },
   );
 
-  it("version 1: both capability commands are folded into the version", async () => {
-    const node = fakeNode(NATIVE_SESSIONS_V1);
+  it("version 3: both capability commands are folded into the version", async () => {
+    const node = fakeNode(NATIVE_SESSIONS_V3);
     const api = createDomainClient(nativeSessionsClient, node.options).api();
     await expect(api.handoffCapabilities()).resolves.toEqual(NATIVE_SESSIONS_HANDOFF_CAPABILITIES);
     await expect(api.syncCapabilities()).resolves.toEqual(NATIVE_SESSIONS_SYNC_CAPABILITIES);
@@ -255,66 +252,11 @@ describe("native-sessions client", () => {
     expect(node.invoked).toEqual([]);
   });
 
-  it("version 1: a result that does not match its schema is refused", async () => {
-    const node = fakeNode(NATIVE_SESSIONS_V1, () => ({ outcome: 7 }));
+  it("version 3: a result that does not match its schema is refused", async () => {
+    const node = fakeNode(NATIVE_SESSIONS_V3, () => ({ outcome: 7 }));
     const api = createDomainClient(nativeSessionsClient, node.options).api();
     await expect(api.dispatch_native_agent_intent(dispatch)).rejects.toThrow(
       "Invalid result from dispatch_native_agent_intent",
     );
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacyAnswer = { outcome: 7, older: true };
-    const node = fakeNode(undefined, () => legacyAnswer);
-    const client = createDomainClient(nativeSessionsClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect(client.api().dispatch_native_agent_intent(dispatch)).resolves.toBe(
-      legacyAnswer as never,
-    );
-    expect(node.invoked).toEqual([{ command: "dispatch_native_agent_intent", args: dispatch }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["native-sessions", 0]]);
-  });
-
-  it("version 0: handoff capabilities are read, and a node without the command does none", async () => {
-    const capable = fakeNode(undefined, () => ({ create: true, delivery: true, pruning: "yes" }));
-    await expect(
-      createDomainClient(nativeSessionsClient, capable.options).api().handoffCapabilities(),
-    ).resolves.toEqual({ create: true, delivery: true, pruning: false });
-    expect(capable.invoked).toEqual([
-      { command: "get_agent_handoff_capabilities", args: undefined },
-    ]);
-
-    const older = fakeNode(undefined, (command) => {
-      throw unknownCommand(command);
-    });
-    await expect(
-      createDomainClient(nativeSessionsClient, older.options).api().handoffCapabilities(),
-    ).resolves.toEqual(LEGACY_HANDOFF_CAPABILITIES);
-
-    const failing = fakeNode(undefined, () => {
-      throw new Error("Backend unavailable");
-    });
-    await expect(
-      createDomainClient(nativeSessionsClient, failing.options).api().handoffCapabilities(),
-    ).rejects.toThrow("Backend unavailable");
-  });
-
-  it("version 0: sync capabilities are the node's answer, asked on every call", async () => {
-    const answer = { historyPagingVersions: [1] };
-    const node = fakeNode(undefined, () => answer);
-    const api = createDomainClient(nativeSessionsClient, node.options).api();
-    await expect(api.syncCapabilities()).resolves.toBe(answer);
-    await expect(api.syncCapabilities()).resolves.toBe(answer);
-    expect(node.invoked.map((call) => call.command)).toEqual([
-      "get_native_agent_sync_capabilities",
-      "get_native_agent_sync_capabilities",
-    ]);
-    const older = fakeNode(undefined, (command) => {
-      throw unknownCommand(command);
-    });
-    await expect(
-      createDomainClient(nativeSessionsClient, older.options).api().syncCapabilities(),
-    ).rejects.toMatchObject({ code: "unknown-command" });
   });
 });

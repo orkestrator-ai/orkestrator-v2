@@ -42,7 +42,7 @@ export type CoordinatorPullRequestWatchResult =
  */
 export function createCoordinatorApi(client: BackendClient) {
   // The `coordinator` domain client (plan item 7009): version 1 sends the
-  // envelope and decodes results; version 0 is today's untyped call.
+  // envelope and decodes results; without negotiation it is today's untyped call.
   const domain = () => coordinatorDomainApi(client);
 
   /** Opening the panel never clears a failed conversation: its pane offers Retry. */

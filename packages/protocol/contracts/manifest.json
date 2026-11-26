@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1111,
-    "defined": 1111,
+    "commands": 1089,
+    "defined": 1089,
     "untyped": 0,
     "events": 48
   },
@@ -558,15 +558,6 @@
       "argsDigest": "sha256:a3638ecb0be67a4a6e7a8e598863384d9a730da4a8c542c7b326c3b494624f4e",
       "resultDigest": "sha256:362381171b4aa3f27c7bc0d59d8d2a7df605528b13af2492cb13ad7b8a0b3032"
     },
-    "arrange_projects": {
-      "domain": "projects",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:40d1c29beb3ee7af6aa2d0c982de84d1fe6ab40830112e224c28c7b8a3264029",
-      "resultDigest": "sha256:c06393f518c1798c1ab1f4663a61913cf94ef13d0a4503096c6bda8af5ec7599"
-    },
     "arrange_projects_by_intent": {
       "domain": "projects",
       "since": 1,
@@ -638,15 +629,6 @@
       "critical": [],
       "argsDigest": "sha256:9ddf14e1522401287edb3a700c19bba7d45804fecc0d1e6c4b93b02c97e957ee",
       "resultDigest": "sha256:748f8da1ac840368ffbdf1cc3b939c38b2041764bf8d63308bb57a171a220b5f"
-    },
-    "associate_coordinator_workflow": {
-      "domain": "coordinator",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:c07a580c5254d461fe61d470c9141213079883fa3c975acea4ba1f164cb89090",
-      "resultDigest": "sha256:e7c4caca8f1336b84fb49c78b9c5c5d28f996b24a16e747c8fe29ec23a4fafa8"
     },
     "attach_controller": {
       "domain": "nodes",
@@ -1035,15 +1017,6 @@
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
     },
-    "check_codex_cli": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
     "check_container_host_reachability": {
       "domain": "docker",
       "since": 1,
@@ -1071,15 +1044,6 @@
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
       "resultDigest": "sha256:e122e9131706acd8b0343ab504e67ced23acb18bc9952296212e65e406ffd56b"
     },
-    "check_cursor_cli": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
     "check_docker": {
       "domain": "docker",
       "since": 1,
@@ -1097,42 +1061,6 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
-    "check_grok_cli": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
-    "check_opencode_cli": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
-    "check_pi_cli": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
-    "claim_feature_plan_build": {
-      "domain": "kanban",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:03b7e6646b447b674e07ff564b9e53e94661dfec00d7462ab5f884e4aebe46be",
-      "resultDigest": "sha256:2a402ad850b125e94eac97e2422c8de08c2860e737f870a0f3dabe5b0aa27b14"
     },
     "claim_linear_writes": {
       "domain": "ticket-sync",
@@ -1412,15 +1340,6 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:f651de3f6fca02e0228ba13f091df3e423c07a51eb6b70803f379214ae9499d4"
-    },
-    "cleanup_stale_local_servers_cmd": {
-      "domain": "agent-servers",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
     },
     "clear_coordinator_worker_goal": {
       "domain": "coordinator",
@@ -1967,15 +1886,6 @@
       "critical": [],
       "argsDigest": "sha256:39545f2031b64488a9af49453422c9b5b0c1d517f8c72f3eb541550f5f01eaea",
       "resultDigest": "sha256:b5aa9dfccb4039da9d3dd74db98032c3a499bdfb82992aa7301f0e0779d82b46"
-    },
-    "delete_agent_handoff": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:66804fbff5ec794fbcf2032a689b33674508d1e123b52eba5b802b332e2b9115",
-      "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
     },
     "delete_build_pipeline": {
       "domain": "pipelines",
@@ -2942,15 +2852,6 @@
       "argsDigest": "sha256:6e1fbfc7f9a96b504525050cd2e7a31daee9762a60178b2dc6c14e6bbf6b0cfd",
       "resultDigest": "sha256:4271108ac1822cfb016d9fa3b98153800c23056df9ef1568bb241dee8e99063b"
     },
-    "get_agent_handoff_capabilities": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:3e3f7b7727a9bc7319860c06681156be788e8fa9e08edd24b4f0d0d23d2a108d"
-    },
     "get_agent_mail_conversation": {
       "domain": "agent-mail",
       "since": 1,
@@ -3284,15 +3185,6 @@
       "argsDigest": "sha256:f493da9f72d3dc75f5e6e7fd7756c35e9778c09efc2ffeea75a01d5dc1042d8f",
       "resultDigest": "sha256:26b675706c0e4a025fc126b4e797a21d9e22b3af725759f3bff38dfb7b9ad807"
     },
-    "get_client_state_capabilities": {
-      "domain": "config",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:25f69780329f46094b71cf041d8d7306ff7fe892235394cd0ebbd43d454934da"
-    },
     "get_codex_server_log": {
       "domain": "agent-servers",
       "since": 1,
@@ -3481,15 +3373,6 @@
       "critical": [],
       "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
       "resultDigest": "sha256:53b5dbb5e327b66d8325b68e3be43af5890772d8b20fa51cd51df8962455b4c7"
-    },
-    "get_coordinator_upstream_auto_merge": {
-      "domain": "config",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:786c7fbb037ddfcbdcd1a12adb32f69b71e81e24222a424bbe514e3bcb10995b",
-      "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
     },
     "get_coordinator_worker_changes": {
       "domain": "coordinator",
@@ -4381,15 +4264,6 @@
       "critical": [],
       "argsDigest": "sha256:52477e00a8fc0cb868f75707cc7b3033e65da8a4bb739f553d85a888326a9600",
       "resultDigest": "sha256:de424af749e6f1c0f58ae98dcf783bea943db04a5a082a54beec347d2c5435a3"
-    },
-    "get_native_agent_sync_capabilities": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
-      "resultDigest": "sha256:cb1960524c8f3c26984ba50958d9033b39ef3cbe70e5c16722ac14ccf857bf0d"
     },
     "get_native_agent_tool_details": {
       "domain": "native-sessions",
@@ -5326,15 +5200,6 @@
       "critical": [],
       "argsDigest": "sha256:9041b3930664fd6969cc140889088ac1a69058903f4037e028b1792f2d528347",
       "resultDigest": "sha256:992382de6a55aad694e1773d69bb202f57e80f318b40fef69845b9e07abd94c8"
-    },
-    "hide_coordinator_work": {
-      "domain": "coordinator",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:936279f4d12bb461a4760e0d9f2a8eacd8a2ae6fc6c169c28c58f6bd4fc52b12",
-      "resultDigest": "sha256:6bb3d936b921fabd21116bc2125c8c79c3fa200755001ea54c0c0ac9f5e391a1"
     },
     "hold_native_agent_interaction": {
       "domain": "native-sessions",
@@ -6675,15 +6540,6 @@
       "argsDigest": "sha256:55676456993e82097e4036a7470123d770bffb7c625d50e6c5f772bba404dcd9",
       "resultDigest": "sha256:a3d1c08cd0dc9aecddc72061726a94e7c4ac4218f308a004d1f881374cf97a67"
     },
-    "prune_agent_handoffs": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:bfa1e351835ab24b5f996a8d775897cf855f1cf9fd5809bf0147e0663401ec73",
-      "resultDigest": "sha256:05ce9d45d7de7105d0fbbcf6dc4dbe09c0ac171c505be8a032a15aae988e4f87"
-    },
     "public_action": {
       "domain": "public-api",
       "since": 1,
@@ -6801,15 +6657,6 @@
       "argsDigest": "sha256:aebe73b717158cd52e145c128feb569c211ab1fd4e58209bbeaae75b80d8c818",
       "resultDigest": "sha256:dd2532aa083889f46af56d8f31c3d4cb39a0e37a5b60c02a4a4c19ecb256a426"
     },
-    "read_file_at_branch": {
-      "domain": "files",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:48864524b033ff5f6d619f5fe7a9bb0c31c9ad160aa00eee23bd6d13ae031d5f",
-      "resultDigest": "sha256:52721c51a0f95d965869f2dbe749307b499f2c8877a4ae46f7ce555e476b349f"
-    },
     "read_file_base64": {
       "domain": "files",
       "since": 1,
@@ -6845,15 +6692,6 @@
       "critical": [],
       "argsDigest": "sha256:36fcd1ad73d7e2905c6a0abb01c45d09b72c2412be7b35b90430f5689619d9ac",
       "resultDigest": "sha256:91409892e8dbc67a7f35e03d9ba0f91e41e47bbacc9f46c1c767ec4300656939"
-    },
-    "read_local_file_at_branch": {
-      "domain": "files",
-      "since": 1,
-      "access": "workspace",
-      "read": true,
-      "critical": [],
-      "argsDigest": "sha256:4922751534032881ba390e9cd0c5bd672c3057a0847d4af4ad894b6f437441f9",
-      "resultDigest": "sha256:52721c51a0f95d965869f2dbe749307b499f2c8877a4ae46f7ce555e476b349f"
     },
     "read_node_file": {
       "domain": "node-files",
@@ -7944,15 +7782,6 @@
       "argsDigest": "sha256:02c13b62081a577f7a57dc4ef1595d17f3620dc34eefd88c8dfe1a0b2880ff04",
       "resultDigest": "sha256:c54a434fa63a8e20b8bb6ffcfa0a446bf4c7900c8534fa72f58ea77b14c42d5c"
     },
-    "save_agent_handoff": {
-      "domain": "native-sessions",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:a4658fda618fa51786c10b24f9425cfaec70455f77e5a1470455c417785ffd6e",
-      "resultDigest": "sha256:e9cd931e20bbe265c53568a684f91a87c62b5f334270f26f16a4e755fbf89dec"
-    },
     "save_auto_pipeline_edits": {
       "domain": "pipelines",
       "since": 1,
@@ -8249,15 +8078,6 @@
       "critical": [],
       "argsDigest": "sha256:d585af22fe4e369406a3b609f2167d7399ac0f04d6bcfa1a50eac08104963d74",
       "resultDigest": "sha256:58d305876d9c306a1a5b46117f11d7eba6de87703f2cf606b2713b34db00753a"
-    },
-    "set_coordinator_upstream_auto_merge": {
-      "domain": "config",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:bca4f45dbb83ab40a27f53d342457dd1dbd397a416aa18e8e6d607d3c89d5daa",
-      "resultDigest": "sha256:ac70213b5a07ea0a1194f16a7a593b1179afcca3e4e008d082c6850ba9401e35"
     },
     "set_coordinator_worker_goal": {
       "domain": "coordinator",
@@ -8601,15 +8421,6 @@
       "argsDigest": "sha256:ad7f8005da5993a231a5bab46aeae57e913b33942aaa50f0e780f023df466b59",
       "resultDigest": "sha256:0ed73b9586d6b6eee395b5facce9052e4b9e2fa0eb0b50abf4853004268e29f3"
     },
-    "start_coordinator_multi_review": {
-      "domain": "coordinator",
-      "since": 1,
-      "access": "internal",
-      "read": false,
-      "critical": ["requestId"],
-      "argsDigest": "sha256:7b14a45fa2a04ea22da05f5d9c29c528fa0082b7db9ac17436821fdd1f55a85f",
-      "resultDigest": "sha256:c411f1700b4bb8d4e809bdf454b69f49a33df0a732f78c5612801d68051e449a"
-    },
     "start_coordinator_node_build_pipeline": {
       "domain": "coordinator",
       "since": 1,
@@ -8617,15 +8428,6 @@
       "read": false,
       "critical": ["requestId"],
       "argsDigest": "sha256:44e445881d52ce1ecf8c1c09c925c7b76aa5163e805cbedcff7e8aa3cc4b3913",
-      "resultDigest": "sha256:860f3f6b80ada6d1ef65911e188854473b2661e199abb8d9a946d076b515f35b"
-    },
-    "start_coordinator_node_multi_review": {
-      "domain": "coordinator",
-      "since": 1,
-      "access": "internal",
-      "read": false,
-      "critical": ["buildPipelineId", "requestId"],
-      "argsDigest": "sha256:3100a8acd25c2d5de6a06c6d601e3aaf9fc73c9258f060379d652b23835655c5",
       "resultDigest": "sha256:860f3f6b80ada6d1ef65911e188854473b2661e199abb8d9a946d076b515f35b"
     },
     "start_cursor_server": {

@@ -1,9 +1,9 @@
 /**
  * The terminals, files and claude-tmux domain clients over a `lib/backend`
  * factory client (plan item 7002), against fake nodes: version 1 for a node
- * that advertises the domain (envelope, decoded results), version 0 for a
- * pre-contract node or a client without negotiation (today's exact calls,
- * answered as sent), and a new connection generation picking again.
+ * that advertises the domain (envelope, decoded results), the unnegotiated
+ * call for a client without negotiation (today's exact calls, answered as
+ * sent), and a new connection generation picking again.
  */
 import { describe, expect, mock, test } from "bun:test";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
@@ -15,7 +15,7 @@ import { files } from "./files";
 import { terminals } from "./terminals";
 
 const CURRENT: NegotiatedDomains = {
-  terminals: { min: 1, max: 1 },
+  terminals: { min: 1, max: 2 },
   files: { min: 1, max: 1 },
   "claude-tmux": { min: 1, max: 1 },
 };
@@ -52,7 +52,7 @@ describe("domain clients over a lib/backend client", () => {
     expect(read).toEqual({ path: "a", content: "x", language: "ts", extra: 1 } as never);
   });
 
-  test("a pre-contract node (no domains) takes version 0 too", async () => {
+  test("a node with no negotiated domains is called unnegotiated too", async () => {
     const { client, invokeRaw } = fakeClient(() => null, null);
     await expect(
       claudeTmux(client).claude_tmux_status({ environmentId: "e", tabId: "t" }),
@@ -104,6 +104,6 @@ describe("domain clients over a lib/backend client", () => {
     signal!.set({ ...CURRENT });
     await terminals(client).detach_terminal({ sessionId: "s" });
     expect(invokeRaw.mock.calls[0]).toEqual(["detach_terminal", { sessionId: "s" }] as never);
-    expect(invokeRaw.mock.calls[1]?.[2]).toEqual({ envelope: { domain: "terminals", version: 1 } });
+    expect(invokeRaw.mock.calls[1]?.[2]).toEqual({ envelope: { domain: "terminals", version: 2 } });
   });
 });

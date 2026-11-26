@@ -98,8 +98,8 @@ describe("git and pull-requests definitions", () => {
   it("lists both clients in DOMAIN_CLIENTS with their adapters", () => {
     expect(DOMAIN_CLIENTS).toContain(gitClient);
     expect(DOMAIN_CLIENTS).toContain(pullRequestsClient);
-    expect(gitClient.versions).toEqual([2, 1, 0]);
-    expect(pullRequestsClient.versions).toEqual([4, 3, 2, 1, 0]);
+    expect(gitClient.versions).toEqual([2]);
+    expect(pullRequestsClient.versions).toEqual([4, 3]);
   });
 
   it("drops unknown keys of a formerly strict command, refuses an unknown critical one", () => {
@@ -119,15 +119,12 @@ describe("git and pull-requests definitions", () => {
     expect(refused._tag).toBe("Failure");
   });
 
-  it("refuses a destination-guarded merge before invoking a pre-contract backend", async () => {
+  it("refuses a destination-guarded merge it cannot send with an envelope", async () => {
     const calls: string[] = [];
     const client = createDomainClient(pullRequestsClient, {
       domains: () => null,
-      call: async () => {
-        throw new Error("Unexpected contract call");
-      },
-      invoke: async (command) => {
-        calls.push(command);
+      call: async (def) => {
+        calls.push(def.name);
         return { merged: true };
       },
     });
@@ -145,7 +142,7 @@ describe("git and pull-requests definitions", () => {
       }),
     ).rejects.toThrow("Update the backend");
     expect(calls).toEqual([]);
-    await client.api().merge_github_pull_request(args);
+    await expect(client.api().merge_github_pull_request(args)).resolves.toEqual({ merged: true });
     expect(calls).toEqual(["merge_github_pull_request"]);
   });
 
@@ -301,20 +298,6 @@ describe("git client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it("version 0: today's untyped call, answered as sent, counted", async () => {
-    const node = fakeNode(undefined, () => ({ legacy: true }));
-    const client = createDomainClient(gitClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect(
-      client.api().changes_get_view({ resourceKey: "k" }) as Promise<unknown>,
-    ).resolves.toEqual({
-      legacy: true,
-    });
-    expect(node.invoked).toEqual([{ command: "changes_get_view", args: { resourceKey: "k" } }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["git", 0]]);
-  });
-
   it("refuses a node whose range does not overlap", () => {
     const node = fakeNode({ git: { min: 3, max: 4 } }, () => null);
     const client = createDomainClient(gitClient, node.options);
@@ -323,8 +306,8 @@ describe("git client", () => {
 });
 
 describe("pull-requests client", () => {
-  it("version 1: the merge guards travel as critical keys", async () => {
-    const node = fakeNode({ "pull-requests": { min: 1, max: 1 } }, () => ({
+  it("version 3: the merge guards travel as critical keys", async () => {
+    const node = fakeNode({ "pull-requests": { min: 1, max: 3 } }, () => ({
       outcome: "merged",
       cleanupOutcome: "not-requested",
     }));
@@ -341,20 +324,8 @@ describe("pull-requests client", () => {
     });
     expect(node.sent[0]?.envelope).toEqual({
       domain: "pull-requests",
-      version: 1,
+      version: 3,
       critical: ["expectedHeadSha", "expectedPrUrl", "method"],
     });
-  });
-
-  it("version 0: today's untyped call, answered as sent", async () => {
-    const node = fakeNode({ git: { min: 1, max: 1 } }, () => ({ older: "shape" }));
-    const client = createDomainClient(pullRequestsClient, node.options);
-    expect(client.version()).toBe(0);
-    const ref = { owner: "o", repo: "r", number: 3 };
-    await expect(client.api().get_github_pull_request(ref) as Promise<unknown>).resolves.toEqual({
-      older: "shape",
-    });
-    expect(node.invoked).toEqual([{ command: "get_github_pull_request", args: ref }]);
-    expect(node.usage).toEqual([["pull-requests", 0]]);
   });
 });

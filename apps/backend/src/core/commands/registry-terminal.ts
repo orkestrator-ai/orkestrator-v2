@@ -56,9 +56,7 @@ import {
   readContainerFileBase64Command,
   readContainerFileCommand,
   readEnvironmentFileBase64Command,
-  readFileAtBranchCommand,
   readFileBase64Command,
-  readLocalFileAtBranchCommand,
   readLocalFileCommand,
   renameContainerFileCommand,
   renameLocalFileCommand,
@@ -70,7 +68,6 @@ import {
   type FileTreeNode,
 } from "@orkestrator/protocol/contract/domains/files";
 import type { CommandContext } from "./context.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import type { Environment } from "../models.js";
 import {
   assertContainerNotDraining,
@@ -81,11 +78,7 @@ import {
   newContainerTerminalToken,
   runContainerWrite,
 } from "../containers/index.js";
-import {
-  containerGitBlobReadCommand,
-  decodeGitBatchOutput,
-  gitDockerScanPool,
-} from "../git/index.js";
+import { gitDockerScanPool } from "../git/index.js";
 import { createHash, randomUUID } from "node:crypto";
 import { WEB_ANNOTATION_LIMITS } from "@orkestrator/protocol/web-annotations";
 import {
@@ -134,7 +127,6 @@ import {
   readFileBase64,
   readTextFile,
   inferLanguage,
-  assertEditorTextFileSize,
   decodeEditorTextFile,
   runCommand,
   writeFileBase64,
@@ -200,7 +192,6 @@ import {
   resolveWorkspaceFolderCreate,
   containerMoveFileCommand,
   containerCreateFolderCommand,
-  readLocalFileAtBranch,
   buildFileSubtree,
   validateFileTreeDirectory,
   CONTAINER_FILE_TREE_LISTER,
@@ -1112,17 +1103,6 @@ export function registerTerminalCommands(
     },
     ASYNC_HANDLER,
   );
-  // Only the diff viewer of v2.21.0 to v2.23.0 asks this and
-  // `read_file_at_branch` (to-do 8304).
-  register(readLocalFileAtBranchCommand, ({ worktreePath, filePath, branch }, context) => {
-    compatibilityPathUsage.record("retired-command.read-file-at-branch");
-    return readLocalFileAtBranch(
-      worktreePath,
-      filePath,
-      branch,
-      context.runtime.diffStats.gitFetchScheduler,
-    );
-  });
   register(
     readFileBase64Command,
     async ({ filePath }, context) => readFileBase64(filePath, await readableHostFileRoots(context)),
@@ -1473,27 +1453,6 @@ export function registerTerminalCommands(
         `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(workspaceFilePath(target))} ${MAX_TEXT_FILE_BYTES} editor ${quoteShell(MAX_TEXT_FILE_SIZE_LABEL)}`,
       );
       const content = decodeEditorTextFile(Buffer.from(encoded.trim(), "base64"));
-      return { path: target, content, language: inferLanguage(target) };
-    },
-    ASYNC_HANDLER,
-  );
-  register(
-    readFileAtBranchCommand,
-    async ({ containerId, filePath, branch }) => {
-      compatibilityPathUsage.record("retired-command.read-file-at-branch");
-      const target = validateRelativeFilePath(filePath);
-      const object = `${branch}:${target}`;
-      // One `git cat-file --batch` answers the size and the body; the output is
-      // cut after the largest acceptable answer, so an oversized blob is refused
-      // from its header without crossing the exec channel in full.
-      const encoded = await dockerExec(
-        containerId,
-        containerGitBlobReadCommand(object, MAX_TEXT_FILE_BYTES),
-      );
-      const read = decodeGitBatchOutput(Buffer.from(encoded, "base64"), MAX_TEXT_FILE_BYTES);
-      if (read?.kind === "too-large") assertEditorTextFileSize(read.size);
-      if (read?.kind !== "blob") return null;
-      const content = decodeEditorTextFile(read.bytes);
       return { path: target, content, language: inferLanguage(target) };
     },
     ASYNC_HANDLER,

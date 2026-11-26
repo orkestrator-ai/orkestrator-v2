@@ -4,27 +4,24 @@
  *
  * - Version 1 sends the envelope and decodes results with the commands'
  *   schemas.
- * - Version 0 (a node that advertises no `nodes` range: a pre-contract
- *   node, or a client without negotiation) is today's untyped call,
- *   `{ command, args }`, answered as sent (`legacyCommandApi`).
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `nodes` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { NODES_COMMANDS } from "./commands.js";
 import { nodesDomain } from "./domain.js";
 
 export type NodesApi = CommandApi<typeof NODES_COMMANDS>;
 
 const nodesApi = (call: CommandCall): NodesApi => commandApi(call, NODES_COMMANDS);
-const legacyNodesApi = (_call: CommandCall, context: DomainAdapterContext): NodesApi =>
-  legacyCommandApi(context, NODES_COMMANDS);
 
 export const nodesClient = domainClient(nodesDomain, {
   1: nodesApi,
-  0: legacyNodesApi,
 });

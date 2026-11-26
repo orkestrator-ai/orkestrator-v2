@@ -13,7 +13,6 @@ import {
 } from "../git/github-cli-setup.js";
 import { checkHostTool } from "../host-tools.js";
 import { homePath, pathExists } from "../shell.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import {
   type EnvironmentAgentSkillFileSchema,
   type EnvironmentAgentSkillScanSchema,
@@ -21,12 +20,7 @@ import {
   checkAnyAiCliCommand,
   checkClaudeCliCommand,
   checkClaudeConfigCommand,
-  checkCodexCliCommand,
-  checkCursorCliCommand,
   checkGithubCliCommand,
-  checkGrokCliCommand,
-  checkOpencodeCliCommand,
-  checkPiCliCommand,
   getAvailableAiCliCommand,
   getContainerGithubCredentialStatusCommand,
   getGithubCliLoginCommand,
@@ -145,28 +139,6 @@ export function registerToolingCommands(register: CommandRegistrar): void {
       ...(login.configDir ? [path.join(login.configDir, ".claude.json")] : []),
       path.join(login.home, ".claude.json"),
     ]);
-  });
-  register(checkOpencodeCliCommand, (_args, context) => {
-    compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return hasManagedOpenCode(context);
-  });
-  register(checkCodexCliCommand, (_args, context) => {
-    compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return checkHostTool(context, "codex");
-  });
-  // Kept under the existing command name for protocol compatibility. Cursor
-  // no longer has a CLI; availability means the SDK bridge is packaged.
-  register(checkCursorCliCommand, (_args, context) => {
-    compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return hasCursorSdkBridge(context);
-  });
-  register(checkGrokCliCommand, (_args, context) => {
-    compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return hasManagedAcpBinary(context, "grok");
-  });
-  register(checkPiCliCommand, (_args, context) => {
-    compatibilityPathUsage.record("retired-command.provider-cli-check");
-    return checkHostTool(context, "pi");
   });
   register(checkGithubCliCommand, (_args, context) => checkHostTool(context, "gh"));
   register(getGithubCliStatusCommand, (_args, context) => getGitHubCliStatus(context));

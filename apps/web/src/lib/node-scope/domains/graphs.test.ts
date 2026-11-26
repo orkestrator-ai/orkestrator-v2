@@ -1,7 +1,7 @@
 /**
  * The `graphs` domain client over a `lib/backend` factory client (plan item
- * 7007), against fake nodes: version 0 for a client without negotiation or a
- * pre-contract node (today's exact calls, answered as sent), version 1 for a
+ * 7007), against fake nodes: the unnegotiated call for a client without
+ * negotiation (today's exact calls, answered as sent), the current version for a
  * node that advertises the domain (envelope with its critical keys, decoded
  * results), and the machine-aimed client, which carries no range.
  */
@@ -11,7 +11,7 @@ import type { BackendClient } from "@/lib/backend/client";
 import { createSignal } from "@/lib/node-scope/signal";
 import { graphs } from "./graphs";
 
-const GRAPHS_V1: NegotiatedDomains = { graphs: { min: 1, max: 1 } };
+const GRAPHS_CURRENT: NegotiatedDomains = { graphs: { min: 1, max: 2 } };
 
 function fakeClient(answer: (command: string) => unknown, domains?: NegotiatedDomains | null) {
   const invokeRaw = mock(async (command: string, ..._rest: unknown[]) => answer(command));
@@ -41,7 +41,7 @@ describe("graphs domain client over a lib/backend client", () => {
     ] as never);
   });
 
-  test("a pre-contract node (no domains) takes version 0 too", async () => {
+  test("a node with no negotiated domains is called unnegotiated too", async () => {
     const { client, invokeRaw } = fakeClient(() => ({ deleted: true }), null);
     await expect(graphs(client).graph_template_delete({ id: "mine" })).resolves.toEqual({
       deleted: true,
@@ -52,24 +52,24 @@ describe("graphs domain client over a lib/backend client", () => {
   test("a node with the domain gets the envelope, critical keys and decoded results", async () => {
     const { client, invokeRaw } = fakeClient(
       (command) => (command === "graph_template_delete" ? { deleted: true } : unchanged),
-      GRAPHS_V1,
+      GRAPHS_CURRENT,
     );
     await graphs(client).graph_template_delete({ id: "mine", expectedRevision: 2 });
     expect(invokeRaw.mock.calls[0]).toEqual([
       "graph_template_delete",
       { id: "mine", expectedRevision: 2 },
-      { envelope: { domain: "graphs", version: 1, critical: ["expectedRevision"] } },
+      { envelope: { domain: "graphs", version: 2, critical: ["expectedRevision"] } },
     ] as never);
     await expect(graphs(client).graph_run_get({ runId: "r1" })).resolves.toEqual(
       unchanged as never,
     );
     expect(invokeRaw.mock.calls[1]?.[2]).toEqual({
-      envelope: { domain: "graphs", version: 1 },
+      envelope: { domain: "graphs", version: 2 },
     });
   });
 
   test("a version-1 answer that does not match its schema is refused", async () => {
-    const { client } = fakeClient(() => ({ status: "changed", run: { id: "r1" } }), GRAPHS_V1);
+    const { client } = fakeClient(() => ({ status: "changed", run: { id: "r1" } }), GRAPHS_CURRENT);
     await expect(graphs(client).graph_run_get({ runId: "r1" })).rejects.toThrow(
       "Invalid result from graph_run_get",
     );

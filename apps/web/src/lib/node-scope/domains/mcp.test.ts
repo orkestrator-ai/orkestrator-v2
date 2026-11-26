@@ -2,9 +2,9 @@
  * The `mcp` domain client over a `lib/backend` factory client (plan item
  * 7008), against fake nodes: the client's own node takes version 1 when it
  * advertises the domain (envelope, decoded snapshot with its
- * `protocolVersion`) and version 0 otherwise (today's call, with the
- * arguments object `machineInvoke` always sent); another machine is always
- * version 0.
+ * `protocolVersion`) and the unnegotiated call otherwise (today's call, with
+ * the arguments object `machineInvoke` always sent); another machine is
+ * always called unnegotiated.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { MCP_MANAGEMENT_PROTOCOL_VERSION } from "@orkestrator/protocol/mcp-management";
@@ -81,7 +81,7 @@ describe("mcp domain client", () => {
     await expect(createMcpManagementApi(versioned).getMcpManagementSnapshot("t")).rejects.toThrow();
   });
 
-  test("a pre-contract node, or a client without negotiation, gets today's call", async () => {
+  test("a client without negotiation gets today's call", async () => {
     for (const domains of [null, undefined]) {
       const { client, invokeRaw } = fakeClient({ older: "shape" }, domains);
       expect(await createMcpManagementApi(client).listMcpManagementTargets()).toEqual({
@@ -91,7 +91,7 @@ describe("mcp domain client", () => {
     }
   });
 
-  test("another machine goes through the command node, version 0, whatever this node speaks", async () => {
+  test("another machine goes through the command node unnegotiated, whatever this node speaks", async () => {
     const { client, invokeRaw } = fakeClient(operation, { mcp: { min: 1, max: 1 } });
     await mcpOn(client)("leaf").get_mcp_operation({ operationId: "op-1" });
     await mcpOn(client)(null).cancel_mcp_apply({ operationId: "op-1" });

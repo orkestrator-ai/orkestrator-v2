@@ -211,7 +211,17 @@ describe("StorageService agent mail routes", () => {
     "a coordinator-created worker wakes only its own coordinator (hidden: %s)",
     async (hidden) => {
       const { storage, dataDir } = await coordinatorFixture();
-      if (hidden) await storage.coordinators.hideCoordinatorWork("p1", new Set(["launch-e1"]));
+      if (hidden) {
+        await storage.coordinators.updateCoordinatorWorkflowAssociations([
+          {
+            associationId: "launch-e1",
+            mutate: (association) => {
+              association.workHiddenAt = new Date().toISOString();
+              return true;
+            },
+          },
+        ]);
+      }
       try {
         const main = coordinatorRuntimeId("coordinator-1", "conversation-1");
         const side = coordinatorRuntimeId("coordinator-1", "conversation-2");

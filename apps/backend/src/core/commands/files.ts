@@ -14,7 +14,6 @@ import {
   parseGitDiffSummary,
   parseGitFileChanges,
   parseGitNumstat,
-  readGitBlob,
   removeLegacyWorktreeFsmonitor,
   runRemoteGit,
   splitNulTerminatedGitFields,
@@ -29,17 +28,9 @@ import { reconcileProjectHomeEnvironment } from "../project-home-environment.js"
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  inferLanguage,
-  runCommand,
-  CommandFailedError,
-  GitRemoteTimeoutError,
-  assertEditorTextFileSize,
-  decodeEditorTextFile,
-} from "../shell.js";
+import { runCommand, CommandFailedError, GitRemoteTimeoutError } from "../shell.js";
 import {
   MAX_BINARY_FILE_BYTES,
-  MAX_TEXT_FILE_BYTES,
   validateRelativeFilePath,
   writeConfinedFile,
   moveConfinedFile,
@@ -2372,26 +2363,6 @@ export function containerMoveFileCommand(
     fi
     bun -e ${quoteShell(CONTAINER_PINNED_FILE_MOVE)} -- /workspace "$source" "$directory" "$destination"${mode}
   `;
-}
-
-export async function readLocalFileAtBranch(
-  worktreePath: string,
-  filePath: string,
-  branch: string,
-  fetches: LocalGitFetches,
-): Promise<{ path: string; content: string; language: string } | null> {
-  const target = validateRelativeFilePath(filePath, "filePath");
-  const base = await resolveLocalGitBaseCommit(worktreePath, branch, fetches);
-  // The resolved commit, never the moving ref, so the read sees the commit
-  // the base check found. An unresolved base is the ref's own error, as
-  // `git show` reported it before.
-  if (!base.oid) throw new Error(`fatal: Not a valid object name ${base.ref}`);
-  // One process answers the size from its header and then the body.
-  const read = await readGitBlob(worktreePath, `${base.oid}:${target}`, MAX_TEXT_FILE_BYTES);
-  if (read.kind === "too-large") assertEditorTextFileSize(read.size);
-  if (read.kind !== "blob") return null;
-  const content = decodeEditorTextFile(read.bytes);
-  return { path: target, content, language: inferLanguage(target) };
 }
 
 /**

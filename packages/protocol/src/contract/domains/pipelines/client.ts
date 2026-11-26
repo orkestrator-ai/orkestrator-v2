@@ -2,40 +2,28 @@
  * The `pipelines` domain client (plan item 7007; §11.2 "Client adapters"):
  * one function per command (`commandApi`), keyed by command name.
  *
- * - Versions 2 and 1 send the envelope (`existingEnvironmentId` and
+ * - Version 2 sends the envelope (`existingEnvironmentId` and
  *   `deliveryPolicy` on the launches, `requestId` on a feature build, a
  *   restart's `selection` and the unread badge's `expectedLastActivityAt` are
  *   critical) and decodes the results with the schemas in `./schemas.ts`.
- * - Version 0 (a pre-contract node) is today's untyped call, answered as
- *   sent (`legacyCommandApi`). No pipeline command was capability-gated: the
- *   older-backend answers (`launch_build_pipeline`, `start_feature_plan_build`
- *   missing) read an `unknown-command`, which both adapters pass through.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `pipelines` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { PIPELINES_COMMANDS } from "./commands.js";
 import { pipelinesDomain } from "./domain.js";
 
 export type PipelinesApi = CommandApi<typeof PIPELINES_COMMANDS>;
 
 const pipelinesApi = (call: CommandCall): PipelinesApi => commandApi(call, PIPELINES_COMMANDS);
-const legacyPipelinesApi = (_call: CommandCall, context: DomainAdapterContext): PipelinesApi =>
-  legacyCommandApi(context, PIPELINES_COMMANDS);
 
 export const pipelinesClient = domainClient(pipelinesDomain, {
   2: pipelinesApi,
-  // Version 2 only removed `import_legacy_build_pipelines` and
-  // `set_workflow_result_tools_rollout` (2026-11-15), which no current client
-  // calls, so version 1 peers take the same API. Renderers v2.21.0 to
-  // v2.38.1-beta still send the import once at startup while the browser holds
-  // the legacy `orkestrator-build-pipelines` localStorage key; they log the
-  // `unknown-command` and keep the key. Adapter 1 goes when the support floor
-  // passes the first Stable release with version 2.
-  1: pipelinesApi,
-  0: legacyPipelinesApi,
 });

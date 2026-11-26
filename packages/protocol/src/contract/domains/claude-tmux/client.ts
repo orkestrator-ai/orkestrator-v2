@@ -5,29 +5,24 @@
  * - Version 1 sends the envelope (the expected prompt of
  *   `claude_tmux_answer_selection_prompt` is critical) and gets the paged
  *   transcript whenever `page` is sent.
- * - Version 0 (a pre-contract node) is today's untyped call, `{ command,
- *   args }`, answered as sent (`legacyCommandApi`). The tmux commands were
- *   never capability-gated; a node that predates transcript paging answers
- *   the whole file as an array, which the caller reads as a page with
- *   nothing before it (the result schema accepts both forms).
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `claude-tmux` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { CLAUDE_TMUX_COMMANDS } from "./commands.js";
 import { claudeTmuxDomain } from "./domain.js";
 
 export type ClaudeTmuxApi = CommandApi<typeof CLAUDE_TMUX_COMMANDS>;
 
 const claudeTmuxApi = (call: CommandCall): ClaudeTmuxApi => commandApi(call, CLAUDE_TMUX_COMMANDS);
-const legacyClaudeTmuxApi = (_call: CommandCall, context: DomainAdapterContext): ClaudeTmuxApi =>
-  legacyCommandApi(context, CLAUDE_TMUX_COMMANDS);
 
 export const claudeTmuxClient = domainClient(claudeTmuxDomain, {
   1: claudeTmuxApi,
-  0: legacyClaudeTmuxApi,
 });

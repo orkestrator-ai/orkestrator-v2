@@ -3404,8 +3404,6 @@ describe("AgentInfoButton session actions", () => {
 
   function expectNoHandoffCreated() {
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs(ENVIRONMENT_ID)).toHaveLength(1);
-    expect(nativeInvokeMock).not.toHaveBeenCalledWith("save_agent_handoff", expect.anything());
-    expect(nativeInvokeMock).not.toHaveBeenCalledWith("delete_agent_handoff", expect.anything());
     expect(mockToastSuccess).not.toHaveBeenCalled();
   }
 
@@ -3470,9 +3468,7 @@ describe("AgentInfoButton session actions", () => {
       ]);
       // The transcript and the change text are the backend's to read: the
       // renderer no longer reads, measures or saves anything for a transfer.
-      for (const command of ["changes_get_handoff", "save_agent_handoff"]) {
-        expect(nativeInvokeMock).not.toHaveBeenCalledWith(command, expect.anything());
-      }
+      expect(nativeInvokeMock).not.toHaveBeenCalledWith("changes_get_handoff", expect.anything());
       const handoffTab = appCommandStore(paneLayoutStore)
         .getState()
         .getAllTabs(ENVIRONMENT_ID)

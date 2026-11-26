@@ -5,11 +5,9 @@ import {
   finishPromptQueueMessageEditCommand,
   renewPromptQueueMessageEditCommand,
   createAgentHandoffCommand,
-  deleteAgentHandoffCommand,
   deleteComposeDraftCommand,
   deleteFileDraftCommand,
   enqueuePromptQueueMessageCommand,
-  getAgentHandoffCapabilitiesCommand,
   getAgentHandoffCommand,
   getComposeDraftCommand,
   getFileDraftCommand,
@@ -17,10 +15,8 @@ import {
   listEnvironmentHydrationCommand,
   listPromptQueuesCommand,
   movePromptQueueMessageCommand,
-  pruneAgentHandoffsCommand,
   removePromptQueueMessageCommand,
   retryPromptQueueDispatchCommand,
-  saveAgentHandoffCommand,
   saveComposeDraftCommand,
   saveFileDraftCommand,
 } from "@orkestrator/protocol/contract/domains/native-sessions";
@@ -31,14 +27,9 @@ import {
   type EnvironmentHydrationPart,
 } from "@orkestrator/protocol/environment-hydration";
 import { asString, asNumber, stripWorkflowRendererSecrets } from "./helpers.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { isFrozenPromptQueueMessage } from "../storage/index.js";
 import { resetAgentMailBudget } from "./registry-mail.js";
-import {
-  AGENT_HANDOFF_CAPABILITIES,
-  createAgentHandoff,
-  parseCreateAgentHandoffInput,
-} from "../agent-handoffs.js";
+import { createAgentHandoff, parseCreateAgentHandoffInput } from "../agent-handoffs.js";
 
 export function registerPromptCommands(
   registerCommand: CommandRegistrar,
@@ -259,45 +250,9 @@ export function registerPromptCommands(
   register(getAgentHandoffCommand, ({ handoffId }, { storage }) =>
     storage.getAgentHandoff(asString(handoffId, "handoffId")),
   );
-  register(
-    saveAgentHandoffCommand,
-    ({ handoffId, environmentId, version, snapshot }, { storage }) => {
-      // Only a renderer older than `create_agent_handoff` still builds its own.
-      compatibilityPathUsage.record("agent-handoff.renderer-saved");
-      return storage.saveAgentHandoff(
-        asString(handoffId, "handoffId"),
-        asString(environmentId, "environmentId"),
-        asNumber(version, "version"),
-        snapshot,
-      );
-    },
-  );
   register(createAgentHandoffCommand, (args, context) =>
     createAgentHandoff(context, parseCreateAgentHandoffInput(args)),
   );
-  register(getAgentHandoffCapabilitiesCommand, () => AGENT_HANDOFF_CAPABILITIES);
-  // Older renderers still call these; current ones leave deletion to the backend.
-  register(deleteAgentHandoffCommand, ({ handoffId, environmentId }, { storage }) =>
-    storage.deleteAgentHandoff(
-      asString(handoffId, "handoffId"),
-      asString(environmentId, "environmentId"),
-    ),
-  );
-  register(pruneAgentHandoffsCommand, ({ environmentId, referencedHandoffIds }, { storage }) => {
-    // Deliberately strict rather than `asStringArray`, which coerces a
-    // non-array to `[]`. Here that would mean "nothing is referenced" and
-    // delete every transcript in the environment.
-    if (!Array.isArray(referencedHandoffIds)) {
-      throw new Error("Expected referencedHandoffIds to be an array");
-    }
-    if (referencedHandoffIds.some((id) => typeof id !== "string")) {
-      throw new Error("Expected referencedHandoffIds to contain only strings");
-    }
-    return storage.pruneAgentHandoffs(
-      asString(environmentId, "environmentId"),
-      referencedHandoffIds as string[],
-    );
-  });
 }
 
 function environmentHydrationIds(value: unknown): string[] {

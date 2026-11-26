@@ -35,22 +35,22 @@ const task = {
 
 describe("kanban over a lib/backend client", () => {
   test("a node with the domain gets typed calls with the envelope; records keep every field", async () => {
-    const client = fakeClient({ kanban: { min: 1, max: 1 } }, (command) =>
+    const client = fakeClient({ kanban: { min: 1, max: 2 } }, (command) =>
       command === "get_kanban_tasks" ? [task] : task,
     );
     await expect(createKanbanApi(client).getKanbanTasks("p-1")).resolves.toEqual([task]);
     expect(client.invokeRaw).toHaveBeenCalledWith(
       "get_kanban_tasks",
       { projectId: "p-1" },
-      { envelope: { domain: "kanban", version: 1 } },
+      { envelope: { domain: "kanban", version: 2 } },
     );
     await kanban(client).add_kanban_comment({ taskId: "t-1", text: "hi", requestId: "r-1" });
     expect(client.invokeRaw.mock.calls.at(-1)?.[2]).toEqual({
-      envelope: { domain: "kanban", version: 1, critical: ["requestId"] },
+      envelope: { domain: "kanban", version: 2, critical: ["requestId"] },
     });
   });
 
-  test("a pre-contract node gets today's calls, answered as sent", async () => {
+  test("a client without negotiation gets today's calls, answered as sent", async () => {
     const answer = { connected: false, hasToken: false };
     const client = fakeClient(null, () => answer);
     const linear = createConfigIntegrationsApi(client);
@@ -63,7 +63,7 @@ describe("kanban over a lib/backend client", () => {
     expect(client.invokeRaw.mock.calls.at(-1)).toEqual(["delete_kanban_task", { taskId: "t-1" }]);
   });
 
-  test("a client that carries no negotiation uses version 0", async () => {
+  test("a client that carries no negotiation calls unnegotiated", async () => {
     const invokeRaw = mock(async () => "base64");
     const client = { invokeRaw } as unknown as BackendClient;
     await expect(createKanbanApi(client).getKanbanImageData("img-1")).resolves.toBe("base64");

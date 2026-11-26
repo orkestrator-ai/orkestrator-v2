@@ -173,12 +173,43 @@ describe("createDomainClient selection", () => {
     expect((thrown as Error).message).toContain("version 2");
   });
 
-  it("refuses a pre-contract node when the client has no legacy adapter", () => {
+  it("refuses a node whose hello has domains but not this one, without a legacy adapter", () => {
     const modern = domainClient(files, { 2: (call) => ({ call }) });
-    const client = createDomainClient(modern, { call: fakeBackend(null).call, domains: null });
+    const client = createDomainClient(modern, {
+      call: fakeBackend(null).call,
+      domains: { other: { min: 1, max: 1 } },
+    });
     expect(client.version()).toBeNull();
     expect(() => client.api()).toThrow(/accepts versions 0 to 0/);
     expect(incompatibility(capture(() => client.api()))?.range).toEqual({ min: 0, max: 0 });
+  });
+
+  it("without negotiation and a legacy adapter, calls the lowest adapter unnegotiated", async () => {
+    const node = fakeBackend({ min: 1, max: 2 });
+    const usage: Array<[string, number]> = [];
+    const seen: boolean[] = [];
+    const adapter = (call: CommandCall, context: DomainAdapterContext) => {
+      seen.push(context.unnegotiated);
+      // A command newer than the adapter: the node, not the client, decides.
+      return { list: () => call(listEntries, { dir: "/" }) };
+    };
+    const modern = domainClient(files, { 2: adapter, 1: adapter });
+    const client = createDomainClient(modern, {
+      call: node.call,
+      domains: () => null,
+      usage: (domain, version) => usage.push([domain, version]),
+    });
+    expect(client.version()).toBe(1);
+    // No envelope and no decoding: the answer is the node's own, extra keys kept.
+    await expect(client.api().list() as Promise<unknown>).resolves.toEqual([
+      { name: "a.txt", size: 1, mtime: 0 },
+    ]);
+    expect(seen).toEqual([true]);
+    expect(node.sent).toEqual([
+      { command: listEntries.name, args: { dir: "/" }, envelope: undefined },
+    ]);
+    // Not a path for an older node, so it is not counted.
+    expect(usage).toEqual([]);
   });
 
   it("caches the choice per domains identity and picks again for a new generation", () => {
@@ -390,7 +421,7 @@ describe("the legacy adapter", () => {
     expect(asked).toHaveLength(3);
   });
 
-  it("lists the eight capability commands under their domains", () => {
+  it("lists the five capability commands under their domains", () => {
     const listed = Object.entries(LEGACY_CAPABILITY_COMMANDS).flatMap(([domain, commands]) => {
       expect(DOMAIN_NAMES).toContain(domain as never);
       return commands ?? [];
@@ -398,9 +429,6 @@ describe("the legacy adapter", () => {
     expect(listed.sort()).toEqual([
       "changes_get_capabilities",
       "design_capabilities",
-      "get_agent_handoff_capabilities",
-      "get_client_state_capabilities",
-      "get_native_agent_sync_capabilities",
       "get_preview_capabilities",
       "transcript_artifact_capabilities",
       "web_annotations_capabilities",

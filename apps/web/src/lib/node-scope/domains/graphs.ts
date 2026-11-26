@@ -3,7 +3,7 @@
  * `graphs(client).graph_run_get({ runId })`. See `./domain-api.ts` for the
  * adapter choice. The machine-aware graph functions aim the client first
  * (`graphsOn`), so a call routed to another machine, or to the command node
- * over the portal, carries no negotiated range and takes version 0: today's
+ * over the portal, carries no negotiated range and goes unnegotiated: today's
  * call by name.
  */
 import { graphsClient, type GraphsApi } from "@orkestrator/protocol/contract/domains/graphs";

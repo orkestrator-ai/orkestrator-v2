@@ -6,28 +6,24 @@
  *   result with the command's schema: the protocol's `McpTargetList`,
  *   `McpManagementSnapshot` (with its `protocolVersion`), operations and
  *   overlays, every undeclared field kept.
- * - Version 0 (a pre-contract node) is today's untyped call, answered as sent
- *   (`legacyCommandApi`). No MCP command was ever capability-gated: a node
- *   that predates MCP management answers `unknown-command`, which the
- *   settings page shows as an ordinary error, at every version.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `mcp` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
-import { commandApi, legacyCommandApi, type CommandApi } from "../command-api.js";
+import { domainClient, type CommandCall } from "../../client.js";
+import { commandApi, type CommandApi } from "../command-api.js";
 import { MCP_COMMANDS } from "./commands.js";
 import { mcpDomain } from "./domain.js";
 
 export type McpApi = CommandApi<typeof MCP_COMMANDS>;
 
 const mcpApi = (call: CommandCall): McpApi => commandApi(call, MCP_COMMANDS);
-const legacyMcpApi = (_call: CommandCall, context: DomainAdapterContext): McpApi =>
-  legacyCommandApi(context, MCP_COMMANDS);
 
 export const mcpClient = domainClient(mcpDomain, {
   1: mcpApi,
-  0: legacyMcpApi,
 });

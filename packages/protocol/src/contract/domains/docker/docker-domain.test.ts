@@ -170,14 +170,14 @@ describe("docker commands", () => {
 });
 
 describe("docker client", () => {
-  it("is listed with adapters 2, 1 and 0", () => {
+  it("is listed with adapter 2", () => {
     expect(DOMAIN_CLIENTS).toContain(dockerClient);
-    expect(dockerClient.versions).toEqual([2, 1, 0]);
+    expect(dockerClient.versions).toEqual([2]);
   });
 
   it("sends the envelope to a node with the domain, critical keys included", async () => {
     const node = fakeNode(
-      { docker: { min: 1, max: 1 } },
+      { docker: { min: 1, max: 2 } },
       {
         provision_environment: "container-1",
         get_docker_topology: {
@@ -193,7 +193,7 @@ describe("docker client", () => {
       },
     );
     const client = createDomainClient(dockerClient, node.options);
-    expect(client.version()).toBe(1);
+    expect(client.version()).toBe(2);
     const docker = client.api();
     await expect(
       docker.provisionEnvironment({ environmentId: "env-1", operationId }),
@@ -204,43 +204,13 @@ describe("docker client", () => {
       {
         command: "provision_environment",
         args: { environmentId: "env-1", operationId },
-        envelope: { domain: "docker", version: 1, critical: ["operationId"] },
+        envelope: { domain: "docker", version: 2, critical: ["operationId"] },
       },
       {
         command: "get_docker_topology",
         args: { refresh: true },
-        envelope: { domain: "docker", version: 1 },
+        envelope: { domain: "docker", version: 2 },
       },
     ]);
-  });
-
-  it("sends today's body to a node without the domain and answers as it was sent", async () => {
-    const invoked: Array<{ command: string; args: unknown }> = [];
-    const answers: Record<string, unknown> = {
-      docker_cleanup_execute: { removed: 1, extra: "kept" },
-      check_docker: { available: true },
-    };
-    const node = fakeNode(null, {});
-    const client = createDomainClient(dockerClient, {
-      ...node.options,
-      invoke: async (command, args) => {
-        invoked.push({ command, args });
-        return answers[command];
-      },
-    });
-    expect(client.version()).toBe(0);
-    const docker = client.api();
-    const result = await docker.cleanupExecute({
-      selectionToken: "token",
-      containerIds: ["c1"],
-      volumeNames: [],
-    });
-    // A pre-contract node's answer is the shape its callers already handle.
-    expect(result).toEqual({ removed: 1, extra: "kept" } as never);
-    expect(invoked[0]).toEqual({
-      command: "docker_cleanup_execute",
-      args: { selectionToken: "token", containerIds: ["c1"], volumeNames: [] },
-    });
-    expect(node.sent).toEqual([]);
   });
 });

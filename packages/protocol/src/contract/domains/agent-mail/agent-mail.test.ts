@@ -249,9 +249,9 @@ function fakeTransport(domains: NegotiatedDomains | null) {
 }
 
 describe("agent-mail client", () => {
-  it("version 1 sends the envelope with the critical keys it carries and decodes", async () => {
-    const { client, calls, invoked } = fakeTransport({ "agent-mail": { min: 1, max: 1 } });
-    expect(client.version()).toBe(1);
+  it("version 2 sends the envelope with the critical keys it carries and decodes", async () => {
+    const { client, calls, invoked } = fakeTransport({ "agent-mail": { min: 1, max: 2 } });
+    expect(client.version()).toBe(2);
     const sent = await client.api().send_agent_mail({
       requestId: "req-1",
       toEnvironmentId: "env-1",
@@ -268,24 +268,15 @@ describe("agent-mail client", () => {
       {
         command: "send_agent_mail",
         args: { requestId: "req-1", toEnvironmentId: "env-1", toTabId: "tab-1", body: "hello" },
-        envelope: { domain: "agent-mail", version: 1, critical: ["requestId"] },
+        envelope: { domain: "agent-mail", version: 2, critical: ["requestId"] },
       },
       {
         command: "retry_agent_mail_inject",
         args: { environmentId: "env-1", tabId: "tab-1", messageId: "m-1" },
         // `now` is not sent, so it is not named.
-        envelope: { domain: "agent-mail", version: 1 },
+        envelope: { domain: "agent-mail", version: 2 },
       },
     ]);
     expect(invoked).toEqual([]);
-  });
-
-  it("version 0 sends today's call without an envelope and returns the answer as sent", async () => {
-    const { client, calls, invoked } = fakeTransport(null);
-    expect(client.version()).toBe(0);
-    const answer = await client.api().get_agent_mail_summary({});
-    expect(answer as unknown).toEqual({ older: "shape" });
-    expect(invoked).toEqual([{ command: "get_agent_mail_summary", args: {} }]);
-    expect(calls).toEqual([]);
   });
 });

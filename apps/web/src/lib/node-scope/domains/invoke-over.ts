@@ -3,7 +3,7 @@
  * for callers that reach a node through something other than a negotiated
  * client: the window's command scope (`commandScopeInvoke`), `invoke_on_node` routing to another machine, or
  * an injected machine call. The client carries no `domains`, so every domain
- * client over it takes version 0, which sends exactly today's
+ * client over it goes unnegotiated, which sends exactly today's
  * `invoke(command, args)` (or `invoke(command)` for {@link NO_ARGS}) and
  * returns the answer as sent; the calls are typed by the definitions.
  */
@@ -32,5 +32,5 @@ export function backendClientOver(invoke: CommandInvoke): BackendClient {
   return client;
 }
 
-/** A call made today without an arguments object; version 0 sends exactly that. */
+/** A call made today without an arguments object; the unnegotiated call sends exactly that. */
 export const NO_ARGS = undefined as never;

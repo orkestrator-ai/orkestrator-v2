@@ -168,9 +168,9 @@ describe("system definitions", () => {
     expect(wrong._tag).toBe("Failure");
   });
 
-  it("lists its client in DOMAIN_CLIENTS with adapters 2, 1 and 0", () => {
+  it("lists its client in DOMAIN_CLIENTS with adapter 2", () => {
     expect(DOMAIN_CLIENTS).toContain(systemClient);
-    expect(systemClient.versions).toEqual([2, 1, 0]);
+    expect(systemClient.versions).toEqual([2]);
   });
 });
 
@@ -199,7 +199,6 @@ function fakeNode(domains: NegotiatedDomains | undefined, answer: (command: stri
   return { sent, invoked, usage, options };
 }
 
-const SYSTEM_V1 = { system: { min: 1, max: 1 } };
 const SYSTEM_CURRENT = { system: { min: 1, max: 2 } };
 const created = {
   schedule: {
@@ -236,36 +235,10 @@ describe("system client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it("version 1: the same typed calls, counted as the version-1 adapter", async () => {
-    const node = fakeNode(SYSTEM_V1, () => created);
-    const client = createDomainClient(systemClient, node.options);
-    expect(client.version()).toBe(1);
-    await expect<unknown>(client.api().create_scheduled_job(createArgs)).resolves.toEqual(created);
-    expect(node.sent).toEqual([
-      {
-        command: createScheduledJobCommand.name,
-        args: createArgs,
-        envelope: { domain: "system", version: 1, critical: ["requestId"] },
-      },
-    ]);
-    expect(node.usage).toEqual([["system", 1]]);
-  });
-
   it("version 2: a result that does not match its schema is refused", async () => {
     const node = fakeNode(SYSTEM_CURRENT, () => ({ schedule: { id: 1 }, replayed: false }));
     await expect(
       createDomainClient(systemClient, node.options).api().create_scheduled_job(createArgs),
     ).rejects.toThrow("Invalid result from create_scheduled_job");
-  });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const legacy = { older: true };
-    const node = fakeNode(undefined, () => legacy);
-    const client = createDomainClient(systemClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect<unknown>(client.api().create_scheduled_job(createArgs)).resolves.toBe(legacy);
-    expect(node.invoked).toEqual([{ command: "create_scheduled_job", args: createArgs }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["system", 0]]);
   });
 });

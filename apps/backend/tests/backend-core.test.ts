@@ -26,7 +26,7 @@ describe("OrkestratorBackend", () => {
     const dataDir = path.join(root, "data");
     const toolchainBinDir = path.join(root, "toolchains", "bin");
     await mkdir(toolchainBinDir, { recursive: true });
-    await writeFile(path.join(toolchainBinDir, "codex"), "managed codex");
+    await writeFile(path.join(toolchainBinDir, "claude"), "managed claude");
 
     const backend = new OrkestratorBackend({
       dataDir,
@@ -39,7 +39,7 @@ describe("OrkestratorBackend", () => {
     await backend.init();
 
     try {
-      await expect(backend.invoke("check_codex_cli")).resolves.toBe(true);
+      await expect(backend.invoke("check_claude_cli")).resolves.toBe(true);
       await expect(backend.invoke<{ version: string }>("get_config")).resolves.toMatchObject({
         version: "1.0.0",
       });

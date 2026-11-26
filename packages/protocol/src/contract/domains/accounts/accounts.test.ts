@@ -207,8 +207,8 @@ describe("accounts client", () => {
     return { client, calls, legacy };
   }
 
-  it("has an adapter for versions 1 and 0, one function per command", () => {
-    expect(Object.keys(accountsClient.adapters).sort()).toEqual(["0", "1"]);
+  it("has an adapter for version 1, one function per command", () => {
+    expect(Object.keys(accountsClient.adapters).sort()).toEqual(["1"]);
     const { client } = node({ accounts: { min: 1, max: 1 } }, snapshot);
     expect(Object.keys(client.api()).sort()).toEqual(ALL.map((def) => def.name).sort());
   });
@@ -239,18 +239,5 @@ describe("accounts client", () => {
   it("version 1 decodes results with the command's schema", async () => {
     const { client } = node({ accounts: { min: 1, max: 1 } }, { ...snapshot, accounts: "none" });
     await expect(client.api().list_agent_accounts({})).rejects.toThrow();
-  });
-
-  it("version 0 (a pre-contract node) is today's call by name, answered as sent", async () => {
-    const older = { accounts: [account], active: { claude: "default" } };
-    const { client, calls, legacy } = node(null, older);
-    expect(client.version()).toBe(0);
-    expect((await client.api().list_agent_accounts({})) as unknown).toEqual(older);
-    await client.api().set_active_agent_account({ platform: "codex", accountId: "a2" });
-    expect(calls).toEqual([]);
-    expect(legacy).toEqual([
-      { command: "list_agent_accounts", args: {} },
-      { command: "set_active_agent_account", args: { platform: "codex", accountId: "a2" } },
-    ]);
   });
 });

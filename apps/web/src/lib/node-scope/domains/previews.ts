@@ -3,7 +3,7 @@
  * `previews(client)().register({ service, operationId })`. The adapter is
  * picked per call from the node's negotiated `domains` (`domainApi`,
  * `./domain-api.ts`): version 1 sends the envelope and decodes
- * results, version 0 is today's call. `lib/backend/previews.ts` calls it.
+ * results; without negotiation the call is today's. `lib/backend/previews.ts` calls it.
  */
 import { previewsClient, type PreviewsApi } from "@orkestrator/protocol/contract/domains/previews";
 import type { BackendClient } from "@/lib/backend/client";

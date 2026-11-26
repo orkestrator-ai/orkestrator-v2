@@ -27,8 +27,6 @@ import {
 export const COMPATIBILITY_PATH_IDS = [
   /** A container bridge's token was read from its `node`-readable `/tmp` file. */
   "bridge-credential.token-file",
-  /** An older renderer built a "Continue in…" handoff itself (`save_agent_handoff`). */
-  "agent-handoff.renderer-saved",
   /**
    * A Claude or Codex turn outcome was recorded as a usage limit from its error
    * text alone: the bridge sent no `errorCode` (it predates the code, or the
@@ -41,43 +39,6 @@ export const COMPATIBILITY_PATH_IDS = [
    * realm from before `patch_global_config` saving a model favourite.
    */
   "workspace-grant.config-echo",
-  /**
-   * A retired coordinator command was called (plan item 7009):
-   * `hide_coordinator_work` (the Work panel's "Clear finished", removed in
-   * v2.36.5-beta), `associate_coordinator_workflow` (never called; launches
-   * record their own associations) or `start_coordinator_multi_review` (its
-   * last caller, Control MCP's `launch_multi_review`, moved off it in
-   * v2.36.4-beta).
-   */
-  "retired-command.hide-coordinator-work",
-  "retired-command.associate-coordinator-workflow",
-  "retired-command.start-coordinator-multi-review",
-  /**
-   * The retired `start_coordinator_node_multi_review` was called (plan item
-   * 7009): its only caller, Control MCP's `launch_multi_review` on the same
-   * command node, moved to `launch_coordinator_node_multi_review` in
-   * v2.36.4-beta.
-   */
-  "retired-command.start-coordinator-node-multi-review",
-  /**
-   * A retired per-provider CLI check (`check_opencode_cli`, `check_codex_cli`,
-   * `check_cursor_cli`, `check_grok_cli`, `check_pi_cli`) was called: no
-   * renderer in the support window asks them (plan item 7009).
-   */
-  "retired-command.provider-cli-check",
-  /** The retired no-op `cleanup_stale_local_servers_cmd` was called (plan item 7009). */
-  "retired-command.cleanup-stale-local-servers",
-  /**
-   * `read_file_at_branch` or `read_local_file_at_branch` was called: only the
-   * diff viewer of v2.21.0 to v2.23.0 asks them (to-do 8304).
-   */
-  "retired-command.read-file-at-branch",
-  /**
-   * `get_coordinator_upstream_auto_merge` or `set_coordinator_upstream_auto_merge`
-   * was called: a renderer from before v2.36.0 asked about the retired
-   * "always merge" setting (to-do 8304).
-   */
-  "retired-command.coordinator-upstream-auto-merge",
 ] as const;
 
 /**

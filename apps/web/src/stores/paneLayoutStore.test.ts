@@ -10,14 +10,6 @@ const updateSessionStatus = mock(async (_sessionId: string, _status: string) => 
 const teardownTab = mock(async (_input: unknown) => ({ completed: true }));
 const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => {});
 const getAgentHandoff = mock(async (_handoffId: string) => null);
-const pruneAgentHandoffs = mock(
-  async (_environmentId: string, _referencedHandoffIds: string[]) => [] as string[],
-);
-const getAgentHandoffCapabilities = mock(async () => ({
-  create: false,
-  delivery: false,
-  pruning: false,
-}));
 let logCapture: LogCapture | undefined;
 
 function captureDebugLogs(): LogCapture {
@@ -47,8 +39,6 @@ mock.module("@/lib/backend", () => ({
   saveSessionBuffer: mock(async () => {}),
   loadSessionBuffer: mock(async () => null),
   getAgentHandoff,
-  pruneAgentHandoffs,
-  getAgentHandoffCapabilities,
   syncSessionsWithContainer: mock(async () => []),
   renameSession: mock(async () => ({})),
   reorderSessions: mock(async () => []),
@@ -117,13 +107,6 @@ function resetStores() {
   teardownTab.mockImplementation(async () => ({ completed: true }));
   stopTmuxSession.mockClear();
   getAgentHandoff.mockClear();
-  pruneAgentHandoffs.mockClear();
-  getAgentHandoffCapabilities.mockClear();
-  getAgentHandoffCapabilities.mockImplementation(async () => ({
-    create: false,
-    delivery: false,
-    pruning: false,
-  }));
   getAgentHandoff.mockImplementation(async () => null);
 }
 
@@ -1235,8 +1218,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
     await expect(loadAgentHandoff(sharedHandoff.id)).resolves.toBe(sharedHandoff as never);
     expect(getAgentHandoff).toHaveBeenCalledTimes(1);
     expect(getAgentHandoff).toHaveBeenCalledWith(uniqueHandoff.id);
-    await Bun.sleep(0);
-    expect(pruneAgentHandoffs).toHaveBeenCalledWith(environmentId, [sharedHandoff.id]);
   });
 
   test("authoritative handoff replacement evicts the old retained-tab cache entry", async () => {
@@ -1504,7 +1485,6 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(appCommandStore(terminalSessionStore).getState().sessions.has(sessionKey)).toBe(true);
     expect(closeLocalTerminalSession).not.toHaveBeenCalled();
     expect(detachTerminal).not.toHaveBeenCalled();
-    expect(pruneAgentHandoffs).not.toHaveBeenCalled();
   });
 
   test("installs an authoritative layout for a hydrated environment that has no local record yet", () => {
@@ -3398,80 +3378,6 @@ describe("paneLayoutStore pane and tab actions", () => {
     expect(appCommandStore(paneLayoutStore).getState().getAllTabs("env-handoff")[0]).toMatchObject({
       consumedAgentHandoffId: "handoff-1",
     });
-  });
-
-  test("hydration reconciles stored handoffs against the restored layout", async () => {
-    /*
-     * The per-tab delete is fire-and-forget. If it is dropped — backend restart,
-     * lock timeout, app kill — the reference is already gone from the layout, so
-     * nothing ever retries and the transcript is stranded on disk. Hydration is
-     * the one moment the environment's full reference set is authoritative.
-     */
-    appCommandStore(paneLayoutStore)
-      .getState()
-      .finishHydration("env-restored", {
-        containerId: null,
-        activePaneId: "default",
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [
-            { id: "live", type: "agent-native", agentHandoffId: "handoff-live" },
-            { id: "consumed", type: "agent-native", consumedAgentHandoffId: "handoff-old" },
-            { id: "plain", type: "plain" },
-          ],
-          activeTabId: "live",
-        },
-      });
-
-    // Only ids a tab still renders from are referenced. A consumed id names a
-    // record that was already deleted, so it must not keep one alive.
-    await Bun.sleep(0);
-    expect(pruneAgentHandoffs).toHaveBeenCalledWith("env-restored", ["handoff-live"]);
-  });
-
-  test("hydration with nothing to restore prunes every stored handoff", async () => {
-    appCommandStore(paneLayoutStore).getState().finishHydration("env-empty");
-
-    await Bun.sleep(0);
-    expect(pruneAgentHandoffs).toHaveBeenCalledWith("env-empty", []);
-  });
-
-  test("a backend that prunes for itself is never asked to by a renderer", async () => {
-    getAgentHandoffCapabilities.mockImplementation(async () => ({
-      create: true,
-      delivery: true,
-      pruning: true,
-    }));
-
-    appCommandStore(paneLayoutStore).getState().finishHydration("env-backend-prunes");
-
-    await Bun.sleep(0);
-    expect(getAgentHandoffCapabilities).toHaveBeenCalled();
-    expect(pruneAgentHandoffs).not.toHaveBeenCalled();
-  });
-
-  test("a failed hydration prune is logged without breaking hydration", async () => {
-    const logs = captureDebugLogs();
-    pruneAgentHandoffs.mockRejectedValueOnce(new Error("prune failed"));
-
-    appCommandStore(paneLayoutStore).getState().finishHydration("env-prune-fail");
-    await Bun.sleep(0);
-
-    expect(appCommandStore(paneLayoutStore).getState().hydration.get("env-prune-fail")).toBe(
-      "done",
-    );
-    expect(logs.records()).toContainEqual(
-      expect.objectContaining({
-        level: "debug",
-        area: "web.pane-layout",
-        event: "handoffs.prune-failed",
-        fields: expect.objectContaining({
-          environmentId: "env-prune-fail",
-          error: expect.objectContaining({ message: "prune failed" }),
-        }),
-      }),
-    );
   });
 
   test("clearing one of multiple handoff references preserves backend storage", () => {

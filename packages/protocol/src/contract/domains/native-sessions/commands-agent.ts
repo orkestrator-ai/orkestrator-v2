@@ -37,7 +37,6 @@ import {
   ResumeEntrySchema,
   SessionActionOutcomeSchema,
   SuborkTranscriptSchema,
-  SyncCapabilitiesSchema,
   ToolDetailsSchema,
   ToolOutputReadSchema,
   ViewUpdateSchema,
@@ -243,22 +242,6 @@ export const getNativeAgentSignInResendCommand = defineCommand({
     logicalSessionKey: optionalUnknown,
   }),
   result: Schema.Struct({ pending: Schema.Boolean }),
-  critical: [],
-});
-
-/**
- * The sync protocols this backend speaks (a capability command). Every
- * version it lists is part of `native-sessions` version 1; the command stays
- * for pre-contract clients until the register row retires.
- */
-export const getNativeAgentSyncCapabilitiesCommand = defineCommand({
-  domain: nativeSessionsDomain,
-  name: "get_native_agent_sync_capabilities",
-  since: 1,
-  access: "workspace",
-  read: true,
-  args: Schema.Struct({}),
-  result: SyncCapabilitiesSchema,
   critical: [],
 });
 
@@ -736,7 +719,6 @@ export const NATIVE_AGENT_COMMANDS = [
   getNativeAgentSessionCommand,
   getNativeAgentProjectionCommand,
   getNativeAgentSignInResendCommand,
-  getNativeAgentSyncCapabilitiesCommand,
   listNativeAgentSessionActivityCommand,
   getNativeAgentTranscriptUpdateCommand,
   getNativeAgentSessionStateUpdateCommand,

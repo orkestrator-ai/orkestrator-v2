@@ -1,8 +1,8 @@
 /**
  * The `agent-mail` domain client over a `lib/backend` factory client (plan
  * item 7008), against fake nodes: a node that advertises the domain takes
- * version 1 (envelope, critical keys, decoded results); a pre-contract node or
- * a client without negotiation takes version 0, whose calls are today's.
+ * its version (envelope, critical keys, decoded results); a client without
+ * negotiation calls unnegotiated, whose calls are today's.
  */
 import { describe, expect, mock, test } from "bun:test";
 import type { NegotiatedDomains } from "@orkestrator/protocol/node-client";
@@ -46,19 +46,19 @@ function fakeClient(answer: unknown, domains?: NegotiatedDomains | null) {
 
 describe("agent-mail domain client", () => {
   test("a node with the domain gets the envelope, its critical key and a decoded message", async () => {
-    const { client, invokeRaw } = fakeClient(message, { "agent-mail": { min: 1, max: 1 } });
+    const { client, invokeRaw } = fakeClient(message, { "agent-mail": { min: 1, max: 2 } });
     const delivered = await createAgentMailApi(client).deliverAgentMailNow("env-1", "tab-1", "m-1");
     expect(delivered).toEqual(message as never);
     expect(invokeRaw.mock.calls).toEqual([
       [
         "retry_agent_mail_inject",
         { environmentId: "env-1", tabId: "tab-1", messageId: "m-1", now: true },
-        { envelope: { domain: "agent-mail", version: 1, critical: ["now"] } },
+        { envelope: { domain: "agent-mail", version: 2, critical: ["now"] } },
       ],
     ] as never);
   });
 
-  test("a pre-contract node, or a client without negotiation, gets today's call", async () => {
+  test("a client without negotiation gets today's call", async () => {
     for (const domains of [null, undefined]) {
       const { client, invokeRaw } = fakeClient({ older: "shape" }, domains);
       const api = createAgentMailApi(client);

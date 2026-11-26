@@ -19,7 +19,6 @@ import type { CommandContext, CommandHandler } from "./context.js";
 import { registerCoordinatorNodeCommands } from "./registry-coordinator-nodes.js";
 import { registerControllerWorkflowCommands } from "./registry-controller-workflows.js";
 import { registerNodeCommands } from "./registry-nodes.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { CoordinatorRequestFlights } from "../coordinator/request-flights.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";
 import { NodeCoordinatorRemote } from "../nodes/node-coordinator-remote.js";
@@ -538,34 +537,6 @@ describe("send_coordinator_node_mail", () => {
     ).toHaveLength(1);
   });
 
-  test("deliverNow to an older leaf sends no steer field and claims no outcome", async () => {
-    const { run, scope, routed } = await setup({
-      answers: {
-        deliver_node_mail: {
-          messageId: "m1",
-          toTabId: "startup-agent",
-          placement: "pending-inject",
-        },
-      },
-    });
-    const result = await run("send_coordinator_node_mail", {
-      scope,
-      nodeId: "bk_leaf",
-      requestId: "correct-old",
-      toEnvironmentId: "leaf-env",
-      body: "Stop.",
-      deliverNow: true,
-    });
-    expect(routed.find((entry) => entry.command === "deliver_node_mail")!.args).not.toHaveProperty(
-      "steer",
-    );
-    expect(result).not.toHaveProperty("deliverNow");
-    expect(result).toMatchObject({
-      placement: "pending-inject",
-      coordinatorDelegationOpened: true,
-    });
-  });
-
   test("a turn the user did not start is framed on the leaf", async () => {
     const answers = {
       deliver_node_mail: { messageId: "m1", toTabId: "startup-agent", placement: "pending-inject" },
@@ -588,11 +559,6 @@ describe("send_coordinator_node_mail", () => {
     });
     await send(contract, "from-mail");
     expect(delivered(contract).turnOrigin).toBe("mail");
-
-    // The still-supported version-0 adapter omits the key for strict old leaves.
-    const precontract = await setup({ answers });
-    await send(precontract, "precontract");
-    expect(delivered(precontract)).not.toHaveProperty("turnOrigin");
   });
 
   test("without deliverNow a capable leaf is not asked to steer, and drops any outcome", async () => {
@@ -643,11 +609,8 @@ describe("node-mail domain client (plan item 1010)", () => {
     });
   const delivery = (context: Awaited<ReturnType<typeof setup>>) =>
     context.routed.find((entry) => entry.command === "deliver_node_mail")!;
-  const legacyCount = () =>
-    compatibilityPathUsage.peek().paths["domain-adapter.backend.node-mail.v0"]?.count ?? 0;
 
   test("current to current: a leaf with the domain is sent steer as critical, without capabilities", async () => {
-    const before = legacyCount();
     const context = await setup({
       capabilities: { "node-attachment": 1 },
       domains: { "node-mail": { min: 1, max: 1 } },
@@ -671,8 +634,6 @@ describe("node-mail domain client (plan item 1010)", () => {
     });
     expect(delivery(context).requestKey).toBe(`mail:${context.scope.coordinatorId}:contract-1`);
     expect(result).toMatchObject({ deliverNow: "steered", coordinatorDelegationOpened: true });
-    // Version 1 is the current version: nothing is counted.
-    expect(legacyCount()).toBe(before);
   });
 
   test("a scheduled fire's mail carries the origin of the turn that set it", async () => {
@@ -697,18 +658,6 @@ describe("node-mail domain client (plan item 1010)", () => {
       body: "Nightly status?",
     });
     expect(delivery(context).args).not.toHaveProperty("turnOrigin");
-  });
-
-  test("current to pre-contract: today's capability gating, no envelope, counted", async () => {
-    const before = legacyCount();
-    const context = await setup({
-      capabilities: { "node-attachment": 1, "node-mail-steer": 1 },
-      answers: { deliver_node_mail: { messageId: "m1", toTabId: "startup-agent" } },
-    });
-    await send(context, "legacy-1");
-    expect(delivery(context).args).toMatchObject({ steer: true });
-    expect(delivery(context)).not.toHaveProperty("envelope");
-    expect(legacyCount()).toBeGreaterThan(before);
   });
 
   test("a leaf that refuses a critical field answers a typed error the coordinator sees", async () => {

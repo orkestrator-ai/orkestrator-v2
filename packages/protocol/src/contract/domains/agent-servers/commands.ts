@@ -211,22 +211,6 @@ export const startLocalAntigravityServerCommand = localServerStart("antigravity"
 export const stopLocalAntigravityServerCommand = localServerStop("antigravity", 2);
 export const getLocalAntigravityServerStatusCommand = localServerStatus("antigravity", 2);
 
-/**
- * A no-op kept from the Tauri era (stale local servers are reaped at startup
- * now). Retired: no caller in the support window; counted
- * (`retired-command.cleanup-stale-local-servers`) until it is removed.
- */
-export const cleanupStaleLocalServersCommand = defineCommand({
-  domain: agentServersDomain,
-  name: "cleanup_stale_local_servers_cmd",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: NoArgs,
-  result: Schema.Void,
-  critical: [],
-});
-
 /** Joins the backend-owned startup wait for one environment and agent. */
 export const awaitBridgeReadyCommand = defineCommand({
   domain: agentServersDomain,
@@ -425,17 +409,6 @@ function hostCheck<const Name extends string>(name: Name, read: boolean) {
 export const hasClaudeCredentialsCommand = hostCheck("has_claude_credentials", false);
 export const checkClaudeCliCommand = hostCheck("check_claude_cli", true);
 export const checkClaudeConfigCommand = hostCheck("check_claude_config", true);
-/**
- * The per-provider CLI checks the renderer stopped calling before the support
- * floor (v2.21.0 calls only `check_claude_cli`, `check_github_cli` and
- * `check_any_ai_cli`). Retired: counted (`retired-command.provider-cli-check`)
- * until they are removed.
- */
-export const checkOpencodeCliCommand = hostCheck("check_opencode_cli", true);
-export const checkCodexCliCommand = hostCheck("check_codex_cli", true);
-export const checkCursorCliCommand = hostCheck("check_cursor_cli", true);
-export const checkGrokCliCommand = hostCheck("check_grok_cli", true);
-export const checkPiCliCommand = hostCheck("check_pi_cli", true);
 export const checkGithubCliCommand = hostCheck("check_github_cli", true);
 export const checkAnyAiCliCommand = hostCheck("check_any_ai_cli", true);
 
@@ -558,7 +531,6 @@ export const AGENT_SERVERS_COMMANDS = [
   startLocalAntigravityServerCommand,
   stopLocalAntigravityServerCommand,
   getLocalAntigravityServerStatusCommand,
-  cleanupStaleLocalServersCommand,
   awaitBridgeReadyCommand,
   peekLocalAgentBridgeCommand,
   peekContainerAgentBridgeCommand,
@@ -577,11 +549,6 @@ export const AGENT_SERVERS_COMMANDS = [
   hasClaudeCredentialsCommand,
   checkClaudeCliCommand,
   checkClaudeConfigCommand,
-  checkOpencodeCliCommand,
-  checkCodexCliCommand,
-  checkCursorCliCommand,
-  checkGrokCliCommand,
-  checkPiCliCommand,
   checkGithubCliCommand,
   checkAnyAiCliCommand,
   getAvailableAiCliCommand,

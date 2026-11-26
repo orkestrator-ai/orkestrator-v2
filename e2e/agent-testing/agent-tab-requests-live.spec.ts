@@ -15,8 +15,8 @@
  * The same case then takes the page offline and drops its event stream during
  * a second running turn, and checks the view recovers and shows that turn's
  * answer without a reload: a slower round must not cost a reconnect its
- * recovery. Further cases let a turn end while its environment is off screen,
- * and hide the combined read from the page, as an older backend would.
+ * recovery. A further case lets a turn end while its environment is off
+ * screen.
  *
  * Measurements are command names, counts and byte totals. Prompts, transcript
  * text, tokens and session ids never reach the output.
@@ -354,56 +354,6 @@ test.describe("Requests of a visible running agent tab", () => {
     } finally {
       await invoke("stop_environment", { environmentId: other.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: other.id }).catch(() => undefined);
-      await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
-      await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
-    }
-  });
-
-  /*
-   * A renderer against a backend from before the combined read. The capability
-   * answer is rewritten on its way to the page, so the backend under it is the
-   * real one and its older commands are the real commands.
-   */
-  test("older-backend: no combined read offered, none sent", async ({ page }) => {
-    test.setTimeout(TURN_DEADLINE_MS + 5 * 60_000);
-    page.setDefaultTimeout(15_000);
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    const failedCommands: string[] = [];
-    await page.route("**/__orkestrator/invoke", async (route) => {
-      const body = route.request().postDataJSON() as { command?: string };
-      if (body.command !== "get_native_agent_sync_capabilities") return route.continue();
-      const response = await route.fetch();
-      const payload = (await response.json()) as { result: Record<string, unknown> };
-      delete payload.result.liveUpdateVersions;
-      return route.fulfill({ response, json: payload });
-    });
-    page.on("response", (response) => {
-      if (!response.url().endsWith("/__orkestrator/invoke") || response.ok()) return;
-      const body = response.request().postDataJSON() as { command?: string };
-      if (body.command?.startsWith("get_native_agent_")) failedCommands.push(body.command);
-    });
-    const { invoke, environment, identity } = await prepareTab(page);
-    try {
-      const requests = recordSessionRequests(page, identity.logicalSessionKey);
-      const turn = sumMarker("OLDERDONE");
-      await send(page, sleepPrompt(30, turn.ask));
-      await expect
-        .poll(() => turnPhase(invoke, identity), { timeout: 90_000, intervals: [500] })
-        .toBe("running");
-      await page.waitForTimeout(SETTLE_MS);
-      const from = Date.now();
-      await page.waitForTimeout(15_000);
-      const to = Date.now();
-      const summary = summarize(requests, from, to);
-      record("older-backend", { ...summary, failedCommands });
-      expect(summary.byCommand["get_native_agent_live_update"] ?? 0).toBe(0);
-      expect(summary.byCommand["get_native_agent_transcript_update"] ?? 0).toBeGreaterThan(10);
-      expect(summary.byCommand[STATE_COMMAND] ?? 0).toBeGreaterThan(10);
-      expect(failedCommands).toEqual([]);
-      await expect(page.getByText(turn.marker).first()).toBeVisible({
-        timeout: TURN_DEADLINE_MS,
-      });
-    } finally {
       await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
       await invoke("delete_environment", { environmentId: environment.id }).catch(() => undefined);
     }

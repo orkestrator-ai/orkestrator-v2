@@ -36,7 +36,7 @@ export type GitHubPullRequestStateAction =
  * goes through the domain client (`@/lib/node-scope/domains/pull-requests`),
  * which picks the node's adapter. Version 1 decodes results with the
  * protocol schemas, whose types are the `github-pull-requests` types used
- * here; version 0 is today's call, answered as sent.
+ * here; without negotiation the call is today's, answered as sent.
  */
 export function createGithubPullRequestsApi(client: BackendClient) {
   const api = () => pullRequests(client);

@@ -1,27 +1,23 @@
 /**
  * The `design` domain client (plan item 7004; §11.2 "Client adapters").
  *
- * - **Version 1** (a node that advertises the domain) sends the envelope and
+ * - **Version 2** (a node that advertises the domain) sends the envelope and
  *   decodes every result with the command's schema. Every build that
  *   advertises the domain has every design capability (`DesignCapabilities`
  *   all `true`, the backend-owned intent queue included), so the capability
  *   flags gate nothing there: `capabilities()` still asks the node, because
  *   its answer also says whether the design service is available, and lays
  *   {@link DESIGN_CONTRACT_CAPABILITIES} over it.
- * - **Version 0** (a pre-contract node, every release in the support window
- *   today) is today's path: the command by name, without an envelope, its
- *   answer undecoded, so an older backend's older shapes are never refused.
- *   Callers keep today's gating on the answer of `design_capabilities`
- *   (which every release since the v2.21.0 floor serves; Appendix F). It is
- *   read through `invoke`, not `capability()`, because a `{ ok: false }`
- *   answer (the service is unavailable) must not be kept for the generation.
  *
- * Retirement: adapter 0 goes when the support floor passes the first Stable
- * release that advertises the `design` domain.
+ * Only the current version has an adapter: the older ones went with the
+ * one-time support floor v2.39.1-beta (to-do 8304 (retired), 2026-11-26), so a node
+ * that advertises no range for the domain is refused with
+ * `unsupported-version`. Later bumps keep an adapter for every version a
+ * release in the 60-day window speaks.
  *
  * Browser-safe.
  */
-import { domainClient, type CommandCall, type DomainAdapterContext } from "../../client.js";
+import { domainClient, type CommandCall } from "../../client.js";
 import type { ArgsOf, ResultOf } from "../../command.js";
 import type { DesignCapabilities } from "../../../design-operations.js";
 import { DESIGN_COMMANDS, designCapabilitiesCommand } from "./commands.js";
@@ -69,20 +65,6 @@ function contractApi(call: CommandCall): DesignApi {
   };
 }
 
-function legacyApi(_call: CommandCall, context: DomainAdapterContext): DesignApi {
-  const command = <C extends DesignCommandDef>(def: C, args: ArgsOf<C>) =>
-    context.invoke(def.name, args as Readonly<Record<string, unknown>>) as Promise<ResultOf<C>>;
-  return {
-    command,
-    capabilities: () => command(designCapabilitiesCommand, {}),
-  };
-}
-
 export const designClient = domainClient(designDomain, {
   2: contractApi,
-  // Version 2 only removed commands nothing called (2026-11-10), so version 1
-  // peers take the same API. Adapter 1 goes when the support floor passes the
-  // first Stable release with version 2.
-  1: contractApi,
-  0: legacyApi,
 });

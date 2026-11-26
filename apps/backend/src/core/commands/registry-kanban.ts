@@ -19,7 +19,6 @@ import {
   appendFeaturePlanMessageCommand,
   appendFeatureStoryMessageCommand,
   cancelFeaturePlanningCommand,
-  claimFeaturePlanBuildCommand,
   closeKanbanTaskForMergedPrCommand,
   createKanbanLabelCommand,
   createFeaturePlanCommand,
@@ -299,12 +298,6 @@ export function registerKanbanCommands(
       asFeaturePlanUpdates(args.updates),
     );
   });
-  register(claimFeaturePlanBuildCommand, ({ featureId, taskId }, { storage }) =>
-    storage.kanban.claimFeaturePlanBuild(
-      asString(featureId, "featureId"),
-      asString(taskId, "taskId"),
-    ),
-  );
   register(
     appendFeaturePlanMessageCommand,
     ({ featureId, role, content, stateApplication, modelId }, { storage }) =>

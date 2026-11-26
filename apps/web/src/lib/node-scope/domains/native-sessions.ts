@@ -5,10 +5,9 @@
  * whose commands are in this domain call `nativeSessions(client)`. The
  * adapter choice, the wire calls and the usage counting are the shared
  * helper's (`./domain-api.ts`, plan item 7010): a node that advertises
- * `native-sessions` gets version 1 (typed calls with the envelope, both
- * capability commands answered by the version without a round trip), any
- * other node or a client without negotiation version 0, today's calls
- * answered as sent.
+ * `native-sessions` gets its version (typed calls with the envelope), a
+ * client without negotiation the unnegotiated call, today's calls answered
+ * as sent. Both capability reads are answered without a round trip either way.
  */
 import {
   nativeSessionsClient,

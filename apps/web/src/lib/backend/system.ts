@@ -55,7 +55,7 @@ export interface EnvironmentProcessUsageSnapshot {
  */
 export function createSystemApi(client: BackendClient) {
   const system = () => systemApi(client);
-  /** Today's call without an arguments object (the version-0 adapter sends exactly that). */
+  /** Today's call without an arguments object (the unnegotiated call sends exactly that). */
   const noArgs = undefined as never;
 
   /** Running Orkestrator version reported by the connected backend. */

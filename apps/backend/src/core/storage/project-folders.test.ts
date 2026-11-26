@@ -5,7 +5,6 @@ import path from "node:path";
 import type { Project } from "../models.js";
 import { StorageService } from "./service.js";
 import { readStoredValue, seedStore } from "./test-support.js";
-import { OrkestratorBackend } from "../index.js";
 
 function project(id: string): Project {
   return {
@@ -122,70 +121,5 @@ describe("StorageService project folders", () => {
     const loaded = await legacyStorage.loadProjects();
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.folder).toBeUndefined();
-  });
-});
-
-describe("arrange_projects command", () => {
-  async function withBackend(run: (backend: OrkestratorBackend) => Promise<void>): Promise<void> {
-    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-arrange-projects-"));
-    const backend = new OrkestratorBackend({
-      dataDir,
-      toolchainBinDir: "",
-      appRoot: "",
-      resourceRoot: "",
-      emit: () => undefined,
-      startupReapers: {
-        localServers: async () => [],
-        claudeTmuxRuntimes: async () => [],
-      },
-    });
-    try {
-      await backend.init();
-      await run(backend);
-    } finally {
-      await backend.shutdown().catch(() => undefined);
-      await fs.rm(dataDir, { recursive: true, force: true });
-    }
-  }
-
-  test("orders projects and files them into folders", async () => {
-    await withBackend(async (backend) => {
-      const first = await backend.invoke<Project>("add_project", {
-        gitUrl: "https://example.invalid/first.git",
-      });
-      const second = await backend.invoke<Project>("add_project", {
-        gitUrl: "https://example.invalid/second.git",
-      });
-
-      const arranged = await backend.invoke<Project[]>("arrange_projects", {
-        projectIds: [second.id, first.id],
-        folders: { [second.id]: "Work" },
-      });
-      expect(arranged.map(({ id, folder }) => ({ id, folder }))).toEqual([
-        { id: second.id, folder: "Work" },
-        { id: first.id, folder: undefined },
-      ]);
-    });
-  });
-
-  test("accepts an omitted folders map, drops unknown keys and rejects bad values", async () => {
-    await withBackend(async (backend) => {
-      const project = await backend.invoke<Project>("add_project", {
-        gitUrl: "https://example.invalid/only.git",
-      });
-      await expect(
-        backend.invoke<Project[]>("arrange_projects", { projectIds: [project.id] }),
-      ).resolves.toHaveLength(1);
-      // An unknown key is dropped (7005, tolerant arguments), as if absent.
-      await expect(
-        backend.invoke<Project[]>("arrange_projects", { projectIds: [project.id], unexpected: 1 }),
-      ).resolves.toEqual([expect.objectContaining({ id: project.id, order: 0 })]);
-      await expect(
-        backend.invoke("arrange_projects", {
-          projectIds: [project.id],
-          folders: { [project.id]: 7 },
-        }),
-      ).rejects.toThrow(/must be a string or null/);
-    });
   });
 });

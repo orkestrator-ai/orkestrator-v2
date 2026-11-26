@@ -132,9 +132,9 @@ describe("transcript artifact definitions", () => {
 });
 
 describe("transcriptsClient (artifact part)", () => {
-  it("is listed with adapters 1 and 0", () => {
+  it("is listed with adapter 1", () => {
     expect(DOMAIN_CLIENTS).toContain(transcriptsClient);
-    expect(transcriptsClient.versions).toEqual([1, 0]);
+    expect(transcriptsClient.versions).toEqual([1]);
   });
 
   function fakeNode(domains: Record<string, { min: number; max: number }> | null) {
@@ -175,13 +175,5 @@ describe("transcriptsClient (artifact part)", () => {
         envelope: { domain: "transcripts", version: 1, critical: ["containerId"] },
       },
     ]);
-  });
-
-  it("version 0 makes today's untyped call, without an envelope or decoding", async () => {
-    const node = fakeNode(null);
-    const result = await node.client.api().openMediaStream(request);
-    expect(result).toHaveProperty("older");
-    expect(node.untyped).toEqual([{ command: "transcript_media_open_stream", args: request }]);
-    expect(node.typed).toEqual([]);
   });
 });

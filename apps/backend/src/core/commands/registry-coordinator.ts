@@ -2,7 +2,6 @@ import {
   adoptCoordinatorWorkflowCommand,
   assertCoordinatorDelegationAvailableCommand,
   assignCoordinatorConversationAgentCommand,
-  associateCoordinatorWorkflowCommand,
   closeCoordinatorConversationCommand,
   createCoordinatorConversationCommand,
   ensureProjectCoordinatorCommand,
@@ -13,7 +12,6 @@ import {
   getProjectCoordinatorCommand,
   getProjectCoordinatorViewCommand,
   getProjectGitStatusCommand,
-  hideCoordinatorWorkCommand,
   launchCoordinatorEnvironmentCommand,
   listCoordinatorActivityCommand,
   listCoordinatorLaunchOverridesCommand,
@@ -24,7 +22,6 @@ import {
   retryCoordinatorConversationCommand,
   selectCoordinatorConversationCommand,
   startCoordinatorBuildPipelineCommand,
-  startCoordinatorMultiReviewCommand,
   switchProjectGitBranchCommand,
   syncProjectGitCommand,
   verifyProjectLaunchBaseCommand,
@@ -47,9 +44,6 @@ import {
   CoordinatorViewRevisions,
   findCoordinatorCheckoutTurn,
   launchDelegationRequest,
-  MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS,
-  multiReviewInputWithDefaults,
-  readLaunchModelCatalog,
   registerCoordinatorGraphActions,
   registerCoordinatorReviewActions,
   registerCoordinatorSuborkActions,
@@ -67,14 +61,12 @@ import { registerCoordinatorWorkerTurnActions } from "../coordinator/worker-turn
 import type { CommandRegistrar, RegistryDependencies } from "./registry-types.js";
 import type { CommandContext } from "./context.js";
 import type { Environment } from "../models.js";
-import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import { ASYNC_HANDLER } from "./registry-async-decode.js";
 import { asNonBlankString } from "./helpers.js";
 import { isGitHubPullRequestRef } from "@orkestrator/protocol/github-pull-requests";
 import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import { localServerStopCommandName } from "../local-server-runtime.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import {
   coordinatorActivityByProject,
   type CoordinatorActivitySnapshot,
@@ -89,10 +81,7 @@ import {
   isStartBuildPipelineInput,
   type BuildPipeline,
 } from "@orkestrator/protocol/build-pipeline";
-import {
-  isStartMultiReviewInput,
-  type MultiReviewWorkflow,
-} from "@orkestrator/protocol/multi-review";
+import {} from "@orkestrator/protocol/multi-review";
 import { runCommand } from "../shell.js";
 import { registerAgentsMdCommands } from "../agents-md-commands.js";
 import { registerWorkerQuestionRelayCommands } from "../worker-question-relay.js";
@@ -385,24 +374,6 @@ export function registerCoordinatorCommands(
       releaseOwner?.();
     }
   });
-  // The Work panel's "Clear finished": hides rows, never removes the records.
-  // Retired (plan item 7009): the panel left in v2.36.5-beta; older renderers
-  // in the window still send it, so it stays until its register row retires.
-  register(hideCoordinatorWorkCommand, async (args, context) => {
-    compatibilityPathUsage.record("retired-command.hide-coordinator-work");
-    if (!context.coordinators) throw new Error("Coordinator service is unavailable");
-    const id = asNonBlankString(args.projectId, "projectId");
-    const ids = args.associationIds;
-    if (
-      !Array.isArray(ids) ||
-      ids.length > MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS ||
-      !ids.every((item) => typeof item === "string")
-    ) {
-      throw new Error("Expected associationIds to be a bounded list of record ids");
-    }
-    await context.storage.coordinators.hideCoordinatorWork(id, new Set<string>(ids));
-    return context.coordinators.get(id);
-  });
   register(pauseProjectCoordinatorCommand, ({ projectId }, context) => {
     if (!context.coordinators) throw new Error("Coordinator service is unavailable");
     return context.coordinators.setPaused(asNonBlankString(projectId, "projectId"), true);
@@ -489,51 +460,6 @@ export function registerCoordinatorCommands(
         asNonBlankString(filename, "filename"),
         asNonBlankString(base64Data, "base64Data"),
       );
-    },
-  );
-  register(
-    associateCoordinatorWorkflowCommand,
-    // Retired (plan item 7009): no release calls it; launches record their own
-    // associations. Kept, counted, until its register row retires.
-    async (
-      {
-        projectId,
-        coordinatorId,
-        conversationId,
-        kind,
-        resourceId,
-        requestId,
-        baseBranch,
-        baseCommit,
-      },
-      context,
-    ) => {
-      compatibilityPathUsage.record("retired-command.associate-coordinator-workflow");
-      const project = asNonBlankString(projectId, "projectId");
-      const coordinator = asNonBlankString(coordinatorId, "coordinatorId");
-      const workspace = await context.storage.coordinators.getCoordinatorWorkspaceById(coordinator);
-      if (!workspace || workspace.projectId !== project) throw new Error("Coordinator not found");
-      if (
-        kind !== "environment" &&
-        kind !== "build-pipeline" &&
-        kind !== "multi-review" &&
-        kind !== "graph-run"
-      ) {
-        throw new Error("Invalid coordinator workflow kind");
-      }
-      const association: CoordinatorWorkflowAssociation = {
-        id: randomUUID(),
-        projectId: project,
-        coordinatorId: coordinator,
-        ...(typeof conversationId === "string" ? { conversationId } : {}),
-        kind,
-        resourceId: asNonBlankString(resourceId, "resourceId"),
-        requestId: asNonBlankString(requestId, "requestId"),
-        ...(typeof baseBranch === "string" ? { baseBranch } : {}),
-        ...(typeof baseCommit === "string" ? { baseCommit } : {}),
-        createdAt: new Date().toISOString(),
-      };
-      return context.storage.coordinators.saveCoordinatorWorkflowAssociation(association);
     },
   );
   register(
@@ -850,117 +776,4 @@ export function registerCoordinatorCommands(
       },
     );
   });
-  register(
-    startCoordinatorMultiReviewCommand,
-    // Retired (plan item 7009): Control MCP's `launch_multi_review` moved to
-    // `launch_coordinator_multi_review_action` in v2.36.4-beta. Kept, counted,
-    // until its register row retires.
-    async ({ scope, requestId, input, buildPipelineId }, context) => {
-      compatibilityPathUsage.record("retired-command.start-coordinator-multi-review");
-      if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
-      const multiReviews = context.multiReviews;
-      if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
-        throw new Error("Coordinator scope is required");
-      }
-      const identity = scope as Record<string, unknown>;
-      const projectId = asNonBlankString(identity.projectId, "projectId");
-      const coordinatorId = asNonBlankString(identity.coordinatorId, "coordinatorId");
-      const conversationId = asNonBlankString(identity.conversationId, "conversationId");
-      await requireCoordinatorConversation(context, projectId, coordinatorId, conversationId);
-      const stableRequestId = asNonBlankString(requestId, "requestId");
-      if (!record(input) || input.projectId !== projectId) {
-        throw new Error("Invalid scoped multi-review request");
-      }
-      // Omitted model rows and auto-actions run the saved Multi Review defaults.
-      const requestedInput = input;
-      const requiredBuildPipelineId = asNonBlankString(buildPipelineId, "buildPipelineId");
-      const buildRecord = await context.storage.getBuildPipeline(requiredBuildPipelineId);
-      const buildSnapshot = buildRecord?.snapshot;
-      if (
-        !record(buildSnapshot) ||
-        buildSnapshot.projectId !== projectId ||
-        buildSnapshot.environmentId !== input.environmentId ||
-        buildSnapshot.phase !== "complete"
-      ) {
-        throw new Error(
-          "Multi-review can start only after the associated build pipeline completed successfully",
-        );
-      }
-      const payloadHash = actionHash({
-        input: requestedInput,
-        buildPipelineId: requiredBuildPipelineId,
-      });
-      return runWorkflowStart(`${coordinatorId}\0${stableRequestId}`, async () => {
-        const receipt = await context.storage.coordinators.reserveCoordinatorWorkflowAssociation({
-          id: randomUUID(),
-          projectId,
-          coordinatorId,
-          conversationId,
-          kind: "multi-review",
-          resourceId: randomUUID(),
-          requestId: stableRequestId,
-          payloadHash,
-          dependsOnResourceId: requiredBuildPipelineId,
-          createdAt: new Date().toISOString(),
-        });
-        if (!receipt.claimed && !receipt.association.pending) {
-          const existing = await context.storage.getMultiReviewWorkflow(
-            receipt.association.resourceId,
-          );
-          if (!existing) throw new Error("Associated multi-review was not found");
-          return existing.snapshot as MultiReviewWorkflow;
-        }
-        if (!receipt.claimed) {
-          throw new Error("Multi-review creation is already in progress; retry this requestId");
-        }
-        // The pending receipt reserves the workflow identity before any launch I/O.
-        // Recover by that identity even when defaults changed or the workflow finished.
-        if (receipt.association.resourceId.startsWith("pending:")) {
-          throw new Error(
-            "Legacy Multi Review reservation has no workflow identity; reconcile the existing review before starting more work",
-          );
-        }
-        const recovered = await context.storage.getMultiReviewWorkflow(
-          receipt.association.resourceId,
-        );
-        if (recovered) {
-          await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
-            receipt.association.id,
-            receipt.association.resourceId,
-          );
-          return recovered.snapshot as MultiReviewWorkflow;
-        }
-        const environment =
-          typeof requestedInput.environmentId === "string"
-            ? await context.storage.getEnvironment(requestedInput.environmentId)
-            : null;
-        input = await multiReviewInputWithDefaults(
-          requestedInput,
-          savedLaunchSettings(
-            await context.storage.loadConfig(),
-            projectId,
-            environment?.projectId === projectId ? environment : undefined,
-          ),
-          () =>
-            readLaunchModelCatalog(
-              dependencies.commands.get("get_native_agent_model_catalog"),
-              String(requestedInput.environmentId),
-              context,
-            ),
-        );
-        if (!isStartMultiReviewInput(input) || input.projectId !== projectId) {
-          throw new Error("Invalid scoped multi-review request");
-        }
-        const workflow = await multiReviews.start(input, receipt.association.resourceId);
-        if (!record(workflow) || typeof workflow.id !== "string") {
-          throw new Error("Multi-review creation returned an invalid workflow");
-        }
-        await context.storage.coordinators.completeCoordinatorWorkflowAssociation(
-          receipt.association.id,
-          workflow.id,
-        );
-        return workflow as MultiReviewWorkflow;
-      });
-    },
-  );
 }

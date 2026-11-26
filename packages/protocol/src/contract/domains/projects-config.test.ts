@@ -9,7 +9,6 @@
 import { describe, expect, it } from "bun:test";
 import * as Schema from "effect/Schema";
 import { isNodeReadCommand } from "../../command-nodes.js";
-import { NO_CLIENT_STATE_CAPABILITIES } from "../../client-state.js";
 import type { NegotiatedDomains } from "../../node-client.js";
 import { createDomainClient, type ContractEnvelopeFields } from "../client.js";
 import { DOMAIN_CLIENTS } from "../client-adapters.js";
@@ -113,8 +112,8 @@ describe("projects and config definitions", () => {
   it("defines both domains at version 2 (min 1) with every command once", () => {
     expect(projectsDomain).toMatchObject({ name: "projects", version: 2, min: 1 });
     expect(configDomain).toMatchObject({ name: "config", version: 2, min: 1 });
-    expect(PROJECTS_COMMANDS).toHaveLength(27);
-    expect(CONFIG_COMMANDS).toHaveLength(40);
+    expect(PROJECTS_COMMANDS).toHaveLength(26);
+    expect(CONFIG_COMMANDS).toHaveLength(37);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],
       [configDomain, CONFIG_COMMANDS],
@@ -204,11 +203,11 @@ describe("projects and config definitions", () => {
     );
   });
 
-  it("lists both clients in DOMAIN_CLIENTS with adapters 2, 1 and 0", () => {
+  it("lists both clients in DOMAIN_CLIENTS with adapter 2", () => {
     expect(DOMAIN_CLIENTS).toContain(projectsClient);
     expect(DOMAIN_CLIENTS).toContain(configClient);
-    expect(projectsClient.versions).toEqual([2, 1, 0]);
-    expect(configClient.versions).toEqual([2, 1, 0]);
+    expect(projectsClient.versions).toEqual([2]);
+    expect(configClient.versions).toEqual([2]);
   });
 });
 
@@ -271,17 +270,6 @@ describe("projects client", () => {
       "Invalid result from get_project",
     );
   });
-
-  it("version 0: today's untyped call, no envelope, the answer as sent, counted", async () => {
-    const older = [{ id: "p1", legacy: true }];
-    const node = fakeNode(undefined, () => older);
-    const client = createDomainClient(projectsClient, node.options);
-    expect(client.version()).toBe(0);
-    await expect(client.api().get_projects({})).resolves.toBe(older as never);
-    expect(node.invoked).toEqual([{ command: "get_projects", args: {} }]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([["projects", 0]]);
-  });
 });
 
 describe("config client", () => {
@@ -296,31 +284,5 @@ describe("config client", () => {
     await expect(api.clientStateCapabilities()).resolves.toEqual(CONFIG_CLIENT_STATE_CAPABILITIES);
     expect(node.sent.map((sent) => sent.command)).toEqual(["get_config", "patch_global_config"]);
     expect(node.invoked).toEqual([]);
-  });
-
-  it("version 0: today's calls, and the capability command asked and parsed each time", async () => {
-    const node = fakeNode(undefined, (command) =>
-      command === "get_client_state_capabilities"
-        ? { coordinatorPaneLayouts: true, noticeDismissals: "yes" }
-        : { older: true },
-    );
-    const api = createDomainClient(configClient, node.options).api();
-    await expect(api.get_config({})).resolves.toEqual({ older: true } as never);
-    await expect(api.clientStateCapabilities()).resolves.toEqual({
-      ...NO_CLIENT_STATE_CAPABILITIES,
-      coordinatorPaneLayouts: true,
-    });
-    await api.clientStateCapabilities();
-    expect(node.invoked).toEqual([
-      { command: "get_config", args: {} },
-      { command: "get_client_state_capabilities", args: undefined },
-      { command: "get_client_state_capabilities", args: undefined },
-    ]);
-    expect(node.sent).toEqual([]);
-    expect(node.usage).toEqual([
-      ["config", 0],
-      ["config", 0],
-      ["config", 0],
-    ]);
   });
 });

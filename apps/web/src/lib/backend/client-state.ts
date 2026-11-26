@@ -31,13 +31,10 @@ import { commandBackendClient, type BackendClient } from "./client";
  */
 export function createClientStateApi(client: BackendClient) {
   // The `config` domain (plan item 7005). Its answers are still read with the
-  // protocol's parsers: an older node's are as it sent them (version 0).
+  // protocol's parsers: an unnegotiated call's are as the node sent them.
   const state = configDomain(client);
 
-  /**
-   * Folded into `config` version 1, which answers without asking; an older
-   * node is asked (an unreadable answer is every capability off).
-   */
+  /** Folded into the `config` domain: answered without asking the node. */
   const getClientStateCapabilities = async (): Promise<ClientStateCapabilities> =>
     state().clientStateCapabilities();
 

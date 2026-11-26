@@ -259,13 +259,4 @@ describe("mcp client", () => {
     ]);
     expect(invoked).toEqual([]);
   });
-
-  it("version 0 sends today's call without an envelope and returns the answer as sent", async () => {
-    const { client, calls, invoked } = fakeTransport(null);
-    expect(client.version()).toBe(0);
-    const answer = await client.api().get_mcp_operation({ operationId: "op-1" });
-    expect(answer as unknown).toEqual({ olderShape: true });
-    expect(invoked).toEqual([{ command: "get_mcp_operation", args: { operationId: "op-1" } }]);
-    expect(calls).toEqual([]);
-  });
 });

@@ -200,10 +200,15 @@ describe("pull request status wakes", () => {
       const worker = await current.addEnvironment("pr-env");
       await follow(current, worker, "create-pr");
       if (hidden)
-        await current.storage.coordinators.hideCoordinatorWork(
-          current.projectId,
-          new Set([(await followOf(current, worker))!.id]),
-        );
+        await current.storage.coordinators.updateCoordinatorWorkflowAssociations([
+          {
+            associationId: (await followOf(current, worker))!.id,
+            mutate: (association) => {
+              association.workHiddenAt = new Date().toISOString();
+              return true;
+            },
+          },
+        ]);
 
       // The PR tab is still working: no pull request, no news.
       await settle(current);

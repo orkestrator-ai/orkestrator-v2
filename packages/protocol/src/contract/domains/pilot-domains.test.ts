@@ -3,8 +3,7 @@
  * `ticket-sync`. Their definitions keep the argument keys the strict handlers
  * accepted (and, for the lenient neighbours defined on 2026-11-07, the keys
  * their handlers read), classify reads as the routing classifier does, and decode
- * tolerantly; their clients send the envelope to a node with the domain and
- * keep today's capability gating for a pre-contract node.
+ * tolerantly; their clients send the envelope to a node with the domain.
  */
 import { describe, expect, it } from "bun:test";
 import { isNodeReadCommand } from "../../command-nodes.js";
@@ -14,7 +13,7 @@ import { DOMAIN_CLIENTS, buildAdapterList } from "../client-adapters.js";
 import { decodeCommandArgs, type AnyCommandDef } from "../command.js";
 import { incompatibility } from "../errors.js";
 import { NODE_FILES_COMMANDS, nodeFilesClient } from "./node-files/index.js";
-import { NODE_MAIL_COMMANDS, NODE_MAIL_FEATURES, nodeMailClient } from "./node-mail/index.js";
+import { NODE_MAIL_COMMANDS, nodeMailClient } from "./node-mail/index.js";
 import { TICKET_SYNC_COMMANDS, ticketSyncClient } from "./ticket-sync/index.js";
 
 /**
@@ -212,14 +211,14 @@ describe("pilot definitions", () => {
     }
   });
 
-  it("are listed in the adapter list with a legacy adapter each", () => {
+  it("are listed in the adapter list with their current adapter only", () => {
     expect(DOMAIN_CLIENTS).toEqual(
       expect.arrayContaining([nodeMailClient, nodeFilesClient, ticketSyncClient]),
     );
     expect(buildAdapterList().domains).toMatchObject({
-      "node-files": { current: 1, adapters: [1, 0] },
-      "node-mail": { current: 1, adapters: [1, 0] },
-      "ticket-sync": { current: 1, adapters: [1, 0] },
+      "node-files": { current: 1, adapters: [1] },
+      "node-mail": { current: 1, adapters: [1] },
+      "ticket-sync": { current: 1, adapters: [1] },
     });
   });
 });
@@ -266,7 +265,6 @@ describe("node-mail client", () => {
     const client = createDomainClient(nodeMailClient, node.options);
     expect(client.version()).toBe(1);
     const mail = client.api();
-    for (const feature of NODE_MAIL_FEATURES) expect(mail.supports(feature)).toBe(true);
     await mail.deliver(delivery);
     await mail.collectOutbox({
       controllerId: "bk_cmd",
@@ -286,125 +284,6 @@ describe("node-mail client", () => {
     expect(node.usage).toEqual([]);
   });
 
-  it("version 0: a pre-contract leaf gets today's gating, no envelope, and is counted", async () => {
-    const node = fakeNode(undefined, ["node-mail-steer", "node-coordinator-mail"]);
-    const client = createDomainClient(nodeMailClient, node.options);
-    expect(client.version()).toBe(0);
-    const mail = client.api();
-    expect(mail.supports("node-mail-steer")).toBe(true);
-    expect(mail.supports("coordinator-notices")).toBe(false);
-    await mail.deliver(delivery);
-    await mail.ackOutbox({
-      controllerId: "bk_cmd",
-      upTo: 3,
-      coordinatorMail: true,
-      coordinatorNotices: { declined: [] },
-      attachmentMail: true,
-    });
-    // coordinatorNotices and attachmentMail are unknown to it: left out.
-    // Adapter 0 omits turnOrigin for strict pre-contract receivers.
-    expect(node.sent).toEqual([
-      {
-        command: "deliver_node_mail",
-        args: {
-          controllerId: "bk_cmd",
-          requestId: "r1",
-          toEnvironmentId: "env-1",
-          body: "Stop.",
-          steer: true,
-        },
-        envelope: undefined,
-      },
-      {
-        command: "ack_node_outbox",
-        args: { controllerId: "bk_cmd", upTo: 3, coordinatorMail: true },
-        envelope: undefined,
-      },
-    ]);
-    expect(node.usage).toEqual([
-      ["node-mail", 0],
-      ["node-mail", 0],
-    ]);
-  });
-
-  it("version 0 preserves origin for capable pre-contract beta leaves", async () => {
-    // v2.36.5-beta and v2.36.6-beta have this capability but no domain range.
-    const node = fakeNode(undefined, ["node-mail-turn-origin"]);
-    const client = createDomainClient(nodeMailClient, node.options);
-    expect(client.version()).toBe(0);
-    const plain = Object.freeze({
-      controllerId: "bk_cmd",
-      requestId: "r1",
-      toEnvironmentId: "env-1",
-      body: "Stop.",
-      turnOrigin: "mail",
-    });
-    await client.api().deliver(plain);
-    expect(node.sent).toEqual([{ command: "deliver_node_mail", args: plain, envelope: undefined }]);
-    expect(node.sent[0]!.args).toHaveProperty("turnOrigin", "mail");
-    expect(plain.turnOrigin).toBe("mail");
-    expect(node.usage).toEqual([["node-mail", 0]]);
-  });
-
-  it("version 0 delivers mail to a strict stable leaf without origin support", async () => {
-    const node = fakeNode(undefined, []);
-    const call = node.options.call;
-    node.options.call = async (def, args, envelope) => {
-      if (def.name === "deliver_node_mail") {
-        // Stable v2.36.1 rejects unknown keys before storing anything.
-        const allowed = new Set([
-          "controllerId",
-          "coordinatorEnvironmentId",
-          "coordinatorTabId",
-          "requestId",
-          "toEnvironmentId",
-          "toTabId",
-          "subject",
-          "body",
-          "steer",
-          "nodeParent",
-          "projectId",
-        ]);
-        for (const key of Object.keys(args as object)) {
-          if (!allowed.has(key)) throw new Error(`Unexpected key: ${key}`);
-        }
-      }
-      return call(def, args, envelope);
-    };
-    const mail = createDomainClient(nodeMailClient, node.options).api();
-    const { steer: _steer, ...plain } = delivery;
-    await expect(mail.deliver(plain)).resolves.toBeDefined();
-    expect(node.sent[0]!.args).not.toHaveProperty("turnOrigin");
-    expect(plain.turnOrigin).toBe("mail");
-  });
-
-  it("version 0 refuses what such a leaf would drop, with the typed errors, and sends nothing", async () => {
-    const node = fakeNode(undefined, []);
-    const mail = createDomainClient(nodeMailClient, node.options).api();
-    expect(
-      incompatibility(
-        await mail.deliver(delivery).catch((error: unknown) => error),
-        "deliver_node_mail",
-      ),
-    ).toMatchObject({ code: "unsupported-field", field: "steer", domain: "node-mail" });
-    const { steer: _steer, ...plain } = delivery;
-    expect(
-      incompatibility(
-        await mail
-          .deliver({ ...plain, attachments: { batch: "b", files: [] } })
-          .catch((e: unknown) => e),
-        "deliver_node_mail",
-      ),
-    ).toMatchObject({ code: "unsupported-field", field: "attachments" });
-    expect(
-      incompatibility(
-        await mail.returnOutboxMail({ controllerId: "bk_cmd", seq: 1 }).catch((e: unknown) => e),
-        "return_node_outbox_mail",
-      ),
-    ).toMatchObject({ code: "unknown-command" });
-    expect(node.sent).toEqual([]);
-  });
-
   it("decodes answers tolerantly: an older leaf's shorter answer and a newer leaf's extra key", async () => {
     const node = fakeNode(NODE_MAIL_V1, [], () => ({ messageId: "m1", fromTheFuture: 1 }));
     const answer = await createDomainClient(nodeMailClient, node.options).api().deliver(delivery);
@@ -412,10 +291,10 @@ describe("node-mail client", () => {
   });
 
   it("picks again for a new connection generation", () => {
-    let domains: NegotiatedDomains | undefined;
+    let domains: NegotiatedDomains | undefined = { "ticket-sync": { min: 1, max: 1 } };
     const node = fakeNode(undefined, []);
     const client = createDomainClient(nodeMailClient, { ...node.options, domains: () => domains });
-    expect(client.version()).toBe(0);
+    expect(client.version()).toBeNull();
     domains = { ...NODE_MAIL_V1 };
     expect(client.version()).toBe(1);
   });
@@ -425,7 +304,6 @@ describe("ticket-sync client", () => {
   it("version 1 syncs and sends reset with liveIds as critical", async () => {
     const node = fakeNode({ "ticket-sync": { min: 1, max: 1 } }, []);
     const sync = createDomainClient(ticketSyncClient, node.options).api();
-    expect(sync.syncs).toBe(true);
     await sync.apply({ controllerId: "bk_cmd", items: [], reset: true, liveIds: [] });
     expect(node.sent[0]!.envelope).toEqual({
       domain: "ticket-sync",
@@ -434,34 +312,8 @@ describe("ticket-sync client", () => {
     });
   });
 
-  it("version 0 syncs only with the ticket-sync capability", async () => {
-    const capable = fakeNode(undefined, ["ticket-sync"]);
-    expect(createDomainClient(ticketSyncClient, capable.options).api().syncs).toBe(true);
-    const older = fakeNode(undefined, ["node-attachment"]);
-    const sync = createDomainClient(ticketSyncClient, older.options).api();
-    expect(sync.syncs).toBe(false);
-    expect(
-      incompatibility(
-        await sync.collectOutbox({ controllerId: "bk_cmd" }).catch((e: unknown) => e),
-        "collect_ticket_sync_outbox",
-      ),
-    ).toMatchObject({ code: "unknown-command" });
-    expect(older.sent).toEqual([]);
-  });
-
-  // Mixed-version qualification run 42827537552: a 2.36.1 leaf's strict
-  // handler refused `features`, so every sync with it failed.
-  it("version 0 collects without features, which a pre-contract handler refused", async () => {
+  it("collects with the command node's features", async () => {
     const collect = { controllerId: "bk_cmd", after: 3, features: ["images"] };
-    const legacy = fakeNode(undefined, ["ticket-sync"]);
-    await createDomainClient(ticketSyncClient, legacy.options).api().collectOutbox(collect);
-    expect(legacy.sent).toEqual([
-      {
-        command: "collect_ticket_sync_outbox",
-        args: { controllerId: "bk_cmd", after: 3 },
-        envelope: undefined,
-      },
-    ]);
     const current = fakeNode({ "ticket-sync": { min: 1, max: 1 } }, []);
     await createDomainClient(ticketSyncClient, current.options).api().collectOutbox(collect);
     expect(current.sent[0]!.args).toEqual(collect);
@@ -479,7 +331,7 @@ describe("ticket-sync client", () => {
 });
 
 describe("node-files client", () => {
-  it("sends sha256 as critical to a node with the domain, and today's body to one without", async () => {
+  it("sends sha256 as critical", async () => {
     const begin = { scope: { projectId: "p" }, path: "a.txt", size: 1, sha256: "f".repeat(64) };
     const current = fakeNode({ "node-files": { min: 1, max: 1 } }, []);
     await createDomainClient(nodeFilesClient, current.options).api().beginWrite(begin);
@@ -488,14 +340,6 @@ describe("node-files client", () => {
       version: 1,
       critical: ["sha256"],
     });
-    const legacy = fakeNode(undefined, []);
-    await createDomainClient(nodeFilesClient, legacy.options).api().beginWrite(begin);
-    expect(legacy.sent[0]).toEqual({
-      command: "begin_node_file_write",
-      args: begin,
-      envelope: undefined,
-    });
-    expect(legacy.usage).toEqual([["node-files", 0]]);
   });
 });
 
@@ -516,20 +360,6 @@ describe("the command node's own reads in ticket-sync and node-mail", () => {
         ? [request]
         : request;
 
-  function withInvoke(node: ReturnType<typeof fakeNode>) {
-    const invoked: Array<[string, unknown]> = [];
-    return {
-      invoked,
-      options: {
-        ...node.options,
-        invoke: async (command: string, args?: unknown) => {
-          invoked.push([command, args]);
-          return answer(command);
-        },
-      },
-    };
-  }
-
   it("version 1: typed calls with the envelope; an action request keeps every key", async () => {
     const node = fakeNode({ ...NODE_MAIL_V1, "ticket-sync": { min: 1, max: 1 } }, [], answer);
     await expect(
@@ -544,21 +374,6 @@ describe("the command node's own reads in ticket-sync and node-mail", () => {
       ["get_ticket_sync_status", "ticket-sync"],
       ["list_node_action_requests", "node-mail"],
       ["resolve_node_action_request", "node-mail"],
-    ]);
-  });
-
-  it("version 0: today's calls by name, never capability-gated", async () => {
-    const legacy = withInvoke(fakeNode(undefined, []));
-    await expect(
-      createDomainClient(ticketSyncClient, legacy.options).api().status({ projectId: "p1" }),
-    ).resolves.toBe(status);
-    const mail = createDomainClient(nodeMailClient, legacy.options).api();
-    await mail.actionRequests({ pendingOnly: true });
-    await mail.resolveActionRequest({ requestId: "q1", decision: "reject" });
-    expect(legacy.invoked).toEqual([
-      ["get_ticket_sync_status", { projectId: "p1" }],
-      ["list_node_action_requests", { pendingOnly: true }],
-      ["resolve_node_action_request", { requestId: "q1", decision: "reject" }],
     ]);
   });
 });

@@ -1,4 +1,8 @@
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
+import {
+  addressFindingsPreExistingFailurePolicy,
+  type AddressFindingsPreExistingFailurePolicy,
+} from "@orkestrator/protocol/address-findings-pre-existing";
 import { MultiReviewWorkerMail } from "./worker-mail.js";
 import {
   addressFindingsReportPrompt,
@@ -118,7 +122,12 @@ import {
   workflowUsageLimitContinuationPrompt,
   type WorkflowWakeReason,
 } from "../workflows/index.js";
-import type { AgentActivityCompletionOutcome, AppConfig, Environment } from "../models.js";
+import type {
+  AgentActivityCompletionOutcome,
+  AppConfig,
+  Environment,
+  PersistedMultiReviewWorkflow,
+} from "../models.js";
 import type { StorageService } from "../storage/index.js";
 import type { AgentToolConnection } from "../agent-tools.js";
 import { ProviderUnreachableError } from "../agent-provider-contract.js";
@@ -463,7 +472,26 @@ function addressFindingsStepHasStarted(workflow: MultiReviewWorkflow): boolean {
   );
 }
 
-function queueDefaultAddressFindings(workflow: MultiReviewWorkflow): void {
+// Keep the current launch's opt-in alongside the controlled workflow. The
+// same fenced write commits both, and only the workflow goes to the renderer.
+const addressFindingsRepairs = new WeakMap<
+  MultiReviewWorkflow,
+  NonNullable<PersistedMultiReviewWorkflow["addressFindingsRepair"]>
+>();
+
+function recordAddressFindingsPreExistingFailures(
+  workflow: MultiReviewWorkflow,
+  requestId: string,
+  policy: AddressFindingsPreExistingFailurePolicy,
+): void {
+  if (policy === "repair") addressFindingsRepairs.set(workflow, { requestId, policy });
+  else addressFindingsRepairs.delete(workflow);
+}
+
+function queueDefaultAddressFindings(
+  workflow: MultiReviewWorkflow,
+  preExisting: AddressFindingsPreExistingFailurePolicy,
+): void {
   supersedePendingAutoPr(workflow);
   workflow.phase = "interactive";
   workflow.addressFindingsLaunch = { kind: "default" };
@@ -471,6 +499,7 @@ function queueDefaultAddressFindings(workflow: MultiReviewWorkflow): void {
   workflow.addressPromptAttempts = 0;
   workflow.addressSessionKey = `multi-review:${workflow.id}:interactive`;
   workflow.addressRequestId = `multi-review-address:${workflow.id}`;
+  recordAddressFindingsPreExistingFailures(workflow, workflow.addressRequestId, preExisting);
   workflow.addressTabId = workflow.addressFindingsTabId ?? `multi-review-fix:${workflow.id}`;
   delete workflow.customAddressFindingsInstruction;
   delete workflow.customAddressFindingsModel;
@@ -479,7 +508,10 @@ function queueDefaultAddressFindings(workflow: MultiReviewWorkflow): void {
   delete workflow.error;
 }
 
-function queueRestartedAddressFindings(workflow: MultiReviewWorkflow): void {
+function queueRestartedAddressFindings(
+  workflow: MultiReviewWorkflow,
+  preExisting: AddressFindingsPreExistingFailurePolicy,
+): void {
   const launch = workflow.addressFindingsLaunch ?? { kind: "default" as const };
   workflow.addressFindingsLaunch = launch;
   const launchId = randomUUID();
@@ -489,6 +521,7 @@ function queueRestartedAddressFindings(workflow: MultiReviewWorkflow): void {
   workflow.addressPromptAttempts = 0;
   workflow.addressSessionKey = `multi-review:${workflow.id}:interactive:${launchId}`;
   workflow.addressRequestId = `multi-review-address:${workflow.id}:${launchId}`;
+  recordAddressFindingsPreExistingFailures(workflow, workflow.addressRequestId, preExisting);
   workflow.addressTabId = `multi-review-fix:${workflow.id}:${launchId}`;
   if (launch.kind === "custom") {
     workflow.customAddressFindingsInstruction = launch.instruction;
@@ -684,11 +717,13 @@ export interface MultiReviewServiceOptions extends Omit<
   dispatchAddressFindingsPrompt?: (
     workflow: MultiReviewWorkflow,
     presentation: { activateTab: boolean },
+    preExisting: AddressFindingsPreExistingFailurePolicy,
   ) => Promise<MultiReviewAddressFindingsDispatchResult | MultiReviewAddressFindingsSession | void>;
   /** Rebinds and seeds a renderer-created replacement for a missing Address Findings session. */
   recoverAddressFindingsSession?: (
     workflow: MultiReviewWorkflow,
     replacement: MultiReviewAddressFindingsSessionReplacement,
+    preExisting: AddressFindingsPreExistingFailurePolicy,
   ) => Promise<MultiReviewAddressFindingsDispatchResult>;
   /**
    * How the interactive Address Findings's latest handoff turn ended. Only `completed`
@@ -1487,7 +1522,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         // supervisor adopts the idle consolidation session and dispatches the
         // prompt from `advance`; a renderer can disappear immediately after this
         // save without delaying or losing the work.
-        queueDefaultAddressFindings(workflow);
+        queueDefaultAddressFindings(workflow, await this.addressFindingsPreExistingFailures());
         const saved = await this.save(workflow, token);
         this.addressFindingsDispatchRetryAt.delete(workflow.id);
         this.foregroundAddressFindingsDispatches.add(workflow.id);
@@ -1554,6 +1589,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           instruction,
           model: workflow.customAddressFindingsModel,
         };
+        recordAddressFindingsPreExistingFailures(
+          workflow,
+          workflow.addressRequestId,
+          addressFindingsPreExistingFailurePolicy(config.global),
+        );
         supersedePendingAutoPr(workflow);
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
@@ -1609,7 +1649,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
         ) {
           return workflow;
         }
-        const recovered = await this.options.recoverAddressFindingsSession!(workflow, replacement);
+        const recovered = await this.options.recoverAddressFindingsSession!(
+          workflow,
+          replacement,
+          addressFindingsRepairs.get(workflow)?.policy ?? "excuse",
+        );
         await this.assertFence(workflow.id, token);
         this.pollGate.clearPrefix(`${workflow.id}\0fix\0`);
         supersedePendingAutoPr(workflow);
@@ -2386,6 +2430,8 @@ export class MultiReviewService implements KeyedWorkflowOwner {
 
       const shouldReplayAddressFindings =
         kind !== "address-findings" && addressFindingsStepHasStarted(workflow);
+      // Read before any session is abandoned; a relaunch takes the value now.
+      const preExisting = await this.addressFindingsPreExistingFailures();
       const preserveSharedAddressFindingsSession =
         kind === "address-findings" &&
         restartedModel === undefined &&
@@ -2468,7 +2514,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
             };
           }
         }
-        queueRestartedAddressFindings(workflow);
+        queueRestartedAddressFindings(workflow, preExisting);
       }
 
       if (kind === "prepare" && restartedModel) {
@@ -3084,14 +3130,15 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     const record = await this.storage.getMultiReviewWorkflow(workflowId);
     if (!record || !isMultiReviewWorkflow(record.snapshot)) return null;
     this.leases.set(workflowId, { token: claimed.token, expiresAt: claimed.expiresAt });
-    return {
-      workflow: {
-        ...record.snapshot,
-        controllerFence: claimed.token,
-        backendRevision: record.revision,
-      },
-      token: claimed.token,
+    const workflow = {
+      ...record.snapshot,
+      controllerFence: claimed.token,
+      backendRevision: record.revision,
     };
+    if (record.addressFindingsRepair?.policy === "repair") {
+      addressFindingsRepairs.set(workflow, record.addressFindingsRepair);
+    }
+    return { workflow, token: claimed.token };
   }
 
   private save(workflow: MultiReviewWorkflow, token: string): Promise<MultiReviewWorkflow> {
@@ -3132,6 +3179,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       workflow,
       workflow.backendRevision,
       { ownerId: this.ownerId, token },
+      addressFindingsRepairs.get(workflow),
     );
     workflow.backendRevision = saved.revision;
     this.noteRecord(workflow.id, workflow);
@@ -3328,6 +3376,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     }
   }
 
+  /** The pre-existing failure policy Settings → Review gives a launch starting now. */
+  private async addressFindingsPreExistingFailures(): Promise<AddressFindingsPreExistingFailurePolicy> {
+    return addressFindingsPreExistingFailurePolicy((await this.storage.loadConfig()).global);
+  }
+
   /** Retry a pause whose validation process or provider session did not confirm its stop. */
   private async advancePausedStop(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     const errors = await this.stopStepForPause(workflow, token, workflow.pausedStep!);
@@ -3351,9 +3404,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
     try {
       const previousAddressFindingsSession = workflow.addressFindingsSession;
       const activateTab = this.foregroundAddressFindingsDispatches.delete(workflow.id);
-      const dispatched = await this.options.dispatchAddressFindingsPrompt!(workflow, {
-        activateTab,
-      });
+      const dispatched = await this.options.dispatchAddressFindingsPrompt!(
+        workflow,
+        { activateTab },
+        addressFindingsRepairs.get(workflow)?.policy ?? "excuse",
+      );
       const result: MultiReviewAddressFindingsDispatchResult | undefined =
         dispatched && "addressFindingsSession" in dispatched
           ? dispatched
@@ -4783,6 +4838,14 @@ export class MultiReviewService implements KeyedWorkflowOwner {
           ? "address-findings"
           : "consolidate";
       await this.workflowRollout.refresh();
+      // An unattended Address Findings turn takes the setting as it starts.
+      if (kind === "address-findings") {
+        recordAddressFindingsPreExistingFailures(
+          workflow,
+          requestId,
+          await this.addressFindingsPreExistingFailures(),
+        );
+      }
       workflow.activeRequest = {
         kind,
         requestId,
@@ -4862,6 +4925,7 @@ export class MultiReviewService implements KeyedWorkflowOwner {
                 workflow.targetBranch,
                 false,
                 checks,
+                addressFindingsRepairs.get(workflow)?.policy ?? "excuse",
               ),
               workflow.reviewPackage ? MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING : "",
             ]
@@ -5407,11 +5471,11 @@ export class MultiReviewService implements KeyedWorkflowOwner {
       await this.assertFence(workflow.id, token);
       if (workflow.restartAddressFindingsAfterConsolidation) {
         delete workflow.restartAddressFindingsAfterConsolidation;
-        queueRestartedAddressFindings(workflow);
+        queueRestartedAddressFindings(workflow, await this.addressFindingsPreExistingFailures());
       } else if (multiReviewAutoAddressFindingsDue(workflow, validationNeedsAttention)) {
         // Save the report and fix intent atomically, so a restart cannot lose
         // the handoff or send it twice. The supervisor owns delivery.
-        queueDefaultAddressFindings(workflow);
+        queueDefaultAddressFindings(workflow, await this.addressFindingsPreExistingFailures());
       } else {
         workflow.phase = "ready";
         // Nothing to fix, so auto-PR moves straight on to the PR.

@@ -1,3 +1,7 @@
+import {
+  isAddressFindingsPreExistingFailurePolicy,
+  type AddressFindingsPreExistingFailurePolicy,
+} from "./address-findings-pre-existing.js";
 import { isWorkspaceGitBaseline, type WorkspaceGitBaseline } from "./workspace-guard.js";
 import { isReviewValidationRun, type ReviewValidationRun } from "./review-validation.js";
 import { isPipelineLongCheckList, type PipelineLongCheck } from "./build-pipeline-long-checks.js";
@@ -1129,6 +1133,14 @@ export interface PipelineSession {
    */
   addressFindingsResult?: PipelineAddressFindingsResult;
   /**
+   * What this Address session was told to do with recorded failures that
+   * already fail on the base branch, from Settings → Review when it opened
+   * (`address-findings-pre-existing.ts`). Verify of the same round reads it.
+   * Absent on other phases and on records written before it existed, which
+   * read as `excuse`.
+   */
+  addressFindingsPreExistingFailures?: AddressFindingsPreExistingFailurePolicy;
+  /**
    * The Build turn's decision on whether review and the stages after it run
    * (`build-pipeline-build-outcome.ts`). Absent when the agent reported none,
    * which continues as before, and on other phases.
@@ -2059,6 +2071,9 @@ function isPipelineSession(value: unknown): value is PipelineSession {
       (value.phase === "address-findings" &&
         value.addressFindingsReportKind !== undefined &&
         isPipelineAddressFindingsResult(value.addressFindingsResult))) &&
+    (value.addressFindingsPreExistingFailures === undefined ||
+      (value.phase === "address-findings" &&
+        isAddressFindingsPreExistingFailurePolicy(value.addressFindingsPreExistingFailures))) &&
     (value.buildOutcome === undefined ||
       (value.phase === "build" && isPipelineBuildOutcome(value.buildOutcome))) &&
     (value.error === undefined ||

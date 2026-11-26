@@ -6,6 +6,7 @@ import { DiagnosticsExportCard } from "./DiagnosticsExportCard";
 import { CoordinatorWebResearchSettings } from "./CoordinatorWebResearchSettings";
 import { requestGlobalSettings } from "@/lib/settings-navigation";
 import { AutoSteerSetting } from "./AutoSteerSetting";
+import { AddressFindingsPreExistingSetting } from "./AddressFindingsPreExistingSetting";
 import { SettingField, SettingExplanation } from "./search/SettingField";
 import { isLocalDesktopWindow } from "@/lib/native/window";
 import { DataSavingSetting } from "./DataSavingSetting";
@@ -379,6 +380,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setReviewLensPresets,
     multiReviewEngine,
     setMultiReviewEngine,
+    addressFindingsRepairsPreExisting,
+    setAddressFindingsRepairsPreExisting,
     webClientStatus,
     setWebClientStatus,
     setWebClientApplyError,
@@ -510,6 +513,15 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <MultiReviewEngineSetting
           value={multiReviewEngine}
           onChange={setMultiReviewEngine}
+          disabled={isSaving}
+        />
+      </SettingField>
+
+      <SettingField setting="review.address-findings-pre-existing">
+        <AddressFindingsPreExistingSetting
+          checked={addressFindingsRepairsPreExisting}
+          supported={global.addressFindingsPreExistingRepairSupported === true}
+          onCheckedChange={setAddressFindingsRepairsPreExisting}
           disabled={isSaving}
         />
       </SettingField>

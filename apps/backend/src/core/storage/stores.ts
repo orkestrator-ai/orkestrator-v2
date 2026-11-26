@@ -11,6 +11,7 @@ import { snapshotBeforeMigration } from "./backups.js";
 import {
   buildPipelineReviewReportUpgradeMigration,
   kanbanTicketSectionsUpgradeMigration,
+  multiReviewAddressFindingsRepairUpgradeMigration,
   recordShapeUpgradeMigration,
 } from "./record-upgrades.js";
 import {
@@ -337,6 +338,7 @@ export const STORAGE_MIGRATIONS: readonly StorageMigration[] = [
   packagePreparationPhaseUpgradeMigration,
   graphVocabularyUpgradeMigration,
   coordinatorReceiptVocabularyUpgradeMigration,
+  multiReviewAddressFindingsRepairUpgradeMigration,
 ];
 
 function legacyArtifacts(entries: readonly string[], baseName: string): string[] {

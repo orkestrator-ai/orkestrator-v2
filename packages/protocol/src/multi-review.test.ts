@@ -889,6 +889,10 @@ test("preparation and immutable package references survive strict workflow valid
       restartAddressFindingsAfterConsolidation: true,
     }),
   ).toBe(true);
+  // Repair policy belongs to the backend record, outside this strict shape.
+  expect(
+    isMultiReviewWorkflow({ ...candidate, addressFindingsPreExistingFailures: "repair" }),
+  ).toBe(false);
   expect(
     isMultiReviewWorkflow({
       ...candidate,

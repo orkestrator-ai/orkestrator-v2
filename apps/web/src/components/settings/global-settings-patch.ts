@@ -71,6 +71,8 @@ export interface CoreFieldsSnapshot {
   reviewLensPresets: ReviewLensPreset[];
   /** Which runtime runs new Multi Reviews (item 301); absent is bespoke. */
   multiReviewEngine: MultiReviewEngine;
+  /** Address Findings also repairs pre-existing base-branch failures; absent is off. */
+  addressFindingsRepairsPreExisting: boolean;
 }
 
 /** Fields stored exactly as the form snapshot holds them. */
@@ -117,6 +119,7 @@ const ABSENT_WHEN: {
 } = {
   sshAgentSocketPath: (value) => value === "",
   autoSteer: (value) => value === false,
+  addressFindingsRepairsPreExisting: (value) => value === false,
   defaultProjectsDirectory: (value) => value === "",
   claudeBackgroundCommandLimitHours: (value) =>
     value === DEFAULT_CLAUDE_BACKGROUND_COMMAND_LIMIT_HOURS,

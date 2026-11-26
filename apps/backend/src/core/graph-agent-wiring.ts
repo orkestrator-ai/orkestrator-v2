@@ -5,6 +5,7 @@
  * the read-only guard's submit-time check on `graph-output` slots (item 209).
  * Kept apart from `index.ts` so the backend wiring is one call.
  */
+import { addressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import type {
@@ -28,7 +29,7 @@ import {
 } from "./graph-agent-tools.js";
 import { GraphAgentNodeExecutor, type GraphAgentExecutorDependencies } from "./graph-node-agent.js";
 import type { GraphRunService } from "./graph-run-service.js";
-import type { Environment } from "./models.js";
+import type { AppConfig, Environment } from "./models.js";
 import {
   type ArtifactTurnDispatch,
   ElapsedPollGate,
@@ -48,6 +49,7 @@ export interface GraphAgentWiringInput {
   artifacts: GraphArtifactStore;
   storage: {
     getEnvironment(environmentId: string): Promise<Environment | null>;
+    loadConfig(): Promise<AppConfig>;
     /** The stored runs, for the remote-ref guard's peers. */
     graphRuns?: { listAllGraphRuns(): Promise<GraphRun[]> };
   };
@@ -162,6 +164,8 @@ export function installGraphAgentExecutor(input: GraphAgentWiringInput): GraphAg
       : {}),
     ...(input.enforcementHost ? { enforcementHost: input.enforcementHost } : {}),
     ...(input.projectNotes ? { projectNotes: input.projectNotes } : {}),
+    addressFindingsPreExistingFailures: async () =>
+      addressFindingsPreExistingFailurePolicy((await input.storage.loadConfig()).global),
     ...(input.artifactDispatch ? { artifactDispatch: input.artifactDispatch } : {}),
     ...(input.captureTranscript ? { captureTranscript: input.captureTranscript } : {}),
     // A consolidation's disputed checks re-run through the environment's

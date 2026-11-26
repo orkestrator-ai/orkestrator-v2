@@ -23,6 +23,7 @@ import type {
   TaskSnapshotImage,
 } from "@orkestrator/protocol/build-pipeline";
 import { MULTI_REVIEW_IMPLEMENTATION_MODE_INSTRUCTION } from "@orkestrator/protocol/multi-review";
+import type { AddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import {
   REVIEW_MAX_CONTEXT_BYTES,
   REVIEW_MAX_CONTEXT_LIST_ENTRIES,
@@ -734,14 +735,56 @@ function unrelatedFailureSteps(
   return `Check whether the failure involves code this branch changes (git diff origin/${targetBranch}...HEAD); if it does, it is not unrelated. Do not run any check against origin/${targetBranch}, check it out, or create another worktree to reproduce a failure there: the failure triage already records the evidence that exists (the target branch's CI result, the repository's flake registry, other pipelines on the same merge-base, the test's imports), so cite it. ${undetermined}`;
 }
 
+function relatedScope(scope: AddressFindingsValidationScope): string {
+  return scope === "ticket" ? "the ticket or this branch's changes" : "this branch's changes";
+}
+
 /** Repair what the branch broke, rerun that check, and excuse the rest only with evidence. */
 function recordedFailureRepairRule(
   targetBranch: string,
   scope: AddressFindingsValidationScope,
 ): string {
-  const related =
-    scope === "ticket" ? "the ticket or this branch's changes" : "this branch's changes";
-  return `Fix every recorded failure that relates to ${related}, then rerun only that check. ${excusedFailureRule(targetBranch, scope)} For a failure you believe is unrelated: ${unrelatedFailureSteps(targetBranch, scope)} Do not change unrelated code or tests to hide a failure.`;
+  return `Fix every recorded failure that relates to ${relatedScope(scope)}, then rerun only that check. ${excusedFailureRule(targetBranch, scope)} For a failure you believe is unrelated: ${unrelatedFailureSteps(targetBranch, scope)} Do not change unrelated code or tests to hide a failure.`;
+}
+
+/**
+ * The opt-in addition to {@link recordedFailureRepairRule} when the run's
+ * recorded policy is `repair` (Settings → Review,
+ * `address-findings-pre-existing.ts`): failures labelled `pre-existing` are
+ * repaired too, each in its own commit and reported apart from the branch's
+ * own fixes. `flaky`, `unrelated` and `undetermined` failures keep today's
+ * handling. Given only with recorded validation, where those labels exist.
+ */
+function preExistingFailureRepairRule(
+  targetBranch: string,
+  scope: AddressFindingsValidationScope,
+): string {
+  const report =
+    scope === "ticket"
+      ? "In the Address Findings result you submit, give each pre-existing repair its own `notes` entry beginning `Pre-existing repair:` that names the failing test, the check you reran with its result and the commit, apart from the notes on this branch's own fixes."
+      : "In your final summary, list each pre-existing repair separately from this branch's own fixes, naming the failing test, the check you reran with its result and the commit. When this turn submits an Address Findings result, also give each its own `notes` entry beginning `Pre-existing repair:`.";
+  const requiredFlakyRepair =
+    scope === "ticket"
+      ? "If the ticket explicitly requires a flaky-test repair, fix its root cause under the ticket rule above."
+      : "If a flaky failure is related to this branch's changes, fix its root cause under the branch rule above.";
+  return `**Pre-existing failures**: this run is set to repair recorded failures that already fail on the base branch, not only excuse them. Repair each recorded failure the validation report labels \`pre-existing\` (in a package without \`validationReport\`, any of the failure triage reasons \`failed-on-merge-base\`, \`failed-on-target-ci\` or \`failed-on-same-base\`), even though it is unrelated to ${relatedScope(scope)}; this is the one exception to leaving unrelated code alone. Fix the cause: never weaken, skip or delete the test, or loosen a check, to make it pass. Commit each pre-existing repair on its own, separate from this branch's own fixes, with a message saying it repairs a failure already present on origin/${targetBranch}, then rerun only the repaired check. If a pre-existing failure cannot be repaired within a reasonable change, leave it with its evidence under the rule above and say why. ${requiredFlakyRepair} For any other failure labelled \`flaky\`, leave the code and test intact and record it in the repository's flaky-test register as the repository's instructions describe, or, when it has none, leave it with its evidence. Failures labelled \`unrelated\` or \`undetermined\` keep the rule above. ${report}`;
+}
+
+/**
+ * {@link recordedFailureRepairRule}, plus {@link preExistingFailureRepairRule}
+ * when the run repairs pre-existing failures and has recorded validation.
+ * With the default policy the text is exactly the rule alone.
+ */
+function recordedFailureRules(
+  targetBranch: string,
+  scope: AddressFindingsValidationScope,
+  reviewPackage: PersistedReviewPackage | undefined,
+  preExisting: AddressFindingsPreExistingFailurePolicy,
+): string {
+  const rule = recordedFailureRepairRule(targetBranch, scope);
+  return preExisting === "repair" && reviewPackage
+    ? `${rule}\n\n${preExistingFailureRepairRule(targetBranch, scope)}`
+    : rule;
 }
 
 /**
@@ -752,8 +795,9 @@ function recordedFailureRepairRule(
 export function addressFindingsValidationInstruction(
   reviewPackage: PersistedReviewPackage | undefined,
   targetBranch: string,
+  preExisting: AddressFindingsPreExistingFailurePolicy = "excuse",
 ): string {
-  return `${addressFindingsValidationGuidance(reviewPackage, targetBranch)}\n\n${ADDRESS_FINDINGS_OUTPUT_CONTRACT}`;
+  return `${addressFindingsValidationGuidance(reviewPackage, targetBranch, preExisting)}\n\n${ADDRESS_FINDINGS_OUTPUT_CONTRACT}`;
 }
 
 /**
@@ -764,10 +808,11 @@ export function addressFindingsValidationInstruction(
 export function addressFindingsValidationGuidance(
   reviewPackage: PersistedReviewPackage | undefined,
   targetBranch: string,
+  preExisting: AddressFindingsPreExistingFailurePolicy = "excuse",
 ): string {
   return [
     recordedValidationSection(reviewPackage),
-    recordedFailureRepairRule(targetBranch, "ticket"),
+    recordedFailureRules(targetBranch, "ticket", reviewPackage, preExisting),
     reviewPackage ? validationHistoryRule(reviewPackage.headRef, targetBranch) : "",
     ADDRESS_FINDINGS_RESULT_REPORTING,
   ]
@@ -789,12 +834,15 @@ export function addressFindingsValidationGuidance(
  *   {@link addressFindingsReportPrompt} already says it in its tail, so a
  *   prompt built with it (fresh, replacement and unattended sessions) passes
  *   false; the reused-session and custom prompts carry no tail and pass true.
+ * @param preExisting The run's recorded pre-existing failure policy; `repair`
+ *   adds the opt-in pre-existing repair rule.
  */
 export function multiReviewAddressFindingsValidationInstruction(
   reviewPackage: PersistedReviewPackage | undefined,
   targetBranch: string,
   includeRerunRule: boolean,
   verifiedChecks?: ReadonlyArray<{ command: string; status: string }>,
+  preExisting: AddressFindingsPreExistingFailurePolicy = "excuse",
 ): string {
   if (!reviewPackage) return "";
   return [
@@ -808,7 +856,7 @@ export function multiReviewAddressFindingsValidationInstruction(
           "</verified-validation-checks-json>",
         ].join("\n"),
     includeRerunRule ? RECORDED_VALIDATION_RERUN_RULE : "",
-    recordedFailureRepairRule(targetBranch, "branch"),
+    recordedFailureRules(targetBranch, "branch", reviewPackage, preExisting),
     MULTI_REVIEW_ADDRESS_FINDINGS_VALIDATION_REPORTING,
   ]
     .filter(Boolean)
@@ -857,7 +905,25 @@ export const ADDRESS_FINDINGS_OUTPUT_CONTRACT =
  * Reproducing them is the address and fix stages' job; a verifier that reruns suites or rebuilds the
  * target branch turns a minutes-long review into a second validation pass.
  */
-export function verificationFailureInstruction(targetBranch: string): string {
+export function verificationFailureInstruction(
+  targetBranch: string,
+  addressFindingsPreExisting: AddressFindingsPreExistingFailurePolicy = "excuse",
+): string {
+  const rule = verificationRecordedFailureRule(targetBranch);
+  return addressFindingsPreExisting === "repair"
+    ? `${rule}\n\n${VERIFICATION_PRE_EXISTING_REPAIR_RULE}`
+    : rule;
+}
+
+/**
+ * Verify's addition when this round's Address Findings ran with the
+ * pre-existing repair policy: a repaired pre-existing failure counts as
+ * repaired, and one it left still follows the excuse rule.
+ */
+export const VERIFICATION_PRE_EXISTING_REPAIR_RULE =
+  "**Pre-existing repairs**: this round's Address Findings was set to repair recorded failures labelled `pre-existing` (they also failed on the merge base) as well, each in its own commit apart from the branch's own fixes, and to report each as a `Pre-existing repair:` note. Count a pre-existing failure as repaired when a commit after the recorded validation headRef plausibly repairs it and that repair is still present at HEAD, established as for a `related` failure above, and name it as repaired in the rationale. A pre-existing failure it left follows the rule above for its verdict. A claimed repair that weakens, skips or deletes the test, or loosens a check, is not a repair: say so in the rationale and treat the failure as left. A pre-existing repair alone is never a reason to report complete: false unless it breaks behaviour the ticket requires.";
+
+function verificationRecordedFailureRule(targetBranch: string): string {
   return `**Recorded failures**: judge each failing test, not each command. An aggregate command such as a full test suite fails when any one of its tests fails, and that alone says nothing about this branch. Judge them from the failure triage, the diff, the recorded diagnostics and the address report; do not rerun or reproduce them. A failure the triage classifies \`unrelated\` never blocks completion, unless an acceptance criterion names that test or the repair of that failure. A \`related\` failure blocks completion unless a commit after the recorded validation headRef plausibly repairs it and that repair is still present at HEAD. An \`undetermined\` failure, a failure the triage does not list and an \`unattributed\` command block completion only when their diagnostics show they exercise code this branch changes or an acceptance criterion depends on that specific behavior, with the same exception for a later repair; a general criterion such as "tests are updated" does not make every suite failure block. To establish a later repair, use the recorded validation headRef as <headRef>: confirm it is an ancestor of HEAD with git merge-base --is-ancestor <headRef> HEAD, inspect git log --oneline <headRef>..HEAD and the relevant commit diffs, and check git diff <headRef>..HEAD to confirm the repair addresses the recorded failure and remains in the final code. The cumulative target-to-HEAD diff alone does not establish that a repair followed validation. If headRef is missing, unavailable or not an ancestor of HEAD, or no repair can be established in that range, report the limitation and keep the relevant failed or incomplete check blocking completion. Ticket acceptance criteria take precedence: a requested repair remains mandatory even if the failure also occurs on origin/${targetBranch}. Name each failure you did not count as blocking in the rationale, with its verdict. The address report is another agent's claim: accept a claimed repair only when the diff shows it in that post-validation range, and do not repeat its checks. If any ticket-required repair remains unmet on this branch, report complete: false.`;
 }
 
@@ -949,6 +1015,7 @@ export function verificationPrompt(
   worktree?: ReviewWorktreeSnapshot,
   addressFindingsReport?: VerificationAddressFindingsReport,
   validationAncestry?: ValidationAncestry,
+  addressFindingsPreExisting?: AddressFindingsPreExistingFailurePolicy,
 ): string {
   const task = verificationTaskPrompt({
     task: pipeline.taskSnapshot,
@@ -958,6 +1025,7 @@ export function verificationPrompt(
     worktree,
     addressFindingsReport,
     validationAncestry,
+    ...(addressFindingsPreExisting ? { addressFindingsPreExisting } : {}),
   });
   return `${task}\n\n${VERIFICATION_LONG_CHECK_INSTRUCTION}\n\n${VERIFICATION_OUTPUT_CONTRACT}`;
 }
@@ -984,6 +1052,8 @@ export function verificationTaskPrompt(input: {
   worktree?: ReviewWorktreeSnapshot;
   addressFindingsReport?: VerificationAddressFindingsReport;
   validationAncestry?: ValidationAncestry;
+  /** The pre-existing failure policy this round's Address Findings ran with; absent is `excuse`. */
+  addressFindingsPreExisting?: AddressFindingsPreExistingFailurePolicy;
 }): string {
   const { task, notes, targetBranch, worktree, addressFindingsReport } = input;
   const recorded = recordedValidationSection(input.reviewPackage, "verification");
@@ -996,7 +1066,7 @@ export function verificationTaskPrompt(input: {
     addressFindingsReportSection(addressFindingsReport),
     verificationCriteriaSection(task),
     validationAncestrySection(input.validationAncestry),
-    verificationFailureInstruction(targetBranch),
+    verificationFailureInstruction(targetBranch, input.addressFindingsPreExisting),
     worktree
       ? worktreeSnapshotSection(worktree, {
           clean:

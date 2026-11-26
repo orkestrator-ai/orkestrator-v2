@@ -90,6 +90,30 @@ describe("globalConfigPatchFromCoreFields", () => {
     });
   });
 
+  test("the pre-existing failure repair switch is off by default, stored on, removed off", () => {
+    expect(baseline.addressFindingsRepairsPreExisting).toBe(false);
+    // An install or older config without the field reads as off.
+    const { addressFindingsRepairsPreExisting: _absent, ...withoutField } =
+      appCommandStore(configStore).getState().config.global;
+    expect(storedCoreFields(withoutField).addressFindingsRepairsPreExisting).toBe(false);
+    const on = { ...baseline, addressFindingsRepairsPreExisting: true };
+    expect(globalConfigPatchFromCoreFields(on, baseline)).toEqual({
+      patch: { addressFindingsRepairsPreExisting: true },
+      unset: [],
+    });
+    expect(globalConfigPatchFromCoreFields(baseline, on)).toEqual({
+      patch: {},
+      unset: ["addressFindingsRepairsPreExisting"],
+    });
+    expect(
+      storedCoreFields({
+        ...appCommandStore(configStore).getState().config.global,
+        addressFindingsPreExistingRepairSupported: true,
+        addressFindingsRepairsPreExisting: true,
+      }).addressFindingsRepairsPreExisting,
+    ).toBe(true);
+  });
+
   test("a field returned to its default is removed rather than stored", () => {
     const edited = {
       ...baseline,

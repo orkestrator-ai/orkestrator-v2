@@ -297,6 +297,52 @@ export const kanbanTicketSectionsUpgradeMigration: StorageMigration = {
   },
 };
 
+/** Move a review's recorded opt-in out of its strictly validated renderer snapshot. */
+export function upgradeMultiReviewAddressFindingsRepair(stored: unknown): unknown {
+  if (!isRecord(stored)) return stored;
+  let changed = false;
+  const upgraded: Record<string, unknown> = {};
+  for (const [id, record] of Object.entries(stored)) {
+    upgraded[id] = record;
+    if (!isRecord(record) || !isRecord(record.snapshot)) continue;
+    if (!Object.hasOwn(record.snapshot, "addressFindingsPreExistingFailures")) continue;
+    const { addressFindingsPreExistingFailures, ...snapshot } = record.snapshot;
+    const request = snapshot.activeRequest;
+    const session = snapshot.addressFindingsSession;
+    const requestId =
+      snapshot.addressRequestId ??
+      (isRecord(request) && request.kind === "address-findings" ? request.requestId : undefined) ??
+      (isRecord(session) && Array.isArray(session.requestIds)
+        ? session.requestIds.at(-1)
+        : undefined);
+    upgraded[id] = {
+      ...record,
+      snapshot,
+      ...(addressFindingsPreExistingFailures === "repair"
+        ? {
+            addressFindingsRepair: {
+              requestId: isNonBlankString(requestId) ? requestId : `multi-review-address:${id}`,
+              policy: "repair",
+            },
+          }
+        : {}),
+    };
+    changed = true;
+  }
+  return changed ? upgraded : stored;
+}
+
+export const multiReviewAddressFindingsRepairUpgradeMigration: StorageMigration = {
+  version: 15,
+  name: "move-multi-review-address-findings-repair",
+  up({ database }) {
+    const current = database.readStoreValueInTransaction("multi-reviews");
+    if (!current) return;
+    const next = upgradeMultiReviewAddressFindingsRepair(current.value);
+    if (next !== current.value) database.writeStoreInTransaction("multi-reviews", next);
+  },
+};
+
 const RECORD_UPGRADES: ReadonlyArray<readonly [string, (stored: unknown) => unknown]> = [
   ["native-agent-sessions", upgradeNativeAgentSessionRecords],
   ["coordinators", upgradeCoordinatorStore],

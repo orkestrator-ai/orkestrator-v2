@@ -10,6 +10,7 @@ import { createCommandRegistry } from "../commands/registry.js";
 import { parseConfigUnsetKeys } from "../commands/registry-projects.js";
 import type { CommandContext } from "../commands/context.js";
 import { defaultConfig } from "./shared-config.js";
+import { addressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import { StorageService } from "./service.js";
 
 async function withStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {
@@ -102,6 +103,72 @@ describe("patching the global config", () => {
       const stored = (await storage.loadOwnConfig()).global;
       expect(stored.githubToken).toBe("ghp_keep");
       expect(stored.codexMaxConcurrentThreads).toBe(3);
+    });
+  });
+
+  test("rejects a malformed repair setting before writing any part of the patch", async () => {
+    await withStorage(async (storage) => {
+      const registry = createCommandRegistry();
+      const runtime = new BackendRuntime({ emit: () => undefined });
+      const context = { storage, runtime } as CommandContext;
+      try {
+        const before = await storage.loadOwnConfig();
+        await expect(
+          registry.get("patch_global_config")!(
+            { patch: { addressFindingsRepairsPreExisting: "true", terminalScrollback: 4_321 } },
+            context,
+          ),
+        ).rejects.toThrow("Expected addressFindingsRepairsPreExisting to be a boolean");
+        expect(await storage.loadOwnConfig()).toEqual(before);
+      } finally {
+        runtime.shutdown();
+      }
+    });
+  });
+
+  test("get_config decodes with malformed stored or inherited review values", async () => {
+    await withStorage(async (storage) => {
+      const config = defaultConfig();
+      await fs.writeFile(
+        path.join(storage.getDataDir(), "config.json"),
+        JSON.stringify({
+          ...config,
+          global: { ...config.global, addressFindingsRepairsPreExisting: "true" },
+        }),
+      );
+      const registry = createCommandRegistry();
+      const runtime = new BackendRuntime({ emit: () => undefined });
+      const context = { storage, runtime } as CommandContext;
+      const read = async () => {
+        const decoded = decodeCommandResult(
+          getConfigCommand,
+          await registry.get("get_config")!({}, context),
+        );
+        if (decoded._tag !== "Success" || !("global" in decoded.success)) {
+          throw new Error("Expected the full config to decode");
+        }
+        return decoded.success.global;
+      };
+      try {
+        const own = await read();
+        expect(own).not.toHaveProperty("addressFindingsRepairsPreExisting");
+        expect(own.addressFindingsPreExistingRepairSupported).toBe(true);
+        await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: true });
+        storage.inheritedGlobalSettings = () => ({ addressFindingsRepairsPreExisting: "true" });
+        const inherited = await read();
+        expect(inherited).not.toHaveProperty("addressFindingsRepairsPreExisting");
+        expect(addressFindingsPreExistingFailurePolicy((await storage.loadConfig()).global)).toBe(
+          "excuse",
+        );
+        await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: false });
+        storage.inheritedGlobalSettings = () => ({ addressFindingsRepairsPreExisting: true });
+        expect((await read()).addressFindingsRepairsPreExisting).toBe(true);
+        expect(addressFindingsPreExistingFailurePolicy((await storage.loadConfig()).global)).toBe(
+          "repair",
+        );
+      } finally {
+        runtime.shutdown();
+      }
     });
   });
 

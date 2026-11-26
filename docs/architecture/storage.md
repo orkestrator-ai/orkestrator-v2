@@ -12,7 +12,7 @@ namespace), their per-file lock files and five-deep backup ladders.
 | `apps/backend/src/core/storage/database.ts` | `StorageDatabase`: connection, migrations, stores, leases |
 | `apps/backend/src/core/storage/database-rows.ts` | How a value splits into rows under its layout, row ids and positions; no SQLite |
 | `apps/backend/src/core/storage/stores.ts` | Store registry and layouts, migrations, the legacy JSON import, archive retention and scrubbing, the native-session owner backfill |
-| `apps/backend/src/core/storage/record-upgrades.ts` | One-shot upgrades of record shapes only older builds wrote |
+| `apps/backend/src/core/storage/record-upgrades.ts` | One-shot record upgrades, including moving the Multi Review Address Findings opt-in to backend metadata (version 15) |
 | `apps/backend/src/core/storage/workflow-vocabulary-upgrade.ts` | The one-shot rename of stored build pipeline and Multi Review names to Rework and Address Findings (version 11) |
 | `apps/backend/src/core/storage/package-preparation-phase-upgrade.ts` | The one-shot move of stored build pipeline package preparation from Rework to its own phase (version 12) |
 | `apps/backend/src/core/storage/graph-vocabulary-upgrade.ts` | The one-shot rename of stored graph templates, runs, artifacts, workflow results and scheduled workflow actions to Rework and Address Findings names (version 13) |

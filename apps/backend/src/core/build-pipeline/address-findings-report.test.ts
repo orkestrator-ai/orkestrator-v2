@@ -10,6 +10,7 @@ import {
 import { TEST_ADDRESS_FINDINGS_RESULT } from "./test-fixtures.js";
 import { REVIEW_ADDRESS_FINDINGS_RESULT_JSON_SCHEMA } from "../review/prompts.js";
 import { resumePromptFor } from "./service-helpers.js";
+import { VERIFICATION_PRE_EXISTING_REPAIR_RULE } from "./prompts.js";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 const scope = { environmentId: "env-1", projectId: "project-1" };
@@ -243,6 +244,55 @@ describe("Address sessions from before the typed report", () => {
         } finally {
           prepare.mockRestore();
         }
+      },
+      { toolMode: true, toolKinds: ["address-findings-result"] },
+    );
+  });
+});
+
+describe("pre-existing failure repair setting", () => {
+  test("Address records the setting in force when it opens, and Verify of that round reads it", async () => {
+    await withPipeline(
+      async ({ service, provider, read, storage, workflowResults }) => {
+        await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: true });
+        const started = await service.start(startInput());
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+        const address = current(addressing);
+        expect(address.addressFindingsPreExistingFailures).toBe("repair");
+        const dispatch = provider.sent.find((entry) => entry.sessionId === address.sdkSessionId)!;
+        expect(dispatch.prompt).toContain("**Pre-existing failures**");
+        expect(dispatch.prompt).toContain("Commit each pre-existing repair on its own");
+
+        // Switching the setting off mid-round does not change the running round.
+        await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: false });
+        await workflowResults!.submit(
+          scope,
+          address.structuredRequestId!,
+          TEST_ADDRESS_FINDINGS_RESULT,
+        );
+        await advanceUntil(service, read, started.id, "verifying");
+        expect(verifyPrompt(provider.sent)).toContain(VERIFICATION_PRE_EXISTING_REPAIR_RULE);
+      },
+      { toolMode: true, toolKinds: ["address-findings-result"] },
+    );
+  });
+
+  test("with the setting off, Address records excuse and Address and Verify get today's prompts", async () => {
+    await withPipeline(
+      async ({ service, provider, read, workflowResults }) => {
+        const started = await service.start(startInput());
+        const addressing = await advanceUntil(service, read, started.id, "addressing-findings");
+        const address = current(addressing);
+        expect(address.addressFindingsPreExistingFailures).toBe("excuse");
+        const dispatch = provider.sent.find((entry) => entry.sessionId === address.sdkSessionId)!;
+        expect(dispatch.prompt).not.toContain("**Pre-existing failures**");
+        await workflowResults!.submit(
+          scope,
+          address.structuredRequestId!,
+          TEST_ADDRESS_FINDINGS_RESULT,
+        );
+        await advanceUntil(service, read, started.id, "verifying");
+        expect(verifyPrompt(provider.sent)).not.toContain(VERIFICATION_PRE_EXISTING_REPAIR_RULE);
       },
       { toolMode: true, toolKinds: ["address-findings-result"] },
     );

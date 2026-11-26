@@ -242,6 +242,8 @@ export { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
  */
 export type PersistedMultiReviewWorkflow = Omit<MultiReviewWorkflowRecord, "snapshot"> & {
   snapshot: unknown;
+  /** The current Address Findings launch's recorded opt-in, kept off the wire. */
+  addressFindingsRepair?: { requestId: string; policy: "repair" };
   controllerLease?: {
     ownerId: string;
     token: string;

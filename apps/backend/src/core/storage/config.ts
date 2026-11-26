@@ -337,6 +337,9 @@ export class ConfigRepository {
       ...withDefaultInheritedSettings(config.global),
       ...inherited,
     } as AppConfig["global"];
+    if (typeof global.addressFindingsRepairsPreExisting !== "boolean") {
+      delete global.addressFindingsRepairsPreExisting;
+    }
     // The command node's default agent may not be enabled on this node.
     const agentSettings = normalizeAgentSettings(global.agentSettings);
     const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
@@ -896,6 +899,8 @@ export class ConfigRepository {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadOwnConfig();
       const merged = { ...config.global, ...patch } as unknown as Record<string, unknown>;
+      // This is a renderer response capability, never a stored preference.
+      delete merged.addressFindingsPreExistingRepairSupported;
       for (const key of options.unset ?? []) delete merged[key];
       const validated = this.validateGlobalConfigForSave(
         merged as unknown as AppConfig["global"],
@@ -975,6 +980,12 @@ export class ConfigRepository {
     globalConfig: AppConfig["global"],
     options: { preserveInheritedSettings?: boolean },
   ): AppConfig["global"] {
+    if (
+      globalConfig.addressFindingsRepairsPreExisting !== undefined &&
+      typeof globalConfig.addressFindingsRepairsPreExisting !== "boolean"
+    ) {
+      throw new Error("Expected addressFindingsRepairsPreExisting to be a boolean");
+    }
     const reviewValidated = validateGlobalReviewInstruction(
       options.preserveInheritedSettings ? withDefaultInheritedSettings(globalConfig) : globalConfig,
     );

@@ -423,6 +423,40 @@ test("MultiReviewService releases the controller lease when it hands off", async
   );
 });
 
+test.each([
+  [true, "repair"],
+  [false, undefined],
+] as const)(
+  "MultiReviewService records the pre-existing repair setting (%p) on the Address Findings launch",
+  async (enabled, recorded) => {
+    const provider = new Provider();
+    await withService(
+      "env-address-pre-existing",
+      provider,
+      async ({ service, storage, start, snapshot }) => {
+        const started = await start();
+        await waitUntil(async () => {
+          await service.advanceNow(started.id);
+          return (await snapshot(started.id))?.phase === "ready";
+        });
+        if (enabled) await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: true });
+
+        const addressed = await service.address(started.id);
+        expect((await storage.getMultiReviewWorkflow(started.id))?.addressFindingsRepair).toEqual(
+          recorded ? { requestId: addressed.addressRequestId!, policy: recorded } : undefined,
+        );
+        expect(addressed).not.toHaveProperty("addressFindingsPreExistingFailures");
+        // A later change applies to the next launch, not this one.
+        await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: !enabled });
+        await service.advanceNow(started.id);
+        expect(
+          (await storage.getMultiReviewWorkflow(started.id))?.addressFindingsRepair?.policy,
+        ).toBe(recorded);
+      },
+    );
+  },
+);
+
 // The keyed supervisor settles the interactive Address Findings handoff with no
 // renderer attached.
 test("MultiReviewService settles the interactive Address Findings card in the background with final usage", async () => {

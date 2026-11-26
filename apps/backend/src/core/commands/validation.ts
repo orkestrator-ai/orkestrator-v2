@@ -149,6 +149,7 @@ export type RendererGlobalConfig = Omit<
   AppConfig["global"],
   "githubToken" | "anthropicApiKey" | "cursorApiKey" | "openCodeZenApiKey"
 > & {
+  addressFindingsPreExistingRepairSupported: true;
   githubTokenConfigured: boolean;
   anthropicApiKeyConfigured: boolean;
   anthropicApiKeySource: ApiKeySource;
@@ -226,6 +227,7 @@ export function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalC
   const { githubToken, anthropicApiKey, cursorApiKey, openCodeZenApiKey, ...safeGlobal } = global;
   return {
     ...safeGlobal,
+    addressFindingsPreExistingRepairSupported: true,
     githubTokenConfigured: Boolean(githubToken?.trim()),
     anthropicApiKeyConfigured: Boolean(anthropicApiKey?.trim()),
     anthropicApiKeySource,
@@ -245,6 +247,7 @@ export function redactAppConfig(config: AppConfig): RendererAppConfig {
 
 export function stripRendererCredentials(global: Record<string, unknown>): AppConfig["global"] {
   const {
+    addressFindingsPreExistingRepairSupported: _ignoredAddressFindingsSupport,
     githubToken: _ignoredToken,
     githubTokenConfigured: _ignoredConfigured,
     anthropicApiKey: _ignoredAnthropicApiKey,

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./action-defaults": "./src/action-defaults.ts",
+    "./address-findings-pre-existing": "./src/address-findings-pre-existing.ts",
     "./backend-diagnostics": "./src/backend-diagnostics.ts",
     "./backend-exit": "./src/backend-exit.ts",
     "./capacity-retry": "./src/capacity-retry.ts",

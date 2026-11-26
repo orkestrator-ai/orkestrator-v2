@@ -21,6 +21,7 @@
 import type { AgentPlatform } from "../agent-platforms.js";
 import type { PipelineTranscriptReference } from "../build-pipeline.js";
 import type { NativeAgentExecutionPolicy } from "../native-agent.js";
+import type { AddressFindingsPreExistingFailurePolicy } from "../address-findings-pre-existing.js";
 import { GRAPH_PLAN_BOUNDS, GRAPH_TEMPLATE_BOUNDS } from "./grammar.js";
 import type { CompiledGraphPlan } from "./plan.js";
 import type { GraphMockRunOptions } from "./mock-pins.js";
@@ -442,6 +443,13 @@ export interface NodeActivation {
    */
   worktree?: GraphActivationWorktree;
   guards?: GraphGuardResult[];
+  /**
+   * An Address Findings activation started while Settings → Review repaired
+   * pre-existing failures (`address-findings-pre-existing.ts`), recorded
+   * before dispatch so its prompt can be reproduced. Written only for
+   * `repair`; absent is `excuse`.
+   */
+  addressFindingsPreExistingFailures?: AddressFindingsPreExistingFailurePolicy;
   /**
    * A `ready` activation's current admission block, set by the pass that
    * could not admit it and dropped when it is admitted or settled.

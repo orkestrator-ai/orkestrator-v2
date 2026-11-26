@@ -1,3 +1,4 @@
+import type { AddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import type { ReviewValidationPlan } from "@orkestrator/protocol/review-workflow";
 /**
  * The text of a built-in prompt (`prompt: { builtIn: "<id>" }`, item 105) for
@@ -150,6 +151,11 @@ export interface GraphBuiltInPromptContext {
   targetBranch: string;
   reportsValidationExcuses?: boolean;
   validationPlan?: ReviewValidationPlan;
+  /**
+   * An Address Findings node's recorded pre-existing failure policy
+   * (`address-findings-pre-existing.ts`); absent is `excuse`, today's text.
+   */
+  addressFindingsPreExisting?: AddressFindingsPreExistingFailurePolicy;
   /** Project notes, when the project has any. */
   notes?: string;
   /** The node's lens (replicated over lenses). */
@@ -168,6 +174,12 @@ export interface GraphBuiltInPromptContext {
    */
   reviewInstruction?: string;
 }
+
+/** The built-in prompts that address findings, and so read the pre-existing failure policy. */
+export const GRAPH_ADDRESS_FINDINGS_BUILT_INS: ReadonlySet<string> = new Set<GraphBuiltInPromptId>([
+  "address-findings",
+  "pipeline-address-findings",
+]);
 
 /** The built-in prompt that merges review reports under Multi Review's contract. */
 export const GRAPH_REVIEW_CONSOLIDATION_BUILT_IN = "consolidation";
@@ -246,7 +258,13 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       return consolidationText(inputs, target, context.validationPlan);
     case "address-findings":
       inputs.optional("code");
-      return addressFindingsText(inputs, instruction, target, context.reportsValidationExcuses);
+      return addressFindingsText(
+        inputs,
+        instruction,
+        target,
+        context.reportsValidationExcuses,
+        context.addressFindingsPreExisting,
+      );
     case "pipeline-address-findings": {
       inputs.optional("code");
       const report = inputs.reviewReport(inputs.required("report"));
@@ -255,7 +273,11 @@ export function graphBuiltInPromptText(context: GraphBuiltInPromptContext): stri
       // response): the node submits it through its `address-findings-result` port tool instead.
       return addressFindingsReportPrompt(
         report,
-        addressFindingsValidationGuidance(inputs.reviewPackage("package"), target),
+        addressFindingsValidationGuidance(
+          inputs.reviewPackage("package"),
+          target,
+          context.addressFindingsPreExisting,
+        ),
       );
     }
     case "build":
@@ -433,6 +455,7 @@ function addressFindingsText(
   instruction: string | undefined,
   target: string,
   reportsValidationExcuses: boolean | undefined,
+  preExisting: AddressFindingsPreExistingFailurePolicy | undefined,
 ): string {
   const entry = inputs.required("report");
   const name = typeName(entry.type);
@@ -456,7 +479,13 @@ function addressFindingsText(
     throw new GraphBuiltInPromptError("Address Findings needs verified validation checks");
   }
   const validation = [
-    multiReviewAddressFindingsValidationInstruction(pkg, target, Boolean(instruction), checks),
+    multiReviewAddressFindingsValidationInstruction(
+      pkg,
+      target,
+      Boolean(instruction),
+      checks,
+      preExisting,
+    ),
     reportsValidationExcuses ? MULTI_REVIEW_STRUCTURED_VALIDATION_REPORTING : "",
   ]
     .filter(Boolean)

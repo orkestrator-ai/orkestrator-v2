@@ -694,3 +694,106 @@ test("dispatchMultiReviewAddressFindingsPrompt sends no validation instruction f
   expect(sent.prompt).not.toContain("**Recorded validation**");
   expect(sent.prompt).not.toContain(BRANCH_REPAIR_RULE);
 });
+
+/** Every Multi Review dispatch path, for one workflow. */
+async function promptsForEveryDispatchPath(
+  base: MultiReviewWorkflow,
+  preExisting?: "excuse" | "repair",
+): Promise<string[]> {
+  const variants: Array<() => Promise<string>> = [
+    async () => {
+      const agents = acceptingAgents();
+      await dispatchMultiReviewAddressFindingsPrompt(
+        agents,
+        base,
+        undefined,
+        false,
+        verifiedPackage,
+        preExisting,
+      );
+      return agents.dispatchIntent.mock.calls[0]![0].prompt;
+    },
+    async () => {
+      const agents = acceptingAgents("provider-fix-new");
+      await dispatchMultiReviewAddressFindingsPrompt(
+        agents,
+        {
+          ...base,
+          reviewModel: { agent: "claude", model: "review-coordinator" },
+          addressFindingsSession: undefined,
+        } as MultiReviewWorkflow,
+        undefined,
+        false,
+        verifiedPackage,
+        preExisting,
+      );
+      return agents.dispatchIntent.mock.calls[0]![0].prompt;
+    },
+    async () => {
+      const agents = acceptingAgents("provider-custom");
+      await dispatchMultiReviewAddressFindingsPrompt(
+        agents,
+        {
+          ...base,
+          customAddressFindingsModel: base.addressFindingsModel,
+          customAddressFindingsInstruction: "Only fix the regression",
+          addressRequestId: "multi-review-address:multi-1:launch-2",
+        } as MultiReviewWorkflow,
+        undefined,
+        false,
+        verifiedPackage,
+        preExisting,
+      );
+      return agents.dispatchIntent.mock.calls[0]![0].prompt;
+    },
+    async () => {
+      const agents = acceptingAgents();
+      await recoverMissingMultiReviewAddressFindingsSession(
+        agents,
+        {
+          ...base,
+          addressFindingsSession: {
+            ...base.addressFindingsModel,
+            sessionKey: "multi-review:multi-1:interactive",
+            providerSessionId: "provider-fix",
+            requestIds: ["multi-review-address:multi-1"],
+            status: "idle",
+            startedAt: "2026-11-23T00:00:00.000Z",
+          },
+        } as MultiReviewWorkflow,
+        {
+          tabId: "multi-review-fix:multi-1",
+          expectedProviderSessionId: "provider-fix",
+          replacementProviderSessionId: "provider-replacement",
+        },
+        verifiedPackage,
+        preExisting,
+      );
+      return agents.dispatchIntent.mock.calls[0]![0].prompt;
+    },
+  ];
+  const prompts: string[] = [];
+  for (const variant of variants) prompts.push(await variant());
+  return prompts;
+}
+
+test("every Multi Review dispatch path repairs pre-existing failures when the launch recorded repair", async () => {
+  const off = await promptsForEveryDispatchPath(packagedWorkflow);
+  const on = await promptsForEveryDispatchPath(packagedWorkflow, "repair");
+  for (const [index, prompt] of on.entries()) {
+    expectBranchValidationInstruction(prompt);
+    expect(prompt).toContain("**Pre-existing failures**");
+    expect(prompt).toContain("Commit each pre-existing repair on its own");
+    expect(prompt).toContain(
+      "In your final summary, list each pre-existing repair separately from this branch's own fixes",
+    );
+    expect(off[index]).not.toContain("**Pre-existing failures**");
+  }
+});
+
+test("a recorded excuse policy, or none, dispatches today's prompt on every path", async () => {
+  const none = await promptsForEveryDispatchPath(packagedWorkflow);
+  const excuse = await promptsForEveryDispatchPath(packagedWorkflow, "excuse");
+  expect(excuse).toEqual(none);
+  for (const prompt of none) expect(prompt).not.toContain("Pre-existing repair");
+});

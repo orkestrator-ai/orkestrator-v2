@@ -1822,20 +1822,22 @@ export class OrkestratorBackend {
           }
         },
         environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
-        dispatchAddressFindingsPrompt: (workflow, presentation) =>
+        dispatchAddressFindingsPrompt: (workflow, presentation, preExisting) =>
           dispatchMultiReviewAddressFindingsPrompt(
             this.nativeAgents,
             workflow,
             storage,
             presentation.activateTab,
             verifyAddressFindingsPackage,
+            preExisting,
           ),
-        recoverAddressFindingsSession: (workflow, replacement) =>
+        recoverAddressFindingsSession: (workflow, replacement, preExisting) =>
           recoverMissingMultiReviewAddressFindingsSession(
             this.nativeAgents,
             workflow,
             replacement,
             verifyAddressFindingsPackage,
+            preExisting,
           ),
         ...multiReviewNativeAddressFindingsOptions(this.nativeAgents),
         workflowAdmission: this.workflowAdmission,

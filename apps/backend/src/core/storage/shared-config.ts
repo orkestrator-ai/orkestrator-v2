@@ -346,6 +346,9 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const coordinatorProviderTierDefaultVersion = normalizeCoordinatorProviderTierDefaultVersion(
     storedCoordinatorProviderTierDefaultVersion,
   );
+  const malformedAddressFindingsPolicy =
+    global.addressFindingsRepairsPreExisting !== undefined &&
+    typeof global.addressFindingsRepairsPreExisting !== "boolean";
   const nextGlobal = stripLegacyKeys(
     {
       ...global,
@@ -356,7 +359,10 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     LEGACY_GLOBAL_AGENT_KEYS,
   ) as unknown as AppConfig["global"];
 
+  if (malformedAddressFindingsPolicy) delete nextGlobal.addressFindingsRepairsPreExisting;
+
   if (
+    !malformedAddressFindingsPolicy &&
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.claudeBackgroundCommandLimitHours === claudeBackgroundCommandLimitHours &&

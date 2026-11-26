@@ -35,11 +35,20 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { PeerNode, ROOT, SetupError, makeNode, runSetup, until } from "./two-node/harness.ts";
+import {
+  PeerNode,
+  ROOT,
+  SetupError,
+  bindFixtureListener,
+  fixtureGitEnvironment,
+  makeNode,
+  runSetup,
+  until,
+} from "./two-node/harness.ts";
 import { runCapabilityQualification } from "./two-node/capability-qualification.ts";
 
 interface Check {
@@ -103,10 +112,9 @@ function text(content: unknown): string {
  */
 function startFakeModel(): FakeModel {
   const requests: ModelRequest[] = [];
-  const server = Bun.serve({
+  const options = {
     hostname: "127.0.0.1",
-    port: 0,
-    async fetch(request) {
+    async fetch(request: Request) {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname.endsWith("/models")) {
         return Response.json({ object: "list", data: [{ id: "fake-1", object: "model" }] });
@@ -157,7 +165,8 @@ function startFakeModel(): FakeModel {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
       });
     },
-  });
+  };
+  const server = bindFixtureListener((port) => Bun.serve({ ...options, port }));
   return {
     origin: `http://127.0.0.1:${server.port}`,
     requests,
@@ -206,14 +215,15 @@ async function filesUnder(directory: string): Promise<string[]> {
 }
 
 async function qualify(signal: AbortSignal): Promise<boolean> {
-  facts.commit = runSetup("git", ["rev-parse", "--verify", "HEAD^{commit}"], ROOT).trim();
+  root = await mkdtemp(path.join(os.tmpdir(), "ork-capabilities-leaf-launch-"));
+  facts.root = root;
+  const gitEnv = fixtureGitEnvironment(root);
+  facts.commit = runSetup("git", ["rev-parse", "--verify", "HEAD^{commit}"], ROOT, gitEnv).trim();
   if (!skipBuild) {
     // The leaf backend starts the Pi bridge from this checkout's build.
     console.log("Building the Pi bridge from this checkout.");
     runSetup(process.execPath, ["run", "build"], path.join(ROOT, "bridges", "pi-bridge"));
   }
-  root = await mkdtemp(path.join(os.tmpdir(), "ork-capabilities-leaf-launch-"));
-  facts.root = root;
   model = startFakeModel();
 
   const command = await makeNode({ name: "Command", role: "command", root, signal });
@@ -281,8 +291,17 @@ async function qualify(signal: AbortSignal): Promise<boolean> {
   const git = (...gitArgs: string[]) =>
     runSetup(
       "git",
-      ["-c", "user.name=Leaf Launch", "-c", "user.email=leaf-launch@example.invalid", ...gitArgs],
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "user.name=Leaf Launch",
+        "-c",
+        "user.email=leaf-launch@example.invalid",
+        ...gitArgs,
+      ],
       repo,
+      gitEnv,
     );
   git("init", "-q", "-b", "main");
   await writeFile(path.join(repo, "README.md"), "# Leaf launch fixture\n");
@@ -290,7 +309,7 @@ async function qualify(signal: AbortSignal): Promise<boolean> {
   git("commit", "-q", "-m", "Initial commit");
   // A project needs an origin; a bare repository in the run directory.
   const origin = path.join(root, "origin.git");
-  runSetup("git", ["init", "-q", "--bare", origin], root);
+  git("init", "-q", "--bare", origin);
   git("remote", "add", "origin", origin);
   git("push", "-q", "origin", "main");
   const project = await publicAction<unknown>(
@@ -321,6 +340,7 @@ async function qualify(signal: AbortSignal): Promise<boolean> {
 
   // The command node selects a required skill for one session of the leaf.
   const marker = `Leaf launch marker ${randomBytes(4).toString("hex")}.`;
+  const skillContent = `---\nname: ${SKILL}\ndescription: ${SKILL} skill\n---\n${marker}\n`;
   const inspection = await command.invoke<{
     inspectionId: string;
     packageId: string;
@@ -329,7 +349,7 @@ async function qualify(signal: AbortSignal): Promise<boolean> {
     kind: "skill",
     name: SKILL,
     description: `${SKILL} skill`,
-    content: marker,
+    content: skillContent,
   });
   const setup = await command.invoke<{ id: string }>("set_capability_setup", {
     setup: { name: "Leaf session tools" },
@@ -387,14 +407,16 @@ async function qualify(signal: AbortSignal): Promise<boolean> {
   const staged = (await filesUnder(leafPlugins)).filter((entry) =>
     entry.endsWith(path.join("skills", SKILL, "SKILL.md")),
   );
+  const stagedPath =
+    staged.length === 1 ? await realpath(path.join(leafPlugins, staged[0]!)) : undefined;
   check(
     "the leaf staged the session's skill from the command node's answer",
-    staged.length === 1,
+    stagedPath !== undefined && (await readFile(stagedPath, "utf8")) === skillContent,
     staged.join(", ") || "nothing staged",
   );
   check(
     "the leaf's Pi session was told about the skill at its staged path",
-    Boolean(asked?.system.includes(SKILL) && asked.system.includes("capability-session-plugins")),
+    Boolean(stagedPath && asked?.system.includes(`<location>${stagedPath}</location>`)),
     asked ? undefined : "the fake model received no request",
   );
   const sharedHomes = [

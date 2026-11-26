@@ -16,7 +16,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,7 +40,7 @@ const previous = {
   PI_SESSION_DIR: process.env.PI_SESSION_DIR,
   [CAPABILITY_SESSION_PLUGINS_DIR_ENV]: process.env[CAPABILITY_SESSION_PLUGINS_DIR_ENV],
 };
-const base = await mkdtemp(join(tmpdir(), "pi-capability-session-skills-"));
+const base = await realpath(await mkdtemp(join(tmpdir(), "pi-capability-session-skills-")));
 const home = join(base, "home");
 const agentDir = join(home, ".pi", "agent");
 const project = join(base, "project");
@@ -269,6 +269,50 @@ describe("Pi session-private skills (fake engine, SDK pin)", () => {
     const rebuilt = await evidence(state.id);
     expect(rebuilt.generation).toBe(first.generation + 1);
     expect(rebuilt.loadedSkills).toEqual([]);
+  });
+
+  test("a staged skill wins over a shared namesake on attach and on resource reload", async () => {
+    const skill = "ork-collision";
+    const plugin = await stagePlugin(pluginsRoot, "f".repeat(40), skill);
+    const stagedFile = join(plugin, "skills", skill, "SKILL.md");
+    const sharedDir = join(agentDir, "skills", skill);
+    await mkdir(sharedDir, { recursive: true });
+    const sharedFile = join(sharedDir, "SKILL.md");
+    await writeFile(
+      sharedFile,
+      `---\nname: ${skill}\ndescription: Shared copy\n---\nShared instructions.\n`,
+    );
+    try {
+      const owner = await createSession("capability-collision");
+      const first = await prompt(owner, "collision before reload", { capabilityPlugins: [plugin] });
+      expect(first.skills).toContain(stagedFile);
+      expect(first.skills).not.toContain(sharedFile);
+      const before = await evidence(owner.id);
+      const live = owner.session;
+      const addedDir = join(agentDir, "skills", "ork-reload-only");
+      await mkdir(addedDir, { recursive: true });
+      const addedFile = join(addedDir, "SKILL.md");
+      await writeFile(
+        addedFile,
+        "---\nname: ork-reload-only\ndescription: Added before reload\n---\n",
+      );
+      const refreshed = await post(`/session/${owner.id}/commands/refresh`, {});
+      expect(refreshed.status).toBe(200);
+      const after = await evidence(owner.id);
+      expect(owner.session).toBe(live);
+      expect(after.generation).toBe(before.generation + 1);
+      expect(after.loadedSkills).toEqual([
+        { name: skill, path: stagedFile },
+        { name: "ork-reload-only", path: addedFile },
+      ]);
+      const second = await prompt(owner, "collision after reload", { capabilityPlugins: [plugin] });
+      expect(second.skills).toContain(stagedFile);
+      expect(second.skills).not.toContain(sharedFile);
+      const unrelated = await createSession("capability-collision-unrelated");
+      expect((await prompt(unrelated, "shared copy only")).skills).toContain(sharedFile);
+    } finally {
+      await rm(join(agentDir, "skills"), { recursive: true, force: true });
+    }
   });
 
   test("a read-only turn loads none of the session's private skills", async () => {

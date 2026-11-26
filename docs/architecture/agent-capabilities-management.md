@@ -335,10 +335,9 @@ review), whose boundary admits no skill frontmatter hooks or tool grants.
   `~/.agents/skills`, and another Pi session never sees it. Pi fixes a
   session's skills when it builds the session, so the bridge rebuilds a live
   session at the start of a turn whose set differs from the one it was built
-  with; a read-only turn or a coordinator loads none. Pi skills are not
-  namespaced and Pi keeps the first skill of a name, so a shared skill with the
-  same name wins; runtime proof then names the shared file and the private
-  skill is not confirmed. The conformance test
+  with; a read-only turn or a coordinator loads none. The session's resource
+  loader gives private skills precedence over shared skills with the same
+  name, preserving both copies on disk. The conformance test
   (`capability-session-skills-conformance.test.ts`) drives the real bridge,
   SDK and pi-ai's faux model.
 - **Not delivered this way:** hooks and MCP servers (their own approval and
@@ -714,16 +713,15 @@ Catalogue names are insufficient to identify the installed revision.
   from the owning backend, which grades it using the launch it actually recorded.
   The same read identifies the worktree or staged container incarnation for
   scoped checks. A container chip uses the manifest staged for that incarnation.
-- **Pi sessions.** The Pi bridge records, on every build of a session, the
-  skills its resource loader resolved with each one's `SKILL.md` path
-  (`loadedSkills`), and serves them on the same no-touch route
-  (`bridges/pi-bridge/src/capability-skills.ts`; the generation counts builds).
-  A session-private skill is `load-confirmed` when a loaded path is
-  `<digest>/skills/<name>/SKILL.md` inside the directory its launch record
-  names (`loadedPrivateSkill`); any other path, such as a shared skill of the
-  same name, is reported as failed. Pi has no skill tool to observe, so
-  nothing is `observed-in-use`. A bridge that answers the route 404 or 405 is
-  reported as unable to say what it loaded, never as loaded.
+- **Pi sessions.** The Pi bridge records the skills its resource loader
+  resolved on attach and on command reload, and serves their `SKILL.md`
+  paths on the same no-touch route as `loadedSkills`. A session-private skill
+  is `load-confirmed` when the reported path exactly matches the launch's
+  expected `SKILL.md` under the owning backend's canonical staging root.
+  Private paths get priority in the bounded report. If rows were omitted,
+  a missing path leaves the load unconfirmed. Pi has no skill tool to observe,
+  so nothing is `observed-in-use`. A bridge that answers 404 or 405 cannot
+  report what it loaded.
 - **Grok.** `grok inspect --json` is Grok's own discovery for the machine. A
   listed `SKILL.md` inside a receipt's installed directory, whose bytes the
   inventory just matched, is `advertised` for the next Grok session. Grok has

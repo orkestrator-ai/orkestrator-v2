@@ -59,6 +59,7 @@ import {
   capabilitySkillsNeedRebuild,
   effectiveCapabilitySkillPaths,
   noteCapabilityLoad,
+  preferCapabilitySkills,
 } from "./capability-skills.js";
 import {
   closePiMcp,
@@ -512,7 +513,7 @@ async function attach(state: SessionState): Promise<AgentSession> {
   try {
     const session = agentSessionTestHooks.createAgentSession
       ? await agentSessionTestHooks.createAgentSession(state)
-      : await createPiAgentSession(state);
+      : await createPiAgentSession(state, capabilitySkills);
 
     // Before `publishAttachedSession`, which is where the command list is read:
     // binding is what runs `resources_discover`, so an extension-contributed
@@ -607,8 +608,9 @@ export async function createPiSessionServices(
     Parameters<typeof createAgentSessionServices>[0],
     "resourceLoaderOptions" | "resourceLoaderReloadOptions"
   >,
+  capabilitySkills = effectiveCapabilitySkillPaths(state),
 ): ReturnType<typeof createAgentSessionServices> {
-  const loaderPolicy = piResourceLoaderPolicy(state, options.cwd);
+  const loaderPolicy = piResourceLoaderPolicy(state, options.cwd, capabilitySkills);
   const settingsManager =
     options.settingsManager ??
     SettingsManager.create(options.cwd, options.agentDir, {
@@ -622,6 +624,15 @@ export async function createPiSessionServices(
       // Project resources can execute arbitrary code or replace built-in tools.
       // Read-only sessions exclude them even inside trusted containers.
       ...loaderPolicy.discovery,
+      ...(capabilitySkills.length > 0
+        ? {
+            skillsOverride: preferCapabilitySkills(
+              capabilitySkills,
+              options.cwd,
+              options.agentDir ?? getAgentDir(),
+            ),
+          }
+        : {}),
       // Kept after any `APPEND_SYSTEM.md` Pi discovers, which passing
       // `appendSystemPrompt` itself would switch off. Re-run on every reload,
       // after `preparePiMcp`, so it sees this attach's MCP connections.
@@ -640,7 +651,10 @@ export async function createPiSessionServices(
   return services;
 }
 
-async function createPiAgentSession(state: SessionState): Promise<AgentSession> {
+async function createPiAgentSession(
+  state: SessionState,
+  capabilitySkills: string[],
+): Promise<AgentSession> {
   // Checked before anything expensive: an environment with no authenticated
   // provider must say so, rather than failing inside the first turn the user
   // paid to start.
@@ -674,12 +688,11 @@ async function createPiAgentSession(state: SessionState): Promise<AgentSession> 
       settingsManager,
       () => state.autoCompaction,
     );
-    const services = await createPiSessionServices(state, {
-      cwd,
-      agentDir: runtimeAgentDir,
-      settingsManager,
-      modelRuntime: runtime,
-    });
+    const services = await createPiSessionServices(
+      state,
+      { cwd, agentDir: runtimeAgentDir, settingsManager, modelRuntime: runtime },
+      capabilitySkills,
+    );
     const preferredModelIds = defaultModelIds(state, cwd, runtimeAgentDir);
     const model = await resolveModelForSession(state.composer.selectedModelId, preferredModelIds);
     state.composer = await hydrateComposerForSession(
@@ -923,6 +936,11 @@ function reloadSessionCommands(
       if (state.session !== session) {
         return { outcome: "deferred", message: "Pi reads its commands again on its next attach." };
       }
+      noteCapabilityLoad(
+        state,
+        state.capabilitySkillPathsLoaded ?? [],
+        session.resourceLoader?.getSkills?.().skills ?? [],
+      );
       // A reload rebuilds the tool registry; the session's tool policy must
       // not be widened by it.
       applyPiToolPolicy(session, state.policy);
@@ -1045,6 +1063,7 @@ export function coordinatorProjectSkillPaths(cwd: string = workingDirectory): st
 export function piResourceLoaderPolicy(
   state: Pick<SessionState, "policy" | "readOnly" | "capabilitySkillPaths">,
   cwd: string = workingDirectory,
+  privateSkills = effectiveCapabilitySkillPaths(state),
 ): {
   discovery: ReturnType<typeof projectResourceDiscoveryOptions> & {
     additionalSkillPaths?: string[];
@@ -1076,7 +1095,6 @@ export function piResourceLoaderPolicy(
   }
   // Skills Agent Capabilities delivered to this session alone: per session in
   // the SDK, never written into the shared Pi home (`capability-skills.ts`).
-  const privateSkills = effectiveCapabilitySkillPaths(state);
   return {
     discovery:
       privateSkills.length > 0 ? { ...discovery, additionalSkillPaths: privateSkills } : discovery,

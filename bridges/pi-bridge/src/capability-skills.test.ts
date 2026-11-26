@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CAPABILITY_SESSION_PLUGINS_DIR_ENV } from "@orkestrator/protocol/capability-resources";
@@ -11,6 +11,7 @@ import {
   noteCapabilityLoad,
   parseCapabilityPlugins,
 } from "./capability-skills.js";
+import { MAX_CAPABILITY_EVIDENCE_BYTES } from "@orkestrator/protocol/capability-evidence";
 import { newSessionState } from "./agent-session.js";
 
 const roots: string[] = [];
@@ -19,7 +20,7 @@ afterAll(async () => {
 });
 
 async function fixture() {
-  const base = await mkdtemp(join(tmpdir(), "pi-capability-skills-"));
+  const base = await realpath(await mkdtemp(join(tmpdir(), "pi-capability-skills-")));
   roots.push(base);
   const root = join(base, "capability-session-plugins");
   const plugin = join(root, "0123456789abcdef0123");
@@ -99,6 +100,31 @@ describe("effective set, rebuild and evidence", () => {
     expect(capabilitySkillsNeedRebuild(state)).toBe(false);
     state.capabilitySkillPaths = [];
     expect(capabilitySkillsNeedRebuild(state)).toBe(true);
+  });
+
+  test("reserves room for staged evidence and marks byte and row truncation", () => {
+    const state = newSessionState();
+    const root = "/staged/digest/skills";
+    const staged = { name: "private", filePath: `${root}/private/SKILL.md` };
+    for (const namePart of ["a", "漢".repeat(4000)]) {
+      const shared = Array.from({ length: 300 }, (_, i) => ({
+        name: `skill-${i}`,
+        filePath: `/shared/${namePart}/${i}/SKILL.md`,
+      }));
+      noteCapabilityLoad(state, [root], [...shared, staged]);
+      const evidence = capabilityEvidenceBody(state);
+      if (evidence.state !== "evidence") throw new Error("Expected evidence");
+      expect(evidence.loadedSkillsIncomplete).toBe(true);
+      expect(evidence.loadedSkills?.[0]).toEqual({ name: staged.name, path: staged.filePath });
+      if (namePart === "a") expect(evidence.loadedSkills).toHaveLength(256);
+      else {
+        expect(evidence.loadedSkills!.length).toBeGreaterThan(1);
+        expect(evidence.loadedSkills!.length).toBeLessThan(25);
+      }
+      expect(Buffer.byteLength(JSON.stringify(evidence))).toBeLessThanOrEqual(
+        MAX_CAPABILITY_EVIDENCE_BYTES,
+      );
+    }
   });
 
   test("the evidence body names loaded skills and their files only, per generation", () => {

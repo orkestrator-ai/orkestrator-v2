@@ -337,13 +337,14 @@ export interface SessionState {
   /** The private skill directories the attached session was built with. */
   capabilitySkillPathsLoaded?: string[];
   /**
-   * What the latest build's resource loader resolved, for the no-touch
+   * What the latest resource load resolved, for the no-touch
    * `/capability-evidence` route. Names and paths only. Runtime-only.
    */
   capabilityEvidence?: {
     generation: number;
     loadedAt: string;
     loadedSkills: Array<{ name: string; path: string }>;
+    loadedSkillsIncomplete?: true;
   };
   /**
    * The workflow-result attempt the current turn runs for, from its prompt.

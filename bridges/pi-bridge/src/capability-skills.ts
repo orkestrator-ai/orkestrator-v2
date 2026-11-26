@@ -19,7 +19,7 @@
  * coordinator loads none: their boundary admits only the skills they already
  * read.
  *
- * Runtime proof comes from what the SDK itself loaded: every attach records
+ * Runtime proof comes from what the SDK itself loaded: each attach and resource reload records
  * the skills the session's resource loader resolved (names and `SKILL.md`
  * paths), served on the no-touch `GET /session/:id/capability-evidence`
  * route. The backend matches a path inside the content-addressed directory
@@ -27,17 +27,20 @@
  */
 import { lstat, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join } from "node:path";
+import type { LoadSkillsResult } from "@earendil-works/pi-coding-agent";
 import {
   CAPABILITY_SESSION_PLUGINS_DIR_ENV,
   MAX_CAPABILITY_SESSION_PLUGINS,
 } from "@orkestrator/protocol/capability-resources";
 import {
+  MAX_CAPABILITY_EVIDENCE_BYTES,
   MAX_CAPABILITY_EVIDENCE_ENTRIES,
   MAX_CAPABILITY_EVIDENCE_NAME,
   MAX_CAPABILITY_EVIDENCE_PATH,
   type CapabilitySessionEvidence,
 } from "@orkestrator/protocol/capability-evidence";
 import { createLogger } from "@orkestrator/protocol/logger";
+import { loadSkills } from "./pi-sdk.js";
 import type { SessionState } from "./state.js";
 
 const log = createLogger("bridge.pi");
@@ -100,7 +103,7 @@ async function acceptableSkills(
   } catch {
     return "refused";
   }
-  const skills = join(path, "skills");
+  const skills = join(realRoot, basename(path), "skills");
   try {
     const entry = await lstat(skills);
     if (entry.isSymbolicLink()) return "refused";
@@ -135,12 +138,31 @@ export function capabilitySkillsNeedRebuild(
   return wanted.length !== loaded.length || wanted.some((path, index) => loaded[index] !== path);
 }
 
+/**
+ * Pi keeps the first skill by name. Reuse its discovery rules for private
+ * paths alone so the selected copy wins when merging the resolved lists.
+ */
+export function preferCapabilitySkills(
+  skillPaths: string[],
+  cwd: string,
+  agentDir: string,
+): (base: LoadSkillsResult) => LoadSkillsResult {
+  return (base) => {
+    const selected = loadSkills({ cwd, agentDir, skillPaths, includeDefaults: false });
+    const names = new Set(selected.skills.map((skill) => skill.name));
+    return {
+      skills: [...selected.skills, ...base.skills.filter((skill) => !names.has(skill.name))],
+      diagnostics: base.diagnostics,
+    };
+  };
+}
+
 function text(value: unknown, limit: number): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= limit ? value : undefined;
 }
 
 /**
- * A session was built: records the private skill set it was built with and
+ * Records the private skill set the resource loader uses and
  * the skills its resource loader actually resolved. Names and paths only.
  */
 export function noteCapabilityLoad(
@@ -150,17 +172,35 @@ export function noteCapabilityLoad(
   now: () => string = () => new Date().toISOString(),
 ): void {
   state.capabilitySkillPathsLoaded = [...loadedWith];
-  const loadedSkills: Array<{ name: string; path: string }> = [];
-  for (const skill of skills.slice(0, MAX_CAPABILITY_EVIDENCE_ENTRIES)) {
-    const name = text(skill.name, MAX_CAPABILITY_EVIDENCE_NAME);
-    const path = text(skill.filePath, MAX_CAPABILITY_EVIDENCE_PATH);
-    if (name && path) loadedSkills.push({ name, path });
-  }
-  state.capabilityEvidence = {
+  const snapshot: NonNullable<SessionState["capabilityEvidence"]> = {
     generation: (state.capabilityEvidence?.generation ?? 0) + 1,
     loadedAt: now(),
-    loadedSkills,
+    loadedSkills: [],
   };
+  // Reserve space for response metadata, delimiters and the truncation flag.
+  // Each row is encoded both as an object and as a name in the skills array.
+  let remaining = MAX_CAPABILITY_EVIDENCE_BYTES - 1024;
+  const add = (skill: (typeof skills)[number]) => {
+    const name = text(skill.name, MAX_CAPABILITY_EVIDENCE_NAME);
+    const path = text(skill.filePath, MAX_CAPABILITY_EVIDENCE_PATH);
+    if (name && path && snapshot.loadedSkills.length < MAX_CAPABILITY_EVIDENCE_ENTRIES) {
+      const row = { name, path };
+      const bytes =
+        Buffer.byteLength(JSON.stringify(row)) + Buffer.byteLength(JSON.stringify(name)) + 2;
+      if (bytes <= remaining) {
+        snapshot.loadedSkills.push(row);
+        remaining -= bytes;
+        return;
+      }
+    }
+    snapshot.loadedSkillsIncomplete = true;
+  };
+  const privateRoots = new Set(loadedWith);
+  const isPrivate = (skill: (typeof skills)[number]) =>
+    typeof skill.filePath === "string" && privateRoots.has(dirname(dirname(skill.filePath)));
+  for (const skill of skills) if (isPrivate(skill)) add(skill);
+  for (const skill of skills) if (!isPrivate(skill)) add(skill);
+  state.capabilityEvidence = snapshot;
 }
 
 /** The route's body: `missing` for an unknown session, `none` before the first load. */
@@ -178,6 +218,7 @@ export function capabilityEvidenceBody(
     plugins: [],
     skills: evidence.loadedSkills.map((skill) => skill.name),
     loadedSkills: evidence.loadedSkills.map((skill) => ({ ...skill })),
+    ...(evidence.loadedSkillsIncomplete ? { loadedSkillsIncomplete: true } : {}),
     // Pi has no skill tool to observe; a skill is read like any file.
     usedSkills: [],
   };

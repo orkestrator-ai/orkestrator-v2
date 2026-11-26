@@ -6,6 +6,7 @@
  * (`unsupported`), never that the session is gone. A failed read is `none`.
  */
 import {
+  MAX_CAPABILITY_EVIDENCE_BYTES,
   parseCapabilitySessionEvidence,
   type CapabilitySessionEvidenceRead,
 } from "@orkestrator/protocol/capability-evidence";
@@ -34,7 +35,7 @@ export async function readBridgeCapabilityEvidence(options: {
         : { state: "none" };
     }
     const body = await boundedJson(response, `${options.agent} capability evidence read`, {
-      remaining: 256 * 1024,
+      remaining: MAX_CAPABILITY_EVIDENCE_BYTES,
     });
     return parseCapabilitySessionEvidence(body);
   } catch {

@@ -346,8 +346,10 @@ The backend learns that a session moved without reading it (to-do 8102 task
   `~/.pi/agent` or `~/.agents/skills`, which every session reads. A prompt
   that names none holds none, and the set moves only by rebuilding the session
   at a turn's start (`reconcileCapabilitySkills`), never mid-turn. A read-only
-  turn and a coordinator load none. Every build records the skills the loader
-  resolved, with their `SKILL.md` paths, for the no-touch
+  turn and a coordinator load none. When a shared skill has the same name,
+  the private skill takes precedence in that session's loader. Every attach
+  and resource reload records the skills the loader resolved, with their
+  `SKILL.md` paths, for the no-touch
   `GET /session/:id/capability-evidence` route, which answers an unknown
   session in band as `missing` and must never touch, hydrate or attach.
   `src/capability-session-skills-conformance.test.ts` proves loading and

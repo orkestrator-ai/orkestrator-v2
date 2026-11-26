@@ -11,7 +11,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { goalIsRunning, isNativeAgentGoal } from "@orkestrator/protocol/native-agent-goal";
 
 import { heldGoal, waitForFileCheck } from "../../scripts/qa-remote-goal-hold";
-import { gatewayInvoker, InvokeError } from "../../scripts/two-node/harness";
+import {
+  bindFixtureListener,
+  FORBIDDEN_PORTS,
+  gatewayInvoker,
+  InvokeError,
+} from "../../scripts/two-node/harness";
 import { nativeWebPlatform } from "../register-dom";
 
 // The root preload installs Happy DOM's fetch, abort and Response classes; a
@@ -34,6 +39,21 @@ describe("the remote goal hold's seeded goal", () => {
   test("waits on a quoted path, so a space or a quote cannot split the check", () => {
     expect(waitForFileCheck("/a b/it's")).toBe(`until [ -f '/a b/it'"'"'s' ]; do sleep 1; done`);
   });
+});
+
+test("the fixture listener skips reserved ports before attempting a bind", () => {
+  const offered = [...FORBIDDEN_PORTS, 51000, 51001].values();
+  const attempted: number[] = [];
+  const bound = bindFixtureListener(
+    (port) => {
+      attempted.push(port);
+      if (port === 51000) throw Object.assign(new Error("occupied"), { code: "EADDRINUSE" });
+      return port;
+    },
+    () => offered.next().value!,
+  );
+  expect(bound).toBe(51001);
+  expect(attempted).toEqual([51000, 51001]);
 });
 
 describe("the gateway invoker", () => {

@@ -14,10 +14,8 @@
  * - **Pi session evidence** (the same route): the bridge reports each skill
  *   the session's resource loader resolved with its `SKILL.md` path. A
  *   session-private skill is `load-confirmed` when that path is inside the
- *   content-addressed directory its launch record names. Pi keeps the first
- *   skill of a name, so a shared skill of the same name shadows the private
- *   one; its path then names the shared copy and the private skill is not
- *   confirmed. Pi has no skill tool, so nothing is `observed-in-use`.
+ *   launch's content-addressed directory under the owning backend's staging
+ *   root. Pi has no skill tool, so nothing is `observed-in-use`.
  * - **Grok discovery** (`grok inspect --json`): the pinned binary's own
  *   listing names the `SKILL.md` it would load. A listed path inside the
  *   receipt's installed directory, whose bytes the inventory just matched, is
@@ -74,18 +72,15 @@ export function loadedPrivatePlugin(evidence: CapabilitySessionEvidence, digest:
  * True when the evidence lists `item`'s skill loaded from the launch's private
  * directory: `<digest>/skills/<install name>/SKILL.md` (Pi's report).
  */
-export function loadedPrivateSkill(
+function loadedPrivateSkill(
   evidence: CapabilitySessionEvidence,
-  digest: string,
+  pluginDirectory: string,
   item: { kind?: string; name?: string; pathOrKey?: string },
 ): boolean {
   if (item.kind !== "skill") return false;
   const directory = installName(item.name ?? "", item.pathOrKey ?? "", "directory");
-  return (evidence.loadedSkills ?? []).some((skill) => {
-    const segments = skill.path.replaceAll("\\", "/").split("/").filter(Boolean);
-    const [owner, skills, name, file] = segments.slice(-4);
-    return owner === digest && skills === "skills" && name === directory && file === "SKILL.md";
-  });
+  const expected = path.join(pluginDirectory, "skills", directory, "SKILL.md");
+  return evidence.loadedSkills?.some((skill) => skill.path === expected) ?? false;
 }
 
 /**
@@ -99,6 +94,7 @@ export function gradeSessionEvidence(input: {
   componentIds: readonly string[];
   state: Pick<CapabilityState, "components">;
   provider?: AgentPlatform;
+  privatePluginDirectory?: string;
 }): Map<string, RuntimeProof> {
   const proofs = new Map<string, RuntimeProof>();
   const { evidence } = input;
@@ -106,7 +102,7 @@ export function gradeSessionEvidence(input: {
   const generation = `${provider}:${evidence.generation}:${evidence.loadedAt}`;
   const privateRecord = input.launch?.privatePlugin;
   // Pi reports each loaded skill's file; Claude reports the plugin directory.
-  const perSkill = evidence.loadedSkills !== undefined;
+  const perSkill = provider === "pi";
   const pluginLoaded =
     privateRecord && !perSkill ? loadedPrivatePlugin(evidence, privateRecord.digest) : false;
   const used = new Set(evidence.usedSkills);
@@ -115,16 +111,24 @@ export function gradeSessionEvidence(input: {
     const item = privateRecord?.items.find((entry) => entry.componentId === componentId);
     if (item && privateRecord) {
       const loaded = perSkill
-        ? loadedPrivateSkill(evidence, privateRecord.digest, item)
+        ? input.privatePluginDirectory !== undefined &&
+          loadedPrivateSkill(evidence, input.privatePluginDirectory, item)
         : pluginLoaded;
       if (!loaded) {
+        const incomplete =
+          perSkill &&
+          (!input.privatePluginDirectory ||
+            !evidence.loadedSkills ||
+            evidence.loadedSkillsIncomplete === true);
         proofs.set(componentId, {
           componentId,
           level: "present",
-          status: "failed",
-          detail: perSkill
-            ? "The session's latest load did not report this skill from its own directory (a shared skill of the same name may have taken its place), so it is not confirmed loaded."
-            : "The session's latest load did not report its own plugin directory, so this component is not confirmed loaded.",
+          status: incomplete ? "installed-next-session" : "failed",
+          detail: incomplete
+            ? "The session's loaded skill path could not be verified from the available evidence."
+            : perSkill
+              ? "The session's latest load did not report this skill from its own directory (a shared skill of the same name may have taken its place), so it is not confirmed loaded."
+              : "The session's latest load did not report its own plugin directory, so this component is not confirmed loaded.",
           source: "bridge-inventory",
           generation,
         });

@@ -14,6 +14,9 @@
  * Nothing here carries content: names and directories only, each bounded.
  */
 
+/** Maximum encoded response size the backend accepts. */
+export const MAX_CAPABILITY_EVIDENCE_BYTES = 256 * 1024;
+
 /** Most rows of each list a bridge reports or a reader keeps. */
 export const MAX_CAPABILITY_EVIDENCE_ENTRIES = 256;
 /** Longest name kept. */
@@ -42,6 +45,8 @@ export interface CapabilitySessionEvidence {
    * directory binds the loaded bytes, as a plugin directory does.
    */
   loadedSkills?: Array<{ name: string; path: string }>;
+  /** Some loaded skill rows could not fit the bridge or reader budget. */
+  loadedSkillsIncomplete?: true;
   /** Skill names the agent invoked in this bridge process, oldest first. */
   usedSkills: string[];
 }
@@ -117,6 +122,10 @@ export function parseCapabilitySessionEvidence(body: unknown): CapabilitySession
     plugins,
     skills: names(record.skills),
     ...(Array.isArray(record.loadedSkills) ? { loadedSkills } : {}),
+    ...(record.loadedSkillsIncomplete === true ||
+    (Array.isArray(record.loadedSkills) && loadedSkills.length !== record.loadedSkills.length)
+      ? { loadedSkillsIncomplete: true }
+      : {}),
     usedSkills: names(record.usedSkills),
   };
 }

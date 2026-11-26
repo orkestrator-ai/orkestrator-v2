@@ -8,6 +8,9 @@
  * with. A leaf asks its command node to resolve the launch
  * (`launch-authority.ts`).
  */
+import { realpath } from "node:fs/promises";
+import path from "node:path";
+
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   CapabilityTarget,
@@ -367,7 +370,12 @@ export class CapabilityPreflight {
         unreported: evidence.state === "unsupported",
       });
     }
+    const digest = target.provider === "pi" ? launch?.privatePlugin?.digest : undefined;
+    const root = digest
+      ? await realpath(sessionPluginsRoot(this.ctx.deps.dataDir)).catch(() => undefined)
+      : undefined;
     return gradeSessionEvidence({
+      ...(root && digest ? { privatePluginDirectory: path.join(root, digest) } : {}),
       launch,
       evidence,
       componentIds,

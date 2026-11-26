@@ -31,6 +31,7 @@ import {
   newSessionState,
   projectResourceDiscoveryOptions,
   reconcileAgentMcp,
+  reconcileCapabilitySkills,
   recordExtensionLoadDiagnostics,
   refreshSessionCommands,
   resumeSession,
@@ -303,6 +304,36 @@ describe("session ownership", () => {
     expect(await second).toBe(fake.session);
     expect(fake.subscribed()).toBe(1);
     expect(state.piSessionId).toBe("pi-session-1");
+  });
+
+  test("a prompt changing private skills waits for and replaces an in-flight attach", async () => {
+    const old = fakeSession();
+    const replacement = fakeSession();
+    const gate = Promise.withResolvers<void>();
+    let builds = 0;
+    installTestHooks({
+      createAgentSession: async () => {
+        builds += 1;
+        if (builds === 1) {
+          await gate.promise;
+          return old.session;
+        }
+        return replacement.session;
+      },
+    });
+    const state = newSessionState();
+    const attaching = ensureSession(state);
+    state.capabilitySkillPaths = ["/staged/selected/skills"];
+    const reconcile = reconcileCapabilitySkills(state);
+    expect(state.session).toBeNull();
+    gate.resolve();
+    expect(await attaching).toBe(old.session);
+    await reconcile;
+    expect(state.session).toBeNull();
+    expect(await ensureSession(state)).toBe(replacement.session);
+    expect(state.capabilitySkillPathsLoaded).toEqual(state.capabilitySkillPaths);
+    expect(builds).toBe(2);
+    await detachSession(state);
   });
 
   test("shares one bridge state across concurrent resumes of the same Pi file", async () => {

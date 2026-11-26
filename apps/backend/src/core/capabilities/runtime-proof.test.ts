@@ -60,7 +60,7 @@ async function machine(options: {
     storage.close?.();
     await fs.rm(dir, { recursive: true, force: true });
   });
-  return { service, storage, home };
+  return { service, storage, home, dataDir: path.join(dir, "data") };
 }
 
 async function addSkill(service: CapabilityService, name: string) {
@@ -246,13 +246,15 @@ describe("runtime proof", () => {
       };
       return { result: undefined, changed: true };
     });
+    const stagingRoot = path.join(node.dataDir, "capability-session-plugins");
+    await fs.mkdir(stagingRoot, { recursive: true });
     const verify = () =>
       node.service.verify({
         consent: true,
         target: { nodeId: NODE, provider, environmentId: "env-1", sessionId: "sess-1" },
         componentIds: [componentId],
       });
-    return { ...node, componentId, verify };
+    return { ...node, stagingRoot: await fs.realpath(stagingRoot), componentId, verify };
   }
 
   const loaded = (usedSkills: string[] = []): CapabilitySessionEvidenceRead => ({
@@ -314,23 +316,22 @@ describe("runtime proof", () => {
   });
 
   /** A Pi session's report: each loaded skill with the `SKILL.md` it came from. */
-  const piLoaded = (path: string): CapabilitySessionEvidenceRead =>
+  const piLoaded = (skillPath: string, incomplete = false): CapabilitySessionEvidenceRead =>
     parseCapabilitySessionEvidence({
       state: "evidence",
       generation: 2,
       loadedAt: "2026-11-26T10:01:00.000Z",
       plugins: [],
       skills: ["review"],
-      loadedSkills: [{ name: "review", path }],
+      loadedSkills: [{ name: "review", path: skillPath }],
+      loadedSkillsIncomplete: incomplete,
       usedSkills: [],
     });
 
   test("a Pi skill loaded from the session's own directory is load-confirmed", async () => {
-    const node = await withPrivateLaunch(
-      () =>
-        piLoaded("/data/capability-session-plugins/0123456789abcdef0123/skills/review/SKILL.md"),
-      "pi",
-    );
+    let loadedPath = "";
+    const node = await withPrivateLaunch(() => piLoaded(loadedPath), "pi");
+    loadedPath = path.join(node.stagingRoot, "0123456789abcdef0123/skills/review/SKILL.md");
     const result = await node.verify();
     expect(result.checks).toEqual([
       expect.objectContaining({
@@ -346,14 +347,24 @@ describe("runtime proof", () => {
     ).toMatchObject({ level: "load-confirmed", generation: "pi:2:2026-11-26T10:01:00.000Z" });
   });
 
-  test("a Pi skill of the same name loaded from a shared home is never confirmed", async () => {
+  test("a Pi skill outside the staging root is never confirmed even with an identical suffix", async () => {
     const node = await withPrivateLaunch(
-      () => piLoaded("/home/user/.pi/agent/skills/review/SKILL.md"),
+      () => piLoaded("/home/user/.pi/agent/0123456789abcdef0123/skills/review/SKILL.md"),
       "pi",
     );
     const result = await node.verify();
     expect(result.checks[0]).toMatchObject({ level: "present", status: "failed" });
     expect(result.checks[0]?.detail).toContain("shared skill of the same name");
+  });
+
+  test("an incomplete Pi report leaves an omitted private skill unconfirmed", async () => {
+    const node = await withPrivateLaunch(
+      () => piLoaded("/home/user/.pi/agent/skills/review/SKILL.md", true),
+      "pi",
+    );
+    const result = await node.verify();
+    expect(result.checks[0]).toMatchObject({ level: "present", status: "installed-next-session" });
+    expect(result.checks[0]?.detail).toContain("available evidence");
   });
 
   test("a Pi bridge without the route reports that loading cannot be confirmed", async () => {

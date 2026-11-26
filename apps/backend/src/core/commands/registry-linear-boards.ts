@@ -31,6 +31,7 @@ import {
   linearIssueCreateId,
   linearKeyFingerprint,
   listLinearTeams,
+  requireLinearDeleteScope,
   updateLinearIssue,
 } from "../linear-boards.js";
 import { issueFilesAreOnBoard, readLinearIssueFiles } from "../linear-files/index.js";
@@ -91,7 +92,7 @@ export async function requireIssueOnProjectBoard(
   apiKey: string,
   projectId: string,
   issueId: string,
-): Promise<void> {
+) {
   const { link, board } = await requireProjectLinearBoard(context, projectId);
   const issue = await getLinearIssueBoard(apiKey, issueId);
   if (!issue) throw new Error(`Linear issue not found: ${issueId}`);
@@ -100,6 +101,7 @@ export async function requireIssueOnProjectBoard(
       `Linear issue ${issue.identifier ?? issueId} is not on this project's Linear board (${linearBoardName(link)}).`,
     );
   }
+  return { board, issue };
 }
 
 /** How long a file link handed to the Linear tab opens without Linear sign-in. */
@@ -306,8 +308,14 @@ export function registerLinearBoardCommands(register: CommandRegistrar): void {
     deleteLinearIssueCommand,
     async ({ projectId, issueId }, context) =>
       withLinearKey(context, async (apiKey) => {
-        await requireIssueOnProjectBoard(context, apiKey, projectId, issueId);
-        await deleteLinearIssue(apiKey, issueId);
+        const { board, issue } = await requireIssueOnProjectBoard(
+          context,
+          apiKey,
+          projectId,
+          issueId,
+        );
+        await requireLinearDeleteScope(apiKey, issue.id, board);
+        await deleteLinearIssue(apiKey, issue.id);
         return { deleted: true };
       }),
     ASYNC_HANDLER,

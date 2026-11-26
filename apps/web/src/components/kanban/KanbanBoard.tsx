@@ -241,7 +241,8 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   // A card's right-click Build… and Delete…: the ticket each is acting on.
-  const [buildTask, setBuildTask] = useState<KanbanTask | null>(null);
+  const [buildTaskId, setBuildTaskId] = useState<string | null>(null);
+  const closeBuildLauncher = useCallback(() => setBuildTaskId(null), []);
   const [taskToDelete, setTaskToDelete] = useState<KanbanTask | null>(null);
 
   const projectTasks = useMemo(
@@ -442,7 +443,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     syncedFromByControllerId={syncedFromByControllerId}
                     shareWith={leafSync?.unshared ? shareWith : undefined}
                     onShareTask={shareTask}
-                    onBuildTask={setBuildTask}
+                    onBuildTask={(task) => setBuildTaskId(task.id)}
                     onDeleteTask={setTaskToDelete}
                   />
                 ))}
@@ -524,8 +525,8 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 
       <KanbanCardBuildLauncher
         projectId={projectId}
-        task={buildTask}
-        onClose={() => setBuildTask(null)}
+        taskId={buildTaskId}
+        onClose={closeBuildLauncher}
       />
 
       <KanbanCardDeleteConfirm

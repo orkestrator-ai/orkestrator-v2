@@ -896,12 +896,15 @@ opens the build launcher over the board, so the board stays on screen; the
 launch is the detail view's, including its check that no machine is already
 building the issue. Build… is disabled, with the reason under it, while a
 build of the issue runs, while build status from every machine is not known
-yet, or while another build is starting. Delete… asks first, then calls
-`delete_linear_issue`, which the backend refuses for an issue off the
-project's board, as it does every write. It is Linear's `issueDelete`
-without `permanentlyDelete`: the issue and its sub-issues go to Linear's
-trash, restorable there for 30 days. A project with no linked board offers
-no Delete. `delete_linear_issue` is a new `kanban` command (no domain
+yet, while loading a ticket for Build, or while another build is starting.
+The launcher names the ticket. Delete… on the board or in issue detail asks
+first, then calls `delete_linear_issue`. The backend checks the issue and
+its active sub-issues against the linked board and refuses the delete if
+it finds an off-board sub-issue or cannot verify the hierarchy. Linear's
+`issueDelete` moves the issue and its active sub-issues to the trash for
+30 days. The board refreshes after success to remove trashed sub-issues.
+A project with no linked board offers no Delete. `delete_linear_issue` is
+a new `kanban` command (no domain
 version change); an older backend answers `unknown-command`, shown as the
 failure toast. Coordinators have no delete tool.
 

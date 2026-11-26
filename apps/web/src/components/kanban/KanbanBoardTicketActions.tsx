@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import {
@@ -17,7 +17,8 @@ import { useBuildLaunchMachines } from "@/components/build/build-machines";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
-import type { KanbanTask } from "@/stores/kanbanStore";
+import { useNodeScope } from "@/lib/node-scope/providers";
+import { kanbanStore, useKanbanStore, type KanbanTask } from "@/stores/kanbanStore";
 import { kanbanBuildStartOptions } from "./kanban-build-start";
 
 const log = createLogger("web.kanban");
@@ -25,28 +26,50 @@ const log = createLogger("web.kanban");
 /**
  * Build… from a card's right-click menu: the same launcher, "Environment
  * already exists" confirmation and start as the ticket dialog's Build…, without
- * opening the ticket first. `task` is the ticket being launched, or null.
+ * opening the ticket first. Both confirmations read the current ticket.
  */
 export function KanbanCardBuildLauncher({
   projectId,
-  task,
+  taskId,
   onClose,
 }: {
   projectId: string;
-  task: KanbanTask | null;
+  taskId: string | null;
   onClose: () => void;
 }) {
   const { startBuild } = useBuildPipeline();
+  const tasks = useNodeScope().store(kanbanStore);
+  const task = useKanbanStore((state) =>
+    state.tasks.find((candidate) => candidate.id === taskId && candidate.projectId === projectId),
+  );
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const machines = useBuildLaunchMachines(projectId);
-  const { catalog, defaults } = useBuildLaunchOptions(projectId, task !== null);
+  const { catalog, defaults } = useBuildLaunchOptions(projectId, task !== undefined);
   const [busy, setBusy] = useState(false);
   // Held rather than started at once: a ticket that already owns an
   // environment asks first, and the answer must keep the launcher's choices.
   const [confirmSelection, setConfirmSelection] = useState<{
-    task: KanbanTask;
+    taskId: string;
     selection: BuildLaunchSelection;
   } | null>(null);
+  const confirmationTaskExists = useKanbanStore((state) =>
+    state.tasks.some(
+      (candidate) => candidate.id === confirmSelection?.taskId && candidate.projectId === projectId,
+    ),
+  );
+  const launcherTicketMissing = taskId !== null && task === undefined;
+  const missingTicket =
+    launcherTicketMissing || (confirmSelection !== null && !confirmationTaskExists);
+
+  useEffect(() => {
+    if (missingTicket) toast.error("This ticket was removed from the board");
+    if (launcherTicketMissing) onClose();
+  }, [launcherTicketMissing, missingTicket, onClose]);
+
+  const findTask = (id: string) =>
+    tasks
+      .getState()
+      .tasks.find((candidate) => candidate.id === id && candidate.projectId === projectId);
 
   const start = async (target: KanbanTask, selection: BuildLaunchSelection) => {
     setBusy(true);
@@ -67,11 +90,15 @@ export function KanbanCardBuildLauncher({
   };
 
   const handleConfirm = (selection: BuildLaunchSelection) => {
-    if (!task) return;
-    const target = task;
+    if (!taskId) return;
+    const target = findTask(taskId);
     onClose();
+    if (!target) {
+      toast.error("This ticket was removed from the board");
+      return;
+    }
     if (target.environmentId) {
-      setConfirmSelection({ task: target, selection });
+      setConfirmSelection({ taskId: target.id, selection });
       return;
     }
     void start(target, selection);
@@ -80,7 +107,7 @@ export function KanbanCardBuildLauncher({
   return (
     <>
       <BuildLaunchDialog
-        open={task !== null}
+        open={task !== undefined}
         onOpenChange={(open) => {
           if (!open) onClose();
         }}
@@ -102,17 +129,22 @@ export function KanbanCardBuildLauncher({
           <AlertDialogHeader>
             <AlertDialogTitle>Environment already exists</AlertDialogTitle>
             <AlertDialogDescription>
-              This task already has an environment linked to it. Starting a new build will create an
-              additional environment.
+              {confirmationTaskExists
+                ? "This task already has an environment linked to it. Starting a new build will create an additional environment."
+                : "This ticket was removed from the board."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (confirmSelection) void start(confirmSelection.task, confirmSelection.selection);
+                if (!confirmSelection) return;
+                const target = findTask(confirmSelection.taskId);
                 setConfirmSelection(null);
+                if (target) void start(target, confirmSelection.selection);
+                else toast.error("This ticket was removed from the board");
               }}
+              disabled={!confirmationTaskExists}
             >
               Start build
             </AlertDialogAction>

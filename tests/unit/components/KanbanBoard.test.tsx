@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import { KanbanBoard, canClearTaskBuildStatus } from "@/components/kanban/KanbanBoard";
 import { projectStore } from "@/stores/projectStore";
@@ -13,15 +13,19 @@ import type { KanbanTask } from "@/stores/kanbanStore";
 import type { BuildPhase, BuildPipeline } from "@/stores/buildPipelineStore";
 import type { Environment } from "@/types";
 import { appCommandStore } from "../../../apps/web/src/test/app-command-store";
+import * as backend from "@/lib/backend";
+import { mockToastError } from "../../mocks/sonner";
 
 const loadTasksMock = mock(async () => undefined);
 const loadGitHubIssuesMock = mock(async () => undefined);
 const initialConfig = appCommandStore(configStore).getState().config;
+const realDeleteTask = appCommandStore(kanbanStore).getState().deleteTask;
 
 beforeEach(() => {
   cleanup();
   loadTasksMock.mockClear();
   loadGitHubIssuesMock.mockClear();
+  mockToastError.mockClear();
   appCommandStore(projectStore).setState({
     projects: [
       {
@@ -39,6 +43,7 @@ beforeEach(() => {
   appCommandStore(kanbanStore).setState({
     tasks: [],
     loadTasks: loadTasksMock as unknown as KanbanState["loadTasks"],
+    deleteTask: realDeleteTask,
   });
   appCommandStore(uiStore).setState({ projectBoardTab: "kanban" });
   appCommandStore(environmentStore).setState({ environments: [] });
@@ -67,6 +72,11 @@ beforeEach(() => {
     projectErrors: new Map(),
     loadIssues: loadGitHubIssuesMock as unknown as GitHubIssuesState["loadIssues"],
   });
+});
+
+afterEach(() => {
+  cleanup();
+  mock.restore();
 });
 
 function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
@@ -336,6 +346,23 @@ describe("KanbanBoard card right-click menu", () => {
     expect(deleteTaskMock).toHaveBeenCalledWith("task-1");
   });
 
+  test("a rejected delete through the store shows an error and keeps the ticket", async () => {
+    const remove = spyOn(backend, "deleteKanbanTask").mockRejectedValue(new Error("Unavailable"));
+    appCommandStore(kanbanStore).setState({ tasks: [makeTask({ title: "Kept ticket" })] });
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+    const menu = await openContextMenu("Kept ticket");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete ticket" }));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Could not delete ticket", {
+        description: "The ticket is still on the board.",
+      }),
+    );
+    expect(remove).toHaveBeenCalledWith("task-1");
+    expect(screen.getByText("Kept ticket")).toBeTruthy();
+  });
+
   test("cancelling Delete… keeps the ticket", async () => {
     const deleteTaskMock = mock(async () => undefined);
     appCommandStore(kanbanStore).setState({
@@ -366,5 +393,84 @@ describe("KanbanBoard card right-click menu", () => {
     expect(within(launcher).getByRole("button", { name: /Start build/ })).toBeTruthy();
     // The ticket view did not open.
     expect(screen.queryByRole("tab", { name: "Ticket" }) === null).toBe(true);
+  });
+
+  const openBuild = async (title: string) => {
+    const menu = await openContextMenu(title);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Build…" }));
+    return screen.findByRole("dialog");
+  };
+
+  test("starts a build with the current ticket and the selected launch options", async () => {
+    const launch = spyOn(backend, "launchBuildPipeline").mockResolvedValue(makePipeline());
+    const task = makeTask({ title: "Build me", description: "Initial description" });
+    appCommandStore(kanbanStore).setState({ tasks: [task] });
+    appCommandStore(projectStore).setState((state) => ({
+      projects: state.projects.map((project) => ({ ...project, localPath: "/checkout" })),
+    }));
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+    const launcher = await openBuild(task.title);
+    act(() =>
+      appCommandStore(kanbanStore).setState({
+        tasks: [{ ...task, description: "Updated description" }],
+      }),
+    );
+    fireEvent.change(within(launcher).getByLabelText("When verified"), {
+      target: { value: "push-no-pr" },
+    });
+    fireEvent.click(within(launcher).getByRole("button", { name: /Start build/ }));
+    await waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+    expect(launch.mock.calls[0]?.[0]).toMatchObject({
+      taskId: task.id,
+      projectId: task.projectId,
+      environmentType: "local",
+      deliveryPolicy: "push-no-pr",
+      steps: { build: { agent: expect.any(String) } },
+      source: { type: "kanban", taskId: task.id },
+      taskSnapshot: { description: "Updated description" },
+    });
+  });
+
+  test("rechecks the environment at submit, supports cancel, and creates an additional environment after confirmation", async () => {
+    const launch = spyOn(backend, "launchBuildPipeline").mockResolvedValue(makePipeline());
+    const task = makeTask({ title: "Build me", description: "Initial description" });
+    const store = appCommandStore(kanbanStore);
+    store.setState({ tasks: [task] });
+    appCommandStore(projectStore).setState((state) => ({
+      projects: state.projects.map((project) => ({ ...project, localPath: "/checkout" })),
+    }));
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+    const launcher = await openBuild(task.title);
+    const linked = { ...task, environmentId: "existing-env" };
+    act(() => store.setState({ tasks: [linked] }));
+    fireEvent.click(within(launcher).getByRole("button", { name: /Start build/ }));
+    const first = await screen.findByRole("alertdialog", { name: "Environment already exists" });
+    expect(launch).not.toHaveBeenCalled();
+    fireEvent.click(within(first).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(launch).not.toHaveBeenCalled();
+
+    const retry = await openBuild(task.title);
+    fireEvent.click(within(retry).getByRole("button", { name: /Start build/ }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Environment already exists" });
+    act(() => store.setState({ tasks: [{ ...linked, description: "Updated again" }] }));
+    fireEvent.click(within(confirm).getByRole("button", { name: "Start build" }));
+    await waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+    expect(launch.mock.calls[0]?.[0]).toMatchObject({
+      existingEnvironmentId: undefined,
+      taskSnapshot: { description: "Updated again" },
+    });
+  });
+
+  test("reports a removed ticket while the card launcher is open", async () => {
+    const launch = spyOn(backend, "launchBuildPipeline");
+    const store = appCommandStore(kanbanStore);
+    store.setState({ tasks: [makeTask({ title: "Build me" })] });
+    renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
+    await openBuild("Build me");
+    act(() => store.setState({ tasks: [] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(mockToastError).toHaveBeenCalledWith("This ticket was removed from the board");
+    expect(launch).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,41 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
+test("a secondary click opens the ticket menu and primary dragging still works after dismissal", async ({
+  page,
+}) => {
+  await page.goto("/linear-board-drag");
+  const card = page.locator('[data-issue-id="card-0"]');
+  const target = page.locator('[data-issue-id="card-1"]');
+  const preview = page.getByTestId("linear-board-card-overlay");
+  await card.click({ button: "right" });
+  const menu = page.getByTestId("ticket-context-menu");
+  await expect(menu.getByRole("menuitem", { name: "Open" })).toBeVisible();
+  await expect(preview).toHaveCount(0);
+  await expect(page.getByTestId("last-move")).toBeEmpty();
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+
+  const start = (await card.boundingBox())!;
+  const end = (await target.boundingBox())!;
+  await page.mouse.move(start.x + 35, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 45, start.y + start.height / 2);
+  await expect(preview).toBeVisible();
+  await page.mouse.move(end.x + 35, end.y + end.height - 10, { steps: 5 });
+  await expect(page.getByTestId("linear-board-drop-indicator")).toHaveAttribute(
+    "data-placement",
+    "after",
+  );
+  await page.mouse.up();
+  await expect(page.getByTestId("last-move")).toHaveText('{"card-0":2.5}');
+  await page.reload();
+  await expect(page.getByTestId("linear-board-card").first()).toHaveAttribute(
+    "data-issue-id",
+    "card-1",
+  );
+});
+
 test("the Linear drag preview casts a shadow while the board card stays flat", async ({ page }) => {
   await page.goto("/linear-board-drag");
   const source = page.getByTestId("linear-board-card").filter({ hasText: "ENG-0" });

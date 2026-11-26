@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Trash2,
   Unlink,
   Unplug,
 } from "lucide-react";
@@ -291,8 +292,16 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
    */
   const [menuBuild, setMenuBuild] = useState<{
     issueId: string;
+    identifier: string;
     detail: LinearIssueDetail | null;
   } | null>(null);
+  const menuBuildRequestRef = useRef(0);
+  useEffect(() => {
+    const request = menuBuildRequestRef;
+    return () => {
+      request.current += 1;
+    };
+  }, []);
   /** Delete… from a ticket's right-click menu, awaiting confirmation. */
   const [issueToDelete, setIssueToDelete] = useState<LinearIssueListItem | null>(null);
   const [deletingIssue, setDeletingIssue] = useState(false);
@@ -311,6 +320,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   const [commentError, setCommentError] = useState<string | null>(null);
   const connectionRequestRef = useRef(0);
   const issuesRequestRef = useRef(0);
+  const deleteNeedsRefreshRef = useRef(false);
   const detailRequestRef = useRef(0);
   /** Bumped whenever a load replaces the issues: a move's rollback is stale after one. */
   const issuesLoadedRef = useRef(0);
@@ -472,6 +482,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
               : Promise.resolve([]),
           ]);
           if (!current()) return;
+          deleteNeedsRefreshRef.current = false;
           issuesLoadedRef.current += 1;
           // Publish the identity only with the tickets and lanes read for it.
           setBoardLink(board.link);
@@ -506,6 +517,11 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     return fetchIssues();
   }, [fetchIssues]);
 
+  const requestBackgroundRefresh = useCallback(() => {
+    setBackgroundRefreshing(true);
+    void fetchIssues({ background: true });
+  }, [fetchIssues]);
+
   // The initial state already shows this first load: as loading, or as the
   // board remembered from the last visit, which this read then refreshes.
   useEffect(() => {
@@ -517,9 +533,8 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   // background when its node is shown again and when the window regains focus.
   const refreshInBackground = useCallback(() => {
     if (issuesState === "loading" || connectionState === "loading") return;
-    setBackgroundRefreshing(true);
-    void fetchIssues({ background: true });
-  }, [connectionState, fetchIssues, issuesState]);
+    requestBackgroundRefresh();
+  }, [connectionState, issuesState, requestBackgroundRefresh]);
   const refreshInBackgroundRef = useRef(refreshInBackground);
   useLayoutEffect(() => {
     refreshInBackgroundRef.current = refreshInBackground;
@@ -706,6 +721,9 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
       await Promise.all(
         Array.from({ length: Math.min(MOVE_CONCURRENCY, moves.length) }, () => worker()),
       );
+      if (deleteNeedsRefreshRef.current && movingIssuesRef.current.size === 0) {
+        requestBackgroundRefresh();
+      }
 
       const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
       const failed = moves.filter((_, index) => errors[index] !== null);
@@ -738,7 +756,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
         );
       }
     },
-    [nodeBackend, projectId],
+    [nodeBackend, projectId, requestBackgroundRefresh],
   );
 
   const selectedPipeline = selectedIssueId
@@ -780,6 +798,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   );
 
   const handleSelectIssue = (issueId: string) => {
+    closeMenuBuild();
     setSelectedIssueId(issueId);
     setDetail(null);
     setDetailError(null);
@@ -789,6 +808,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
   };
 
   const handleBackToList = () => {
+    closeMenuBuild();
     detailRequestRef.current += 1;
     setSelectedIssueId(null);
     setDetail(null);
@@ -847,16 +867,25 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     }
   };
 
+  const closeMenuBuild = () => {
+    menuBuildRequestRef.current += 1;
+    setMenuBuild(null);
+  };
+
   /** Build… on a ticket's menu: reads the issue (a build needs its detail), then opens the launcher. */
   const requestMenuBuild = (issue: LinearIssueListItem) => {
-    setMenuBuild({ issueId: issue.id, detail: null });
+    const requestId = ++menuBuildRequestRef.current;
+    const target = { issueId: issue.id, identifier: issue.identifier };
+    setMenuBuild({ ...target, detail: null });
     nodeBackend.getLinearIssue(issue.id, boardProjectId).then(
-      (issueDetail) =>
-        setMenuBuild((current) =>
-          current?.issueId === issue.id ? { issueId: issue.id, detail: issueDetail } : current,
-        ),
+      (issueDetail) => {
+        if (menuBuildRequestRef.current === requestId) {
+          setMenuBuild({ ...target, detail: issueDetail });
+        }
+      },
       (error: unknown) => {
-        setMenuBuild((current) => (current?.issueId === issue.id ? null : current));
+        if (menuBuildRequestRef.current !== requestId) return;
+        closeMenuBuild();
         toast.error(`Could not load ${issue.identifier} to build it`, {
           description: error instanceof Error ? error.message : String(error),
         });
@@ -869,7 +898,15 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     setDeletingIssue(true);
     try {
       await nodeBackend.deleteLinearIssue(projectId, issue.id);
+      // Start a new generation so a read from before Linear committed the
+      // delete cannot put the issue back. The read also reconciles sub-issues.
+      issuesRequestRef.current += 1;
+      deleteNeedsRefreshRef.current = true;
+      forgetLinearBoardSnapshot(scope, projectId);
       setIssues((current) => current.filter((candidate) => candidate.id !== issue.id));
+      if (selectedIssueIdRef.current === issue.id) handleBackToList();
+      if (menuBuild?.issueId === issue.id) closeMenuBuild();
+      if (movingIssuesRef.current.size === 0) requestBackgroundRefresh();
       toast.success(`${issue.identifier} moved to Linear's trash`);
       setIssueToDelete(null);
     } catch (error) {
@@ -881,20 +918,37 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
     }
   };
 
+  const loadingBuildIssue = menuBuild?.detail === null ? menuBuild : null;
+  const buildDisabledReason = (issue: LinearIssueListItem) => {
+    if (isActivePipeline(getIssuePipeline(pipelines, issue.id))) {
+      return "A build of this ticket is still running";
+    }
+    if (remoteBuilds.unavailable) return "Waiting for build status from all machines";
+    if (isBuildStarting) return "Another build is starting";
+    if (loadingBuildIssue) return `Loading ${loadingBuildIssue.identifier} for build`;
+    if (menuBuild) return `Configuring a build for ${menuBuild.identifier}`;
+    return undefined;
+  };
   const menuActions: LinearIssueMenuActions = {
     onBuild: requestMenuBuild,
-    buildDisabledReason: (issue) => {
-      if (isActivePipeline(getIssuePipeline(pipelines, issue.id))) {
-        return "A build of this ticket is still running";
-      }
-      if (remoteBuilds.unavailable) return "Waiting for build status from all machines";
-      if (isBuildStarting || menuBuild !== null) return "Another build is starting";
-      return undefined;
-    },
+    loadingBuildIssueId: loadingBuildIssue?.issueId,
+    buildDisabledReason,
     // Deletes are refused for an issue off the project's linked board, so a
     // project without one offers none.
     ...(boardState === "linked" ? { onDelete: setIssueToDelete } : {}),
   };
+
+  const deleteDialog = (
+    <LinearIssueDeleteDialog
+      issue={issueToDelete}
+      deleting={deletingIssue}
+      buildRunning={
+        issueToDelete ? isActivePipeline(getIssuePipeline(pipelines, issueToDelete.id)) : false
+      }
+      onCancel={() => setIssueToDelete(null)}
+      onConfirm={(issue) => void handleDeleteIssue(issue)}
+    />
+  );
 
   const handlePostComment = async () => {
     const body = commentBody.trim();
@@ -1016,6 +1070,16 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
               >
                 <ExternalLink className="h-3.5 w-3.5" />
                 Open
+              </Button>
+            )}
+            {boardState === "linked" && issueForHeader && (
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Delete ticket"
+                onClick={() => setIssueToDelete(issueForHeader)}
+              >
+                <Trash2 className="h-4 w-4" />
               </Button>
             )}
           </div>
@@ -1258,6 +1322,7 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
           {...launchDefaults}
           onConfirm={(selection) => void handleStartBuild(selection)}
         />
+        {deleteDialog}
       </div>
     );
   }
@@ -1619,10 +1684,10 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                             key={issue.id}
                             ticketLabel={`${issue.identifier} ${issue.title}`}
                             onOpen={() => handleSelectIssue(issue.id)}
-                            onBuild={() => menuActions.onBuild?.(issue)}
-                            buildDisabledReason={menuActions.buildDisabledReason?.(issue)}
+                            onBuild={() => requestMenuBuild(issue)}
+                            buildDisabledReason={buildDisabledReason(issue)}
                             onDelete={
-                              menuActions.onDelete ? () => menuActions.onDelete?.(issue) : undefined
+                              boardState === "linked" ? () => setIssueToDelete(issue) : undefined
                             }
                           >
                             <button
@@ -1646,6 +1711,11 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
                                   </span>
                                 )}
                               </div>
+                              {loadingBuildIssue?.issueId === issue.id && (
+                                <span role="status" className="text-xs text-muted-foreground">
+                                  Loading ticket for build…
+                                </span>
+                              )}
                             </button>
                           </TicketContextMenu>
                         );
@@ -1661,8 +1731,9 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
 
       <BuildLaunchDialog
         open={menuBuild?.detail != null}
+        ticketTitle={menuBuild?.detail?.title}
         onOpenChange={(open) => {
-          if (!open) setMenuBuild(null);
+          if (!open) closeMenuBuild();
         }}
         catalog={launchCatalog}
         busy={isBuildStarting}
@@ -1679,20 +1750,12 @@ function LinearTicketsViewProject({ projectId, buildPipeline }: LinearTicketsVie
         {...launchDefaults}
         onConfirm={(selection) => {
           const issue = menuBuild?.detail ?? null;
-          setMenuBuild(null);
+          closeMenuBuild();
           void handleStartBuild(selection, issue);
         }}
       />
 
-      <LinearIssueDeleteDialog
-        issue={issueToDelete}
-        deleting={deletingIssue}
-        buildRunning={
-          issueToDelete ? isActivePipeline(getIssuePipeline(pipelines, issueToDelete.id)) : false
-        }
-        onCancel={() => setIssueToDelete(null)}
-        onConfirm={(issue) => void handleDeleteIssue(issue)}
-      />
+      {deleteDialog}
 
       <LinearConnectDialog
         open={connectOpen}

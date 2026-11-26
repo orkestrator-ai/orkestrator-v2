@@ -43,7 +43,8 @@ export function LinearIssueDeleteDialog({
           <AlertDialogTitle>Delete {issue?.identifier ?? "this ticket"}?</AlertDialogTitle>
           <AlertDialogDescription>
             <span className="font-medium text-foreground">{issue?.title}</span> moves to
-            Linear&apos;s trash, with its sub-issues. It can be restored in Linear for 30 days.
+            Linear&apos;s trash along with its active sub-issues. All active sub-issues must be on
+            this board. Trashed issues can be restored in Linear for 30 days.
             {buildRunning && (
               <span className="mt-2 block">
                 Its build is still running and carries on until you stop it.

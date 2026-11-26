@@ -269,6 +269,7 @@ export interface LinearIssueMenuActions {
   onBuild?: (issue: LinearIssueListItem) => void;
   /** Why Build cannot start for this issue now, or undefined when it can. */
   buildDisabledReason?: (issue: LinearIssueListItem) => string | undefined;
+  loadingBuildIssueId?: string;
   /** Absent (no linked board) hides Delete. */
   onDelete?: (issue: LinearIssueListItem) => void;
 }
@@ -392,6 +393,11 @@ function LinearBoardCard({
         >
           {selected && <span className="sr-only">Selected. </span>}
           <LinearCardContent issue={issue} type={type} pipelinePhase={pipelinePhase} />
+          {menuActions?.loadingBuildIssueId === issue.id && (
+            <span role="status" className="text-xs text-muted-foreground">
+              Loading ticket for build…
+            </span>
+          )}
         </button>
       </TicketContextMenu>
     </div>

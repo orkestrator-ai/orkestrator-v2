@@ -310,6 +310,74 @@ export function issueIsOnBoard(issue: LinearIssueBoard, board: LinearBoardFilter
   return !board.linearProjectId || issue.projectId === board.linearProjectId;
 }
 
+/**
+ * Check the accessible hierarchy before issueDelete can trash it. Visit archived
+ * children too so an archived intermediate issue cannot hide an active descendant.
+ */
+export async function requireLinearDeleteScope(
+  apiKey: string,
+  issueId: string,
+  board: LinearBoardFilter,
+): Promise<void> {
+  const maxIssues = 50;
+  const pending = [issueId];
+  const seen = new Set(pending);
+  const unknownScope = "Could not verify all sub-issues. Open the issue in Linear to delete it.";
+  for (let index = 0; index < pending.length; index += 1) {
+    const id = pending[index]!;
+    const data = await linearGraphql<{ issue?: { children?: unknown } }>(
+      apiKey,
+      `query OrkestratorLinearDeleteChildren($id: String!) {
+        issue(id: $id) {
+          children(first: 50, includeArchived: true) {
+            nodes { id identifier archivedAt team { id } project { id } }
+            pageInfo { hasNextPage }
+          }
+        }
+      }`,
+      { id },
+    );
+    const children = data.issue?.children;
+    if (
+      !isRecord(children) ||
+      !Array.isArray(children.nodes) ||
+      !isRecord(children.pageInfo) ||
+      children.pageInfo.hasNextPage !== false ||
+      pending.length + children.nodes.length > maxIssues
+    ) {
+      throw new Error(unknownScope);
+    }
+    for (const child of children.nodes) {
+      if (
+        !isRecord(child) ||
+        typeof child.id !== "string" ||
+        !child.id ||
+        seen.has(child.id) ||
+        !(child.archivedAt === null || typeof child.archivedAt === "string")
+      ) {
+        throw new Error(unknownScope);
+      }
+      if (
+        child.archivedAt === null &&
+        !issueIsOnBoard(
+          {
+            id: child.id,
+            teamId: isRecord(child.team) ? optionalString(child.team.id) : undefined,
+            projectId: isRecord(child.project) ? optionalString(child.project.id) : undefined,
+          },
+          board,
+        )
+      ) {
+        throw new Error(
+          `Sub-issue ${optionalString(child.identifier) ?? child.id} is outside this project's Linear board. Open the issue in Linear to delete it.`,
+        );
+      }
+      seen.add(child.id);
+      pending.push(child.id);
+    }
+  }
+}
+
 /** One issue with the ids a write needs (state, assignee, labels, team, project). */
 export async function getLinearIssueWithIds(
   apiKey: string,

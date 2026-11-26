@@ -260,6 +260,9 @@ export const kanbanStore = defineScopedStore<KanbanState>("kanban", (scope) => (
         set((state) => ({ tasks: state.tasks.filter((t) => t.id !== taskId) }));
       } catch (error) {
         log.error("task.delete-failed", { taskId, error: formatLogError(error) });
+        toast.error("Could not delete ticket", {
+          description: "The ticket is still on the board.",
+        });
       }
     },
 

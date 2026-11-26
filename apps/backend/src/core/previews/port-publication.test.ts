@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { publishedPortArguments } from "../commands-containers.js";
+import { publishedPortArguments } from "../commands/containers.js";
 import { desiredGeneratedDefinitions } from "./service-registry.js";
 import { createPreviewHarness, type PreviewHarness } from "./test-support.js";
 import { isPortMapping } from "../storage/shared-core.js";

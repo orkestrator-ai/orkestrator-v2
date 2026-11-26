@@ -59,12 +59,13 @@ import {
 } from "@orkestrator/protocol/contract/domains/design";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { CommandContext } from "../commands-context.js";
 import {
+  type CommandContext,
+  type CommandRegistrar,
   contractCommandHandler,
   contractResultValidationDefault,
-} from "../commands-registry-contracts.js";
-import type { CommandRegistrar, DefinedCommandHandler } from "../commands-registry-types.js";
+  type DefinedCommandHandler,
+} from "../commands/index.js";
 import {
   BUILD_PIPELINE_AGENTS,
   type BuildPipelineAgent,
@@ -746,7 +747,7 @@ export function designCommandEntries(options: DesignCommandOptions = {}): Design
 
 /**
  * Registers the design commands with their definitions (the backend
- * registry, `commands-registry-design.ts`), so the registry decodes their
+ * registry, `commands/registry-design.ts`), so the registry decodes their
  * arguments tolerantly and validates their results in development and tests.
  */
 export function registerDefinedDesignCommands(

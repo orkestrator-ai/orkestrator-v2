@@ -35,7 +35,7 @@
 import { createHash } from "node:crypto";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import { CONTAINER_GITHUB_CREDENTIAL_FILE } from "../agent-credential-files.js";
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import {
   boundedLaunchWithPrivateEnv,
   keepPreviousLogCommand,

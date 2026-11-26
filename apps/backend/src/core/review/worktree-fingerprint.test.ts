@@ -9,7 +9,7 @@ import {
   reviewWorktreeProbeReasonCode,
   REVIEW_WORKTREE_FINGERPRINT_SCRIPT,
 } from "./worktree-fingerprint.js";
-import { parseGitPorcelainPaths } from "../commands-review.js";
+import { parseGitPorcelainPaths } from "../commands/review.js";
 
 const roots: string[] = [];
 

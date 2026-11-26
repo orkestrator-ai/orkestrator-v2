@@ -3,9 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService } from "../storage/service.js";
-import { registerKanbanCommands } from "../commands-registry-kanban.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
-import type { CommandHandler } from "../commands-context.js";
+import { registerKanbanCommands } from "../commands/registry-kanban.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
+import type { CommandHandler } from "../commands/context.js";
 import { type ControlMcpServer, readControlMcpDescriptor } from "./server.js";
 import { coordinatorRoleCapabilities } from "./tools.js";
 import {

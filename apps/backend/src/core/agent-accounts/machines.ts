@@ -10,7 +10,7 @@ import {
 } from "@orkestrator/protocol/agent-accounts";
 
 import { runWithTimeout, WorkTimeoutError } from "../abortable-timing.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { listAgentAccounts } from "./accounts.js";
 import { readHostAgentSignIns } from "../agent-sign-ins.js";
 import { NodeUnavailableError } from "../nodes/index.js";

@@ -4,15 +4,15 @@
  * `/api/info` as 2.x behind the launch's Basic password and reports what it
  * was launched with. Every process here is one this test spawned, stopped
  * through its recorded handle. Coordinator launches are covered with the
- * coordinator supervisor (`commands-servers-coordinator-opencode.test.ts`).
+ * coordinator supervisor (`commands/servers-coordinator-opencode.test.ts`).
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
-import { stopLocalServerUnlocked } from "../commands-local-server-lifecycle.js";
-import type { CommandContext } from "../commands-context.js";
+import { stopLocalServerUnlocked } from "../commands/local-server-lifecycle.js";
+import type { CommandContext } from "../commands/context.js";
 import { LocalServerRuntime } from "../local-server-runtime.js";
 import { ensureOpenCode2HostServer, peekOpenCode2HostServer } from "./host-server.js";
 import { openCode2ServerKey } from "./host-server-state.js";

@@ -10,7 +10,7 @@ import {
   agentTestUsageOrigin,
   applyAgentTestAnthropicOrigin,
 } from "../agent-test-fixtures.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { defaultDataDir } from "../../data-dir.js";
 import {
   CLAUDE_USAGE_URL,

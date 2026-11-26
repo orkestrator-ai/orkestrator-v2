@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { CommandContext } from "../src/core/commands-context.js";
+import type { CommandContext } from "../src/core/commands/context.js";
 import type { Environment } from "../src/core/models.js";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";

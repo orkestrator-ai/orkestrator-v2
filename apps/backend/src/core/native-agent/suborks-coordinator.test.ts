@@ -4,7 +4,7 @@
  * coordinator's own checkout) and delivers the answers to the conversation's
  * mailbox, where its session's rows and Stop find them. Provider fakes only.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   COORDINATOR_EXECUTION_POLICY,
@@ -13,7 +13,7 @@ import {
   coordinatorRuntimeId,
   type CoordinatorConversation,
 } from "@orkestrator/protocol/coordinator";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
 import { registerCoordinatorSuborkActions } from "../coordinator/subork-actions.js";
 import { nativeAgentSessionStorageKey } from "./service-shared.js";
 import { suborkWorld, type SuborkWorld } from "./suborks-test-support.js";

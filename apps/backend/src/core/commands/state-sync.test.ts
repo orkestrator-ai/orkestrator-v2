@@ -1,0 +1,6420 @@
+import { describe, expect, jest, mock, spyOn, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { isPrMonitorSnapshot } from "@orkestrator/protocol/pr-monitor";
+import { MULTI_REVIEW_WORKFLOW_VERSION } from "@orkestrator/protocol/multi-review";
+import {
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+} from "@orkestrator/protocol/agent-interactions";
+import { __testing as commandTesting } from "./testing.js";
+import { createCommandRegistry } from "./registry.js";
+import {
+  findKanbanTaskForEnvironment,
+  getPrMonitorCheckRequest,
+  getPrMonitorDetectionRequest,
+  parsePrMonitorCheckResponse,
+  parsePrMonitorDetectionResponse,
+} from "./pr-monitor.js";
+import { toClientEnvironment } from "./terminal.js";
+import type { CommandContext } from "./context.js";
+import { parsePrCheckSummary } from "./review.js";
+import {
+  FIRST_USE_BRIDGE_READY_TIMEOUT_MS,
+  FIRST_USE_CATALOG_BUDGET_MS,
+  firstUseCatalogFetchTimeoutMs,
+} from "./registry-projects.js";
+import { agentAccountLoginKey } from "../agent-accounts/store.js";
+import { cachedLaunchModels } from "../control-shared-actions.js";
+import { StorageService } from "../storage/service.js";
+import { seedUnreadableStore, storageInternals } from "../storage/test-support.js";
+import type { ClaudeModelCatalogEntry } from "../models.js";
+import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";
+import { createProviderStub } from "../native-agent/service-projection-test-support.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import { launchInternals } from "../native-agent/service-test-collaborators.js";
+
+/**
+ * Registry-level coverage for the commands that back the backend-owned state
+ * introduced with the change feed. These run against a real StorageService
+ * because the argument coercion in the registry is exactly what decides whether
+ * storage's own validation is reachable.
+ */
+
+async function withCommands<T>(
+  run: (
+    invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>,
+    storage: StorageService,
+    dataDir: string,
+    commands: ReturnType<typeof createCommandRegistry>,
+    context: CommandContext,
+  ) => Promise<T>,
+  options: {
+    environment?: Record<string, unknown>;
+    buildPipelines?: CommandContext["buildPipelines"];
+    multiReviews?: CommandContext["multiReviews"];
+    nativeAgents?: CommandContext["nativeAgents"];
+    nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
+    tabTeardown?: NonNullable<Parameters<typeof createCommandRegistry>[0]>["tabTeardown"];
+    modelCatalogRefresh?: NonNullable<
+      Parameters<typeof createCommandRegistry>[0]
+    >["modelCatalogRefresh"];
+  } = {},
+): Promise<T> {
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "e1",
+    name: "Env",
+    projectId: "proj-1",
+    status: "running",
+    environmentType: "local",
+    branch: "main",
+    order: 0,
+    containerId: null,
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    networkAccessMode: "restricted",
+    createdAt: new Date(0).toISOString(),
+    ...options.environment,
+  } as Parameters<StorageService["addEnvironment"]>[0]);
+  const commands = createCommandRegistry({
+    tabTeardown: options.tabTeardown,
+    modelCatalogRefresh: options.modelCatalogRefresh,
+  });
+  const context = {
+    appRoot: "",
+    resourceRoot: "",
+    toolchainBinDir: "",
+    emit: () => undefined,
+    storage,
+    buildPipelines: options.buildPipelines,
+    multiReviews: options.multiReviews,
+    nativeAgents: options.nativeAgents ?? options.nativeAgentsFactory?.(storage),
+    runtime: new BackendRuntime({ emit: () => undefined }),
+  } as unknown as CommandContext;
+
+  const invoke = async (command: string, args: Record<string, unknown>) => {
+    const handler = commands.get(command);
+    if (!handler) throw new Error(`Command not registered: ${command}`);
+    return await handler(args, context);
+  };
+
+  try {
+    return await run(invoke, storage, dataDir, commands, context);
+  } finally {
+    context.runtime.shutdown();
+    // Closing a terminal disposes its history without awaiting the writes.
+    await context.runtime.terminals.history.settled();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+}
+
+const KEY = "claude env-e1:tab-1";
+
+// Captured before any test fakes timers: the clock helpers below need a real
+// macrotask yield so storage and command continuations run between steps.
+const realSetImmediate = globalThis.setImmediate;
+const flushContinuations = () => new Promise<void>((resolve) => realSetImmediate(resolve));
+
+/**
+ * Runs `body` on a fake clock. `await_bridge_ready` accepts nothing below one
+ * second and polls every 500 ms, so its scenarios would otherwise spend real
+ * seconds waiting on timers whose values are the subject of the assertions.
+ */
+async function withFakeClock<T>(body: () => Promise<T>): Promise<T> {
+  jest.useFakeTimers();
+  try {
+    return await body();
+  } finally {
+    jest.useRealTimers();
+  }
+}
+
+/**
+ * Advances the fake clock in small steps, flushing promise continuations
+ * between steps. Timers are re-armed only after the awaited storage read
+ * resolves, so a single large jump would skip every poll after the first.
+ */
+async function advanceFakeClock(ms: number, stepMs = 50): Promise<void> {
+  for (let elapsed = 0; elapsed < ms; elapsed += stepMs) {
+    await flushContinuations();
+    jest.advanceTimersByTime(Math.min(stepMs, ms - elapsed));
+  }
+  await flushContinuations();
+}
+
+/** Advances the fake clock until every promise settled; a bounded loop, never a hang. */
+async function advanceFakeClockUntilSettled(
+  promises: Array<Promise<unknown>>,
+  limitMs = 10_000,
+): Promise<void> {
+  let settled = 0;
+  for (const promise of promises) {
+    void promise.then(
+      () => (settled += 1),
+      () => (settled += 1),
+    );
+  }
+  for (let elapsed = 0; settled < promises.length; elapsed += 50) {
+    if (elapsed >= limitMs) throw new Error(`promises still pending after ${limitMs} fake ms`);
+    await advanceFakeClock(50);
+  }
+}
+
+describe("scoped resource snapshot commands", () => {
+  test("batches allowlisted reads with stable revisions and bounded input", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [{ resource: "config", id: "global", revision: 1 }],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toHaveLength(1);
+      expect(batch.entries[0]).toMatchObject({
+        resource: "config",
+        id: "global",
+        status: "ok",
+        command: "get_config",
+        args: {},
+      });
+      expect(batch.entries[0]?.generation).toMatch(/^[a-f0-9]{32}$/);
+      expect(batch.entries[0]?.revision).toMatch(/^[a-f0-9]{32}$/);
+
+      await expect(
+        invoke("get_scoped_resource_snapshots", {
+          changes: Array.from({ length: 33 }, (_, index) => ({
+            resource: "config",
+            id: `global-${index}`,
+            revision: index + 1,
+          })),
+        }),
+      ).rejects.toThrow("at most 32");
+    });
+  });
+
+  test("keeps native-agent scopes distinct when they share an environment", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [
+          {
+            resource: "native-agent-session",
+            id: "e1",
+            revision: 1,
+            agent: "codex",
+            logicalSessionKey: "env-e1:tab-1",
+          },
+          {
+            resource: "native-agent-session",
+            id: "e1",
+            revision: 2,
+            agent: "claude",
+            logicalSessionKey: "env-e1:tab-2",
+          },
+        ],
+      })) as { entries: Array<Record<string, unknown>> };
+
+      // Two agents in one environment are two scopes. Collapsing them on
+      // `resource\0id` would silently answer for only one of them.
+      expect(batch.entries).toHaveLength(2);
+      expect(batch.entries.every((entry) => entry.status === "deferred")).toBe(true);
+    });
+  });
+
+  test("collapses repeated changes for the same scope", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [
+          { resource: "config", id: "global", revision: 1 },
+          { resource: "config", id: "global", revision: 2 },
+        ],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toHaveLength(1);
+    });
+  });
+
+  test("defers a resource with no batchable read command", async () => {
+    await withCommands(async (invoke) => {
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        // An environment change without a project id names no readable scope.
+        changes: [{ resource: "environment", id: "e1", revision: 1 }],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toEqual([{ resource: "environment", id: "e1", status: "deferred" }]);
+    });
+  });
+
+  test("defers an entry that would blow the response byte budget", async () => {
+    await withCommands(async (invoke, storage) => {
+      // A single snapshot larger than the per-entry cap is deferred rather
+      // than returned, so the client falls back to an individual read.
+      await storage.kanban.saveProjectNotes("proj-1", "x".repeat(3 * 1024 * 1024));
+      const batch = (await invoke("get_scoped_resource_snapshots", {
+        changes: [{ resource: "project-notes", id: "proj-1", revision: 1 }],
+      })) as { entries: Array<Record<string, unknown>> };
+      expect(batch.entries).toEqual([
+        { resource: "project-notes", id: "proj-1", status: "deferred" },
+      ]);
+    });
+  });
+});
+
+/** `updateGlobalConfig` replaces the whole block, so edit a loaded copy. */
+async function setOpenCodeModelProviders(
+  storage: StorageService,
+  openCodeModelProviders: string[],
+): Promise<void> {
+  const config = await storage.loadConfig();
+  await storage.updateGlobalConfig({
+    ...config.global,
+    openCodeModelProviders,
+  });
+}
+
+describe("remembered create-environment agent selection", () => {
+  test("preserves backend-owned create state when stale repository settings are saved", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+        },
+      });
+
+      await invoke("update_repository_config", {
+        projectId: "proj-1",
+        repoConfig: {
+          defaultBranch: "develop",
+          prBaseBranch: "release",
+          lastEnvironmentType: "containerized",
+          lastEnvironmentAgentSelection: {
+            platform: "claude",
+            mode: "native",
+          },
+        },
+      });
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+        },
+      });
+    });
+  });
+
+  test("serializes concurrent repository settings and remembered-selection writes", async () => {
+    await withCommands(async (_invoke, storage) => {
+      await storage.updateRepositoryConfig("proj-1", {
+        defaultBranch: "main",
+        prBaseBranch: "main",
+        lastEnvironmentType: "local",
+      });
+
+      await Promise.all([
+        storage.updateRepositorySettings("proj-1", {
+          defaultBranch: "develop",
+          prBaseBranch: "release",
+        }),
+        storage.patchRepositoryConfig("proj-1", {
+          lastEnvironmentAgentSelection: {
+            platform: "codex",
+            mode: "terminal",
+          },
+        }),
+      ]);
+
+      expect(await storage.getRepositoryConfig("proj-1")).toEqual({
+        defaultBranch: "develop",
+        prBaseBranch: "release",
+        lastEnvironmentType: "local",
+        lastEnvironmentAgentSelection: {
+          platform: "codex",
+          mode: "terminal",
+        },
+      });
+    });
+  });
+
+  // `patchRepositoryConfig` seeds `defaultRepositoryConfig()` when the project
+  // has never been saved. Without that seed the patch would write a repository
+  // entry with no `defaultBranch`/`prBaseBranch`, which every later reader treats
+  // as configured rather than defaulted.
+  test("seeds repository defaults when remembering against an unsaved project", async () => {
+    await withCommands(async (_invoke, storage) => {
+      const untouched = await storage.getRepositoryConfig("proj-never-saved");
+
+      await storage.patchRepositoryConfig("proj-never-saved", {
+        lastEnvironmentAgentSelection: { platform: "claude", mode: "native" },
+      });
+
+      expect(await storage.getRepositoryConfig("proj-never-saved")).toEqual({
+        ...untouched,
+        lastEnvironmentAgentSelection: { platform: "claude", mode: "native" },
+      });
+      expect(untouched.defaultBranch).toBe("main");
+      expect(untouched.prBaseBranch).toBe("main");
+    });
+  });
+});
+
+describe("one-shot startup launch speed", () => {
+  test("persists an explicit Fast or Normal choice for the pending launch", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialAgentModel: "sonnet",
+        initialReasoningEffort: "high",
+        initialFastMode: true,
+      });
+      expect((await storage.getEnvironment("e1"))?.initialFastMode).toBe(true);
+
+      // `false` is a choice, not an absence: a falsy-only guard anywhere on
+      // this path would drop it and hand the run back to the platform tier.
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialFastMode: false,
+      });
+      expect((await storage.getEnvironment("e1"))?.initialFastMode).toBe(false);
+    });
+  });
+
+  test("leaves speed untouched when the request carries none", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialFastMode: true,
+      });
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        initialAgentModel: "opus",
+      });
+
+      expect((await storage.getEnvironment("e1"))?.initialFastMode).toBe(true);
+    });
+  });
+
+  test("clears speed with the rest of the launch intent", async () => {
+    await withCommands(async (invoke, storage) => {
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: true,
+        initialAgentModel: "sonnet",
+        initialFastMode: true,
+      });
+      await invoke("update_environment_agent_settings", {
+        environmentId: "e1",
+        pendingAgentLaunch: false,
+      });
+
+      const environment = await storage.getEnvironment("e1");
+      expect(environment?.initialFastMode).toBeUndefined();
+      expect(environment?.initialAgentModel).toBeUndefined();
+    });
+  });
+
+  test("rejects a non-boolean speed rather than storing it", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("update_environment_agent_settings", {
+          environmentId: "e1",
+          pendingAgentLaunch: true,
+          initialFastMode: "yes",
+        }),
+      ).rejects.toThrow("initialFastMode must be a boolean");
+    });
+  });
+});
+
+describe("native agent model catalogue command", () => {
+  test("rejects an unknown host catalogue provider before launching a probe", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("refresh_host_agent_model_catalog", { agent: "unknown" }),
+      ).rejects.toThrow("Unknown agent platform: unknown");
+    });
+  });
+
+  test("validates an OpenCode cache target before launching its host refresh", async () => {
+    const refresh = mock(async () => ({ agent: "opencode" as const, models: [] }));
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("refresh_host_agent_model_catalog", {
+            agent: "opencode",
+            projectId: "missing-project",
+          }),
+        ).rejects.toThrow("Project not found: missing-project");
+        expect(refresh).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("requires an OpenCode cache target before launching its host refresh", async () => {
+    const refresh = mock(async () => ({ agent: "opencode" as const, models: [] }));
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("refresh_host_agent_model_catalog", { agent: "opencode" }),
+        ).rejects.toThrow("Expected projectId to be a string");
+        expect(refresh).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("persists an environment-free provider refresh in the host catalogue", async () => {
+    const models = [
+      {
+        platform: "grok" as const,
+        id: "grok-4",
+        label: "Grok 4",
+        providerLabel: "Grok",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+    ];
+    const refresh = mock(async () => ({ agent: "grok" as const, models }));
+    await withCommands(
+      async (invoke, storage) => {
+        expect(await invoke("refresh_host_agent_model_catalog", { agent: "grok" })).toEqual({
+          agent: "grok",
+          modelCount: 1,
+        });
+        expect((await storage.getAgentModelCatalogCache()).grok?.models).toEqual(models);
+        expect(refresh).toHaveBeenCalledTimes(1);
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("persists every global host catalogue branch", async () => {
+    const catalogs = {
+      claude: { agent: "claude", models: [{ id: "claude-opus", name: "Opus" }] },
+      codex: {
+        agent: "codex",
+        models: [{ id: "gpt-codex", name: "Codex" }],
+        accountLoginKey: agentAccountLoginKey(),
+      },
+      cursor: {
+        agent: "cursor",
+        models: [{ platform: "cursor", id: "cursor-1", label: "Cursor 1" }],
+      },
+      pi: {
+        agent: "pi",
+        models: [{ platform: "pi", id: "provider/pi-1", label: "Pi 1" }],
+      },
+    } as const;
+    const refresh = mock(async (_context: CommandContext, agent: keyof typeof catalogs) =>
+      structuredClone(catalogs[agent]),
+    );
+    await withCommands(
+      async (invoke, storage) => {
+        for (const agent of ["claude", "codex", "cursor", "pi"] as const) {
+          await invoke("refresh_host_agent_model_catalog", { agent });
+        }
+        const cache = await storage.getAgentModelCatalogCache();
+        expect(cache.claude?.models).toEqual(Array.from(catalogs.claude.models));
+        expect(cache.codex?.models).toEqual(Array.from(catalogs.codex.models));
+        expect(cache.cursor?.models).toEqual(Array.from(catalogs.cursor.models));
+        expect(cache.pi?.models).toEqual(Array.from(catalogs.pi.models));
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("merges host OpenCode models into the repository-scoped catalogue", async () => {
+    const refresh = mock(async () => ({
+      agent: "opencode" as const,
+      models: [
+        {
+          platform: "opencode" as const,
+          id: "openai/gpt-5",
+          label: "GPT-5",
+          providerLabel: "OpenAI",
+          reasoning: [
+            { id: "default", label: "Default" },
+            { id: "high", label: "High" },
+          ],
+          contextWindow: 400_000,
+          supportsImageInput: true,
+        },
+      ],
+    }));
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.addProject({
+          id: "proj-1",
+          name: "Project",
+          gitUrl: "https://example.com/repo.git",
+          localPath: null,
+          order: 0,
+          addedAt: new Date(0).toISOString(),
+        });
+        await storage.cacheOpenCodeModelCatalog("proj-1", [
+          {
+            id: "repository/custom-model",
+            name: "Repository Model",
+            provider: "repository",
+          },
+        ]);
+
+        expect(
+          await invoke("refresh_host_agent_model_catalog", {
+            agent: "opencode",
+            projectId: "proj-1",
+          }),
+        ).toEqual({ agent: "opencode", modelCount: 1 });
+        expect((await storage.getOpenCodeModelCatalog("proj-1"))?.models).toEqual([
+          {
+            id: "openai/gpt-5",
+            name: "GPT-5",
+            provider: "openai",
+            variants: ["high"],
+            contextWindow: 400_000,
+            supportsImageInput: true,
+          },
+          {
+            id: "repository/custom-model",
+            name: "Repository Model",
+            provider: "repository",
+          },
+        ]);
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("passes only the residual first-use budget to catalogue fetching", () => {
+    const startedAt = 10_000;
+    const deadline = startedAt + FIRST_USE_CATALOG_BUDGET_MS;
+
+    expect(firstUseCatalogFetchTimeoutMs(deadline, startedAt + 30_000)).toBe(15_000);
+    expect(firstUseCatalogFetchTimeoutMs(deadline, deadline + 500)).toBe(1_000);
+  });
+
+  test("seeds the host Pi catalogue before an environment exists", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: [...(config.global.enabledAgentPlatforms ?? []), "pi"],
+      });
+      const models = [
+        {
+          platform: "pi" as const,
+          id: "openai-codex/gpt-5.4",
+          label: "GPT-5.4",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ];
+      const refresh = mock(async () => {
+        await storage.cacheAgentModelCatalog("pi", models);
+        return models;
+      });
+      commands.set("ensure_host_pi_model_catalog", refresh);
+
+      const first = (await invoke("get_agent_model_catalog_cache", {})) as {
+        pi?: { models: typeof models };
+      };
+      expect(first.pi?.models).toEqual(models);
+      expect(refresh).toHaveBeenCalledTimes(1);
+
+      await invoke("get_agent_model_catalog_cache", {});
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("seeds enabled host catalogues when the startup cache read requests it", async () => {
+    const refresh = mock(async () => ({
+      agent: "codex" as const,
+      models: [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          reasoningEfforts: ["high"],
+          defaultReasoningEffort: "high",
+        },
+      ],
+      accountLoginKey: agentAccountLoginKey(),
+    }));
+    await withCommands(
+      async (invoke, storage) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...config.global,
+          enabledAgentPlatforms: ["codex"],
+        });
+
+        const cache = (await invoke("get_agent_model_catalog_cache", { seed: true })) as {
+          codex?: { models: { id: string }[] };
+        };
+
+        expect(refresh).toHaveBeenCalledTimes(1);
+        expect(cache.codex?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("a startup read without seed answers the stored cache while a seed is still running", async () => {
+    let finishSeed!: () => void;
+    const seedReleased = new Promise<void>((resolve) => {
+      finishSeed = resolve;
+    });
+    const refresh = mock(async () => {
+      await seedReleased;
+      throw new Error("grok returned an empty model catalogue");
+    });
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        const config = await storage.loadConfig();
+        await storage.updateGlobalConfig({
+          ...config.global,
+          enabledAgentPlatforms: ["grok", "pi"],
+        });
+        await storage.cacheAgentModelCatalog("codex", [
+          { id: "gpt-5.4", name: "GPT-5.4", reasoningEfforts: [], defaultReasoningEffort: null },
+        ] as never);
+        const piProbe = mock(async () => []);
+        commands.set("ensure_host_pi_model_catalog", piProbe);
+
+        const seeding = invoke("get_agent_model_catalog_cache", { seed: true });
+        await Promise.resolve();
+        const cached = (await invoke("get_agent_model_catalog_cache", { seed: false })) as {
+          codex?: { models: { id: string }[] };
+        };
+        // Another platform's cached catalogue loads while the seed is pending,
+        // and the read starts no Pi probe of its own.
+        expect(cached.codex?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+        expect(piProbe).not.toHaveBeenCalled();
+
+        finishSeed();
+        await seeding;
+        expect(refresh).toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("starts a requested bridge once when its durable catalogue is missing", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const awaitReady = mock(async () => ({
+        status: "ready" as const,
+        port: 4321,
+        authToken: "bridge-token",
+      }));
+      commands.set("await_bridge_ready", awaitReady);
+
+      await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+        ensureAgent: "pi",
+      });
+
+      expect(awaitReady).toHaveBeenCalledWith(
+        { environmentId: "e1", agent: "pi", timeoutMs: FIRST_USE_BRIDGE_READY_TIMEOUT_MS },
+        expect.anything(),
+      );
+
+      await storage.cacheAgentModelCatalog("pi", [
+        {
+          platform: "pi",
+          id: "openai-codex/gpt-5.4",
+          label: "GPT-5.4",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ]);
+      awaitReady.mockClear();
+
+      await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+        ensureAgent: "pi",
+      });
+
+      expect(awaitReady).not.toHaveBeenCalled();
+    });
+  });
+
+  test("rejects an unsupported first-use catalogue agent", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "bogus",
+        }),
+      ).rejects.toThrow("ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi");
+    });
+  });
+
+  // The whole point of making the first-use start opt-in is that the ordinary
+  // read stays side-effect free. A read that started bridges on its own would
+  // spawn a process in every environment the launcher happens to poll.
+  test("does not start any bridge for a read with no requested agent", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const awaitReady = mock(async () => ({ status: "ready" as const }));
+      commands.set("await_bridge_ready", awaitReady);
+
+      await invoke("get_native_agent_model_catalog", { environmentId: "e1" });
+
+      expect(awaitReady).not.toHaveBeenCalled();
+    });
+  });
+
+  test("downloads a missing Claude catalogue on first use and then serves it from the cache", async () => {
+    const refresh = mock(async () => ({
+      agent: "claude" as const,
+      models: [{ id: "sonnet", name: "Sonnet", resolvedModel: "claude-sonnet" }],
+    }));
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        const awaitReady = mock(async () => ({ status: "ready" as const }));
+        commands.set("await_bridge_ready", awaitReady);
+
+        const first = (await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        })) as { models: { platform: string; id: string }[]; status: string };
+        expect(first.status).toBe("ready");
+        expect(first.models.some((m) => m.platform === "claude" && m.id === "sonnet")).toBe(true);
+        expect((await storage.getAgentModelCatalogCache()).claude?.models).toHaveLength(1);
+
+        await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        });
+        expect(refresh).toHaveBeenCalledTimes(1);
+        // The host-wide probe is used, not an environment bridge.
+        expect(awaitReady).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("reports a failed Claude first-use download so the picker can retry", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const refresh = mock(async () => {
+      throw new Error("not signed in");
+    });
+    try {
+      await withCommands(
+        async (invoke) => {
+          const result = (await invoke("get_native_agent_model_catalog", {
+            environmentId: "e1",
+            ensureAgent: "claude",
+          })) as { status: string };
+          expect(result.status).toBe("failed");
+        },
+        { modelCatalogRefresh: refresh as never },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("bounds a host seed that does not settle and lets it finish in the background", async () => {
+    let refreshStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    const refresh = mock(async () => {
+      refreshStarted();
+      return await new Promise<never>(() => undefined);
+    });
+    jest.useFakeTimers();
+    try {
+      await withCommands(
+        async (invoke) => {
+          const response = invoke("get_native_agent_model_catalog", {
+            environmentId: "e1",
+            ensureAgent: "opencode",
+          });
+          await started;
+          jest.advanceTimersByTime(FIRST_USE_CATALOG_BUDGET_MS);
+          await expect(response).resolves.toMatchObject({ status: "failed" });
+        },
+        { modelCatalogRefresh: refresh as never },
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("records why a first-use bridge did not become ready", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        commands.set(
+          "await_bridge_ready",
+          mock(async () => ({
+            status: "failed" as const,
+            error: { message: "Environment is not running", retryable: false },
+          })),
+        );
+
+        const catalogue = (await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "pi",
+        })) as { models: unknown[]; status: string };
+
+        // `await_bridge_ready` reports failure by returning, and this call is
+        // the launch, so nothing else would ever record the reason.
+        expect(
+          warn.mock.calls.some(
+            (call) =>
+              typeof call[0] === "string" &&
+              call[0].includes("bridge.not-ready agent=pi") &&
+              call[0].includes("Environment is not running"),
+          ),
+        ).toBe(true);
+        // The response still carries every durable fallback.
+        expect(Array.isArray(catalogue.models)).toBe(true);
+        expect(catalogue.status).toBe("failed");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  test("records a first-use bridge start that threw", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        commands.set(
+          "await_bridge_ready",
+          mock(async () => {
+            throw new Error("bridge start exploded");
+          }),
+        );
+
+        await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "cursor",
+        });
+
+        expect(
+          warn.mock.calls.some(
+            (call) =>
+              typeof call[0] === "string" && call[0].includes("bridge.start-failed agent=cursor"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  test("does not seed the Pi catalogue when Pi is not an enabled platform", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: ["claude", "codex"],
+      });
+      const refresh = mock(async () => []);
+      commands.set("ensure_host_pi_model_catalog", refresh);
+
+      await invoke("get_agent_model_catalog_cache", {});
+
+      // Seeding spawns a real bridge, so a platform the user has turned off
+      // must not pay for it on every launch.
+      expect(refresh).not.toHaveBeenCalled();
+    });
+  });
+
+  test("returns the last-known-good catalogues when Pi seeding fails", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: [...(config.global.enabledAgentPlatforms ?? []), "pi"],
+      });
+      await storage.cacheAgentModelCatalog("cursor", [
+        {
+          platform: "cursor",
+          id: "composer-2.5",
+          label: "Composer 2.5",
+          providerLabel: "Cursor",
+          supportsSpeed: true,
+          supportsMode: true,
+        },
+      ]);
+      commands.set(
+        "ensure_host_pi_model_catalog",
+        mock(async () => {
+          throw new Error("pi bridge entrypoint not found");
+        }),
+      );
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+
+      try {
+        // Startup must stay non-fatal: a Pi probe that cannot run may not take
+        // the other platforms' catalogues down with it.
+        const cache = (await invoke("get_agent_model_catalog_cache", {})) as {
+          cursor?: { models: { id: string }[] };
+        };
+
+        expect(cache.cursor?.models.map((model) => model.id)).toEqual(["composer-2.5"]);
+        expect(
+          warn.mock.calls.some(
+            (call) => typeof call[0] === "string" && call[0].includes("seed.pi-failed"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  test("normalizes provider catalogues and filters OpenCode to the configured providers", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        claudeModelCatalog: {
+          environmentId: "e1",
+          models: [
+            {
+              id: "claude-opus",
+              name: "Opus",
+              supportedEffortLevels: ["low", "high"],
+            },
+          ],
+          source: "sdk",
+          fetchedAt: new Date(0).toISOString(),
+          stale: false,
+        },
+      });
+      await storage.cacheAgentModelCatalog("codex", [
+        {
+          id: "gpt-codex",
+          name: "Codex",
+          reasoningEfforts: ["medium", "high"],
+          defaultReasoningEffort: "high",
+        },
+      ]);
+      await storage.cacheAgentModelCatalog("cursor", [
+        {
+          platform: "cursor",
+          id: "composer-cached",
+          label: "Composer Cached",
+          providerLabel: "Cursor",
+          supportsSpeed: true,
+          supportsMode: true,
+        },
+      ]);
+      await storage.cacheAgentModelCatalog("grok", [
+        {
+          platform: "grok",
+          id: "grok-cached",
+          label: "Grok Cached",
+          providerLabel: "Grok",
+          supportsMode: true,
+        },
+      ]);
+      await storage.cacheAgentModelCatalog("pi", [
+        {
+          platform: "pi",
+          id: "anthropic/claude-opus-4-5",
+          label: "Claude Opus 4.5",
+          providerLabel: "Anthropic",
+          reasoning: [
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+          defaultReasoningId: "high",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ]);
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "opencode-go/b", name: "OpenCode Go B", provider: "opencode-go" },
+        { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
+      ]);
+
+      // Both picker-facing reads filter, so a cache written before the
+      // allowlist changed cannot leak an excluded provider to the renderer.
+      const cached = (await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      })) as { models: Array<{ provider: string }> };
+      expect(cached.models.map((model) => model.provider)).toEqual(["opencode-go", "opencode"]);
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+
+      expect(models.map((model) => model.id)).toEqual([
+        "claude-opus",
+        "gpt-codex",
+        "opencode-go/b",
+        "opencode/a",
+        "composer-cached",
+        "grok-cached",
+        "anthropic/claude-opus-4-5",
+      ]);
+      expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
+        "opencode-go",
+        "opencode",
+      ]);
+    });
+  });
+
+  test("resolves each provider's default reasoning id from what the model offers", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        claudeModelCatalog: {
+          environmentId: "e1",
+          models: [
+            { id: "claude-broad", name: "Broad", supportedEffortLevels: ["low", "medium", "high"] },
+            // Before the shared policy this still advertised "high", an effort
+            // the model does not accept.
+            { id: "claude-narrow", name: "Narrow", supportedEffortLevels: ["low", "medium"] },
+          ],
+          source: "sdk",
+          fetchedAt: new Date(0).toISOString(),
+          stale: false,
+        },
+      });
+      await storage.cacheAgentModelCatalog("codex", [
+        {
+          id: "codex-with-high",
+          name: "Codex With High",
+          reasoningEfforts: ["low", "medium", "high"],
+          // "high" outranks a medium the catalog merely advertises.
+          defaultReasoningEffort: "medium",
+        },
+        {
+          id: "codex-without-high",
+          name: "Codex Without High",
+          reasoningEfforts: ["low", "medium", "xhigh"],
+          // With no "high" on offer the advertised default must survive rather
+          // than collapsing to the first listed effort.
+          defaultReasoningEffort: "medium",
+        },
+      ]);
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode", variants: ["high"] },
+      ]);
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+      const defaults = new Map(models.map((model) => [model.id, model.defaultReasoningId]));
+
+      expect(defaults.get("claude-broad")).toBe("high");
+      expect(defaults.get("claude-narrow")).toBe("low");
+      expect(defaults.get("codex-with-high")).toBe("high");
+      expect(defaults.get("codex-without-high")).toBe("medium");
+      // OpenCode injects an explicit "Default" choice, which outranks "high".
+      expect(defaults.get("opencode/a")).toBe("default");
+
+      // Every advertised default has to be a selectable option.
+      for (const model of models) {
+        const reasoning = model.reasoning as Array<{ id: string }> | undefined;
+        if (!reasoning?.length) continue;
+        expect(reasoning.map((option) => option.id)).toContain(model.defaultReasoningId as string);
+      }
+      // The Codex bridge honours no provider-only axis, so the catalogue
+      // offers none (no reasoning-summary picker for the composer to hide).
+      const codexModels = models.filter((model) => model.platform === "codex");
+      expect(codexModels).toHaveLength(2);
+      for (const model of codexModels) expect(model).not.toHaveProperty("parameters");
+    });
+  });
+
+  test("exposes Claude parameters only on eligible catalogue rows in both reads", async () => {
+    const entries: ClaudeModelCatalogEntry[] = [
+      {
+        id: "sonnet",
+        name: "Sonnet",
+        resolvedModel: "claude-sonnet-5-5",
+        supportedEffortLevels: ["low", "xhigh"],
+      },
+      { id: "haiku", name: "Haiku" },
+    ];
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        claudeModelCatalog: {
+          environmentId: "e1",
+          models: entries,
+          source: "sdk",
+          fetchedAt: new Date(0).toISOString(),
+          stale: false,
+        },
+      });
+      await storage.cacheAgentModelCatalog("claude", entries);
+      const native = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<{
+        id: string;
+        parameters?: Array<{ id: string }>;
+        reasoning?: Array<{ id: string }>;
+      }>;
+      const launch = await cachedLaunchModels(
+        <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
+          invoke(command, args ?? {}) as Promise<T>,
+        "proj-1",
+      );
+      for (const models of [native, launch]) {
+        const ids = (id: string) =>
+          models.find((model) => model.id === id)?.parameters?.map((parameter) => parameter.id);
+        const reasoning = (id: string) =>
+          models.find((model) => model.id === id)?.reasoning?.map((option) => option.id);
+        expect(ids("sonnet")).toEqual(["thinking", "context1m"]);
+        expect(ids("haiku")).toEqual(["thinking"]);
+        expect(reasoning("sonnet")).toEqual(["low", "xhigh", "ultracode"]);
+        expect(reasoning("haiku")).not.toContain("ultracode");
+      }
+    });
+  });
+
+  test("widens the catalogue when a provider is added to the configured list", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "openrouter/c", name: "OpenRouter C", provider: "openrouter" },
+      ]);
+      await setOpenCodeModelProviders(storage, ["opencode", "opencode-go", "openrouter"]);
+
+      const cached = (await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      })) as { models: Array<{ provider: string }> };
+      expect(cached.models.map((model) => model.provider)).toEqual(["opencode", "openrouter"]);
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+      expect(models.map((model) => model.id)).toEqual(["opencode/a", "openrouter/c"]);
+    });
+  });
+
+  test("offers every provider when the configured list is emptied", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+        { id: "hpc-ai/b", name: "HPC B", provider: "hpc-ai" },
+      ]);
+      await setOpenCodeModelProviders(storage, []);
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+      expect(models.map((model) => model.id)).toEqual(["hpc-ai/b", "opencode/a"]);
+    });
+  });
+
+  test("surfaces favourited OpenCode models before a live catalogue exists", async () => {
+    await withCommands(async (invoke, storage) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+          { platform: "codex", modelId: "gpt-codex" },
+        ],
+      });
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+      expect(models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            platform: "opencode",
+            id: "opencode-go/deepseek-v4-flash",
+            label: "deepseek-v4-flash",
+            providerLabel: "opencode-go",
+          }),
+        ]),
+      );
+    });
+  });
+
+  // The favourite list is renderer-supplied config, so this command is the
+  // boundary that has to re-apply the allowlist to it. A favourite naming an
+  // excluded provider must not slip a model back into the picker that every
+  // other read of this catalogue filters out.
+  test("does not surface a favourite from a provider the allowlist excludes", async () => {
+    await withCommands(async (invoke, storage) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "openrouter/kimi-k2.5" },
+          { platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" },
+        ],
+      });
+      await setOpenCodeModelProviders(storage, ["opencode", "opencode-go"]);
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+
+      expect(models.map((model) => model.id)).not.toContain("openrouter/kimi-k2.5");
+      expect(models.map((model) => model.id)).toContain("opencode-go/deepseek-v4-flash");
+    });
+  });
+
+  // Before any bridge runs, the connectivity persisted with the durable
+  // catalogue is all a picker can know, and it may predate a sign-in. A
+  // provider it omits is marked rather than hidden, as a cached row or as a
+  // favourite.
+  test("marks providers the persisted connectivity reports as disconnected", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog(
+        "proj-1",
+        [
+          { id: "opencode/claude-sonnet-5", name: "Claude Sonnet 5", provider: "opencode" },
+          {
+            id: "opencode-go/deepseek-v4.1-flash",
+            name: "DeepSeek V4.1 Flash",
+            provider: "opencode-go",
+          },
+        ],
+        ["opencode-go"],
+      );
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [{ platform: "opencode", modelId: "opencode/big-pickle" }],
+      });
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<{ platform: string; id: string; connected?: boolean }>;
+
+      expect(
+        models
+          .filter((model) => model.platform === "opencode")
+          .map((model) => [model.id, model.connected]),
+      ).toEqual([
+        ["opencode-go/deepseek-v4.1-flash", undefined],
+        ["opencode/claude-sonnet-5", false],
+        ["opencode/big-pickle", false],
+      ]);
+
+      // The launch dialogs read the same marks from the durable cache.
+      const cached = (await invoke("get_opencode_model_catalog_cache", {
+        projectId: "proj-1",
+      })) as { models: Array<{ id: string; connected?: boolean }> };
+      expect(cached.models.map((model) => [model.id, model.connected])).toEqual([
+        ["opencode-go/deepseek-v4.1-flash", undefined],
+        ["opencode/claude-sonnet-5", false],
+      ]);
+    });
+  });
+
+  test("does not duplicate a favourite the cached catalogue already lists", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.cacheOpenCodeModelCatalog("proj-1", [
+        { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
+      ]);
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        favoriteModels: [
+          { platform: "opencode", modelId: "opencode/a" },
+          { platform: "opencode", modelId: "opencode/a" },
+        ],
+      });
+
+      const models = (await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+
+      expect(models.filter((model) => model.id === "opencode/a")).toHaveLength(1);
+    });
+  });
+});
+
+describe("bridge readiness command", () => {
+  test("coalesces waiters and returns the authoritative ready endpoint", async () => {
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        await withFakeClock(async () => {
+          const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+          commands.set("start_local_codex_server_cmd", start);
+          const first = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_000,
+          });
+          const second = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_000,
+          });
+          setTimeout(() => {
+            void storage.updateEnvironment("e1", {
+              status: "running",
+              setupPhase: "ready",
+            });
+          }, 10);
+
+          await advanceFakeClockUntilSettled([first, second]);
+          await expect(Promise.all([first, second])).resolves.toEqual([
+            { status: "ready", port: 4321, authToken: "bridge-token" },
+            { status: "ready", port: 4321, authToken: "bridge-token" },
+          ]);
+          expect(start).toHaveBeenCalledTimes(1);
+        });
+      },
+      {
+        environment: {
+          status: "creating",
+          setupPhase: "running",
+          worktreePath: "/tmp/ready-worktree",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    );
+  });
+
+  test("gives coalesced callers independent deadlines while sharing startup", async () => {
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        await withFakeClock(async () => {
+          const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+          commands.set("start_local_codex_server_cmd", start);
+          const short = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          const long = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_500,
+          });
+          setTimeout(() => {
+            void storage.updateEnvironment("e1", { status: "running", setupPhase: "ready" });
+          }, 1_200);
+          await advanceFakeClockUntilSettled([short, long]);
+
+          await expect(short).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
+          await expect(long).resolves.toEqual({
+            status: "ready",
+            port: 4321,
+            authToken: "bridge-token",
+          });
+          expect(start).toHaveBeenCalledTimes(1);
+        });
+      },
+      {
+        environment: {
+          status: "creating",
+          setupPhase: "pending",
+          worktreePath: "/tmp/ready-worktree",
+        },
+      },
+    );
+  }, 4_000);
+
+  test("extends the shared probe so a late caller receives its full deadline", async () => {
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        await withFakeClock(async () => {
+          const start = mock(async () => ({ port: 4321, authToken: "bridge-token" }));
+          commands.set("start_local_codex_server_cmd", start);
+
+          const first = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          await advanceFakeClock(750);
+          const late = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          setTimeout(() => {
+            void storage.updateEnvironment("e1", { status: "running", setupPhase: "ready" });
+          }, 450);
+          await advanceFakeClockUntilSettled([first, late]);
+
+          await expect(first).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
+          await expect(late).resolves.toEqual({
+            status: "ready",
+            port: 4321,
+            authToken: "bridge-token",
+          });
+          expect(start).toHaveBeenCalledTimes(1);
+        });
+      },
+      {
+        environment: {
+          status: "creating",
+          setupPhase: "pending",
+          worktreePath: "/tmp/ready-worktree",
+        },
+      },
+    );
+  }, 4_000);
+
+  test("fails closed for missing, failed, and incomplete bridge state", async () => {
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "missing",
+            agent: "codex",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toEqual({
+          status: "failed",
+          error: { message: "Environment not found", retryable: false },
+        });
+
+        await storage.updateEnvironment("e1", { setupPhase: "failed" });
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toEqual({
+          status: "failed",
+          error: { message: "Environment setup failed", retryable: false },
+        });
+
+        await storage.updateEnvironment("e1", { setupPhase: "ready" });
+        commands.set("start_local_codex_server_cmd", async () => ({ port: 4321 }));
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toEqual({
+          status: "failed",
+          error: {
+            message: "codex bridge returned an incomplete ready endpoint",
+            retryable: false,
+          },
+        });
+      },
+      {
+        environment: {
+          status: "running",
+          setupPhase: "ready",
+          worktreePath: "/tmp/ready-worktree",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    );
+  });
+
+  test("observes deletion while an environment is still starting", async () => {
+    await withCommands(
+      async (invoke, storage) => {
+        await withFakeClock(async () => {
+          const waiting = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 2_000,
+          });
+          setTimeout(() => {
+            void storage.removeEnvironment("e1");
+          }, 10);
+          await advanceFakeClockUntilSettled([waiting]);
+          await expect(waiting).resolves.toEqual({
+            status: "failed",
+            error: { message: "Environment was deleted", retryable: false },
+          });
+        });
+      },
+      {
+        environment: {
+          status: "creating",
+          setupPhase: "running",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    );
+  });
+
+  test("returns a structured durable-window timeout instead of an error string", async () => {
+    await withCommands(
+      async (invoke) => {
+        await withFakeClock(async () => {
+          const waiting = invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          });
+          await advanceFakeClockUntilSettled([waiting]);
+          await expect(waiting).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
+        });
+      },
+      {
+        environment: {
+          status: "creating",
+          setupPhase: "running",
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    );
+  });
+
+  test("keeps retryable local startup races inside the durable wait", async () => {
+    await withCommands(
+      async (invoke, _storage, _dataDir, commands) => {
+        const startedAt = Date.now();
+        let clockReads = 0;
+        const now = spyOn(Date, "now").mockImplementation(() =>
+          clockReads++ === 0 ? startedAt : startedAt + 1_000,
+        );
+        commands.set("start_local_codex_server_cmd", async () => {
+          throw { message: "not ready", retryable: true, retryAfterMs: 500 };
+        });
+
+        try {
+          await expect(
+            invoke("await_bridge_ready", {
+              environmentId: "e1",
+              agent: "codex",
+              timeoutMs: 1_000,
+            }),
+          ).resolves.toEqual({
+            status: "timed-out",
+            error: {
+              message: "codex bridge did not become ready before the caller deadline",
+              retryable: true,
+              retryAfterMs: 1_000,
+            },
+          });
+        } finally {
+          now.mockRestore();
+        }
+      },
+      {
+        environment: {
+          status: "running",
+          setupPhase: "ready",
+          worktreePath: "/tmp/ready-worktree",
+          createdAt: new Date().toISOString(),
+        },
+      },
+    );
+  });
+
+  test("validates arguments and rechecks environment state after a retryable start failure", async () => {
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "unknown",
+            timeoutMs: 1_000,
+          }),
+        ).rejects.toThrow("agent must be one of");
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 999,
+          }),
+        ).rejects.toThrow("between 1000 and 120000");
+        // An unknown key is dropped (7009, tolerant arguments): the declared
+        // ones are still checked.
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 999,
+            extra: true,
+          }),
+        ).rejects.toThrow("between 1000 and 120000");
+
+        commands.set("start_local_codex_server_cmd", async () => {
+          await storage.updateEnvironment("e1", { status: "stopped" });
+          throw { message: "not ready", retryable: true, retryAfterMs: 0 };
+        });
+        await expect(
+          invoke("await_bridge_ready", {
+            environmentId: "e1",
+            agent: "codex",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toEqual({
+          status: "failed",
+          error: { message: "Environment is not running", retryable: false },
+        });
+      },
+      {
+        environment: {
+          status: "running",
+          setupPhase: "ready",
+          worktreePath: "/tmp/ready-worktree",
+        },
+      },
+    );
+  });
+});
+
+describe("initial prompt attachment command", () => {
+  test("writes a validated local batch in an isolated request directory", async () => {
+    const worktreePath = path.join(tmpdir(), `ork-attachments-${crypto.randomUUID()}`);
+    await fs.mkdir(worktreePath, { recursive: true });
+    try {
+      await withCommands(
+        async (invoke) => {
+          const result = await invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [
+              { id: "one", name: "screen shot.png", base64Data: "QQ==" },
+              { id: "two", name: "screen-shot.png", base64Data: "Qg==" },
+            ],
+          });
+          expect(result).toEqual([
+            { name: "screen-shot.png", path: expect.any(String) },
+            { name: "screen-shot-2.png", path: expect.any(String) },
+          ]);
+          const saved = result as Array<{ name: string; path: string }>;
+          const canonicalWorktree = await fs.realpath(worktreePath);
+          expect(path.dirname(saved[0]!.path)).toBe(path.dirname(saved[1]!.path));
+          expect(path.dirname(saved[0]!.path)).toStartWith(
+            path.join(canonicalWorktree, ".orkestrator/initial-prompt/"),
+          );
+          await expect(fs.readFile(saved[0]!.path, "utf8")).resolves.toBe("A");
+          await expect(fs.readFile(saved[1]!.path, "utf8")).resolves.toBe("B");
+
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [
+                { id: "first", name: "cleanup.png", base64Data: "Qw==" },
+                { id: "broken", base64Data: "RA==" },
+              ],
+            }),
+          ).rejects.toThrow("attachment.name");
+          const batchDirectories = await fs.readdir(
+            path.join(worktreePath, ".orkestrator/initial-prompt"),
+          );
+          expect(batchDirectories).toHaveLength(1);
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects symlink ancestors without modifying their external target", async () => {
+    const worktreePath = path.join(tmpdir(), `ork-attachments-worktree-${crypto.randomUUID()}`);
+    const externalPath = path.join(tmpdir(), `ork-attachments-external-${crypto.randomUUID()}`);
+    await fs.mkdir(worktreePath, { recursive: true });
+    await fs.mkdir(externalPath, { recursive: true });
+    await fs.symlink(externalPath, path.join(worktreePath, ".orkestrator"));
+    try {
+      await withCommands(
+        async (invoke) => {
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "image.png", base64Data: "QQ==" }],
+            }),
+          ).rejects.toThrow("symlink or non-directory ancestor");
+          expect(await fs.readdir(externalPath)).toEqual([]);
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+      await fs.rm(externalPath, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps concurrent same-name batches isolated and validates before writing", async () => {
+    const worktreePath = path.join(tmpdir(), `ork-attachments-concurrent-${crypto.randomUUID()}`);
+    await fs.mkdir(worktreePath, { recursive: true });
+    try {
+      await withCommands(
+        async (invoke) => {
+          const [first, second] = (await Promise.all([
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "same.png", base64Data: "QQ==" }],
+            }),
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "two", name: "same.png", base64Data: "Qg==" }],
+            }),
+          ])) as [Array<{ path: string }>, Array<{ path: string }>];
+          expect(first[0]!.path).not.toBe(second[0]!.path);
+          await expect(fs.readFile(first[0]!.path, "utf8")).resolves.toBe("A");
+          await expect(fs.readFile(second[0]!.path, "utf8")).resolves.toBe("B");
+
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [
+                { id: "valid", name: "never-written.png", base64Data: "Qw==" },
+                { id: "invalid", name: "bad.png", base64Data: "not base64" },
+              ],
+            }),
+          ).rejects.toThrow("not valid base64");
+          const allFiles = await fs.readdir(
+            path.join(worktreePath, ".orkestrator/initial-prompt"),
+            { recursive: true },
+          );
+          expect(allFiles).not.toContain("never-written.png");
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("writes container batches through stdin and cleans its directory after partial failure", async () => {
+    const fakeRoot = await fs.mkdtemp(path.join(tmpdir(), "ork-attachment-docker-"));
+    const binDir = path.join(fakeRoot, "bin");
+    const dockerLog = path.join(fakeRoot, "docker.log");
+    const payloadLog = path.join(fakeRoot, "payload.log");
+    const writeCount = path.join(fakeRoot, "write-count");
+    await fs.mkdir(binDir);
+    await fs.writeFile(
+      path.join(binDir, "docker"),
+      `#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_ATTACHMENT_DOCKER_LOG"
+case "$*" in
+  *"rm -rf"*) exit 9 ;;
+esac
+if [ "$1" = "exec" ] && [ "$2" = "-i" ]; then
+  count=0
+  [ ! -f "$FAKE_ATTACHMENT_WRITE_COUNT" ] || count="$(cat "$FAKE_ATTACHMENT_WRITE_COUNT")"
+  count=$((count + 1))
+  printf '%s' "$count" > "$FAKE_ATTACHMENT_WRITE_COUNT"
+  cat >> "$FAKE_ATTACHMENT_PAYLOAD_LOG"
+  [ "$count" -lt 3 ] || exit 7
+fi
+exit 0
+`,
+    );
+    await fs.chmod(path.join(binDir, "docker"), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    process.env.FAKE_ATTACHMENT_DOCKER_LOG = dockerLog;
+    process.env.FAKE_ATTACHMENT_PAYLOAD_LOG = payloadLog;
+    process.env.FAKE_ATTACHMENT_WRITE_COUNT = writeCount;
+    try {
+      await withCommands(
+        async (invoke) => {
+          const saved = (await invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            // Whitespace is stripped before the payload reaches `base64 -d`
+            // rather than relying on the decoder to tolerate it.
+            attachments: [{ id: "one", name: "container.png", base64Data: "Q\n Q=\t=" }],
+          })) as Array<{ name: string; path: string }>;
+          expect(saved).toEqual([
+            {
+              name: "container.png",
+              path: expect.stringMatching(
+                /^\/workspace\/\.orkestrator\/initial-prompt\/[0-9a-f-]+\/container\.png$/,
+              ),
+            },
+          ]);
+          await expect(fs.readFile(payloadLog, "utf8")).resolves.toBe("QQ==");
+          // Old batches are pruned inside the container before a new one lands.
+          await expect(fs.readFile(dockerLog, "utf8")).resolves.toContain(
+            "batches.slice(Number(keep))",
+          );
+
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [
+                { id: "two", name: "first.png", base64Data: "Qg==" },
+                { id: "three", name: "second.png", base64Data: "Qw==" },
+              ],
+            }),
+          ).rejects.toThrow("docker exec exited with 7");
+          const calls = await fs.readFile(dockerLog, "utf8");
+          expect(calls).toContain("process.chdir(current)");
+          expect(calls).toContain("fs.linkSync(temp, filename)");
+        },
+        {
+          environment: {
+            environmentType: "containerized",
+            containerId: "container-1",
+            worktreePath: null,
+          },
+        },
+      );
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      delete process.env.FAKE_ATTACHMENT_DOCKER_LOG;
+      delete process.env.FAKE_ATTACHMENT_PAYLOAD_LOG;
+      delete process.env.FAKE_ATTACHMENT_WRITE_COUNT;
+      await fs.rm(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects attachment count, identity, and unavailable environment targets", async () => {
+    await withCommands(
+      async (invoke, storage) => {
+        await expect(
+          invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [],
+          }),
+        ).rejects.toThrow("between 1 and 20");
+        await expect(
+          invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [{ id: "", name: "bad.png", base64Data: "QQ==" }],
+          }),
+        ).rejects.toThrow("attachment.id");
+        await expect(
+          invoke("write_initial_prompt_attachments", {
+            environmentId: "missing",
+            attachments: [{ id: "one", name: "bad.png", base64Data: "QQ==" }],
+          }),
+        ).rejects.toThrow("Environment not found");
+
+        await storage.updateEnvironment("e1", {
+          environmentType: "containerized",
+          containerId: null,
+          worktreePath: undefined,
+        });
+        await expect(
+          invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [{ id: "one", name: "bad.png", base64Data: "QQ==" }],
+          }),
+        ).rejects.toThrow("Container environment is not ready");
+      },
+      { environment: { worktreePath: "/tmp/attachment-validation-worktree" } },
+    );
+  });
+
+  test("accepts twenty attachments and rejects the twenty-first", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-count-"));
+    try {
+      await withCommands(
+        async (invoke) => {
+          const batch = (count: number) =>
+            Array.from({ length: count }, (_, index) => ({
+              id: `id-${index}`,
+              name: `image-${index}.png`,
+              base64Data: "QQ==",
+            }));
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: batch(20),
+            }),
+          ).resolves.toHaveLength(20);
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: batch(21),
+            }),
+          ).rejects.toThrow("between 1 and 20");
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  test("rejects an aggregate payload above the total limit and an empty one", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-size-"));
+    try {
+      await withCommands(
+        async (invoke) => {
+          // Each item is inside the 8MB per-payload cap; together they are not.
+          const oversized = Buffer.alloc(7 * 1024 * 1024).toString("base64");
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: Array.from({ length: 6 }, (_, index) => ({
+                id: `id-${index}`,
+                name: `image-${index}.png`,
+                base64Data: oversized,
+              })),
+            }),
+          ).rejects.toThrow("total limit");
+
+          // 0 % 4 === 0, so an empty payload used to pass every structural check
+          // and produce a 0-byte file still advertised to the agent.
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "empty.png", base64Data: "" }],
+            }),
+          ).rejects.toThrow("must not be empty");
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "odd.png", base64Data: "QQQ" }],
+            }),
+          ).rejects.toThrow("not valid base64");
+          await expect(fs.readdir(path.join(worktreePath, ".orkestrator"))).rejects.toThrow(
+            "ENOENT",
+          );
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("allocates a safe unique name for every hostile or colliding attachment name", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-names-"));
+    try {
+      await withCommands(
+        async (invoke) => {
+          const saved = (await invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [
+              { id: "a", name: ".", base64Data: "QQ==" },
+              { id: "b", name: "..", base64Data: "Qg==" },
+              { id: "c", name: "   ", base64Data: "Qw==" },
+              { id: "d", name: "shot.png", base64Data: "RA==" },
+              { id: "e", name: "shot.png", base64Data: "RQ==" },
+              { id: "f", name: "shot.png", base64Data: "Rg==" },
+              { id: "g", name: "../../etc/passwd", base64Data: "Rw==" },
+            ],
+          })) as Array<{ name: string; path: string }>;
+
+          expect(saved.map(({ name }) => name)).toEqual([
+            "clipboard.png",
+            "clipboard-2.png",
+            "clipboard-3.png",
+            "shot.png",
+            "shot-2.png",
+            "shot-3.png",
+            // Dots survive sanitization; separators do not, so no traversal
+            // segment can reach the filesystem.
+            "..-..-etc-passwd",
+          ]);
+          const batchDirectory = path.dirname(saved[0]!.path);
+          expect(new Set(saved.map(({ path: saved }) => path.dirname(saved)))).toEqual(
+            new Set([batchDirectory]),
+          );
+          // A successful batch owns exactly its own directory: nothing is written
+          // beside it, and nothing is left in the shared parent.
+          expect((await fs.readdir(batchDirectory)).sort()).toEqual(
+            saved.map(({ name }) => name).sort(),
+          );
+          expect(await fs.readdir(path.dirname(batchDirectory))).toEqual([
+            path.basename(batchDirectory),
+          ]);
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("bounds long attachment names while preserving unique suffixes", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-long-names-"));
+    try {
+      await withCommands(
+        async (invoke) => {
+          const longName = `${"a".repeat(300)}.png`;
+          const saved = (await invoke("write_initial_prompt_attachments", {
+            environmentId: "e1",
+            attachments: [
+              { id: "a", name: longName, base64Data: "QQ==" },
+              { id: "b", name: longName, base64Data: "Qg==" },
+            ],
+          })) as Array<{ name: string; path: string }>;
+          expect(saved[0]!.name.length).toBeLessThanOrEqual(128);
+          expect(saved[1]!.name.length).toBeLessThanOrEqual(132);
+          expect(saved[1]!.name).toEndWith("-2");
+          await expect(fs.readFile(saved[0]!.path, "utf8")).resolves.toBe("A");
+          await expect(fs.readFile(saved[1]!.path, "utf8")).resolves.toBe("B");
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("prunes local batch directories beyond the retention bound", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-prune-"));
+    const batchesDirectory = path.join(worktreePath, ".orkestrator/initial-prompt");
+    try {
+      await withCommands(
+        async (invoke) => {
+          // Sequential, so each directory gets a distinct, increasing mtime.
+          const batches: string[] = [];
+          for (let index = 0; index < 13; index += 1) {
+            const saved = (await invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: `id-${index}`, name: "shot.png", base64Data: "QQ==" }],
+            })) as Array<{ path: string }>;
+            batches.push(path.basename(path.dirname(saved[0]!.path)));
+          }
+
+          const remaining = await fs.readdir(batchesDirectory);
+          expect(remaining).toHaveLength(10);
+          expect(new Set(remaining)).toEqual(new Set(batches.slice(-10)));
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("does not prune through a staging-directory replacement race", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-prune-race-"));
+    const staging = path.join(worktreePath, ".orkestrator/initial-prompt");
+    const displaced = path.join(worktreePath, ".orkestrator/initial-prompt-displaced");
+    const external = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-prune-external-"));
+    await fs.mkdir(staging, { recursive: true });
+    for (let index = 0; index < 12; index += 1) {
+      await fs.mkdir(path.join(external, `sentinel-${index}`));
+    }
+    const canonicalStaging = await fs.realpath(staging);
+    const realLstat = fs.lstat.bind(fs);
+    let reads = 0;
+    const lstatSpy = spyOn(fs, "lstat").mockImplementation((async (
+      target: string,
+      ...rest: unknown[]
+    ) => {
+      const stats = await realLstat(target as never, ...(rest as never[]));
+      if (target === canonicalStaging && ++reads === 2) {
+        await fs.rename(staging, displaced);
+        await fs.symlink(external, staging);
+      }
+      return stats;
+    }) as typeof fs.lstat);
+    try {
+      await withCommands(
+        async (invoke) => {
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "shot.png", base64Data: "QQ==" }],
+            }),
+          ).rejects.toThrow("symlink or non-directory ancestor");
+          expect(await fs.readdir(external)).toHaveLength(12);
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      lstatSpy.mockRestore();
+      await fs.rm(worktreePath, { recursive: true, force: true });
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+
+  test("removes the whole local batch and rethrows the original mid-batch failure", async () => {
+    const worktreePath = await fs.mkdtemp(path.join(tmpdir(), "ork-attachments-partial-"));
+    const batchesDirectory = path.join(worktreePath, ".orkestrator/initial-prompt");
+    const realRealpath = fs.realpath.bind(fs);
+    let rootReads = 0;
+    let failNextCleanupRoot = false;
+    let simulateCleanupFailure = false;
+    const realpathSpy = spyOn(fs, "realpath").mockImplementation((async (
+      target: string,
+      ...rest: unknown[]
+    ) => {
+      if (target === worktreePath && failNextCleanupRoot) {
+        failNextCleanupRoot = false;
+        throw new Error("cleanup exploded");
+      }
+      if (target === worktreePath) {
+        rootReads += 1;
+        if (rootReads === 3 || rootReads === 7) {
+          failNextCleanupRoot = simulateCleanupFailure;
+          throw new Error("simulated attachment write failure");
+        }
+      }
+      return realRealpath(target as never, ...(rest as never[]));
+    }) as typeof fs.realpath);
+    try {
+      await withCommands(
+        async (invoke) => {
+          const batch = {
+            environmentId: "e1",
+            attachments: [
+              { id: "one", name: "first.png", base64Data: "QQ==" },
+              { id: "two", name: "second.png", base64Data: "Qg==" },
+            ],
+          };
+          await expect(invoke("write_initial_prompt_attachments", batch)).rejects.toThrow(
+            "simulated attachment write failure",
+          );
+          // The first item was already on disk; the batch directory goes with it.
+          expect(await fs.readdir(batchesDirectory)).toEqual([]);
+
+          // A cleanup that itself fails must not replace the failure the caller
+          // is being told about.
+          simulateCleanupFailure = true;
+          await expect(invoke("write_initial_prompt_attachments", batch)).rejects.toThrow(
+            "simulated attachment write failure",
+          );
+        },
+        { environment: { worktreePath } },
+      );
+    } finally {
+      realpathSpy.mockRestore();
+      await fs.rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  test("surfaces container mkdir and spawn failures without writing anything", async () => {
+    const fakeRoot = await fs.mkdtemp(path.join(tmpdir(), "ork-attachment-docker-fail-"));
+    const binDir = path.join(fakeRoot, "bin");
+    await fs.mkdir(binDir);
+    await fs.writeFile(
+      path.join(binDir, "docker"),
+      `#!/bin/sh
+case "$*" in
+  *"process.chdir(current)"*) echo "mkdir refused" >&2; exit 3 ;;
+esac
+exit 0
+`,
+    );
+    await fs.chmod(path.join(binDir, "docker"), 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
+    try {
+      await withCommands(
+        async (invoke) => {
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "container.png", base64Data: "QQ==" }],
+            }),
+          ).rejects.toThrow("docker exec exited with 3");
+        },
+        {
+          environment: {
+            environmentType: "containerized",
+            containerId: "container-1",
+            worktreePath: null,
+          },
+        },
+      );
+
+      // A docker binary that cannot be spawned at all reaches the child "error"
+      // listener rather than the exit listener.
+      await fs.rm(path.join(binDir, "docker"));
+      await withCommands(
+        async (invoke) => {
+          await expect(
+            invoke("write_initial_prompt_attachments", {
+              environmentId: "e1",
+              attachments: [{ id: "one", name: "container.png", base64Data: "QQ==" }],
+            }),
+          ).rejects.toThrow();
+        },
+        {
+          environment: {
+            environmentType: "containerized",
+            containerId: "container-1",
+            worktreePath: null,
+          },
+        },
+      );
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await fs.rm(fakeRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("container attachment confinement helpers", () => {
+  const runHelper = async (
+    script: string,
+    args: string[],
+    stdin = "",
+  ): Promise<{ code: number | null; stdout: string; stderr: string }> => {
+    const child = spawn(process.execPath, ["-e", script, ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") throw error;
+    });
+    child.stdin.end(stdin);
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", resolve);
+    });
+    return { code, stdout, stderr };
+  };
+
+  const spawnReadyHelper = async (script: string, args: string[]) => {
+    const child = spawn(process.execPath, ["-e", script, ...args, "READY"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") throw error;
+    });
+    await new Promise<void>((resolve, reject) => {
+      let stdout = "";
+      child.once("error", reject);
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk.toString();
+        if (stdout.includes("READY\n")) resolve();
+      });
+      child.once("exit", (code) => reject(new Error(`helper exited before ready: ${code}`)));
+    });
+    return child;
+  };
+
+  test("rejects symlink ancestors and never follows a final symlink", async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-root-"));
+    const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-external-"));
+    try {
+      await fs.symlink(external, path.join(root, "stage"));
+      const ancestor = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "image.png", "1"],
+        "QQ==",
+      );
+      expect(ancestor.code).not.toBe(0);
+      expect(await fs.readdir(external)).toEqual([]);
+
+      await fs.rm(path.join(root, "stage"));
+      await fs.mkdir(path.join(root, "stage/batch"), { recursive: true });
+      const sentinel = path.join(external, "sentinel");
+      await fs.writeFile(sentinel, "outside");
+      await fs.symlink(sentinel, path.join(root, "stage/batch/image.png"));
+      const finalSymlink = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "image.png", "1"],
+        "QQ==",
+      );
+      expect(finalSymlink.code).not.toBe(0);
+      await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("outside");
+
+      await fs.rm(path.join(root, "stage/batch/image.png"));
+      const written = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "image.png", "1"],
+        "QQ==",
+      );
+      expect(written.code).toBe(0);
+      await expect(fs.readFile(path.join(root, "stage/batch/image.png"), "utf8")).resolves.toBe(
+        "A",
+      );
+      expect(await fs.readdir(path.join(root, "stage/batch"))).toEqual(["image.png"]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+
+  test("atomically replaces a command-owned container artifact without following a symlink", async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-overwrite-"));
+    const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-external-"));
+    try {
+      await fs.mkdir(path.join(root, "stage/batch"), { recursive: true });
+      const target = path.join(root, "stage/batch/review-package.json");
+      await fs.writeFile(target, "old");
+      const replaced = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "review-package.json", "3", "", "overwrite", String(0o444)],
+        "bmV3",
+      );
+      expect(replaced.code).toBe(0);
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("new");
+      expect((await fs.stat(target)).mode & 0o777).toBe(0o444);
+
+      const sentinel = path.join(external, "sentinel");
+      await fs.writeFile(sentinel, "outside");
+      await fs.rm(target);
+      await fs.symlink(sentinel, target);
+      const symlinkReplacement = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "review-package.json", "4", "", "overwrite"],
+        "c2FmZQ==",
+      );
+      expect(symlinkReplacement.code).toBe(0);
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("safe");
+      await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("outside");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects and cleans up a write when its pinned directory is renamed", async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-race-"));
+    const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-race-external-"));
+    const displaced = path.join(root, "stage-original");
+    await fs.mkdir(path.join(root, "stage/batch"), { recursive: true });
+    await fs.mkdir(path.join(external, "batch"));
+    try {
+      const child = await spawnReadyHelper(commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE, [
+        root,
+        "stage/batch",
+        "image.png",
+        "1",
+      ]);
+      await fs.rename(path.join(root, "stage"), displaced);
+      await fs.symlink(external, path.join(root, "stage"));
+      child.stdin.end("QQ==");
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", resolve);
+      });
+      expect(code).toBe(76);
+      await expect(fs.stat(path.join(displaced, "batch/image.png"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await fs.readdir(path.join(external, "batch"))).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps recursive cleanup confined during ancestor replacement", async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-cleanup-race-"));
+    const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-cleanup-external-"));
+    const displaced = path.join(root, "stage-original");
+    await fs.mkdir(path.join(root, "stage/batch"), { recursive: true });
+    await fs.writeFile(path.join(root, "stage/batch/inside"), "inside");
+    await fs.mkdir(path.join(external, "batch"));
+    await fs.writeFile(path.join(external, "batch/sentinel"), "outside");
+    try {
+      const child = await spawnReadyHelper(commandTesting.CONTAINER_PINNED_ATTACHMENT_REMOVE, [
+        root,
+        "stage/batch",
+      ]);
+      await fs.rename(path.join(root, "stage"), displaced);
+      await fs.symlink(external, path.join(root, "stage"));
+      child.stdin.end();
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", resolve);
+      });
+      expect(code).toBe(0);
+      await expect(fs.stat(path.join(displaced, "batch"))).rejects.toThrow("ENOENT");
+      await expect(fs.readFile(path.join(external, "batch/sentinel"), "utf8")).resolves.toBe(
+        "outside",
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("pane layout intent command", () => {
+  test("rebases concurrent optimistic additions inside the backend mutation queue", async () => {
+    await withCommands(async (invoke) => {
+      const layout = (tabIds: string[]) => ({
+        version: 3,
+        containerId: null,
+        activePaneId: "pane-1",
+        root: {
+          kind: "leaf",
+          id: "pane-1",
+          tabs: tabIds.map((id) => ({ id, type: "plain" })),
+          activeTabId: tabIds.at(-1) ?? null,
+        },
+      });
+      const base = layout(["base"]);
+      await invoke("save_pane_layout", {
+        environmentId: "e1",
+        layout: base,
+        expectedRevision: 0,
+      });
+      await invoke("apply_pane_layout_intent", {
+        environmentId: "e1",
+        baseLayout: base,
+        desiredLayout: layout(["base", "window-a"]),
+      });
+      const saved = (await invoke("apply_pane_layout_intent", {
+        environmentId: "e1",
+        baseLayout: base,
+        desiredLayout: layout(["base", "window-b"]),
+      })) as { root: { tabs: Array<{ id: string }> }; revision: number };
+      expect(saved.root.tabs.map(({ id }) => id)).toEqual(["base", "window-a", "window-b"]);
+      expect(saved.revision).toBe(3);
+    });
+  });
+
+  test("rejects a stale container generation without replacing its layout", async () => {
+    await withCommands(
+      async (invoke, storage) => {
+        const layout = (containerId: string, tabId: string) => ({
+          version: 3,
+          containerId,
+          activePaneId: "pane-1",
+          root: {
+            kind: "leaf",
+            id: "pane-1",
+            tabs: [{ id: tabId, type: "plain" }],
+            activeTabId: tabId,
+          },
+        });
+        const current = layout("container-new", "current");
+        await invoke("save_pane_layout", {
+          environmentId: "e1",
+          layout: current,
+          expectedRevision: 0,
+        });
+        await expect(
+          invoke("apply_pane_layout_intent", {
+            environmentId: "e1",
+            baseLayout: layout("container-old", "base"),
+            desiredLayout: layout("container-old", "stale"),
+          }),
+        ).rejects.toThrow("stale environment generation");
+        expect(await storage.getPaneLayout("e1")).toMatchObject({
+          containerId: "container-new",
+          revision: 1,
+          root: current.root,
+        });
+      },
+      {
+        environment: {
+          environmentType: "containerized",
+          containerId: "container-new",
+        },
+      },
+    );
+  });
+
+  test("rejects malformed layout envelopes and oversized selection intents", async () => {
+    await withCommands(async (invoke) => {
+      const layout = {
+        version: 3,
+        containerId: null,
+        activePaneId: "pane-1",
+        root: { kind: "leaf", id: "pane-1", tabs: [], activeTabId: null },
+      };
+      await expect(
+        invoke("apply_pane_layout_intent", {
+          environmentId: "e1",
+          baseLayout: { ...layout, injected: true },
+          desiredLayout: layout,
+        }),
+      ).rejects.toThrow("Unexpected baseLayout field");
+      await expect(
+        invoke("apply_pane_layout_intent", {
+          environmentId: "e1",
+          baseLayout: layout,
+          desiredLayout: { ...layout, root: [] },
+        }),
+      ).rejects.toThrow("desiredLayout.root");
+      await expect(
+        invoke("apply_pane_layout_intent", {
+          environmentId: "e1",
+          baseLayout: layout,
+          desiredLayout: layout,
+          selectionIntent: { activeTabIds: { "": "tab" } },
+        }),
+      ).rejects.toThrow("keys to be non-empty");
+      await expect(
+        invoke("apply_pane_layout_intent", {
+          environmentId: "e1",
+          baseLayout: layout,
+          desiredLayout: layout,
+          selectionIntent: {
+            activeTabIds: Object.fromEntries(
+              Array.from({ length: 1_025 }, (_, index) => [`pane-${index}`, null]),
+            ),
+          },
+        }),
+      ).rejects.toThrow("1024 entry limit");
+    });
+  });
+});
+
+describe("setup session wait command", () => {
+  test("rehydrates a durable setup session and validates timeout boundaries", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        setupPhase: "running",
+        setupSessionId: "e1:setup",
+        setupStartedAt: "2026-08-05T10:00:00.000Z",
+      });
+      await expect(
+        invoke("await_environment_setup_session", {
+          environmentId: "e1",
+          timeoutMs: 0,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          environmentId: "e1",
+          sessionId: "e1:setup",
+          running: true,
+          terminalRunning: false,
+          hasOutput: false,
+        }),
+      );
+      await expect(
+        invoke("await_environment_setup_session", {
+          environmentId: "e1",
+          timeoutMs: -1,
+        }),
+      ).rejects.toThrow("between 0 and 60000");
+      await expect(
+        invoke("await_environment_setup_session", {
+          environmentId: "e1",
+          timeoutMs: 60_001,
+        }),
+      ).rejects.toThrow("between 0 and 60000");
+    });
+  });
+
+  test("reports a retained transcript on a rehydrated setup session", async () => {
+    // The renderer retires a completed setup tab only when the backend proves
+    // its transcript is gone, so the durable-rehydration branch has to answer
+    // `hasOutput` from the retained buffer rather than always reporting false.
+    await withCommands(async (invoke, storage, _dataDir, _commands, context) => {
+      const { terminals } = context.runtime;
+      try {
+        await storage.updateEnvironment("e1", {
+          setupPhase: "ready",
+          setupSessionId: "e1:setup",
+          setupStartedAt: "2026-08-05T10:00:00.000Z",
+          setupCompletedAt: "2026-08-05T10:01:00.000Z",
+        });
+        await expect(
+          invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            sessionId: "e1:setup",
+            running: false,
+            success: true,
+            terminalRunning: false,
+            hasOutput: false,
+          }),
+        );
+
+        terminals.appendOutput("e1:setup", "cloning repository...\r\n");
+        await expect(
+          invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            sessionId: "e1:setup",
+            running: false,
+            terminalRunning: false,
+            hasOutput: true,
+          }),
+        );
+
+        // Freeing the retained buffer is what flips the answer back, which is
+        // the transition that makes the tab retirable minutes after setup ends.
+        terminals.deleteRetainedOutput("e1:setup");
+        await expect(
+          invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
+        ).resolves.toEqual(expect.objectContaining({ hasOutput: false }));
+      } finally {
+        terminals.deleteRetainedOutput("e1:setup");
+      }
+    });
+  });
+
+  test("returns null when no setup is running or the wait expires", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(
+        invoke("await_environment_setup_session", {
+          environmentId: "e1",
+          timeoutMs: 0,
+        }),
+      ).resolves.toBeNull();
+      await storage.updateEnvironment("e1", { setupPhase: "running" });
+      await expect(
+        invoke("await_environment_setup_session", {
+          environmentId: "e1",
+          timeoutMs: 0,
+        }),
+      ).resolves.toBeNull();
+    });
+  });
+
+  test("waits through pending setup until the durable session is published", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", { setupPhase: "pending" });
+      setTimeout(() => {
+        void storage.updateEnvironment("e1", {
+          setupPhase: "running",
+          setupSessionId: "e1:setup",
+          setupStartedAt: "2026-08-05T10:00:00.000Z",
+        });
+      }, 10);
+      await expect(
+        invoke("await_environment_setup_session", {
+          environmentId: "e1",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          sessionId: "e1:setup",
+          running: true,
+        }),
+      );
+    });
+  });
+});
+
+type Invoke = (command: string, args: Record<string, unknown>) => Promise<unknown>;
+
+/**
+ * The orphan sweep only trusts persisted panes, so publish the layout through
+ * the same command a renderer would use and hand back the new revision.
+ */
+async function savePaneTabs(
+  invoke: Invoke,
+  tabs: ReadonlyArray<{ id: string; type: string }>,
+  expectedRevision = 0,
+): Promise<number> {
+  const saved = (await invoke("save_pane_layout", {
+    environmentId: "e1",
+    layout: {
+      version: 3,
+      containerId: null,
+      activePaneId: "pane-1",
+      root: {
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [...tabs],
+        activeTabId: tabs[0]?.id ?? null,
+      },
+    },
+    expectedRevision,
+  })) as { revision: number };
+  return saved.revision;
+}
+
+async function adoptInteractiveNativeSession(
+  storage: StorageService,
+  tabId: string,
+  agent: "claude" | "codex" | "opencode" = "codex",
+): Promise<string> {
+  const logicalSessionKey = `env-e1:${tabId}`;
+  const key = nativeAgentSessionStorageKey("e1", agent, logicalSessionKey);
+  await storage.adoptNativeAgentSession({
+    key,
+    environmentId: "e1",
+    agent,
+    logicalSessionKey,
+    providerSessionId: `provider-${tabId}`,
+    origin: "interactive-native",
+    interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+  });
+  return key;
+}
+
+/**
+ * The orphan grace is an hour of wall clock measured from a durable timestamp,
+ * so move the clock rather than the record under test.
+ */
+async function pastOrphanGrace<T>(run: () => Promise<T>): Promise<T> {
+  const advanced = Date.now() + 61 * 60 * 1_000;
+  const now = spyOn(Date, "now").mockImplementation(() => advanced);
+  try {
+    return await run();
+  } finally {
+    now.mockRestore();
+  }
+}
+
+function hoursAgoIso(hours: number): string {
+  return new Date(Date.now() - hours * 60 * 60 * 1_000).toISOString();
+}
+
+const RUNNING_STARTUP_AGENT_SESSION = {
+  tabId: "startup-agent",
+  agent: "claude",
+  style: "native",
+  status: "running",
+  providerSessionId: "startup-provider",
+} as const;
+
+describe("durable tab teardown commands", () => {
+  test("disconnects persistent terminal sessions and clears direct and replayed intents", async () => {
+    await withCommands(async (invoke, storage) => {
+      const direct = await storage.createSession("e1", "local", "tab-direct", "plain");
+      await expect(
+        invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-direct",
+          kind: "terminal",
+          persistentSessionId: direct.id,
+        }),
+      ).resolves.toEqual({ completed: true });
+      expect((await storage.getSession(direct.id))?.status).toBe("disconnected");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+
+      const replayed = await storage.createSession("e1", "local", "tab-replayed", "plain");
+      await storage.setTabTeardownIntent("e1", {
+        tabId: "tab-replayed",
+        kind: "terminal",
+        persistentSessionId: replayed.id,
+        createdAt: "2026-08-04T10:00:00.000Z",
+      });
+      await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+      expect((await storage.getSession(replayed.id))?.status).toBe("disconnected");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("skips every destructive orphan path when the layout store is unreadable", async () => {
+    await withCommands(async (invoke, _storage, dataDir) => {
+      seedUnreadableStore(dataDir, "pane-layouts.json", "{truncated");
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 0,
+        tmuxSessions: 0,
+        skipped: true,
+      });
+    });
+  });
+
+  test("keeps a native session whose agent-native tab still exists in the layout", async () => {
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+        const key = await adoptInteractiveNativeSession(storage, "tab-native");
+        await savePaneTabs(invoke, [{ id: "tab-native", type: "agent-native" }]);
+
+        await expect(
+          pastOrphanGrace(() => invoke("reconcile_orphaned_tab_resources", {})),
+        ).resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+        expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+        expect(deleteRequest).not.toHaveBeenCalled();
+      },
+      {
+        tabTeardown: {
+          peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+          fetch: deleteRequest as unknown as typeof fetch,
+        },
+      },
+    );
+  });
+
+  test("reaps an unreferenced native session only once the orphan grace elapses", async () => {
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+        const key = await adoptInteractiveNativeSession(storage, "tab-native");
+        await savePaneTabs(invoke, [{ id: "surviving-tab", type: "agent-native" }]);
+
+        await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+          terminals: 0,
+          nativeSessions: 0,
+          tmuxSessions: 0,
+        });
+        expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+        expect(deleteRequest).not.toHaveBeenCalled();
+
+        await expect(
+          pastOrphanGrace(() => invoke("reconcile_orphaned_tab_resources", {})),
+        ).resolves.toEqual({ terminals: 0, nativeSessions: 1, tmuxSessions: 0 });
+        expect(deleteRequest).toHaveBeenCalledTimes(1);
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+      },
+      {
+        tabTeardown: {
+          peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+          fetch: deleteRequest as unknown as typeof fetch,
+        },
+      },
+    );
+  });
+
+  test("keeps stable terminals whose terminal-typed tabs still exist in the layout", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      const tabs = [
+        { id: "tab-plain", type: "plain" },
+        { id: "tab-cursor", type: "cursor" },
+        { id: "tab-grok", type: "grok" },
+      ];
+      const sessionIds: Record<string, string> = {};
+      for (const tab of tabs) {
+        const created = (await invoke("create_local_terminal_session", {
+          environmentId: "e1",
+          terminalKey: tab.id,
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: false,
+        })) as { sessionId: string };
+        sessionIds[tab.id] = created.sessionId;
+      }
+      await savePaneTabs(invoke, tabs);
+
+      // The first sweep can only ever arm the grace, so prove both passes keep
+      // every referenced terminal rather than only the arming one.
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 0,
+        tmuxSessions: 0,
+      });
+      await expect(
+        pastOrphanGrace(() => invoke("reconcile_orphaned_tab_resources", {})),
+      ).resolves.toEqual({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
+
+      for (const tab of tabs) {
+        expect(
+          await invoke("create_local_terminal_session", {
+            environmentId: "e1",
+            terminalKey: tab.id,
+            cols: 80,
+            rows: 24,
+            trackEnvironmentActivity: false,
+          }),
+        ).toEqual({
+          sessionId: sessionIds[tab.id],
+          created: false,
+          bootstrapped: false,
+        });
+        await invoke("close_local_terminal_session", { sessionId: sessionIds[tab.id] });
+      }
+    });
+  });
+
+  test("never lets one tab type protect the other type's orphaned resource", async () => {
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+        const terminal = (await invoke("create_local_terminal_session", {
+          environmentId: "e1",
+          terminalKey: "shared-terminal",
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: false,
+        })) as { sessionId: string };
+        const nativeKey = await adoptInteractiveNativeSession(storage, "shared-native");
+        // Each live resource is named by a tab of the *other* type, which is the
+        // exact confusion a single referenced-tab set would have papered over.
+        await savePaneTabs(invoke, [
+          { id: "shared-terminal", type: "agent-native" },
+          { id: "shared-native", type: "plain" },
+        ]);
+
+        await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+          terminals: 0,
+          nativeSessions: 0,
+          tmuxSessions: 0,
+        });
+        await expect(
+          pastOrphanGrace(() => invoke("reconcile_orphaned_tab_resources", {})),
+        ).resolves.toEqual({ terminals: 1, nativeSessions: 1, tmuxSessions: 0 });
+
+        expect(await storage.getNativeAgentSession(nativeKey)).toBeNull();
+        const replacement = (await invoke("create_local_terminal_session", {
+          environmentId: "e1",
+          terminalKey: "shared-terminal",
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: false,
+        })) as { sessionId: string; created: boolean };
+        expect(replacement.created).toBe(true);
+        expect(replacement.sessionId).not.toBe(terminal.sessionId);
+        await invoke("close_local_terminal_session", { sessionId: replacement.sessionId });
+      },
+      {
+        tabTeardown: {
+          peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+          fetch: deleteRequest as unknown as typeof fetch,
+        },
+      },
+    );
+  });
+
+  test("keeps a running startup agent session while its agent-native tab is persisted", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: hoursAgoIso(2),
+        },
+      });
+      await savePaneTabs(invoke, [{ id: "startup-agent", type: "agent-native" }]);
+
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 0,
+        tmuxSessions: 0,
+      });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toMatchObject({
+        status: "running",
+        providerSessionId: "startup-provider",
+      });
+    });
+  });
+
+  test("retires a running startup agent session whose agent-native tab is gone", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      commands.set("claude_tmux_reconcile_orphans", async () => ({ reaped: 0 }));
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: new Date().toISOString(),
+        },
+      });
+      let revision = await savePaneTabs(invoke, [{ id: "other-tab", type: "agent-native" }]);
+
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 0,
+        tmuxSessions: 0,
+      });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toMatchObject({
+        status: "running",
+      });
+
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: hoursAgoIso(2),
+        },
+      });
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 1,
+        tmuxSessions: 0,
+      });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toBeUndefined();
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+
+      // A terminal-typed tab of the same id is not the startup agent's pane.
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          ...RUNNING_STARTUP_AGENT_SESSION,
+          startedAt: hoursAgoIso(2),
+        },
+      });
+      revision = await savePaneTabs(invoke, [{ id: "startup-agent", type: "plain" }], revision);
+      expect(revision).toBe(2);
+      await expect(invoke("reconcile_orphaned_tab_resources", {})).resolves.toEqual({
+        terminals: 0,
+        nativeSessions: 1,
+        tmuxSessions: 0,
+      });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toBeUndefined();
+    });
+  });
+
+  test("validates teardown inputs before journaling", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(
+        invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-1",
+          kind: "unknown",
+        }),
+      ).rejects.toThrow("kind is not a supported tab teardown kind");
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+    });
+  });
+
+  test("delegates tmux teardown and retires every native-provider mapping", async () => {
+    const closeProviderSessionIfRunning = mock(async () => "closed" as const);
+    await withCommands(
+      async (invoke, storage, _dataDir, commands) => {
+        const stopTmux = mock(async () => undefined);
+        commands.set("claude_tmux_stop", stopTmux);
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-tmux",
+            kind: "claude-tmux",
+          }),
+        ).resolves.toEqual({ completed: true });
+        expect(stopTmux).toHaveBeenCalledWith(
+          { environmentId: "e1", tabId: "tab-tmux" },
+          expect.any(Object),
+        );
+
+        for (const [agent, kind] of [
+          ["claude", "claude-native"],
+          ["codex", "codex-native"],
+          ["opencode", "opencode-native"],
+        ] as const) {
+          const tabId = `tab-${agent}`;
+          const logicalSessionKey = `env-e1:${tabId}`;
+          const key = nativeAgentSessionStorageKey("e1", agent, logicalSessionKey);
+          await storage.adoptNativeAgentSession({
+            key,
+            environmentId: "e1",
+            agent,
+            logicalSessionKey,
+            providerSessionId: `${agent}-provider-session`,
+            origin: "interactive-native",
+            interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          });
+
+          await expect(
+            invoke("teardown_tab", {
+              environmentId: "e1",
+              tabId,
+              kind,
+            }),
+          ).resolves.toEqual({ completed: true });
+          expect(await storage.getNativeAgentSession(key)).toBeNull();
+        }
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+        // OpenCode closes through its provider, not a raw request.
+        expect(closeProviderSessionIfRunning).toHaveBeenCalledWith(
+          "e1",
+          "opencode",
+          "opencode-provider-session",
+        );
+      },
+      {
+        tabTeardown: {
+          peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+          fetch: (async () =>
+            Response.json({ closed: true, retained: true })) as unknown as typeof fetch,
+        },
+        nativeAgents: {
+          closeProviderSessionIfRunning,
+          releaseProviderSession: () => undefined,
+        } as never,
+      },
+    );
+  });
+
+  test("refuses terminal resources owned by another tab or environment", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.addEnvironment({
+        id: "e2",
+        name: "Other",
+        projectId: "proj-1",
+        status: "running",
+        environmentType: "local",
+        branch: "other",
+        order: 1,
+        containerId: null,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        networkAccessMode: "restricted",
+        createdAt: new Date(0).toISOString(),
+      });
+      const otherTab = (await invoke("create_local_terminal_session", {
+        environmentId: "e1",
+        terminalKey: "tab-other",
+        cols: 80,
+        rows: 24,
+        trackEnvironmentActivity: false,
+      })) as { sessionId: string };
+      const otherEnvironment = await storage.createSession("e2", "local", "tab-target", "plain");
+
+      await expect(
+        invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-target",
+          kind: "terminal",
+          sessionId: otherTab.sessionId,
+        }),
+      ).rejects.toThrow("not owned by the requested environment and tab");
+      expect(
+        await invoke("create_local_terminal_session", {
+          environmentId: "e1",
+          terminalKey: "tab-other",
+          cols: 80,
+          rows: 24,
+          trackEnvironmentActivity: false,
+        }),
+      ).toEqual({
+        sessionId: otherTab.sessionId,
+        created: false,
+        bootstrapped: false,
+      });
+
+      await expect(
+        invoke("teardown_tab", {
+          environmentId: "e1",
+          tabId: "tab-target",
+          kind: "terminal",
+          persistentSessionId: otherEnvironment.id,
+        }),
+      ).rejects.toThrow("not owned by the requested environment and tab");
+      expect((await storage.getSession(otherEnvironment.id))?.status).toBe("connected");
+
+      await invoke("close_local_terminal_session", { sessionId: otherTab.sessionId });
+    });
+  });
+
+  test("refuses a native provider session owned by another tab or environment", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.addEnvironment({
+        id: "e2",
+        name: "Other",
+        projectId: "proj-1",
+        status: "running",
+        environmentType: "local",
+        branch: "other",
+        order: 1,
+        containerId: null,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        networkAccessMode: "restricted",
+        createdAt: new Date(0).toISOString(),
+      });
+      for (const [environmentId, tabId] of [
+        ["e1", "tab-other"],
+        ["e2", "tab-target"],
+      ] as const) {
+        const logicalSessionKey = `env-${environmentId}:${tabId}`;
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey(environmentId, "codex", logicalSessionKey),
+          environmentId,
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId: `provider-${environmentId}-${tabId}`,
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        });
+      }
+
+      for (const providerSessionId of ["provider-e1-tab-other", "provider-e2-tab-target"]) {
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-target",
+            kind: "codex-native",
+            sessionId: providerSessionId,
+          }),
+        ).rejects.toThrow("owned by a different environment or tab");
+      }
+      expect(await storage.listNativeAgentSessions()).toHaveLength(2);
+      expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty("tab-target");
+    });
+  });
+
+  test("retains the native mapping and intent while the bridge is unavailable", async () => {
+    const peekBridge = mock(async () => null as { port: number; authToken: string } | null);
+    peekBridge.mockResolvedValueOnce(null);
+    peekBridge.mockResolvedValue({ port: 4000, authToken: "test-token" });
+    const deleteRequest = mock(async () => Response.json({ closed: true, retained: true }));
+    await withCommands(
+      async (invoke, storage) => {
+        const logicalSessionKey = "env-e1:tab-codex";
+        const key = nativeAgentSessionStorageKey("e1", "codex", logicalSessionKey);
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey,
+          providerSessionId: "provider-codex",
+          origin: "interactive-native",
+          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+        });
+
+        await expect(
+          invoke("teardown_tab", {
+            environmentId: "e1",
+            tabId: "tab-codex",
+            kind: "codex-native",
+            sessionId: "provider-codex",
+          }),
+        ).rejects.toThrow("unavailable or unhealthy");
+        expect(await storage.getNativeAgentSession(key)).not.toBeNull();
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty(
+          "tab-codex",
+        );
+        expect(deleteRequest).not.toHaveBeenCalled();
+
+        await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+        expect(deleteRequest).toHaveBeenCalledTimes(1);
+        expect(await storage.getNativeAgentSession(key)).toBeNull();
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toBeUndefined();
+      },
+      {
+        tabTeardown: {
+          peekBridge,
+          fetch: deleteRequest as unknown as typeof fetch,
+        },
+      },
+    );
+  });
+
+  test("times out a hanging provider delete without blocking other intents", async () => {
+    const deleteRequest = mock((input: string | URL | Request, _init?: RequestInit) => {
+      if (!String(input).includes("provider-hanging")) {
+        return Promise.resolve(Response.json({ closed: true, retained: true }));
+      }
+      // Deliberately ignore AbortSignal. The command's own deadline must bound
+      // reconciliation even if the transport never settles cooperatively.
+      return new Promise<Response>(() => undefined);
+    });
+    await withCommands(
+      async (invoke, storage) => {
+        for (const [tabId, providerSessionId] of [
+          ["tab-hanging", "provider-hanging"],
+          ["tab-fast", "provider-fast"],
+        ] as const) {
+          const logicalSessionKey = `env-e1:${tabId}`;
+          await storage.adoptNativeAgentSession({
+            key: nativeAgentSessionStorageKey("e1", "codex", logicalSessionKey),
+            environmentId: "e1",
+            agent: "codex",
+            logicalSessionKey,
+            providerSessionId,
+            origin: "interactive-native",
+            interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
+          });
+          await storage.setTabTeardownIntent("e1", {
+            tabId,
+            kind: "codex-native",
+            sessionId: providerSessionId,
+            createdAt: `2026-08-04T10:00:0${tabId === "tab-hanging" ? "0" : "1"}.000Z`,
+          });
+        }
+
+        // The hanging request never settles, so reconcile can only resolve
+        // because the command's own deadline fired; resolving at all is the
+        // proof that it is bounded, with no wall-clock ceiling to miss under load.
+        await expect(invoke("reconcile_tab_teardowns", {})).resolves.toEqual({ completed: 1 });
+
+        const hangingKey = nativeAgentSessionStorageKey("e1", "codex", "env-e1:tab-hanging");
+        const fastKey = nativeAgentSessionStorageKey("e1", "codex", "env-e1:tab-fast");
+        expect(await storage.getNativeAgentSession(hangingKey)).not.toBeNull();
+        expect(await storage.getNativeAgentSession(fastKey)).toBeNull();
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).toHaveProperty(
+          "tab-hanging",
+        );
+        expect((await storage.getEnvironment("e1"))?.tabTeardownIntents).not.toHaveProperty(
+          "tab-fast",
+        );
+      },
+      {
+        tabTeardown: {
+          peekBridge: async () => ({ port: 4000, authToken: "test-token" }),
+          fetch: deleteRequest as unknown as typeof fetch,
+          deleteTimeoutMs: 20,
+          closeTimeoutMs: 20,
+        },
+      },
+    );
+  });
+});
+
+describe("prompt queue commands", () => {
+  test("wakes the native dispatcher after durable enqueue", async () => {
+    const notifyPromptQueueChanged = mock((_queueKey: string) => undefined);
+    await withCommands(
+      async (invoke) => {
+        await invoke("enqueue_prompt_queue_message", {
+          queueKey: "opencode\u0000env-e1:review-tab",
+          environmentId: "e1",
+          message: { id: "review-1", text: "Review" },
+        });
+
+        expect(notifyPromptQueueChanged).toHaveBeenCalledWith("opencode\u0000env-e1:review-tab");
+      },
+      {
+        nativeAgents: { notifyPromptQueueChanged } as never,
+      },
+    );
+  });
+
+  test("a queued prompt and a direct prompt start a new agent mail budget", async () => {
+    const dispatchIntent = mock(async () => ({ outcome: "accepted" }));
+    await withCommands(
+      async (invoke, storage) => {
+        const reset = mock(async (_environmentId: string, _logicalSessionKey: string) => true);
+        storage.resetAgentMailBudgetForSession = reset;
+        await invoke("enqueue_prompt_queue_message", {
+          queueKey: "claude\u0000env-e1:tab-1",
+          environmentId: "e1",
+          message: { id: "queued-1", text: "Next" },
+        });
+        expect(reset).toHaveBeenCalledWith("e1", "env-e1:tab-1");
+
+        reset.mockClear();
+        await invoke("dispatch_native_agent_intent", {
+          environmentId: "e1",
+          agent: "claude",
+          logicalSessionKey: "env-e1:tab-2",
+          prompt: "Go",
+          requestId: "request-1",
+        });
+        expect(reset).toHaveBeenCalledWith("e1", "env-e1:tab-2");
+        expect(dispatchIntent).toHaveBeenCalledTimes(1);
+      },
+      { nativeAgents: { dispatchIntent, notifyPromptQueueChanged: () => undefined } as never },
+    );
+  });
+
+  test("mutates and reads back a backend-owned queue", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("enqueue_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          message: { id: "m1" },
+        }),
+      ).resolves.toMatchObject({ queueKey: KEY, revision: 1 });
+      await invoke("enqueue_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        message: { id: "m2" },
+      });
+      await invoke("move_prompt_queue_message", {
+        queueKey: KEY,
+        environmentId: "e1",
+        messageId: "m2",
+        direction: "up",
+      });
+
+      await expect(invoke("get_prompt_queue", { queueKey: KEY })).resolves.toMatchObject({
+        messages: [{ id: "m2" }, { id: "m1" }],
+      });
+      await expect(invoke("list_prompt_queues", { environmentId: "e1" })).resolves.toHaveLength(1);
+      await expect(
+        invoke("remove_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          messageId: "m2",
+        }),
+      ).resolves.toMatchObject({
+        removed: { id: "m2" },
+        queue: { messages: [{ id: "m1" }] },
+      });
+    });
+  });
+
+  test("explicitly retries a terminal queue dispatch", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.savePromptQueue(KEY, "e1", [{ id: "m1", text: "invalid" }]);
+      await storage.reservePromptQueueHeadForDispatch(KEY);
+      await storage.failPromptQueueDispatch(KEY, "m1");
+
+      await expect(invoke("retry_prompt_queue_dispatch", { queueKey: KEY })).resolves.toMatchObject(
+        {
+          messages: [{ id: "m1", text: "invalid" }],
+        },
+      );
+      expect((await storage.getPromptQueue(KEY))?.dispatchError).toBeUndefined();
+    });
+  });
+
+  test("rejects a malformed enqueue message", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("enqueue_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          message: "bad",
+        }),
+      ).rejects.toThrow("non-blank ID");
+    });
+  });
+
+  test("rejects malformed reorder and removal arguments", async () => {
+    // Each of these coerces at the registry boundary, so a bad payload must
+    // fail there rather than reaching storage as a plausible-looking value.
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("move_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          messageId: "m1",
+          direction: 1,
+        }),
+      ).rejects.toThrow("direction");
+      await expect(
+        invoke("move_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          messageId: "m1",
+        }),
+      ).rejects.toThrow("direction");
+      await expect(
+        invoke("move_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          messageId: "m1",
+          direction: "sideways",
+        }),
+      ).rejects.toThrow("must be up or down");
+      await expect(
+        invoke("remove_prompt_queue_message", {
+          queueKey: KEY,
+          environmentId: "e1",
+          messageId: 7,
+        }),
+      ).rejects.toThrow("messageId");
+    });
+  });
+
+  test("rejects blank identifiers", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("enqueue_prompt_queue_message", {
+          queueKey: "",
+          environmentId: "e1",
+          message: { id: "m1" },
+        }),
+      ).rejects.toThrow();
+      await expect(invoke("get_prompt_queue", { queueKey: "" })).rejects.toThrow();
+      await expect(invoke("list_prompt_queues", { environmentId: "" })).rejects.toThrow();
+    });
+  });
+});
+
+describe("draft commands", () => {
+  test("forwards compare-and-swap revisions for compose and file mutations", async () => {
+    await withCommands(async (invoke) => {
+      const compose = (await invoke("save_compose_draft", {
+        draftKey: "compose:e1:tab",
+        ownerType: "environment",
+        ownerId: "e1",
+        value: "first",
+        expectedRevision: 0,
+      })) as { revision: number };
+      const file = (await invoke("save_file_draft", {
+        draftKey: "file:e1:a",
+        environmentId: "e1",
+        filePath: "a.ts",
+        content: "first",
+        originalContent: "disk",
+        expectedRevision: 0,
+      })) as { revision: number };
+
+      await invoke("save_compose_draft", {
+        draftKey: "compose:e1:tab",
+        ownerType: "environment",
+        ownerId: "e1",
+        value: "second",
+        expectedRevision: compose.revision,
+      });
+      await invoke("save_file_draft", {
+        draftKey: "file:e1:a",
+        environmentId: "e1",
+        filePath: "a.ts",
+        content: "second",
+        originalContent: "disk",
+        expectedRevision: file.revision,
+      });
+
+      await expect(
+        invoke("delete_compose_draft", {
+          draftKey: "compose:e1:tab",
+          expectedRevision: compose.revision,
+        }),
+      ).rejects.toThrow("revision conflict");
+      await expect(
+        invoke("delete_file_draft", {
+          draftKey: "file:e1:a",
+          expectedRevision: file.revision,
+        }),
+      ).rejects.toThrow("revision conflict");
+      await expect(
+        invoke("delete_compose_draft", {
+          draftKey: "compose:e1:tab",
+          expectedRevision: 2,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        invoke("delete_file_draft", {
+          draftKey: "file:e1:a",
+          expectedRevision: 2,
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  test("rejects malformed revision arguments before draft mutation", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("save_file_draft", {
+          draftKey: "file:e1:a",
+          environmentId: "e1",
+          filePath: "a.ts",
+          content: "first",
+          originalContent: "disk",
+          expectedRevision: "zero",
+        }),
+      ).rejects.toThrow("Expected expectedRevision to be a number");
+      await expect(
+        invoke("delete_compose_draft", {
+          draftKey: "compose:e1:tab",
+          expectedRevision: "zero",
+        }),
+      ).rejects.toThrow("Expected expectedRevision to be a number");
+      await expect(
+        invoke("delete_file_draft", {
+          draftKey: "file:e1:a",
+          expectedRevision: "zero",
+        }),
+      ).rejects.toThrow("Expected expectedRevision to be a number");
+    });
+  });
+});
+
+describe("agent handoff commands", () => {
+  test("saves, reads, and deletes an environment-owned handoff", async () => {
+    await withCommands(async (invoke, storage) => {
+      const snapshot = {
+        sourceProvider: "claude",
+        destinationProvider: "codex",
+        messages: [{ id: "m1" }],
+      };
+      await expect(
+        invoke("save_agent_handoff", {
+          handoffId: "h1",
+          environmentId: "e1",
+          version: 1,
+          snapshot,
+        }),
+      ).resolves.toMatchObject({
+        id: "h1",
+        environmentId: "e1",
+        version: 1,
+        snapshot,
+      });
+      await expect(invoke("get_agent_handoff", { handoffId: "h1" })).resolves.toMatchObject({
+        id: "h1",
+        snapshot,
+      });
+      await expect(
+        invoke("delete_agent_handoff", {
+          handoffId: "h1",
+          environmentId: "e1",
+        }),
+      ).resolves.toBe(true);
+      await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
+      await expect(
+        invoke("delete_agent_handoff", {
+          handoffId: "h1",
+          environmentId: "e1",
+        }),
+      ).resolves.toBe(false);
+    });
+  });
+
+  test("rejects malformed command arguments before mutation", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(
+        invoke("save_agent_handoff", {
+          handoffId: "h1",
+          environmentId: "e1",
+          version: "1",
+          snapshot: {},
+        }),
+      ).rejects.toThrow("version");
+      await expect(
+        invoke("save_agent_handoff", {
+          handoffId: "h1",
+          environmentId: "e1",
+          version: 1,
+          snapshot: [],
+        }),
+      ).rejects.toThrow("must be an object");
+      await expect(invoke("get_agent_handoff", { handoffId: 1 })).rejects.toThrow("handoffId");
+      await expect(
+        invoke("delete_agent_handoff", {
+          handoffId: "h1",
+          environmentId: null,
+        }),
+      ).rejects.toThrow("environmentId");
+      await expect(storage.getAgentHandoff("h1")).resolves.toBeNull();
+    });
+  });
+
+  test("prunes handoffs the restored layout no longer references", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveAgentHandoff("kept", "e1", 1, { messages: [] });
+      await storage.saveAgentHandoff("orphan", "e1", 1, { messages: [] });
+
+      await expect(
+        invoke("prune_agent_handoffs", {
+          environmentId: "e1",
+          referencedHandoffIds: ["kept"],
+        }),
+      ).resolves.toEqual(["orphan"]);
+      await expect(storage.getAgentHandoff("kept")).resolves.not.toBeNull();
+      await expect(storage.getAgentHandoff("orphan")).resolves.toBeNull();
+    });
+  });
+
+  test("refuses a prune whose reference list is not an array of strings", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveAgentHandoff("kept", "e1", 1, { messages: [] });
+
+      /*
+       * `asStringArray` would coerce each of these to `[]`, which here reads as
+       * "nothing is referenced" and would delete every transcript in the
+       * environment. Prune has to reject the request instead.
+       */
+      for (const referencedHandoffIds of [undefined, null, "kept", { 0: "kept" }]) {
+        await expect(
+          invoke("prune_agent_handoffs", {
+            environmentId: "e1",
+            referencedHandoffIds,
+          }),
+        ).rejects.toThrow("referencedHandoffIds");
+      }
+      await expect(
+        invoke("prune_agent_handoffs", {
+          environmentId: "e1",
+          referencedHandoffIds: ["kept", 7],
+        }),
+      ).rejects.toThrow("only strings");
+      await expect(
+        invoke("prune_agent_handoffs", {
+          environmentId: 1,
+          referencedHandoffIds: [],
+        }),
+      ).rejects.toThrow("environmentId");
+
+      await expect(storage.getAgentHandoff("kept")).resolves.not.toBeNull();
+    });
+  });
+});
+
+describe("native agent controller commands", () => {
+  test("maps native session and dispatch arguments to the backend authority", async () => {
+    const ensureSession = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
+      operation: "ensure",
+      input,
+    }));
+    const dispatchPrompt = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
+      operation: "dispatch",
+      input,
+    }));
+    const adoptSession = mock(async (input: unknown) => ({
+      ...nativeSessionRecord(),
+      operation: "adopt",
+      input,
+    }));
+    const nativeAgents = {
+      ensureSession,
+      adoptSession,
+      dispatchPrompt,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("ensure_native_agent_session", {
+            environmentId: "e1",
+            agent: "codex",
+            logicalSessionKey: "env-e1:tab-1",
+            origin: "automated-review",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            title: "Review",
+            model: "gpt-test",
+            reasoningEffort: "high",
+            phase: "review",
+          }),
+        ).resolves.toMatchObject({ operation: "ensure" });
+        expect(ensureSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:tab-1",
+          origin: "automated-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          title: "Review",
+          model: "gpt-test",
+          reasoningEffort: "high",
+          phase: "review",
+        });
+
+        await expect(
+          invoke("adopt_native_agent_session", {
+            environmentId: "e1",
+            agent: "opencode",
+            logicalSessionKey: "env-e1:tab-adopted",
+            origin: "build-pipeline",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            providerSessionId: "provider-new",
+            expectedProviderSessionId: "provider-old",
+            controls: {
+              modelId: "opencode-go/deepseek-v4-flash",
+              reasoningId: "high",
+              executionProfileId: "reviewer",
+            },
+            model: "provider/model",
+            reasoningEffort: "high",
+            executionProfileId: "plan",
+          }),
+        ).resolves.toMatchObject({ operation: "adopt" });
+        expect(adoptSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          agent: "opencode",
+          logicalSessionKey: "env-e1:tab-adopted",
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          providerSessionId: "provider-new",
+          expectedProviderSessionId: "provider-old",
+          title: undefined,
+          controls: {
+            modelId: "opencode-go/deepseek-v4-flash",
+            reasoningId: "high",
+            executionProfileId: "reviewer",
+          },
+          model: "provider/model",
+          reasoningEffort: "high",
+          phase: undefined,
+          executionProfileId: "plan",
+        });
+
+        // A blank profile would be persisted into the session controls and later
+        // dispatched as the provider's agent name, so it is refused at the edge
+        // rather than normalised to the provider default further in.
+        for (const executionProfileId of ["", "   ", 7, null]) {
+          await expect(
+            invoke("ensure_native_agent_session", {
+              environmentId: "e1",
+              agent: "opencode",
+              logicalSessionKey: "env-e1:tab-blank-profile",
+              origin: "interactive-native",
+              executionProfileId,
+            }),
+          ).rejects.toThrow(/executionProfileId/);
+          await expect(
+            invoke("adopt_native_agent_session", {
+              environmentId: "e1",
+              agent: "opencode",
+              logicalSessionKey: "env-e1:tab-blank-profile",
+              origin: "interactive-native",
+              providerSessionId: "provider-new",
+              executionProfileId,
+            }),
+          ).rejects.toThrow(/executionProfileId/);
+        }
+        // Omitting it stays legal — the `ensure` above passes no profile and is
+        // forwarded with `executionProfileId: undefined` — so validation rejects
+        // only a value that is present and unusable.
+        expect(ensureSession.mock.calls[0]?.[0]).toMatchObject({ executionProfileId: undefined });
+
+        const schema = { type: "object" };
+        const images = [{ filename: "reference.png", data: "cG5n" }];
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            environmentId: "e1",
+            agent: "claude",
+            logicalSessionKey: "env-e1:tab-2",
+            origin: "automated-review",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            prompt: "Review this",
+            requestId: "request-1",
+            images,
+            schema,
+          }),
+        ).resolves.toMatchObject({ operation: "dispatch" });
+        expect(dispatchPrompt).toHaveBeenCalledWith({
+          environmentId: "e1",
+          agent: "claude",
+          logicalSessionKey: "env-e1:tab-2",
+          origin: "automated-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          title: undefined,
+          model: undefined,
+          reasoningEffort: undefined,
+          phase: undefined,
+          prompt: "Review this",
+          requestId: "request-1",
+          images,
+          attachments: undefined,
+          schema,
+          // An absent mode must resolve to the restrictive direction: undefined
+          // reaches the Claude bridge as bypassPermissions.
+          mode: "plan",
+          fastMode: undefined,
+          subAgent: undefined,
+          includeLocalSettings: undefined,
+          promptSuggestions: undefined,
+        });
+
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            environmentId: "e1",
+            agent: "claude",
+            logicalSessionKey: "env-e1:tab-2",
+            prompt: " ",
+            requestId: "request-2",
+          }),
+        ).rejects.toThrow("non-blank string");
+        await expect(
+          invoke("adopt_native_agent_session", {
+            environmentId: "e1",
+            agent: "opencode",
+            logicalSessionKey: "env-e1:tab-adopted",
+            providerSessionId: " ",
+          }),
+        ).rejects.toThrow("non-blank string");
+        expect(dispatchPrompt).toHaveBeenCalledTimes(1);
+        expect(adoptSession).toHaveBeenCalledTimes(1);
+
+        await expect(
+          invoke("ensure_native_agent_session", {
+            environmentId: "e1",
+            agent: "codex",
+            logicalSessionKey: "env-e1:invalid-origin",
+            origin: "scheduled-task",
+          }),
+        ).rejects.toThrow("supported agent interaction origin");
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            environmentId: "e1",
+            agent: "codex",
+            logicalSessionKey: "env-e1:invalid-policy",
+            prompt: "Review",
+            requestId: "request-invalid-policy",
+            interactionPolicy: {
+              ...UNATTENDED_AGENT_INTERACTION_POLICY,
+              authorization: "await-user",
+            },
+          }),
+        ).rejects.toThrow("valid agent interaction policy");
+        // The third registration site coerces the same two arguments and must
+        // reject them just as the other two do.
+        await expect(
+          invoke("adopt_native_agent_session", {
+            environmentId: "e1",
+            agent: "opencode",
+            logicalSessionKey: "env-e1:invalid-origin",
+            providerSessionId: "provider-new",
+            origin: "scheduled-task",
+          }),
+        ).rejects.toThrow("supported agent interaction origin");
+        await expect(
+          invoke("adopt_native_agent_session", {
+            environmentId: "e1",
+            agent: "opencode",
+            logicalSessionKey: "env-e1:invalid-policy",
+            providerSessionId: "provider-new",
+            interactionPolicy: {
+              ...INTERACTIVE_AGENT_INTERACTION_POLICY,
+              unknown: "await-user",
+            },
+          }),
+        ).rejects.toThrow("valid agent interaction policy");
+        await expect(
+          invoke("ensure_native_agent_session", {
+            environmentId: "e1",
+            agent: "codex",
+            logicalSessionKey: "env-e1:non-string-origin",
+            origin: 7,
+          }),
+        ).rejects.toThrow("supported agent interaction origin");
+        expect(ensureSession).toHaveBeenCalledTimes(1);
+        expect(dispatchPrompt).toHaveBeenCalledTimes(1);
+        expect(adoptSession).toHaveBeenCalledTimes(1);
+      },
+      { nativeAgents },
+    );
+  });
+
+  test("rejects malformed dispatch images, attachments and schema", async () => {
+    const dispatchPrompt = mock(async () => ({ ...nativeSessionRecord(), operation: "dispatch" }));
+    const nativeAgents = { dispatchPrompt } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+
+    await withCommands(
+      async (invoke) => {
+        const base = {
+          environmentId: "e1",
+          agent: "claude",
+          logicalSessionKey: "env-e1:tab-2",
+          prompt: "Review this",
+          requestId: "request-1",
+        };
+        // Cast straight through, a malformed element surfaced as a TypeError deep
+        // inside the provider — which the drain path then retried forever.
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            ...base,
+            images: [{}],
+          }),
+        ).rejects.toThrow("filename must be a non-empty string");
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            ...base,
+            images: [{ filename: "a.png", data: "not base64!" }],
+          }),
+        ).rejects.toThrow("valid base64");
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            ...base,
+            images: Array.from({ length: 21 }, () => ({ filename: "a.png", data: "AA==" })),
+          }),
+        ).rejects.toThrow("At most 20 prompt images");
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            ...base,
+            attachments: [{ type: "image" }],
+          }),
+        ).rejects.toThrow("path must be a non-empty string");
+        expect(dispatchPrompt).not.toHaveBeenCalled();
+
+        // typeof x === "object" admits arrays, so a JSON array must not pass as a
+        // JSON Schema object.
+        await expect(
+          invoke("dispatch_native_agent_prompt", {
+            ...base,
+            schema: [{ type: "object" }],
+          }),
+        ).resolves.toMatchObject({ operation: "dispatch" });
+        expect(dispatchPrompt).toHaveBeenCalledWith(expect.objectContaining({ schema: undefined }));
+      },
+      { nativeAgents },
+    );
+  });
+
+  test("forwards an explicit dispatch mode and its per-prompt options", async () => {
+    const dispatchPrompt = mock(async () => ({ ...nativeSessionRecord(), operation: "dispatch" }));
+    const nativeAgents = { dispatchPrompt } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+
+    await withCommands(
+      async (invoke) => {
+        await invoke("dispatch_native_agent_prompt", {
+          environmentId: "e1",
+          agent: "claude",
+          logicalSessionKey: "env-e1:tab-2",
+          prompt: "Ship it",
+          requestId: "request-1",
+          mode: "build",
+          fastMode: true,
+          subAgent: "reviewer",
+          includeLocalSettings: false,
+          promptSuggestions: true,
+        });
+        expect(dispatchPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({
+            mode: "build",
+            fastMode: true,
+            subAgent: "reviewer",
+            includeLocalSettings: false,
+            promptSuggestions: true,
+          }),
+        );
+      },
+      { nativeAgents },
+    );
+  });
+
+  test("reports unavailable native supervision before accepting work", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("ensure_native_agent_session", {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:tab-1",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+      await expect(
+        invoke("dispatch_native_agent_prompt", {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:tab-1",
+          prompt: "Build",
+          requestId: "request-1",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+      await expect(
+        invoke("adopt_native_agent_session", {
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "env-e1:tab-1",
+          providerSessionId: "provider-1",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+    });
+  });
+
+  test("acknowledges only the startup session identified by optional fencing fields", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        startupAgentSession: {
+          tabId: "startup-agent",
+          agent: "codex",
+          style: "native",
+          providerSessionId: "provider-1",
+          status: "running",
+          startedAt: "2026-07-29T12:00:00.000Z",
+        },
+      });
+
+      await expect(
+        invoke("acknowledge_startup_agent_session", {
+          environmentId: "e1",
+          providerSessionId: "provider-old",
+        }),
+      ).resolves.toMatchObject({
+        startupAgentSession: { providerSessionId: "provider-1" },
+      });
+      await expect(
+        invoke("acknowledge_startup_agent_session", {
+          environmentId: "e1",
+          providerSessionId: "provider-1",
+          startedAt: "2026-07-29T12:00:00.000Z",
+        }),
+      ).resolves.toMatchObject({ id: "e1" });
+      expect((await storage.getEnvironment("e1"))?.startupAgentSession).toBeUndefined();
+
+      await expect(
+        invoke("acknowledge_startup_agent_session", {
+          environmentId: "e1",
+          providerSessionId: " ",
+        }),
+      ).rejects.toThrow("non-blank string");
+    });
+  });
+
+  test("reconciles a pending launch after setup and re-reads authoritative state", async () => {
+    const reconcileInitialLaunch = mock(async (_environmentId: string) => undefined);
+    const nativeAgents = {
+      reconcileInitialLaunch,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(
+      async (_invoke, storage) => {
+        reconcileInitialLaunch.mockImplementationOnce(async (environmentId) => {
+          await storage.updateEnvironment(environmentId, {
+            pendingAgentLaunch: false,
+            startupAgentSession: {
+              tabId: "startup-agent",
+              agent: "codex",
+              style: "native",
+              providerSessionId: "provider-1",
+              status: "running",
+            },
+          });
+        });
+        const environment = await storage.getEnvironment("e1");
+        if (!environment) throw new Error("Test environment is missing");
+        const completed = await commandTesting.completeEnvironmentSetup(environment, {
+          storage,
+          emit: () => undefined,
+          appRoot: "",
+          resourceRoot: "",
+          environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+          runtime: new BackendRuntime({ emit: () => undefined }),
+          nativeAgents,
+        });
+
+        expect(reconcileInitialLaunch).toHaveBeenCalledWith("e1");
+        expect(completed).toMatchObject({
+          setupScriptsComplete: true,
+          pendingAgentLaunch: false,
+          startupAgentSession: {
+            providerSessionId: "provider-1",
+            status: "running",
+          },
+        });
+      },
+      {
+        nativeAgents,
+        environment: {
+          createdFromCommit: "commit-1",
+          pendingAgentLaunch: true,
+        },
+      },
+    );
+  });
+
+  test("a setup override restores readiness and reconciles a pending agent launch", async () => {
+    const reconcileInitialLaunch = mock(async (_environmentId: string) => undefined);
+    const nativeAgents = {
+      reconcileInitialLaunch,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(
+      async (invoke, storage) => {
+        reconcileInitialLaunch.mockImplementationOnce(async (environmentId) => {
+          await storage.updateEnvironment(environmentId, { pendingAgentLaunch: false });
+        });
+
+        const result = await invoke("override_environment_setup", {
+          environmentId: "e1",
+        });
+
+        expect(reconcileInitialLaunch).toHaveBeenCalledWith("e1");
+        expect(result).toMatchObject({
+          id: "e1",
+          status: "running",
+          setupScriptsComplete: true,
+          setupPhase: "ready",
+          setupOverride: true,
+          lifecycleError: null,
+          pendingAgentLaunch: false,
+        });
+        await expect(storage.getEnvironment("e1")).resolves.toMatchObject({
+          status: "running",
+          setupScriptsComplete: true,
+          setupPhase: "ready",
+          pendingAgentLaunch: false,
+        });
+      },
+      {
+        nativeAgents,
+        environment: {
+          status: "error",
+          setupScriptsComplete: false,
+          setupPhase: "failed",
+          lifecycleError: "Setup script failed",
+          pendingAgentLaunch: true,
+        },
+      },
+    );
+  });
+
+  test("keeps setup complete and launch pending when reconciliation fails", async () => {
+    const nativeAgents = {
+      reconcileInitialLaunch: mock(async () => {
+        throw new Error("bridge unavailable");
+      }),
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(
+      async (_invoke, storage) => {
+        const environment = await storage.getEnvironment("e1");
+        if (!environment) throw new Error("Test environment is missing");
+        await expect(
+          commandTesting.completeEnvironmentSetup(environment, {
+            storage,
+            emit: () => undefined,
+            appRoot: "",
+            resourceRoot: "",
+            environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+            runtime: new BackendRuntime({ emit: () => undefined }),
+            nativeAgents,
+          }),
+        ).resolves.toMatchObject({
+          setupScriptsComplete: true,
+          pendingAgentLaunch: true,
+        });
+      },
+      {
+        nativeAgents,
+        environment: {
+          createdFromCommit: "commit-1",
+          pendingAgentLaunch: true,
+        },
+      },
+    );
+  });
+});
+
+describe("multi review commands", () => {
+  const startInput = {
+    environmentId: "e1",
+    projectId: "proj-1",
+    targetBranch: "main",
+    reviewers: [
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    ],
+    addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
+  } as const;
+
+  test("strips the controller lease and fence from renderer reads", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.saveMultiReviewWorkflow("workflow-1", "e1", 1, {
+        id: "workflow-1",
+        phase: "reviewing",
+        controllerFence: "snapshot-token",
+      });
+      const claimed = await storage.claimMultiReviewController("workflow-1", "backend", 15_000);
+      expect(claimed.granted).toBe(true);
+      expect((await storage.getMultiReviewWorkflow("workflow-1"))?.controllerLease).toBeDefined();
+
+      const rendererWorkflow = (await invoke("get_multi_review_workflow", {
+        workflowId: "workflow-1",
+      })) as { snapshot: Record<string, unknown> };
+      expect(rendererWorkflow).not.toHaveProperty("controllerLease");
+      expect(rendererWorkflow.snapshot).not.toHaveProperty("controllerFence");
+      expect(rendererWorkflow.snapshot).toMatchObject({ id: "workflow-1", phase: "reviewing" });
+      const revision = (rendererWorkflow as unknown as { revision: number }).revision;
+      expect(
+        await invoke("get_multi_review_workflow", {
+          workflowId: "workflow-1",
+          knownRevision: revision,
+        }),
+      ).toEqual({ unchanged: true, revision });
+      const stale = (await invoke("get_multi_review_workflow", {
+        workflowId: "workflow-1",
+        knownRevision: revision - 1,
+      })) as Record<string, unknown>;
+      expect(stale).not.toHaveProperty("unchanged");
+      expect(stale).not.toHaveProperty("controllerLease");
+      const listed = (await invoke("list_multi_review_workflows", {
+        environmentId: "e1",
+      })) as Array<Record<string, unknown>>;
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).not.toHaveProperty("controllerLease");
+      expect(listed[0]?.snapshot).not.toHaveProperty("controllerFence");
+    });
+  });
+
+  test("delegates lifecycle intents and strips the backend controller fence", async () => {
+    const workflow = (operation: string) => ({
+      operation,
+      id: "multi-1",
+      phase: "reviewing",
+      controllerFence: "secret-fence",
+    });
+    const start = mock(async (_input: unknown) => workflow("start"));
+    const address = mock(async (id: string) => ({ ...workflow("address"), id }));
+    const customAddressFindings = mock(async (input: { workflowId: string }) => ({
+      ...workflow("customAddressFindings"),
+      id: input.workflowId,
+    }));
+    const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
+    const recoverAddressFindingsSession = mock(
+      async (_environmentId: string, input: { tabId: string }) => ({
+        ...workflow("recoverAddressFindingsSession"),
+        id: input.tabId.includes("multi-1") ? "multi-1" : "unexpected",
+      }),
+    );
+    const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
+    const stopReviewer = mock(async (id: string, _reviewerId: string) => ({
+      ...workflow("stopReviewer"),
+      id,
+    }));
+    const stopValidation = mock(async (id: string) => ({
+      ...workflow("stopValidation"),
+      id,
+    }));
+    const restartReviewer = mock(async (id: string, _reviewerId: string) => ({
+      ...workflow("restartReviewer"),
+      id,
+    }));
+    const restartStep = mock(async (id: string, _kind: string) => ({
+      ...workflow("restartStep"),
+      id,
+    }));
+    const pauseStep = mock(async (id: string, _kind: string) => ({
+      ...workflow("pauseStep"),
+      id,
+    }));
+    const resumeStep = mock(async (id: string, _kind: string) => ({
+      ...workflow("resumeStep"),
+      id,
+    }));
+    const unstickReviewer = mock(async (id: string, _reviewerId: string) => ({
+      ...workflow("unstickReviewer"),
+      id,
+    }));
+    const supervisor = {
+      start,
+      address,
+      customAddressFindings,
+      retry,
+      recoverAddressFindingsSession,
+      cancel,
+      stopValidation,
+      stopReviewer,
+      restartReviewer,
+      restartStep,
+      pauseStep,
+      resumeStep,
+      unstickReviewer,
+    } as unknown as NonNullable<CommandContext["multiReviews"]>;
+
+    await withCommands(
+      async (invoke) => {
+        const calls: Array<[string, Record<string, unknown>]> = [
+          ["start_multi_review", startInput as unknown as Record<string, unknown>],
+          ["address_multi_review", { workflowId: "multi-1" }],
+          [
+            "start_multi_review_custom_fix",
+            {
+              workflowId: "multi-1",
+              addressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+              instruction: "Fix the inactive-tab regression",
+            },
+          ],
+          ["retry_multi_review", { workflowId: "multi-1" }],
+          [
+            "recover_multi_review_fix_session",
+            {
+              environmentId: "e1",
+              tabId: "multi-review-fix:multi-1:launch-1",
+              expectedProviderSessionId: "provider-fix",
+              replacementProviderSessionId: "provider-replacement",
+            },
+          ],
+          ["cancel_multi_review", { workflowId: "multi-1" }],
+          ["stop_multi_review_validation", { workflowId: "multi-1" }],
+          ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
+          ["restart_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
+          [
+            "restart_multi_review_reviewer",
+            {
+              workflowId: "multi-1",
+              reviewerId: "reviewer-2",
+              model: { agent: "claude", model: "opus", reasoningEffort: "high" },
+            },
+          ],
+          [
+            "restart_multi_review_step",
+            {
+              workflowId: "multi-1",
+              kind: "consolidate",
+              model: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+            },
+          ],
+          ["pause_multi_review_step", { workflowId: "multi-1", kind: "consolidate" }],
+          ["resume_multi_review_step", { workflowId: "multi-1", kind: "consolidate" }],
+          ["unstick_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
+        ];
+        for (const [command, args] of calls) {
+          const result = (await invoke(command, args)) as Record<string, unknown>;
+          expect(result).not.toHaveProperty("controllerFence");
+          expect(result.id).toBe("multi-1");
+        }
+        expect(start).toHaveBeenCalledWith(startInput);
+        expect(address).toHaveBeenCalledWith("multi-1");
+        expect(customAddressFindings).toHaveBeenCalledWith({
+          workflowId: "multi-1",
+          addressFindingsModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+          instruction: "Fix the inactive-tab regression",
+        });
+        expect(retry).toHaveBeenCalledWith("multi-1");
+        expect(recoverAddressFindingsSession).toHaveBeenCalledWith("e1", {
+          tabId: "multi-review-fix:multi-1:launch-1",
+          expectedProviderSessionId: "provider-fix",
+          replacementProviderSessionId: "provider-replacement",
+        });
+        expect(cancel).toHaveBeenCalledWith("multi-1");
+        expect(stopValidation).toHaveBeenCalledWith("multi-1");
+        expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
+        expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1", undefined);
+        expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-2", {
+          agent: "claude",
+          model: "opus",
+          reasoningEffort: "high",
+        });
+        expect(restartStep).toHaveBeenCalledWith("multi-1", "consolidate", {
+          agent: "codex",
+          model: "gpt-5.6",
+          reasoningEffort: "high",
+        });
+        expect(pauseStep).toHaveBeenCalledWith("multi-1", "consolidate");
+        expect(resumeStep).toHaveBeenCalledWith("multi-1", "consolidate");
+        expect(unstickReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
+  test("records the address intent without waiting for command-scoped native delivery", async () => {
+    const pending = {
+      id: "multi-1",
+      environmentId: "e1",
+      phase: "interactive",
+      controllerFence: "secret-fence",
+      addressPromptPending: true,
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+      addressFindingsSession: {
+        providerSessionId: "provider-fix",
+        sessionKey: "multi-review:multi-1:fix",
+      },
+    };
+    const address = mock(async () => pending);
+    const adoptSession = mock(async () => ({ providerSessionId: "provider-fix" }));
+    const dispatchIntent = mock(async () => ({
+      outcome: "accepted" as const,
+      requestId: "multi-review-address:multi-1",
+    }));
+    const supervisor = { address } as unknown as NonNullable<CommandContext["multiReviews"]>;
+    const nativeAgents = {
+      adoptSession,
+      dispatchIntent,
+    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
+
+    await withCommands(
+      async (invoke) => {
+        const result = (await invoke("address_multi_review", {
+          workflowId: "multi-1",
+        })) as Record<string, unknown>;
+
+        expect(address).toHaveBeenCalledWith("multi-1");
+        expect(adoptSession).not.toHaveBeenCalled();
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        expect(result.addressPromptPending).toBe(true);
+        expect(result).not.toHaveProperty("controllerFence");
+      },
+      { multiReviews: supervisor, nativeAgents },
+    );
+  });
+
+  test("rejects malformed start and lifecycle requests before supervision", async () => {
+    const start = mock(async () => undefined);
+    const lifecycle = mock(async () => undefined);
+    const supervisor = {
+      start,
+      customAddressFindings: lifecycle,
+      address: lifecycle,
+      retry: lifecycle,
+      cancel: lifecycle,
+    } as unknown as NonNullable<CommandContext["multiReviews"]>;
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("start_multi_review", {
+            ...startInput,
+            reviewers: [{ ...startInput.reviewers[0], id: "renderer-injected" }],
+          }),
+        ).rejects.toThrow("Invalid multi review start request");
+        await expect(invoke("address_multi_review", { workflowId: " " })).rejects.toThrow(
+          "non-blank string",
+        );
+        await expect(
+          invoke("start_multi_review_custom_fix", {
+            workflowId: "multi-1",
+            addressFindingsModel: startInput.addressFindingsModel,
+            instruction: " ",
+          }),
+        ).rejects.toThrow("Invalid Multi Review custom fix request");
+        await expect(
+          invoke("restart_multi_review_step", {
+            workflowId: "multi-1",
+            kind: "reviewers",
+          }),
+        ).rejects.toThrow("Invalid multi review step restart request");
+        expect(start).not.toHaveBeenCalled();
+        expect(lifecycle).not.toHaveBeenCalled();
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
+  test("delegates authoritative reviewer transcript reads", async () => {
+    const reviewerTranscript = mock(async (workflowId: string, reviewerId: string) => ({
+      workflowId,
+      reviewerId,
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "running",
+      messages: [{ id: "progress" }],
+    }));
+    const supervisor = { reviewerTranscript } as unknown as NonNullable<
+      CommandContext["multiReviews"]
+    >;
+
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_reviewer_transcript", {
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+          }),
+        ).resolves.toMatchObject({
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          messages: [{ id: "progress" }],
+        });
+        expect(reviewerTranscript).toHaveBeenCalledWith("multi-1", "reviewer-1", undefined);
+        await invoke("get_multi_review_reviewer_transcript", {
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          knownSourceToken: "rt1.scope.token",
+        });
+        expect(reviewerTranscript).toHaveBeenLastCalledWith(
+          "multi-1",
+          "reviewer-1",
+          "rt1.scope.token",
+        );
+        await expect(
+          invoke("get_multi_review_reviewer_transcript", {
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            knownSourceToken: "x".repeat(513),
+          }),
+        ).rejects.toThrow("source token");
+        await expect(
+          invoke("get_multi_review_reviewer_transcript", {
+            workflowId: "multi-1",
+            reviewerId: " ",
+          }),
+        ).rejects.toThrow("non-blank string");
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
+  test("delegates bounded step transcript reads", async () => {
+    const stepTranscript = mock(async (workflowId: string, step: string) => ({
+      workflowId,
+      step,
+      session: "own",
+      transcript: "snapshot",
+      messages: [{ id: "progress" }],
+    }));
+    const supervisor = { stepTranscript } as unknown as NonNullable<CommandContext["multiReviews"]>;
+
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_step_transcript", {
+            workflowId: "multi-1",
+            step: "address-findings",
+          }),
+        ).resolves.toMatchObject({ step: "address-findings", messages: [{ id: "progress" }] });
+        expect(stepTranscript).toHaveBeenCalledWith("multi-1", "address-findings", undefined);
+        await invoke("get_multi_review_step_transcript", {
+          workflowId: "multi-1",
+          step: "consolidate",
+          knownSourceToken: "rt1.scope.token",
+        });
+        expect(stepTranscript).toHaveBeenLastCalledWith(
+          "multi-1",
+          "consolidate",
+          "rt1.scope.token",
+        );
+        for (const invalid of [
+          { workflowId: "multi-1", step: "reviewers" },
+          { workflowId: "multi-1", step: "fix", knownSourceToken: "x".repeat(513) },
+        ]) {
+          await expect(invoke("get_multi_review_step_transcript", invalid)).rejects.toThrow(
+            "Invalid multi review step transcript request",
+          );
+        }
+        expect(stepTranscript).toHaveBeenCalledTimes(2);
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
+  test("delegates step tool bodies with validated workflow, step and reference", async () => {
+    const stepToolDetails = mock(async () => ({ detailRef: "bd1.reference", toolOutput: "body" }));
+    const supervisor = { stepToolDetails } as unknown as NonNullable<
+      CommandContext["multiReviews"]
+    >;
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_step_tool_details", {
+            workflowId: "multi-1",
+            step: "prepare",
+            detailRef: "bd1.reference",
+          }),
+        ).resolves.toMatchObject({ toolOutput: "body" });
+        expect(stepToolDetails).toHaveBeenCalledWith("multi-1", "prepare", "bd1.reference");
+        for (const invalid of [
+          { step: "reviewers" },
+          { workflowId: " " },
+          { detailRef: "" },
+          { detailRef: 42 },
+          { detailRef: "x".repeat(2049) },
+        ]) {
+          await expect(
+            invoke("get_multi_review_step_tool_details", {
+              workflowId: "multi-1",
+              step: "fix",
+              detailRef: "bd1.reference",
+              ...invalid,
+            }),
+          ).rejects.toThrow("Invalid multi review step tool detail request");
+        }
+        expect(stepToolDetails).toHaveBeenCalledTimes(1);
+      },
+      { multiReviews: supervisor },
+    );
+  });
+
+  test("delegates bounded reviewer history page reads", async () => {
+    const reviewerHistoryPage = mock(async () => ({
+      status: "page",
+      messages: [{ id: "earlier" }],
+      historyEpoch: "legacy",
+      complete: true,
+      truncated: false,
+    }));
+    const supervisor = { reviewerHistoryPage } as unknown as NonNullable<
+      CommandContext["multiReviews"]
+    >;
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("get_multi_review_reviewer_history_page", {
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            before: "cursor",
+            limit: 50,
+          }),
+        ).resolves.toMatchObject({ status: "page", messages: [{ id: "earlier" }] });
+        expect(reviewerHistoryPage).toHaveBeenCalledWith("multi-1", "reviewer-1", "cursor", {
+          limit: 50,
+        });
+        for (const invalid of [
+          { before: "" },
+          { before: "x".repeat(1025) },
+          { before: "cursor", limit: 201 },
+          { before: "cursor", limit: 0 },
+          { before: "cursor", targetBytes: 1024 * 1024 + 1 },
+          { before: 42 },
+        ]) {
+          await expect(
+            invoke("get_multi_review_reviewer_history_page", {
+              workflowId: "multi-1",
+              reviewerId: "reviewer-1",
+              ...invalid,
+            }),
+          ).rejects.toThrow("Invalid multi review reviewer history page request");
+        }
+        expect(reviewerHistoryPage).toHaveBeenCalledTimes(1);
+      },
+      { multiReviews: supervisor },
+    );
+  });
+});
+
+describe("build pipeline commands", () => {
+  const startInput = {
+    taskId: "task-1",
+    projectId: "proj-1",
+    environmentType: "local",
+    agentType: "codex",
+    taskTitle: "Implement the feature",
+    taskSnapshot: {
+      title: "Implement the feature",
+      description: "Do the work",
+      acceptanceCriteria: "It works",
+      comments: [],
+      images: [],
+    },
+  } as const;
+
+  test("resolves a validated build stage through transient native agent inspection", async () => {
+    const inspectSession = mock(async () => ({ sessionId: "provider-session", revision: 7 }));
+    const nativeAgents = { inspectSession } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+          id: "pipeline-1",
+          taskId: "task-1",
+          projectId: "proj-1",
+          environmentId: "e1",
+          environmentType: "local",
+          agentType: "codex",
+          phase: "building",
+          sessions: [
+            {
+              phase: "build",
+              agent: "codex",
+              origin: "build-pipeline",
+              interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+              iteration: 0,
+              sessionKey: "pipeline-session-key",
+              sdkSessionId: "provider-session",
+              status: "running",
+              startedAt: "2026-09-08T10:00:00.000Z",
+              label: "Build Session",
+            },
+          ],
+          currentSessionIndex: 0,
+          iteration: 0,
+          maxIterations: 3,
+          createdAt: "2026-09-08T10:00:00.000Z",
+          taskTitle: "Implement the feature",
+          taskSnapshot: startInput.taskSnapshot,
+        });
+
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "pipeline-1",
+            sessionKey: "pipeline-session-key",
+            refreshUsage: true,
+          }),
+        ).resolves.toEqual({ sessionId: "provider-session", revision: 7 });
+        expect(inspectSession).toHaveBeenCalledWith({
+          environmentId: "e1",
+          agent: "codex",
+          logicalSessionKey: "pipeline-session-key",
+          providerSessionId: "provider-session",
+          origin: "build-pipeline",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          title: "Build Session",
+          phase: "build",
+          refreshUsage: true,
+        });
+
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "pipeline-1",
+            sessionKey: "another-session",
+          }),
+        ).rejects.toThrow("Build pipeline session is unavailable");
+        expect(inspectSession).toHaveBeenCalledTimes(1);
+      },
+      { nativeAgents },
+    );
+  });
+
+  test("resolves a Multi Review reviewer through transient native agent inspection", async () => {
+    const inspectSession = mock(async () => ({ sessionId: "reviewer-session", revision: 3 }));
+    const nativeAgents = { inspectSession } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+    const workflow = {
+      version: MULTI_REVIEW_WORKFLOW_VERSION,
+      controller: "backend",
+      id: "workflow-1",
+      environmentId: "e1",
+      projectId: "proj-1",
+      targetBranch: "main",
+      reviewers: [
+        {
+          id: "reviewer-1",
+          agent: "cursor",
+          model: "composer-2",
+          status: "running",
+          sessionKey: "reviewer-session-key",
+          providerSessionId: "reviewer-session",
+        },
+        { id: "reviewer-2", agent: "codex", model: "gpt-5.6", status: "running" },
+        {
+          id: "reviewer-3",
+          agent: "claude",
+          model: "opus",
+          status: "failed",
+          error: "Provider exited",
+          providerSessionId: "unrotated-session",
+        },
+      ],
+      addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
+      phase: "reviewing",
+      createdAt: "2026-09-08T10:00:00.000Z",
+      updatedAt: "2026-09-08T10:00:00.000Z",
+      backendRevision: 1,
+    };
+
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.saveMultiReviewWorkflow("workflow-1", "e1", 1, workflow);
+        await storage.saveMultiReviewWorkflow("malformed", "e1", 1, { id: "malformed" });
+
+        await expect(
+          invoke("get_multi_review_reviewer_projection", {
+            workflowId: "workflow-1",
+            reviewerId: "reviewer-1",
+            refreshUsage: true,
+          }),
+        ).resolves.toEqual({ sessionId: "reviewer-session", revision: 3 });
+        expect(inspectSession).toHaveBeenLastCalledWith({
+          environmentId: "e1",
+          agent: "cursor",
+          logicalSessionKey: "reviewer-session-key",
+          providerSessionId: "reviewer-session",
+          origin: "automated-review",
+          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+          phase: "review",
+          refreshUsage: true,
+        });
+        await invoke("get_multi_review_reviewer_projection", {
+          workflowId: "workflow-1",
+          reviewerId: "reviewer-3",
+        });
+        expect(inspectSession).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agent: "claude",
+            logicalSessionKey: "multi-review:workflow-1:reviewer:reviewer-3",
+            providerSessionId: "unrotated-session",
+          }),
+        );
+
+        for (const [workflowId, reviewerId, message] of [
+          ["missing", "reviewer-1", "Multi review workflow is unavailable"],
+          ["malformed", "reviewer-1", "Multi review workflow is unavailable"],
+          ["workflow-1", "unknown", "Multi review reviewer is unavailable"],
+          // Not started yet: there is no provider session to inspect.
+          ["workflow-1", "reviewer-2", "Multi review reviewer is unavailable"],
+        ] as const) {
+          await expect(
+            invoke("get_multi_review_reviewer_projection", { workflowId, reviewerId }),
+          ).rejects.toThrow(message);
+        }
+        await expect(
+          invoke("get_multi_review_reviewer_projection", {
+            workflowId: "workflow-1",
+            reviewerId: "reviewer-1",
+            refreshUsage: "yes",
+          }),
+        ).rejects.toThrow("refreshUsage");
+        expect(inspectSession).toHaveBeenCalledTimes(2);
+      },
+      { nativeAgents },
+    );
+
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("get_multi_review_reviewer_projection", {
+          workflowId: "workflow-1",
+          reviewerId: "reviewer-1",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+    });
+  });
+
+  test("rejects invalid build-stage projection requests before inspection", async () => {
+    const inspectSession = mock(async () => ({ sessionId: "provider-session", revision: 1 }));
+    const nativeAgents = { inspectSession } as unknown as NonNullable<
+      CommandContext["nativeAgents"]
+    >;
+
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.saveBuildPipeline("malformed", "proj-1", "e1", 1, {});
+        await storage.saveBuildPipeline("missing-sdk", "proj-1", "e1", 1, {
+          id: "missing-sdk",
+          taskId: "task-1",
+          projectId: "proj-1",
+          environmentId: "e1",
+          environmentType: "local",
+          agentType: "codex",
+          phase: "building",
+          sessions: [
+            {
+              phase: "build",
+              agent: "codex",
+              iteration: 0,
+              sessionKey: "session-key",
+              status: "idle",
+              startedAt: "2026-09-08T10:00:00.000Z",
+              label: "Build Session",
+            },
+          ],
+          currentSessionIndex: 0,
+          iteration: 0,
+          maxIterations: 3,
+          createdAt: "2026-09-08T10:00:00.000Z",
+          taskTitle: "Implement the feature",
+          taskSnapshot: startInput.taskSnapshot,
+        });
+
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "missing",
+            sessionKey: "session-key",
+          }),
+        ).rejects.toThrow("Build pipeline is unavailable");
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "malformed",
+            sessionKey: "session-key",
+          }),
+        ).rejects.toThrow("Build pipeline is unavailable");
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "missing-sdk",
+            sessionKey: "session-key",
+          }),
+        ).rejects.toThrow("Build pipeline is unavailable");
+        await expect(
+          invoke("get_build_pipeline_session_projection", {
+            pipelineId: "malformed",
+            sessionKey: "session-key",
+            refreshUsage: "yes",
+          }),
+        ).rejects.toThrow("refreshUsage");
+        expect(inspectSession).not.toHaveBeenCalled();
+      },
+      { nativeAgents },
+    );
+
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("get_build_pipeline_session_projection", {
+          pipelineId: "pipeline-1",
+          sessionKey: "session-key",
+        }),
+      ).rejects.toThrow("Native agent service is unavailable");
+    });
+  });
+
+  test("does not persist inspected build stages or enroll them in activity reconciliation", async () => {
+    const stub = createProviderStub("codex", {
+      activity: async () => "idle",
+    });
+    let service: NativeAgentService | undefined;
+
+    await withCommands(
+      async (invoke, storage) => {
+        try {
+          await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+            id: "pipeline-1",
+            taskId: "task-1",
+            projectId: "proj-1",
+            environmentId: "e1",
+            environmentType: "local",
+            agentType: "codex",
+            phase: "building",
+            sessions: [
+              {
+                phase: "build",
+                agent: "codex",
+                origin: "build-pipeline",
+                interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+                iteration: 0,
+                sessionKey: "pipeline-session-key",
+                sdkSessionId: "provider-session",
+                status: "idle",
+                startedAt: "2026-09-08T10:00:00.000Z",
+                label: "Build Session",
+              },
+            ],
+            currentSessionIndex: 0,
+            iteration: 0,
+            maxIterations: 3,
+            createdAt: "2026-09-08T10:00:00.000Z",
+            taskTitle: "Implement the feature",
+            taskSnapshot: startInput.taskSnapshot,
+          });
+          const projectionChanges: string[] = [];
+          storage.setResourceChangeListener((change) => {
+            if (change.resource === "native-agent-session") {
+              projectionChanges.push(change.id);
+            }
+          });
+
+          await expect(
+            invoke("get_build_pipeline_session_projection", {
+              pipelineId: "pipeline-1",
+              sessionKey: "pipeline-session-key",
+            }),
+          ).resolves.toMatchObject({ sessionId: "provider-session", connection: "connected" });
+          await expect(storage.listNativeAgentSessions()).resolves.toEqual([]);
+          expect(projectionChanges).toEqual([]);
+
+          await launchInternals(service!).reconcileAgentActivityOnce();
+          expect(stub.activity).not.toHaveBeenCalled();
+
+          await invoke("delete_build_pipeline", { pipelineId: "pipeline-1" });
+          await expect(storage.listNativeAgentSessions()).resolves.toEqual([]);
+        } finally {
+          await service?.shutdown();
+        }
+      },
+      {
+        nativeAgentsFactory: (storage) => {
+          service = new NativeAgentService(
+            storage,
+            async <T>(command: string): Promise<T> => {
+              if (command === "get_native_agent_model_catalog") return [] as T;
+              throw new Error(`Unexpected backend command: ${command}`);
+            },
+            { provider: async () => stub.provider },
+          );
+          return service;
+        },
+      },
+    );
+  });
+
+  test("delegates lifecycle operations to the backend supervisor", async () => {
+    const restartSelection = { agent: "claude", model: "opus", reasoningEffort: "high" };
+    const start = mock(async (input: unknown) => ({ operation: "start", input }));
+    const pause = mock(async (id: string) => ({ operation: "pause", id }));
+    const resume = mock(async (id: string) => ({ operation: "resume", id }));
+    const cancel = mock(async (id: string) => ({ operation: "cancel", id }));
+    const retryCompletionComment = mock(async (id: string) => ({
+      operation: "retry",
+      id,
+    }));
+    const remove = mock(async (id: string) => ({ operation: "remove", id }));
+    const sendMessage = mock(async (id: string, text: string) => ({
+      operation: "send",
+      id,
+      text,
+    }));
+    const steerMessage = mock(async (id: string, text: string) => ({
+      pipeline: { operation: "steer", id, text },
+      delivery: "steered" as const,
+    }));
+    const retryReview = mock(async (id: string) => ({
+      operation: "retry-review",
+      id,
+    }));
+    const retryStage = mock(async (id: string) => ({
+      operation: "retry-stage",
+      id,
+    }));
+    const restartStep = mock(async (id: string, stageId: string) => ({
+      operation: "restart-step",
+      id,
+      stageId,
+    }));
+    const previewCodeRewind = mock(async (id: string, stageId: string) => ({
+      operation: "preview-code-rewind",
+      id,
+      stageId,
+    }));
+    const rewindCode = mock(async (id: string, stageId: string, expectedHead: string) => ({
+      operation: "rewind-code",
+      id,
+      stageId,
+      expectedHead,
+    }));
+    const retryReviewer = mock(async (id: string, reviewerId: string) => ({
+      operation: "retry-reviewer",
+      id,
+      reviewerId,
+    }));
+    const restartReviewer = mock(async (id: string, reviewerId: string) => ({
+      operation: "restart-reviewer",
+      id,
+      reviewerId,
+    }));
+    const stopReviewer = mock(async (id: string, reviewerId: string) => ({
+      operation: "stop-reviewer",
+      id,
+      reviewerId,
+    }));
+    const restartCurrentStep = mock(async (id: string) => ({
+      operation: "restart-current-step",
+      id,
+    }));
+    const retryInteractionFailure = mock(async (id: string) => ({
+      operation: "retry-interaction",
+      id,
+    }));
+    const steerQueuedMessage = mock(async (id: string, messageId: string) => ({
+      pipeline: { operation: "steer-queued", id, messageId },
+      delivery: "steered",
+    }));
+    const removeQueuedMessage = mock(async (id: string, messageId: string) => ({
+      pipeline: { operation: "remove-queued", id, messageId },
+      removed: true,
+    }));
+    const supervisor = {
+      start,
+      pause,
+      resume,
+      cancel,
+      retryCompletionComment,
+      remove,
+      sendMessage,
+      steerMessage,
+      steerQueuedMessage,
+      removeQueuedMessage,
+      retryReview,
+      retryStage,
+      restartStep,
+      previewCodeRewind,
+      rewindCode,
+      retryReviewer,
+      restartReviewer,
+      stopReviewer,
+      restartCurrentStep,
+      retryInteractionFailure,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(
+      async (invoke, storage) => {
+        await expect(invoke("start_build_pipeline", startInput)).resolves.toMatchObject({
+          operation: "start",
+        });
+        await expect(invoke("pause_build_pipeline", { pipelineId: "pipeline-1" })).resolves.toEqual(
+          { operation: "pause", id: "pipeline-1" },
+        );
+        await expect(
+          invoke("resume_build_pipeline", { pipelineId: "pipeline-1" }),
+        ).resolves.toEqual({ operation: "resume", id: "pipeline-1" });
+        await expect(
+          invoke("cancel_build_pipeline", { pipelineId: "pipeline-1" }),
+        ).resolves.toEqual({ operation: "cancel", id: "pipeline-1" });
+        await expect(
+          invoke("retry_build_pipeline_completion_comment", {
+            pipelineId: "pipeline-1",
+          }),
+        ).resolves.toEqual({ operation: "retry", id: "pipeline-1" });
+        await expect(
+          invoke("send_build_pipeline_message", {
+            pipelineId: "pipeline-1",
+            text: "also update the README",
+          }),
+        ).resolves.toEqual({
+          operation: "send",
+          id: "pipeline-1",
+          text: "also update the README",
+        });
+        await expect(
+          invoke("steer_build_pipeline", {
+            pipelineId: "pipeline-1",
+            text: "use the existing helper",
+          }),
+        ).resolves.toEqual({
+          pipeline: { operation: "steer", id: "pipeline-1", text: "use the existing helper" },
+          delivery: "steered",
+        });
+        expect(steerMessage).toHaveBeenCalledWith("pipeline-1", "use the existing helper");
+        await expect(
+          invoke("steer_queued_build_pipeline_message", {
+            pipelineId: "pipeline-1",
+            messageId: "message-1",
+          }),
+        ).resolves.toEqual({
+          pipeline: { operation: "steer-queued", id: "pipeline-1", messageId: "message-1" },
+          delivery: "steered",
+        });
+        await expect(
+          invoke("remove_queued_build_pipeline_message", {
+            pipelineId: "pipeline-1",
+            messageId: "message-2",
+          }),
+        ).resolves.toEqual({
+          pipeline: { operation: "remove-queued", id: "pipeline-1", messageId: "message-2" },
+          removed: true,
+        });
+        await expect(
+          invoke("retry_build_pipeline_review", {
+            pipelineId: "pipeline-1",
+          }),
+        ).resolves.toEqual({ operation: "retry-review", id: "pipeline-1" });
+        await expect(
+          invoke("retry_build_pipeline_stage", {
+            pipelineId: "pipeline-1",
+          }),
+        ).resolves.toEqual({ operation: "retry-stage", id: "pipeline-1" });
+        await expect(
+          invoke("restart_build_pipeline_step", {
+            pipelineId: "pipeline-1",
+            stageId: "review-session",
+            selection: restartSelection,
+          }),
+        ).resolves.toEqual({
+          operation: "restart-step",
+          id: "pipeline-1",
+          stageId: "review-session",
+        });
+        await expect(
+          invoke("restart_build_pipeline_step", {
+            pipelineId: "pipeline-1",
+            stageId: "review-session",
+          }),
+        ).resolves.toEqual({
+          operation: "restart-step",
+          id: "pipeline-1",
+          stageId: "review-session",
+        });
+        await expect(
+          invoke("preview_build_pipeline_code_rewind", {
+            pipelineId: "pipeline-1",
+            stageId: "build-session",
+          }),
+        ).resolves.toEqual({
+          operation: "preview-code-rewind",
+          id: "pipeline-1",
+          stageId: "build-session",
+        });
+        await expect(
+          invoke("rewind_build_pipeline_code", {
+            pipelineId: "pipeline-1",
+            stageId: "build-session",
+            expectedHead: "c".repeat(40),
+          }),
+        ).resolves.toEqual({
+          operation: "rewind-code",
+          id: "pipeline-1",
+          stageId: "build-session",
+          expectedHead: "c".repeat(40),
+        });
+        await expect(
+          invoke("rewind_build_pipeline_code", {
+            pipelineId: "pipeline-1",
+            stageId: "build-session",
+            expectedHead: " ",
+          }),
+        ).rejects.toThrow("expectedHead");
+        expect(rewindCode).toHaveBeenCalledTimes(1);
+        await expect(
+          invoke("retry_build_pipeline_reviewer", {
+            pipelineId: "pipeline-1",
+            reviewerId: "reviewer-2",
+          }),
+        ).resolves.toEqual({
+          operation: "retry-reviewer",
+          id: "pipeline-1",
+          reviewerId: "reviewer-2",
+        });
+        expect(retryReviewer).toHaveBeenCalledWith("pipeline-1", "reviewer-2");
+        for (const args of [
+          { pipelineId: " ", reviewerId: "reviewer-2" },
+          { pipelineId: "pipeline-1", reviewerId: " " },
+          { pipelineId: "", reviewerId: "reviewer-2" },
+          { pipelineId: "pipeline-1", reviewerId: "" },
+        ]) {
+          await expect(invoke("retry_build_pipeline_reviewer", args)).rejects.toThrow();
+        }
+        expect(retryReviewer).toHaveBeenCalledTimes(1);
+        await expect(
+          invoke("stop_build_pipeline_reviewer", {
+            pipelineId: "pipeline-1",
+            reviewerId: "reviewer-2",
+          }),
+        ).resolves.toEqual({
+          operation: "stop-reviewer",
+          id: "pipeline-1",
+          reviewerId: "reviewer-2",
+        });
+        expect(stopReviewer).toHaveBeenCalledWith("pipeline-1", "reviewer-2");
+        for (const args of [
+          { pipelineId: " ", reviewerId: "reviewer-2" },
+          { pipelineId: "pipeline-1", reviewerId: " " },
+        ]) {
+          await expect(invoke("stop_build_pipeline_reviewer", args)).rejects.toThrow();
+        }
+        expect(stopReviewer).toHaveBeenCalledTimes(1);
+        await expect(
+          invoke("restart_build_pipeline_reviewer", {
+            pipelineId: "pipeline-1",
+            reviewerId: "reviewer-2",
+          }),
+        ).resolves.toEqual({
+          operation: "restart-reviewer",
+          id: "pipeline-1",
+          reviewerId: "reviewer-2",
+        });
+        expect(restartReviewer).toHaveBeenCalledWith("pipeline-1", "reviewer-2");
+        await expect(
+          invoke("restart_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: " " }),
+        ).rejects.toThrow();
+
+        await expect(
+          invoke("restart_build_pipeline_current_step", {
+            pipelineId: "pipeline-1",
+          }),
+        ).resolves.toEqual({ operation: "restart-current-step", id: "pipeline-1" });
+        await expect(
+          invoke("retry_build_pipeline_interaction_failure", {
+            pipelineId: "pipeline-1",
+          }),
+        ).resolves.toEqual({ operation: "retry-interaction", id: "pipeline-1" });
+
+        await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+          id: "pipeline-1",
+        });
+        await expect(
+          invoke("delete_build_pipeline", { pipelineId: "pipeline-1" }),
+        ).resolves.toEqual({ operation: "remove", id: "pipeline-1" });
+        expect(await storage.getBuildPipeline("pipeline-1")).not.toBeNull();
+
+        expect(start).toHaveBeenCalledWith(startInput);
+        expect(pause).toHaveBeenCalledWith("pipeline-1");
+        expect(resume).toHaveBeenCalledWith("pipeline-1");
+        expect(cancel).toHaveBeenCalledWith("pipeline-1");
+        expect(retryCompletionComment).toHaveBeenCalledWith("pipeline-1");
+        expect(remove).toHaveBeenCalledWith("pipeline-1");
+        expect(sendMessage).toHaveBeenCalledWith("pipeline-1", "also update the README");
+        expect(retryReview).toHaveBeenCalledWith("pipeline-1");
+        expect(retryStage).toHaveBeenCalledWith("pipeline-1");
+        expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session", undefined);
+        expect(restartStep).toHaveBeenCalledWith("pipeline-1", "review-session", restartSelection);
+        expect(restartCurrentStep).toHaveBeenCalledWith("pipeline-1");
+        expect(retryInteractionFailure).toHaveBeenCalledWith("pipeline-1");
+      },
+      { buildPipelines: supervisor },
+    );
+  });
+
+  test("validates lifecycle arguments before invoking the supervisor", async () => {
+    const start = mock(async () => undefined);
+    const pause = mock(async () => undefined);
+    const supervisor = {
+      start,
+      pause,
+      resume: pause,
+      cancel: pause,
+      retryCompletionComment: pause,
+      remove: pause,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("start_build_pipeline", {
+            ...startInput,
+            taskSnapshot: { ...startInput.taskSnapshot, images: "not-an-array" },
+          }),
+        ).rejects.toThrow("Invalid build pipeline start request");
+        await expect(invoke("pause_build_pipeline", { pipelineId: "   " })).rejects.toThrow(
+          "non-blank string",
+        );
+        await expect(invoke("resume_build_pipeline", { pipelineId: 7 })).rejects.toThrow("string");
+        await expect(invoke("cancel_build_pipeline", {})).rejects.toThrow("string");
+        await expect(
+          invoke("retry_build_pipeline_completion_comment", {
+            pipelineId: "",
+          }),
+        ).rejects.toThrow("non-blank string");
+        await expect(
+          invoke("retry_build_pipeline_interaction_failure", {
+            pipelineId: " ",
+          }),
+        ).rejects.toThrow("non-blank string");
+        await expect(invoke("delete_build_pipeline", { pipelineId: " " })).rejects.toThrow(
+          "non-blank string",
+        );
+        await expect(invoke("get_build_pipeline", { pipelineId: "" })).rejects.toThrow(
+          "non-blank string",
+        );
+        await expect(invoke("list_build_pipelines", { projectId: " " })).rejects.toThrow(
+          "non-blank string",
+        );
+
+        expect(start).not.toHaveBeenCalled();
+        expect(pause).not.toHaveBeenCalled();
+      },
+      { buildPipelines: supervisor },
+    );
+  });
+
+  test("reports unavailable supervision and keeps deletion recoverable", async () => {
+    await withCommands(async (invoke, storage) => {
+      for (const [command, args] of [
+        ["start_build_pipeline", startInput],
+        ["pause_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["resume_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["cancel_build_pipeline", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_completion_comment", { pipelineId: "pipeline-1" }],
+        [
+          "send_build_pipeline_message",
+          {
+            pipelineId: "pipeline-1",
+            text: "hello",
+          },
+        ],
+        ["steer_build_pipeline", { pipelineId: "pipeline-1", text: "hello" }],
+        [
+          "steer_queued_build_pipeline_message",
+          { pipelineId: "pipeline-1", messageId: "message-1" },
+        ],
+        [
+          "remove_queued_build_pipeline_message",
+          { pipelineId: "pipeline-1", messageId: "message-1" },
+        ],
+        ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
+        ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
+        ["restart_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "review-session" }],
+        ["skip_build_pipeline_step", { pipelineId: "pipeline-1", stageId: "verify-session" }],
+        [
+          "preview_build_pipeline_code_rewind",
+          { pipelineId: "pipeline-1", stageId: "build-session" },
+        ],
+        [
+          "rewind_build_pipeline_code",
+          { pipelineId: "pipeline-1", stageId: "build-session", expectedHead: "c".repeat(40) },
+        ],
+        ["retry_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+        ["stop_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+        ["restart_build_pipeline_reviewer", { pipelineId: "pipeline-1", reviewerId: "reviewer-2" }],
+        ["restart_build_pipeline_current_step", { pipelineId: "pipeline-1" }],
+        [
+          "retry_build_pipeline_interaction_failure",
+          {
+            pipelineId: "pipeline-1",
+          },
+        ],
+      ] as const) {
+        await expect(invoke(command, args)).rejects.toThrow(
+          "Build pipeline supervisor is unavailable",
+        );
+      }
+
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        id: "pipeline-1",
+      });
+      await expect(
+        invoke("delete_build_pipeline", { pipelineId: "pipeline-1" }),
+      ).resolves.toBeUndefined();
+      expect(await storage.getBuildPipeline("pipeline-1")).toBeNull();
+    });
+  });
+
+  test("rejects client-authored snapshots while preserving reads and deletion", async () => {
+    await withCommands(async (invoke, storage) => {
+      await expect(
+        invoke("save_build_pipeline", {
+          pipelineId: "p1",
+          projectId: "proj-1",
+          environmentId: "e1",
+          version: 1,
+          snapshot: { id: "p1", phase: "building" },
+        }),
+      ).rejects.toThrow("backend-owned");
+
+      await storage.saveBuildPipeline("p1", "proj-1", "e1", 2, {
+        id: "p1",
+        phase: "building",
+        controller: "backend",
+      });
+
+      await expect(invoke("list_build_pipelines", { projectId: "proj-1" })).resolves.toHaveLength(
+        1,
+      );
+
+      await invoke("delete_build_pipeline", { pipelineId: "p1" });
+      await expect(invoke("get_build_pipeline", { pipelineId: "p1" })).resolves.toBeNull();
+    });
+  });
+
+  test("clears every task pipeline before updating the task and deduplicates the linked id", async () => {
+    const operations: string[] = [];
+    const remove = mock(async (pipelineId: string) => {
+      operations.push(`remove:${pipelineId}`);
+    });
+    const supervisor = {
+      remove,
+    } as unknown as NonNullable<CommandContext["buildPipelines"]>;
+
+    await withCommands(
+      async (invoke, storage) => {
+        const task = await storage.kanban.addKanbanTask("proj-1", "Build task", "");
+        await storage.kanban.updateKanbanTask(task.id, {
+          environmentId: "e1",
+          buildPipelineId: "pipeline-linked",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+        });
+        await storage.saveBuildPipeline("pipeline-linked", "proj-1", "e1", 1, {
+          taskId: task.id,
+        });
+        await storage.saveBuildPipeline("pipeline-secondary", "proj-1", "e1", 1, {
+          taskId: task.id,
+        });
+        await storage.saveBuildPipeline("pipeline-unrelated", "proj-1", "e1", 1, {
+          taskId: "another-task",
+        });
+
+        const updateKanbanTask = storage.kanban.updateKanbanTask.bind(storage.kanban);
+        const updateSpy = spyOn(storage.kanban, "updateKanbanTask").mockImplementation(
+          async (taskId, updates, expectedProjectId) => {
+            operations.push(`update:${taskId}`);
+            return updateKanbanTask(taskId, updates, expectedProjectId);
+          },
+        );
+
+        const result = (await invoke("clear_task_build_status", {
+          taskId: task.id,
+        })) as {
+          task: { id: string; environmentId?: string; buildPipelineId?: string; prUrl?: string };
+          removedPipelineIds: string[];
+        };
+
+        expect(result.removedPipelineIds).toEqual(["pipeline-linked", "pipeline-secondary"]);
+        expect(result.task).toMatchObject({ id: task.id, prUrl: "" });
+        expect(result.task.environmentId).toBeUndefined();
+        expect(result.task.buildPipelineId).toBeUndefined();
+        expect(remove.mock.calls.map(([pipelineId]) => pipelineId)).toEqual([
+          "pipeline-linked",
+          "pipeline-secondary",
+        ]);
+        expect(operations).toEqual([
+          "remove:pipeline-linked",
+          "remove:pipeline-secondary",
+          `update:${task.id}`,
+        ]);
+        expect(updateSpy).toHaveBeenCalledWith(task.id, {
+          environmentId: undefined,
+          buildPipelineId: undefined,
+          prUrl: "",
+          prState: undefined,
+        });
+      },
+      { buildPipelines: supervisor },
+    );
+  });
+
+  test("falls back to storage deletion when the build-pipeline supervisor is unavailable", async () => {
+    await withCommands(async (invoke, storage) => {
+      const task = await storage.kanban.addKanbanTask("proj-1", "Stored build task", "");
+      await storage.kanban.updateKanbanTask(task.id, {
+        buildPipelineId: "pipeline-stored",
+      });
+      await storage.saveBuildPipeline("pipeline-stored", "proj-1", "e1", 1, {
+        taskId: task.id,
+      });
+
+      const operations: string[] = [];
+      const deleteBuildPipeline = storage.deleteBuildPipeline.bind(storage);
+      const deleteSpy = spyOn(storage, "deleteBuildPipeline").mockImplementation(
+        async (pipelineId) => {
+          operations.push(`delete:${pipelineId}`);
+          await deleteBuildPipeline(pipelineId);
+        },
+      );
+      const updateKanbanTask = storage.kanban.updateKanbanTask.bind(storage.kanban);
+      spyOn(storage.kanban, "updateKanbanTask").mockImplementation(
+        async (taskId, updates, expectedProjectId) => {
+          operations.push(`update:${taskId}`);
+          return updateKanbanTask(taskId, updates, expectedProjectId);
+        },
+      );
+
+      const result = (await invoke("clear_task_build_status", {
+        taskId: task.id,
+      })) as { removedPipelineIds: string[] };
+
+      expect(result.removedPipelineIds).toEqual(["pipeline-stored"]);
+      expect(deleteSpy).toHaveBeenCalledWith("pipeline-stored");
+      expect(operations).toEqual(["delete:pipeline-stored", `update:${task.id}`]);
+      expect(await storage.getBuildPipeline("pipeline-stored")).toBeNull();
+    });
+  });
+});
+
+describe("set_environment_unread", () => {
+  async function seedEnvironment(storage: StorageService): Promise<void> {
+    if (!(await storage.getProject("proj-1"))) {
+      await storage.addProject({
+        id: "proj-1",
+        name: "Project",
+        gitUrl: "https://example.com/repo.git",
+        localPath: null,
+        order: 0,
+        addedAt: new Date().toISOString(),
+      });
+    }
+    if (!(await storage.getEnvironment("e1"))) {
+      await storage.addEnvironment({
+        id: "e1",
+        name: "Env",
+        projectId: "proj-1",
+        status: "running",
+        environmentType: "local",
+        branch: "main",
+        order: 0,
+        containerId: null,
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        networkAccessMode: "restricted",
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  test("sets and clears the badge on the environment record", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+
+      await expect(
+        invoke("set_environment_unread", { environmentId: "e1", unread: true }),
+      ).resolves.toMatchObject({ id: "e1", hasUnreadWork: true });
+      await expect(
+        invoke("set_environment_unread", {
+          environmentId: "e1",
+          unread: false,
+          expectedLastActivityAt: null,
+        }),
+      ).resolves.toMatchObject({ id: "e1", hasUnreadWork: false });
+    });
+  });
+
+  test("treats a non-boolean flag as read rather than marking unread", async () => {
+    // asBoolean falls back to false, so a malformed request can only ever clear
+    // the badge — never raise one the user has not been given a reason for.
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      await invoke("set_environment_unread", { environmentId: "e1", unread: true });
+
+      await expect(
+        invoke("set_environment_unread", { environmentId: "e1", unread: "yes" }),
+      ).resolves.toMatchObject({ hasUnreadWork: false });
+    });
+  });
+
+  test("rejects an unknown environment", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("set_environment_unread", { environmentId: "missing", unread: true }),
+      ).rejects.toThrow("not found");
+    });
+  });
+
+  test("does not let a delayed clear erase a newer completion", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      const first = "2026-01-01T00:00:00.000Z";
+      const second = "2026-01-01T00:00:01.000Z";
+
+      await expect(storage.recordEnvironmentCompletion("e1", first)).resolves.toMatchObject({
+        lastActivityAt: first,
+        hasUnreadWork: true,
+      });
+
+      await expect(storage.recordEnvironmentCompletion("e1", second)).resolves.toMatchObject({
+        lastActivityAt: second,
+        hasUnreadWork: true,
+      });
+
+      await expect(
+        invoke("set_environment_unread", {
+          environmentId: "e1",
+          unread: false,
+          expectedLastActivityAt: first,
+        }),
+      ).resolves.toMatchObject({ lastActivityAt: second, hasUnreadWork: true });
+    });
+  });
+
+  test("guards an absent activity token with explicit null", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      const completion = "2026-01-01T00:00:00.000Z";
+
+      await storage.recordEnvironmentCompletion("e1", completion);
+      await expect(
+        invoke("set_environment_unread", {
+          environmentId: "e1",
+          unread: false,
+          expectedLastActivityAt: null,
+        }),
+      ).resolves.toMatchObject({ lastActivityAt: completion, hasUnreadWork: true });
+    });
+  });
+
+  test("rejects a malformed clear token instead of clearing without a guard", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      await invoke("set_environment_unread", { environmentId: "e1", unread: true });
+
+      await expect(
+        invoke("set_environment_unread", {
+          environmentId: "e1",
+          unread: false,
+          expectedLastActivityAt: 42,
+        }),
+      ).rejects.toThrow("Expected expectedLastActivityAt to be a string");
+      expect(await storage.getEnvironment("e1")).toMatchObject({ hasUnreadWork: true });
+    });
+  });
+
+  test("ignores a stale completion without raising a new badge", async () => {
+    await withCommands(async (invoke, storage) => {
+      await seedEnvironment(storage);
+      const newest = "2026-01-01T00:00:01.000Z";
+      await storage.recordEnvironmentCompletion("e1", newest);
+      await invoke("set_environment_unread", {
+        environmentId: "e1",
+        unread: false,
+        expectedLastActivityAt: newest,
+      });
+
+      await expect(
+        storage.recordEnvironmentCompletion("e1", "2026-01-01T00:00:00.000Z"),
+      ).resolves.toMatchObject({ lastActivityAt: newest, hasUnreadWork: false });
+    });
+  });
+});
+
+describe("pr monitor commands", () => {
+  // Each `withCommands` builds its own runtime and shuts it down afterwards,
+  // which drops the PR monitor's entries and scheduled polls with it.
+  test("pr_monitor_watch validates its arguments", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("pr_monitor_watch", {
+          environmentId: "e1",
+          mode: "idle",
+        }),
+      ).rejects.toThrow("mode must be normal, create-pending, or merge-pending");
+      await expect(
+        invoke("pr_monitor_watch", {
+          environmentId: 42,
+          mode: "merge-pending",
+        }),
+      ).rejects.toThrow("Expected environmentId to be a string");
+      await expect(
+        invoke("pr_monitor_watch", {
+          environmentId: "missing",
+          mode: "merge-pending",
+        }),
+      ).rejects.toThrow("Environment not found: missing");
+    });
+  });
+
+  test("watch requests are durable in the authoritative snapshot", async () => {
+    await withCommands(async (invoke) => {
+      const empty = await invoke("get_pr_monitor_state", {});
+      expect(isPrMonitorSnapshot(empty)).toBe(true);
+      expect((empty as { entries: unknown[] }).entries).toEqual([]);
+
+      await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+
+      // A later snapshot — the rehydration path a freshly mounted client
+      // uses — still carries the pending request; nothing about it lived in
+      // the client that asked.
+      const snapshot = (await invoke("get_pr_monitor_state", {})) as {
+        entries: Array<Record<string, unknown>>;
+      };
+      expect(isPrMonitorSnapshot(snapshot)).toBe(true);
+      expect(snapshot.entries).toHaveLength(1);
+      expect(snapshot.entries[0]).toMatchObject({
+        environmentId: "e1",
+        mode: "create-pending",
+        prUrl: null,
+        consecutiveErrors: 0,
+      });
+    });
+  });
+
+  test("snapshot reads are stamped and answer compact conditional reads", async () => {
+    await withCommands(async (invoke) => {
+      await invoke("pr_monitor_watch", { environmentId: "e1", mode: "create-pending" });
+      const stamped = (await invoke("get_pr_monitor_state", {})) as {
+        entries: Array<Record<string, unknown>>;
+        generation: string;
+        revision: number;
+      };
+      expect(isPrMonitorSnapshot(stamped)).toBe(true);
+      expect(typeof stamped.generation).toBe("string");
+      expect(stamped.revision).toBeGreaterThan(0);
+
+      await expect(
+        invoke("get_pr_monitor_state", {
+          knownGeneration: stamped.generation,
+          knownRevision: stamped.revision,
+        }),
+      ).resolves.toEqual({
+        status: "unchanged",
+        generation: stamped.generation,
+        revision: stamped.revision,
+      });
+
+      await invoke("pr_monitor_watch", { environmentId: "e1", mode: "merge-pending" });
+      const changed = (await invoke("get_pr_monitor_state", {
+        knownGeneration: stamped.generation,
+        knownRevision: stamped.revision,
+      })) as { status: string; revision: number; snapshot: { entries: unknown[] } };
+      expect(changed.status).toBe("snapshot");
+      expect(changed.revision).toBeGreaterThan(stamped.revision);
+      expect(changed.snapshot.entries).toEqual([
+        expect.objectContaining({ environmentId: "e1", mode: "merge-pending" }),
+      ]);
+
+      await expect(
+        invoke("get_pr_monitor_state", { knownGeneration: "stale", knownRevision: 1 }),
+      ).resolves.toMatchObject({ status: "reset", reason: "generation" });
+      await expect(
+        invoke("get_pr_monitor_state", { knownGeneration: stamped.generation }),
+      ).resolves.toMatchObject({ status: "reset", reason: "invalid-request" });
+    });
+  });
+
+  test("conflict-resolution refresh intent is durable and backend-only", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+
+      const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+
+      const armed = await storage.getEnvironment("e1");
+      expect(armed?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+      expect(armed?.prRecheckAfterAgentCompletionArmedAt).toBe(armedAt);
+      expect(toClientEnvironment(armed!)).not.toHaveProperty(
+        "prRecheckAfterAgentCompletionArmedAt",
+      );
+
+      // A backend completion edge schedules the monitor but does not consume
+      // the intent before GitHub confirms the conflict is actually gone.
+      await invoke("pr_monitor_agent_turn_completed", { environmentId: "e1" });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        armed?.prRecheckAfterAgentCompletionArmedAt,
+      );
+
+      // GitHub's indeterminate result must not consume the durable request.
+      await invoke("set_environment_pr", {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: null,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        armedAt,
+      );
+
+      await invoke("set_environment_pr", {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: false,
+      });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+
+      const refusedArm = await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      });
+      expect(refusedArm).toBeNull();
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+
+      await storage.updateEnvironment("e1", {
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      await invoke("arm_pr_refresh_after_agent_completion", { environmentId: "e1" });
+      await invoke("set_environment_pr", {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "merged",
+        hasMergeConflicts: null,
+      });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+
+      await storage.updateEnvironment("e1", {
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const disappearanceArm = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      const knownRequest = getPrMonitorDetectionRequest({
+        environmentId: "e1",
+        branch: "main",
+        kind: "local",
+        worktreePath: "/tmp/worktree",
+        ready: true,
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      expect(() => parsePrMonitorDetectionResponse(knownRequest, "not-json")).toThrow(
+        "Failed to parse gh pr view output",
+      );
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        disappearanceArm,
+      );
+
+      // The monitor's upstream-disappearance effect uses the same clear.
+      await invoke("clear_environment_pr", { environmentId: "e1" });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+    });
+  });
+
+  test("set_environment_pr validates required metadata without clearing an arm", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+
+      for (const [args, message] of [
+        [
+          { environmentId: "e1", prUrl: "https://github.com/acme/repo/pull/7", prState: "open" },
+          "Expected hasMergeConflicts to be a boolean or null",
+        ],
+        [
+          {
+            environmentId: "e1",
+            prUrl: "https://github.com/acme/repo/pull/7",
+            prState: "draft",
+            hasMergeConflicts: false,
+          },
+          "Expected prState to be open, merged, or closed",
+        ],
+        [
+          {
+            environmentId: "e1",
+            prUrl: "https://github.com/acme/repo/pull/7",
+            prState: "open",
+            hasMergeConflicts: "no",
+          },
+          "Expected hasMergeConflicts to be a boolean or null",
+        ],
+      ] as const) {
+        await expect(invoke("set_environment_pr", args)).rejects.toThrow(message);
+        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+          armedAt,
+        );
+      }
+      // A defined command drops an unknown key (plan item 7003, §11.4) instead
+      // of refusing the call; the open, conflict-free PR then clears the arm.
+      await expect(
+        invoke("set_environment_pr", {
+          environmentId: "e1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: false,
+          extra: true,
+        }),
+      ).resolves.not.toHaveProperty("extra");
+    });
+  });
+
+  test("returns the rollback token when monitor hydration fails after persistence", async () => {
+    await withCommands(async (invoke, storage) => {
+      const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await storage.updateEnvironment("e1", {
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: true,
+        });
+        // Every read of the environment store, through the facade or from
+        // another repository, reaches the projects repository.
+        // Arming reads its one row directly, so this fails only the monitor's
+        // hydration, however many reads that takes.
+        const projects = storageInternals(storage).repos.projects;
+        const loadSpy = spyOn(projects, "loadEnvironments").mockImplementation(async () => {
+          throw new Error("temporary storage read failure");
+        });
+
+        const armedAt = (await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        })) as string;
+        loadSpy.mockRestore();
+        expect(armedAt).toEqual(expect.any(String));
+        expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+          armedAt,
+        );
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /arm\.track-failed environmentId=e1 .*temporary storage read failure/,
+          ),
+        );
+      } finally {
+        warning.mockRestore();
+      }
+    });
+  });
+
+  test("token-safe disarm cannot clear a newer Resolve request", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const first = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      const second = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      expect(second).not.toBe(first);
+
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: first,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        second,
+      );
+
+      await expect(
+        invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }),
+      ).rejects.toThrow("Expected armedAt to be a string");
+      await expect(
+        invoke("disarm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+          armedAt: 123,
+        }),
+      ).rejects.toThrow("Expected armedAt to be a string");
+      // An unknown key is dropped (7006, tolerant arguments): each call is
+      // the same as without it. The arm takes a fresh token, a disarm with the
+      // superseded one leaves it, and a disarm with the current one clears it.
+      const third = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        extra: true,
+      })) as string;
+      expect(third).not.toBe(second);
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        third,
+      );
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: second,
+        extra: true,
+      });
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        third,
+      );
+
+      await invoke("disarm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+        armedAt: third,
+        extra: true,
+      });
+      expect(
+        (await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+    });
+  });
+
+  test("a refused arm never returns a token owned by an earlier Resolve request", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const first = (await invoke("arm_pr_refresh_after_agent_completion", {
+        environmentId: "e1",
+      })) as string;
+      await storage.updateEnvironment("e1", { hasMergeConflicts: false });
+
+      expect(
+        await invoke("arm_pr_refresh_after_agent_completion", {
+          environmentId: "e1",
+        }),
+      ).toBeNull();
+      expect((await storage.getEnvironment("e1"))?.prRecheckAfterAgentCompletionArmedAt).toBe(
+        first,
+      );
+    });
+  });
+
+  test("snapshot reconciliation tracks environments with a stored PR", async () => {
+    await withCommands(async (invoke, storage) => {
+      await storage.updateEnvironment("e1", {
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+        hasMergeConflicts: false,
+      });
+
+      const snapshot = (await invoke("get_pr_monitor_state", {})) as {
+        entries: Array<Record<string, unknown>>;
+      };
+      expect(snapshot.entries).toHaveLength(1);
+      expect(snapshot.entries[0]).toMatchObject({
+        environmentId: "e1",
+        mode: "normal",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+    });
+  });
+
+  test("PR discovery and known-URL lookup carry the actual base and reject unsafe metadata", () => {
+    const metadata = {
+      url: "https://github.com/acme/repo/pull/7",
+      state: "OPEN",
+      mergeable: "CONFLICTING",
+      baseRefName: "release/2.0",
+      isCrossRepository: false,
+    };
+    for (const knownPrUrl of [null, metadata.url]) {
+      const request = { args: [], shellCommand: "", branch: "feature", knownPrUrl };
+      const encode = (value: typeof metadata) => JSON.stringify(knownPrUrl ? value : [value]);
+      expect(parsePrMonitorDetectionResponse(request, encode(metadata))).toMatchObject({
+        baseBranch: "release/2.0",
+        hasMergeConflicts: true,
+      });
+      expect(() =>
+        parsePrMonitorDetectionResponse(
+          request,
+          encode({ ...metadata, baseRefName: "main; unsafe" }),
+        ),
+      ).toThrow("invalid pull request base branch");
+    }
+  });
+
+  test("production detection uses branch discovery only until a PR URL is known", () => {
+    const discovery = getPrMonitorDetectionRequest({
+      environmentId: "e1",
+      branch: "feature/pr-monitor",
+      kind: "local",
+      worktreePath: "/tmp/worktree",
+      ready: true,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    });
+    expect(discovery.args).toEqual([
+      "pr",
+      "list",
+      "--head",
+      "feature/pr-monitor",
+      "--state",
+      "all",
+      "--limit",
+      "30",
+      "--json",
+      "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,baseRefName,isCrossRepository",
+    ]);
+    expect(discovery.knownPrUrl).toBeNull();
+    expect(discovery.shellCommand).not.toContain("statusCheckRollup");
+
+    const known = getPrMonitorDetectionRequest({
+      environmentId: "e1",
+      branch: "feature/pr-monitor",
+      kind: "container",
+      containerId: "container-1",
+      ready: true,
+      prUrl: "https://github.com/acme/repo/pull/7",
+      prState: "open",
+      hasMergeConflicts: null,
+    });
+    expect(known.args).toEqual([
+      "pr",
+      "view",
+      "https://github.com/acme/repo/pull/7",
+      "--json",
+      "url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,baseRefName",
+    ]);
+    expect(known.shellCommand).toBe(
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json url,state,headRefOid,mergeable,mergeStateStatus,isDraft,updatedAt,autoMergeRequest,baseRefName",
+    );
+    expect(
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/7",
+          state: "MERGED",
+          mergeable: "UNKNOWN",
+        }),
+      ),
+    ).toEqual({
+      url: "https://github.com/acme/repo/pull/7",
+      state: "merged",
+      hasMergeConflicts: null,
+      checkSummary: null,
+    });
+    const checks = getPrMonitorCheckRequest("https://github.com/acme/repo/pull/7");
+    expect(checks.args).toEqual([
+      "pr",
+      "view",
+      "https://github.com/acme/repo/pull/7",
+      "--json",
+      "statusCheckRollup,headRefOid",
+    ]);
+    expect(checks.shellCommand).toBe(
+      "gh pr view 'https://github.com/acme/repo/pull/7' --json statusCheckRollup,headRefOid",
+    );
+    expect(
+      parsePrMonitorCheckResponse(
+        JSON.stringify({
+          statusCheckRollup: [
+            { status: "COMPLETED", conclusion: "SUCCESS" },
+            { state: "SUCCESS" },
+            { status: "IN_PROGRESS", conclusion: "" },
+            { status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        }),
+      ),
+    ).toEqual({ passed: 2, total: 4, pending: 1 });
+    expect(
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/7",
+          state: "OPEN",
+        }),
+      ),
+    ).toEqual({
+      url: "https://github.com/acme/repo/pull/7",
+      state: "open",
+      hasMergeConflicts: null,
+      checkSummary: null,
+    });
+    // The merge state feeds the "ready to merge" shimmer; a draft is never ready.
+    expect(
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/7",
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "CLEAN",
+          isDraft: false,
+        }),
+      ),
+    ).toMatchObject({ hasMergeConflicts: false, mergeability: "clean" });
+    expect(
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/7",
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+          mergeStateStatus: "BLOCKED",
+          isDraft: true,
+        }),
+      ),
+    ).toMatchObject({ mergeability: "unavailable" });
+    expect(() =>
+      parsePrMonitorDetectionResponse(
+        known,
+        JSON.stringify({
+          url: "https://github.com/acme/repo/pull/8",
+          state: "OPEN",
+          mergeable: "MERGEABLE",
+        }),
+      ),
+    ).toThrow("unexpected pull request metadata");
+
+    const terminal = getPrMonitorDetectionRequest({
+      environmentId: "e1",
+      branch: "feature/pr-monitor",
+      kind: "container",
+      containerId: "container-1",
+      ready: true,
+      prUrl: "https://github.com/acme/repo/pull/7",
+      prState: "merged",
+      hasMergeConflicts: false,
+    });
+    expect(terminal.knownPrUrl).toBeNull();
+    expect(terminal.args.slice(0, 4)).toEqual(["pr", "list", "--head", "feature/pr-monitor"]);
+  });
+
+  test.each([
+    ["pending", { state: "PENDING" }, { passed: 0, total: 1, pending: 1 }],
+    ["expected", { state: "EXPECTED" }, { passed: 0, total: 1, pending: 1 }],
+    ["queued", { state: "QUEUED" }, { passed: 0, total: 1, pending: 1 }],
+    ["waiting", { state: "WAITING" }, { passed: 0, total: 1, pending: 1 }],
+    ["in-progress status", { status: "IN_PROGRESS" }, { passed: 0, total: 1, pending: 1 }],
+    [
+      "real in-progress CheckRun",
+      { status: "IN_PROGRESS", conclusion: "" },
+      { passed: 0, total: 1, pending: 1 },
+    ],
+    ["requested status", { status: "REQUESTED" }, { passed: 0, total: 1, pending: 1 }],
+    [
+      "running status with a stale success conclusion",
+      { status: "IN_PROGRESS", conclusion: "SUCCESS" },
+      { passed: 0, total: 1, pending: 1 },
+    ],
+    ["empty entry", {}, { passed: 0, total: 1, pending: 1 }],
+    ["neutral", { conclusion: "NEUTRAL" }, { passed: 1, total: 1, pending: 0 }],
+    ["lowercase skipped", { conclusion: "skipped" }, { passed: 1, total: 1, pending: 0 }],
+    ["cancelled", { conclusion: "CANCELLED" }, { passed: 0, total: 1, pending: 0 }],
+    ["timed out", { conclusion: "TIMED_OUT" }, { passed: 0, total: 1, pending: 0 }],
+    ["action required", { conclusion: "ACTION_REQUIRED" }, { passed: 0, total: 1, pending: 0 }],
+    ["error", { state: "ERROR" }, { passed: 0, total: 1, pending: 0 }],
+  ] as const)("classifies %s PR check rollups", (_name, check, expected) => {
+    expect(parsePrCheckSummary([check])).toEqual(expected);
+  });
+
+  test.each([undefined, null, {}, "not-a-rollup"])(
+    "collapses non-array PR check rollups to an empty summary",
+    (rollup) => {
+      expect(parsePrCheckSummary(rollup)).toEqual({ passed: 0, total: 0, pending: 0 });
+    },
+  );
+
+  test("production task lookup resolves direct and build-pipeline environment links", async () => {
+    await withCommands(async (_invoke, storage) => {
+      const direct = await storage.kanban.addKanbanTask("proj-1", "Direct", "");
+      await storage.kanban.updateKanbanTask(direct.id, {
+        environmentId: "e1",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+
+      await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
+        taskId: direct.id,
+        status: "backlog",
+        prUrl: "https://github.com/acme/repo/pull/7",
+        prState: "open",
+      });
+
+      await storage.kanban.updateKanbanTask(direct.id, { environmentId: undefined });
+      const pipelineTask = await storage.kanban.addKanbanTask("proj-1", "Pipeline", "");
+      await storage.saveBuildPipeline("pipeline-1", "proj-1", "e1", 1, {
+        taskId: pipelineTask.id,
+        source: { type: "kanban" },
+      });
+
+      await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
+        taskId: pipelineTask.id,
+        status: "backlog",
+      });
+      await storage.kanban.deleteKanbanTask(pipelineTask.id);
+      await expect(findKanbanTaskForEnvironment(storage, "e1")).resolves.toMatchObject({
+        taskId: pipelineTask.id,
+        status: null,
+        prUrl: null,
+      });
+      await expect(findKanbanTaskForEnvironment(storage, "missing")).resolves.toBeNull();
+    });
+  });
+});
+
+/**
+ * A complete native agent session record, as the session service answers:
+ * the `native-sessions` result schema is the model (plan item 7010), so a
+ * fake's answer carries every field the storage always writes.
+ */
+function nativeSessionRecord() {
+  return {
+    version: 1,
+    key: "e1:codex:tab-1",
+    environmentId: "e1",
+    agent: "codex",
+    logicalSessionKey: "tab-1",
+    providerSessionId: "provider-1",
+    origin: "interactive-native",
+    interactionPolicy: { version: 1, mode: "interactive" },
+    createdAt: "2026-11-07T00:00:00.000Z",
+    updatedAt: "2026-11-07T00:00:00.000Z",
+  };
+}

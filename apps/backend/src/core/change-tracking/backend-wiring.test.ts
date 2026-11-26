@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
-import * as containerExec from "../commands-container-exec.js";
+import * as containerExec from "../commands/container-exec.js";
 import { DiffStatsTracking } from "../diff-stats-tracking.js";
 import type { DiffStatsTarget } from "../diff-stats-service.js";
 import { createBackendChangeTracking } from "./backend-wiring.js";

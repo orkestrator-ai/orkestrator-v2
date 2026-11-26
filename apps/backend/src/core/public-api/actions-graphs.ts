@@ -34,7 +34,7 @@ import type {
   PublicGraphTemplateSummary,
   PublicGraphValidation,
 } from "@orkestrator/protocol/public-api-resources";
-import { conciseError } from "../commands-error-text.js";
+import { conciseError } from "../commands/index.js";
 import { GraphLaunchError, type GraphRunLaunchService } from "../graph-run-launch.js";
 import { GraphRunServiceError, type GraphRunService } from "../graph-run-service.js";
 import { GraphTemplateError } from "../graph-template-errors.js";

@@ -21,9 +21,10 @@
  * spawn time.
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { createServer } from "node:net";
+import { devNull } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -86,7 +87,7 @@ export function backendEnvironment(
 /** A free loopback port that is none of {@link FORBIDDEN_PORTS}. */
 export async function freePort(
   forbidden: ReadonlySet<number> = FORBIDDEN_PORTS,
-  probe: () => Promise<number> = ephemeralPort,
+  probe: () => Promise<number> = () => probeFixturePort(forbidden),
 ): Promise<number> {
   for (let attempt = 0; attempt < 50; attempt++) {
     const port = await probe();
@@ -95,24 +96,63 @@ export async function freePort(
   throw new SetupError("No free loopback port outside the forbidden set.");
 }
 
-function ephemeralPort(): Promise<number> {
+function fixturePortCandidate(): number {
+  return randomInt(49152, 65536);
+}
+
+function probeFixturePort(forbidden: ReadonlySet<number>): Promise<number> {
+  const port = fixturePortCandidate();
+  if (forbidden.has(port) || FORBIDDEN_PORTS.has(port)) return Promise.resolve(0);
   return new Promise((resolve, reject) => {
     const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() => resolve(typeof address === "object" && address ? address.port : 0));
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") resolve(0);
+      else reject(error);
     });
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(port)));
   });
 }
 
 /** Run a setup command; a failure is a {@link SetupError} with its stderr. */
-export function runSetup(command: string, args: readonly string[], cwd: string): string {
-  const result = spawnSync(command, [...args], { cwd, encoding: "utf8" });
+export function runSetup(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  const result = spawnSync(command, [...args], { cwd, env, encoding: "utf8" });
   if (result.status !== 0) {
     throw new SetupError(`${command} ${args.join(" ")}: ${(result.stderr ?? "").trim()}`);
   }
   return result.stdout;
+}
+
+/** Git fixtures must ignore the caller's repository, config and hook environment. */
+export function fixtureGitEnvironment(root: string): NodeJS.ProcessEnv {
+  return {
+    PATH: [directoryOf("git"), "/usr/bin", "/bin"].filter(Boolean).join(path.delimiter),
+    HOME: root,
+    XDG_CONFIG_HOME: path.join(root, ".config"),
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
+
+/** Bind an explicit port so a fixture listener never touches a reserved port. */
+export function bindFixtureListener<T>(
+  bind: (port: number) => T,
+  candidate = fixturePortCandidate,
+): T {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const port = candidate();
+    if (FORBIDDEN_PORTS.has(port)) continue;
+    try {
+      return bind(port);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    }
+  }
+  throw new SetupError("No available loopback port outside the forbidden set.");
 }
 
 export interface InvokeFailure {

@@ -7,7 +7,7 @@ import {
   expectNothingSecretLogged,
   expectOnlyLoginSecrets,
 } from "../../../../../tests/helpers/auth-secret-canaries.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   createOpenCodeProviderLogin,
   normalizeOpenCodeProviderAuth,

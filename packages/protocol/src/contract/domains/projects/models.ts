@@ -2,7 +2,7 @@
  * The project model and the other records the `projects` commands answer
  * (plan item 7005): `Project` of `apps/backend/src/core/models.ts` field for
  * field, the GitHub clone browser (`github-clone.ts`), the host folder picker
- * (`commands-host-files.ts`), project copies between machines
+ * (`apps/backend/src/core/commands/host-files.ts`), project copies between machines
  * (`project-copy.ts`) and the AGENTS.md section proposals
  * (`agents-md-orkestrator.ts`). Plan item 7010 makes these the single
  * definition the backend and the renderer infer their types from; `Project`
@@ -105,7 +105,7 @@ export const GitHubCloneRepositoryListSchema = Schema.Struct({
   nextCursor: optionalString,
 });
 
-// --- The host folder picker (`commands-host-files.ts`) ------------------------
+// --- The host folder picker (`apps/backend/src/core/commands/host-files.ts`) ------------------------
 
 export const HostDirectoryEntrySchema = Schema.Struct({
   name: Schema.String,

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { detectEnvironmentPullRequest } from "../commands-pr-monitor.js";
+import { detectEnvironmentPullRequest } from "../commands/pr-monitor.js";
 import type { PrMonitorTarget } from "./pr-monitor.js";
 import {
   failingCheckNames,

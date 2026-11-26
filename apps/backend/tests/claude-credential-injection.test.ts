@@ -24,7 +24,7 @@ import { delimiter, join } from "node:path";
 import { readKeychainCommand } from "../src/core/claude-host-credentials";
 import { tmpdir } from "node:os";
 
-const { __testing } = await import("../src/core/commands");
+const { __testing } = await import("../src/core/commands/testing");
 const {
   buildSyncContainerClaudeCredentialCommand,
   getClaudeOAuthAccessToken,
@@ -481,7 +481,7 @@ describe("host Claude credential opt-out", () => {
 });
 
 const { readRuntimeHostClaudeCredentials, runtimeHostClaudeConfigDir } =
-  await import("../src/core/commands-files");
+  await import("../src/core/commands/files");
 const { applyClaudeHostCredentialEnvironment } = await import("../src/core/host-agent-credentials");
 const { claudeKeychainService, claudeLoginLookupOptions } =
   await import("../src/core/claude-host-credentials");

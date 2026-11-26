@@ -33,8 +33,8 @@ import {
   envWithManagedBinaries,
   resolveAgentBinary,
   resolveManagedBinary,
-} from "../commands-agent-support.js";
-import type { CommandContext } from "../commands-context.js";
+} from "../commands/agent-support.js";
+import type { CommandContext } from "../commands/index.js";
 import { discoverAgentPlugins } from "../extension-discovery.js";
 import type { McpManagementService } from "../mcp-management/index.js";
 import { CapabilityEnvironmentAuthority } from "./environment-authority.js";

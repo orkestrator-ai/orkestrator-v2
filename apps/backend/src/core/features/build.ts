@@ -30,8 +30,8 @@ import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
 import type { BuildPipelineService } from "../build-pipeline/service.js";
 import { type StorageService, resizeKanbanImage, type KanbanTask } from "../storage/index.js";
 import { assertValidPromptImages } from "../prompt-attachments.js";
-import { generateEnvironmentNameWithCodexExec } from "../commands-agent-support.js";
-import type { CommandContext } from "../commands-context.js";
+import { generateEnvironmentNameWithCodexExec } from "../commands/agent-support.js";
+import type { CommandContext } from "../commands/index.js";
 import type { FeatureBuildTasks } from "./build-tasks.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 

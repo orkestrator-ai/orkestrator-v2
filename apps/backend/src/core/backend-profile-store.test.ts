@@ -10,8 +10,8 @@ import {
   parseBackendProfile,
   type BackendProfile,
 } from "@orkestrator/protocol/backend-profile";
-import { createCommandRegistry } from "./commands.js";
-import type { CommandContext } from "./commands-context.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext } from "./commands/context.js";
 import { StorageService } from "./storage/service.js";
 import {
   BackendProfileConflictError,

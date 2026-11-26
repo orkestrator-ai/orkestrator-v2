@@ -27,7 +27,7 @@ A committed `packages/protocol/contracts/manifest.json` describes every register
 ## Current state (verified 2026-11-07)
 
 - Model to copy:
-  - `apps/backend/src/core/commands-secret-sweep-test-support.ts:117-184` imports `./commands.js` in a child process with a stubbed `fetch` and a temporary home directory, calls `createCommandRegistry()` with no options, and iterates `Array.from(commands.keys()).sort()`.
+  - `apps/backend/src/core/commands/secret-sweep-test-support.ts:117-184` imports `./commands.js` in a child process with a stubbed `fetch` and a temporary home directory, calls `createCommandRegistry()` with no options, and iterates `Array.from(commands.keys()).sort()`.
   - A generator needs only that, plus the `contracts` map from [1003](1003-backend-register-overload.md).
 - `--check` precedent: `scripts/generate-codex-app-server-protocol.ts`.
   - It parses arguments at :61-67, regenerates into a temporary directory, and compares digests and method sets (:415-500).

@@ -1,10 +1,10 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { CoordinatorSnapshot } from "@orkestrator/protocol/coordinator";
 import { isViewSnapshotOutcome } from "@orkestrator/protocol/view-sync";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerCoordinatorCommands } from "../commands-registry-coordinator.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerCoordinatorCommands } from "../commands/registry-coordinator.js";
+import type { RegistryDependencies } from "../commands/registry-types.js";
 import { CoordinatorViewRevisions } from "./view-revisions.js";
 
 function snapshot(projectId: string, title: string): CoordinatorSnapshot {

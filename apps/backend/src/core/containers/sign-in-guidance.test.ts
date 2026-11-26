@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { AgentAccountsRuntime } from "../agent-accounts/runtime.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { containerSignInGuidance } from "./sign-in-guidance.js";
 import { createNativeAgentProvider } from "../native-agent/provider.js";
 import type { Environment } from "../models.js";

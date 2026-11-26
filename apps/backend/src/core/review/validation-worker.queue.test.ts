@@ -5,7 +5,7 @@ import path from "node:path";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { validationPreparation } from "./validation-service.js";
-import { parseReviewPreparationValidation } from "../commands-review.js";
+import { parseReviewPreparationValidation } from "../commands/review.js";
 import { tmpdir } from "node:os";
 import {
   fixtures,

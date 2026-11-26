@@ -1,6 +1,6 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, mock, test } from "bun:test";
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 import type { Environment } from "../src/core/models";
 import {
   LIVENESS_CHECK_EVERY_TICKS,

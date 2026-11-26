@@ -1,5 +1,5 @@
-import type { CommandContext } from "../commands-context.js";
-import { syncStoredEnvironmentStatus } from "../commands-environment.js";
+import type { CommandContext } from "../commands/index.js";
+import { syncStoredEnvironmentStatus } from "../commands/environment.js";
 import type { ContainerLifecycleAction } from "./oom-events.js";
 import type { Environment } from "../models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

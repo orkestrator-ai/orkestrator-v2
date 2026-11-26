@@ -9,8 +9,8 @@ import {
 
 import { WebSocket as WsClient } from "ws";
 
-import { createCommandRegistry } from "../../backend/src/core/commands";
-import type { CommandContext } from "../../backend/src/core/commands-context";
+import { createCommandRegistry } from "../../backend/src/core/commands/registry";
+import type { CommandContext } from "../../backend/src/core/commands/context";
 import {
   createPreviewHarness,
   type PreviewHarness,

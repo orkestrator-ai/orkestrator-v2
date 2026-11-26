@@ -1,19 +1,18 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { CommandContext } from "./commands-context.js";
-import { claudeLoginLookupOptions } from "./claude-host-credentials.js";
 import {
-  getClaudeOAuthAccessToken,
-  getHostClaudeCredentials,
-  runtimeHostClaudeConfigDir,
-} from "./commands-files.js";
+  type CommandContext,
+  cursorApiKeyFingerprint,
+  resolveCursorApiKey,
+} from "./commands/index.js";
+import { claudeLoginLookupOptions, getClaudeOAuthAccessToken } from "./claude-host-credentials.js";
+import { getHostClaudeCredentials, runtimeHostClaudeConfigDir } from "./commands/files.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT_ENV,
   AGENT_TEST_HOST_PI_AGENT_DIR_ENV,
 } from "./agent-credential-files.js";
-import { cursorApiKeyFingerprint, resolveCursorApiKey } from "./commands-validation.js";
 
 export type CursorHostCredentialMaterial = {
   apiKey: string | undefined;

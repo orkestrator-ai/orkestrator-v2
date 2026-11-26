@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
-import { __testing as commandTesting } from "../../apps/backend/src/core/commands";
+import { __testing as commandTesting } from "../../apps/backend/src/core/commands/testing.js";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 const setupScript = join(repoRoot, "docker", "workspace-setup.sh");

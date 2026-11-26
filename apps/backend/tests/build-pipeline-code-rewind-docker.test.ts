@@ -40,7 +40,7 @@ import {
   createGitEnvironmentCommandRunner,
   createPipelineEnvironmentGit,
   parseGitPorcelainPaths,
-} from "../src/core/commands-review";
+} from "../src/core/commands/review";
 import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { EnvironmentMutationFence } from "../src/core/environments/replacement-fence";

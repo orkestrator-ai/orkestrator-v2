@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { createServer } from "node:http";
-import { redactGlobalConfig, stripRendererCredentials } from "../src/core/commands-validation.js";
+import { redactGlobalConfig, stripRendererCredentials } from "../src/core/commands/validation.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import type { BackendInvoker } from "../src/gateway-support-core.js";
 import {

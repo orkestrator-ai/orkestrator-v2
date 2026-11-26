@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { createLogger } from "@orkestrator/protocol/logger";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   closeEnvironmentCleanupStorage,
   environmentCleanupLedger,

@@ -1,7 +1,5 @@
-import type { CommandContext } from "./commands-context.js";
-import { bearerBridgeHeaders } from "./commands-server-health.js";
-import { peekContainerAgentBridge, peekLocalAgentBridge } from "./commands-servers.js";
-import { asCachedCodexModels } from "./commands-validation.js";
+import { asCachedCodexModels, bearerBridgeHeaders, type CommandContext } from "./commands/index.js";
+import { peekContainerAgentBridge, peekLocalAgentBridge } from "./commands/servers.js";
 import type { CodexModelCatalogEntry, Environment } from "./models.js";
 
 /**

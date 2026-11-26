@@ -264,7 +264,7 @@ import {
   type AutoPrLaunchOutcome,
   type InteractiveAddressFindingsTurnOutcome,
 } from "./auto-pr.js";
-import type { ReviewPackageVerification } from "../commands-review.js";
+import type { ReviewPackageVerification } from "../commands/index.js";
 import {
   StaleAddressFindingsEvidenceError,
   verifyAddressFindingsValidation,

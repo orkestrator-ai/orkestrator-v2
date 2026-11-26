@@ -31,7 +31,7 @@ import { PublicApiReconciliations } from "./public-api/index.js";
 import { TerminalRuntime, type TerminalRuntimeOptions } from "./terminals/index.js";
 import { TmuxRuntime, type TmuxRuntimeOptions } from "./tmux/index.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
-import type { BackendEmit } from "./commands-context.js";
+import type { BackendEmit } from "./backend-emit.js";
 
 export type BackendRuntimeOptions = {
   /** Read at emit time, so a caller may pass a closure over a gateway that does not exist yet. */

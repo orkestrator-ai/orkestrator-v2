@@ -32,7 +32,7 @@ String-registered commands keep working unchanged.
 
 ## Current state (verified 2026-11-07)
 
-- The registry is in `apps/backend/src/core/commands-registry.ts:103-406`; `commands.ts` is a 5-line re-export.
+- The registry is in `apps/backend/src/core/commands/registry.ts:103-406`; `commands.ts` is a 5-line re-export.
   - The `register` closure is at :112-117.
   - It wraps each handler in `guardContainerCommand` (:118-142) and `commandTimings.time`.
   - About 60 `register*Commands(register, deps)` calls follow at :342-403. `registerPublicApiCommands` must stay last.

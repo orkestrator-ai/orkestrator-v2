@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-18
 - **Test:** `durable tab teardown commands > times out a hanging provider delete without blocking other intents`
-- **File:** `apps/backend/src/core/commands-state-sync.test.ts:3184`
+- **File:** `apps/backend/src/core/commands/state-sync.test.ts:3184`
 - **Original command:** `mise run test:logged -- --name full-suite -- mise run test` on
   branch `qualify-annotation-live-implement-0330a0bacc01` (`50c26708`; the
   change touches only the dev:test harness, e2e specs and docs, not tab
@@ -17,7 +17,7 @@
   `{ completed: 1 }` as expected; only the wall-clock bound failed.
 - **Evidence:** `/var/folders/hc/8ntcxqnj4916wj9cxy6vx16c0000gn/T/orkestrator-test-run.Zq7Cut/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
 - **Isolated rerun:**
-  `mise run test:logged -- --name iso-state-sync -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name iso-state-sync -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/state-sync.test.ts --parallel=1 --only-failures`
   passed (12.6 s for the file; 170 passed alone without the preload too).
 
 ## Current assessment
@@ -33,7 +33,7 @@ number. Not changed here.
 - **Change:** branch `todo-0004-composer-model-params-803868a90fcb` (Codex dispatch model, Codex config merge, removed Codex summary/personality and Claude `maxBudgetUsd`); nothing in tab teardown changed.
 - **Original command:** `mise run test`; workspace/root/bridges/protocol reserved 4/1/2/1 worker slots, with other worktrees active on the host.
 - **Failure:** `expect(performance.now() - startedAt).toBeLessThan(250)` received 874.81 ms (test 1321.24 ms); `reconcile_tab_teardowns` itself resolved `{ completed: 1 }`.
-- **Owning-file rerun:** `mise exec -- bun test --cwd apps/backend ./src/core/commands-state-sync.test.ts --parallel=1` passed the complete unchanged file (169 pass, 0 fail).
+- **Owning-file rerun:** `mise exec -- bun test --cwd apps/backend ./src/core/commands/state-sync.test.ts --parallel=1` passed the complete unchanged file (169 pass, 0 fail).
 - **Evidence:** `orkestrator-test-run.1IoirM/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz` below the host temporary directory.
 - **Assessment:** recurrence of the same wall-clock bound under load. No assertion, deadline or skip changed.
 
@@ -58,6 +58,6 @@ remains failed.
 ## Resolution (2026-11-15)
 
 - **Root cause:** a wall-clock assertion, `expect(performance.now() - startedAt).toBeLessThan(250)`, around a reconcile whose hanging request never settles. Host load alone moved the elapsed time past 250 ms (264–875 ms observed) while the result was correct.
-- **Fix:** `apps/backend/src/core/commands-state-sync.test.ts` drops the elapsed bound. The hanging fetch ignores its AbortSignal and never resolves, so `reconcile_tab_teardowns` resolving `{ completed: 1 }` at all proves the command's own 20 ms deadline fired and did not block the other intent; the storage assertions that the fast intent completed and the hanging one is retained are unchanged.
+- **Fix:** `apps/backend/src/core/commands/state-sync.test.ts` drops the elapsed bound. The hanging fetch ignores its AbortSignal and never resolves, so `reconcile_tab_teardowns` resolving `{ completed: 1 }` at all proves the command's own 20 ms deadline fired and did not block the other intent; the storage assertions that the fast intent completed and the hanging one is retained are unchanged.
 - **Reproduced:** no — the failure is the bound itself; there is no load-independent way to make 250 ms fail on demand other than starving the host, which this host already was.
-- **Stress:** `mise run test:logged -- --name f2-teardown -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts -t "times out a hanging provider delete" --rerun-each=5 --parallel=1` passed. A contention run of the whole describe block did not finish within 290 s on the loaded host and was stopped.
+- **Stress:** `mise run test:logged -- --name f2-teardown -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/state-sync.test.ts -t "times out a hanging provider delete" --rerun-each=5 --parallel=1` passed. A contention run of the whole describe block did not finish within 290 s on the loaded host and was stopped.

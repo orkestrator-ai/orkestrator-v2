@@ -13,13 +13,16 @@ import {
   type ChangesResolveLiveDetailResult,
   type ChangeViewResult,
 } from "@orkestrator/protocol/change-resources";
-import type { CommandContext } from "../commands-context.js";
-import { asNonBlankString } from "../commands-helpers.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
-import { coordinatorNodeTarget, withRetryAdvice } from "../commands-registry-coordinator-nodes.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type RegistryDependencies,
+} from "../commands/index.js";
+import { coordinatorNodeTarget, withRetryAdvice } from "../commands/registry-coordinator-nodes.js";
+import { isImmutableCommitRef } from "../commands/files.js";
 import { coordinatorCaller } from "./action-scope.js";
 import { diffBaseGitForEnvironment, type DiffBaseGit } from "../diff-base-override.js";
-import { isImmutableCommitRef } from "../commands-files.js";
 import type { Environment } from "../models.js";
 import { requireProjectWorker, surfaceRecord } from "../worker-surface-runs.js";
 import {

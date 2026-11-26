@@ -7,9 +7,10 @@ import path from "node:path";
 import {
   CONTAINER_PINNED_ATTACHMENT_REMOVE,
   CONTAINER_PINNED_ATTACHMENT_WRITE,
-} from "./commands-files.js";
-import { createCommandRegistry, type CommandContext } from "./commands.js";
-import type { EnvironmentCommandRunner } from "./commands-review.js";
+} from "./commands/files.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext } from "./commands/context.js";
+import type { EnvironmentCommandRunner } from "./commands/review.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { closeEnvironmentCleanupStorage } from "./environments/cleanup-ledger.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";

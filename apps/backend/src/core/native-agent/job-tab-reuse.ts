@@ -2,7 +2,7 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { nativeAgentJobReceiptIsActive, type NativeAgentJobCompletionAction } from "../models.js";
 import { nativeAgentSessionStorageKey } from "./service-shared.js";
 import { createHash } from "node:crypto";

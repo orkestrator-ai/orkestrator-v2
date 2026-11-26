@@ -42,10 +42,10 @@ import {
   GIT_REPRESENTATION_ID,
   gitNumstatAlgorithmId,
 } from "@orkestrator/protocol/node/change-tracking/count-policy";
-import { mapWithConcurrency, parseGitDiffSummary, type GitFileChange } from "../commands-files.js";
+import { mapWithConcurrency } from "../commands/files.js";
+import { gitDockerScanPool, type GitFileChange, parseGitDiffSummary } from "../git/index.js";
+import { UNTRACKED_SCAN_CONCURRENCY } from "../commands/index.js";
 import { CaptureError, captureErrorReason, type CaptureErrorReason } from "./capture-error.js";
-import { UNTRACKED_SCAN_CONCURRENCY } from "../commands-validation.js";
-import { gitDockerScanPool } from "../git/index.js";
 import { countUntrackedFileLines } from "../local-git-scan-caches.js";
 import { runCommandBuffer } from "../shell.js";
 import { encodePath, SAFE_GIT_CONFIG } from "./capture.js";

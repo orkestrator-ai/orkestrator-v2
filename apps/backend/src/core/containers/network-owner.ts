@@ -5,7 +5,7 @@ import { runCommand } from "../shell.js";
  * (`egress-gateway.ts`) when the runtime joined one with `--network
  * container:<gateway>`, otherwise the runtime itself. Published ports, the
  * firewall and its report, and the Docker network endpoint all belong to the
- * owner. A leaf, so `commands-container-exec` can use it without a cycle.
+ * owner. A leaf, so `commands/container-exec.ts` can use it without a cycle.
  */
 
 /**

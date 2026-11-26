@@ -443,7 +443,7 @@ const VALIDATORS: readonly GraphBuiltInValidator[] = [
     backend: {
       checks:
         "the sealed package still has its byte count and SHA-256, and its validation artifacts verify",
-      existing: "apps/backend/src/core/commands-review.ts#verifyEnvironmentReviewPackage",
+      existing: "apps/backend/src/core/commands/review.ts#verifyEnvironmentReviewPackage",
     },
   },
   {

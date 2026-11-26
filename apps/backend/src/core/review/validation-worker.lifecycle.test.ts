@@ -13,7 +13,7 @@ import { WORKLOAD_NICE } from "../process-priority.js";
 import { verifyValidationArtifacts } from "./validation-artifacts.js";
 import type { Environment } from "../models.js";
 import { validationPreparation } from "./validation-service.js";
-import { parseReviewPreparationValidation } from "../commands-review.js";
+import { parseReviewPreparationValidation } from "../commands/review.js";
 import {
   fixture,
   control,

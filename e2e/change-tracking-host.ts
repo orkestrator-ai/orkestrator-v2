@@ -6,9 +6,9 @@ import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejectio
 import { unknownCapabilities } from "@orkestrator/protocol/change-evidence";
 import { ChangeEvidenceRecorder } from "@orkestrator/protocol/node/change-tracking/evidence-builders";
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
-import { registerChangeCommands } from "../apps/backend/src/core/commands-registry-changes";
-import { registrarFrom } from "../apps/backend/src/core/commands-registry-contracts";
-import type { CommandContext, CommandHandler } from "../apps/backend/src/core/commands-context";
+import { registerChangeCommands } from "../apps/backend/src/core/commands/registry-changes";
+import { registrarFrom } from "../apps/backend/src/core/commands/registry-contracts";
+import type { CommandContext, CommandHandler } from "../apps/backend/src/core/commands/context";
 import {
   createHarness,
   git,

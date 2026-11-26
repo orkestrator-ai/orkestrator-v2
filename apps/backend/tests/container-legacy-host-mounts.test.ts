@@ -7,12 +7,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { startAssignedContainerRuntimeTask } from "../src/core/commands-environment";
-import { createDockerContainer } from "../src/core/commands-containers";
+import { startAssignedContainerRuntimeTask } from "../src/core/commands/environment";
+import { createDockerContainer } from "../src/core/commands/containers";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
-} from "../src/core/commands-error-text";
+} from "../src/core/commands/error-text";
 import { resetResourceCaches } from "../src/core/containers/resources";
 import { rebuildPreview } from "../src/core/containers/replacement";
 import { previewDockerCleanup } from "../src/core/containers/cleanup-preview";

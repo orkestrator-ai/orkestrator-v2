@@ -8,8 +8,8 @@ import {
   type ResettableGlobalSettingKey,
 } from "@orkestrator/protocol/setting-sources";
 import { BackendRuntime } from "../backend-runtime.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { StorageService } from "./service.js";
 
 async function withStorage(

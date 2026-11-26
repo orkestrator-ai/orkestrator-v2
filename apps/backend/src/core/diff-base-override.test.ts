@@ -1,11 +1,11 @@
-import { registrarFrom } from "./commands-registry-contracts.js";
+import { registrarFrom } from "./commands/registry-contracts.js";
 import { expect, test } from "bun:test";
 import {
   environmentBaselineCommit,
   parseEnvironmentDiffBaseOverride,
 } from "@orkestrator/protocol/diff-stats";
-import type { CommandContext, CommandHandler } from "./commands-context.js";
-import { registerDiffBaseCommands } from "./commands-registry-diff-base.js";
+import type { CommandContext, CommandHandler } from "./commands/context.js";
+import { registerDiffBaseCommands } from "./commands/registry-diff-base.js";
 import {
   listDiffBaseCommits,
   parseDiffBaseBranches,

@@ -10,7 +10,7 @@ import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.
 import { BackendRuntime } from "./backend-runtime.js";
 import { StorageService } from "./storage/service.js";
 import { seedStore } from "./storage/test-support.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 const stores: StorageService[] = [];
 afterEach(async () => {
   for (const storage of stores.splice(0)) {

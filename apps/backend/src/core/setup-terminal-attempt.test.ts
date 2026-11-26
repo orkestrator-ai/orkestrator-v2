@@ -6,17 +6,17 @@ import path from "node:path";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 
 import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import {
   containerSetupShellCommand,
   settleTerminalProcessExit,
   spawnSetupTerminal,
-} from "./commands-environment.js";
+} from "./commands/environment.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
   setupScriptFailedError,
-} from "./commands-error-text.js";
+} from "./commands/error-text.js";
 import {
   CONTAINER_TERMINAL_PID_RECORD_COMMAND,
   SETUP_DONE_OSC_SEQUENCE,
@@ -449,7 +449,7 @@ test.each(["reserved", "failed"])(
       environmentIsolationVariables,
       formatEnvironmentIsolationNotice,
     } = await import("./environments/isolation.js");
-    const { quoteShell } = await import("./commands-agent-support.js");
+    const { quoteShell } = await import("./commands/agent-support.js");
     const harness = await createPreviewHarness();
     const runtime = new BackendRuntime({ emit: () => undefined, terminals: FAST_TERMINATE });
     const inherited = [...ENVIRONMENT_ISOLATION_ENV_NAMES, "SHELL"].map(

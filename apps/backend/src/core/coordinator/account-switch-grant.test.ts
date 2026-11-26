@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,10 +15,10 @@ import {
   type CoordinatorAccountSwitchGrantState,
 } from "@orkestrator/protocol/coordinator-account-switch-grant";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
-import type { CommandContext } from "../commands-context.js";
-import { registerAgentAccountCommands } from "../commands-registry-accounts.js";
-import { registerNodeCommands } from "../commands-registry-nodes.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandContext } from "../commands/context.js";
+import { registerAgentAccountCommands } from "../commands/registry-accounts.js";
+import { registerNodeCommands } from "../commands/registry-nodes.js";
+import type { RegistryDependencies } from "../commands/registry-types.js";
 import { rpc } from "../control-mcp/test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";

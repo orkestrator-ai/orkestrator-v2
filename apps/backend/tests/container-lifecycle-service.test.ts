@@ -20,8 +20,8 @@ import {
   runContainerOperation,
 } from "../src/core/containers/lifecycle-service";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
-import { recreateEnvironmentOnce, startEnvironmentOnce } from "../src/core/commands-environment";
-import { deleteEnvironmentTask } from "../src/core/commands-servers";
+import { recreateEnvironmentOnce, startEnvironmentOnce } from "../src/core/commands/environment";
+import { deleteEnvironmentTask } from "../src/core/commands/servers";
 import {
   BlockedRegistryWriter,
   REGISTRY_SCHEMA_MARKER_FILE,

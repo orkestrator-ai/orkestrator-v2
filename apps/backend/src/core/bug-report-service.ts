@@ -38,8 +38,8 @@ import {
 import { collectBugReportMachineFacts } from "@orkestrator/protocol/node/bug-report-facts";
 import { defaultToolchainBinDir, toolchainRootDir } from "@orkestrator/toolchain/layout";
 
-import type { CommandContext } from "./commands-context.js";
-import { stopLocalServer } from "./commands-servers.js";
+import type { CommandContext } from "./commands/index.js";
+import { stopLocalServer } from "./commands/servers.js";
 import { nativeAgentSessionStorageKey } from "./native-agent/service-shared.js";
 import { gitHubCli, gitHubCliEnv, resolveGitHubToken } from "./git/index.js";
 import { runCommand } from "./shell.js";

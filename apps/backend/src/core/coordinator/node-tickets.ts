@@ -8,10 +8,12 @@ import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import type { TicketSyncNodeState } from "@orkestrator/protocol/ticket-sync";
 import { coordinatorNodeTicketCommand } from "@orkestrator/protocol/contract/domains/ticket-sync";
 
-import type { CommandContext } from "../commands-context.js";
-import { asNonBlankString } from "../commands-helpers.js";
-import { ASYNC_HANDLER } from "../commands-registry-async-decode.js";
-import type { CommandRegistrar } from "../commands-registry-types.js";
+import {
+  asNonBlankString,
+  ASYNC_HANDLER,
+  type CommandContext,
+  type CommandRegistrar,
+} from "../commands/index.js";
 import { requireCoordinatorConversation } from "./action-scope.js";
 import type { KanbanTask } from "../storage/index.js";
 

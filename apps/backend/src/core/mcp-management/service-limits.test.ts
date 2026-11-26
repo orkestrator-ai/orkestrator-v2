@@ -11,8 +11,8 @@ import {
   type McpManagementChangedEvent,
 } from "@orkestrator/protocol/mcp-management";
 
-import { createCommandRegistry } from "../commands.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   SENTINEL,
   createFixture,

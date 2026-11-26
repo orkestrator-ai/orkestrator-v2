@@ -70,7 +70,7 @@ import {
   ACP_SESSION_CREATE_ATTEMPTS,
   ACP_SESSION_CREATE_RETRY_BASE_MS,
 } from "./service-shared.js";
-import { schedulingEnabled } from "../commands-registry-scheduled-jobs.js";
+import { schedulingEnabled } from "../commands/index.js";
 import { withProviderSessionTeardownLock } from "../provider-session-ownership.js";
 import {
   agentMessagingEnabled,

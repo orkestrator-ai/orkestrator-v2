@@ -3,7 +3,7 @@
 - **ID:** 0136
 - **Status:** resolved
 - **Date observed:** 2026-08-18
-- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `5a5797eb` on `add-playwright-docker`, with a working tree carrying the Docker/Playwright review fixes (`docker/`, `apps/backend/src/core/commands-containers.ts`, `tests/unit/version-drift.test.ts`, `e2e/`, `AGENTS.md`).
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `5a5797eb` on `add-playwright-docker`, with a working tree carrying the Docker/Playwright review fixes (`docker/`, `apps/backend/src/core/commands/containers.ts`, `tests/unit/version-drift.test.ts`, `e2e/`, `AGENTS.md`).
 - **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the bridges group shared the host with the workspace, root and protocol groups.
 - **Failure:** `error: Timed out waiting for ACP state: false` (duration 15,021.82 ms), thrown from the shared `waitFor` helper (`acp-test-harness.ts:184`) via `spawnBridge` (`acp-test-harness.ts:234`) at `acp-session.test.ts:156`. The expired wait is the `GET /global/health` poll against the freshly spawned bridge child, so the child never reported healthy and no model-attribution behaviour was reached. `describeWaitValue` printed `false` with no `(last error: …)` suffix, so every poll got an answer — the child was reachable and simply never reported healthy, rather than the socket being refused.
 - **Suite counts:** bridges group `2701 pass, 11 skip, 1 fail. Ran 2713 tests across 92 files. [65.50s]`. It was the only failure in that group and in the whole run; the workspace, root/agent-support and codex-protocol-lockfile groups all exited 0.

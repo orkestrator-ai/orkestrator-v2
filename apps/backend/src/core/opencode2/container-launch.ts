@@ -42,8 +42,8 @@ import {
   OPENCODE2_LAUNCH_HOME,
   OPENCODE2_LAUNCH_ROOT,
 } from "../agent-credential-files.js";
-import { quoteShell } from "../commands-agent-support.js";
-import { dockerExec } from "../commands-container-exec.js";
+import { quoteShell } from "../commands/agent-support.js";
+import { dockerExec } from "../commands/index.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import {
   CONTAINER_ROOT_USER_ARGS,

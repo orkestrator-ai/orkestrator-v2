@@ -68,9 +68,9 @@ Item 1's evidence, items 2 to 6 and 8 to 10, and the flake triage are done; 0145
 
 **Problem.** Some failures the triage found fail alone too, so they are bugs, but they have no owner file.
 
-**Context.** `workspace-realm-electron.spec.ts:409` (deleted with workspace realms by plan item 6003, 2026-11-07) and the annotation Notes focus check (0740, 0772, 0789, 0790), the `AgentLaunchDialog.spec.ts` branch suggestion (only in 0493), and 0723's likely race at `commands-servers.ts`.
+**Context.** `workspace-realm-electron.spec.ts:409` (deleted with workspace realms by plan item 6003, 2026-11-07) and the annotation Notes focus check (0740, 0772, 0789, 0790), the `AgentLaunchDialog.spec.ts` branch suggestion (only in 0493), and 0723's likely race at `commands/servers.ts`.
 
-**Investigation.** The 0723 race is still present: the OpenCode server start decides its error in the `exit` listener (`child.once("exit", onExit)`, `apps/backend/src/core/commands-servers.ts:301`) from `stderrTail`, and stderr data can arrive after `exit` (Node and Bun emit `close` after the streams end). The locked-database message at `:292`-`:295` therefore depends on timing. The line number in the file (295) is now the message construction, not the decision.
+**Investigation.** The 0723 race is still present: the OpenCode server start decides its error in the `exit` listener (`child.once("exit", onExit)`, `apps/backend/src/core/commands/servers.ts:301`) from `stderrTail`, and stderr data can arrive after `exit` (Node and Bun emit `close` after the streams end). The locked-database message at `:292`-`:295` therefore depends on timing. The line number in the file (295) is now the message construction, not the decision.
 
 **Decisions.**
 
@@ -369,7 +369,7 @@ one live check (an Electron spec with a hung `close()`).
      path-filtered, so a required check would stay pending on unrelated pull
      requests.
    - Once active, the app's merge (`gh pr merge` without `--admin`,
-     `apps/backend/src/core/commands-review.ts`) is refused until the three
+     `apps/backend/src/core/commands/review.ts`) is refused until the three
      checks pass. That is intended; the maintainer chose not to add `--admin`
      or `--auto`.
 2. **Done (2026-10-22): `AddProjectDialog.test.tsx`.** The 2 s typed-path
@@ -471,7 +471,7 @@ one live check (an Electron spec with a hung `close()`).
      (spec deleted with realms by 6003, 2026-11-07) and the annotation Notes focus check fail alone too (0740, 0772, 0789,
      0790), and `AgentLaunchDialog.spec.ts`'s branch suggestion fails on
      `main` (tracked only in 0493). They need a bug or todo of their own.
-     0723 points at a likely product race: `commands-servers.ts:295` decides
+     0723 points at a likely product race: `commands/servers.ts:295` decides
      the error on `exit`, before stderr ("database is locked") may arrive.
 8. **Done (2026-10-25): dev profiles report the real version.**
    `desktopApplicationVersion(app)` (`apps/desktop/electron/app-version.ts`)

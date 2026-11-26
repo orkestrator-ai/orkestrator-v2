@@ -5,7 +5,7 @@ import {
 import { isEnvironmentSetupSettled } from "@orkestrator/protocol/environment-readiness";
 import type { AgentMailMessage } from "@orkestrator/protocol/agent-mail";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("coordinator");

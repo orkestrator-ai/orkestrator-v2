@@ -11,9 +11,9 @@ import type {
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { StorageService } from "../storage/service.js";
 import { PrViewerPermissionCache } from "../git/index.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandContext } from "../commands-context.js";
-import { schedulingEnabled, withProjectEnvironments } from "../commands-registry-scheduled-jobs.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { schedulingEnabled, withProjectEnvironments } from "../commands/registry-scheduled-jobs.js";
 import { installControlledTimeout } from "../../../../../tests/helpers/controlled-timeout.js";
 import { ScheduleAuthorityError, type ScheduledJobExecutor } from "./executor.js";
 import { claimDueFire, settleFire, type FireResult } from "./model.js";

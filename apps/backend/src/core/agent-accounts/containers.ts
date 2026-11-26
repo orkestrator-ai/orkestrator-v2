@@ -24,16 +24,15 @@ import {
 } from "@orkestrator/protocol/agent-accounts";
 import { restrictProviderAuthEntries } from "@orkestrator/protocol/login-snapshots";
 
-import type { CommandContext } from "../commands-context.js";
-import type { AgentAccountsRuntime } from "./runtime.js";
-import type { AppConfig, Environment } from "../models.js";
-import { quoteShell } from "../commands-agent-support.js";
-import { dockerExec } from "../commands-container-exec.js";
+import { type CommandContext, dockerExec } from "../commands/index.js";
+import { quoteShell } from "../commands/agent-support.js";
 import {
   buildSyncContainerClaudeCredentialCommand,
   resolveContainerClaudeCredentials,
   runtimeHostClaudeLookup,
-} from "../commands-files.js";
+} from "../commands/files.js";
+import type { AgentAccountsRuntime } from "./runtime.js";
+import type { AppConfig, Environment } from "../models.js";
 import { hostClaudeSignedOut } from "../claude-host-credentials.js";
 import {
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,

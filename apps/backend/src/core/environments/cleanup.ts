@@ -2,18 +2,15 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
-import type { CommandContext } from "../commands-context.js";
-import { validateGitRefName } from "../commands-agent-support.js";
+import type { CommandContext } from "../commands/index.js";
+import { validateGitRefName } from "../commands/agent-support.js";
+import { assertDockerContainerOwned, isMissingDockerObjectError } from "../commands/environment.js";
+import { getWorktreeBaseDir } from "../worktrees/index.js";
 import {
   environmentBranchNamespace,
   isBranchInEnvironmentNamespace,
   isEnvironmentOwnedBranch,
 } from "@orkestrator/protocol/environment-branch";
-import {
-  assertDockerContainerOwned,
-  getWorktreeBaseDir,
-  isMissingDockerObjectError,
-} from "../commands-environment.js";
 import {
   environmentCleanupLedger,
   type EnvironmentCleanupEntry,

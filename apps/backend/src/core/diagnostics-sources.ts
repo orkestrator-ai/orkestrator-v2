@@ -1,7 +1,7 @@
 import { resolveLogDetail } from "@orkestrator/protocol/log-policy";
 import os from "node:os";
 import path from "node:path";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import { APP_VERSION } from "./constants.js";
 import type { DiagnosticsSources } from "./diagnostics-bundle.js";
 import {

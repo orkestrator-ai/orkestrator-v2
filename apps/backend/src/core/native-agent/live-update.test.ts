@@ -3,7 +3,7 @@ import type {
   NativeAgentSessionStateUpdate,
   NativeAgentTranscriptUpdate,
 } from "@orkestrator/protocol/native-agent";
-import { createCommandRegistry } from "../commands-registry.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { readNativeAgentLiveUpdate, type NativeAgentLiveUpdateReads } from "./live-update.js";
 import type { NativeAgentLiveUpdateInput } from "./service-shared.js";
 

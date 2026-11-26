@@ -27,9 +27,9 @@ import {
   resolveBugReportRuntime,
 } from "./bug-report-runtime.js";
 import { nativeAgentApprovalModes } from "@orkestrator/protocol/native-agent";
-import { createCommandRegistry } from "./commands-registry.js";
-import type { CommandContext } from "./commands-context.js";
-import { localServerFields } from "./commands-local-server-lifecycle.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext } from "./commands/context.js";
+import { localServerFields } from "./commands/local-server-lifecycle.js";
 import { reapOrphanedLocalServers } from "./local-server-reaper.js";
 import * as credentials from "./git/github-credentials.js";
 import { GitHubCliSelection } from "./git/index.js";

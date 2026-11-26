@@ -19,8 +19,7 @@ import {
 } from "@orkestrator/protocol/graphs/library";
 import { isGraphRunTerminal, type GraphRun } from "@orkestrator/protocol/graphs/run";
 import { graphRunSummary, type GraphRunSummary } from "@orkestrator/protocol/graphs/run-view";
-import type { CommandRegistrar } from "../commands-registry-types.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext, CommandRegistrar } from "../commands/index.js";
 import { actionHash, coordinatorCaller, type CoordinatorCaller } from "./action-scope.js";
 import { graphLaunchRunId, GraphLaunchError } from "../graph-run-launch.js";
 import { assertCoordinatorMayControlWorkflow } from "./environment-scope.js";

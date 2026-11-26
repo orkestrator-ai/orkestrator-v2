@@ -1,11 +1,10 @@
 import { createLogger } from "@orkestrator/protocol/logger";
-import type { CommandContext } from "./commands-context.js";
-import { getHostPort } from "./commands-container-exec.js";
+import { type CommandContext, getHostPort } from "./commands/index.js";
 import {
   CONTAINER_BRIDGE_PORTS,
   localRuntimeEnvironment,
   localServerPort,
-} from "./commands-servers.js";
+} from "./commands/servers.js";
 import {
   type ContainerBridgeKind,
   isContainerBridgeKind,
@@ -26,7 +25,7 @@ const log = createLogger("logging");
 const CONTAINER_LOOKUP_CONCURRENCY = 4;
 const CONTAINER_LOOKUP_TIMEOUT_MS = 3_000;
 
-type DiscoveryDependencies = Pick<typeof import("./commands-container-exec.js"), "getHostPort"> & {
+type DiscoveryDependencies = Pick<typeof import("./commands/container-exec.js"), "getHostPort"> & {
   readToken: typeof readContainerBridgeToken;
 };
 const defaultDependencies: DiscoveryDependencies = {

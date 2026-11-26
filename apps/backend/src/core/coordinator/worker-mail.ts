@@ -21,16 +21,19 @@ import {
 } from "@orkestrator/protocol/project-home-message";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { coordinatorDelegationNotOpenedNote } from "./workflow-retention.js";
-import type { CommandContext } from "../commands-context.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type RegistryDependencies,
+} from "../commands/index.js";
 import {
   attachmentReferences,
   placeCallerAttachments,
   readCallerAttachments,
   type MailAttachmentInvoker,
 } from "./mail-attachments.js";
-import { asNonBlankString } from "../commands-helpers.js";
 import { assertCoordinatorMayActOnEnvironment } from "./environment-scope.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
 import { coordinatorDeliverNowResult, settleCoordinatorDeliverNow } from "./deliver-now.js";
 import type { OwnAttachment } from "../mail-attachments.js";
 import type { Environment } from "../models.js";

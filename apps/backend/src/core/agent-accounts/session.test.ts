@@ -3,10 +3,10 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import * as containerExec from "../commands-container-exec.js";
-import * as serverHealth from "../commands-server-health.js";
+import * as containerExec from "../commands/container-exec.js";
+import * as serverHealth from "../commands/server-health.js";
 import { CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT } from "../constants.js";
 import { coordinatorSessionAccount, readSessionAgentAccount } from "./session.js";
 import type { Environment } from "../models.js";

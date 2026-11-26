@@ -976,7 +976,7 @@ log.warn("branch.rename-failed", () => ({
 [git] branch.rename-failed reason=branch-exists exitCode=128 signal=null environmentId=... runtime=local error.name=CommandFailedError error.outputOmitted=true error.exitCode=128 error.stack="at runCommandBytes (apps/backend/src/core/shell.ts:345:13)"
 ```
 
-`renameLiveGitBranch` in `apps/backend/src/core/commands-agent-support.ts` is the
+`renameLiveGitBranch` in `apps/backend/src/core/commands/agent-support.ts` is the
 worked example.
 
 `classifyCommandFailure(error, options)` returns exactly `{ reason, exitCode, signal }`.

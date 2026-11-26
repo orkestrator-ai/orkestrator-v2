@@ -49,15 +49,15 @@
 | `apps/backend/tests/commands-registry-pr.test.ts` | Electron backend command registry > persists merge cleanup intent before dispatch and completes local cleanup in the backend | 5,000ms timeout / 7,295.39ms |
 | `apps/backend/tests/commands-registry-pr.test.ts` | Electron backend command registry > continues confirmed cleanup when persisting merged PR state fails once | 5,000ms timeout / 6,423.57ms |
 | `apps/backend/tests/commands-io-coverage.test.ts` | backend command I/O coverage > reports the HEAD and uncommitted paths of a local environment worktree | 5,000ms timeout / 5,001.20ms |
-| `apps/backend/src/core/commands-state-sync.test.ts` | initial prompt attachment command > accepts twenty attachments and rejects the twenty-first | 5,000ms timeout / 5,002.65ms |
-| `apps/backend/src/core/commands-state-sync.test.ts` | initial prompt attachment command > allocates a safe unique name for every hostile or colliding attachment name | 5,000ms timeout / 5,003.55ms |
+| `apps/backend/src/core/commands/state-sync.test.ts` | initial prompt attachment command > accepts twenty attachments and rejects the twenty-first | 5,000ms timeout / 5,002.65ms |
+| `apps/backend/src/core/commands/state-sync.test.ts` | initial prompt attachment command > allocates a safe unique name for every hostile or colliding attachment name | 5,000ms timeout / 5,003.55ms |
 | `apps/backend/src/core/coordinator/service.test.ts` | project coordinator > retention never removes an open conversation | 5,000ms timeout / 5,250.71ms |
 | `bridges/acp-bridge/src/acp-http.test.ts` | ACP bridge > reaps a session process when the creating HTTP client disconnects | Timed out waiting for ACP state: empty string / 5,644.46ms |
 
 - **Isolated reruns:** exit 0 for all three logged commands below. Each used
   one worker, so owning files ran separately, with no concurrent file pool:
   - `bun run test:logged -- --name composite-timeout-owners -- bun test ./tests/unit/pi-bridge-vendor.test.ts ./apps/backend/tests/commands-integration.test.ts ./apps/backend/tests/commands-registry-pr.test.ts ./apps/backend/tests/commands-io-coverage.test.ts --parallel=1 --only-failures` (37.8s).
-  - `bun run test:logged -- --name composite-backend-timeout-owners -- bun test --cwd apps/backend src/core/commands-state-sync.test.ts src/core/coordinator-service.test.ts --parallel=1 --only-failures` (17.6s).
+  - `bun run test:logged -- --name composite-backend-timeout-owners -- bun test --cwd apps/backend src/core/commands/state-sync.test.ts src/core/coordinator-service.test.ts --parallel=1 --only-failures` (17.6s).
   - `bun run test:logged -- --name composite-acp-timeout-owner -- bun test ./bridges/acp-bridge/src/acp-http.test.ts --parallel=1 --only-failures` (10.1s).
 - **Evidence:** `/tmp/orkestrator-test-run.Cun1t8/summary.json` and its compressed
   group logs. Host contention is a hypothesis supported by broad elapsed-time

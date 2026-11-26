@@ -5,15 +5,14 @@ import {
 } from "@orkestrator/protocol/container-lifecycle";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 import { promises as seedFs } from "node:fs";
-import type { CommandContext } from "../commands-context.js";
-import { cleanupErrorMessage } from "../commands-error-text.js";
+import { cleanupErrorMessage, type CommandContext } from "../commands/index.js";
 import {
   assertDockerContainerOwned,
   cleanupEnvironmentSetupState,
   deleteMergedEnvironmentRemoteBranch,
   enqueueEnvironmentLifecycleOperation,
-} from "../commands-environment.js";
-import { stopLocalServersForEnvironmentUnlocked } from "../commands-local-server-lifecycle.js";
+} from "../commands/environment.js";
+import { stopLocalServersForEnvironmentUnlocked } from "../commands/local-server-lifecycle.js";
 import { drainContainerProcesses } from "../containers/index.js";
 import { environmentCleanupLedger } from "./cleanup-ledger.js";
 import { buildEnvironmentCleanupEntry, runEnvironmentCleanupStep } from "./cleanup.js";

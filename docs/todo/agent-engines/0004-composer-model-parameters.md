@@ -142,7 +142,7 @@ checklist on 2026-11-10.
    (`native-agent/service-projection.test.ts`); the renderer test "suppresses
    no Codex parameter control in a %s tab" (`AgentNativeTab.test.tsx`); the
    catalogue assertions that Codex rows have no `parameters`
-   (`commands-state-sync.test.ts`, `commands-registry-coordinator.test.ts`);
+   (`commands/state-sync.test.ts`, `commands/registry-coordinator.test.ts`);
    and "refuses a Codex reasoning summary that no catalogue row offers".
 2. ~~**Reasoning and speed axes.**~~ Done 2026-10-25: decision recorded to keep
    both models, on the `AgentModel` doc comment in `native-agent.ts` (see

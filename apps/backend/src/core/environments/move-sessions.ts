@@ -10,7 +10,7 @@ import {
 } from "../agent-accounts/homes.js";
 import { runtimeHostCodexHome } from "../agent-accounts/index.js";
 import { claudeProjectSlug } from "../claude-project-slug.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { environmentStateDirectory } from "./state-paths.js";
 import { pathExists } from "../shell.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

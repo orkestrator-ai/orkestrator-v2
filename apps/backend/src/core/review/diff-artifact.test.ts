@@ -14,7 +14,7 @@ import {
   verifyEnvironmentReviewPackage,
   readEnvironmentWorkspaceFile,
   writeEnvironmentReviewArtifact,
-} from "../commands-review.js";
+} from "../commands/review.js";
 import {
   REVIEW_DIFF_CHUNK_THRESHOLD_BYTES,
   reviewDiffArgs,

@@ -1,6 +1,7 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { BackendRuntime } from "../backend-runtime.js";
-import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
 import {
   createProviderStub,

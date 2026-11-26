@@ -22,7 +22,7 @@ import {
   generateReviewPackage,
   parseReviewPreparationValidation,
   verifyEnvironmentReviewPackage,
-} from "../commands-review.js";
+} from "../commands/review.js";
 import {
   command,
   control,
@@ -30,7 +30,7 @@ import {
   cleanupReviewValidationFixtures,
 } from "./validation-worker-test-support.js";
 import { longCheckStatusFromRun } from "@orkestrator/protocol/build-pipeline-long-checks";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 
 test("cancelled validation preparation preserves partial evidence and its diagnostic", () => {
   const run = newReviewValidationRun("review-validation-cancelled", {

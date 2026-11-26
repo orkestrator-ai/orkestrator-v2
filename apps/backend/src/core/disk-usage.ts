@@ -11,7 +11,7 @@ import type {
 } from "@orkestrator/protocol/disk-usage";
 import { defaultRuntimeProfileRoots } from "@orkestrator/protocol/node/runtime-profile-status";
 
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import { retainedContainerIds, storageVolumeNames } from "./environments/cleanup.js";
 import type { Environment } from "./models.js";
 import { GIT_MIRROR_NAME, GIT_MIRRORS_DIR, gitMirrorMountNames } from "./project-git-mirror.js";

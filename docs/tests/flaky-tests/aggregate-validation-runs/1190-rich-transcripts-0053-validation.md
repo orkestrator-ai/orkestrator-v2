@@ -30,7 +30,7 @@ switched back.
 | `apps/backend/tests/commands-integration.test.ts` | Git-excludes injection, Git scan caches | Not rerun | 53 passed, 2 failed |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | 7 retarget and candidate cases, 15–35 s | 18 passed, 3 failed | 20 passed, 1 failed |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | 2 cases | 0 passed, 1 failed (file aborted) | 1 passed, 3 failed |
-| `apps/backend/src/core/commands-environment-worktree-location.test.ts` | Explicit and configured roots; alias retarget | 7 passed, 2 failed | 7 passed, 2 failed |
+| `apps/backend/src/core/commands/environment-worktree-location.test.ts` | Explicit and configured roots; alias retarget | 7 passed, 2 failed | 7 passed, 2 failed |
 | `apps/backend/tests/docker-image.test.ts` | `pinned image identity`: restricted runtime on a gateway image; rootless host address | 19 passed, 2 failed | 19 passed, 2 failed |
 | `apps/backend/tests/staged-input-relay.test.ts` | Four `staged input relay` cases, under 1 s each | 5 passed, 4 failed | 5 passed, 4 failed |
 | `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write` | 33 passed, 1 failed | 33 passed, 1 failed |

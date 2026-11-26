@@ -2,7 +2,7 @@
  * `native-sessions` commands for terminal tab sessions, their scrollback
  * buffers, the environment's pane layout, and the host actions a tab opens
  * (browser, editor, file manager, DNS checks). Registered by the backend's
- * `commands-registry-sessions.ts`. The argument rules are those of
+ * `apps/backend/src/core/commands/registry-sessions.ts`. The argument rules are those of
  * `commands-agent.ts`.
  *
  * Browser-safe.

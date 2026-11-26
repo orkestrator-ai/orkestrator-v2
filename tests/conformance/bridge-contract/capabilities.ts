@@ -21,6 +21,7 @@ const no = (reason: string): Capability => ({ supported: false, reason });
 
 export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, Capability>> = {
   cursor: {
+    "capability-evidence-in-band": no("this bridge has no session capability evidence route"),
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
@@ -36,6 +37,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "log-policy-authenticated": yes,
   },
   pi: {
+    "capability-evidence-in-band": yes,
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
@@ -53,6 +55,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "log-policy-authenticated": yes,
   },
   claude: {
+    "capability-evidence-in-band": yes,
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
@@ -76,6 +79,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     ),
   },
   codex: {
+    "capability-evidence-in-band": no("this bridge has no session capability evidence route"),
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,
@@ -97,6 +101,7 @@ export const BRIDGE_CONTRACT_CAPABILITIES: Record<BridgeId, Record<ScenarioId, C
     "log-policy-authenticated": yes,
   },
   acp: {
+    "capability-evidence-in-band": no("this bridge has no session capability evidence route"),
     "unknown-session-in-band": yes,
     "close-retains-then-missing": yes,
     "close-pending-fences-prompt": yes,

@@ -3,7 +3,7 @@
  * as the OpenCode provider reaches it.
  *
  * The server is the environment's `opencode` local server: the supervisor
- * (`startLocalServer` in `commands-servers.ts`) owns the process under
+ * (`startLocalServer` in `commands/servers.ts`) owns the process under
  * `opencode:<environmentId>`, so it is stopped with the environment, by
  * backend shutdown and on a worktree move, reaped if a previous backend left
  * it orphaned, and replaced when a coordinator's research setting changes
@@ -34,9 +34,9 @@ import { openCode2CoordinatorSignature, writeOpenCode2CoordinatorConfig } from "
 import type { OpenCode2ServerConnection } from "./environment-provider.js";
 import { openCode2ServerKey, type OpenCode2HostServerRecord } from "./host-server-state.js";
 import { writeOpenCode2HostConfig } from "./server.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
+import { assertLocalServerStartAllowed, startLocalServer } from "../commands/servers.js";
 import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
-import { assertLocalServerStartAllowed, startLocalServer } from "../commands-servers.js";
 
 /** The first start imports the user's credentials and migrates an empty database. */
 export const OPENCODE2_HOST_READY_TIMEOUT_MS = 60_000;

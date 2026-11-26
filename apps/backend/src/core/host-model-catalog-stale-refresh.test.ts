@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { agentAccountLoginKey } from "./agent-accounts/store.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { HostCatalogSeeds } from "./host-catalog-seeds.js";
 import {
   isHostModelCatalogStale,

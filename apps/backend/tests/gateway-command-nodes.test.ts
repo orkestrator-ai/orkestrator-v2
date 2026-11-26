@@ -15,9 +15,9 @@ import {
 } from "@orkestrator/protocol/contract/domains/system";
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { CONTROLLER_HEADER, type NodeRecord } from "@orkestrator/protocol/command-nodes";
-import type { CommandContext } from "../src/core/commands-context.js";
-import { createCommandRegistry } from "../src/core/commands-registry.js";
-import { selfImprovementFleet } from "../src/core/commands-registry-self-improvement.js";
+import type { CommandContext } from "../src/core/commands/context.js";
+import { createCommandRegistry } from "../src/core/commands/registry.js";
+import { selfImprovementFleet } from "../src/core/commands/registry-self-improvement.js";
 import { ClientGrantService } from "../src/core/nodes/client-grants.js";
 import { NodeLink } from "../src/core/nodes/node-link.js";
 import { readBundleArchive } from "../src/core/self-improvement/bundle.js";

@@ -2,16 +2,15 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { mintBridgeToken } from "@orkestrator/protocol/node/bridge-credential";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
-import type { CommandContext } from "./commands-context.js";
-import { resolveBunBinary } from "./commands-agent-support.js";
-import { applyPiHostCredentialEnvironment } from "./host-agent-credentials.js";
-import { bearerBridgeHeaders } from "./commands-server-health.js";
+import { bearerBridgeHeaders, type CommandContext } from "./commands/index.js";
+import { resolveBunBinary } from "./commands/agent-support.js";
 import {
   allocateLocalPort,
   fetchAcpNormalizedModelsAt,
   prepareBridgePath,
   waitForLocalServerStartup,
-} from "./commands-servers.js";
+} from "./commands/servers.js";
+import { applyPiHostCredentialEnvironment } from "./host-agent-credentials.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 
 const log = createLogger("models");

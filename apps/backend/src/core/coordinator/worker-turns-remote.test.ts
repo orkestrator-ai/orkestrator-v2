@@ -4,8 +4,8 @@ import type { NativeAgentSlashCommand } from "@orkestrator/protocol/native-agent
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { ControlMcpServer } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "../control-mcp/tools.js";
 import { createEnvironment, createProject, StorageService } from "../storage/service.js";

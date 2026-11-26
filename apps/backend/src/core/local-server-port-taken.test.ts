@@ -3,8 +3,8 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { PassThrough } from "node:stream";
 import { LOCAL_BRIDGE_READY_PREFIX } from "@orkestrator/protocol/node/local-bridge-readiness";
-import { checkHttpHealth } from "./commands-server-health.js";
-import { waitForLocalServerStartup } from "./commands-servers.js";
+import { checkHttpHealth } from "./commands/server-health.js";
+import { waitForLocalServerStartup } from "./commands/servers.js";
 import { LocalServerPortTakenError, watchLocalServerOutput } from "./local-server-port-taken.js";
 
 const servers: Array<ReturnType<typeof Bun.serve>> = [];

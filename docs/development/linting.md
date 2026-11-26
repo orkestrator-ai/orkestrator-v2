@@ -280,14 +280,14 @@ new.
     `plan-usage/`, `features/`, `previews/`, `worktrees/`, `git/`, `coordinator/`,
     `agent-accounts/`, `workflows/`, `review/`, `build-pipeline/`,
     `native-agent/`, `recurring/`, `tmux/`, `terminals/`, `containers/`,
-    `environments/`, `storage/`) are
+    `environments/`, `storage/`, `commands/`) are
     reached only
     through their
-    `index.ts`, which re-exports by name (never `export *`). A new domain folder starts with an `index.ts`
+    `index.ts`, which re-exports by name (never `export *`); how a folder is laid out and how its exceptions are found is in [`backend-domain-folders.md`](backend-domain-folders.md). A new domain folder starts with an `index.ts`
     and a pattern in both the `apps/backend/src/**` and the `tests/unit/**`
     overrides. Where routing a leaf module through `index.ts` would close a
     runtime import cycle (the storage layer importing a domain's store layout,
-    for example, `agent-accounts/store.ts`, or `workflows/result-final-text.ts`,
+    for example, `web-annotations/store-layout.ts`, or `workflows/result-final-text.ts`,
     whose one importer the result contracts reach, or
     `recurring/work-metrics.ts`, which `native-session-invalidation-metrics.ts`
     imports and `recurring/diagnostics.ts` reaches, or
@@ -302,8 +302,8 @@ new.
     `host-database-server.ts` and `provider-login.ts`, which reach the command
     layer, `worktrees/removal-reads.ts`, which reaches change tracking,
     seven `git/` modules such as `git/pr-monitor-runtime.ts`, which reaches
-    the PR monitor commands, and fourteen `coordinator/` modules such as
-    `coordinator/review-actions.ts`, the command handlers the command registry
+    the PR monitor commands, and eleven `coordinator/` modules such as
+    `coordinator/fork-worker.ts`, the command handlers the command registry
     installs, four `agent-accounts/` modules such as
     `agent-accounts/accounts.ts`, which reaches the command layer, and six
     `review/` modules such as `review/service.ts` and `review/fanout.ts`,
@@ -355,17 +355,17 @@ new.
     `replacement.ts` and `cleanup-inventory.ts`, and through them
     `network.ts`, `resources.ts` and `cleanup-preview.ts`), the command layer
     (`bridge-credential.ts` and `apt-packages.ts` through
-    `commands-container-exec.ts`, `claude-login-keeper.ts` and
-    `github-credential.ts` through `commands-files.ts`,
-    `lifecycle-events.ts` through `commands-environment.ts`,
-    `project-seed-files.ts` through `commands-project-files.ts`),
+    `commands/container-exec.ts`, `claude-login-keeper.ts` and
+    `github-credential.ts` through `commands/files.ts`,
+    `lifecycle-events.ts` through `commands/environment.ts`,
+    `project-seed-files.ts` through `commands/project-files.ts`),
     `claude-state-signal.ts` (`credential-mode.ts`,
     `worktree-signal-install.ts`), `portable-input-status.ts`
     (`login-file-watcher.ts`, `sign-in-guidance.ts`), and `git/`
     (`git-fetch.ts`, through `worktrees/index.ts`). Keeping those root files
     deep instead does not shrink the set, because each imports several other
-    container modules. The root files that re-export container symbols
-    (`egress-gateway.ts`, `commands-servers.ts`, and `commands-helpers.ts`,
+    container modules. The files outside the folder that re-export container symbols
+    (`egress-gateway.ts`, `commands/servers.ts`, and `commands/helpers.ts`,
     which lists `containers/scripts.ts`'s exports by name rather than with
     `export *`) do it through `containers/index.ts`. Its `tests/unit/**`
     pattern has two exceptions, `containers/network.ts` (for
@@ -375,14 +375,14 @@ new.
     The `environments/` boundary has five exceptions for runtime cycles, none
     of them re-exported by `environments/index.ts`. `environments/cleanup.ts`,
     `cleanup-reconciler.ts`, `delete.ts` and `move.ts` import
-    `commands-environment.ts`, which takes `environments/isolation.ts` and
+    `commands/environment.ts`, which takes `environments/isolation.ts` and
     `start-remedy.ts` from `environments/index.ts`, and
     `environments/process-usage.ts` imports `local-server-reaper.ts`, which
     reaches `tmux/session-manager.ts` (an `environments/index.ts` importer)
     through `tmux/index.ts`. Their importers (`index.ts`, `disk-usage.ts`,
-    `commands-servers.ts`, `commands-registry-environments.ts`,
-    `commands-registry-system.ts` and `containers/cleanup-legacy-runtimes.ts`)
-    import them directly. `commands-helpers.ts` re-exports
+    `commands/servers.ts`, `commands/registry-environments.ts`,
+    `commands/registry-system.ts` and `containers/cleanup-legacy-runtimes.ts`)
+    import them directly. `commands/helpers.ts` re-exports
     `environments/operations.ts`'s exports by name through
     `environments/index.ts` rather than with `export *`. Its `tests/unit/**`
     pattern has no exceptions, and its `apps/backend/src/**` pattern also
@@ -413,6 +413,28 @@ new.
     exceptions: `storage/service.ts`, `storage/stores.ts` and
     `storage/test-support.ts`.
 
+    The `commands/` boundary has nineteen exceptions for runtime cycles. Most
+    domains import `commands/index.ts` for a leaf (`dockerExec`,
+    `conciseError`, the `CommandContext` type, …), so `index.ts` re-exports
+    only modules that reach none of its importers: it does not re-export the
+    registry (`commands/registry.ts`, which the composition root imports
+    directly), the seven registry files whose helpers other domains call
+    (`registry-coordinator.ts`, `registry-coordinator-nodes.ts`,
+    `registry-docker.ts`, `registry-mcp.ts`, `registry-projects.ts`,
+    `registry-self-improvement.ts`, `registry-user-commands.ts`), or the
+    eleven handler modules that reach the container, environment, server and
+    review layers (`agent-support.ts`, `containers.ts`, `environment.ts`,
+    `environment-fork.ts`, `files.ts`, `local-server-lifecycle.ts`,
+    `pr-monitor.ts`, `pr-monitor-batch.ts`, `projects.ts`, `review.ts`,
+    `servers.ts`). Like `storage/index.ts`, it still re-exports their types
+    with `export type`. `commands/helpers.ts`, the re-export list the handler
+    modules share, is internal: callers outside the folder import a symbol
+    from `commands/index.ts` or from the domain that defines it. Its
+    `tests/unit/**` pattern has two exceptions: `commands/registry.ts` and
+    `commands/testing.ts`. Its `apps/backend/src/**` pattern
+    `**/commands/*` matches no other import path: `tmux/commands.ts` and the
+    protocol's `contract/domains/*/commands.ts` are files, not folders.
+
     Name an exception for a domain's test support when an entrypoint outside
     the test globs imports it. The `preview-*-harness.ts` entrypoints import
     `previews/test-support.ts`, `public-api/test-provider.ts` imports
@@ -433,7 +455,8 @@ new.
     modules `containers/index.ts` cannot re-export), and
     `storage/service.ts`, `storage/stores.ts` and `storage/test-support.ts`
     (for the tests that construct a `StorageService`, open the database or
-    seed stores). Write those specifiers
+    seed stores), and `commands/registry.ts` and `commands/testing.ts` (for
+    the tests that build a command registry or read `__testing`). Write those specifiers
     with the `.js` extension: the exceptions name `.js` paths, so an
     extensionless specifier is reported.
 

@@ -12,7 +12,7 @@ import {
   type SetupFailureReason,
   setupFailureReasonOscSequence,
 } from "./containers/index.js";
-import { SETUP_TERMINAL_STILL_RUNNING_MESSAGE } from "./commands-error-text.js";
+import { SETUP_TERMINAL_STILL_RUNNING_MESSAGE } from "./commands/index.js";
 import type { PtyProcess } from "./pty.js";
 import type { TerminalRuntime } from "./terminals/index.js";
 

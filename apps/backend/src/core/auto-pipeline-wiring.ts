@@ -8,8 +8,8 @@
  */
 import { AutoPipelineService } from "./auto-pipeline.js";
 import type { AutoPipelineToolHost } from "./agent-tools-auto-pipeline.js";
-import type { CommandContext } from "./commands-context.js";
-import { createPipelineEnvironmentGit } from "./commands-review.js";
+import type { CommandContext } from "./commands/index.js";
+import { createPipelineEnvironmentGit } from "./commands/review.js";
 import {
   GraphAgentProviders,
   graphAgentBridgeConnection,

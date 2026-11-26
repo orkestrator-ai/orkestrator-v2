@@ -1,6 +1,6 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 import type { StateSignalCredential } from "../src/core/agent-tools";
 import {
   CLAUDE_STATE_POLL_INTERVAL_MS,

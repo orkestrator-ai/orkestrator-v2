@@ -11,7 +11,7 @@ import {
 } from "./containers/claude-login-keeper.js";
 import { CommandFailedError } from "./shell.js";
 import { AgentAccountsRuntime } from "./agent-accounts/runtime.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 
 let root: string | undefined;
 

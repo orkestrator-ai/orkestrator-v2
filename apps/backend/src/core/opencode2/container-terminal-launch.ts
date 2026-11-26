@@ -34,7 +34,7 @@
  */
 import { parseTerminalOpenCodeLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { OPENCODE2_LAUNCH_CONFIG_DIR } from "../agent-credential-files.js";
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import { persistentStateExports } from "../containers/index.js";
 import {
   OPENCODE2_CONTAINER_CLI_PATH,

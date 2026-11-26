@@ -1,5 +1,5 @@
-import type { CommandContext } from "../commands-context.js";
-import { syncContainerGitHubCredential } from "../commands-files.js";
+import type { CommandContext } from "../commands/index.js";
+import { syncContainerGitHubCredential } from "../commands/files.js";
 import { currentRuntimeIdentity } from "./lifecycle-service.js";
 import { readImageManifest } from "./image.js";
 import { withdrawAuthenticatedGitMirrors } from "../project-git-mirror.js";

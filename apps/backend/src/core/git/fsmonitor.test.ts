@@ -3,14 +3,14 @@ import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../../tests/default-test-timeo
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { reconcileContainerDelegationBase } from "../commands-environment.js";
-import { enableGitScanCaches, getLocalGitStatusDetailed } from "../commands-files.js";
+import { reconcileContainerDelegationBase } from "../commands/environment.js";
+import { enableGitScanCaches, getLocalGitStatusDetailed } from "../commands/files.js";
 import {
   SCRATCH_COMMIT_AUTHOR,
   SCRATCH_COMMIT_EMAIL,
   SCRATCH_COMMIT_SUBJECT,
   isResumableScratchRepository,
-} from "../commands-projects.js";
+} from "../commands/projects.js";
 import {
   GIT_FSMONITOR_DISABLED_ARGS,
   HARDENED_GIT_CONFIG,

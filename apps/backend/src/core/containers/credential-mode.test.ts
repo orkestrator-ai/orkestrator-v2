@@ -1,6 +1,6 @@
 import { expect, test, spyOn } from "bun:test";
 import { containerCredentialMode, containerOpenCode2Mode } from "./credential-mode.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 const context = {} as CommandContext;
 test.each([
   ["supported", "supported", "launcher"],

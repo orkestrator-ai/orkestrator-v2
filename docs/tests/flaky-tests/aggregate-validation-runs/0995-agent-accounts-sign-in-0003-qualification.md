@@ -46,7 +46,7 @@ Implementation commit `74841142b` addresses the dispatch-journal and evidence-sp
 
 - `mise run check` through `test:logged` passed formatting, lint and all package typechecks. The final static run took 11.9 s.
 - `codex-storage-final`: the new shared-state upgrade suite plus existing dispatch-journal and change-evidence owners passed (0.8 s).
-- `codex-auth-launch`: the stored-account runtime and process-supervisor owners passed (0.4 s). `backend-launch`, run with `bun test --cwd apps/backend ./src/core/commands-servers-coordinator.test.ts --parallel=1 --only-failures`, passed separately (8.1 s).
+- `codex-auth-launch`: the stored-account runtime and process-supervisor owners passed (0.4 s). `backend-launch`, run with `bun test --cwd apps/backend ./src/core/commands/servers-coordinator.test.ts --parallel=1 --only-failures`, passed separately (8.1 s).
 - `codex-auth-component-final`: the complete native-tab component owner passed after changing two new DOM absence assertions to the repository's bounded boolean convention (58.4 s). `codex-auth-diagnostic-bounds` passed (25.4 s). The original aggregate's diagnostic failure names that earlier assertion form and is fixed in the implementation commit.
 
 ### Component browser suite

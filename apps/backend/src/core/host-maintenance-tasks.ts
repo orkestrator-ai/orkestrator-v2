@@ -5,7 +5,7 @@ import path from "node:path";
 import { ensurePinnedToolchains, type ToolchainProgress } from "@orkestrator/toolchain/manager";
 import { installPinnedToolchains, planToolchainInstall } from "@orkestrator/toolchain/install";
 import { isHostVersion, type HostReleasePins } from "@orkestrator/protocol/host-maintenance";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import { APP_VERSION, DOCKER_IMAGE } from "./constants.js";
 import {
   configuredImageRef,

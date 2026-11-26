@@ -18,7 +18,7 @@ import { AgentAccountAutoSwitcher } from "./auto-switch.js";
 import { AgentAccountSharedUsage } from "./shared-usage.js";
 import { shareAndMergeUsage } from "./usage-sharing.js";
 import { eventSink } from "../backend-emit.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 
 /**
  * Automatic switching on the newest reading of each login from any machine

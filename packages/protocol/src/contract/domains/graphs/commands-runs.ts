@@ -2,7 +2,7 @@
  * `graphs` commands of a run: the run view's reads and controls (item 211),
  * answers to waiting activations (items 204 and 208), and restart and code
  * rewind (item 210). Registered by the backend's
- * `commands-registry-graph-runs.ts`. The argument rules are those of
+ * `apps/backend/src/core/commands/registry-graph-runs.ts`. The argument rules are those of
  * `commands-templates.ts`: the handlers keep their validators, which throw a
  * coded `GraphRunServiceError`, `GraphAgentQuestionError` or
  * `GraphRunRewindError`.

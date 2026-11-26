@@ -8,8 +8,8 @@ import {
   isFileWriteConflict,
   parseFileWritePrecondition,
 } from "@orkestrator/protocol/file-write-precondition";
-import type { CommandContext } from "./commands-context.js";
-import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext } from "./commands/context.js";
+import { createCommandRegistry } from "./commands/registry.js";
 import { MAX_TEXT_FILE_BYTES } from "./path-safety.js";
 import {
   CONTAINER_WRITE_CONFLICT_EXIT,

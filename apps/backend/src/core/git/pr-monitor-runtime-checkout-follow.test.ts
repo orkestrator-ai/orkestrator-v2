@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import type { Environment } from "../models.js";
 import { ProjectCheckoutMergeFollower } from "../project-checkout-merge-follow.js";

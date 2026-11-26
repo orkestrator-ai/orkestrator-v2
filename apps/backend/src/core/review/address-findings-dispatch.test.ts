@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BackendRuntime } from "../backend-runtime.js";
-import { verifyEnvironmentReviewPackage } from "../commands-review.js";
+import { verifyEnvironmentReviewPackage } from "../commands/review.js";
 import { graphEnvironmentFixture } from "../graph-run-test-support.js";
 import { runCommand } from "../shell.js";
 import type { ReviewPackage } from "@orkestrator/protocol/review-workflow";

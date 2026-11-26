@@ -13,8 +13,8 @@ import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import type { Environment } from "../models.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";
 import {

@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { withOpenCode2HostDatabaseServer } from "./host-database-server.js";
 import { openCode2LegacyReconcileMarker } from "./credential-upgrade.js";
 import { FakeOpenCode2Server } from "./fake-server.test-support.js";

@@ -3,7 +3,7 @@ import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import type { Environment } from "../models.js";
-import type { EnvironmentCommandRunner } from "../commands-review.js";
+import type { EnvironmentCommandRunner } from "../commands/index.js";
 
 /** Per-stream size bound, the validation worker's own `MAX_STREAM_BYTES`. */
 const MAX_VALIDATION_ARTIFACT_BYTES = 32 * 1024 * 1024;

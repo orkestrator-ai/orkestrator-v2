@@ -441,7 +441,7 @@ or a person.
    `projectResourcesEnabled` are gone, and a session without a policy runs as
    the host default). `cursorMcpServers` opens `.cursor/mcp.json` only when
    the policy turns `projectResources` on. The launchers in
-   `commands-servers.ts`, `host-model-catalog-refresh.ts` and
+   `commands/servers.ts`, `host-model-catalog-refresh.ts` and
    `pi-model-catalog-seeding.ts` no longer set the variables; coordinators stay
    closed through `ORKESTRATOR_BRIDGE_EXECUTION_POLICY`. The comments, both
    `AGENTS.md` files and `platform-inconsistencies.md` are updated, and no

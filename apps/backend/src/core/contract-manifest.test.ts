@@ -30,8 +30,8 @@ import {
   untypedCommandCounts,
   type ContractManifest,
 } from "../../../../scripts/generate-contract-manifest.ts";
-import type { CommandHandler } from "./commands-context.js";
-import { CommandRegistry, createRegistryRegistrar } from "./commands-registry-contracts.js";
+import type { CommandHandler } from "./commands/context.js";
+import { CommandRegistry, createRegistryRegistrar } from "./commands/registry-contracts.js";
 import {
   CONTRACT_DOMAIN_MAP,
   contractDomainsByCommand,

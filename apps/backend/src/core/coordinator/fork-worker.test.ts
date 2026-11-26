@@ -8,8 +8,8 @@ import {
   coordinatorDelegationFromMail,
   parseCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { parseForkWorkerLaunch } from "./fork-worker.js";
 import { CoordinatorService } from "./service.js";
 import { ControlMcpServer } from "../control-mcp/server.js";

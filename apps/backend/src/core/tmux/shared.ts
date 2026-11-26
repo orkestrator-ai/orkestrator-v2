@@ -3,7 +3,7 @@ import path from "node:path";
 import os from "node:os";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
-import type { CommandContext } from "../commands.js";
+import type { CommandContext } from "../commands/index.js";
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME, type AgentToolConnection } from "../agent-tools.js";
 import type { Environment } from "../models.js";
 import type { JsonRecord } from "../storage/index.js";

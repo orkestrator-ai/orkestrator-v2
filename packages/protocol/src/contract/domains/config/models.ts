@@ -2,7 +2,7 @@
  * The settings model as the `config` commands answer it (plan item 7005):
  * `AppConfig`, its `global` and `RepositoryConfig` of
  * `apps/backend/src/core/models.ts` field for field, the renderer's view of
- * them (`RendererAppConfig` of `commands-validation.ts`: credentials replaced
+ * them (`RendererAppConfig` of `apps/backend/src/core/commands/validation.ts`: credentials replaced
  * by `*Configured`/`*Source`), the agent settings tier this domain owns, and
  * the records of the shared client state and permission rules. Plan item 7010
  * makes these the single definition the backend and the renderer infer their
@@ -213,7 +213,7 @@ export const StoredGlobalConfigSchema = openRecord({
 });
 export type StoredGlobalConfig = DeepMutable<typeof StoredGlobalConfigSchema.Type>;
 
-/** `ApiKeySource` (`commands-validation.ts`): where the key a new container receives comes from. */
+/** `ApiKeySource` (`apps/backend/src/core/commands/validation.ts`): where the key a new container receives comes from. */
 export const ApiKeySourceSchema = Schema.Literals(["config", "host-env", "none"]);
 /** `CursorApiKeySource`: `host-snapshot` is a test profile's authorized copy of the host credential. */
 export const CursorApiKeySourceSchema = Schema.Literals([
@@ -224,7 +224,7 @@ export const CursorApiKeySourceSchema = Schema.Literals([
 ]);
 
 /**
- * `RendererGlobalConfig` (`commands-validation.ts`): the global settings as
+ * `RendererGlobalConfig` (`apps/backend/src/core/commands/validation.ts`): the global settings as
  * every command answers them. The credentials are write-only; only whether
  * each is configured, and where a container's key comes from, is sent.
  */

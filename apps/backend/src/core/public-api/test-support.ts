@@ -7,9 +7,9 @@ import {
   type PublicActionName,
   type PublicActionResponse,
 } from "@orkestrator/protocol/public-api";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandRegistryOptions } from "../commands-registry-types.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandRegistryOptions } from "../commands/registry-types.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage/service.js";

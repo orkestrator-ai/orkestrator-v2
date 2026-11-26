@@ -1,11 +1,12 @@
 /**
  * Agent Capabilities runtime proof (`capabilities/runtime-proof.ts`): reads a
- * bridge session's no-touch `/session/:id/capability-evidence` route. Only the
- * Claude bridge serves it; a 404 or 405 from any bridge means the bridge
- * predates the route or its provider has no such report (`unsupported`),
- * never that the session is gone. A failed read is `none`.
+ * bridge session's no-touch `/session/:id/capability-evidence` route. The
+ * Claude and Pi bridges serve it; a 404 or 405 from any bridge means the
+ * bridge predates the route or its provider has no such report
+ * (`unsupported`), never that the session is gone. A failed read is `none`.
  */
 import {
+  MAX_CAPABILITY_EVIDENCE_BYTES,
   parseCapabilitySessionEvidence,
   type CapabilitySessionEvidenceRead,
 } from "@orkestrator/protocol/capability-evidence";
@@ -34,7 +35,7 @@ export async function readBridgeCapabilityEvidence(options: {
         : { state: "none" };
     }
     const body = await boundedJson(response, `${options.agent} capability evidence read`, {
-      remaining: 256 * 1024,
+      remaining: MAX_CAPABILITY_EVIDENCE_BYTES,
     });
     return parseCapabilitySessionEvidence(body);
   } catch {

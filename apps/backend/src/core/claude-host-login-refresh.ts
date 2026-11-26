@@ -3,8 +3,8 @@ import path from "node:path";
 
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
 
-import type { CommandContext } from "./commands-context.js";
-import { resolveClaudeBinary } from "./commands-agent-support.js";
+import type { CommandContext } from "./commands/index.js";
+import { resolveClaudeBinary } from "./commands/agent-support.js";
 import {
   type ResolvedAgentAccount,
   stripInheritedAgentCredentials,

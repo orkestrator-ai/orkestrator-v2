@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { NativeAgentResumeIdentityObserver } from "./resume-identity.js";
 import { nativeAgentSessionResumeIdentity } from "../models.js";
 import { nativeAgentSessionStorageKey } from "./service.js";

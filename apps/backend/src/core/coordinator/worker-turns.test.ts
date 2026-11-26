@@ -2,7 +2,7 @@ import { afterEach, describe, expect, type mock, spyOn, test } from "bun:test";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { isCoordinatorWakeAttentionEvent } from "@orkestrator/protocol/environment-attention";
 import type { NativeAgentSlashCommand } from "@orkestrator/protocol/native-agent";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "../control-mcp/tools.js";
 import { ControlMcpServer } from "../control-mcp/server.js";
 import { launchDelegationRequest } from "./delegation-request.js";

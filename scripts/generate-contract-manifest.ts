@@ -32,7 +32,7 @@
  * `scripts/contract-argument-rules.ts`): no `Schema.optional` or
  * `UndefinedOr`, and no `Schema.Number`. A breach fails the generator.
  *
- * The registry is loaded the way `commands-secret-sweep-test-support.ts` does:
+ * The registry is loaded the way `apps/backend/src/core/commands/secret-sweep-test-support.ts` does:
  * in a child process with a constructed environment (temporary HOME and XDG
  * directories, an empty PATH, no inherited `ORKESTRATOR_*` variable) and a
  * `fetch` that refuses, calling `createCommandRegistry()` with no options. No
@@ -500,7 +500,7 @@ async function childMain(output: string): Promise<void> {
   globalThis.fetch = (async () => {
     throw new Error("network is disabled while generating the contract manifest");
   }) as unknown as typeof fetch;
-  const { createCommandRegistry } = await import("../apps/backend/src/core/commands.js");
+  const { createCommandRegistry } = await import("../apps/backend/src/core/commands/registry.js");
   const manifest = buildContractManifest(createCommandRegistry());
   await writeFile(output, serializeContractManifest(manifest));
 }

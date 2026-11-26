@@ -7,8 +7,8 @@ import {
   loadAgentTestHostCursorApiKey,
   resetAgentTestHostCursorApiKeyForTests,
 } from "./agent-test-cursor-credential.js";
-import type { CommandContext } from "./commands-context.js";
-import { resolveCursorApiKey } from "./commands-validation.js";
+import type { CommandContext } from "./commands/context.js";
+import { resolveCursorApiKey } from "./commands/validation.js";
 import { cursorSdkAuthStatus } from "./cursor-sdk-bridge.js";
 
 let dataDir: string;

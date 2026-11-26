@@ -10,7 +10,7 @@ import {
   ENVIRONMENT_ISOLATION_ENV_NAMES,
   environmentIsolationVariables,
 } from "../environments/isolation.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 
 test("two Claude panes on an existing tmux server replace its inherited project and ports", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ork-tmux-isolation-"));

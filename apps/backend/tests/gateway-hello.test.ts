@@ -15,7 +15,7 @@ import * as Schema from "effect/Schema";
 import {
   CommandRegistry,
   createRegistryRegistrar,
-} from "../src/core/commands-registry-contracts.js";
+} from "../src/core/commands/registry-contracts.js";
 import { GatewayLifecycle } from "../src/gateway-lifecycle.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import {

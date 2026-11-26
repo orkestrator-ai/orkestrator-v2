@@ -10,32 +10,33 @@
 // (`last-usage.ts`, `shared-usage.ts`, `usage-sharing.ts`), other machines'
 // accounts (`machines.ts`), session accounts (`session.ts`), promotion and the
 // runtime state (`runtime.ts`). The command registry
-// (`commands-registry-accounts.ts`), storage (`storage/agent-accounts.ts`),
+// (`commands/registry-accounts.ts`), storage (`storage/agent-accounts.ts`),
 // usage-limit reads (`agent-usage-limits.ts`) and the host login refreshers
 // (`claude-host-login-refresh.ts`, `codex-host-login-refresh.ts`) stay with
 // their own prefix groups.
 //
-// Seven modules are named exceptions in `.oxlintrc.json`, not part of this
+// Five modules are named exceptions in `.oxlintrc.json`, not part of this
 // surface. Routing them through this file would close a runtime import cycle.
 // Each is imported directly by the files listed:
 // - `accounts.ts`, `machines.ts` and `session.ts` reach the command layer
-//   (`commands-servers.ts`, `host-model-catalog-refresh.ts`,
-//   `commands-environment.ts`, …), which imports this file. They are for
-//   `commands-registry-accounts.ts` and `commands-registry-projects.ts`, the
+//   (`commands/servers.ts`, `host-model-catalog-refresh.ts`,
+//   `commands/environment.ts`, …), which imports this file. They are for
+//   `commands/registry-accounts.ts` and `commands/registry-projects.ts`, the
 //   composition root `core/index.ts`, `session-title-service.ts` (a dynamic
 //   import) and `coordinator/usage-limit-account-routing.ts`;
 // - `runtime.ts` reaches `plan-usage/reader.ts`, which imports this file. It
-//   is for `backend-runtime.ts` and, for one type, `commands-servers.ts`;
-// - `store.ts`, `homes.ts` and `auto-switch-notices.ts` are imported from
-//   below the modules this file re-exports: the storage layer
-//   (`storage/agent-accounts.ts`, `storage/config.ts`), `commands-servers.ts`,
-//   the host model catalogue, `permission-rules/`, `mcp-management/`,
-//   `capabilities/`, `environments/move-sessions.ts`,
-//   `codex-host-login-refresh.ts` and `coordinator/notice-router.ts`. The
-//   modules this file re-exports (`active.ts`, `containers.ts`, …) reach most
-//   of those importers back (the storage layer, `permission-rules/`,
-//   `coordinator/notice-router.ts`), so they cannot import this file. Like
-//   every exception, each module stays out of this file for all its importers.
+//   is for `backend-runtime.ts` and, for one type, `commands/servers.ts`;
+// - `homes.ts` is imported from below the modules this file re-exports:
+//   `permission-rules/`, `mcp-management/`, `capabilities/`,
+//   `environments/move-sessions.ts` and `codex-host-login-refresh.ts`, which
+//   the re-exported modules (`active.ts`, `containers.ts`, …) reach, so they
+//   cannot import this file. Like every exception, it stays out of this file
+//   for all its importers.
+// `store.ts` and `auto-switch-notices.ts` were exceptions too until the
+// storage and commands domains moved into their folders: their importers
+// (the storage layer, `commands/servers.ts`, the host model catalogue and
+// `coordinator/notice-router.ts`) now reach only the light `storage/index.ts`
+// and `commands/index.ts`, so routing them through this file closes no cycle.
 export {
   activeAgentAccountShellEnvironment,
   addedClaudeAccountHomes,
@@ -58,6 +59,7 @@ export {
   type LimitedAccountMove,
   type UsageLimitStopReport,
 } from "./auto-switch.js";
+export { mailAutoSwitchNotice } from "./auto-switch-notices.js";
 export {
   activeAgentAccountInputRoots,
   activeClaudeCredentials,
@@ -83,6 +85,7 @@ export {
   type AgentAccountLoginHandle,
   type SpawnLike,
 } from "./login.js";
+export { agentAccountLoginKey, parseAgentAccountStore, type AgentAccountStore } from "./store.js";
 export {
   applySharedUsageReadings,
   centralUsageReadings,

@@ -2,7 +2,7 @@ import { canonicalJson } from "@orkestrator/protocol/canonical-json";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
 import { INHERITED_GLOBAL_SETTING_KEYS } from "@orkestrator/protocol/controller-settings";
 
-import { stripRendererCredentials } from "../commands-validation.js";
+import { stripRendererCredentials } from "../commands/index.js";
 
 /**
  * The workspace grant allow-list (report §10.2, plan item 7012).

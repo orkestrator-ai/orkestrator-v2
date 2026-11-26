@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 import {
   listContainerMcpDirectories,
   readContainerMcpFile,
-} from "../src/core/commands-registry-mcp";
+} from "../src/core/commands/registry-mcp";
 import { McpManagementService } from "../src/core/mcp-management/service";
 import { createFixture, targetIdFor } from "../src/core/mcp-management/test-support";
 

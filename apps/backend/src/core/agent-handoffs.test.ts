@@ -17,7 +17,7 @@ import {
   type CreateAgentHandoffInput,
 } from "./agent-handoffs.js";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { AGENT_HANDOFF_PRUNE_GRACE_MS } from "./storage/shared-pane-layout.js";
 import { StorageService } from "./storage/service.js";
 

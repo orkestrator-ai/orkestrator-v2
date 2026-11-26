@@ -12,7 +12,7 @@ import {
   type AutoPipelineSources,
 } from "@orkestrator/protocol/build-pipeline";
 import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import type { BuildPipelineProvider } from "./build-pipeline/provider.js";
 import {
   assertNoOtherWorkflowWriting,

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { getHostGitHubToken } from "./github-credentials.js";
 import {
   beginAgentAccountLogin,

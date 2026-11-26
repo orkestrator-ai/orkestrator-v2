@@ -7,7 +7,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
 import { MAX_TEXT_FILE_BYTES, MAX_TEXT_FILE_SIZE_LABEL } from "../src/core/path-safety";
 import * as realPty from "../src/core/pty";
@@ -72,17 +72,19 @@ mock.module("../src/core/pty", () => ({ spawnPty }));
 
 const {
   CONTAINER_FILE_TREE_LISTER,
+  buildFileSubtree,
+  buildFileTree,
+  parseContainerFileSubtree,
+  parseContainerFileTree,
+} = await import("../src/core/commands/files");
+const {
   CONTAINER_INTERACTIVE_SHELL_COMMAND,
   CONTAINER_SAFE_BASE64_READER,
   buildContainerSafeBase64Reader,
-  buildFileSubtree,
-  buildFileTree,
-  createCommandRegistry,
-  parseContainerFileSubtree,
-  parseContainerFileTree,
-} = await import("../src/core/commands");
-const { resolveBunBinary } = await import("../src/core/commands-agent-support");
-const { getWorktreeBaseDir } = await import("../src/core/commands-environment");
+} = await import("../src/core/containers/scripts");
+const { createCommandRegistry } = await import("../src/core/commands/registry");
+const { resolveBunBinary } = await import("../src/core/commands/agent-support");
+const { getWorktreeBaseDir } = await import("../src/core/commands/environment");
 const { BackendRuntime } = await import("../src/core/backend-runtime");
 
 const tempDirs: string[] = [];

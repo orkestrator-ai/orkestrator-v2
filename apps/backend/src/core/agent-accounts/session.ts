@@ -6,10 +6,8 @@ import {
 } from "@orkestrator/protocol/agent-accounts";
 
 import { CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT } from "../constants.js";
-import { getHostPort } from "../commands-container-exec.js";
-import { checkHttpHealth } from "../commands-server-health.js";
+import { checkHttpHealth, type CommandContext, getHostPort } from "../commands/index.js";
 
-import type { CommandContext } from "../commands-context.js";
 import { listAgentAccounts } from "./accounts.js";
 import { readContainerAgentAccountId } from "./containers.js";
 

@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { createHash } from "node:crypto";
@@ -7,8 +7,8 @@ import { access, utimes } from "node:fs/promises";
 
 import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerNodeCommands } from "../commands-registry-nodes.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerNodeCommands } from "../commands/registry-nodes.js";
 import { NodeCoordination } from "./node-coordination.js";
 import { WorkerTabCloseAdmission } from "../worker-tab-close-admission.js";
 

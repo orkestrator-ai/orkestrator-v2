@@ -121,7 +121,7 @@ response; see "Assumptions and decisions".
 
 **Context.** Optional; does not affect `mise run test`. This task is the harness change; running a paid live scenario to read the cost moved to the manual-test checklist (7568: 0014 task 4).
 
-**Investigation.** There is no public usage action (no usage field in `packages/protocol/src/public-api.ts`, no CLI command); usage lives in the backend's usage store (`apps/backend/src/core/commands-registry-usage.ts`). Reading it would need either a registry call outside `public_action` or a new public read.
+**Investigation.** There is no public usage action (no usage field in `packages/protocol/src/public-api.ts`, no CLI command); usage lives in the backend's usage store (`apps/backend/src/core/commands/registry-usage.ts`). Reading it would need either a registry call outside `public_action` or a new public read.
 
 **Decisions.**
 
@@ -642,7 +642,7 @@ model).
   - Checks: `mise run format:check`, `mise run lint` (exit 0; existing
     warnings only) and `mise run typecheck` pass; `packages/cli` suite
     259/259. Complete `mise run test`: exit 1 after about 27 minutes, solely on
-    `commands-file-copy.test.ts` (EPIPE in a container helper case this
+    `commands/file-copy.test.ts` (EPIPE in a container helper case this
     branch does not touch); that file passed alone three times. Registered
     as flake
     [0910](../../tests/flaky-tests/environments-and-containers/0910-file-copy-container-helper-stdin-epipe.md).
@@ -790,7 +790,7 @@ model).
       no bundled Bun, `resolveBunBinary` fell back to `bun` on `PATH`, here a
       mise shim that cannot resolve from `/`, where exec control runs. It now
       falls back to the Bun running the backend; covered by
-      `commands-agent-support.test.ts`. The stuck-pending receipt is Code
+      `commands/agent-support.test.ts`. The stuck-pending receipt is Code
       item 3.
   - Not run: Pi, Cursor, Grok (bridges not packaged); `mise run smoke:cli`,
     the macOS config directory and `--profile` discovery (macOS item);

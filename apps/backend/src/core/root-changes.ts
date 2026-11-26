@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { RootChangeFile } from "@orkestrator/protocol/coordinator-surfaces";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import type { Environment } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";

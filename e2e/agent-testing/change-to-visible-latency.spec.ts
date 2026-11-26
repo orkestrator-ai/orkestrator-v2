@@ -145,7 +145,7 @@ async function msUntil(
 
 /**
  * Untracked files the backend line-counts per scan (`UNTRACKED_SCAN_MAX_FILES`,
- * apps/backend/src/core/commands-validation.ts). Past it the badge is
+ * apps/backend/src/core/commands/validation.ts). Past it the badge is
  * approximate and its tooltip names the cap, so a bigger burst can never show
  * an exact `+N`.
  */

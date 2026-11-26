@@ -9,10 +9,8 @@ import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
 import { useProjects } from "@/hooks/useProjects";
 import { projectStore } from "@/stores/projectStore";
 import * as native from "@/lib/native/backend";
-import {
-  createCommandRegistry,
-  type CommandContext,
-} from "../../../apps/backend/src/core/commands";
+import type { CommandContext } from "../../../apps/backend/src/core/commands/index.js";
+import { createCommandRegistry } from "../../../apps/backend/src/core/commands/registry.js";
 import { EnvironmentLifecycleTaskTracker } from "../../../apps/backend/src/core/environments/index.js";
 import { runCommand } from "../../../apps/backend/src/core/shell";
 import { StorageService } from "../../../apps/backend/src/core/storage/service.js";

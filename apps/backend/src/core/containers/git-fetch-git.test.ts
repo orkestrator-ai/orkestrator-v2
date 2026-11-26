@@ -8,14 +8,14 @@ import {
   getContainerGitStatusDetailed,
   revertContainerFile,
   type ContainerGitStatusDeps,
-} from "../commands-files.js";
+} from "../commands/files.js";
 import {
   CONTAINER_FETCH_COOLDOWN_MS,
   ContainerGitFetchPolicy,
   type ContainerFetchChange,
 } from "./git-fetch.js";
 import { runCommand } from "../shell.js";
-import { dockerExec } from "../commands-container-exec.js";
+import { dockerExec } from "../commands/container-exec.js";
 import { ManualTime } from "../recurring/test-support.js";
 import { RecurringWorkMetrics } from "../recurring/work-metrics.js";
 

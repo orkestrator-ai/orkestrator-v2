@@ -297,7 +297,7 @@ describe("rootless daemon with host loopback enabled", () => {
     async () => {
       const { ContainerHostReachabilityService } =
         await import("../src/core/containers/host-reachability");
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { networkOwnerContainer } = await import("../src/core/containers/network-owner");
 

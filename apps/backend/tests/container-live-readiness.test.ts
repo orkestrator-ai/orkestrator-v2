@@ -44,7 +44,7 @@ import {
   waitForContainerBoot,
   type BootObservation,
 } from "../src/core/containers/readiness";
-import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands-error-text";
+import { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } from "../src/core/commands/error-text";
 import type { Environment } from "../src/core/models";
 import { lifecycleEnvironment, memoryLifecycleContext } from "./container-lifecycle-fixtures";
 import { removeLabelledResources } from "./container-live-cleanup";
@@ -329,7 +329,7 @@ function launchingEnvironment(id: string, overrides: Partial<Environment> = {}):
 }
 
 async function startEnvironment(environmentId: string, context: unknown) {
-  const { startEnvironmentOnce } = await import("../src/core/commands-environment");
+  const { startEnvironmentOnce } = await import("../src/core/commands/environment");
   return startEnvironmentOnce(environmentId, context as never, () => undefined);
 }
 
@@ -898,7 +898,7 @@ describe("C23/readiness firewall failure after boot", () => {
   live(
     "C23/readiness: a firewall re-run that loses DNS fails closed with no allow-all interval",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const scene = await scenario();
@@ -1035,7 +1035,7 @@ describe("C10 setup interrupted after a possible side effect", () => {
   live(
     "C10: a setup whose terminal dies after its side effect is failed, never ready, never rerun",
     async () => {
-      const { setupTerminalSessionId } = await import("../src/core/commands-terminal");
+      const { setupTerminalSessionId } = await import("../src/core/commands/terminal");
       const scene = await scenario({
         setupContainer: "date +%s%N >> /home/node/.c10-side-effects && sleep 600",
       });
@@ -1144,7 +1144,7 @@ describe("C22 live host-service reply", () => {
         classifyProbeOutput,
         containerAgentToolsUrl,
       } = await import("../src/core/containers/host-reachability");
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const scene = await scenario();
       // The real agent tools server, bound as the backend binds it.

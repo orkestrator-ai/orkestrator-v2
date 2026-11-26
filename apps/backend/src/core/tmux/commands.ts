@@ -30,9 +30,7 @@ import {
   reconcileClaudeStatePollingCommand,
 } from "@orkestrator/protocol/contract/domains/claude-tmux";
 import type { ResultOf } from "@orkestrator/protocol/contract/command";
-import { wrapRegistrar } from "../commands-registry-contracts.js";
-import { ASYNC_HANDLER } from "../commands-registry-async-decode.js";
-import type { CommandRegistrar } from "../commands-registry-types.js";
+import { ASYNC_HANDLER, type CommandRegistrar, wrapRegistrar } from "../commands/index.js";
 import * as shared from "./shared.js";
 import * as hooks from "./hooks.js";
 import * as interactive from "./interactive.js";

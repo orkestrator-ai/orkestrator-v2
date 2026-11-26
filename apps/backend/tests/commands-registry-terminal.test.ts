@@ -44,7 +44,7 @@ const {
   withGitSubcommandLog,
 } = await createCommandFixtures();
 
-const { beginSetupPreparationSession } = await import("../src/core/commands-environment");
+const { beginSetupPreparationSession } = await import("../src/core/commands/environment");
 
 type RunCommand = typeof import("../src/core/shell").runCommand;
 
@@ -81,7 +81,7 @@ describe("Electron backend command registry", () => {
   test("container setup drops inherited isolation and does not print a local isolation notice", async () => {
     const { ENVIRONMENT_ISOLATION_ENV_NAMES, environmentIsolationVariables } =
       await import("../src/core/environments/isolation");
-    const { spawnSetupTerminal } = await import("../src/core/commands-environment");
+    const { spawnSetupTerminal } = await import("../src/core/commands/environment");
     const inherited = ENVIRONMENT_ISOLATION_ENV_NAMES.map(
       (name) => [name, process.env[name]] as const,
     );

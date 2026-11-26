@@ -17,21 +17,24 @@ import {
   type CoordinatorWorkflowAssociation,
 } from "@orkestrator/protocol/coordinator";
 import { isFeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
-import type { CommandContext } from "../commands-context.js";
-import { asNonBlankString } from "../commands-helpers.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type CoordinatorNodeTarget,
+  type RegistryDependencies,
+} from "../commands/index.js";
+import {
+  coordinatorNodeTarget,
+  RETRY_SAME_REQUEST,
+  withRetryAdvice,
+} from "../commands/registry-coordinator-nodes.js";
 import {
   coordinatorCaller,
   withCoordinatorReceipt,
   type CoordinatorCaller,
 } from "./action-scope.js";
 import { launchWorkerPr, launchWorkerResolve } from "./pr.js";
-import {
-  coordinatorNodeTarget,
-  RETRY_SAME_REQUEST,
-  withRetryAdvice,
-  type CoordinatorNodeTarget,
-} from "../commands-registry-coordinator-nodes.js";
 import type { Environment } from "../models.js";
 import { resolveProjectGitRoot } from "../project-git-root.js";
 import { applyRootChanges, listRootChanges } from "../root-changes.js";

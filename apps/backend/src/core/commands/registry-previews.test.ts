@@ -1,0 +1,226 @@
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+
+import { previewErrorFromUnknown } from "@orkestrator/protocol/preview-services";
+
+import { createCommandRegistry } from "./registry.js";
+import type { CommandContext } from "./context.js";
+import { createPreviewHarness, type PreviewHarness } from "../previews/test-support.js";
+
+describe("preview commands", () => {
+  let harness: PreviewHarness;
+  let context: CommandContext;
+  const commands = createCommandRegistry();
+  const invoke = (name: string, args: Record<string, unknown> = {}) =>
+    Promise.resolve(commands.get(name)!(args, context));
+
+  beforeEach(async () => {
+    harness = await createPreviewHarness();
+    await harness.addContainerEnvironment("a", { entryPort: 3000 });
+    context = {
+      storage: harness.storage,
+      previews: harness.runtime,
+      emit: () => undefined,
+    } as unknown as CommandContext;
+  });
+
+  afterEach(async () => {
+    await harness.cleanup();
+  });
+
+  test("a backend with no stored settings has the transport and relay on", async () => {
+    const settings = (await invoke("get_preview_settings")) as {
+      stored: { transport: boolean; relay: boolean; publication: { enabled: boolean } };
+      effective: { transport: boolean; relay: boolean };
+    };
+    expect(settings.stored).toMatchObject({
+      transport: true,
+      relay: true,
+      publication: { enabled: false },
+    });
+    expect(settings.effective).toMatchObject({ transport: true, relay: true });
+  });
+
+  test("a stored off survives the default being on", async () => {
+    await invoke("update_preview_settings", { settings: { transport: false, relay: false } });
+    expect(await harness.storage.previewServices.loadPreviewSettings()).toMatchObject({
+      transport: false,
+      relay: false,
+    });
+  });
+
+  test("capabilities advertise the registry but not disabled transports", async () => {
+    await invoke("update_preview_settings", { settings: { transport: false } });
+    const capabilities = (await invoke("get_preview_capabilities")) as {
+      registry: { available: boolean };
+      surfaces: {
+        desktopTunnel: { available: boolean; reason?: string };
+        browserEmbedded: { available: boolean };
+      };
+      backendInstanceId: string;
+    };
+    expect(capabilities.registry.available).toBe(true);
+    expect(capabilities.surfaces.desktopTunnel).toMatchObject({
+      available: false,
+      reason: expect.stringContaining("disabled"),
+    });
+    expect(capabilities.surfaces.browserEmbedded.available).toBe(false);
+    expect(capabilities.backendInstanceId).toMatch(/^bk_/);
+  });
+
+  test("register, snapshot, and conflicting update round-trip through commands", async () => {
+    const created = (await invoke("register_preview_service", {
+      service: { environmentId: "a", label: "api", targetKind: "container", applicationPort: 8000 },
+      operationId: "op-command-1",
+    })) as { definition: { serviceId: string; definitionRevision: number } };
+    const snapshot = (await invoke("get_preview_services", { environmentId: "a" })) as {
+      services: Array<{ definition: { label: string } }>;
+    };
+    expect(snapshot.services.map((service) => service.definition.label).sort()).toEqual([
+      "api",
+      "app",
+    ]);
+
+    await invoke("update_preview_service", {
+      serviceId: created.definition.serviceId,
+      expectedRevision: 1,
+      patch: { label: "api2" },
+    });
+    const conflict = await invoke("update_preview_service", {
+      serviceId: created.definition.serviceId,
+      expectedRevision: 1,
+      patch: { label: "api3" },
+    }).catch((error: unknown) => error);
+    expect(previewErrorFromUnknown(conflict)?.category).toBe("configuration-conflict");
+  });
+
+  test("invalid input is rejected with a stable category", async () => {
+    const error = await invoke("register_preview_service", {
+      service: { environmentId: "a", label: "x", targetKind: "remote", applicationPort: 1 },
+    }).catch((failure: unknown) => failure);
+    expect(previewErrorFromUnknown(error)?.category).toBe("invalid-request");
+  });
+
+  test("settings commands toggle the transport kill switch", async () => {
+    const updated = (await invoke("update_preview_settings", {
+      settings: { transport: false },
+    })) as {
+      effective: { transport: boolean };
+    };
+    expect(updated.effective.transport).toBe(false);
+    expect((await harness.storage.previewServices.loadPreviewSettings()).transport).toBe(false);
+  });
+
+  test("client metric reports join the preview diagnostics; malformed ones change nothing", async () => {
+    type Diagnostics = {
+      metrics: {
+        counters: Record<string, number>;
+        histograms: Record<string, { count: number; p50: number; max: number }>;
+      };
+    };
+    const report = {
+      counters: [
+        { name: "desktop.reconnect", category: "access-expired", count: 2 },
+        { name: "desktop.reconnect_failed", category: "capacity-exceeded", count: 1 },
+      ],
+      histograms: { "desktop.connect_ms": [10, 30], "desktop.first_byte_ms": [25] },
+    };
+    expect(await invoke("record_preview_client_metrics", { report })).toEqual({ recorded: true });
+    await invoke("record_preview_client_metrics", {
+      report: {
+        counters: [{ name: "desktop.reconnect", category: "access-expired", count: 1 }],
+        histograms: {},
+      },
+    });
+    const { metrics } = (await invoke("get_preview_diagnostics")) as Diagnostics;
+    expect(metrics.counters["desktop.reconnect{access-expired}"]).toBe(3);
+    expect(metrics.counters["desktop.reconnect_failed{capacity-exceeded}"]).toBe(1);
+    expect(metrics.histograms["desktop.connect_ms"]).toMatchObject({ count: 2, max: 30 });
+    expect(metrics.histograms["desktop.first_byte_ms"]).toMatchObject({ count: 1, p50: 25 });
+
+    for (const malformed of [
+      undefined,
+      {
+        counters: [{ name: "desktop.reconnect", category: "http://svc/?token=x", count: 1 }],
+        histograms: {},
+      },
+      { counters: [], histograms: { "desktop.connect_ms": [1], "/app?session=secret": [1] } },
+    ]) {
+      const error = await invoke("record_preview_client_metrics", { report: malformed }).catch(
+        (failure: unknown) => failure,
+      );
+      expect(previewErrorFromUnknown(error)?.category).toBe("invalid-request");
+    }
+    const after = (await invoke("get_preview_diagnostics")) as Diagnostics;
+    expect(after.metrics).toEqual(metrics);
+    expect(JSON.stringify(after)).not.toContain("secret");
+    expect(JSON.stringify(after)).not.toContain("token");
+  });
+
+  test("backends without the runtime report unsupported", async () => {
+    context = { storage: harness.storage } as unknown as CommandContext;
+    const error = await invoke("get_preview_capabilities").catch((failure: unknown) => failure);
+    expect(previewErrorFromUnknown(error)?.category).toBe("unsupported");
+  });
+
+  test("the iOS handoff URL carries only a one-use session code, never the grant", async () => {
+    harness.runtime.publication = {
+      bootstrapAction: () => "https://bootstrap.preview.test/bootstrap",
+      originFor: () => "https://s-0123.preview.test",
+    };
+    // Install the container before the first command initializes the runtime:
+    // its background reconcile may inspect Docker at once, and a "missing"
+    // inspection is cached.
+    harness.docker.containers.set("container-a", {
+      id: "container-a",
+      environmentId: "a",
+      owner: harness.owner,
+      ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
+    });
+    await invoke("update_preview_settings", { settings: { transport: true } });
+    await harness.runtime.registry.settle();
+    const serviceId = harness.runtime.registry.snapshot({ environmentId: "a" }).services[0]!
+      .definition.serviceId;
+    const handoff = (await invoke("create_preview_handoff_url", { serviceId, path: "/x" })) as {
+      url: string;
+      attachmentId: string;
+    };
+    expect(handoff.attachmentId).toBeTruthy();
+    const url = new URL(handoff.url);
+    expect(url.origin).toBe("https://s-0123.preview.test");
+    expect(url.pathname).toBe("/__orkestrator_preview/session");
+    const code = url.searchParams.get("code")!;
+    // The code yields exactly one host-bound session for this service.
+    expect(harness.runtime.access.consumeSessionCode(code, serviceId).path).toBe("/x");
+    expect(() => harness.runtime.access.consumeSessionCode(code, serviceId)).toThrow("forbidden");
+  });
+  test("a handoff failure after minting releases the attachment", async () => {
+    harness.runtime.publication = {
+      bootstrapAction: () => "https://bootstrap.preview.test/bootstrap",
+      originFor: () => "https://s-0123.preview.test",
+    };
+    harness.docker.containers.set("container-a", {
+      id: "container-a",
+      environmentId: "a",
+      owner: harness.owner,
+      ports: { "3000/tcp": [{ HostIp: "127.0.0.1", HostPort: "49152" }] },
+    });
+    await invoke("update_preview_settings", { settings: { transport: true } });
+    await harness.runtime.registry.settle();
+    const serviceId = harness.runtime.registry.snapshot({ environmentId: "a" }).services[0]!
+      .definition.serviceId;
+    const consume = spyOn(harness.runtime.access, "consumeBootstrapGrant").mockImplementation(
+      () => {
+        expect(harness.runtime.access.stats().attachments).toBe(1);
+        throw new Error("forced grant failure");
+      },
+    );
+    try {
+      await expect(invoke("create_preview_handoff_url", { serviceId })).rejects.toThrow(
+        "forced grant failure",
+      );
+      expect(harness.runtime.access.stats().attachments).toBe(0);
+    } finally {
+      consume.mockRestore();
+    }
+  });
+});

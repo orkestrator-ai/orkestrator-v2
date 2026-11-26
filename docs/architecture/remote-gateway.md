@@ -860,7 +860,7 @@ used: it would browse the client's disk, which is the wrong machine when the
 client is connected to a remote backend.
 
 The picker is rendered by the client but lists directories with the
-`list_host_directory` backend command (`commands-host-files.ts`), so it browses
+`list_host_directory` backend command (`commands/host-files.ts`), so it browses
 the machine the connected backend runs on, whether that is local, a remote
 desktop connection, or a browser over the gateway. Listings are capped at
 `MAX_HOST_DIRECTORY_ENTRIES`; hidden entries are omitted unless requested; a

@@ -6,7 +6,7 @@ import {
   REGISTRY_WRITER_LEASE_FILE,
 } from "../../../../backend/src/core/registry-writer-lease";
 import { StorageService } from "../../../../backend/src/core/storage/service";
-import { schedulerStatus } from "../../../../backend/src/core/commands-registry-scheduled-jobs";
+import { schedulerStatus } from "../../../../backend/src/core/commands/registry-scheduled-jobs";
 import { afterAll, afterEach, describe, expect, mock, test, spyOn, setSystemTime } from "bun:test";
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";

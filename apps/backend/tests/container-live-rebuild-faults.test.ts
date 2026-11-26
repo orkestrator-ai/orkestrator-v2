@@ -153,7 +153,7 @@ interface LiveEnvironment {
  * and writer lease exactly as a backend holds them.
  */
 async function createLegacyEnvironment(label: string, bigFileMiB = 0): Promise<LiveEnvironment> {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-rebuild-faults-"));
   dataDirs.push(dataDir);

@@ -18,7 +18,7 @@ import {
   CONTAINER_CLAUDE_CREDENTIAL_FILE,
 } from "../agent-credential-files.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import type { Environment } from "../models.js";
 import { createEnvironment, StorageService } from "../storage/service.js";
 

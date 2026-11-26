@@ -17,7 +17,7 @@
 // (`transcript-progress.ts`), and the saved copies of the local images
 // transcript messages showed (`transcript-media-pins.ts`). The
 // session stores (`storage/native*.ts`), the native commands
-// (`commands-registry-native*.ts`) and the session invalidation metrics
+// (`commands/registry-native*.ts`) and the session invalidation metrics
 // (`native-session-invalidation-metrics.ts`, which the storage layer and the
 // recurring diagnostics also read) stay with their own groups.
 //

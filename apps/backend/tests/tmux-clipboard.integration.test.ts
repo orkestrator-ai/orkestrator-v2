@@ -6,7 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import { InteractiveTmuxTerminalManager } from "../src/core/tmux/interactive";
 import { TmuxBackend } from "../src/core/tmux/backend";
 import type { TmuxSession } from "../src/core/tmux/session-manager";
-import type { CommandContext } from "../src/core/commands-context";
+import type { CommandContext } from "../src/core/commands/context";
 import { eventSink } from "../src/core/backend-emit";
 import {
   bindOsc52ClipboardGestures,

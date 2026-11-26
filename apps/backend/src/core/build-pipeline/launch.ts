@@ -31,7 +31,7 @@ import {
   type StartBuildPipelineInput,
 } from "@orkestrator/protocol/build-pipeline";
 import type { DeliveryPolicy } from "@orkestrator/protocol/ticket-sections";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { KanbanTask } from "../storage/index.js";
 import { buildPipelineInputWithDefaults, savedLaunchSettings } from "../coordinator/index.js";
 

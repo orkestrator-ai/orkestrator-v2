@@ -9,7 +9,7 @@ import { resolveClaudeDiscoveryConfig } from "./claude-query-config.js";
 /**
  * Where command discovery resolves. A container bridge is started with
  * `cd /workspace` and no `CWD` (`startContainerClaudeServer` in
- * apps/backend/src/core/commands-containers.ts), so its project commands,
+ * apps/backend/src/core/commands/containers.ts), so its project commands,
  * skills and plugins must come from the process's own working directory and
  * its own home, never from a path the backend computed on the host. A local
  * bridge runs from its own directory and is pointed at the worktree by `CWD`.

@@ -20,8 +20,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/transcripts";
 import { ArtifactFailure, artifactError } from "@orkestrator/protocol/transcript-artifacts";
 
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import type { CommandRegistrar } from "../commands-registry-types.js";
+import type { CommandContext, CommandHandler, CommandRegistrar } from "../commands/index.js";
 import { artifactCommandError } from "./commands.js";
 
 /** Looks up another registered command at call time (registration order does not matter). */

@@ -3,8 +3,8 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 
-import type { LocalGitFetches } from "../commands-files.js";
-import { readLocalFileAtBranch } from "../commands-files.js";
+import type { LocalGitFetches } from "../commands/files.js";
+import { readLocalFileAtBranch } from "../commands/files.js";
 import {
   GIT_BATCH_HEADER_MAX_BYTES,
   containerGitBlobReadCommand,

@@ -865,7 +865,7 @@ capability row says so.
 | Agent Tools mail | `apps/backend/src/core/agent-tools-messaging.ts` |
 | Control MCP mail | `apps/backend/src/core/control-mcp/server.ts` |
 | Delegation = MCP ∧ inject | `apps/backend/src/core/coordinator/providers.ts` |
-| UI commands | `apps/backend/src/core/commands-registry-mail.ts` |
+| UI commands | `apps/backend/src/core/commands/registry-mail.ts` |
 | Conversations (pairs) | `apps/backend/src/core/agent-mail-conversations.ts` |
 | Settings / banner | `apps/web/src/components/settings/MessagingSettings.tsx`, `apps/web/src/components/agent-mail/` |
 | Transcript tiles | `apps/web/src/lib/chat/client-only-messages.ts` (carrier → rows), `apps/web/src/lib/chat/agent-mail-tool-call.ts` (mail tool calls), `apps/web/src/components/chat/MailTile.tsx`, `MailToolPart.tsx` |

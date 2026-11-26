@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { captureLogs, type LogCapture } from "@orkestrator/protocol/testing/log-capture";
 import { commandTimings, CommandTimings } from "./command-timing.js";
-import type { CommandContext } from "./commands-context.js";
-import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext } from "./commands/context.js";
+import { createCommandRegistry } from "./commands/registry.js";
 
 let capture: LogCapture | null = null;
 afterEach(() => {

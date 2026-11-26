@@ -14,7 +14,7 @@ import {
 import type { ProviderChangeCapabilities } from "@orkestrator/protocol/change-evidence";
 import { ChangeEvidenceRecorder } from "@orkestrator/protocol/node/change-tracking/evidence-builders";
 import { ChangeEvidenceSpool } from "@orkestrator/protocol/node/change-tracking/evidence-spool";
-import { getLocalGitStatusDetailed, type LocalGitFetches } from "../commands-files.js";
+import { getLocalGitStatusDetailed, type LocalGitFetches } from "../commands/files.js";
 import type { DiffStatsTarget } from "../diff-stats-service.js";
 import { openChangeLedgerDatabase } from "./ledger-schema.js";
 import { operationIdFor, toolResourceKeys, turnResourceKeys } from "./identities.js";

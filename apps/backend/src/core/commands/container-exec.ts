@@ -1,0 +1,118 @@
+import { runCommand } from "../shell.js";
+import { networkOwnerContainer } from "../containers/index.js";
+import type { EnvironmentStatus } from "../models.js";
+
+/**
+ * The one primitive every container-facing command module needs.
+ *
+ * It lives in its own leaf rather than in `environment.ts` because six of
+ * that module's own consumers import nothing from it but this function. Hosting
+ * it there made each of them a back-edge into `environment.ts` and turned
+ * the command modules' graph cyclic; a cycle in this group already had to be worked
+ * around once (the lazy scanner imports `DiffStatsTracking` replaced). This
+ * module must therefore not import any other module of `commands/`.
+ */
+export async function dockerExec(
+  containerId: string,
+  command: string,
+  timeoutMs = 120_000,
+  redactValues?: ReadonlyArray<string | null | undefined>,
+  signal?: AbortSignal,
+): Promise<string> {
+  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], {
+    timeoutMs,
+    redactValues,
+    signal,
+  });
+  return stdout;
+}
+
+export function parseDockerStatus(status: string): EnvironmentStatus {
+  switch (status.trim().toLowerCase()) {
+    case "running":
+      return "running";
+    case "created":
+    case "restarting":
+      return "creating";
+    case "exited":
+    case "dead":
+    case "paused":
+      return "stopped";
+    default:
+      return "error";
+  }
+}
+
+export async function getDockerStatus(containerId: string): Promise<EnvironmentStatus> {
+  const { stdout } = await runCommand(
+    "docker",
+    ["inspect", "-f", "{{.State.Status}}", containerId],
+    { timeoutMs: 10_000 },
+  );
+  return parseDockerStatus(stdout);
+}
+
+export async function isContainerRunning(containerId: string): Promise<boolean> {
+  try {
+    return (await getDockerStatus(containerId)) === "running";
+  } catch {
+    return false;
+  }
+}
+
+export async function getHostPort(
+  containerId: string,
+  containerPort: number,
+  protocol = "tcp",
+  signal?: AbortSignal,
+  throwOnError = false,
+): Promise<number | null> {
+  try {
+    // A runtime behind an egress gateway publishes through the gateway.
+    const owner = await networkOwnerContainer(containerId, signal);
+    if (throwOnError) {
+      // `docker port` exits nonzero for an unpublished port as well as daemon
+      // failures. Inspect distinguishes successful absence from a failed read.
+      const { stdout } = await runCommand(
+        "docker",
+        ["inspect", "--format", "{{json .NetworkSettings.Ports}}", owner],
+        { timeoutMs: 10_000, signal },
+      );
+      const bindings = JSON.parse(stdout) as Record<
+        string,
+        Array<{ HostPort: string }> | null
+      > | null;
+      const port = Number(bindings?.[`${containerPort}/${protocol}`]?.[0]?.HostPort);
+      return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+    }
+    const { stdout } = await runCommand("docker", ["port", owner, `${containerPort}/${protocol}`], {
+      timeoutMs: 10_000,
+      signal,
+    });
+    const line = stdout.split("\n").find(Boolean);
+    if (!line) return null;
+    const rawPort = line.split(":").at(-1);
+    const port = rawPort ? Number.parseInt(rawPort, 10) : Number.NaN;
+    return Number.isFinite(port) ? port : null;
+  } catch (error) {
+    if (throwOnError) throw error;
+    return null;
+  }
+}
+
+export const CONTAINER_AGENT_TOOLS_HOST = "host.docker.internal";
+
+export const DOCKER_DESKTOP_GATEWAY_HOST = "gateway.docker.internal";
+
+export function shouldAddDockerHostGatewayAlias(
+  platform: NodeJS.Platform = process.platform,
+  daemon: "local-engine" | "desktop" | "remote" | "unknown" | "unavailable" = "local-engine",
+): boolean {
+  // Docker Desktop publishes host.docker.internal through its own DNS. An
+  // explicit host-gateway entry shadows that working address with the Linux VM
+  // bridge gateway on macOS/Windows — and on Docker Desktop for Linux, whose
+  // daemon also runs in a VM — which cannot reach host-only listeners. Only a
+  // Linux Engine needs the alias.
+  // An undetermined daemon keeps the platform default rather than guessing.
+  return platform === "linux" && daemon !== "desktop" && daemon !== "remote";
+}

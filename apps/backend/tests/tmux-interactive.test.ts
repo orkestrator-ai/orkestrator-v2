@@ -1,7 +1,7 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { describe, expect, test } from "bun:test";
 import { BackendRuntime } from "../src/core/backend-runtime";
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 import {
   buildTmuxPaneUpdate,
   INTERACTIVE_SNAPSHOT_MAX_MS,

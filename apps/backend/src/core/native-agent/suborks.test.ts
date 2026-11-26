@@ -5,8 +5,8 @@
  */
 import { AgentBranchDispatchSetupError } from "../agent-branch-types.js";
 import { AgentMailService } from "../agent-mail-service.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import { nativeAgentCapabilities } from "@orkestrator/protocol/native-agent";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";

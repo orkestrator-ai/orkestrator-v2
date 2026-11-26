@@ -15,7 +15,7 @@ Current paths for the relocated files:
   Evidence: `/tmp/orkestrator-test-run.iHe5wy/summary.json` and its compressed logs.
 - **Known attachment timeout recurrence:** `initial prompt attachment command >
   accepts twenty attachments and rejects the twenty-first`, in
-  `apps/backend/src/core/commands-state-sync.test.ts`, timed out at 5003.88ms.
+  `apps/backend/src/core/commands/state-sync.test.ts`, timed out at 5003.88ms.
   This is the same open case in the coordinator validation timeout cluster below.
 - **Known packaged-reviewer recurrence:** `restarting a packaged reviewer
   re-verifies and reuses the read-only package prompt`, in
@@ -25,7 +25,7 @@ Current paths for the relocated files:
   advance beyond the phase the assertion observes; no product failure is
   established by that transient-state expectation.
 - **Owner rerun:**
-  `mise exec -- bun run test:logged -- --name validation-aggregate-owners -- bun test --cwd apps/backend ./src/core/commands-state-sync.test.ts ./src/core/multi-review-service.test.ts --parallel=2 --only-failures`
+  `mise exec -- bun run test:logged -- --name validation-aggregate-owners -- bun test --cwd apps/backend ./src/core/commands/state-sync.test.ts ./src/core/multi-review-service.test.ts --parallel=2 --only-failures`
   passed (17.5s). The packaged-reviewer case also passed the subsequent full
   aggregate run.
 
@@ -67,7 +67,7 @@ Current paths for the relocated files:
   guard finding two old DOM absence assertions; those assertions were corrected
   in this change and the diagnostic owner passed (21.1s). It is not a flake.
 - **Owner reruns:** all passed; no timeout or assertion was loosened:
-  - `mise exec -- bun run test:logged -- --name validation-final-backend-owners -- bun test --cwd apps/backend ./src/core/commands-state-sync.test.ts ./src/core/coordinator-service.test.ts ./src/core/multi-review-service.test.ts ./src/core/review-validation-service.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=1 --only-failures` (28.9s).
+  - `mise exec -- bun run test:logged -- --name validation-final-backend-owners -- bun test --cwd apps/backend ./src/core/commands/state-sync.test.ts ./src/core/coordinator-service.test.ts ./src/core/multi-review-service.test.ts ./src/core/review-validation-service.test.ts ./src/core/build-pipeline-review-fanout.test.ts --parallel=1 --only-failures` (28.9s).
   - `mise exec -- bun run test:logged -- --name validation-root-timeout-owner -- bun test ./apps/backend/tests/commands-integration.test.ts --parallel=1 --only-failures` (19.6s).
   - `mise exec -- bun run test:logged -- --name validation-acp-timeout-owner -- bun test ./bridges/acp-bridge/src/acp-http.test.ts --parallel=1 --only-failures` (2.6s).
   The root server-shutdown case remains open alongside the existing timeout

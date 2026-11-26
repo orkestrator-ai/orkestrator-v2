@@ -33,7 +33,13 @@ import {
   type PlanUsageResets,
   type PlanUsageSnapshot,
 } from "@orkestrator/protocol/plan-usage";
-import type { CommandContext } from "../commands-context.js";
+import {
+  type CommandContext,
+  resolveCursorApiKey,
+  resolveOpenCodeZenApiKey,
+} from "../commands/index.js";
+import { getClaudeOAuthAccessToken } from "../claude-host-credentials.js";
+import { resolveContainerClaudeCredentials } from "../commands/files.js";
 import {
   claudePlanResets,
   codexInlineResetCredits,
@@ -41,7 +47,6 @@ import {
   codexResetCount,
   codexResetItems,
 } from "./resets.js";
-import { getClaudeOAuthAccessToken, resolveContainerClaudeCredentials } from "../commands-files.js";
 import {
   CACHE_TTL_MS,
   createPlanUsageCache,
@@ -51,7 +56,6 @@ import {
 } from "./cache.js";
 import { asRecord } from "../agent-provider-runtime.js";
 import { agentTestUsageOrigin } from "../agent-test-fixtures.js";
-import { resolveCursorApiKey, resolveOpenCodeZenApiKey } from "../commands-validation.js";
 import { cursorSdkCredentialPath } from "../cursor-sdk-bridge.js";
 import {
   readAddedClaudeCredentials,

@@ -7,8 +7,8 @@ import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
 
 import { parseGitHubDeviceLoginOutput } from "../agent-accounts/login.js";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { gitHubCli, GitHubCliSelection } from "./github-cli-binary.js";
 import {
   cancelGitHubCliLogin,

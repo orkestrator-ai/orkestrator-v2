@@ -4,7 +4,7 @@
 //
 // `removal-reads.ts` is a named exception in `.oxlintrc.json`, not part of this
 // surface: it imports `change-tracking/index.js`, and change tracking reaches
-// `commands-files.ts` and `containers/git-fetch.ts`, which import this file, so
+// `commands/files.ts` and `containers/git-fetch.ts`, which import this file, so
 // re-exporting `WorktreeRemovalReads` here would close a runtime import cycle.
 // `diff-stats-service.ts` imports it directly.
 export {

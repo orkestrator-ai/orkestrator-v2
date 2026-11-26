@@ -23,8 +23,8 @@ beforeEach(() => {
 });
 afterEach(() => modeSpy.mockRestore());
 
-// Claude's stop/replacement lives in commands-containers; Codex's lives in
-// commands-registry-servers. Exercise both with the real HTTP health predicate.
+// Claude's stop/replacement lives in core/commands/containers.ts; Codex's lives in
+// core/commands/registry-servers.ts. Exercise both with the real HTTP health predicate.
 for (const provider of ["claude", "codex"] as const) {
   test(`${provider} replaces a legacy bridge when the stop leaves an HTML responder`, async () => {
     const stateDir = await createTempDir(`ork-${provider}-html-replacement-`);

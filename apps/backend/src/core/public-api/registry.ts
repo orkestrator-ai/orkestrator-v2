@@ -1,6 +1,6 @@
 import { PERMISSION_RULE_HANDLERS } from "./actions-permission-rules.js";
 import type { PublicActionName, PublicCapabilities } from "@orkestrator/protocol/public-api";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandRegistrar, RegistryDependencies } from "../commands/index.js";
 import { ATTENTION_HANDLERS } from "./actions-attention.js";
 import { BUILD_HANDLERS } from "./actions-builds.js";
 import { CHANGE_HANDLERS } from "./actions-changes.js";

@@ -16,7 +16,7 @@
   -> 54 passed, 0 failed. The target passed.
 - **Attribution:** observed while changing setup-tab retirement in
   `apps/web/src/components/terminal/TerminalContainer.view.tsx` and the setup
-  session snapshot in `apps/backend/src/core/commands-registry-environments.ts`.
+  session snapshot in `apps/backend/src/core/commands/registry-environments.ts`.
   Neither file is imported by `opencode-sessions.ts` or its test, and the same
   file passed in the immediately preceding full-suite run of the same commit
   (`bun run test`, workspace group status 0). The two share only host capacity.

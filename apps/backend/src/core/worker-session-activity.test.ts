@@ -6,9 +6,9 @@ import type { NativeAgentService } from "./native-agent/service.js";
 import { CoordinatorService, type CoordinatorDelegationOptions } from "./coordinator/service.js";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import type { StorageService } from "./storage/service.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { workerSessionActivity } from "./worker-session-activity.js";
-import { createCommandRegistry } from "./commands-registry.js";
+import { createCommandRegistry } from "./commands/registry.js";
 
 const worlds: MailWorld[] = [];
 afterEach(async () => {

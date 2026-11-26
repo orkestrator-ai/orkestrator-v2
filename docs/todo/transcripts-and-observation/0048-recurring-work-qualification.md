@@ -214,7 +214,7 @@ W5).
 
 **Context.** Narrowed on 2026-10-25 (decision 6): every new container records its creation commit and compares against it, so a "branch-baseline container" cannot come from normal creation.
 
-**Investigation.** Still accurate. `establishCreatedFromCommit` is at `apps/backend/src/core/commands-local-server-lifecycle.ts:87`, `resolveComparisonRef` at `packages/protocol/src/diff-stats.ts:194`, and the cooldowns at `apps/backend/src/core/containers/git-fetch.ts:97` (5 min) and `:99` (30 min). The routine path therefore serves a shrinking population that new users never reach.
+**Investigation.** Still accurate. `establishCreatedFromCommit` is at `apps/backend/src/core/commands/local-server-lifecycle.ts:87`, `resolveComparisonRef` at `packages/protocol/src/diff-stats.ts:194`, and the cooldowns at `apps/backend/src/core/containers/git-fetch.ts:97` (5 min) and `:99` (30 min). The routine path therefore serves a shrinking population that new users never reach.
 
 **Decisions.**
 
@@ -232,7 +232,7 @@ W5).
 **Outcome (2026-11-01).** Rechecked on `93b99bfba`: the references above
 hold (`establishCreatedFromCommit` is now at `:88`). A start whose capture fails cannot leave a running
 environment without `createdFromCommit`: `prepareEnvironmentForSetup`
-(`commands-environment.ts`) throws and the start fails. So the routine
+(`commands/environment.ts`) throws and the start fails. So the routine
 policy's only population is a containerized record whose setup completed
 before the field existed (`ensureCreatedFromCommitBeforeSetup` skips a record
 with `setupScriptsComplete`). All three cases ran live on a disposable Linux
@@ -933,7 +933,7 @@ and the decisions below were recorded.
   `maintenance`, `progress` and `progress`). In `BackendActivityJobs` the
   class only orders overdue runs after a host resume: every job has its own
   slot.
-- Read through `get_recurring_work_diagnostics` (`commands-registry-system.ts`)
+- Read through `get_recurring_work_diagnostics` (`commands/registry-system.ts`)
   and the `recurringWork` block of the gateway's `/__orkestrator/metrics`.
 - Harness: `apps/backend/scripts/recurring-baseline.ts` with its `-harness`,
   `-native` and `-workflows` modules; flags `--out`, `--compare`,
@@ -1013,7 +1013,7 @@ and the decisions below were recorded.
   touch the keyed path.
 - Container fetch reach (found 2026-10-25): every new container records its
   creation commit before setup (`establishCreatedFromCommit`,
-  `commands-local-server-lifecycle.ts`), and `resolveComparisonRef`
+  `commands/local-server-lifecycle.ts`), and `resolveComparisonRef`
   (`packages/protocol/src/diff-stats.ts`) prefers that commit. A container's
   diff baseline is therefore a full commit SHA, which the status script
   classifies as `commit` and the policy never fetches. The routine fetch
@@ -2522,7 +2522,7 @@ Recorded 2026-11-01 by the worker that closed task 4's remaining cases.
     key is a hash), so one read only through the progressive path is left
     to that path's own bounds. Tests: the release case in
     `native-agent/projection-cache-gauges.test.ts` and the ordering case in
-    `commands-environment-cleanup.test.ts`; live, the fixed run kept them at
+    `commands/environment-cleanup.test.ts`; live, the fixed run kept them at
     the two long-lived sessions (see Long soak). Three other projection
     maps have no eviction at all but stayed at zero without a browser
     reader; they are [7100](7100-long-soak-follow-ups.md) task 3.
@@ -2579,7 +2579,7 @@ with other tasks' decisions.
   bridge bind its CLI to its own lifetime; or both. Chosen: the group reap,
   for every local bridge kind (`reapProcessGroup` in `process-tree.ts`,
   `reapAfterUnrequestedExit` in `local-server-runtime.ts`, called from the
-  bridge exit handler in `commands-servers.ts`). Why: the backend spawns each
+  bridge exit handler in `commands/servers.ts`). Why: the backend spawns each
   bridge `detached`, so the group is its own to signal (AGENTS.md), and one
   place covers all five bridges and OpenCode. SIGTERM, 2 s, then SIGKILL; an
   empty group answers ESRCH, and Linux does not reuse a pid that still names

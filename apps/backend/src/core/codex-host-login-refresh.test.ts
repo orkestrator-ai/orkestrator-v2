@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import type { spawn } from "node:child_process";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { createCodexLoginRefresher, refreshHostCodexLogin } from "./codex-host-login-refresh.js";
 
 let root: string;

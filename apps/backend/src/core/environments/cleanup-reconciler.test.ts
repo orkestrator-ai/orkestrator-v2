@@ -8,8 +8,8 @@ import {
   environmentBranchBase,
   environmentBranchNamespace,
   parseEnvironmentBranchNamespace,
-} from "../commands-agent-support.js";
-import type { CommandContext } from "../commands-context.js";
+} from "../commands/agent-support.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   closeEnvironmentCleanupStorage,
   environmentCleanupLedger,

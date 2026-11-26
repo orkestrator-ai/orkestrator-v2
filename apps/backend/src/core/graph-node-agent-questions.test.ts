@@ -186,7 +186,7 @@ describe("ask_human", () => {
 
   test("the graph_run_answer command validates its arguments", async () => {
     const { world, waiting } = await waitingRun();
-    const { registerGraphRunCommands } = await import("./commands-registry-graph-runs.js");
+    const { registerGraphRunCommands } = await import("./commands/registry-graph-runs.js");
     const handlers = new Map<
       string,
       (args: Record<string, unknown>, context: unknown) => unknown

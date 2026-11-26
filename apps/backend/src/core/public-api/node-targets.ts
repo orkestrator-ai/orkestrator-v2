@@ -23,7 +23,7 @@ import type {
   PublicNodeTagged,
   PublicPage,
 } from "@orkestrator/protocol/public-api-resources";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { NodeUnavailableError, type NodeLink } from "../nodes/index.js";
 import { boundedMessage, PublicActionError } from "./errors.js";
 import { isPublicAuthority, type PublicAuthority } from "./operation-ledger.js";

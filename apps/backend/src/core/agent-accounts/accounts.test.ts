@@ -1,5 +1,5 @@
-import { registerProjectCommands } from "../commands-registry-projects.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registerProjectCommands } from "../commands/registry-projects.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { AgentAccountSharedUsage } from "./shared-usage.js";
 import { eventSink } from "../backend-emit.js";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
@@ -30,7 +30,7 @@ import {
 import { applyActiveAgentAccountEnvironment } from "./active.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { SpawnLike } from "./login.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import type { PlanUsageReader } from "../plan-usage/reader.js";
 import { contextUsageWithPlanUsage } from "../plan-usage/cache.js";
 import { StorageService } from "../storage/service.js";

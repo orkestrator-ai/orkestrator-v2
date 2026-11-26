@@ -145,7 +145,7 @@ import { buildPipelineStage, buildPipelineStageTurn } from "./stages.js";
 import { readTranscriptProgressSample } from "../native-agent/index.js";
 import { multiReviewDuplicateReviewerCount } from "@orkestrator/protocol/multi-review-launch";
 import { reviewLensField } from "@orkestrator/protocol/review-lens";
-import type { ReviewPackageVerification } from "../commands-review.js";
+import type { ReviewPackageVerification } from "../commands/index.js";
 import { retainRoundReviewReport } from "./rewind.js";
 import {
   clearReviewerStopped,

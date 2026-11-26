@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 import { CoordinatorService } from "./service.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { runCommand } from "../shell.js";
 import type {
   MultiReviewWorkflow,

@@ -21,7 +21,7 @@ import type { Environment } from "./command-fixtures";
 import {
   environmentForkHooks,
   resolveEnvironmentForkBase,
-} from "../src/core/commands-environment-fork";
+} from "../src/core/commands/environment-fork";
 
 // This slow-tier file creates real repositories/worktrees and waits for
 // subprocess cleanup. The shared preload's hang watchdog

@@ -16,7 +16,7 @@ import { REVIEW_VALIDATION_WORKER } from "./validation-worker.js";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { controlReviewValidation, validationPreparation } from "./validation-service.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   gitOnPath,
   fixture,

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { gitHubCli, GitHubCliSelection } from "./git/index.js";
 import { HostMaintenanceError, HostMaintenanceService } from "./host-maintenance.js";
 import {
@@ -18,7 +18,7 @@ import {
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   environmentLifecycleErrorMessage,
-} from "./commands-error-text.js";
+} from "./commands/error-text.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 
 let dataDir: string;

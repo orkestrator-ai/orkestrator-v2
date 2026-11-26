@@ -2,7 +2,7 @@ import {
   declaredAptPackagesFromText,
   type DeclaredAptPackages,
 } from "@orkestrator/protocol/apt-packages";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import { readDefaultBranchConfigText, type GitBlobReader } from "./setup-approval.js";
 
 /**

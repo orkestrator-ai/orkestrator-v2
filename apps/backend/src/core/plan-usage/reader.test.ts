@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { claudePlanResets, codexResetItems } from "./resets.js";
 import { ERROR_CACHE_TTL_MS, contextUsageWithPlanUsage } from "./cache.js";
 import { AgentAccountsRuntime } from "../agent-accounts/runtime.js";

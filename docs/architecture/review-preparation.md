@@ -521,7 +521,7 @@ already has is refused there rather than journaled as on a pipeline.
 
 The renderer's Multi Review button, the CLI's `review launch` and a command
 node's coordinator all run the same backend path (`launchMultiReviewButton` in
-`commands-registry-controller-workflows.ts`, registered as `launch_multi_review`
+`commands/registry-controller-workflows.ts`, registered as `launch_multi_review`
 and `launch_controller_multi_review`). It fills omitted rows, the target branch
 and the review instruction from saved settings, reuses an active review, and
 writes the root tab into the environment's pane layout, so a client that goes

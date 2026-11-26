@@ -5,9 +5,9 @@ import {
   type DiffBaseCommit,
   type EnvironmentDiffBaseOverride,
 } from "@orkestrator/protocol/diff-stats";
-import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
-import { dockerExec } from "./commands-container-exec.js";
-import { isImmutableCommitRef } from "./commands-files.js";
+import { quoteShell, validateGitRefName } from "./commands/agent-support.js";
+import { dockerExec } from "./commands/index.js";
+import { isImmutableCommitRef } from "./commands/files.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";
 

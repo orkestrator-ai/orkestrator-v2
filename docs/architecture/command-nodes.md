@@ -783,11 +783,11 @@ remain and use the same paths.
   associations and delegations are kept there with the resource's `nodeId`
   (`CoordinatorWorkflowAssociation.nodeId`); a reservation is written before
   the routed side effect and completed after it
-  (`commands-registry-coordinator-nodes.ts`).
+  (`commands/registry-coordinator-nodes.ts`).
 - **The node runs the work** through its ordinary commands and a few
   controller commands that reuse the button and local-coordinator logic
   with the node's own defaults and model catalogue
-  (`commands-registry-controller-workflows.ts`).
+  (`commands/registry-controller-workflows.ts`).
 - **Operator clients too.** An external Control MCP client and the
   `orkestrator` CLI reach the same leaves through public actions with a
   `nodeId` (`--node`), routed by the command node with the caller's

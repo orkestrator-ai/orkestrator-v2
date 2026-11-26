@@ -2,8 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { fakePid } from "@orkestrator/protocol/testing/fake-pids";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { createDockerContainer } from "../src/core/commands-containers";
-import { formatSetupTerminalIntro, spawnSetupTerminal } from "../src/core/commands-environment";
+import { createDockerContainer } from "../src/core/commands/containers";
+import { formatSetupTerminalIntro, spawnSetupTerminal } from "../src/core/commands/environment";
 import type { PtyExitEvent, PtyProcess } from "../src/core/pty";
 import {
   formatProjectSeedRefusals,

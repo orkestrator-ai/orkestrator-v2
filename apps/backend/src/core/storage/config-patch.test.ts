@@ -6,9 +6,9 @@ import { decodeCommandResult } from "@orkestrator/protocol/contract/command";
 import { getConfigCommand } from "@orkestrator/protocol/contract/domains/config";
 
 import { BackendRuntime } from "../backend-runtime.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import { parseConfigUnsetKeys } from "../commands-registry-projects.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import { parseConfigUnsetKeys } from "../commands/registry-projects.js";
+import type { CommandContext } from "../commands/context.js";
 import { defaultConfig } from "./shared-config.js";
 import { StorageService } from "./service.js";
 

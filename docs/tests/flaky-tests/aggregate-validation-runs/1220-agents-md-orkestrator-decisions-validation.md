@@ -39,7 +39,7 @@ directory, one at a time, in this worktree and in a fresh clone of
 | `apps/backend/tests/docker-image.test.ts` | Two `pinned image identity` cases | 2 failed | 2 failed, the same cases | 1170, 1190 |
 | `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write` | 1 failed | 1 failed | 0091 |
 | `apps/backend/src/core/environments/move.test.ts` | `move_environment`, `interrupted move recovery`, `move failure boundaries` (real-Git 5 s deadlines) | 17 failed | 12 failed | 1101, 0692, 0790 |
-| `apps/backend/src/core/commands-environment-worktree-location.test.ts` | `retargeting an accepted alias…`, `start uses and persists both explicit and configured roots…` | 2 failed | 2 failed, the same cases | 1101 |
+| `apps/backend/src/core/commands/environment-worktree-location.test.ts` | `retargeting an accepted alias…`, `start uses and persists both explicit and configured roots…` | 2 failed | 2 failed, the same cases | 1101 |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | `a worker that takes in newer target history is retargeted…` | 5 failed | 3 failed (overlapping candidate cases) | 0962, 1101 |
 | `apps/backend/src/core/change-tracking/acceptance-sharing.test.ts` | `V09: environments aliasing one checkout share one watcher and scan…` | Failed 3 of 3 full-file runs (8–16 s); its describe block alone passed (4 pass) | Failed 1 of 3 full-file runs (13.2 s) | 1170 |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | Two `pruneProfiles` cases | 2 failed | 2 failed, the same cases | 1100 |

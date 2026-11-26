@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { StateSignalCredential } from "../agent-tools.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   TMUX_HOOK_SIGNAL_RETRY_MS,
   TmuxHookSignalManager,

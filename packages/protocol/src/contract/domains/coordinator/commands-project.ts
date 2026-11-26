@@ -5,7 +5,7 @@
  * coordinator's Control MCP tools (worker surfaces, turns, goals, suborks,
  * graph runs, reviews, questions and mail), with their `*_controller_*`
  * counterparts on the node that owns a worker. Registered from
- * `commands-registry-coordinator.ts` and the registrars it calls.
+ * `apps/backend/src/core/commands/registry-coordinator.ts` and the registrars it calls.
  *
  * Argument schemas declare every key the handler reads and decode tolerantly
  * (§11.4). A key the handler requires with `asNonBlankString` is

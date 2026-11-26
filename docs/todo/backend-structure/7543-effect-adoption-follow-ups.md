@@ -78,7 +78,7 @@ whether abort resolves or rejects (`host-standalone-updater.ts`,
 `graph-agent-guards.ts` (`listRemote`) retries every error immediately,
 including authentication failures. The reconnect `delay` in
 `http-bridge/observation-stream.ts` ignores `close()`, and
-`commands-servers.ts` checks `isShuttingDown()` and then sleeps.
+`commands/servers.ts` checks `isShuttingDown()` and then sleeps.
 
 **Context.** The backend now runs Effect for startup, shutdown and the
 reachability check, so a runtime is already in the process.
@@ -227,7 +227,7 @@ For the invoker family that is left:
   `ls-remote`, the bridge observation stream's reconnect delay, the OpenCode
   locked-database retry wait and the provider tab session request. The two
   OpenCode sleeps (`opencode-agent-tools.ts`, `opencode-provider-helpers.ts`)
-  and the locked-database retry wait (in `commands-servers.ts`, with its
+  and the locked-database retry wait (in `commands/servers.ts`, with its
   delays in `opencode-host-start.ts`) were removed with OpenCode 1.x on
   2026-11-11 (`git show 5f4e27b1c:<path>`).
 - **Bridge waits (task 4).** `@orkestrator/protocol/node/bounded-wait`
@@ -243,7 +243,7 @@ For the invoker family that is left:
   (whose asset read honours the signal) and the media route's file open
   (`resolveMediaWithin`, which also closes a handle opened too late).
 - **Command invoker cancellation (task 6).** `CommandInvocation.signal`
-  (`commands-context.ts`) and `InvokeOptions` (`control-shared-actions.ts`)
+  (`commands/context.ts`) and `InvokeOptions` (`control-shared-actions.ts`)
   carry a caller's signal into a command; the Control MCP coordinator scope
   and operator node invokers pass it on. `routeToNode` hands it to the node
   link for routed reads only. `GatewayHandlers` aborts each invoke's signal

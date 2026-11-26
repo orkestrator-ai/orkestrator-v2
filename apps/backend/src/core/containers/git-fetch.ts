@@ -703,7 +703,7 @@ function classifyFetchError(error: unknown): WorktreeRemoteFetchFailure {
 }
 
 // ---------------------------------------------------------------------------
-// Framing shared with the scripts in `commands-files.ts`. Markers use the same
+// Framing shared with the scripts in `commands/files.ts`. Markers use the same
 // ASCII record/unit separators as the status script.
 
 const FRAME_START = String.fromCharCode(0x1e);

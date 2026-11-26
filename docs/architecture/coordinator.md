@@ -3787,7 +3787,7 @@ the work through a controller command (`launch_controller_terminal`,
 `open_controller_browser`, `edit_controller_worker_tab`, `create_controller_pr`,
 `resolve_controller_conflicts`, `get_controller_worker_changes`,
 `fork_controller_environment`, or the `reviewer` and `custom-address` surfaces of `controller_multi_review_surface`
-in `commands-registry-controller-workflows.ts`; `stop_controller_worker_turn`,
+in `commands/registry-controller-workflows.ts`; `stop_controller_worker_turn`,
 `list_controller_worker_commands` and `run_controller_worker_command` in
 `coordinator/worker-turn-actions.ts`). Those are node-link only,
 never reachable with a workspace grant. Job, tab and navigation IDs on that
@@ -3882,7 +3882,7 @@ With `nodeId` the node owning the worker reads it
 (`get_controller_worker_changes`) and applies its own bounds.
 
 **Forking a worker.** `fork_worker` runs what the sidebar's Fork runs
-(`forkEnvironmentRecord` in `commands-environment-fork.ts`): the worker's
+(`forkEnvironmentRecord` in `commands/environment-fork.ts`): the worker's
 committed `HEAD` becomes the fork's base on a new branch, with its agent
 settings, network mode, allowed domains and ports. Its uncommitted changes and
 its conversation are not copied, so the description tells the coordinator to
@@ -4340,7 +4340,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   causes (`session-manager-coordinator-skills.test.ts`), the hook refusing
   granted tools and skill scripts (`read-only-policy.test.ts`), all in
   claude-bridge; the launcher naming the account's skills directory
-  (`agent-accounts/active.test.ts`, `commands-servers-coordinator.test.ts`)
+  (`agent-accounts/active.test.ts`, `commands/servers-coordinator.test.ts`)
 
 - the same contracts against real providers: `mise run
   test:agent:coordinator` runs its scenarios per platform in a disposable
@@ -4396,7 +4396,7 @@ guarantee, not by one end-to-end scenario replayed per platform:
   goal stops, and the sweep's hold: `coordinator/goal-wake.test.ts`
 - an OpenCode coordinator keeps its scoped Control MCP credential on its server
   through every later reconcile, and does not start until it is connected:
-  `commands-servers-coordinator-opencode.test.ts`
+  `commands/servers-coordinator-opencode.test.ts`
 
 The runs that qualify each platform are recorded in
 [coordinator-live-conformance.md](../development/coordinator-live-conformance.md)

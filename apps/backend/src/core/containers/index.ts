@@ -22,8 +22,8 @@
 // `usage-sampler.ts`), and the Docker CLI's caches, errors, ownership labels
 // and cleanup (`availability-cache.ts`, `container-state-cache.ts`,
 // `cli-errors.ts`, `ownership.ts`, `network-changes.ts`, `cleanup-*.ts`).
-// The container command handlers (`commands-containers.ts`,
-// `commands-container-exec.ts`, `commands-registry-docker.ts`), the egress
+// The container command handlers (`commands/containers.ts`,
+// `commands/container-exec.ts`, `commands/registry-docker.ts`), the egress
 // gateway (`egress-gateway.ts`), the environment files and the storage layer
 // stay with their own groups.
 //
@@ -37,11 +37,11 @@
 //   and `cleanup-inventory.ts` import it, and `network.ts`, `resources.ts`
 //   and `cleanup-preview.ts` reach it through those;
 // - through the command layer: `bridge-credential.ts` imports
-//   `commands-container-exec.ts`, which `apt-packages.ts` reaches through
+//   `commands/container-exec.ts`, which `apt-packages.ts` reaches through
 //   `setup-approval.ts`; `claude-login-keeper.ts` and `github-credential.ts`
-//   import `commands-files.ts`; `lifecycle-events.ts` imports
-//   `commands-environment.ts`; `project-seed-files.ts` imports
-//   `commands-project-files.ts`;
+//   import `commands/files.ts`; `lifecycle-events.ts` imports
+//   `commands/environment.ts`; `project-seed-files.ts` imports
+//   `commands/project-files.ts`;
 // - through `claude-state-signal.ts`: `credential-mode.ts` and
 //   `worktree-signal-install.ts`;
 // - through `portable-input-status.ts`: `login-file-watcher.ts` and
@@ -51,9 +51,9 @@
 //
 // Keeping those importers deep instead does not shrink the set: each one
 // kept deep frees at most one module and makes every module it imports an
-// exception. The root files that re-export container
-// symbols for their own callers (`egress-gateway.ts`, `commands-servers.ts`
-// and `commands-helpers.ts`, which lists `scripts.ts`'s exports by name) do
+// exception. The files outside this folder that re-export container
+// symbols for their own callers (`egress-gateway.ts`, `commands/servers.ts`
+// and `commands/helpers.ts`, which lists `scripts.ts`'s exports by name) do
 // it through this file.
 //
 // The `tests/unit/**` pattern has two exceptions, `network.ts` (for

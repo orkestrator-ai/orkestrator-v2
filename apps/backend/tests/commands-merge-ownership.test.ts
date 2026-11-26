@@ -1,10 +1,10 @@
 import { expect, spyOn, test } from "bun:test";
 import * as shell from "../src/core/shell";
-import * as containerExec from "../src/core/commands-container-exec";
+import * as containerExec from "../src/core/commands/container-exec";
 import {
   mergePullRequestInContainer,
   mergePullRequestViaGitHubApi,
-} from "../src/core/commands-review";
+} from "../src/core/commands/review";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

@@ -44,7 +44,7 @@ import {
   pullRequestFollowSummary,
   thisNodePrHealth,
 } from "../coordinator/index.js";
-import { withScheduleActor } from "../commands-registry-scheduled-jobs.js";
+import { withScheduleActor } from "../commands/index.js";
 import {
   BUILD_CANCELLED_ERROR,
   MAX_BUILD_PIPELINE_ITERATIONS,

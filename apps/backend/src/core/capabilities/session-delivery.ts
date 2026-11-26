@@ -13,6 +13,13 @@
  * isolated by construction, and its skills are namespaced
  * (`orkestrator-session:<name>`), so a personal copy cannot shadow them.
  *
+ * Pi on a host takes skills the same way: the same directory, whose `skills/`
+ * the Pi bridge passes to that session's resource loader as its own
+ * `additionalSkillPaths` (per session in the pinned SDK). Pi skills are not
+ * namespaced, and Pi keeps the first skill of a name it loads, so a shared
+ * skill of the same name wins; runtime proof then reports the shared path,
+ * never the private one (`runtime-proof.ts`).
+ *
  * The directory is frozen at launch: the launch record names its digest and
  * every later turn passes the same bytes, so a running session never gains or
  * changes a component behind its back. Hooks, MCP servers, native plugins and
@@ -64,6 +71,18 @@ const PRIVATE_KINDS = new Set<CapabilityComponent["kind"]>([
   "subagent",
 ]);
 
+/**
+ * The kinds each provider's bridge loads from a session's private plugin:
+ * Claude every kind a plugin carries, Pi skills (its bridge passes the
+ * plugin's `skills/` as the session's skill paths).
+ */
+const PRIVATE_KINDS_BY_PROVIDER: Partial<
+  Record<CapabilityTarget["provider"], ReadonlySet<CapabilityComponent["kind"]>>
+> = {
+  claude: PRIVATE_KINDS,
+  pi: new Set<CapabilityComponent["kind"]>(["skill"]),
+};
+
 export interface SessionPrivateItem {
   packageId: string;
   packageDigest: string;
@@ -87,18 +106,19 @@ export interface SessionPrivatePluginRecord {
 
 /**
  * Whether `component` can reach `target` only through its own session.
- * Claude on a host (any account home: the plugin directory is passed inline,
- * not read from the home), for a kind a plugin carries, not carried by a
- * native plugin of its own package.
+ * Claude or Pi on a host (any account home: the directory is passed per
+ * session, not read from the home), for a kind that provider's bridge loads
+ * from the session plugin, not carried by a native plugin of its own package.
  */
 export function sessionPrivateDeliverable(
   state: Pick<CapabilityState, "components">,
   target: Pick<CapabilityTarget, "provider" | "environmentIncarnation">,
   component: CapabilityComponent,
 ): boolean {
-  if (target.provider !== "claude" || target.environmentIncarnation !== undefined) return false;
-  if (!PRIVATE_KINDS.has(component.kind)) return false;
-  if (component.providerHints.length > 0 && !component.providerHints.includes("claude"))
+  if (target.environmentIncarnation !== undefined) return false;
+  const kinds = PRIVATE_KINDS_BY_PROVIDER[target.provider];
+  if (!kinds?.has(component.kind)) return false;
+  if (component.providerHints.length > 0 && !component.providerHints.includes(target.provider))
     return false;
   return !component.dependencies.some((id) => state.components[id]?.kind === "native-plugin");
 }

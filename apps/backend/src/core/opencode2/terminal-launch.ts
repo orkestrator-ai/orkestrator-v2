@@ -23,7 +23,7 @@
  *   are unset, and a user `OPENCODE_CONFIG` reaches OpenCode only as its
  *   mirror.
  */
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import { OPENCODE2_DISABLE_FILEWATCHER, OPENCODE2_FLAGS, openCode2HostPaths } from "./server.js";
 
 /** Shell variables that must not reach a 2.x terminal TUI or its private server. */

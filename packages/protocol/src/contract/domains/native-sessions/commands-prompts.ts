@@ -2,7 +2,7 @@
  * `native-sessions` commands for what a person has committed to send or is
  * still writing: prompt queues, compose and file drafts, "Continue in…"
  * handoffs and the renderer's boot hydration batch. Registered by the
- * backend's `commands-registry-prompts.ts`. The argument rules are those of
+ * backend's `apps/backend/src/core/commands/registry-prompts.ts`. The argument rules are those of
  * `commands-agent.ts`.
  *
  * Browser-safe.

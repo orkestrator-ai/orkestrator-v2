@@ -8,8 +8,8 @@ import { dockerOwnerNamespace } from "./ownership.js";
 import { runCommand } from "../shell.js";
 import { removeRuntimeContainer } from "../egress-gateway.js";
 import { environmentCleanupLedger } from "../environments/index.js";
-import { containerIdMatches } from "../commands-review.js";
-import type { CommandContext } from "../commands-context.js";
+import { containerIdMatches } from "../commands/review.js";
+import type { CommandContext } from "../commands/index.js";
 import type { Environment } from "../models.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 

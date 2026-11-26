@@ -175,11 +175,11 @@ evidence. This file only points at it.
   managed binaries in an agent-test profile, and since 2026-10-25
   `resolveClaudeBinary`, `resolveCodexBinary`, `resolveOpenCodeBinary` and
   `resolvePiBinary` (`resolvePathFallbackAgentBinary` in
-  `apps/backend/src/core/commands-agent-support.ts`) refuse the bare-name
+  `apps/backend/src/core/commands/agent-support.ts`) refuse the bare-name
   `PATH` fallback there too, with "`<Agent>` is not installed in this
   agent-test profile's toolchain". Other runtime flavours keep the fallback.
   Cursor and Grok (`resolveManagedAcpBinary`) never fall back anywhere.
-  Covered by `apps/backend/src/core/commands-agent-support.test.ts`.
+  Covered by `apps/backend/src/core/commands/agent-support.test.ts`.
 - A `dev:test` profile's backend reports the workspace package version, not
   Electron's (`desktopApplicationVersion` in
   `apps/desktop/electron/app-version.ts`, from #1265), so stream reconnects no
@@ -193,8 +193,8 @@ evidence. This file only points at it.
    An agent-test profile now refuses the `PATH` fallback for Claude, Codex,
    OpenCode and Pi, so a launch requested directly through the backend cannot
    reach a host binary the profile reports as unavailable (decision 1 below).
-   Evidence: `resolvePathFallbackAgentBinary` in `commands-agent-support.ts`;
-   `commands-agent-support.test.ts` covers managed-first, the fallback outside
+   Evidence: `resolvePathFallbackAgentBinary` in `commands/agent-support.ts`;
+   `commands/agent-support.test.ts` covers managed-first, the fallback outside
    agent-test, the refusal (also through `resolveAgentBinary`), and that
    `checkHostTool` and spawning agree in one profile. `features/build.ts` now
    passes the runtime flavour to its Codex naming call. The two Claude

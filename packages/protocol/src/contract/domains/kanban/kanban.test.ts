@@ -223,7 +223,7 @@ describe("kanban definitions", () => {
   });
 
   // The registry words these as the handlers did ("Expected projectId to be a
-  // string"); commands-registry-kanban.test.ts pins that text.
+  // string"); apps/backend/src/core/commands/registry-kanban.test.ts pins that text.
   it("drop unknown keys and refuse a required key of the wrong type", () => {
     const decoded = decodeCommandArgs(addKanbanCommentCommand, {
       taskId: "t-1",

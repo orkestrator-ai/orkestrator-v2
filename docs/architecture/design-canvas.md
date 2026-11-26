@@ -561,7 +561,7 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   send, so a link starts with only its tab id, which names the backend's
   native-session mapping (`env-<environmentId>:<tabId>`) only while the tab
   is open: tab teardown retires that mapping. Teardown
-  (`commands-registry-teardown.ts`) therefore records on every link naming the
+  (`commands/registry-teardown.ts`) therefore records on every link naming the
   tab the identity a resume needs: Codex's thread id, read from the session
   before it is closed (`NativeAgentService.resumableSessionIdIfRunning`,
   observe only), and the provider session id for Claude, which resumes by it.
@@ -576,7 +576,7 @@ Code: `apps/backend/src/core/design/session-links.ts`,
   link is written after the provider-session teardown lock is released (a
   resume holds its canvas lane while waiting for that lock), and recording
   never fails the close. The fallback to the kept identity is covered by
-  deterministic tests only (`commands-registry-teardown.test.ts`, "a Codex
+  deterministic tests only (`commands/registry-teardown.test.ts`, "a Codex
   session the bridge lost…"): `e2e/agent-testing/design-resume-clients-live.spec.ts`
   restarts the Codex bridge before the close, but a restarted bridge restores
   its registrations, so the live read still answers. Reaching the branch live
@@ -649,9 +649,9 @@ credentials or prompts.
 Backend: the `core/design/` `service`, `operations`, `intents`, `history`, `lifecycle`,
 `sync`, `records`, `exports`, `export-writer`, `renderer`, `mcp`,
 `cross-process`, `host-file` and `session-links` tests,
-`commands-registry-teardown` (a closing tab records its session on design
+`commands/registry-teardown` (a closing tab records its session on design
 links, including from the identity kept on the mapping when the session is
-gone), `storage-native-agent-resume-identity` and `commands-registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
+gone), `storage-native-agent-resume-identity` and `commands/registry-design` (a happy-dom runtime renderer from `design/test-support.ts`
 plus one real-Chromium renderer test). Backend tests reach a storage bound
 (change log, history entries) by lowering it with `withDesignLimit`, not with
 hundreds of fsynced commits, and check the shipped bound in memory. A test

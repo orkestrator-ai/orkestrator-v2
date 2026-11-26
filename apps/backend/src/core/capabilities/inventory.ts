@@ -36,11 +36,23 @@ export interface InventoryMcpServer {
   sourceLabel: string;
 }
 
+/**
+ * The native plugins the provider CLIs list. An agent whose listing could not
+ * be read is named in `errors`; those errors carry no `provider`, because
+ * unmanaged plugins are never evidence for a managed installation, so they
+ * must not hold back what the reconciler confirms for that provider.
+ */
+export interface InventoryPluginListing {
+  plugins: InventoryPlugin[];
+  errors?: Array<{ message: string }>;
+}
+
 export interface InventorySources {
   homes: CapabilityHomes;
   /** Which providers are installed on this machine. */
   providers(): Promise<Array<{ provider: AgentPlatform; available: boolean; version?: string }>>;
-  plugins?(): Promise<InventoryPlugin[]>;
+  /** Runs provider CLIs: slow, so the service caches it (`inventory-cache.ts`). */
+  plugins?(): Promise<InventoryPluginListing>;
   /** Plugins in Orkestrator's own Claude marketplace, with the bytes Claude reads. */
   managedPlugins?(): Promise<ManagedClaudePluginObservation[]>;
   mcpServers?(): Promise<InventoryMcpServer[]>;
@@ -124,7 +136,9 @@ export async function collectCapabilityInventory(
   }
   if (sources.plugins) {
     try {
-      for (const plugin of await sources.plugins()) {
+      const listing = await sources.plugins();
+      errors.push(...(listing.errors ?? []).map((error) => ({ message: error.message })));
+      for (const plugin of listing.plugins) {
         if (managedPluginIds.has(`${plugin.provider}:${plugin.qualifiedId}`)) continue;
         items.push({
           id: `${plugin.provider}:plugin:${plugin.qualifiedId}`,

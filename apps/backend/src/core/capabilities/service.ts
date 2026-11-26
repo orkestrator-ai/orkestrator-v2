@@ -72,7 +72,8 @@ import {
 } from "./handover.js";
 import { CapabilityImportCommands } from "./import-commands.js";
 import { CapabilityInspectionCommands } from "./inspection-commands.js";
-import { collectCapabilityInventory } from "./inventory.js";
+import { collectCapabilityInventory, type InventorySources } from "./inventory.js";
+import { InventoryPluginCache } from "./inventory-cache.js";
 import { answerLeafLaunch, LeafLaunchAuthority } from "./launch-authority.js";
 import { CapabilityLibraryReads } from "./library-reads.js";
 import { remoteTransport, routedTransport } from "./node-transport.js";
@@ -88,13 +89,14 @@ import type {
   CapabilityChangeNotice,
   CapabilityServiceContext,
   CapabilityServiceDeps,
+  InventoryReadOptions,
 } from "./service-context.js";
 import { CapabilitySetupCommands } from "./setup-commands.js";
 import type { CapabilityState } from "./types.js";
 import { CapabilityUpdateCommands } from "./update-commands.js";
 import type { MachineFact } from "./views.js";
 
-export type { CapabilityServiceDeps } from "./service-context.js";
+export type { CapabilityServiceDeps, InventoryReadOptions } from "./service-context.js";
 
 const log = createLogger("capabilities");
 
@@ -125,6 +127,8 @@ export class CapabilityService {
   private readonly updates: CapabilityUpdateCommands;
   private readonly preflight: CapabilityPreflight;
   private readonly executorHandlers: CapabilityExecutorHandlers;
+  /** The provider CLIs' plugin listings, shared and briefly kept (`inventory-cache.ts`). */
+  private readonly pluginListing: InventoryPluginCache | undefined;
   private updateTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   /** This node handed (or is handing) its authority to another command node. */
@@ -135,6 +139,8 @@ export class CapabilityService {
     const nodeAuthority = deps.isAuthority;
     this.deps = { ...deps, isAuthority: () => nodeAuthority() && !this.handedOver };
     this.artifacts = new CapabilityArtifactStore(deps.dataDir);
+    const listPlugins = deps.inventory.plugins;
+    this.pluginListing = listPlugins ? new InventoryPluginCache(() => listPlugins()) : undefined;
     this.drift = new CapabilityDriftWorkflow({
       storage: deps.storage,
       artifacts: this.artifacts,
@@ -175,6 +181,8 @@ export class CapabilityService {
       ...(deps.mcp ? { mcp: deps.mcp } : {}),
       ...(deps.claudePlugins ? { claudePlugins: deps.claudePlugins } : {}),
       ...(deps.now ? { now: deps.now } : {}),
+      // A write to this machine's homes changes what its inventory reports.
+      afterWrite: () => this.invalidateInventory(),
     });
     const local = localTransport({
       selfId: deps.selfId,
@@ -238,7 +246,8 @@ export class CapabilityService {
     });
     this.leafLaunch = new LeafLaunchAuthority({
       storage: deps.storage,
-      observeSelf: () => this.observeSelf(),
+      // Launch evidence only: no provider CLI's plugin listing on the launch path.
+      observeSelf: () => this.observeSelf({ launch: true }),
       admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
       controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
       ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
@@ -274,8 +283,8 @@ export class CapabilityService {
       announce: (change) => this.announce(change),
       assertAuthority: () => this.assertAuthority(),
       machineFacts: () => this.machineFacts(),
-      observeSelf: () => this.observeSelf(),
-      observeNode: (nodeId) => this.observeNode(nodeId),
+      observeSelf: (options) => this.observeSelf(options),
+      observeNode: (nodeId, options) => this.observeNode(nodeId, options),
       resolveFor: (state, input) => this.resolveFor(state, input),
     };
     this.reads = new CapabilityLibraryReads(context);
@@ -371,13 +380,31 @@ export class CapabilityService {
     ];
   }
 
-  async observeSelf(): Promise<CapabilityInventory> {
+  /**
+   * Something on this machine changed what its inventory reports (a
+   * capability write, an MCP change, a plugin switch): the next read lists
+   * the provider plugins again rather than serve a listing from before it.
+   */
+  invalidateInventory(): void {
+    this.pluginListing?.invalidate();
+  }
+
+  /**
+   * This machine's inventory. Files, MCP configuration and managed plugins
+   * are read live; the provider CLIs' plugin listings come from the shared
+   * cache, and a launch read leaves them out: they are never launch evidence
+   * (`isLaunchInventoryEvidence`) and one CLI can hang.
+   */
+  async observeSelf(options: InventoryReadOptions = {}): Promise<CapabilityInventory> {
     const selfId = await this.deps.selfId();
-    const inventory = await collectCapabilityInventory(
-      selfId,
-      { ...this.deps.inventory, homes: this.deps.homes() },
-      () => this.now(),
-    );
+    const sources: InventorySources = { ...this.deps.inventory, homes: this.deps.homes() };
+    const pluginListing = this.pluginListing;
+    if (pluginListing && !options.launch) {
+      sources.plugins = () => pluginListing.read(options.refresh === true ? { refresh: true } : {});
+    } else {
+      delete sources.plugins;
+    }
+    const inventory = await collectCapabilityInventory(selfId, sources, () => this.now());
     if (this.deps.busyProviders) {
       // An unreadable activity record holds every provider: err towards not changing running work.
       inventory.busyProviders = await this.deps.busyProviders().catch(() => [...AGENT_PLATFORMS]);
@@ -441,8 +468,11 @@ export class CapabilityService {
     return inventory;
   }
 
-  private async observeNode(nodeId: string): Promise<CapabilityInventory> {
-    if (nodeId === (await this.deps.selfId())) return this.observeSelf();
+  private async observeNode(
+    nodeId: string,
+    options: InventoryReadOptions = {},
+  ): Promise<CapabilityInventory> {
+    if (nodeId === (await this.deps.selfId())) return this.observeSelf(options);
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     return remoteTransport({
       selfId: this.deps.selfId,

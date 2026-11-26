@@ -723,6 +723,7 @@ interface LeafAnswer {
 
 export interface LeafLaunchAuthorityDeps {
   storage: { capabilities: CapabilitiesStorage };
+  /** This machine's launch evidence (`InventoryReadOptions.launch`): no provider plugin listing. */
   observeSelf(): Promise<CapabilityInventory>;
   admitEpoch(controllerId: string, epoch: number): void;
   stageWorktree?(
@@ -790,8 +791,11 @@ export class LeafLaunchAuthority {
             return [];
           })) ?? [];
     }
+    // Only a required component is checked against this machine again
+    // (`localDeliveryCheck`); an answer requiring none reuses the first read.
+    const recheck = !answered || answered.answer.required.length > 0;
     const [latestInventory, latestReport] = await Promise.all([
-      this.deps.observeSelf().catch(() => undefined),
+      recheck ? this.deps.observeSelf().catch(() => undefined) : inventory,
       this.deps.scopedReport?.(request.target, request.relativeWorktree).catch(() => undefined),
     ]);
     if (answered) {

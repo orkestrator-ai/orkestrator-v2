@@ -17,6 +17,8 @@ export const CAPABILITIES_LOG_AREAS = defineLogAreas({
       "command.failed":
         "A capability command failed unexpectedly; `ref` is the reference the user sees.",
       "service.preflight-failed": "Resolving a session's capabilities failed before launch.",
+      "inventory.plugin-list-timed-out":
+        "One agent's plugin listing did not answer within the inventory's limit (`provider`, `timeoutMs`); logged once until it answers again.",
       "service.launch-record-failed":
         "The capability decision could not be recorded after verification.",
       "delivery.scope-failed": "A worktree or account delivery pass failed.",

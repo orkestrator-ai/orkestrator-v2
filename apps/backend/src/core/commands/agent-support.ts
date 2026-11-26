@@ -440,6 +440,7 @@ function createLocalExtensionCommandRunner(
   cwd: string,
   context: CommandContext,
   run: typeof runCommand,
+  timeoutMs = EXTENSION_DISCOVERY_TIMEOUT_MS,
 ): ExtensionCommandRunner {
   return async (agent, args) => {
     if (agent === "cursor") {
@@ -451,7 +452,7 @@ function createLocalExtensionCommandRunner(
         ...envWithManagedBinaries(context),
         NO_COLOR: "1",
       },
-      timeoutMs: EXTENSION_DISCOVERY_TIMEOUT_MS,
+      timeoutMs,
     });
     return stdout;
   };
@@ -464,8 +465,9 @@ function createLocalExtensionCommandRunner(
 export function createHostExtensionCommandRunner(
   context: CommandContext,
   run: typeof runCommand = runCommand,
+  options: { timeoutMs?: number } = {},
 ): ExtensionCommandRunner {
-  return createLocalExtensionCommandRunner(homePath(), context, run);
+  return createLocalExtensionCommandRunner(homePath(), context, run, options.timeoutMs);
 }
 
 export function createExtensionCommandRunner(

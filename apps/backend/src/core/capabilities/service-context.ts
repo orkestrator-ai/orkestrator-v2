@@ -36,6 +36,17 @@ import type { GitFetchOptions } from "./source-inspection.js";
 import type { CapabilityState } from "./types.js";
 import type { MachineFact } from "./views.js";
 
+/** How a read of this machine's inventory treats the provider CLIs' plugin listings. */
+export interface InventoryReadOptions {
+  /**
+   * Launch evidence only: leaves the plugin listings out. They are never
+   * launch evidence (`isLaunchInventoryEvidence`), and one CLI can hang.
+   */
+  launch?: boolean;
+  /** List the plugins again rather than use a recent listing. */
+  refresh?: boolean;
+}
+
 export interface CapabilityServiceDeps {
   storage: {
     capabilities: CapabilitiesStorage;
@@ -123,8 +134,8 @@ export interface CapabilityServiceContext {
   assertAuthority(): void;
   /** This machine first, then the machines it controls. */
   machineFacts(): Promise<MachineFact[]>;
-  observeSelf(): Promise<CapabilityInventory>;
+  observeSelf(options?: InventoryReadOptions): Promise<CapabilityInventory>;
   /** A machine's live inventory: this one directly, another over its node link. */
-  observeNode(nodeId: string): Promise<CapabilityInventory>;
+  observeNode(nodeId: string, options?: InventoryReadOptions): Promise<CapabilityInventory>;
   resolveFor(state: CapabilityState, input: CapabilityResolveInput): EffectiveAgentResources;
 }

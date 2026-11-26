@@ -13,7 +13,8 @@
  *   Claude marketplace (`provider-adapters/claude-plugins.ts`), run with
  *   this machine's Claude CLI; other providers' plugins are discovered only;
  * - discovery from the existing skill locations, the provider plugin
- *   listings (`discoverAgentPlugins`) and MCP management's catalog.
+ *   listings (`inventory-plugins.ts`, a short limit per agent) and MCP
+ *   management's catalog.
  */
 import { createHash } from "node:crypto";
 
@@ -27,7 +28,7 @@ import {
 } from "@orkestrator/protocol/contract/domains/capabilities";
 
 import { generateGraphSharingKeyPair } from "../graph-template-signing.js";
-import { commandExists } from "../shell.js";
+import { commandExists, runCommand } from "../shell.js";
 import {
   createHostExtensionCommandRunner,
   envWithManagedBinaries,
@@ -35,11 +36,11 @@ import {
   resolveManagedBinary,
 } from "../commands/agent-support.js";
 import type { CommandContext } from "../commands/index.js";
-import { discoverAgentPlugins } from "../extension-discovery.js";
 import type { McpManagementService } from "../mcp-management/index.js";
 import { CapabilityEnvironmentAuthority } from "./environment-authority.js";
 import type { McpInstaller } from "./executor.js";
-import type { InventoryMcpServer, InventoryPlugin } from "./inventory.js";
+import type { InventoryMcpServer } from "./inventory.js";
+import { INVENTORY_PLUGIN_LIST_TIMEOUT_MS, inventoryPluginLister } from "./inventory-plugins.js";
 import { agentTestCapabilityHomes, defaultCapabilityHomes } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { ClaudePluginAdapter } from "./provider-adapters/claude-plugins.js";
@@ -367,6 +368,8 @@ export async function setCapabilityPluginEnabled(
     qualifiedId,
     enabled,
   );
+  // The plugin listing the inventory keeps no longer holds.
+  context.capabilities?.invalidateInventory();
   return {
     provider,
     qualifiedId: result.pluginId,
@@ -393,7 +396,6 @@ export function createCapabilityService(
   nodes: CapabilityNodeAccess,
 ): CapabilityService {
   const isolated = context.runtimeFlavor === "agent-test";
-  const runner = createHostExtensionCommandRunner(context);
   const homes = () => capabilityHomes(context);
   const claudePlugins = new ClaudePluginAdapter({
     homes,
@@ -445,28 +447,13 @@ export function createCapabilityService(
       ...(isolated
         ? {}
         : {
-            plugins: async (): Promise<InventoryPlugin[]> => {
-              const lists = await Promise.allSettled(
-                (["claude", "codex", "grok", "opencode", "pi"] as const).map((provider) =>
-                  discoverAgentPlugins(provider, runner),
-                ),
-              );
-              return lists.flatMap((result) =>
-                result.status === "fulfilled"
-                  ? result.value.plugins.map((plugin) => ({
-                      provider: result.value.agent,
-                      qualifiedId: plugin.qualifiedId ?? plugin.name,
-                      name: plugin.name,
-                      enabled:
-                        plugin.status === "disabled"
-                          ? false
-                          : plugin.status === "configured"
-                            ? true
-                            : null,
-                    }))
-                  : [],
-              );
-            },
+            // A short per-agent limit: one hung CLI cannot hold the inventory.
+            plugins: inventoryPluginLister({
+              run: createHostExtensionCommandRunner(context, runCommand, {
+                timeoutMs: INVENTORY_PLUGIN_LIST_TIMEOUT_MS,
+              }),
+              timeoutMs: INVENTORY_PLUGIN_LIST_TIMEOUT_MS,
+            }),
             mcpServers: async (): Promise<InventoryMcpServer[]> => {
               const mcp = context.mcpManagement;
               if (!mcp) return [];

@@ -24,6 +24,7 @@ import { StorageService } from "../storage/service.js";
 import type { TestNode, TestNodeNetwork } from "../nodes/node-network-test-support.js";
 import type { NodeServiceOptions } from "../nodes/node-service.js";
 import { CapabilityEnvironmentAuthority } from "./environment-authority.js";
+import type { InventoryPluginListing } from "./inventory.js";
 import { testCapabilityHomes } from "./native-ownership.js";
 import type {
   ContainerDeliveryEvidence,
@@ -82,6 +83,8 @@ export async function addCapabilityNode(
     launchAnswerTimeoutMs?: number;
     leafRequestTimeoutMs?: number;
     extra?: Partial<NodeServiceOptions>;
+    /** The provider plugin listings this machine's inventory reads (`inventory-plugins.ts`). */
+    inventoryPlugins?: () => Promise<InventoryPluginListing>;
   } = {},
 ): Promise<CapabilityNode> {
   const node = await network.add(name, {
@@ -146,6 +149,7 @@ export async function addCapabilityNode(
     homes: () => testCapabilityHomes(home),
     inventory: {
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
+      ...(options.inventoryPlugins ? { plugins: options.inventoryPlugins } : {}),
     },
     requestLaunch: (payload) => node.emit(CAPABILITY_LAUNCH_REQUESTED_EVENT, payload),
     controllerReachable,

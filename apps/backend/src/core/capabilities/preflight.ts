@@ -106,7 +106,7 @@ export class CapabilityPreflight {
     const local = target.nodeId === selfId;
     const inventory =
       target.environmentIncarnation === undefined
-        ? await this.ctx.observeNode(target.nodeId).catch(() => undefined)
+        ? await this.ctx.observeNode(target.nodeId, { launch: true }).catch(() => undefined)
         : undefined;
     const remoteProofs = new Map(remote?.checks.map((check) => [check.componentId, check]));
     // What the provider itself reported: never inferred from what was sent.
@@ -478,7 +478,13 @@ export class CapabilityPreflight {
       ...(input.graphNode ? { graphNode: input.graphNode } : {}),
       ceiling: input.ceiling,
     };
-    const launchInventory = await this.ctx.observeNode(input.target.nodeId).catch(() => undefined);
+    // Launch evidence only, and none when the library is empty: nothing can resolve to verify.
+    const libraryEmpty =
+      Object.keys((await this.ctx.deps.storage.capabilities.loadCapabilityState()).packages)
+        .length === 0;
+    const launchInventory = libraryEmpty
+      ? undefined
+      : await this.ctx.observeNode(input.target.nodeId, { launch: true }).catch(() => undefined);
     const scopedEvidence = await this.ctx.scoped
       .launchEvidence(input.target, input.relativeWorktree, (state) =>
         this.ctx.resolveFor(state, {

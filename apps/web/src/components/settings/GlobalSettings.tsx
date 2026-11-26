@@ -113,6 +113,13 @@ export function normalizeAllowedDomainsInput(value: string | string[]): string[]
 }
 
 /** The same fields as `CoreFieldsSnapshot`, read from the persisted config. */
+function savedAddressFindingsRepair(global: GlobalConfig): boolean {
+  return (
+    global.addressFindingsPreExistingRepairSupported === true &&
+    global.addressFindingsRepairsPreExisting === true
+  );
+}
+
 export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
   const appearance = global.terminalAppearance || DEFAULT_TERMINAL_APPEARANCE;
   return {
@@ -167,7 +174,7 @@ export function storedCoreFields(global: GlobalConfig): CoreFieldsSnapshot {
     reviewInstruction: getSavedReviewInstruction(global.reviewInstruction),
     reviewLensPresets: resolveReviewLensPresets(global.reviewLensPresets),
     multiReviewEngine: global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
-    addressFindingsRepairsPreExisting: global.addressFindingsRepairsPreExisting === true,
+    addressFindingsRepairsPreExisting: savedAddressFindingsRepair(global),
   };
 }
 
@@ -259,7 +266,8 @@ export function globalFormSignature(global: GlobalConfig): string {
     getSavedReviewInstruction(global.reviewInstruction),
     resolveReviewLensPresets(global.reviewLensPresets),
     global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
-    global.addressFindingsRepairsPreExisting === true,
+    global.addressFindingsPreExistingRepairSupported === true,
+    savedAddressFindingsRepair(global),
     // Canonical shape, so an edit that only reorders keys is not a change.
     normalizeAgentSettings(global.agentSettings),
   ]);
@@ -295,6 +303,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
   const { config, setConfig, ready: machineReady } = useSettingsConfig();
   const { machine } = useAccountMachine();
   const global = config.global;
+  const addressFindingsRepairSupported = global.addressFindingsPreExistingRepairSupported === true;
 
   const [envPatterns, setEnvPatterns] = useState(global.envFilePatterns.join(", "));
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
@@ -415,7 +424,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE,
   );
   const [addressFindingsRepairsPreExisting, setAddressFindingsRepairsPreExisting] = useState(
-    global.addressFindingsRepairsPreExisting === true,
+    savedAddressFindingsRepair(global),
   );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
@@ -476,10 +485,11 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     const sync = <T,>(
       set: (update: (value: T) => T) => void,
       read: (global: GlobalConfig) => T,
+      force = false,
     ) => {
       const previous = read(baseline);
       const next = read(global);
-      set((current) => (replace || !settingValuesEqual(previous, next) ? next : current));
+      set((current) => (replace || force || !settingValuesEqual(previous, next) ? next : current));
     };
     syncedGlobalSignatureRef.current = signature;
     syncedGlobalRef.current = global;
@@ -578,7 +588,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
     sync(setMultiReviewEngine, (global) => global.multiReviewEngine ?? MULTI_REVIEW_DEFAULT_ENGINE);
     sync(
       setAddressFindingsRepairsPreExisting,
-      (global) => global.addressFindingsRepairsPreExisting === true,
+      savedAddressFindingsRepair,
+      global.addressFindingsPreExistingRepairSupported !== true,
     );
   }, [global]);
 
@@ -768,7 +779,8 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       reviewInstruction,
       reviewLensPresets,
       multiReviewEngine,
-      addressFindingsRepairsPreExisting,
+      addressFindingsRepairsPreExisting:
+        addressFindingsRepairSupported && addressFindingsRepairsPreExisting,
     }),
     [
       envPatterns,
@@ -812,6 +824,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       reviewInstruction,
       reviewLensPresets,
       multiReviewEngine,
+      addressFindingsRepairSupported,
       addressFindingsRepairsPreExisting,
     ],
   );
@@ -994,7 +1007,7 @@ export function GlobalSettings({ activeSection }: GlobalSettingsProps) {
       );
       setAddressFindingsRepairsPreExisting((current) =>
         current === addressFindingsRepairsPreExisting
-          ? newConfig.global.addressFindingsRepairsPreExisting === true
+          ? savedAddressFindingsRepair(newConfig.global)
           : current,
       );
       setLogDetailKeepRaised((current) =>

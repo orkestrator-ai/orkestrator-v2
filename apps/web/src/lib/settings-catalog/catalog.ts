@@ -629,7 +629,13 @@ export const SETTINGS_CATALOG: readonly SettingDescriptor[] = [
       "validation failures",
     ],
     appliesWhen: "new-sessions",
-    value: stored("addressFindingsRepairsPreExisting", false, onOff),
+    value: binding(
+      "addressFindingsRepairsPreExisting",
+      (global) =>
+        global.addressFindingsPreExistingRepairSupported === true &&
+        global.addressFindingsRepairsPreExisting === true,
+      onOff,
+    ),
   },
   {
     id: "review.instruction",

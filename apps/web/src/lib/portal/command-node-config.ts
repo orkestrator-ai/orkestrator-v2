@@ -103,6 +103,12 @@ export function layerConfig(commandNode: AppConfig, node: AppConfig): AppConfig 
   const global = { ...node.global };
   for (const key of INHERITED_GLOBAL_SETTING_KEYS) delete global[key];
   Object.assign(global, pickInheritedGlobalSettings(commandNode.global));
+  if (commandNode.global.addressFindingsPreExistingRepairSupported === true) {
+    global.addressFindingsPreExistingRepairSupported = true;
+  } else {
+    delete global.addressFindingsPreExistingRepairSupported;
+    delete global.addressFindingsRepairsPreExisting;
+  }
   const agentSettings = normalizeAgentSettings(global.agentSettings);
   const enabled = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
   global.agentSettings = {

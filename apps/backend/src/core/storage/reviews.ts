@@ -270,6 +270,7 @@ export class ReviewsRepository {
     snapshot: unknown,
     expectedRevision?: number,
     controllerFence?: { ownerId: string; token: string },
+    addressFindingsRepair?: PersistedMultiReviewWorkflow["addressFindingsRepair"],
   ): Promise<PersistedMultiReviewWorkflow> {
     if (!isNonBlankString(workflowId) || !isNonBlankString(environmentId)) {
       throw new Error("Multi review workflow identity must not be blank");
@@ -322,6 +323,7 @@ export class ReviewsRepository {
             updatedAt: nowIso(),
             revision: (previous?.revision ?? 0) + 1,
             ...(previous?.controllerLease ? { controllerLease: previous.controllerLease } : {}),
+            ...(addressFindingsRepair ? { addressFindingsRepair } : {}),
           };
           return { result: next, value: next };
         },

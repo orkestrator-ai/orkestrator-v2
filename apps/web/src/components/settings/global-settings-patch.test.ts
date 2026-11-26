@@ -108,6 +108,7 @@ describe("globalConfigPatchFromCoreFields", () => {
     expect(
       storedCoreFields({
         ...appCommandStore(configStore).getState().config.global,
+        addressFindingsPreExistingRepairSupported: true,
         addressFindingsRepairsPreExisting: true,
       }).addressFindingsRepairsPreExisting,
     ).toBe(true);

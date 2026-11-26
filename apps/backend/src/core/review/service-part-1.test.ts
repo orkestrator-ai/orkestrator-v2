@@ -441,12 +441,17 @@ test.each([
         });
         if (enabled) await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: true });
 
-        await service.address(started.id);
-        expect((await snapshot(started.id))?.addressFindingsPreExistingFailures).toBe(recorded);
+        const addressed = await service.address(started.id);
+        expect((await storage.getMultiReviewWorkflow(started.id))?.addressFindingsRepair).toEqual(
+          recorded ? { requestId: addressed.addressRequestId!, policy: recorded } : undefined,
+        );
+        expect(addressed).not.toHaveProperty("addressFindingsPreExistingFailures");
         // A later change applies to the next launch, not this one.
         await storage.patchGlobalConfig({ addressFindingsRepairsPreExisting: !enabled });
         await service.advanceNow(started.id);
-        expect((await snapshot(started.id))?.addressFindingsPreExistingFailures).toBe(recorded);
+        expect(
+          (await storage.getMultiReviewWorkflow(started.id))?.addressFindingsRepair?.policy,
+        ).toBe(recorded);
       },
     );
   },

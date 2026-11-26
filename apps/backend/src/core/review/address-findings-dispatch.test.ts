@@ -696,7 +696,10 @@ test("dispatchMultiReviewAddressFindingsPrompt sends no validation instruction f
 });
 
 /** Every Multi Review dispatch path, for one workflow. */
-async function promptsForEveryDispatchPath(base: MultiReviewWorkflow): Promise<string[]> {
+async function promptsForEveryDispatchPath(
+  base: MultiReviewWorkflow,
+  preExisting?: "excuse" | "repair",
+): Promise<string[]> {
   const variants: Array<() => Promise<string>> = [
     async () => {
       const agents = acceptingAgents();
@@ -706,6 +709,7 @@ async function promptsForEveryDispatchPath(base: MultiReviewWorkflow): Promise<s
         undefined,
         false,
         verifiedPackage,
+        preExisting,
       );
       return agents.dispatchIntent.mock.calls[0]![0].prompt;
     },
@@ -721,6 +725,7 @@ async function promptsForEveryDispatchPath(base: MultiReviewWorkflow): Promise<s
         undefined,
         false,
         verifiedPackage,
+        preExisting,
       );
       return agents.dispatchIntent.mock.calls[0]![0].prompt;
     },
@@ -737,6 +742,7 @@ async function promptsForEveryDispatchPath(base: MultiReviewWorkflow): Promise<s
         undefined,
         false,
         verifiedPackage,
+        preExisting,
       );
       return agents.dispatchIntent.mock.calls[0]![0].prompt;
     },
@@ -761,6 +767,7 @@ async function promptsForEveryDispatchPath(base: MultiReviewWorkflow): Promise<s
           replacementProviderSessionId: "provider-replacement",
         },
         verifiedPackage,
+        preExisting,
       );
       return agents.dispatchIntent.mock.calls[0]![0].prompt;
     },
@@ -772,10 +779,7 @@ async function promptsForEveryDispatchPath(base: MultiReviewWorkflow): Promise<s
 
 test("every Multi Review dispatch path repairs pre-existing failures when the launch recorded repair", async () => {
   const off = await promptsForEveryDispatchPath(packagedWorkflow);
-  const on = await promptsForEveryDispatchPath({
-    ...packagedWorkflow,
-    addressFindingsPreExistingFailures: "repair",
-  } as MultiReviewWorkflow);
+  const on = await promptsForEveryDispatchPath(packagedWorkflow, "repair");
   for (const [index, prompt] of on.entries()) {
     expectBranchValidationInstruction(prompt);
     expect(prompt).toContain("**Pre-existing failures**");
@@ -789,10 +793,7 @@ test("every Multi Review dispatch path repairs pre-existing failures when the la
 
 test("a recorded excuse policy, or none, dispatches today's prompt on every path", async () => {
   const none = await promptsForEveryDispatchPath(packagedWorkflow);
-  const excuse = await promptsForEveryDispatchPath({
-    ...packagedWorkflow,
-    addressFindingsPreExistingFailures: "excuse",
-  } as MultiReviewWorkflow);
+  const excuse = await promptsForEveryDispatchPath(packagedWorkflow, "excuse");
   expect(excuse).toEqual(none);
   for (const prompt of none) expect(prompt).not.toContain("Pre-existing repair");
 });

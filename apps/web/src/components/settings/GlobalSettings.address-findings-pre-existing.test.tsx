@@ -9,11 +9,16 @@ import { GlobalSettings } from "./GlobalSettings";
 import { ADDRESS_FINDINGS_PRE_EXISTING_LABEL } from "./AddressFindingsPreExistingSetting";
 import { appCommandStore } from "@/test/app-command-store";
 
-const initial = appCommandStore(configStore).getState().config;
-let selected = structuredClone(initial);
+const original = appCommandStore(configStore).getState().config;
+const initial = {
+  ...original,
+  global: { ...original.global, addressFindingsPreExistingRepairSupported: true },
+};
+let selected: typeof original = structuredClone(initial);
 
 beforeEach(() => {
   selected = structuredClone(initial);
+  appCommandStore(configStore).getState().setConfig(selected);
   spyOn(backend, "getConfig").mockImplementation(async () => selected);
   spyOn(backend, "getAgentModelCatalogCache").mockResolvedValue({ schemaVersion: 1 });
 });
@@ -21,7 +26,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   mock.restore();
-  appCommandStore(configStore).setState({ config: initial });
+  appCommandStore(configStore).setState({ config: original });
 });
 
 function mount() {
@@ -81,4 +86,48 @@ test("a stored value shows on reopen", async () => {
   mount();
   const toggle = await screen.findByRole("switch", { name: ADDRESS_FINDINGS_PRE_EXISTING_LABEL });
   expect(toggle.getAttribute("aria-checked")).toBe("true");
+});
+
+test("an older command node's stored echo leaves the switch off and prevents saving after reopen", async () => {
+  const older = {
+    ...original,
+    global: { ...original.global, addressFindingsRepairsPreExisting: true },
+  };
+  selected = older;
+  appCommandStore(configStore).getState().setConfig(older);
+  const save = spyOn(backend, "patchGlobalConfig").mockResolvedValue(older);
+  for (const reopen of [false, true]) {
+    const { unmount } = mount();
+    const toggle = await screen.findByRole("switch", { name: ADDRESS_FINDINGS_PRE_EXISTING_LABEL });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(screen.getByText(/command node does not support this setting/)).toBeDefined();
+    if (!reopen) fireEvent.click(toggle);
+    unmount();
+  }
+  expect(save).not.toHaveBeenCalled();
+});
+
+test("losing command-node support during a save does not adopt the echoed value", async () => {
+  const savedByOldNode = {
+    ...original,
+    global: { ...original.global, addressFindingsRepairsPreExisting: true },
+  };
+  const save = spyOn(backend, "patchGlobalConfig").mockImplementation(async () => {
+    selected = savedByOldNode;
+    return selected;
+  });
+  const { unmount } = mount();
+  const toggle = await screen.findByRole("switch", { name: ADDRESS_FINDINGS_PRE_EXISTING_LABEL });
+  fireEvent.click(toggle);
+  await waitFor(() => {
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+  unmount();
+  mount();
+  const reopened = await screen.findByRole("switch", { name: ADDRESS_FINDINGS_PRE_EXISTING_LABEL });
+  expect(reopened.hasAttribute("disabled")).toBe(true);
+  expect(reopened.getAttribute("aria-checked")).toBe("false");
 });

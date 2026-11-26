@@ -217,6 +217,55 @@ describe("patching global settings", () => {
   });
 });
 
+test("a Review opt-in is saved on its command node and inherited by the leaf after reload", async () => {
+  installCommandWindow();
+  let saved: boolean | undefined;
+  let commandSupportsRepair = true;
+  invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+    if (command === "invoke_on_node") {
+      expect((args as { command: string }).command).toBe("get_config");
+      return {
+        outcome: "ok",
+        result: {
+          ...config("leaf"),
+          global: {
+            ...config("leaf").global,
+            addressFindingsPreExistingRepairSupported: true,
+            addressFindingsRepairsPreExisting: false,
+          },
+        },
+      };
+    }
+    if (command === "patch_global_config") {
+      saved = (args?.patch as Partial<GlobalConfig> | undefined)?.addressFindingsRepairsPreExisting;
+    }
+    return {
+      ...config("command"),
+      global: {
+        ...config("command").global,
+        ...(commandSupportsRepair ? { addressFindingsPreExistingRepairSupported: true } : {}),
+        addressFindingsRepairsPreExisting: saved,
+      },
+    };
+  });
+  const patched = await patchGlobalConfig(
+    { addressFindingsRepairsPreExisting: true },
+    { machine: "bk_leaf" },
+  );
+  expect(invokeMock).toHaveBeenCalledWith("patch_global_config", {
+    patch: { addressFindingsRepairsPreExisting: true },
+  });
+  expect(patched.global).toMatchObject({
+    addressFindingsPreExistingRepairSupported: true,
+    addressFindingsRepairsPreExisting: true,
+  });
+  expect((await getConfig("bk_leaf")).global).toEqual(patched.global);
+  commandSupportsRepair = false;
+  const older = await getConfig("bk_leaf");
+  expect(older.global).not.toHaveProperty("addressFindingsPreExistingRepairSupported");
+  expect(older.global).not.toHaveProperty("addressFindingsRepairsPreExisting");
+});
+
 describe("layering between two explicit scopes", () => {
   let windowScope: WindowScope;
   let commandClient: FakeNodeClient;

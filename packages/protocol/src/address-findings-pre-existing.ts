@@ -10,7 +10,7 @@
  * The user chooses with the global `addressFindingsRepairsPreExisting` switch
  * (Settings → Review), off by default. Each Address Findings run records the
  * choice in force when it started (a pipeline's Address session, a Multi
- * Review workflow, a graph activation), so its prompt can be reproduced and a
+ * Review record's backend metadata, a graph activation), so its prompt can be reproduced and a
  * setting changed mid-review does not change a run already under way. A
  * record without the field is `excuse`.
  *

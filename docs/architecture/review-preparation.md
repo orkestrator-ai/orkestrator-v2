@@ -138,9 +138,9 @@ recorded validation to triage.
 Settings → Review has a switch, **Address Findings also fixes pre-existing
 test failures on the base branch** (global `addressFindingsRepairsPreExisting`,
 `packages/protocol/src/address-findings-pre-existing.ts`). It is **off by
-default**, for new and existing installs; a config without the field, and an
-older client or backend that does not know it, reads as off. It is a review
-preference, so a command node hands it to the machines it controls
+default**, for new and existing installs. The switch is disabled when the
+command node does not advertise support. It is a review preference, so a
+command node hands it to the machines it controls
 (`INHERITED_GLOBAL_SETTING_KEYS`) and it can be reset to the default.
 
 - **Off.** Every Address Findings prompt and Verify prompt is byte-for-byte what
@@ -151,13 +151,15 @@ preference, so a command node hands it to the machines it controls
   pre-existing rule (`preExistingFailureRepairRule` in
   `build-pipeline/prompts.ts`): repair each recorded failure the validation
   report labels `pre-existing` (in a package without `validationReport`, a
-  triage reason `failed-on-merge-base`) by fixing its cause, never by weakening,
+  triage reason of `failed-on-merge-base`, `failed-on-target-ci` or
+  `failed-on-same-base`) by fixing its cause, never by weakening,
   skipping or deleting the test; commit each such repair on its own, apart from
   the branch's own fixes; rerun only the repaired check; and list each repair
   separately (a `Pre-existing repair:` note in the pipeline's Address Findings
-  result, or its own entry in Multi Review's summary). A failure labelled
-  `flaky` is never hidden by a code change: it is recorded in the repository's
-  flaky-test register as its instructions describe, or left with its evidence.
+  result, or its own entry in Multi Review's summary). Repair the root cause
+  of a flaky test when the ticket explicitly requires it or the failure is
+  related to the branch. For incidental flakes, follow the repository's
+  flaky-test register instructions or leave the failure with its evidence.
   `unrelated` and `undetermined` failures keep today's handling. The rule is
   given only with recorded validation, where those labels exist.
 - **Verify.** When this round's Address Findings ran with the switch on, the
@@ -174,13 +176,14 @@ its prompt can be reproduced:
 | Run | Read when | Recorded on |
 | --- | --- | --- |
 | Build pipeline | its Address Findings session opens (`build-pipeline/stage-prompts.ts`) | the session, `addressFindingsPreExistingFailures` (`excuse` or `repair`); Verify of the same round reads it there |
-| Multi Review | Address Findings is queued (manual, automatic, custom or restarted) or an unattended Address Findings request is created (`review/service.ts`) | the workflow, `addressFindingsPreExistingFailures`; every dispatch, retry and session replacement (`review/address-findings-dispatch.ts`) reads the recorded value, never the live setting |
+| Multi Review | Address Findings is queued (manual, automatic, custom or restarted) or an unattended Address Findings request is created (`review/service.ts`) | backend workflow metadata for the Address request; every dispatch, retry and session replacement (`review/address-findings-dispatch.ts`) reads the recorded value, never the live setting |
 | Graph Address node (`address-findings`, `pipeline-address-findings`) | the activation is first dispatched (`graph-node-agent.ts`) | the activation, `addressFindingsPreExistingFailures` |
 
-Multi Review workflows and graph activations record the field only for
-`repair`: their guards refuse unknown keys, so a review on the default keeps
-the exact shape an older reader accepts. A graph's Verify node does not know
-the Address node's choice and keeps today's rule.
+Multi Review keeps the renderer snapshot in its existing shape for both
+policies. The backend stores metadata only for `repair`. Graph activations
+also record the field only for `repair`, so their default shape is preserved.
+A graph's Verify node does not know the Address node's choice and keeps
+today's rule.
 
 **The trade-off.** Repairing pre-existing failures makes pull requests larger
 and mixes unrelated fixes into a change, even in their own commits; and builds

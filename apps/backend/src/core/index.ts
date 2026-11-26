@@ -1,4 +1,3 @@
-import { addressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import { createRichInteractionService } from "./rich-interactions/index.js";
 import type { RichInteractionService } from "./rich-interactions/service.js";
 import {
@@ -1823,20 +1822,22 @@ export class OrkestratorBackend {
           }
         },
         environmentGit: createPipelineEnvironmentGit(storage, context.runtime.environments.fence),
-        dispatchAddressFindingsPrompt: (workflow, presentation) =>
+        dispatchAddressFindingsPrompt: (workflow, presentation, preExisting) =>
           dispatchMultiReviewAddressFindingsPrompt(
             this.nativeAgents,
             workflow,
             storage,
             presentation.activateTab,
             verifyAddressFindingsPackage,
+            preExisting,
           ),
-        recoverAddressFindingsSession: (workflow, replacement) =>
+        recoverAddressFindingsSession: (workflow, replacement, preExisting) =>
           recoverMissingMultiReviewAddressFindingsSession(
             this.nativeAgents,
             workflow,
             replacement,
             verifyAddressFindingsPackage,
+            preExisting,
           ),
         ...multiReviewNativeAddressFindingsOptions(this.nativeAgents),
         workflowAdmission: this.workflowAdmission,
@@ -2024,8 +2025,6 @@ export class OrkestratorBackend {
         ),
       projectNotes: async (projectId) =>
         (await storage.kanban.getProjectNotes(projectId)).content || undefined,
-      addressFindingsPreExistingFailures: async () =>
-        addressFindingsPreExistingFailurePolicy((await storage.loadConfig()).global),
       artifactDispatch,
       // The run view's activation transcripts (item 211).
       captureTranscript: createGraphRunTranscriptCapture({ storage }),

@@ -16,9 +16,11 @@ export const ADDRESS_FINDINGS_PRE_EXISTING_LABEL =
 export function AddressFindingsPreExistingSetting({
   checked,
   onCheckedChange,
+  supported,
   disabled,
 }: {
   checked: boolean;
+  supported: boolean;
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
 }) {
@@ -36,8 +38,9 @@ export function AddressFindingsPreExistingSetting({
           htmlFor="address-findings-pre-existing"
           description={
             <span id="address-findings-pre-existing-description">
-              Repairs them in separate commits instead of only excusing them. Pull requests get
-              larger, and builds running at the same time may race to fix the same test.
+              {supported
+                ? "Repairs them in separate commits instead of only excusing them. Pull requests get larger, and builds running at the same time may race to fix the same test."
+                : "The command node does not support this setting. Update it to enable pre-existing repairs."}
             </span>
           }
         >
@@ -45,8 +48,8 @@ export function AddressFindingsPreExistingSetting({
             id="address-findings-pre-existing"
             aria-label={ADDRESS_FINDINGS_PRE_EXISTING_LABEL}
             aria-describedby="address-findings-pre-existing-description"
-            checked={checked}
-            disabled={disabled}
+            checked={supported && checked}
+            disabled={!supported || disabled}
             onCheckedChange={onCheckedChange}
           />
         </SettingsRow>

@@ -520,6 +520,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       <SettingField setting="review.address-findings-pre-existing">
         <AddressFindingsPreExistingSetting
           checked={addressFindingsRepairsPreExisting}
+          supported={global.addressFindingsPreExistingRepairSupported === true}
           onCheckedChange={setAddressFindingsRepairsPreExisting}
           disabled={isSaving}
         />

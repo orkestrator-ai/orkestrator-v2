@@ -1056,6 +1056,7 @@ export class StorageService {
     snapshot: unknown,
     expectedRevision?: number,
     controllerFence?: { ownerId: string; token: string },
+    addressFindingsRepair?: PersistedMultiReviewWorkflow["addressFindingsRepair"],
   ): Promise<PersistedMultiReviewWorkflow> {
     return this.repos.reviews.saveMultiReviewWorkflow(
       workflowId,
@@ -1064,6 +1065,7 @@ export class StorageService {
       snapshot,
       expectedRevision,
       controllerFence,
+      addressFindingsRepair,
     );
   }
 

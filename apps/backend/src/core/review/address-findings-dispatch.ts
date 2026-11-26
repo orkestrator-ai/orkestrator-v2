@@ -9,7 +9,7 @@ import {
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { createHash } from "node:crypto";
-import { recordedAddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
+import type { AddressFindingsPreExistingFailurePolicy } from "@orkestrator/protocol/address-findings-pre-existing";
 import {
   NativeAgentProviderSessionMissingError,
   type NativeAgentService,
@@ -79,6 +79,7 @@ async function validationInstruction(
   workflow: MultiReviewWorkflow,
   includeRerunRule: boolean,
   verify: AddressFindingsPackageVerifier | undefined,
+  preExisting: AddressFindingsPreExistingFailurePolicy,
 ): Promise<string> {
   const checks = await verifyAddressFindingsValidation(
     workflow.environmentId,
@@ -90,8 +91,7 @@ async function validationInstruction(
     workflow.targetBranch,
     includeRerunRule,
     checks,
-    // The policy the launch recorded when it started, never the live setting.
-    recordedAddressFindingsPreExistingFailurePolicy(workflow.addressFindingsPreExistingFailures),
+    preExisting,
   );
 }
 
@@ -109,6 +109,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
   workflow: MultiReviewWorkflow,
   replacement: MultiReviewAddressFindingsSessionReplacement,
   verifyPackage?: AddressFindingsPackageVerifier,
+  preExisting: AddressFindingsPreExistingFailurePolicy = "excuse",
 ): Promise<MultiReviewAddressFindingsDispatchResult> {
   const session = workflow.addressFindingsSession;
   if (
@@ -128,7 +129,7 @@ export async function recoverMissingMultiReviewAddressFindingsSession(
       "The Multi Review Address Findings session replacement targeted an unexpected tab",
     );
   }
-  const validation = await validationInstruction(workflow, false, verifyPackage);
+  const validation = await validationInstruction(workflow, false, verifyPackage, preExisting);
   const interactiveSessionKeyPrefix = `multi-review:${workflow.id}:interactive`;
   const logicalSessionKey =
     workflow.addressSessionKey ??
@@ -206,6 +207,7 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
   tabs?: AddressFindingsTabPublisher,
   activateTab = false,
   verifyPackage?: AddressFindingsPackageVerifier,
+  preExisting: AddressFindingsPreExistingFailurePolicy = "excuse",
 ): Promise<MultiReviewAddressFindingsDispatchResult> {
   const session = workflow.addressFindingsSession;
   const selection = workflow.customAddressFindingsModel ?? workflow.addressFindingsModel;
@@ -220,6 +222,7 @@ export async function dispatchMultiReviewAddressFindingsPrompt(
     workflow,
     customAddressFindings || !createsFreshAddressFindingsSession,
     verifyPackage,
+    preExisting,
   );
   const logicalSessionKey = workflow.addressSessionKey ?? `multi-review:${workflow.id}:interactive`;
   const model = selection.model === "default" ? undefined : selection.model;

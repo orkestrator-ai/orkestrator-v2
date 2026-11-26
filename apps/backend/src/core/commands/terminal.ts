@@ -104,19 +104,21 @@ export function conditionalSnapshot<T>(
 
 export type RendererWorkflowRecord = Omit<
   PersistedMultiReviewWorkflow,
-  "snapshot" | "controllerLease"
+  "snapshot" | "controllerLease" | "addressFindingsRepair"
 > & { snapshot?: unknown };
 
 /**
- * Backend-owned workflows carry a controller lease (top level) and a fence
- * token (inside the snapshot) that the renderer must never see. Copies the
- * record without them. A record without a snapshot is returned untouched so
- * the response always mirrors the stored shape.
+ * Project the renderer record without the controller lease, fence token
+ * or Address Findings launch metadata.
  */
 export function stripWorkflowRendererSecrets(
   workflow: PersistedMultiReviewWorkflow,
 ): RendererWorkflowRecord {
-  const { controllerLease: _controllerLease, ...rendererWorkflow } = workflow;
+  const {
+    controllerLease: _controllerLease,
+    addressFindingsRepair: _addressFindingsRepair,
+    ...rendererWorkflow
+  } = workflow;
   if (workflow.snapshot === undefined) return rendererWorkflow;
   return { ...rendererWorkflow, snapshot: stripWorkflowSnapshotSecrets(workflow.snapshot) };
 }

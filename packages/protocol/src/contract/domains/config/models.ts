@@ -235,6 +235,8 @@ export const CursorApiKeySourceSchema = Schema.Literals([
  */
 export const GlobalConfigSchema = openRecord({
   ...globalSettingsFields,
+  /** Advertised by the backend that owns the setting, including when it is off. */
+  addressFindingsPreExistingRepairSupported: optionalBoolean,
   githubTokenConfigured: Schema.Boolean,
   anthropicApiKeyConfigured: Schema.Boolean,
   anthropicApiKeySource: ApiKeySourceSchema,

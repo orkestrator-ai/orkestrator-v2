@@ -130,12 +130,24 @@ describe("pre-existing failure policy: repair", () => {
     expect(rule).toContain("then rerun only the repaired check");
     expect(rule).toContain("never weaken, skip or delete the test");
     expect(rule).toContain(
-      "Do not change code or tests for a failure labelled `flaky`: record it in the repository's flaky-test register",
+      "If the ticket explicitly requires a flaky-test repair, fix its root cause under the ticket rule above.",
+    );
+    expect(rule).toContain(
+      "For any other failure labelled `flaky`, leave the code and test intact and record it in the repository's flaky-test register",
     );
     expect(rule).toContain("Failures labelled `unrelated` or `undetermined` keep the rule above.");
     expect(rule).toContain("its own `notes` entry beginning `Pre-existing repair:`");
     // Only the rule is added: the rest of the off-path text is unchanged.
     expect(on.replace(`\n\n${rule.split("\n\n")[0]}`, "")).toBe(off);
+  });
+
+  test("the opt-in recognizes all three base evidence reasons in triage-only packages", () => {
+    // A file reference does not carry validationReport, so the prompt must tell
+    // the agent how to interpret the older sealed evidence it will read.
+    const rule = addressFindingsValidationGuidance(reviewPackage, "release", "repair");
+    expect(rule).toContain(
+      "a package without `validationReport`, any of the failure triage reasons `failed-on-merge-base`, `failed-on-target-ci` or `failed-on-same-base`",
+    );
   });
 
   test("the graph Address node's guidance carries the same rule", () => {
@@ -164,6 +176,10 @@ describe("pre-existing failure policy: repair", () => {
     );
     const rule = on.slice(on.indexOf("**Pre-existing failures**"));
     expect(rule).toContain("unrelated to this branch's changes");
+    expect(rule).toContain(
+      "If a flaky failure is related to this branch's changes, fix its root cause",
+    );
+    expect(rule).toContain("For any other failure labelled `flaky`");
     expect(rule).toContain(
       "In your final summary, list each pre-existing repair separately from this branch's own fixes",
     );

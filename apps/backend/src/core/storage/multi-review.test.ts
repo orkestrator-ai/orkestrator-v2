@@ -2,7 +2,11 @@ import { expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import {
+  isMultiReviewWorkflow,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
+import { consolidatedReport } from "../review/service-test-support.js";
 import { StorageService } from "./service.js";
 import { LEGACY_JSON_DIRECTORY, openBackendDatabase } from "./stores.js";
 import {
@@ -86,6 +90,37 @@ async function withStorage(
     await fs.rm(dataDir, { recursive: true, force: true });
   }
 }
+
+test("upgrades an existing opted-in review without changing its public snapshot or revision", async () => {
+  const snapshot = {
+    ...workflow("multi-1"),
+    phase: "interactive",
+    addressPromptPending: true,
+    addressRequestId: "request-1",
+    consolidatedReport,
+  };
+  await withStorage(
+    async (storage) => {
+      const record = await storage.getMultiReviewWorkflow("multi-1");
+      expect(record?.revision).toBe(3);
+      expect(record?.snapshot).toEqual(snapshot);
+      expect(isMultiReviewWorkflow(record?.snapshot)).toBe(true);
+      expect(record?.addressFindingsRepair).toEqual({ requestId: "request-1", policy: "repair" });
+    },
+    {
+      legacyMultiReviews: {
+        "multi-1": {
+          id: "multi-1",
+          revision: 3,
+          version: 1,
+          environmentId: "env-1",
+          updatedAt: snapshot.updatedAt,
+          snapshot: { ...snapshot, addressFindingsPreExistingFailures: "repair" },
+        },
+      },
+    },
+  );
+});
 
 test("Multi Review storage atomically enforces one active workflow per environment", async () => {
   await withStorage(async (storage) => {

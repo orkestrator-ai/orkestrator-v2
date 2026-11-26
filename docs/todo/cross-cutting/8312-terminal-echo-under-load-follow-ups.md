@@ -2,17 +2,20 @@
 
 ## Task analysis
 
-Analysed 2026-11-22 against main at `dd1391427` (first analysed 2026-11-19
-at `0007f0e66`, then 2026-11-20 at `0b778d995`). From the terminal key-to-echo latency work
+Analysed 2026-11-26 against main at `8950e12e2` (first analysed 2026-11-19
+at `0007f0e66`, then 2026-11-20 at `0b778d995` and 2026-11-22 at
+`dd1391427`). From the terminal key-to-echo latency work
 ([terminal-latency.md](../../development/terminal-latency.md)), which measured
 the backend's share, cut it, and left these follow-ups. The real-browser
 measurement (task 3), the hidden-tab change (task 2) and the transcript-growth
 investigation (task 4) are done; their figures are in
 [terminal-latency.md](../../development/terminal-latency.md#in-a-real-browser).
+Task 1's heavy-level measurement is done too and found no felt backend load,
+so the worker was not built; the task stays open on a stated trigger.
 
 ### Tasks
 
-1. **Move headless parsing and serialization off the backend's event loop**: Status: open.
+1. **Move headless parsing and serialization off the backend's event loop**: Status: open (waits on a felt backend stall by the rule below; measured not felt at the heavy level on 2026-11-26).
 2. **Measure and reduce the renderer's parsing of hidden terminal tabs**: Status: done.
 3. **Check typing latency in a real browser on a loaded `dev:test` profile**: Status: done.
 4. **Find why echo slows as agents' transcripts grow**: Status: done.
@@ -43,9 +46,9 @@ synchronous `serializedState` used by checkpoints, snapshots and the
 graceful-shutdown checkpoint.
 
 On 2026-11-20 the real-browser run (task 3) measured the backend's share as
-the page sees it: with the load running only on the backend (terminals and
-agents in other environments, so the page parses none of it), key-to-echo was
-p50/p95/p99 27.6/40.1/44.1 ms against 37.0/38.3/40.9 ms idle at the `busy`
+the page sees it: with the load running only on the backend (unmounted load
+terminals in the typing environment and agents in other environments),
+key-to-echo was p50/p95/p99 27.6/40.1/44.1 ms against 37.0/38.3/40.9 ms idle at the `busy`
 shape, and 27.0/31.4/42.3 ms against 32.0/35.3/36.2 ms with six build and three
 tool terminals. Those were historical runs. The original harness could
 confuse unavailable event-loop counters with zero stalls and did not verify
@@ -55,21 +58,57 @@ pending a comparison with the corrected harness.
 On 2026-11-22 the corrected harness, with keys spread over the frame (task
 4), compared the busy shape over three rounds: backend-only means 26.5 to
 27.3 ms against idle 27.1 to 27.3 ms, p95 34 to 35 ms in both, no late
-backend ticks. At the busy level the backend's load is not felt. The heavy
-level (six build and three tool terminals) has not been repeated with it.
+backend ticks. At the busy level the backend's load is not felt.
+
+On 2026-11-26 the heavy level (six build and three tool terminals with
+unmounted session keys in the typing environment and four fake-model agents
+in other environments) was repeated against idle with the corrected harness
+on `beelink2` against `main` at `8950e12e2`: two runs of three rounds each, in
+opposite starting orders, with 200 measured keys per cell and no timeouts.
+For each producer, the output revision advanced in the same generation
+between snapshots bracketing typing. The agent stream checks confirmed
+coverage through the final echo. The rule for "felt" was written down before
+the first heavy cell ran:
+
+> The backend load is felt if (a) the median of backend-only's three per-round
+> p95s, or of its three p99s, is more than 5 ms above idle's matching median
+> **and** backend-only is more than 5 ms worse than the same round's idle on
+> that percentile in at least two of the three rounds; or (b) the backend's
+> event-loop monitor records any tick at least 100 ms late in a backend-only
+> cell.
+
+| Run | Variant | Means, r1 / r2 / r3 ms | p95, r1 / r2 / r3 ms | p99, r1 / r2 / r3 ms | Late ticks (≥100 ms) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | idle | 27.2 / 27.2 / 27.1 | 34.8 / 34.6 / 34.4 | 35.8 / 37.3 / 35.3 | 0 / 0 / 0 |
+| 1 | backend-only | 26.6 / 26.6 / 26.9 | 34.2 / 34.4 / 34.1 | 35.1 / 35.5 / 34.9 | 0 / 0 / 0 |
+| 2 | idle | 27.1 / 27.0 / 27.4 | 34.6 / 34.0 / 34.3 | 35.4 / 34.5 / 35.0 | 0 / 0 / 0 |
+| 2 | backend-only | 26.8 / 27.0 / 26.9 | 34.3 / 34.5 / 34.7 | 35.4 / 35.4 / 35.3 | 0 / 0 / 0 |
+
+Medians of the per-round values: run 1 p95 34.6 (idle) against 34.2
+(backend-only), p99 35.8 against 35.1; run 2 p95 34.3 against 34.5, p99 35.0
+against 35.4. No round in either run had backend-only more than 1 ms worse
+than idle at p95 or p99, and the monitor recorded no late tick or stall in any
+cell. The heavy load did not meet the felt rule. Browser resource timing
+measured keystroke request-to-first-byte (`responseStart - requestStart`) p99
+at 1.8 to 4.0 ms in backend-only cells, 0.9 to 1.0 ms in five idle cells and
+4.1 ms in the first idle cell. Request-to-first-byte p95 was 1.1 to 1.6 ms
+under load and 0.8 to 0.9 ms at idle. The [per-round request timings](../../development/terminal-latency.md#heavy-load-backend-only-with-the-corrected-harness-8312-task-1)
+include both percentiles. Frame quantization may explain why these request
+timing differences produced little change in measured echo latency.
 
 **Decisions.**
 
 - **Where the headless terminals run.**
-  - **A worker per backend holding every session's terminal, behind an async interface (the design to build once a measurement shows the remaining stall is felt).**
+  - **A worker per backend holding every session's terminal, behind an async interface (the design to build once a measurement shows the remaining stall is felt by the rule above).**
     - Pros: parsing and serialization leave the loop entirely; uses a second core.
-    - Cons: `serializedState` and its callers become async; the worker needs `@xterm/headless` at run time, which means either a separately bundled worker entry in the backend, Electron and CLI builds or an inlined bundle; restart and crash handling for the worker. The historical browser figures need a verified comparison before they can inform this choice.
+    - Cons: `serializedState` and its callers become async; the worker needs `@xterm/headless` at run time, which means either a separately bundled worker entry in the backend, Electron and CLI builds or an inlined bundle; restart and crash handling for the worker. The corrected browser runs at the busy (2026-11-22) and heavy (2026-11-26) levels show nothing for it to recover as the page sees it.
   - **Keep the metered scheduler and lower its budgets.**
     - Pros: no packaging change.
     - Cons: the work stays on the loop; smaller turns only spread it out, and throughput falls when the loop is busy.
-  - **Leave it until a measurement shows a felt stall (recommended).**
+  - **Leave it until a measurement shows a felt stall (recommended; decided 2026-11-26 after the heavy run).**
     - Pros: no async conversion or packaging risk for no measured gain; the browser spec reruns the check (`backend-only` against `idle`).
     - Cons: a heavier or different load (more terminals, a slower host, a remote client) may still feel it, and nobody has measured those.
+    - Build the worker only when a backend-only browser-spec run meets the felt rule above, at any load shape or on any host. Use the spec to check reports of typing lag while builds run. A change that adds work to the headless path (a larger scrollback, more frequent serialization, a second headless consumer) requires rerunning the heavy `idle,backend-only` cells before it merges. Keep the worker deferred if the rerun falls below the felt threshold.
 - **Serialization cost alone.**
   - **Serialize at most once per checkpoint interval under sustained output (time-only trigger while the parser is behind).**
     - Pros: fewer 10 ms holds.
@@ -282,8 +321,31 @@ separately from the typing window, which ends at the final echo. See the
 
 The ticket conditions the worker on a measured backend stall. The original
 runs compared idle and backend-only typing. Review found gaps in verification
-of producer activity, stream duration and stall counters. Use the corrected
-harness for the comparison before deciding whether a worker is warranted.
+of producer activity, stream duration and stall counters, so the comparison
+was repeated with the corrected harness: at the busy level on 2026-11-22 and
+at the heavy level on 2026-11-26. Neither met the felt rule, so no production
+code changed.
+
+### Task 1: the felt rule, and why it is stated this way
+
+The rule (in task 1's investigation) was recorded before the heavy run, so the
+result could not shape it. It compares percentiles rather than means because
+a stall shows in the tail first. The 5 ms margin is above the run-to-run
+spread the corrected harness shows between identical idle cells (about 1 ms at
+p95 and up to 3 ms at p99 with 200 keys, where nearest-rank p99 is the
+third-slowest key)
+and below a third of a 60 Hz frame. The "two of three rounds" clause stops one
+slow key in one round from deciding it. Late backend ticks count on their own
+because a 100 ms stall is felt whatever the percentiles say.
+
+### Task 1: kept open with a trigger rather than closed
+
+The heavy level is the largest shape either harness defines, but a slower
+host, a remote client, or more terminals than nine have not been measured,
+and the worker design and its packaging constraints are recorded here. Keeping
+the task with a concrete trigger (in its decisions) keeps that analysis next
+to the condition that would reopen it; closing would retire the file and move
+it into git history.
 
 ## Constraints and rationale
 

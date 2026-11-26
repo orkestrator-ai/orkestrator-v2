@@ -129,7 +129,7 @@ rerun ran on mbp3 with real logins and left this file; their results are in
 
 ### Tasks
 
-1. **Manual tests and live checks** (366 items): run each check under
+1. **Manual tests and live checks** (369 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -308,16 +308,16 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 71 | 3 |
+| Agent engines and provider SDKs | 74 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 34 | 5 |
+| Containers and environments | 34 | 4 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 102 | 9 |
+| Cross-cutting | 106 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 362 | 24 |
+| **Total** | 369 | 23 |
 
 
 
@@ -1028,9 +1028,10 @@ None open (both answered on 2026-11-14).
 
 #### MCP
 
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`; all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) item above; Cursor's cells (task 6) ran on 2026-11-26. The recommended option is to keep all-on for Claude, Codex, OpenCode and Cursor, and to decide Grok and Pi apply from their runs, narrowing them to write-only if they fail. Inputs:
-  - Claude, Codex, Pi and OpenCode pass every probe cell, but only against the loopback fake model (2026-11-06 and 2026-11-10).
-  - On real logins (2026-11-26, [0039's record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)): Pi passed every probe in both scopes (`pending-next-turn` → `applied`); Cursor went `pending-next-turn` → `applied` in both scopes with 14 of 15 probes passed, the failed one a removal that worked but whose reply the harness's exact-match rule rejected.
+- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`, all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) item above. The recommended option is to keep all-on for Claude, Codex, OpenCode, Cursor and Pi, and decide Grok apply from its run, narrowing it to write-only if it fails. Use these results.
+  - The loopback fake-model runs passed every probe cell for Claude, Codex and Pi on 2026-11-06 and for OpenCode on 2026-11-10.
+  - Pi 1.5.2 passed every probe in both scopes on a real login on 2026-11-26, with `pending-next-turn` → `applied` per probed tab. See [0039's real-login record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
+  - Cursor reported `pending-next-turn` → `applied` in both scopes on a real login on 2026-11-26, and 14 of 15 probes passed. The user-removal probe on tab B reached no server with its nonce, and the panel omitted the removed name. The exact-match rule rejected its reply, which ended with `MCPQ-UNAVAILABLE` after narration on the same line. The panel evidence leaves tool availability inconclusive. See [0039's real-login record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
   - Grok's cells still depend on the Grok live item above (host login expired).
 
   Record: the decision and the provider lists, in 0039's "Assumptions and decisions". If you narrow, reply to the coordinator so an agent can make the one-line default change.

@@ -7,7 +7,7 @@ import path from "node:path";
  * pipeline's transcript store (and its legacy manifest import) and
  * `transcript-artifacts/store.ts`. Because two domains use it, it is part of
  * the shared kernel at the `core/` root rather than either domain's folder
- * (to-do 0012, task 7).
+ * (#2201; docs/development/backend-domain-folders.md).
  *
  * One record is one private file: a single line of compact JSON header, a
  * newline, then the opaque payload bytes. The header is small and bounded so

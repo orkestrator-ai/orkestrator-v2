@@ -2,7 +2,7 @@ import { expect, mock, spyOn, test } from "bun:test";
 import { claudeTmuxEvent } from "@orkestrator/protocol/contract/domains/events";
 import { TmuxBackend } from "./backend.js";
 import { TmuxSession } from "./session-manager.js";
-import type { CommandContext } from "../commands.js";
+import type { CommandContext } from "../commands/context.js";
 
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 

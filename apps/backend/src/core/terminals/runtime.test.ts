@@ -6,8 +6,8 @@ import {
   type ControlledTimeout,
 } from "../../../../../tests/helpers/controlled-timeout.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
-import { setupTerminalSessionId } from "../commands-terminal.js";
+import type { CommandContext } from "../commands/context.js";
+import { setupTerminalSessionId } from "../commands/terminal.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { createEnvironment, type StorageService } from "../storage/service.js";
 import type { ContainerTerminalShell } from "../containers/terminal-shell.js";

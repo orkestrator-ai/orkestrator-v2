@@ -16,8 +16,8 @@ import {
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
-import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands-files.js";
-import { createEnvironmentCommandRunner } from "./commands-review.js";
+import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands/files.js";
+import { createEnvironmentCommandRunner } from "./commands/review.js";
 import { FakeGraphRepo } from "./graph-agent-test-support.js";
 import { GraphAgentGuardError, GraphAgentGuards } from "./graph-agent-guards.js";
 import { FakeBranchRepo } from "./graph-branch-test-support.js";

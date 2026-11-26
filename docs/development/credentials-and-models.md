@@ -9,7 +9,7 @@ local worktrees, Docker environments, and isolated `dev:test` profiles.
 The main implementation points are:
 
 - `apps/desktop/electron/backend-process.ts` — backend environment isolation.
-- `apps/backend/src/core/commands.ts` — provider launch, credential delivery,
+- `apps/backend/src/core/commands/` — provider launch, credential delivery,
   live catalogue discovery, and container mounts.
 - `apps/backend/src/core/storage/service.ts` — durable application-level catalogues.
 - `docker/entrypoint.sh` — bounded host-state import into writable containers.

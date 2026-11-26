@@ -1,4 +1,4 @@
-import { createCommandRegistry } from "./commands-registry.js";
+import { createCommandRegistry } from "./commands/registry.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -7,7 +7,7 @@ import path from "node:path";
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
 
 import { BUG_REPORT_SCRATCH_PREFIX } from "./bug-report-scratch.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { readableHostFileRoots } from "./readable-host-roots.js";
 import { readFileBase64 } from "./shell.js";
 import { syntheticWav } from "./transcript-artifacts/fixtures/synthetic-wav.js";

@@ -3,7 +3,7 @@ import { mkdtempSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { statStamp } from "./stat-stamp.js";
-import { UNTRACKED_SCAN_MAX_FILES } from "./commands-validation.js";
+import { UNTRACKED_SCAN_MAX_FILES } from "./commands/validation.js";
 import {
   countUntrackedFileLines,
   dropLocalGitScanCaches,

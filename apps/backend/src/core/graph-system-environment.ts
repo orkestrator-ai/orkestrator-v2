@@ -11,9 +11,9 @@
  * ({@link graphCommandErrorLine}); payloads passed as arguments (a pull
  * request body) are redacted from them.
  */
-import { quoteShell } from "./commands-agent-support.js";
-import { createEnvironmentCommandRunner, readEnvironmentWorkspaceFile } from "./commands-review.js";
-import { dockerExec } from "./commands-container-exec.js";
+import { quoteShell } from "./commands/agent-support.js";
+import { createEnvironmentCommandRunner, readEnvironmentWorkspaceFile } from "./commands/review.js";
+import { dockerExec } from "./commands/index.js";
 import { withContainerRuntimeCredential } from "./containers/index.js";
 import type { EnvironmentMutationFence } from "./environments/index.js";
 import {

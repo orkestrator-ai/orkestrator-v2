@@ -9,7 +9,7 @@ import {
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { createHash } from "node:crypto";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { NativeAgentJobTabReuse } from "./job-tab-reuse.js";
 import { nativeTabsOfLayout } from "../public-api/index.js";
 

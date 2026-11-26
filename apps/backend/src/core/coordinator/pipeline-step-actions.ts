@@ -8,15 +8,17 @@ import {
   type BuildPipelineRestartSelection,
 } from "@orkestrator/protocol/build-pipeline-restart-selection";
 import { pipelineWorkerSessionKey } from "@orkestrator/protocol/pipeline-worker-mail";
-import type { CommandContext } from "../commands-context.js";
-import { asNonBlankString } from "../commands-helpers.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type CoordinatorNodeTarget,
+} from "../commands/index.js";
 import {
   coordinatorNodeTarget,
   RETRY_SAME_REQUEST,
   withRetryAdvice,
-  type CoordinatorNodeTarget,
-} from "../commands-registry-coordinator-nodes.js";
-import type { CommandRegistrar } from "../commands-registry-types.js";
+} from "../commands/registry-coordinator-nodes.js";
 import {
   coordinatorCaller,
   withCoordinatorReceipt,

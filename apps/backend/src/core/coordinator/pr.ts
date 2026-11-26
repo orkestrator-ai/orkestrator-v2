@@ -3,8 +3,7 @@ import {
   resolvePrTargetBranch,
 } from "@orkestrator/protocol/git-workflow-prompts";
 import { withWorkerActionReceipt } from "../worker-action-receipts.js";
-import type { CommandContext } from "../commands-context.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandContext, RegistryDependencies } from "../commands/index.js";
 import type { Environment } from "../models.js";
 import {
   launchPrAgent,

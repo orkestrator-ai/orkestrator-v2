@@ -3,7 +3,7 @@
  * creating and adopting a session, dispatching prompts, the projection and
  * the progressive views, session actions, sign-in, interactions and the
  * session's suborks. Registered by the backend's
- * `commands-registry-native.ts` and `commands-registry-suborks.ts`.
+ * `apps/backend/src/core/commands/registry-native.ts` and `apps/backend/src/core/commands/registry-suborks.ts`.
  *
  * Arguments: every key a handler reads is declared, because a defined
  * command drops the keys it does not declare. A key the handler reads as a

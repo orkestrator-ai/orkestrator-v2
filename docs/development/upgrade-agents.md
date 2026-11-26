@@ -159,7 +159,7 @@ At application startup:
    after 60 seconds without data, not after a total deadline.
 5. `apps/desktop/electron/backend-process.ts` passes the activation directory to
    the backend as `--toolchain-bin-dir`.
-6. `apps/backend/src/core/commands.ts` prefers those executables for local
+6. `apps/backend/src/core/commands/` prefers those executables for local
    OpenCode servers, Claude/Codex bridges, extension discovery, and helper
    commands. It passes `CLAUDE_CLI_PATH` to the Claude bridge and `CODEX_PATH` to
    the Codex bridge. `apps/backend/src/core/tmux/` also uses the managed Claude
@@ -728,7 +728,7 @@ The vendor step leaves out the SDK's platform packages
 Claude Code binary, because nothing that runs `dist/` uses them. The SDK looks
 for its own binary only when `pathToClaudeCodeExecutable` is unset, and every
 host path sets it: both backend launches of a host bridge (`startLocalServerAttempt` in
-`apps/backend/src/core/commands-servers.ts` and the model-catalogue refresh in
+`apps/backend/src/core/commands/servers.ts` and the model-catalogue refresh in
 `host-model-catalog-refresh.ts`) set `CLAUDE_CLI_PATH` from
 `resolveClaudeBinary`, which returns the managed toolchain binary or, outside
 agent-test profiles, the bare name `claude` (never empty), and every SDK call
@@ -1282,7 +1282,7 @@ thread items are:
 - `bridges/codex-bridge/src/app-server-runtime.ts`
 
 `bridges/codex-bridge/src/app-server/process-supervisor.ts` launches the binary
-selected by `CODEX_PATH`. `apps/backend/src/core/commands.ts` also uses the
+selected by `CODEX_PATH`. `apps/backend/src/core/commands/` also uses the
 managed Codex binary for isolated `codex exec` helpers such as environment-name
 generation; `apps/backend/src/core/session-title-runners.ts` is another
 deliberate hermetic `codex exec` exception (session titles), and its test runs

@@ -14,7 +14,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandContext } from "../src/core/commands.js";
+import type { CommandContext } from "../src/core/commands/context.js";
 import {
   tmuxHookSignalInstallCommand,
   tmuxHookSignalSupport,

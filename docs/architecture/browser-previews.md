@@ -34,7 +34,7 @@ stays off until it is turned on.
 | Backend | `preview-tunnel-mux-server.ts` | Tunnel v2 sessions: many connections per socket |
 | Backend | `preview-publication.ts` | Private HTTPS origins, bootstrap host |
 | Backend | `preview-relay-supervisor.ts` | Optional in-container relay |
-| Backend | `core/commands-registry-previews.ts` | Trusted control commands |
+| Backend | `core/commands/registry-previews.ts` | Trusted control commands |
 | Protocol | `packages/protocol/src/preview-*.ts` | Contracts, HTTP/1.1 and WebSocket codecs, header policy |
 | Desktop | `electron/preview-transport-manager.ts` | Per-service loopback ingress over the tunnel |
 | Desktop | `electron/preview-tunnel-session.ts` | Tunnel v2 sessions and streams |

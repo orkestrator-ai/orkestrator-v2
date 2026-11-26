@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { removeAgentAccount, renewAgentAccountLogin } from "./accounts.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { StorageService } from "../storage/service.js";
 
 const NOW = Date.parse("2026-11-03T12:00:00Z");

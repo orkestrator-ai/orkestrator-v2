@@ -1,8 +1,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { PublicExecutionState } from "@orkestrator/protocol/public-api";
-import type { CommandContext } from "../commands-context.js";
-import { quoteShell, resolveBunBinary } from "../commands-agent-support.js";
+import type { CommandContext } from "../commands/index.js";
+import { quoteShell, resolveBunBinary } from "../commands/agent-support.js";
 import { runCommand } from "../shell.js";
 import { withContainerRuntimeCredential } from "../containers/index.js";
 import type { Environment } from "../models.js";

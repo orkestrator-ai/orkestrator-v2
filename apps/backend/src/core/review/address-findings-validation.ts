@@ -3,7 +3,7 @@ import type {
   ReviewPackage,
   ReviewPackageReference,
 } from "@orkestrator/protocol/review-workflow";
-import type { ReviewPackageVerification } from "../commands-review.js";
+import type { ReviewPackageVerification } from "../commands/index.js";
 
 export type AddressFindingsValidationCheck = Pick<
   ReviewPackage["validation"][number],

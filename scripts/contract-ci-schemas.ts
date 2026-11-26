@@ -580,7 +580,7 @@ async function childMain(input: string, output: string): Promise<void> {
     throw new Error("network is disabled while the contract CI job loads the registry");
   }) as unknown as typeof fetch;
   const request = JSON.parse(await readFile(input, "utf8")) as ChildRequest;
-  const { createCommandRegistry } = await import("../apps/backend/src/core/commands.js");
+  const { createCommandRegistry } = await import("../apps/backend/src/core/commands/registry.js");
   const registry = createCommandRegistry();
   if (request.mode === "schemas") {
     const { canonicalJsonSchema } = await import("@orkestrator/protocol/contract/json-schema");

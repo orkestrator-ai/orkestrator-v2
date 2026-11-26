@@ -4,8 +4,8 @@ import type { CoordinatorPaneLayout } from "@orkestrator/protocol/coordinator-pa
 import { COORDINATOR_ACTION_MARK_LIMITS } from "@orkestrator/protocol/coordinator-action-marks";
 import { NOTICE_DISMISSAL_LIMITS } from "@orkestrator/protocol/notice-dismissals";
 import type { ResourceChange } from "@orkestrator/protocol/resource-events";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { COORDINATOR_ACTION_MARKS_FULL_ERROR } from "./client-state.js";
 import { createProject, StorageService } from "./service.js";
 import { withTemporaryStorage } from "./test-support.js";

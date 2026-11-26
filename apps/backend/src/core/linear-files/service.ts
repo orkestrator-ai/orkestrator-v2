@@ -25,10 +25,10 @@ import {
 } from "@orkestrator/protocol/linear-files";
 import { createLogger } from "@orkestrator/protocol/logger";
 import {
-  createGitEnvironmentCommandRunner,
   assertWorkspaceArtifactIsGitExcluded,
+  createGitEnvironmentCommandRunner,
   setupWorkspaceArtifactGitExclude,
-} from "../commands-review.js";
+} from "../commands/review.js";
 import { serializeFileWrite } from "../file-write-precondition.js";
 import type { EnvironmentMutationFence } from "../environments/index.js";
 import { sanitizeLinearError, type LinearBoardFilter } from "../linear.js";

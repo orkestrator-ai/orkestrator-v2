@@ -8,7 +8,7 @@ import {
   type ReviewValidationOutput,
 } from "@orkestrator/protocol/review-workflow";
 import { readReviewValidationOutput } from "./validation-service.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 
 test("validation output reader appends by offset and resets on truncation or rotation", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "validation-output-offsets-"));

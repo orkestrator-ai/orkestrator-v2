@@ -4,8 +4,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { BRIDGE_LOG_RELAY_ENV } from "@orkestrator/protocol/node/logger-environment";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import { stopLocalServerUnlocked } from "../src/core/commands-local-server-lifecycle.js";
-import { startLocalServerUnlocked } from "../src/core/commands-servers.js";
+import { stopLocalServerUnlocked } from "../src/core/commands/local-server-lifecycle.js";
+import { startLocalServerUnlocked } from "../src/core/commands/servers.js";
 import { createCommandFixtures } from "./command-fixtures.js";
 
 const { createContext, createEnvironment, createTempDir, fs, path } = await createCommandFixtures();

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
-import { createDockerContainer } from "../src/core/commands-containers";
+import { createDockerContainer } from "../src/core/commands/containers";
 import { replaceRuntimePreservingState } from "../src/core/containers/replacement";
 import { resetResourceCaches } from "../src/core/containers/resources";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";

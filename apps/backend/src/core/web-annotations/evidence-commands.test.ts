@@ -10,8 +10,8 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import {
   fileContentSha256,
   isFileWriteConflict,

@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import * as containerExec from "./commands-container-exec.js";
+import * as containerExec from "./commands/container-exec.js";
 import { DiffStatsTracking } from "./diff-stats-tracking.js";
 
 const cleanups: Array<() => void> = [];

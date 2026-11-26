@@ -1,4 +1,4 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,9 +10,9 @@ import {
   type AcceptanceCriterion,
 } from "@orkestrator/protocol/ticket-sections";
 import type { KanbanTask } from "./shared.js";
-import type { CommandHandler } from "../commands-context.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
-import { registerKanbanCommands } from "../commands-registry-kanban.js";
+import type { CommandHandler } from "../commands/context.js";
+import type { RegistryDependencies } from "../commands/registry-types.js";
+import { registerKanbanCommands } from "../commands/registry-kanban.js";
 import { StorageService } from "./service.js";
 import { readStoredValue, seedStore } from "./test-support.js";
 

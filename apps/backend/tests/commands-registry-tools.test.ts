@@ -3,7 +3,7 @@ import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout.js"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import * as agentSupport from "../src/core/commands-agent-support";
+import * as agentSupport from "../src/core/commands/agent-support";
 import { homePath } from "../src/core/shell";
 import { ENVIRONMENT_AGENT_SKILLS_SCRIPT } from "../src/core/environments/agent-skills";
 import { createCommandFixtures, type CommandContext } from "./command-fixtures";

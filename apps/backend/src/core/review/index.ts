@@ -15,8 +15,8 @@
 // (`tab-actions.ts`) and the startup cleanup of retired looped reviews
 // (`retired-looped-review-cleanup.ts`). The build pipeline's own review
 // stages (`build-pipeline/review-*.ts`) are in the build-pipeline domain,
-// and the review commands (`commands-review.ts`,
-// `commands-registry-reviews.ts`) and the review stores
+// and the review commands (`commands/review.ts`,
+// `commands/registry-reviews.ts`) and the review stores
 // (`storage/reviews.ts`) stay with their own prefix groups.
 //
 // Eight modules are named exceptions in `.oxlintrc.json`: imported directly,

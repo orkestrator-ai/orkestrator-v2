@@ -18,7 +18,7 @@ import {
   syncContainerCursorSdkCredentials,
   writeCursorSdkCredentials,
 } from "../src/core/cursor-sdk-bridge";
-import type { CommandContext } from "../src/core/commands-context";
+import type { CommandContext } from "../src/core/commands/context";
 import { LocalServerRuntime } from "../src/core/local-server-runtime";
 
 let dataDir: string;

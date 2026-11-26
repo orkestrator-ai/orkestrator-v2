@@ -29,7 +29,7 @@ import {
   type ReviewLens,
 } from "@orkestrator/protocol/review-lens";
 import { buildAdmissionKey } from "../build-pipeline/index.js";
-import { conciseError } from "../commands-error-text.js";
+import { conciseError } from "../commands/index.js";
 import { buildPipelineInputWithDefaults, savedLaunchSettings } from "../coordinator/index.js";
 import { isProjectHomeEnvironment } from "../project-home-environment.js";
 import type { PersistedBuildPipeline } from "../models.js";

@@ -4,12 +4,12 @@
  * container id against the environment, and `transcript_artifact_prepare_worker`
  * reports honestly when no preparation is wired.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-artifact-commands";
 
-import type { CommandContext, CommandHandler } from "../commands-context.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
 import { registerTranscriptArtifactCommands } from "./commands.js";
 import { containerRelativePath, registerTranscriptArtifactPdfCommands } from "./commands-pdf.js";
 import { ENV, createHarness, fakePdf, type Harness } from "./service-test-support.js";

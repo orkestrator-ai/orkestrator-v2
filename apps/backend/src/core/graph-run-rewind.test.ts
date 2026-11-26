@@ -776,7 +776,7 @@ describe("code rewind", () => {
 
 describe("commands", () => {
   test("graph_run_restart and the code-rewind commands validate and delegate", async () => {
-    const { registerGraphRunRewindCommands } = await import("./commands-registry-graph-runs.js");
+    const { registerGraphRunRewindCommands } = await import("./commands/registry-graph-runs.js");
     const handlers = new Map<
       string,
       (args: Record<string, unknown>, context: unknown) => unknown

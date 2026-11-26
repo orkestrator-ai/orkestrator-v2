@@ -3,8 +3,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { jwtExpiryMs } from "@orkestrator/protocol/login-snapshots";
-import type { CommandContext } from "./commands-context.js";
-import { resolveCodexBinary } from "./commands-agent-support.js";
+import type { CommandContext } from "./commands/index.js";
+import { resolveCodexBinary } from "./commands/agent-support.js";
 import { readCodexAuthFile } from "./agent-accounts/homes.js";
 import { INHERITED_CREDENTIAL_ENV } from "./agent-accounts/index.js";
 

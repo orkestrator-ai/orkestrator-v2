@@ -13,7 +13,7 @@ import {
   type AgentsMdSection,
 } from "@orkestrator/protocol/agents-md-orkestrator";
 import { parseGitHubRepositoryRemote } from "@orkestrator/protocol/github-repository";
-import { validateGitRefName } from "./commands-agent-support.js";
+import { validateGitRefName } from "./commands/agent-support.js";
 import { type CoordinatorRequestFlights } from "./coordinator/index.js";
 import {
   gitHubCli,

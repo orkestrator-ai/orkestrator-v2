@@ -10,7 +10,7 @@ import type {
   HostSignInPlatform,
 } from "@orkestrator/protocol/agent-accounts";
 
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import type { Environment } from "./models.js";
 
 /**

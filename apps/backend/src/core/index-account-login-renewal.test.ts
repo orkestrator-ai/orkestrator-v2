@@ -7,7 +7,7 @@ import * as credentials from "./claude-host-credentials.js";
 import * as shell from "./shell.js";
 import { CLAUDE_HOST_REFRESH_MODEL } from "./claude-host-login-refresh.js";
 import type { AgentAccountAutoSwitcherDeps } from "./agent-accounts/auto-switch.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { OrkestratorBackend } from "./index.js";
 
 const ACCOUNT_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";

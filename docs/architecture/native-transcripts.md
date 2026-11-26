@@ -292,7 +292,7 @@ Its contract definition now sets `encoded`, like the other four, so its
 result is no longer schema-checked in development. Its callers are mostly
 in-process (Control MCP environment tools, node coordination), which receive
 the same plain object; only reads that cross the gateway gain.
-`commands-registry-native-splice.test.ts` pins which commands are marked;
+`commands/registry-native-splice.test.ts` pins which commands are marked;
 re-measure before marking another.
 
 ### Incomplete previews and exact recovery

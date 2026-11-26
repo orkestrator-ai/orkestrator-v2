@@ -24,8 +24,8 @@ import { egressGatewayOf, resetNetworkOwnerCache } from "../src/core/containers/
 import { prepareEgressGatewayForStart } from "../src/core/egress-gateway";
 import { githubRangesSeedDirectory } from "../src/core/git/github-ranges-cache";
 import { extractSingleTarFile } from "../src/core/containers/copy-out";
-import { resolveOperationImage } from "../src/core/commands-environment";
-import { shouldAddDockerHostGatewayAlias } from "../src/core/commands-container-exec";
+import { resolveOperationImage } from "../src/core/commands/environment";
+import { shouldAddDockerHostGatewayAlias } from "../src/core/commands/container-exec";
 import {
   probeCapabilities,
   CONTRACT_FILES,
@@ -358,7 +358,7 @@ describe("topology gate", () => {
         repositories: {},
       }),
     });
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     await withDockerScript(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -395,7 +395,7 @@ esac
         repositories: {},
       }),
     });
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     const { resetResourceCaches } = await import("../src/core/containers/resources");
     // A rootless daemon without delegated cgroups (driver `none`) would accept
     // these limits, record them in HostConfig and enforce none of them.
@@ -468,7 +468,7 @@ esac
         repositories: {},
       }),
     });
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     const { resetResourceCaches } = await import("../src/core/containers/resources");
     const daemon = (extra: Record<string, unknown>) =>
       JSON.stringify({
@@ -574,7 +574,7 @@ describe("pinned image identity", () => {
         capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
       }),
     );
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     const originalPolicy = process.env.ORKESTRATOR_NETWORK_POLICY;
     delete process.env.ORKESTRATOR_NETWORK_POLICY;
     try {
@@ -636,7 +636,7 @@ esac
         capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
       }),
     );
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     const saved = {
       ORKESTRATOR_NETWORK_POLICY: process.env.ORKESTRATOR_NETWORK_POLICY,
       ORKESTRATOR_PORTABLE_INPUTS: process.env.ORKESTRATOR_PORTABLE_INPUTS,
@@ -734,7 +734,7 @@ esac
       }),
     );
     const gatewayId = "d".repeat(64);
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     const script = (workloadCreate: string) => `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
@@ -947,7 +947,7 @@ esac
         capabilities: { "network-policy": 3, "network-refresh": 1, "staged-inputs": 2 },
       }),
     );
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     resetDockerTopologyCache();
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
@@ -1003,7 +1003,7 @@ esac
         repositories: {},
       }),
     });
-    const { createDockerContainer } = await import("../src/core/commands-containers");
+    const { createDockerContainer } = await import("../src/core/commands/containers");
     const retagged = `sha256:${"e".repeat(64)}`;
     const tar = await tarOf("image-manifest.json", validManifest());
     await withDockerScript(

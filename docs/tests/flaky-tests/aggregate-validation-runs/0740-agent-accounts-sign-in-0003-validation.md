@@ -51,10 +51,10 @@ tests and prose, so validation includes auto-merged changes.
 | Original conflicted file | Resolution |
 | --- | --- |
 | `apps/backend/src/core/agent-accounts-homes.ts` | Keep the branch's shared Claude credential lookup; discard the now-unused Keychain constant import. |
-| `apps/backend/src/core/commands-registry-accounts.ts` | Retain session-free sign-in status and main's machine-account, session-account and terminal sign-in commands. |
-| `apps/backend/src/core/commands-registry-accounts.test.ts` | Retain both sets of argument-validation and dispatch tests. |
+| `apps/backend/src/core/commands/registry-accounts.ts` | Retain session-free sign-in status and main's machine-account, session-account and terminal sign-in commands. |
+| `apps/backend/src/core/commands/registry-accounts.test.ts` | Retain both sets of argument-validation and dispatch tests. |
 | `apps/backend/src/core/commands-runtime-state.ts` | Accept main's deletion; move the branch's explicit host Claude config-directory constant into the extracted `agent-credential-files.ts`. |
-| `apps/backend/src/core/commands-servers.ts` | Use main's owned local-server runtime while retaining bounded, credential-redacted bridge output. |
+| `apps/backend/src/core/commands/servers.ts` | Use main's owned local-server runtime while retaining bounded, credential-redacted bridge output. |
 | `apps/web/src/components/settings/AgentAccountsSection.test.tsx` | Keep both account-change notification and selected-machine routing coverage. |
 | `apps/web/src/components/settings/GlobalSettings.sections.tsx` | Keep the status card and account-change refresh within main's machine scope; render Cursor sign-in once. |
 | `docs/architecture/agent-accounts.md` | Document the extracted runtime and the new sign-in surfaces. |

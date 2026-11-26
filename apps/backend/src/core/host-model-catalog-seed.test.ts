@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { HOST_CATALOG_SEED_FAILURE_COOLDOWN_MS, HostCatalogSeeds } from "./host-catalog-seeds.js";
 import {
   resetHostModelCatalogSeedCooldown,

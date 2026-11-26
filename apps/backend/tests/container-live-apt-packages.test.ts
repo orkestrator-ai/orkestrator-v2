@@ -97,7 +97,7 @@ async function asNode(containerId: string, script: string): Promise<string> {
 }
 
 async function createRuntime(name: string, config: Record<string, unknown>) {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const localPath = await checkout(name, config);
   const allowedDomains = ["registry.npmjs.org"];

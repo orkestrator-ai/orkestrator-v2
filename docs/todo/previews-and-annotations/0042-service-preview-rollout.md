@@ -816,7 +816,7 @@ This replaces the 2026-09-23 file lists as the current baseline.
   | protocol | `src/node/preview-http1.test.ts` | 19 |
   | protocol | `src/node/preview-websocket.test.ts` | 7 |
   | protocol | `src/preview-services.test.ts` | 21 |
-  | backend | `src/core/commands-registry-previews.test.ts` | 6 |
+  | backend | `src/core/commands/registry-previews.test.ts` | 6 |
   | backend | `src/core/previews/access.test.ts` | 11 |
   | backend | `src/core/previews/docker.test.ts` | 0, 1 skipped (1 on Docker) |
   | backend | `src/core/previews/port-publication.test.ts` | 4 |

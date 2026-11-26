@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseContainerLifecycleError } from "@orkestrator/protocol/container-lifecycle";
-import { stageConfiguredProjectFilesForContainer } from "../src/core/commands-project-files";
+import { stageConfiguredProjectFilesForContainer } from "../src/core/commands/project-files";
 import { copyProjectSeedFilesIntoContainer } from "../src/core/containers/project-seed-files";
 import { copyOutBounded } from "../src/core/containers/copy-out";
 import { isDockerCopyRefusedError } from "../src/core/containers/copy-refusal";

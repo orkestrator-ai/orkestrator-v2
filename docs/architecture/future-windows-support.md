@@ -192,7 +192,7 @@ builds, bridges and agent CLIs would outlive whatever stopped them.
 
   The orphan reaper's safety checks (`ppid == 1`, `pgid == pid`) have no
   Windows equivalent.
-- **Shell.** `resolveLocalShellPath` (`commands-terminal.ts:225`) falls back
+- **Shell.** `resolveLocalShellPath` (`commands/terminal.ts:225`) falls back
   to `/bin/zsh`, and user commands run as `<shell> -lc`.
 - **tmux.** About 8,400 lines in `tmux-*.ts`. They back only the opt-in
   claude-tmux tab; the default is `claudeNativeBackend: "sdk"`
@@ -261,7 +261,7 @@ builds, bridges and agent CLIs would outlive whatever stopped them.
 - Activation of the current set uses symlinks (`install.ts:209`,
   `manager.ts:1601`).
 - Binary names have no `.exe` (`manager.ts:174`,
-  `commands-agent-support.ts:334,694`).
+  `commands/agent-support.ts:334,694`).
 - `scripts/download-bun.sh` is bash, and it pins SHAs only for darwin and
   linux.
 - `host-maintenance-tasks.ts:254` throws for gh on win32.

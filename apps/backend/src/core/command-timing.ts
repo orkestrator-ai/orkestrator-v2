@@ -5,7 +5,7 @@ import { createLogger } from "@orkestrator/protocol/logger";
  * Durations of registered backend commands, for evidence when the backend is
  * slow: a `backend` `command.slow` line for a command that took long, and the
  * commands in flight for the event-loop stall line. Every caller reaches a
- * command through the registry (`commands-registry.ts`), whether it arrived
+ * command through the registry (`commands/registry.ts`), whether it arrived
  * over the gateway's `/__orkestrator/invoke` (the renderer, a node link, the
  * CLI), the control MCP or another command, so one wrapper covers them all.
  *

@@ -26,19 +26,19 @@ import {
 } from "./containers/index.js";
 import { CONTAINER_FETCH_EXEC_MARGIN_MS, ContainerGitFetchPolicy } from "./containers/git-fetch.js";
 import { recurringDiagnosticsRegistry } from "./recurring/index.js";
-import { localGitScanCacheGauges } from "./local-git-scan-caches.js";
+import { dropLocalGitScanCaches, localGitScanCacheGauges } from "./local-git-scan-caches.js";
 import {
   buildContainerFetchScript,
   buildFileTree,
   CONTAINER_FILE_TREE_LISTER,
-  dropLocalGitScanCaches,
   getContainerGitStatusDetailed,
   getLocalGitStatusDetailed,
   MAX_FILE_TREE_NODES,
   parseContainerFileTree,
-  type ContainerGitStatusDeps,
-} from "./commands-files.js";
-import { dockerExec } from "./commands-container-exec.js";
+} from "./commands/files.js";
+import { type CommandContext, type ContainerGitStatusDeps, dockerExec } from "./commands/index.js";
+import { quoteShell } from "./commands/agent-support.js";
+import type { BackendEmit } from "./backend-emit.js";
 import {
   baselineTargetBranch,
   findIntegratedBaseline,
@@ -46,8 +46,6 @@ import {
   localBaselineGit,
 } from "./diff-baseline.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
-import { quoteShell } from "./commands-agent-support.js";
-import type { BackendEmit, CommandContext } from "./commands-context.js";
 import type { Environment } from "./models.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 

@@ -1,7 +1,7 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerSystemCommands } from "../commands-registry-system.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerSystemCommands } from "../commands/registry-system.js";
 import {
   boundSnapshot,
   collectDescendantPids,

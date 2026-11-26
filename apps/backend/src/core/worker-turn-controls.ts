@@ -1,6 +1,6 @@
 import { withWorkerActionReceipt } from "./worker-action-receipts.js";
 import { encodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import {
   listSessionCommands,
   PublicActionError,

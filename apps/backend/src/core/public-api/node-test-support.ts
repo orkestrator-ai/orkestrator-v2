@@ -1,4 +1,4 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
 import {
@@ -7,7 +7,7 @@ import {
   type PublicActionName,
   type PublicActionResponse,
 } from "@orkestrator/protocol/public-api";
-import { registerNodeCommands } from "../commands-registry-nodes.js";
+import { registerNodeCommands } from "../commands/registry-nodes.js";
 import { settle, TestNodeNetwork, type TestNode } from "../nodes/node-network-test-support.js";
 import { withPublicAuthority } from "./dispatch.js";
 import type { PublicAuthority } from "./operation-ledger.js";

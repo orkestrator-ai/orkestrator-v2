@@ -314,7 +314,7 @@ No assertion, timeout, skip, or unrelated implementation changed.
   deadline itself was not reached on Linux.
 - **Verification:** six runs of `mise run test:logged -- --name
   env-fsmonitor-runN -- bun --cwd=apps/backend test
-  ./src/core/git/fsmonitor.test.ts ./src/core/commands-files-local-scan.test.ts
+  ./src/core/git/fsmonitor.test.ts ./src/core/commands/files-local-scan.test.ts
   --parallel=2`: all PASS. `--rerun-each` cannot stress this owner: on the
   second and later iterations `fixture repositories inherit fsmonitor off from
   the test preload` fails, and it fails identically on the unchanged file

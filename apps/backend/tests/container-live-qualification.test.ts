@@ -366,7 +366,7 @@ describe("C12 backend-created runtime on persistent storage", () => {
       const { ensureStorageVolumes, initializeStorageSet, planStorageSet } =
         await import("../src/core/containers/storage");
       const { PROVIDER_STATE_LAYOUT } = await import("../src/core/containers/state-layout");
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const environment = lifecycleEnvironment({
         id: `env-${RUN}-created`,
@@ -440,7 +440,7 @@ describe("C20 staged portable inputs", () => {
     async () => {
       const { memoryLifecycleContext, lifecycleEnvironment } =
         await import("./container-lifecycle-fixtures");
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const fixtureHome = path.join(dataDir, "fixture-home");
       const SENTINEL = `ORKSENTINEL${RUN}`;
@@ -587,7 +587,7 @@ describe("C20 staged portable inputs", () => {
             "cat /home/node/.codex/auth.json; test -f /home/node/.claude/CLAUDE.md && echo claude-md",
           ]),
         ).toBe('{"OPENAI_API_KEY":"fixture-not-a-key"}claude-md');
-        const { startContainerClaudeServer } = await import("../src/core/commands-containers");
+        const { startContainerClaudeServer } = await import("../src/core/commands/containers");
         // Starts the shipped bridge and waits for its authenticated readiness
         // route as the backend does; no provider turn or billing is involved.
         expect((await startContainerClaudeServer(containerId)).hostPort).toBeGreaterThan(0);

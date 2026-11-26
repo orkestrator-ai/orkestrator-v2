@@ -20,7 +20,7 @@ import {
   AGENT_VOICE_CHAT_SYSTEM_PROMPT,
   sanitizeAgentVoiceChatReply,
 } from "@orkestrator/protocol/agent-voice-chat";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import {
   buildClaudeOneShotCommandArgs,
   buildCodexOneShotCommandArgs,

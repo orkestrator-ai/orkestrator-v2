@@ -32,7 +32,7 @@ printf 'bridge\\n'
 });
 
 test("strict host-port discovery distinguishes unpublished ports from failed inspection", async () => {
-  const { getHostPort } = await import("../commands-container-exec.js");
+  const { getHostPort } = await import("../commands/container-exec.js");
   rememberNetworkOwner("runtime", null);
   await withDockerScript(
     `#!/bin/sh

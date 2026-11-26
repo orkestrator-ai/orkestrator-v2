@@ -22,7 +22,7 @@ import {
   type FileWritePrecondition,
 } from "@orkestrator/protocol/file-write-precondition";
 import { MAX_TEXT_FILE_BYTES } from "./path-safety.js";
-import { quoteShell } from "./commands-agent-support.js";
+import { quoteShell } from "./commands/agent-support.js";
 
 export function fileWriteConflictError(): Error {
   return new Error(FILE_WRITE_CONFLICT_MESSAGE);

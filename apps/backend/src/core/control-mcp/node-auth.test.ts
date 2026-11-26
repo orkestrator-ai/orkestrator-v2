@@ -1,9 +1,9 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, expect, test } from "bun:test";
 import path from "node:path";
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerCoordinatorNodeCommands } from "../commands-registry-coordinator-nodes.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerCoordinatorNodeCommands } from "../commands/registry-coordinator-nodes.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];

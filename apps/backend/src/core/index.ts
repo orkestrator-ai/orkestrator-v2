@@ -57,15 +57,40 @@ import {
   bugReportReaperEnvironments,
   updateBugReportBridgeFromEnvironment,
 } from "./bug-report-runtime.js";
-import { schedulingEnabled } from "./commands-registry-scheduled-jobs.js";
-import { createSelfImprovementService } from "./commands-registry-self-improvement.js";
+import {
+  type CommandContext,
+  type CommandInvocation,
+  schedulingEnabled,
+} from "./commands/index.js";
+import { createSelfImprovementService } from "./commands/registry-self-improvement.js";
+import { resolveUserCommandLaunch } from "./commands/registry-user-commands.js";
+import { resolveManagedBinary } from "./commands/agent-support.js";
+import { checkDockerAvailability } from "./commands/registry-docker.js";
+import {
+  createMcpRuntimeProbe,
+  mcpContainerOptions,
+  mcpRolloutLoader,
+} from "./commands/registry-mcp.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import {
+  scheduleMergeCleanupRecovery,
+  tmuxLocalClaudeConfigDirectory,
+} from "./commands/servers.js";
+import {
+  coordinatorBridgeEnvironmentFields,
+  coordinatorBridgeIdentityFromEnvironment,
+} from "./commands/local-server-lifecycle.js";
+import {
+  ensureContainerHostServicePorts,
+  prepareContainerAgentToolsRoute,
+} from "./commands/environment.js";
+import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands/review.js";
 import type { SelfImprovementService } from "./self-improvement/index.js";
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { AgentHumanPromptMonitor } from "./agent-human-prompt-monitor.js";
 import { readTaskOutputTail } from "./task-output-tail.js";
 import { HumanPromptRegistry } from "./human-prompt-registry.js";
 import { UserCommandService } from "./user-commands.js";
-import { resolveUserCommandLaunch } from "./commands-registry-user-commands.js";
 import { isPipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 import { workerSessionActivity, workerSessionGoal } from "./worker-session-activity.js";
 import {
@@ -106,7 +131,6 @@ import { BackendPush, createWorkflowSummaryReader } from "./push/index.js";
 import { pickInheritedGlobalSettings } from "@orkestrator/protocol/controller-settings";
 import type { NodeMode } from "@orkestrator/protocol/command-nodes";
 import { stoppedWorkerMailHook } from "./agent-mail-stopped-worker.js";
-import { resolveManagedBinary } from "./commands-agent-support.js";
 import {
   compatibilityPathUsage,
   type CompatibilityPathUsageSink,
@@ -133,7 +157,6 @@ import {
   multiReviewNativeAddressFindingsOptions,
   type ProvisionalFindingSink,
 } from "./review/index.js";
-import { checkDockerAvailability } from "./commands-registry-docker.js";
 import { openRegistryWriter, type RegistryWriter } from "./registry-writer-lease.js";
 import { registryWriterStartup } from "./registry-writer-startup.js";
 import { sweepOrphanEgressGateways } from "./egress-gateway.js";
@@ -194,11 +217,6 @@ import {
   WEB_ANNOTATION_GC_EVERY_TICKS,
   type WebAnnotationToolHost,
 } from "./web-annotations/index.js";
-import {
-  createMcpRuntimeProbe,
-  mcpRolloutLoader,
-  mcpContainerOptions,
-} from "./commands-registry-mcp.js";
 import { McpManagementService } from "./mcp-management/index.js";
 import {
   createCapabilityEnvironmentAuthority,
@@ -207,18 +225,7 @@ import {
 } from "./capabilities/index.js";
 import { remoteScopedEnvironments } from "./capabilities/scoped-sources.js";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import {
-  createCommandRegistry,
-  scheduleMergeCleanupRecovery,
-  tmuxLocalClaudeConfigDirectory,
-  type CommandContext,
-  type CommandInvocation,
-} from "./commands.js";
 import { reapOrphanedClaudeTmuxRuntimes, reapOrphanedLocalServers } from "./local-server-reaper.js";
-import {
-  coordinatorBridgeEnvironmentFields,
-  coordinatorBridgeIdentityFromEnvironment,
-} from "./commands-local-server-lifecycle.js";
 import { claudeTmuxRuntimeRootPrefix } from "./tmux/index.js";
 import { StorageService } from "./storage/service.js";
 import { BackendRuntime, type BackendRuntimeOptions } from "./backend-runtime.js";
@@ -230,10 +237,6 @@ import {
   type TranscriptArtifactService,
   type TranscriptArtifactToolHost,
 } from "./transcript-artifacts/index.js";
-import {
-  prepareContainerAgentToolsRoute,
-  ensureContainerHostServicePorts,
-} from "./commands-environment.js";
 import { APP_VERSION, BUILD_COMMIT, DOCKER_IMAGE } from "./constants.js";
 import { type BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { HostMaintenanceService } from "./host-maintenance.js";
@@ -303,7 +306,6 @@ import {
   runStartupEnvironmentCleanup,
 } from "./environments/cleanup-reconciler.js";
 import { LinearFileService } from "./linear-files/index.js";
-import { createPipelineEnvironmentGit, verifyEnvironmentReviewPackage } from "./commands-review.js";
 import { GraphTemplateService } from "./graph-template-service.js";
 import { GraphArtifactStore } from "./graph-artifacts.js";
 import { GraphBranchWorktreeJanitor, GraphBranchWorktrees } from "./graph-branch-worktrees.js";

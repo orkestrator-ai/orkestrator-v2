@@ -46,7 +46,7 @@ import path from "node:path";
 import { withoutUrlCredentials } from "@orkestrator/protocol/git-remote-url";
 import { allowlistEntryDomain, parseAllowlistEntry } from "@orkestrator/protocol/network-allowlist";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import type { Project } from "./models.js";
 import {
   containerCloneUrl,

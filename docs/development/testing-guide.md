@@ -694,7 +694,7 @@ entries are mocks, so a suite can assert on the reads.
 
 Default and slow-tier tests must not reach the network or a provider login. A
 backend path that resolves an agent CLI (`resolveCodexBinary` and its siblings
-in `commands-agent-support.ts`) checks the managed copies first
+in `commands/agent-support.ts`) checks the managed copies first
 (`toolchainBinDir`, `<resourceRoot>/bin`, `<appRoot>/binaries`,
 `<appRoot>/bin`) and then falls back to the bare name, so `PATH` decides. CI
 puts the pinned Codex on `PATH`, and a developer's `PATH` usually has a
@@ -1407,7 +1407,7 @@ mise run dev:stop --profile bg15 && mise run dev:reset --profile bg15
 Before 2026-11-06 a claude-tmux tab in an agent-test profile with no added
 Claude account ran the CLI with the host tmux server's environment, which
 reads the host's `~/.claude`; on an older commit, cherry-pick that fix
-(`tmuxLocalClaudeConfigDirectory` in `commands-servers.ts`) into the scratch
+(`tmuxLocalClaudeConfigDirectory` in `commands/servers.ts`) into the scratch
 checkout before running this.
 
 #### Environment activity RPC counts (WEB-3)

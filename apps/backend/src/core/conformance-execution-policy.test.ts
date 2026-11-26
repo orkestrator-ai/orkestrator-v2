@@ -56,7 +56,7 @@ describe("execution policy shapes", () => {
       expect(effects.isolation === "container").toBe(
         containerized && shape.policy.sandbox !== "provider",
       );
-      // The firewall follows the environment's setting (`commands-containers.ts`).
+      // The firewall follows the environment's setting (`commands/containers.ts`).
       if (effects.networkHeldBy === "container") {
         expect(shape.environment.networkAccessMode).toBe("restricted");
       }

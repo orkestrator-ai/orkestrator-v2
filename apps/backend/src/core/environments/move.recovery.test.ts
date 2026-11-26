@@ -3,7 +3,7 @@ import { describe, expect, test, mock, spyOn, setDefaultTimeout } from "bun:test
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Environment } from "../models.js";
-import { type CommandContext } from "../commands.js";
+import type { CommandContext } from "../commands/context.js";
 import { moveEnvironmentTask, recoverInterruptedEnvironmentMoves } from "./move.js";
 import { runCommand } from "../shell.js";
 import * as shell from "../shell.js";

@@ -19,7 +19,7 @@ Each rerun used `mise run test:logged`, one explicit owning file and `--parallel
 | --- | --- | --- | --- | --- |
 | `fallback to the ordinary clone > an object lost from deep in the history, which only the clone can find` | `tests/unit/workspace-setup-git-mirror.test.ts:309` | Git child status null; 6,809.93 ms, beyond the 5 s case deadline | `mise run test:logged -- --name merge-git-mirror-alone -- bun test ./tests/unit/workspace-setup-git-mirror.test.ts --parallel=1 --only-failures` | exit 0, 46.4 s |
 | `native shell completion execution > zsh bashcompinit parses option values and offers short flags` | `packages/cli/tests/command-surface.test.ts:375` | Bash child status null; 5,004.27 ms | `mise run test:logged -- --name merge-cli-completion-alone -- bun test --cwd packages/cli ./tests/command-surface.test.ts --parallel=1 --only-failures` | exit 0, 6.8 s |
-| `container removal safety and shared revert behavior > revert refuses a newly added folder containing a nested repository without mutation` | `apps/backend/src/core/commands-files-delete-folder.test.ts:260` | Expected nested-repository refusal, received an empty error; 5,305.84 ms and timeout | `mise run test:logged -- --name merge-folder-delete-alone -- bun test --cwd apps/backend ./src/core/commands-files-delete-folder.test.ts --parallel=1 --only-failures` | exit 0, 14.7 s |
+| `container removal safety and shared revert behavior > revert refuses a newly added folder containing a nested repository without mutation` | `apps/backend/src/core/commands/files-delete-folder.test.ts:260` | Expected nested-repository refusal, received an empty error; 5,305.84 ms and timeout | `mise run test:logged -- --name merge-folder-delete-alone -- bun test --cwd apps/backend ./src/core/commands/files-delete-folder.test.ts --parallel=1 --only-failures` | exit 0, 14.7 s |
 | `never runs the worktree's fsmonitor hook or takes optional locks (node)` | `apps/backend/src/core/review-worktree-fingerprint.test.ts` | 5,054.04 ms timeout | `mise run test:logged -- --name merge-fingerprint-alone -- bun test --cwd apps/backend ./src/core/review-worktree-fingerprint.test.ts --parallel=1 --only-failures` | exit 0, 24.1 s |
 | `bounded in-container boot wait > returns as soon as the current boot is ready, and prints what one read would` | `apps/backend/tests/container-readiness.test.ts:314` | Probe took 1,064.68 ms, expected below 1,000 ms; case 1,333.58 ms | `mise run test:logged -- --name merge-readiness-alone -- bun test --cwd apps/backend ./tests/container-readiness.test.ts --parallel=1 --only-failures` | exit 0, 9.5 s |
 
@@ -111,11 +111,11 @@ Original evidence remains under
 `.orkestrator/review-artifacts/review-validation-dd80c812-46c6-4f02-b538-897dbf04bdfd/validation-04.stderr.txt`.
 
 `container removal safety and shared revert behavior > revert restores a tracked
-file from the base` (`apps/backend/src/core/commands-files-delete-folder.test.ts`)
+file from the base` (`apps/backend/src/core/commands/files-delete-folder.test.ts`)
 timed out at 5,031.36 ms during `git diff --cached --name-status`.
 At `b32cfe416`, the unchanged complete owner passed alone:
 `mise run test:logged -- --name recorded-revert-alone -- bun test --cwd
-apps/backend ./src/core/commands-files-delete-folder.test.ts --parallel=1
+apps/backend ./src/core/commands/files-delete-folder.test.ts --parallel=1
 --only-failures` (exit 0, 24.4 s). Passing raw output was deleted, so totals are
 not inferred. No assertion, skip or timeout changed; this is evidence of
 intermittence, not a demonstrated cause or repair.
@@ -189,7 +189,7 @@ No production behavior changed.
 The two backend owners passed together in 5.4 s:
 `mise run test:logged -- --name review-helper-guards-final -- bun test --cwd
 apps/backend ./src/core/path-safety.test.ts
-./src/core/commands-environment-cleanup.test.ts --parallel=1 --only-failures`.
+./src/core/commands/environment-cleanup.test.ts --parallel=1 --only-failures`.
 Focused backend typechecking initially found seven missing parameter types in
 these new test spies; explicit parameter tuples fixed all seven and the exact
 package typecheck passed on rerun (0.6 s). The initial artifact is
@@ -259,10 +259,10 @@ unconfirmed, and the isolated pass does not replace the aggregate failure.
 
 Observed in `ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=7200000 mise run test:logged -- --name coverage-full-final -- mise run test` at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`, base `08d3da4a23cfe2ecc34fba663ca27e765f7924a9`, macOS arm64/Bun 1.4.4. The workspace reserved six slots (web two, backend four), root one, bridges two and protocol one. The aggregate exited 1 after 2468.77 s; backend has no final counts because the workspace no-progress watchdog fired. Root reported 4274 pass/25 skip/4 fail; web 14336 pass/10 skip/2 fail; Pi 706 pass/1 skip/2 fail.
 
-- `apps/backend/src/core/commands-files-delete-folder.test.ts` — `container removal safety and shared revert behavior > revert restores a tracked file from the base`: Test deadline 5,000 ms exceeded. Observed 6123.11ms. Complete unchanged owner: 25 pass, 0 fail, 0 skip in 18.14 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
+- `apps/backend/src/core/commands/files-delete-folder.test.ts` — `container removal safety and shared revert behavior > revert restores a tracked file from the base`: Test deadline 5,000 ms exceeded. Observed 6123.11ms. Complete unchanged owner: 25 pass, 0 fail, 0 skip in 18.14 s at `310f4fd7ae6d64395d5f5bc3e3548485489be2f0`.
 
 ```sh
-mise run test:logged -- --name watcher-triage-delete-folder -- bun test --cwd apps/backend ./src/core/commands-files-delete-folder.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/delete-folder.xml
+mise run test:logged -- --name watcher-triage-delete-folder -- bun test --cwd apps/backend ./src/core/commands/files-delete-folder.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures --reporter=junit --reporter-outfile=/private/tmp/ork-watcher-failure-triage.0oarZv/delete-folder.xml
 ```
 
 `mise run flaky:recurrence -- 9839 --base 08d3da4a23cfe2ecc34fba663ca27e765f7924a9 --registry-ref origin/main` reported the case open; this records a recurrence.

@@ -16,7 +16,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 import type { Environment } from "../src/core/models";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
@@ -28,7 +28,8 @@ import { isolateXdgEnvironment, XDG_KEYS } from "./xdg-fixture.js";
 import { AUTH_SECRET_CANARIES } from "../../../tests/helpers/auth-secret-canaries.js";
 import { OPENCODE2_CONTAINER_PLUGINS_FINGERPRINT } from "../src/core/opencode2/container-server.js";
 
-const { createCommandRegistry, __testing } = await import("../src/core/commands");
+const { __testing } = await import("../src/core/commands/testing");
+const { createCommandRegistry } = await import("../src/core/commands/registry");
 
 type Handler = NonNullable<
   ReturnType<typeof createCommandRegistry>["get"] extends (name: string) => infer T ? T : never

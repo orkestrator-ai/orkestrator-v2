@@ -217,7 +217,7 @@ async function createRuntime(
   id: string,
   options: { image?: string; mode?: "restricted" | "full"; domains?: string[] } = {},
 ) {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}-${id}`,

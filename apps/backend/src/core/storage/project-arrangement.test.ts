@@ -7,8 +7,8 @@ import {
   parseProjectArrangementIntent,
   projectFolderDragId,
 } from "@orkestrator/protocol/project-arrangement";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import type { Project } from "../models.js";
 import { StorageService } from "./service.js";
 

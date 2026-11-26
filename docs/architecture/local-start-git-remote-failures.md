@@ -14,7 +14,7 @@ environment offers to switch the project to HTTPS.
 
 The failure is persisted as the environment's `lifecycleError`, a sanitized
 message chosen by `environmentLifecycleErrorMessage`
-(`apps/backend/src/core/commands-error-text.ts`). Git remote failures have
+(`apps/backend/src/core/commands/error-text.ts`). Git remote failures have
 their own wording:
 
 | Cause | Message |

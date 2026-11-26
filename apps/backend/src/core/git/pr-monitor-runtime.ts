@@ -9,16 +9,18 @@ import { isPrReadingConfirmedByMonitor } from "@orkestrator/protocol/pr-merge-re
 import { PrMonitorService, type PrMonitorServiceOptions } from "./pr-monitor.js";
 import type { Environment } from "../models.js";
 import type { StorageService } from "../storage/index.js";
-import type { BackendEmit, CommandContext } from "../commands-context.js";
-import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
-import { WorkAdmissionPool } from "../work-admission.js";
+import type { BackendEmit } from "../backend-emit.js";
+import type { CommandContext } from "../commands/index.js";
 import {
   detectEnvironmentPullRequest,
   environmentToPrMonitorTarget,
   findKanbanTaskForEnvironment,
   prMonitorCooldownScope,
   projectHomePrTarget,
-} from "../commands-pr-monitor.js";
+} from "../commands/pr-monitor.js";
+import { PR_BATCH_TIMEOUT_MS, PrMonitorBatchReader } from "../commands/pr-monitor-batch.js";
+import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/events";
+import { WorkAdmissionPool } from "../work-admission.js";
 import { readCheckoutBranch, refreshProjectHomeBranch } from "../project-home-environment.js";
 import {
   PrViewerPermissionCache,
@@ -26,7 +28,6 @@ import {
   prViewerRepository,
 } from "./pr-viewer-permission.js";
 import { PrRequiredChecksCache } from "./pr-required-checks.js";
-import { PR_BATCH_TIMEOUT_MS, PrMonitorBatchReader } from "../commands-pr-monitor-batch.js";
 import { gitHubCli, type GitHubCliSelection } from "./github-cli-binary.js";
 import { gitHubCliEnv } from "./github-credentials.js";
 import { runCommand } from "../shell.js";
@@ -47,7 +48,7 @@ export interface RelayedPrMonitorHealth {
 
 /**
  * Starts the cleanup that follows a merged PR when the environment asked for
- * one. It is owned by `commands-servers` (it ends in `deleteEnvironmentTask`),
+ * one. It is owned by `commands/servers.ts` (it ends in `deleteEnvironmentTask`),
  * which imports the PR monitor in turn, so the backend passes it in at
  * construction instead of this module importing it.
  */
@@ -55,7 +56,7 @@ export type MergeCleanupScheduler = (environmentId: string, context: CommandCont
 
 export type PrMonitorRuntimeOptions = {
   /**
-   * `scheduleMergeCleanupRecovery` from `commands-servers.ts` in the backend
+   * `scheduleMergeCleanupRecovery` from `commands/servers.ts` in the backend
    * (`index.ts`) and in command fixtures. Without it a merged observation's
    * cleanup is skipped with one warning; the cleanup intent stays durable on
    * the environment for backend startup to recover.
@@ -134,7 +135,7 @@ export class PrMonitorRuntime {
   readonly requiredChecks = new PrRequiredChecksCache();
   /**
    * One query for the local open PRs of a host and credential
-   * (`commands-pr-monitor-batch.ts`). A change it sees for a quiet PR wakes
+   * (`commands/pr-monitor-batch.ts`). A change it sees for a quiet PR wakes
    * that PR's entry, which then reads the shared answer.
    */
   readonly prBatches = new PrMonitorBatchReader({

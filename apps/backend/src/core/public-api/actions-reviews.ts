@@ -17,7 +17,7 @@ import {
   REVIEW_TAB_TITLE,
 } from "@orkestrator/protocol/git-workflow-prompts";
 import { createPRPrompt, createResolveConflictsPrompt } from "@orkestrator/protocol/pr-prompt";
-import { conciseError } from "../commands-error-text.js";
+import { conciseError } from "../commands/index.js";
 import { workflowSummary } from "../build-pipeline/control-workflow-summary.js";
 import type { Environment } from "../models.js";
 import { MULTI_REVIEW_AUTO_PR_TAB_TITLE } from "../review/index.js";

@@ -13,7 +13,7 @@ Analysed 2026-11-04 against `main` at `96ee1eb3`, with the replay removal from t
 
 **Problem.** The ACP bridge still handles Cursor's own extension methods, though no launch runs Cursor on it. The handlers add code and tests to a sensitive module for an agent that uses another bridge.
 
-**Context.** BR-16 removed only the tool metadata replay, because that was the part gated on `provider === "cursor"` and spawning a process per pass. Cursor runs on `bridges/cursor-bridge`; `apps/backend/src/core/commands-servers.ts` and `host-model-catalog-refresh.ts` send only Grok here, and the container entrypoint exports `ACP_PROVIDER=grok`.
+**Context.** BR-16 removed only the tool metadata replay, because that was the part gated on `provider === "cursor"` and spawning a process per pass. Cursor runs on `bridges/cursor-bridge`; `apps/backend/src/core/commands/servers.ts` and `host-model-catalog-refresh.ts` send only Grok here, and the container entrypoint exports `ACP_PROVIDER=grok`.
 
 **Investigation.** These are gated by method name, not provider, so a provider-id argument does not prove them unreachable: `isCursorTaskMethod` and `isCursorUpdateTodosMethod` dispatch at `bridges/acp-bridge/src/acp-session.ts:2305` and `:2309`. Grok's launcher record lists no acknowledged extension methods, and nothing here shows Grok sending a `cursor/` method, but no run against the real binary was made to confirm it; that run is in the manual-test checklist (7568, 4540 task 1). What goes with them: `applyCursorTask`, the `cursorTask` field on tool sources, and most of `testing/fake-agent-prompt-cursor.ts` and the `cursor/task` cases in `acp-transcript.test.ts` and `acp-context.test.ts`. The fixtures still send these methods under the neutral `acp-fixture` provider.
 

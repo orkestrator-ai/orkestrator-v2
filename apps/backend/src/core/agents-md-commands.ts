@@ -15,9 +15,12 @@ import {
   readProjectAgentsMdSectionCommand,
   requestCoordinatorAgentsMdUpdateCommand,
 } from "@orkestrator/protocol/contract/domains/projects";
-import { asNonBlankString } from "./commands-helpers.js";
-import type { CommandContext } from "./commands-context.js";
-import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type RegistryDependencies,
+} from "./commands/index.js";
 import { coordinatorCaller, withCoordinatorReceipt } from "./coordinator/index.js";
 import { resolveProjectGitRoot } from "./project-git-root.js";
 

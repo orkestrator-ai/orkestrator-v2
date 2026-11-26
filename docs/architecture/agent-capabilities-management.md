@@ -161,7 +161,7 @@ with `answer_capability_node_request` (`internal`, at the leaf's current
 epoch and controller):
 
 - `container-staging`, when the leaf creates or rebuilds a container
-  (`commands-containers.ts` asks `prepareContainerStaging`): the container's
+  (`commands/containers.ts` asks `prepareContainerStaging`): the container's
   environment and project ids, providers and stage names. The command node
   plans the container target for that machine (`containerCapabilityPlan`),
   sends every artifact the plan names over `stage_capability_node_artifact`,

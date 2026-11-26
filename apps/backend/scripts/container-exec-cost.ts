@@ -6,8 +6,8 @@ import {
   buildContainerGitStatusScript,
   CONTAINER_FILE_TREE_LISTER,
   MAX_FILE_TREE_NODES,
-} from "../src/core/commands-files.js";
-import { quoteShell } from "../src/core/commands-agent-support.js";
+} from "../src/core/commands/files.js";
+import { quoteShell } from "../src/core/commands/agent-support.js";
 
 /**
  * What one container `docker exec` costs, end to end, on the Docker this

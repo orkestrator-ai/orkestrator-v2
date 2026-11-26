@@ -9,8 +9,8 @@
 import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
 import { FEATURE_PLANNING_RECORD_VERSION } from "@orkestrator/protocol/feature-planning";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { CoordinatorRequestFlights } from "./request-flights.js";
 import { MailWorld } from "../agent-mail-world-test-support.js";
 import { featurePlanCoordinatorStatus } from "./feature-plan-status.js";

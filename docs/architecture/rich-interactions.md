@@ -35,7 +35,7 @@ delivered only to that stored destination.
 | Contract, kinds, validators | `packages/protocol/src/rich-interactions/` (`core.ts`, `refs.ts`, `form.ts`, `kinds-*.ts`, `validate.ts`); tool names in `rich-interaction-tools.ts` |
 | Contract domain | `packages/protocol/src/contract/domains/rich-interactions/` (10 commands) |
 | Backend service | `apps/backend/src/core/rich-interactions/` (`service.ts`, `store.ts`, `layout.ts`, `deliverables.ts`, `product-commands.ts`, `tools.ts`, `index.ts`) |
-| Command registration | `apps/backend/src/core/commands-registry-rich-interactions.ts` |
+| Command registration | `apps/backend/src/core/commands/registry-rich-interactions.ts` |
 | Web data layer | `apps/web/src/lib/chat/rich-interactions.ts`, `apps/web/src/lib/backend/rich-interactions.ts` |
 | Cards | `apps/web/src/components/chat/interactions/` (shell, registry, `kinds/*`) |
 | Composer tools | `apps/web/src/components/chat/interactions/composer/` |

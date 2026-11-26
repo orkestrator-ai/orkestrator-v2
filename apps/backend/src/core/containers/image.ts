@@ -18,7 +18,7 @@ import {
 import { dockerOwnerNamespace } from "./ownership.js";
 import { copyOutBounded, extractSingleTarFile } from "./copy-out.js";
 import { runCommand } from "../shell.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 
 /**
  * Image identity, manifest and daemon topology.

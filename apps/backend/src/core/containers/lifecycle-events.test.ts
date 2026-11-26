@@ -1,5 +1,5 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { ContainerLifecycleReactor, containerIdsMatch } from "./lifecycle-events.js";
 import { EnvironmentOperations } from "../environments/operations.js";
 import type { Environment } from "../models.js";

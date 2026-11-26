@@ -16,9 +16,12 @@ import {
 } from "@orkestrator/protocol/native-agent-goal";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { asNonBlankString } from "../commands-helpers.js";
-import type { CommandContext } from "../commands-context.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type RegistryDependencies,
+} from "../commands/index.js";
 import {
   coordinatorCaller,
   withCoordinatorReceipt,

@@ -1,0 +1,1456 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { createCommandRegistry } from "./registry.js";
+import type { CommandContext } from "./context.js";
+import { ProjectGitService } from "../project-git-service.js";
+import { CoordinatorService } from "../coordinator/service.js";
+import { createEnvironment, createProject, StorageService } from "../storage/service.js";
+import { runCommand } from "../shell.js";
+import {
+  COORDINATOR_REQUEST_ID_REUSED_ERROR,
+  coordinatorRuntimeId,
+} from "@orkestrator/protocol/coordinator";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import {
+  COORDINATOR_DELEGATION_FRAME_OPEN,
+  COORDINATOR_WORKER_NO_PR_INSTRUCTION,
+  COORDINATOR_DELEGATION_PRESENTATION,
+  coordinatorDelegationFromMail,
+  parseCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
+import { parseBackendId } from "@orkestrator/protocol/federation";
+import { NodeCoordinatorRemote } from "../nodes/node-coordinator-remote.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import { MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS } from "../coordinator/workflow-retention.js";
+import { seedStore, readStoredValue } from "../storage/test-support.js";
+import { multiReviewInputWithDefaults } from "../coordinator/launch-defaults.js";
+import type { AgentModel } from "@orkestrator/protocol/native-agent";
+
+describe("coordinator command registry", () => {
+  let root: string;
+  let checkout: string;
+  let storage: StorageService;
+  let coordinator: CoordinatorService;
+  let context: CommandContext;
+  let commands: ReturnType<typeof createCommandRegistry>;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-coordinator-commands-"));
+    checkout = path.join(root, "checkout");
+    await fs.mkdir(checkout);
+    await runCommand("git", ["init", "-b", "main"], { cwd: checkout });
+    await runCommand("git", ["config", "user.email", "test@example.invalid"], { cwd: checkout });
+    await runCommand("git", ["config", "user.name", "Coordinator Test"], { cwd: checkout });
+    await fs.writeFile(path.join(checkout, "README.md"), "initial\n");
+    await runCommand("git", ["add", "README.md"], { cwd: checkout });
+    await runCommand("git", ["commit", "-m", "initial"], { cwd: checkout });
+    storage = new StorageService(path.join(root, "data"));
+    await storage.init();
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      agentSettings: { ...config.global.agentSettings, defaultAgent: "codex" },
+    });
+    coordinator = new CoordinatorService(storage, () => ({
+      enabled: true,
+      running: true,
+      error: null,
+    }));
+    commands = createCommandRegistry();
+    context = {
+      storage,
+      coordinators: coordinator,
+      appRoot: root,
+      resourceRoot: root,
+      emit: () => undefined,
+      environmentLifecycleTasks: {} as CommandContext["environmentLifecycleTasks"],
+      runtime: new BackendRuntime({ emit: () => undefined }),
+    };
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  test.each([undefined, "", "  ", " release/next "])(
+    "resolves the configured launch base branch %p with a main fallback",
+    async (defaultBranch) => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const branch = defaultBranch?.trim() || "main";
+      if (branch !== "main") await runCommand("git", ["branch", branch], { cwd: checkout });
+      if (defaultBranch !== undefined)
+        await storage.updateRepositoryConfig(project.id, {
+          ...(await storage.getRepositoryConfig(project.id)),
+          defaultBranch,
+        });
+      context.projectGit = new ProjectGitService(storage);
+      const head = (
+        await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })
+      ).stdout.trim();
+      expect(
+        await commands.get("get_project_base_branch_tip")!({ projectId: project.id }, context),
+      ).toMatchObject({
+        branch,
+        commit: head,
+        ref: branch,
+        fetched: false,
+      });
+    },
+  );
+
+  test("create_coordinator_conversation passes only string conversation ids to close", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const create = mock(coordinator.createConversation.bind(coordinator));
+    coordinator.createConversation = create;
+    const run = commands.get("create_coordinator_conversation")!;
+    await run({ projectId: project.id }, context);
+    await run({ projectId: project.id, closeUnused: ["side-1", 7, "", null, "side-2"] }, context);
+    await run({ projectId: project.id, closeUnused: "side-1" }, context);
+    expect(create.mock.calls.map((call) => call[2])).toEqual([
+      { closeUnused: [] },
+      { closeUnused: ["side-1", "side-2"] },
+      { closeUnused: [] },
+    ]);
+  });
+
+  test("watch_coordinator_pull_request watches the project's own pull requests once it has a coordinator", async () => {
+    const project = await storage.addProject(
+      createProject("https://github.com/acme/app.git", checkout),
+    );
+    const run = commands.get("watch_coordinator_pull_request")!;
+    const args = {
+      projectId: project.id,
+      owner: "acme",
+      repo: "app",
+      number: 12,
+      source: "rendered",
+    };
+    expect(await run(args, context)).toEqual({ watched: false, reason: "no-coordinator" });
+    await coordinator.ensure(project.id);
+    expect(await run(args, context)).toEqual({ watched: true, added: true });
+    expect(await run({ ...args, repo: "other" }, context)).toEqual({
+      watched: false,
+      reason: "other-repository",
+    });
+    await expect(run({ ...args, source: "typed" }, context)).rejects.toThrow("Expected source");
+    await expect(run({ ...args, owner: ".." }, context)).rejects.toThrow("Expected owner");
+    // A defined command drops an unknown key (tolerant reader), so the call is the plain watch.
+    expect(await run({ ...args, extra: true }, context)).toMatchObject({ watched: true });
+    expect(
+      storage.watchedPullRequests.listWatchedPullRequests(project.id).map((entry) => entry.key),
+    ).toEqual(["acme/app#12"]);
+  });
+
+  test("removes a project even when the coordinator store schema is unsupported", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    await fs.writeFile(
+      path.join(storage.getDataDir(), "coordinators.json"),
+      JSON.stringify({ version: 999, revision: 1, workspaces: {}, workflows: [] }),
+    );
+
+    await expect(
+      commands.get("remove_project")!({ projectId: project.id }, context),
+    ).resolves.toBeUndefined();
+    expect(await storage.getProject(project.id)).toBeNull();
+  });
+
+  test("launches once with an attested prompt and rejects request reuse", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const create = mock(async (args: Record<string, unknown>) => {
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+        initialPrompt: String(args.initialPrompt),
+      });
+      environment.id = "worker-1";
+      environment.status = "creating";
+      environment.pendingAgentLaunch = true;
+      environment.delegationBaseBranch = "main";
+      environment.delegationBaseCommit = head;
+      environment.controlRequestId = String(args.controlRequestId);
+      await storage.addEnvironment(environment);
+      return environment;
+    });
+    commands.set("create_environment", create);
+    const launch = commands.get("launch_coordinator_environment")!;
+    const args = {
+      scope: {
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+        conversationId: conversation.id,
+      },
+      requestId: "launch-1",
+      input: {
+        projectId: project.id,
+        environmentType: "local",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: head,
+        initialPrompt: "Implement it",
+      },
+    };
+    await expect(launch(args, context)).resolves.toMatchObject({ environment: { id: "worker-1" } });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(
+      (await storage.coordinators.listOpenCoordinatorDelegations())[0]?.delegation?.request,
+    ).toMatchObject({ summary: "Implement it", source: "default" });
+    expect(String(create.mock.calls[0]![0]!.initialPrompt)).toContain(
+      COORDINATOR_DELEGATION_FRAME_OPEN,
+    );
+    expect(String(create.mock.calls[0]![0]!.initialPrompt)).toContain(
+      COORDINATOR_WORKER_NO_PR_INSTRUCTION,
+    );
+    expect(await storage.getEnvironment("worker-1")).toMatchObject({
+      initialPromptPresentation: {
+        kind: COORDINATOR_DELEGATION_PRESENTATION,
+        frame: expect.stringContaining(COORDINATOR_DELEGATION_FRAME_OPEN),
+      },
+    });
+    // The same request again replays, and says so.
+    const replay = (await launch(args, context)) as Record<string, unknown>;
+    expect(replay).toMatchObject({ environment: { id: "worker-1" }, replayed: true });
+    expect(create).toHaveBeenCalledTimes(1);
+    // Launch intent alone is delivery evidence, even before a session/mailbox exists.
+    await storage.updateEnvironment("worker-1", { initialPrompt: undefined, status: "running" });
+    const requestState = commands.get("get_worker_request_state")!;
+    expect(
+      await requestState({ environmentId: "worker-1", tabId: "startup-agent" }, context),
+    ).toEqual({
+      requestPending: true,
+      backgroundWorkPending: false,
+    });
+    expect(
+      await requestState({ environmentId: "worker-1", tabId: "other" }, context),
+    ).toMatchObject({
+      requestPending: false,
+    });
+    const remote = new NodeCoordinatorRemote({
+      invokeOnNode: async ({ command, args: remoteArgs }) => ({
+        outcome: "ok",
+        result:
+          command === "get_agent_registry"
+            ? { entries: [{ environmentId: "worker-1", tabId: "startup-agent", state: "idle" }] }
+            : await commands.get(command)!(remoteArgs, context),
+      }),
+      summaries: async () => ({ selfId: parseBackendId("bk_command"), nodes: [] }),
+    });
+    expect(await remote.workerState("bk_leaf", "worker-1", "startup-agent")).toMatchObject({
+      tab: "idle",
+      requestPending: true,
+    });
+    await coordinator.reconcileWorkerDelegations();
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
+    await storage.updateEnvironment("worker-1", { pendingAgentLaunch: false });
+    expect(await remote.workerState("bk_leaf", "worker-1", "startup-agent")).toMatchObject({
+      requestPending: false,
+    });
+    await expect(
+      launch(
+        {
+          ...args,
+          input: { ...args.input, initialPrompt: "Different payload" },
+        },
+        context,
+      ),
+    ).rejects.toThrow(COORDINATOR_REQUEST_ID_REUSED_ERROR);
+  });
+
+  test("a launch's frame says when the turn arose from agent mail", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const setOrigin = (origin: "user" | "mail") =>
+      storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+        ...workspace!,
+        conversations: workspace!.conversations.map((item) =>
+          item.id === conversation.id ? { ...item, lastTurnOrigin: origin } : item,
+        ),
+      }));
+    const create = mock(async (args: Record<string, unknown>) => {
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+        initialPrompt: String(args.initialPrompt),
+      });
+      environment.status = "creating";
+      environment.delegationBaseBranch = "main";
+      environment.delegationBaseCommit = head;
+      await storage.addEnvironment(environment);
+      return environment;
+    });
+    commands.set("create_environment", create);
+    const launch = (requestId: string, turnOrigin?: "user" | "mail") =>
+      commands.get("launch_coordinator_environment")!(
+        {
+          scope: {
+            projectId: project.id,
+            coordinatorId: snapshot.workspace.id,
+            conversationId: conversation.id,
+            ...(turnOrigin ? { turnOrigin } : {}),
+          },
+          requestId,
+          input: {
+            projectId: project.id,
+            environmentType: "local",
+            delegationBaseBranch: "main",
+            delegationBaseCommit: head,
+            initialPrompt: "Implement it",
+          },
+        },
+        context,
+      );
+    const fromMail = async () => {
+      const prompt = String(create.mock.calls.at(-1)![0]!.initialPrompt);
+      const parsed = parseCoordinatorDelegatedPrompt(prompt);
+      expect(parsed?.source).toBe("Implement it");
+      return coordinatorDelegationFromMail(parsed!.frame);
+    };
+    await setOrigin("mail");
+    await launch("from-mail");
+    expect(await fromMail()).toBe(true);
+    await setOrigin("user");
+    await launch("from-user");
+    expect(await fromMail()).toBe(false);
+    // A scheduled fire carries the origin of the turn that set it.
+    await launch("scheduled-from-mail", "mail");
+    expect(await fromMail()).toBe(true);
+    await setOrigin("mail");
+    await launch("scheduled-from-user", "user");
+    expect(await fromMail()).toBe(false);
+  });
+
+  test("a defaulted agent replays after the default agent changes", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const create = mock(async (args: Record<string, unknown>) => {
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+        initialPrompt: String(args.initialPrompt),
+      });
+      environment.id = "worker-default";
+      environment.status = "creating";
+      await storage.addEnvironment(environment);
+      return environment;
+    });
+    commands.set("create_environment", create);
+    const launch = commands.get("launch_coordinator_environment")!;
+    const args = (agent: string, agentDefaulted?: true) => ({
+      scope: {
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+        conversationId: conversation.id,
+      },
+      requestId: "launch-default-agent",
+      input: {
+        projectId: project.id,
+        environmentType: "local",
+        delegationBaseBranch: "main",
+        delegationBaseCommit: head,
+        initialPrompt: "Implement it",
+        agentSettings: { defaultAgent: agent, platforms: { [agent]: { mode: "native" } } },
+      },
+      ...(agentDefaulted ? { agentDefaulted } : {}),
+    });
+    await launch(args("codex", true), context);
+    // The user switched their default to Claude before the retry arrived.
+    await expect(launch(args("claude", true), context)).resolves.toMatchObject({
+      environment: { id: "worker-default" },
+      replayed: true,
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    // Naming an agent is a different request from "the default".
+    await expect(launch(args("claude"), context)).rejects.toThrow(
+      COORDINATOR_REQUEST_ID_REUSED_ERROR,
+    );
+  });
+
+  test.each([false, true])(
+    "resolves persisted Pi defaults with no bridge (marked: %p)",
+    async (marked) => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const snapshot = await coordinator.ensure(project.id);
+      const conversation = snapshot.workspace.conversations[0]!;
+      const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+      await storage.updateGlobalConfig({
+        ...(await storage.loadConfig()).global,
+        enabledAgentPlatforms: ["pi"],
+      });
+      seedStore(path.join(root, "data"), "agent-model-catalog.json", {
+        schemaVersion: 1,
+        pi: {
+          updatedAt: new Date(0).toISOString(),
+          models: [
+            { platform: "pi", id: "openai/gpt-4", label: "Refused first model" },
+            {
+              platform: "pi",
+              id: "openai/gpt-6.1-sol",
+              label: "Saved default",
+              ...(marked ? { sessionDefault: true } : {}),
+            },
+          ],
+        },
+      });
+      const catalog = (await commands.get("get_native_agent_model_catalog")!(
+        { environmentId },
+        context,
+      )) as AgentModel[];
+      // The durable cache is served either way; only the row resolution
+      // differs. An unmarked (pre-upgrade) cache leaves the model to Pi.
+      expect(catalog.filter((model) => model.platform === "pi")).toHaveLength(2);
+      const rows = await multiReviewInputWithDefaults(
+        {},
+        {
+          tiers: { global: { defaultAgent: "pi" } },
+          global: { defaultAgent: "pi" },
+          enabledAgentPlatforms: ["pi"],
+        },
+        async () => catalog,
+      );
+      const expected = { agent: "pi", model: marked ? "openai/gpt-6.1-sol" : "default" };
+      expect(rows.reviewers).toEqual([expected, expected]);
+      expect(rows.reviewModel).toEqual(expected);
+      expect(rows.addressFindingsModel).toEqual(expected);
+    },
+  );
+
+  test("returns the Codex catalogue for a live coordinator conversation", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+
+    await expect(
+      commands.get("get_native_agent_model_catalog")!({ environmentId }, context),
+    ).resolves.toEqual([]);
+
+    await storage.cacheAgentModelCatalog("codex", [
+      {
+        id: "gpt-coordinator",
+        name: "GPT Coordinator",
+        reasoningEfforts: ["medium", "high"],
+        defaultReasoningEffort: "high",
+      },
+    ]);
+
+    const models = await commands.get("get_native_agent_model_catalog")!(
+      {
+        environmentId,
+      },
+      context,
+    );
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        platform: "codex",
+        id: "gpt-coordinator",
+        label: "GPT Coordinator",
+        defaultReasoningId: "high",
+      }),
+    ]);
+    // The cached read goes through the same normaliser, so it offers no
+    // reasoning-summary parameter either.
+    expect((models as AgentModel[])[0]).not.toHaveProperty("parameters");
+
+    await coordinator.closeConversation(project.id, conversation.id);
+    await expect(
+      commands.get("get_native_agent_model_catalog")!(
+        {
+          environmentId: coordinatorRuntimeId(snapshot.workspace.id, conversation.id),
+        },
+        context,
+      ),
+    ).rejects.toThrow("coordinator conversation is unavailable");
+  });
+
+  test("seeds a project-scoped OpenCode catalogue for an unassigned coordinator", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      enabledAgentPlatforms: ["opencode"],
+      coordinatorProviderTiers: "provider-configured",
+      openCodeModelProviders: ["openai"],
+    });
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const refresh = mock(async (_context: CommandContext, agent: string) => {
+      expect(agent).toBe("opencode");
+      return {
+        agent: "opencode" as const,
+        models: [
+          {
+            platform: "opencode" as const,
+            id: "openai/gpt-5.4",
+            label: "GPT-5.4",
+            providerLabel: "OpenAI",
+          },
+        ],
+      };
+    });
+    commands = createCommandRegistry({ modelCatalogRefresh: refresh as never });
+
+    const result = (await commands.get("get_native_agent_model_catalog")!(
+      { environmentId, ensureAgent: "opencode" },
+      context,
+    )) as { models: { id: string; platform: string }[]; status: string };
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(
+      (await storage.getOpenCodeModelCatalog(project.id))?.models.map((model) => model.id),
+    ).toEqual(["openai/gpt-5.4"]);
+    expect(result).toMatchObject({ status: "ready" });
+    expect(result.models).toContainEqual(
+      expect.objectContaining({ id: "openai/gpt-5.4", platform: "opencode" }),
+    );
+  });
+
+  test("rejects invalid coordinator model-catalogue states", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const environmentId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const catalogue = commands.get("get_native_agent_model_catalog")!;
+
+    // An unassigned conversation is exactly when the composer asks for this
+    // catalogue, so it must answer rather than refuse.
+    await expect(catalogue({ environmentId }, context)).resolves.toBeDefined();
+    await expect(
+      catalogue({ environmentId: coordinatorRuntimeId(snapshot.workspace.id) }, context),
+    ).rejects.toThrow("coordinator conversation is unavailable");
+
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      ...workspace!,
+      lifecycleState: "paused",
+    }));
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow("not ready");
+
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      ...workspace!,
+      lifecycleState: "ready",
+      conversations: workspace!.conversations.map((item) => ({
+        ...item,
+        agent: "claude",
+      })),
+    }));
+    await storage.saveConfig({
+      ...(await storage.loadConfig()),
+      global: {
+        ...(await storage.loadConfig()).global,
+        enabledAgentPlatforms: ["codex"],
+      },
+    });
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow("not qualified");
+
+    await storage.coordinators.mutateCoordinatorWorkspace(project.id, (workspace) => ({
+      ...workspace!,
+      conversations: workspace!.conversations.map((item) => ({
+        ...item,
+        agent: "codex",
+      })),
+    }));
+    await storage.updateProject(project.id, { localPath: null });
+    await expect(catalogue({ environmentId }, context)).rejects.toThrow(
+      "coordinator checkout is unavailable",
+    );
+  });
+
+  test("rejects unpublished container commits before reserving or creating work", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const create = mock(async () => ({}));
+    commands.set("create_environment", create);
+    await expect(
+      commands.get("launch_coordinator_environment")!(
+        {
+          scope: {
+            projectId: project.id,
+            coordinatorId: snapshot.workspace.id,
+            conversationId: conversation.id,
+          },
+          requestId: "container-launch",
+          input: {
+            projectId: project.id,
+            environmentType: "containerized",
+            delegationBaseBranch: "main",
+            delegationBaseCommit: head,
+            initialPrompt: "Implement it",
+          },
+        },
+        context,
+      ),
+    ).rejects.toThrow("published to a remote branch");
+    expect(create).not.toHaveBeenCalled();
+    expect(await storage.coordinators.listCoordinatorWorkflowAssociations(project.id)).toEqual([]);
+  });
+
+  test("requires a matching worker commit and a completed build before downstream workflows", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const environment = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+    environment.id = "worker-1";
+    environment.createdFromCommit = "b".repeat(40);
+    await storage.addEnvironment(environment);
+    context.buildPipelines = {
+      start: mock(async () => ({})),
+    } as unknown as CommandContext["buildPipelines"];
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    const buildInput = {
+      taskId: (await storage.kanban.addKanbanTask(project.id, "Task", "")).id,
+      projectId: project.id,
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      environmentType: "local",
+      agentType: "codex",
+      existingEnvironmentId: environment.id,
+      delegationBaseBranch: "main",
+      delegationBaseCommit: head,
+    };
+    await expect(
+      commands.get("start_coordinator_build_pipeline")!(
+        { scope, requestId: "build-1", input: buildInput },
+        context,
+      ),
+    ).rejects.toThrow("was not created from the requested delegation commit");
+
+    context.multiReviews = {
+      start: mock(async () => ({})),
+    } as unknown as CommandContext["multiReviews"];
+    await expect(
+      commands.get("start_coordinator_multi_review")!(
+        {
+          scope,
+          requestId: "review-1",
+          buildPipelineId: "missing-build",
+          input: {
+            environmentId: environment.id,
+            projectId: project.id,
+            targetBranch: "main",
+            reviewers: [{ agent: "claude", model: "opus" }],
+            addressFindingsModel: { agent: "codex", model: "gpt-5.6" },
+          },
+        },
+        context,
+      ),
+    ).rejects.toThrow("completed successfully");
+  });
+
+  test("deduplicates concurrent build starts", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    const buildInput = {
+      taskId: (await storage.kanban.addKanbanTask(project.id, "Task", "")).id,
+      projectId: project.id,
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      environmentType: "local",
+      agentType: "codex",
+      delegationBaseBranch: "main",
+      delegationBaseCommit: head,
+    };
+    let releaseBuild!: () => void;
+    const buildBarrier = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
+    const startBuild = mock(async (_input: unknown, coordinatorLaunchId?: string) => {
+      await buildBarrier;
+      return {
+        id: "pipeline-1",
+        projectId: project.id,
+        environmentId: "pipeline-environment",
+        coordinatorLaunchId,
+      };
+    });
+    context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
+    const build = commands.get("start_coordinator_build_pipeline")!;
+    const first = build({ scope, requestId: "build-deduped", input: buildInput }, context);
+    const second = build({ scope, requestId: "build-deduped", input: buildInput }, context);
+    const contenders = Array.from({ length: 20 }, () =>
+      build({ scope, requestId: "build-deduped", input: buildInput }, context),
+    );
+    const deadline = Date.now() + 2_000;
+    while (startBuild.mock.calls.length === 0 && Date.now() < deadline) await Bun.sleep(5);
+    expect(startBuild).toHaveBeenCalledTimes(1);
+    releaseBuild();
+    expect(await first).toEqual(await second);
+    for (const result of await Promise.all(contenders)) expect(result).toEqual(await first);
+    expect(
+      await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
+    ).toContainEqual(
+      expect.objectContaining({
+        kind: "build-pipeline",
+        resourceId: "pipeline-1",
+        pending: false,
+        createdEnvironmentId: "pipeline-environment",
+      }),
+    );
+  });
+
+  test("links a build to its ticket and refuses a taskId that is not a ticket here", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const other = await storage.addProject(createProject("other", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: snapshot.workspace.conversations[0]!.id,
+    };
+    const ticket = await storage.kanban.addKanbanTask(project.id, "Task", "");
+    const elsewhere = await storage.kanban.addKanbanTask(other.id, "Elsewhere", "");
+    const startBuild = mock(async (_input: unknown, coordinatorLaunchId?: string) => ({
+      id: "pipeline-linked",
+      projectId: project.id,
+      coordinatorLaunchId,
+    }));
+    context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
+    const input = (taskId: string) => ({
+      taskId,
+      projectId: project.id,
+      taskTitle: "Task",
+      taskSnapshot: {
+        title: "Task",
+        description: "",
+        acceptanceCriteria: "",
+        comments: [],
+        images: [],
+      },
+      environmentType: "local",
+      agentType: "codex",
+      delegationBaseBranch: "main",
+      delegationBaseCommit: head,
+    });
+    const build = commands.get("start_coordinator_build_pipeline")!;
+
+    for (const [requestId, taskId] of [
+      ["build-missing", "no-such-ticket"],
+      ["build-elsewhere", elsewhere.id],
+    ]) {
+      await expect(build({ scope, requestId, input: input(taskId!) }, context)).rejects.toThrow(
+        "Create the ticket with create_ticket first",
+      );
+    }
+    expect(startBuild).not.toHaveBeenCalled();
+    expect(await storage.coordinators.listCoordinatorWorkflowAssociations(project.id)).toEqual([]);
+
+    await build({ scope, requestId: "build-linked", input: input(ticket.id) }, context);
+    expect(startBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: ticket.id,
+        source: { type: "kanban", taskId: ticket.id },
+      }),
+      expect.any(String),
+    );
+  });
+
+  for (const phase of ["preparing", "complete"]) {
+    test(`recovers a ${phase} review after receipt failure and defaults change`, async () => {
+      const project = await storage.addProject(createProject("remote", checkout));
+      const snapshot = await coordinator.ensure(project.id);
+      const scope = {
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+        conversationId: snapshot.workspace.conversations[0]!.id,
+      };
+      const environment = createEnvironment(project.id, {
+        name: "worker",
+        environmentType: "local",
+      });
+      await storage.addEnvironment(environment);
+      storage.getBuildPipeline = mock(async () => ({
+        snapshot: {
+          projectId: project.id,
+          environmentId: environment.id,
+          phase: "complete",
+        },
+      })) as unknown as typeof storage.getBuildPipeline;
+      let saved: Record<string, unknown> | undefined;
+      const start = mock(async (input: Record<string, unknown>, id?: string) => {
+        saved = { ...input, id, phase };
+        await storage.createMultiReviewWorkflowIfNoActive(id!, environment.id, 1, saved);
+        return saved;
+      });
+      context.multiReviews = { start } as unknown as CommandContext["multiReviews"];
+      const complete = storage.coordinators.completeCoordinatorWorkflowAssociation.bind(
+        storage.coordinators,
+      );
+      let fail = true;
+      storage.coordinators.completeCoordinatorWorkflowAssociation = async (...args) => {
+        if (fail) {
+          fail = false;
+          throw new Error("receipt write failed");
+        }
+        return complete(...args);
+      };
+      const args = {
+        scope,
+        requestId: "crash-retry",
+        buildPipelineId: "build-1",
+        input: { projectId: project.id, environmentId: environment.id, targetBranch: "main" },
+      };
+      const launch = commands.get("start_coordinator_multi_review")!;
+      await expect(launch(args, context)).rejects.toThrow("receipt write failed");
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        agentSettings: {
+          actionDefaults: { review: { platform: "claude", model: "changed-model" } },
+          multiReview: { reviewerCount: 4 },
+        },
+      });
+      commands.set("get_native_agent_model_catalog", () => {
+        throw new Error("changed catalogue unavailable");
+      });
+      expect(await launch(args, context)).toEqual(saved);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(
+        await storage.coordinators.listCoordinatorWorkflowAssociations(project.id),
+      ).toContainEqual(expect.objectContaining({ resourceId: saved!.id, pending: false }));
+    });
+  }
+
+  test("omitted build and Multi Review choices run the saved defaults", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const config = await storage.loadConfig();
+    await storage.updateGlobalConfig({
+      ...config.global,
+      enabledAgentPlatforms: ["claude", "codex"],
+      agentSettings: {
+        defaultAgent: "codex",
+        actionDefaults: {
+          review: { platform: "claude", model: "opus", reasoningEffort: "high" },
+          review2: { platform: "codex", model: "gpt-5.6" },
+          addressFindings: { platform: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+        },
+        multiReview: { autoFix: true, reviewerCount: 2 },
+      },
+    });
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    const startBuild = mock(async (_input: unknown, coordinatorLaunchId?: string) => ({
+      id: "pipeline-defaults",
+      projectId: project.id,
+      coordinatorLaunchId,
+    }));
+    context.buildPipelines = { start: startBuild } as unknown as CommandContext["buildPipelines"];
+    await commands.get("start_coordinator_build_pipeline")!(
+      {
+        scope,
+        requestId: "build-defaults",
+        input: {
+          taskId: (await storage.kanban.addKanbanTask(project.id, "Task", "")).id,
+          projectId: project.id,
+          taskTitle: "Task",
+          taskSnapshot: {
+            title: "Task",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          environmentType: "local",
+          delegationBaseBranch: "main",
+          delegationBaseCommit: head,
+        },
+      },
+      context,
+    );
+    const opus = { agent: "claude", model: "opus", reasoningEffort: "high" };
+    const fix = { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" };
+    expect(startBuild).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentType: "codex",
+        reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
+        reviewPreparation: opus,
+        steps: expect.objectContaining({ review: opus, "address-findings": fix, verify: fix }),
+      }),
+      expect.any(String),
+    );
+
+    // An explicit step replaces only that step; explicit reviewers replace the
+    // saved rows; the rest keeps its defaults.
+    await commands.get("start_coordinator_build_pipeline")!(
+      {
+        scope,
+        requestId: "build-overrides",
+        input: {
+          taskId: (await storage.kanban.addKanbanTask(project.id, "Task 2", "")).id,
+          projectId: project.id,
+          taskTitle: "Task",
+          taskSnapshot: {
+            title: "Task",
+            description: "",
+            acceptanceCriteria: "",
+            comments: [],
+            images: [],
+          },
+          environmentType: "local",
+          delegationBaseBranch: "main",
+          delegationBaseCommit: head,
+          steps: { build: { agent: "claude" }, verify: { agent: "claude", model: "sonnet" } },
+          reviewers: [{ agent: "codex", model: "gpt-5.6" }],
+        },
+      },
+      context,
+    );
+    expect(startBuild).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentType: "claude",
+        reviewers: undefined,
+        reviewPreparation: undefined,
+        steps: expect.objectContaining({
+          build: { agent: "claude" },
+          review: { agent: "codex", model: "gpt-5.6" },
+          "address-findings": fix,
+          verify: { agent: "claude", model: "sonnet" },
+        }),
+      }),
+      expect.any(String),
+    );
+
+    const environment = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+    environment.id = "worker-defaults";
+    await storage.addEnvironment(environment);
+    storage.getBuildPipeline = mock(async () => ({
+      snapshot: {
+        id: "pipeline-defaults",
+        projectId: project.id,
+        environmentId: environment.id,
+        phase: "complete",
+      },
+    })) as unknown as typeof storage.getBuildPipeline;
+    commands.set("get_native_agent_model_catalog", async () => [
+      { platform: "claude", id: "opus", label: "Opus", reasoning: [{ id: "high", label: "High" }] },
+      {
+        platform: "codex",
+        id: "gpt-5.6",
+        label: "GPT-5.6",
+        reasoning: [{ id: "medium", label: "Medium" }],
+      },
+    ]);
+    const startReview = mock(async () => ({ id: "review-defaults" }));
+    context.multiReviews = { start: startReview } as unknown as CommandContext["multiReviews"];
+    await commands.get("start_coordinator_multi_review")!(
+      {
+        scope,
+        requestId: "review-defaults",
+        buildPipelineId: "pipeline-defaults",
+        input: { environmentId: environment.id, projectId: project.id, targetBranch: "main" },
+      },
+      context,
+    );
+    expect(startReview).toHaveBeenCalledWith(
+      {
+        environmentId: environment.id,
+        projectId: project.id,
+        targetBranch: "main",
+        reviewers: [opus, { agent: "codex", model: "gpt-5.6" }],
+        reviewModel: opus,
+        addressFindingsModel: fix,
+        autoAddressFindings: true,
+        autoPr: false,
+      },
+      expect.any(String),
+    );
+  });
+
+  test("returns worker start errors and rejects cross-project coordinator mail", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const otherProject = await storage.addProject(createProject("other", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    const head = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: checkout })).stdout.trim();
+    const worker = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+    worker.id = "worker-stopped";
+    worker.status = "stopped";
+    const create = mock(async () => {
+      await storage.addEnvironment(worker);
+      return worker;
+    });
+    commands.set("create_environment", create);
+    commands.set(
+      "start_environment_background",
+      mock(async () => Promise.reject(new Error("boot failed"))),
+    );
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    await expect(
+      commands.get("launch_coordinator_environment")!(
+        {
+          scope,
+          requestId: "launch-error",
+          input: {
+            projectId: project.id,
+            environmentType: "local",
+            delegationBaseBranch: "main",
+            delegationBaseCommit: head,
+            initialPrompt: "Implement it",
+          },
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      environment: { id: worker.id },
+      startError: "boot failed",
+      coordinatorDelegationOpened: false,
+    });
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
+
+    const foreign = createEnvironment(otherProject.id, {
+      name: "foreign",
+      environmentType: "local",
+    });
+    await storage.addEnvironment(foreign);
+    await expect(
+      commands.get("send_coordinator_agent_mail")!(
+        {
+          ...scope,
+          requestId: "foreign-mail",
+          toEnvironmentId: foreign.id,
+          toTabId: "tab-1",
+          body: "Cross the boundary",
+        },
+        context,
+      ),
+    ).rejects.toThrow("must stay within their project");
+  });
+
+  test("opens delegations only for scheduled mail; a follow-up joins the open one", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    await storage.patchRepositorySettings(project.id, { coordinatorOtherEnvironments: true });
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
+    const worker = createEnvironment(project.id, { name: "worker", environmentType: "local" });
+    worker.status = "running";
+    worker.setupPhase = "ready";
+    worker.setupScriptsComplete = true;
+    await storage.addEnvironment(worker);
+    const scope = {
+      projectId: project.id,
+      coordinatorId: snapshot.workspace.id,
+      conversationId: conversation.id,
+    };
+    const send = commands.get("send_coordinator_agent_mail")!;
+
+    await storage.savePaneLayout(
+      worker.id,
+      {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane",
+        root: {
+          kind: "leaf",
+          id: "pane",
+          tabs: [{ id: "plain", type: "codex" }],
+          activeTabId: "plain",
+        },
+      },
+      0,
+    );
+    await storage.synchronizeAgentMailboxes();
+    const stored = await send(
+      {
+        ...scope,
+        requestId: "stored-request",
+        toEnvironmentId: worker.id,
+        toTabId: "plain",
+        body: "This tab cannot receive an agent turn.",
+      },
+      context,
+    );
+    expect(stored).toMatchObject({
+      placement: "stored",
+      coordinatorDelegationOpened: false,
+    });
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toEqual([]);
+
+    await storage.savePaneLayout(
+      worker.id,
+      {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane",
+        root: {
+          kind: "leaf",
+          id: "pane",
+          tabs: [
+            {
+              id: "agent",
+              type: "agent-native",
+              nativeAgentData: { environmentId: worker.id, platform: "codex" },
+            },
+          ],
+          activeTabId: "agent",
+        },
+      },
+      1,
+    );
+    await storage.synchronizeAgentMailboxes();
+    await expect(
+      send(
+        {
+          ...scope,
+          requestId: "first-request",
+          toEnvironmentId: worker.id,
+          toTabId: "agent",
+          body: "First request.",
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      placement: "pending-inject",
+      coordinatorDelegationOpened: true,
+    });
+    // Let the first request reach the worker, then pause the follow-up after
+    // joining has been read. Completion must wait for durable publication.
+    const mailbox = (await storage.getAgentMailMailbox(worker.id, "agent")).descriptor;
+    const initial = (await storage.listPendingAgentMailInjects())[0]!.message;
+    await storage.beginAgentMailInject(mailbox.mailboxId, initial.id, mailbox.incarnationId);
+    await storage.finishAgentMailInject(mailbox.mailboxId, initial.id, { outcome: "accepted" });
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const originalSend = storage.sendAgentMail.bind(storage);
+    storage.sendAgentMail = async (...args) => {
+      entered();
+      await released;
+      return originalSend(...args);
+    };
+    const followUp = send(
+      {
+        ...scope,
+        requestId: "racing-follow-up",
+        toEnvironmentId: worker.id,
+        body: "Finish this too.",
+      },
+      context,
+    );
+    await enteredPromise;
+    const completion = coordinator.settleWorkerDelegations({
+      environmentId: worker.id,
+      tabId: "agent",
+      state: "completed",
+    });
+    release();
+    await followUp;
+    storage.sendAgentMail = originalSend;
+    await completion;
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
+    // A follow-up while the worker is still on the first request joins that
+    // delegation: delivered, and one wake for both — never a second delegation.
+    await expect(
+      send(
+        {
+          ...scope,
+          requestId: "overlapping-request",
+          toEnvironmentId: worker.id,
+          body: "Second request.",
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      placement: "pending-inject",
+      toTabId: "agent",
+      coordinatorDelegationOpened: true,
+    });
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(1);
+    for (const item of await storage.listPendingAgentMailInjects()) {
+      await storage.beginAgentMailInject(
+        item.mailbox.mailboxId,
+        item.message.id,
+        item.mailbox.incarnationId,
+      );
+      await storage.finishAgentMailInject(item.mailbox.mailboxId, item.message.id, {
+        outcome: "accepted",
+      });
+    }
+    await coordinator.settleWorkerDelegations({
+      environmentId: worker.id,
+      tabId: "agent",
+      state: "completed",
+    });
+    await coordinator.settleWorkerDelegations({
+      environmentId: worker.id,
+      tabId: "agent",
+      state: "completed",
+    });
+    expect(await storage.coordinators.listOpenCoordinatorDelegations()).toHaveLength(0);
+    expect(await storage.listPendingAgentMailInjects()).toHaveLength(1);
+  });
+
+  test("retires session, credential, bridge, and mailbox before closing a conversation", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "codex");
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const sessionKey = nativeAgentSessionStorageKey(
+      runtimeId,
+      "codex",
+      conversation.logicalSessionKey,
+    );
+    await storage.adoptNativeAgentSession({
+      key: sessionKey,
+      environmentId: runtimeId,
+      agent: "codex",
+      logicalSessionKey: conversation.logicalSessionKey,
+      providerSessionId: "thread-1",
+      origin: "coordinator",
+      executionPolicy: "coordinator-read-only",
+      owner: {
+        kind: "coordinator",
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+      },
+    });
+    const terminateCommands = mock(async () => undefined);
+    const clearPrompts = mock(() => undefined);
+    context.userCommands = {
+      terminateForEnvironment: terminateCommands,
+    } as unknown as CommandContext["userCommands"];
+    context.humanPrompts = {
+      clearEnvironment: clearPrompts,
+    } as unknown as CommandContext["humanPrompts"];
+    const stopProjection = mock(async () => undefined);
+    const revoke = mock(() => undefined);
+    const stopBridge = mock(async () => undefined);
+    context.nativeAgents = {
+      stopProjectionSession: stopProjection,
+    } as unknown as CommandContext["nativeAgents"];
+    context.controlMcp = {
+      revokeCoordinatorCredentials: revoke,
+    } as unknown as CommandContext["controlMcp"];
+    commands.set("stop_local_codex_server_cmd", stopBridge);
+
+    const closed = await commands.get("close_coordinator_conversation")!(
+      { projectId: project.id, conversationId: conversation.id },
+      context,
+    );
+    expect(terminateCommands).toHaveBeenCalledWith(runtimeId);
+    expect(clearPrompts).toHaveBeenCalledWith(runtimeId);
+    expect(stopProjection).toHaveBeenCalledWith({
+      environmentId: runtimeId,
+      agent: "codex",
+      logicalSessionKey: conversation.logicalSessionKey,
+    });
+    expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
+    expect(stopBridge).toHaveBeenCalledWith({ environmentId: runtimeId }, context);
+    expect(closed).toMatchObject({ workspace: { selectedConversationId: null } });
+    expect(await storage.getNativeAgentSession(sessionKey)).toBeNull();
+  });
+
+  test("retires whichever platform's bridge the conversation actually belongs to", async () => {
+    // Teardown named the Codex stop command literally, so a conversation on any
+    // other platform left its bridge, its transcript and its scoped MCP
+    // credential running after the tab closed.
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    await coordinator.assignConversationAgent(project.id, conversation.id, "claude");
+    const runtimeId = coordinatorRuntimeId(snapshot.workspace.id, conversation.id);
+    const sessionKey = nativeAgentSessionStorageKey(
+      runtimeId,
+      "claude",
+      conversation.logicalSessionKey,
+    );
+    await storage.adoptNativeAgentSession({
+      key: sessionKey,
+      environmentId: runtimeId,
+      agent: "claude",
+      logicalSessionKey: conversation.logicalSessionKey,
+      providerSessionId: "sdk-session-1",
+      origin: "coordinator",
+      executionPolicy: "coordinator-read-only",
+      owner: {
+        kind: "coordinator",
+        projectId: project.id,
+        coordinatorId: snapshot.workspace.id,
+      },
+    });
+    const stopProjection = mock(async () => undefined);
+    const stopClaude = mock(async () => undefined);
+    const stopCodex = mock(async () => undefined);
+    context.nativeAgents = {
+      stopProjectionSession: stopProjection,
+    } as unknown as CommandContext["nativeAgents"];
+    context.controlMcp = {
+      revokeCoordinatorCredentials: mock(() => undefined),
+    } as unknown as CommandContext["controlMcp"];
+    commands.set("stop_local_claude_server_cmd", stopClaude);
+    commands.set("stop_local_codex_server_cmd", stopCodex);
+
+    await commands.get("close_coordinator_conversation")!(
+      { projectId: project.id, conversationId: conversation.id },
+      context,
+    );
+    expect(stopClaude).toHaveBeenCalledWith({ environmentId: runtimeId }, context);
+    expect(stopCodex).not.toHaveBeenCalled();
+    expect(stopProjection).toHaveBeenCalledWith({
+      environmentId: runtimeId,
+      agent: "claude",
+      logicalSessionKey: conversation.logicalSessionKey,
+    });
+    expect(await storage.getNativeAgentSession(sessionKey)).toBeNull();
+  });
+
+  test("closing an unassigned conversation revokes its credential and stops no bridge", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const conversation = snapshot.workspace.conversations[0]!;
+    expect(conversation.agent).toBeUndefined();
+    const revoke = mock(() => undefined);
+    const stopProjection = mock(async () => undefined);
+    const stopCodex = mock(async () => undefined);
+    context.nativeAgents = {
+      stopProjectionSession: stopProjection,
+    } as unknown as CommandContext["nativeAgents"];
+    context.controlMcp = {
+      revokeCoordinatorCredentials: revoke,
+    } as unknown as CommandContext["controlMcp"];
+    commands.set("stop_local_codex_server_cmd", stopCodex);
+
+    await commands.get("close_coordinator_conversation")!(
+      { projectId: project.id, conversationId: conversation.id },
+      context,
+    );
+    // Nothing reached a provider, so there is no session, bridge or rollout —
+    // but the credential is issued up front and must still be revoked.
+    expect(stopProjection).not.toHaveBeenCalled();
+    expect(stopCodex).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledWith(snapshot.workspace.id, conversation.id);
+  });
+
+  test("hide_coordinator_work marks this project's records only, and keeps them", async () => {
+    const project = await storage.addProject(createProject("remote", checkout));
+    const other = await storage.addProject(createProject("other", checkout));
+    const snapshot = await coordinator.ensure(project.id);
+    const elsewhere = await coordinator.ensure(other.id);
+    const follow = (projectId: string, coordinatorId: string, requestId: string) =>
+      storage.coordinators.followCoordinatorPullRequest({
+        projectId,
+        coordinatorId,
+        environmentId: "gone-env",
+        requestId,
+        source: "create-pr",
+        prUrl: "https://github.com/o/r/pull/1",
+      });
+    const mine = await follow(project.id, snapshot.workspace.id, "mine");
+    const theirs = await follow(other.id, elsewhere.workspace.id, "theirs");
+    const announced: string[] = [];
+    storage.addResourceChangeListener((change) => {
+      if (change.resource === "coordinator") announced.push(change.id);
+    });
+
+    const next = (await commands.get("hide_coordinator_work")!(
+      { projectId: project.id, associationIds: [mine.id, theirs.id] },
+      context,
+    )) as Awaited<ReturnType<CoordinatorService["get"]>>;
+
+    expect(next?.workflows.find((item) => item.id === mine.id)?.workHiddenAt).toEqual(
+      expect.any(String),
+    );
+    expect(announced).toContain(project.id);
+    expect(announced).not.toContain(other.id);
+    const [untouched] = await storage.coordinators.listCoordinatorWorkflowAssociations(other.id);
+    expect(untouched?.id).toBe(theirs.id);
+    expect(untouched?.workHiddenAt).toBeUndefined();
+
+    const stored = () => readStoredValue(root + "/data", "coordinators.json");
+    const before = stored();
+    const announcedBefore = announced.length;
+    for (const associationIds of [
+      [],
+      [mine.id],
+      Array(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS).fill(mine.id),
+    ]) {
+      await commands.get("hide_coordinator_work")!(
+        { projectId: project.id, associationIds },
+        context,
+      );
+      expect(stored()).toEqual(before);
+      expect(announced).toHaveLength(announcedBefore);
+    }
+    await expect(
+      commands.get("hide_coordinator_work")!(
+        {
+          projectId: project.id,
+          associationIds: Array(MAX_COORDINATOR_WORKFLOW_ASSOCIATIONS + 1).fill(mine.id),
+        },
+        context,
+      ),
+    ).rejects.toThrow("bounded list");
+
+    announced.length = 0;
+    await storage.coordinators.markCoordinatorWorkflowNotified(mine.id, 1);
+    expect(announced).toEqual([project.id]);
+    await storage.coordinators.markCoordinatorWorkflowNotified(mine.id, 1);
+    expect(announced).toEqual([project.id]);
+    await storage.coordinators.updateCoordinatorWorkflowAssociation(mine.id, (current) => {
+      current.pullRequest!.final = {
+        prUrl: current.pullRequest!.prUrl!,
+        prState: "merged",
+        at: new Date().toISOString(),
+      };
+      return true;
+    });
+    expect(announced).toEqual([project.id, project.id]);
+
+    await expect(
+      commands.get("hide_coordinator_work")!(
+        { projectId: project.id, associationIds: "everything" },
+        context,
+      ),
+    ).rejects.toThrow("associationIds");
+  });
+});

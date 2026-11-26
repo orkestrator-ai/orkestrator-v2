@@ -73,7 +73,7 @@ export type BusyOptions = {
 
 /**
  * Untracked files the environment scan counts lines for
- * (`UNTRACKED_SCAN_MAX_FILES` in apps/backend/src/core/commands-validation.ts;
+ * (`UNTRACKED_SCAN_MAX_FILES` in apps/backend/src/core/commands/validation.ts;
  * the test pins the two together). Past it the rest are listed uncounted and
  * the badge reads `~+2,000`, so a larger burst can only be waited for up to
  * this many added lines. The busy environments hold no other untracked files.

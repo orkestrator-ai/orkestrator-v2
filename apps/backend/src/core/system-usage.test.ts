@@ -1,13 +1,13 @@
-import { registrarFrom } from "./commands-registry-contracts.js";
+import { registrarFrom } from "./commands/registry-contracts.js";
 import { describe, expect, mock, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
-import type { CommandContext, CommandHandler } from "./commands-context.js";
+import type { CommandContext, CommandHandler } from "./commands/context.js";
 import { MachineLoadSampler } from "./machine-load.js";
 import { flushMicrotasks } from "./recurring/test-support.js";
 import { APP_VERSION } from "./constants.js";
-import { registerSystemCommands } from "./commands-registry-system.js";
-import { createCommandRegistry } from "./commands-registry.js";
+import { registerSystemCommands } from "./commands/registry-system.js";
+import { createCommandRegistry } from "./commands/registry.js";
 import {
   cpuPercent,
   cpuTimes,

@@ -5,9 +5,8 @@ import path from "node:path";
 
 import { createLogger } from "@orkestrator/protocol/logger";
 
-import { validateGitRefName } from "./commands-agent-support.js";
-import type { CommandContext } from "./commands-context.js";
-import { toClientEnvironment } from "./commands-terminal.js";
+import { validateGitRefName } from "./commands/agent-support.js";
+import { type CommandContext, toClientEnvironment } from "./commands/index.js";
 import { ORKESTRATOR_PROJECT_CONFIG } from "./constants.js";
 import type { Environment } from "./models.js";
 import { runCommand } from "./shell.js";

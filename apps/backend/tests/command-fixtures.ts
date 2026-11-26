@@ -1,6 +1,6 @@
 import { FAKE_BRIDGE_STARTUP } from "./fake-bridge-startup.js";
 import { eventSink } from "../src/core/backend-emit.js";
-import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "../src/core/commands-server-health.js";
+import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "../src/core/commands/server-health.js";
 import { afterAll, afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import {
@@ -44,7 +44,7 @@ import { spawnCommand } from "../src/core/shell";
 
 import type { Environment, RepositoryConfig } from "../src/core/models";
 
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 
 import { APP_SLUG, APP_VERSION } from "../src/core/constants";
 
@@ -228,19 +228,16 @@ export async function createCommandFixtures() {
 
   mock.module("../src/core/pty", () => ({ spawnPty: ptySpawn }));
 
-  const {
-    __testing: commandTesting,
-    CONTAINER_UNTRACKED_STATS_SCANNER,
-    createCommandRegistry,
-    environmentBranchBase,
-    ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
-    isImmutableCommitRef,
-    resolveBrowserOpenCommand,
-    resolveFileManagerRevealCommands,
-    scheduleMergeCleanupRecovery,
-    tmuxLocalClaudeConfigDirectory,
-    toClientEnvironment,
-  } = await import("../src/core/commands");
+  const { __testing: commandTesting } = await import("../src/core/commands/testing");
+  const { CONTAINER_UNTRACKED_STATS_SCANNER } = await import("../src/core/containers/scripts");
+  const { createCommandRegistry } = await import("../src/core/commands/registry");
+  const { environmentBranchBase, resolveBrowserOpenCommand, resolveFileManagerRevealCommands } =
+    await import("../src/core/commands/agent-support");
+  const { ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES } = await import("../src/core/commands/error-text");
+  const { isImmutableCommitRef } = await import("../src/core/commands/files");
+  const { scheduleMergeCleanupRecovery, tmuxLocalClaudeConfigDirectory } =
+    await import("../src/core/commands/servers");
+  const { toClientEnvironment } = await import("../src/core/commands/terminal");
 
   const { CommandFailedError, GitRemoteTimeoutError } = await import("../src/core/shell");
 

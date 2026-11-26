@@ -464,7 +464,7 @@ and no interactive links. `TextPart` passes a stable `richPartId`
   first showed, so an agent overwriting `1-top.png` does not change earlier
   messages. Inside a message (rich scope plus message identity), the
   resolver reads a local image through `transcript_media_pin`
-  (`commands-registry-transcript-media.ts`, protocol
+  (`commands/registry-transcript-media.ts`, protocol
   `transcript-media-pins.ts`) instead of `read_file_base64` /
   `read_container_file_base64`. The backend invokes those same registered
   readers on first use, so confinement and error states are unchanged. It

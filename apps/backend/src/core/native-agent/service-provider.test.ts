@@ -23,8 +23,8 @@ import {
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./provider.js";
-import { createCommandRegistry } from "../commands.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { AmbiguousPromptDispatchError } from "./provider.js";
 import { WorkflowResultService } from "../workflows/result-service.js";
 import { FakeOpenCode2Server, fakeOpenCode2Model } from "../opencode2/fake-server.test-support.js";

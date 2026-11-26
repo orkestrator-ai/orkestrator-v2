@@ -8,9 +8,9 @@ import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 import { PROJECT_COPY_CHANGED_EVENT } from "@orkestrator/protocol/project-copy";
 
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands.js";
-import { createLocalWorktree } from "../commands-environment.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import { createLocalWorktree } from "../commands/environment.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { runCommand } from "../shell.js";
 import { StorageService } from "../storage/service.js";

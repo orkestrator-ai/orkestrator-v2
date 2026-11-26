@@ -1,4 +1,4 @@
-import type { CommandInvocation } from "./core/commands-context.js";
+import type { CommandInvocation } from "./core/commands/index.js";
 import { Base64FileReadSizeHistogram } from "./gateway-file-read-sizes.js";
 import type { DatabaseStats } from "@orkestrator/protocol/backend-diagnostics";
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";

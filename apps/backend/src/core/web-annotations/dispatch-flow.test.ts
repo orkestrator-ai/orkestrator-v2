@@ -4,7 +4,7 @@
  * by in-memory activity. Crash points are simulated by driving the storage
  * the drain would use and replacing the annotation service instance.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,8 +15,8 @@ import {
   type WebAnnotationDestination,
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerPromptCommands } from "../commands-registry-prompts.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerPromptCommands } from "../commands/registry-prompts.js";
 import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
 import { StorageService } from "../storage/service.js";
 import { compileWebAnnotationBrief, composeWebAnnotationDispatchText } from "./brief.js";

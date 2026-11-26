@@ -4,7 +4,7 @@
 - **Status:** resolved
 - **Date observed:** 2026-11-06
 - **Test:** `create_project_from_scratch > serializes two requests for the same canonical path`
-- **File:** `apps/backend/src/core/commands-project-creation.test.ts:1644`
+- **File:** `apps/backend/src/core/commands/project-creation.test.ts:1644`
 - **Original command:** the `Tests (backend)` shard of `CI` on `main`
   (`mise run test:full` with `ORKESTRATOR_TEST_GROUPS=backend`), run
   42226422192, job 127920967194, commit `fa06f5c1f`.

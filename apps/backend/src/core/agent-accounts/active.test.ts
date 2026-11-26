@@ -13,12 +13,12 @@ import {
   markLocalBridgesForLoginRefresh,
   readCoordinatorCodexLogin,
 } from "./active.js";
-import type { CommandContext } from "../commands-context.js";
-import * as commandFiles from "../commands-files.js";
+import type { CommandContext } from "../commands/context.js";
+import * as commandFiles from "../commands/files.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import type { LocalServerLaunch } from "../local-server-runtime.js";
 
-import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "../commands-servers.js";
+import { prepareCoordinatorClaudeHome, prepareCoordinatorCodexHome } from "../commands/servers.js";
 import { createCodexLoginRefresher } from "../codex-host-login-refresh.js";
 import { claudeKeychainService } from "./homes.js";
 import { StorageService } from "../storage/service.js";

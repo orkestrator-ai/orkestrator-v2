@@ -2,7 +2,7 @@
  * `coordinator` commands for the Actions panel's manual marks
  * (`@orkestrator/protocol/coordinator-action-marks`): action cards the user
  * marked done by hand in one coordinator conversation. Registered from
- * `commands-registry-client-state.ts`, beside the other presentation state
+ * `apps/backend/src/core/commands/registry-client-state.ts`, beside the other presentation state
  * every client shares.
  *
  * Both are `workspace` commands: a window showing another node's coordinator

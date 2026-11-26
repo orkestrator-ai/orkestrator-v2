@@ -5,8 +5,8 @@ import path from "node:path";
 import type { AgentActivityState } from "@orkestrator/protocol/agent-activity";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { COORDINATOR_CHECKOUT_TURN_COMMAND } from "@orkestrator/protocol/coordinator-activity";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import {
   findCoordinatorCheckoutTurn,
   type CoordinatorCheckoutTurnSources,

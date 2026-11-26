@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { operationFailureCode } from "./lifecycle-service.js";
-import { dockerUnavailableReason } from "../commands-registry-docker.js";
+import { dockerUnavailableReason } from "../commands/registry-docker.js";
 import { isDockerDaemonUnreachable, isDockerPathNotFound } from "./cli-errors.js";
 
 const UNREACHABLE = [

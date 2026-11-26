@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
 import { recurringWorkMetrics, RecurringWorkMetrics } from "../recurring/work-metrics.js";
 import { CommandFailedError, runCommand } from "../shell.js";

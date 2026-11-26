@@ -6,7 +6,8 @@ import {
   extractBuildPipelineDetail,
   mergeBuildPipelineDetail,
 } from "@orkestrator/protocol/build-pipeline-detail";
-import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { StorageService } from "../storage/service.js";
 import { BackendRuntime } from "../backend-runtime.js";
 import { withoutTranscriptBodies } from "./transcript-projection.js";

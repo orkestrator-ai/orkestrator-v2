@@ -740,7 +740,7 @@ test.describe("live idle observation", () => {
           approvalModes.find((mode) => mode.kind === "auto-review");
         const hasModes = (initial?.composer?.modes ?? []).some((mode) => mode.id === "build");
         // A dispatch without a mode runs Claude, Codex and OpenCode in plan
-        // mode (`commands-validation.ts`); Cursor, Grok and Pi keep their own.
+        // mode (`apps/backend/src/core/commands/validation.ts`); Cursor, Grok and Pi keep their own.
         const dispatchMode =
           platform === "claude" || platform === "codex" || platform === "opencode"
             ? { mode: "build" }

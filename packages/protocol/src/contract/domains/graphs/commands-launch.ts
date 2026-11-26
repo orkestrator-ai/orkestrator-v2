@@ -1,7 +1,7 @@
 /**
  * `graphs` commands that start work: "Describe a graph" jobs (item 215),
  * launches from the app (item 214), mock runs and the effect journal (item
- * 213). Registered by the backend's `commands-registry-graph-describe.ts`,
+ * 213). Registered by the backend's `apps/backend/src/core/commands/registry-graph-describe.ts`,
  * `-graph-launch.ts` and `-graph-mock.ts`. The argument rules are those of
  * `commands-templates.ts`: the handlers keep their validators
  * (`parseGraphDescribeStartInput`, `parseGraphLaunchRequest`, the mock

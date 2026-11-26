@@ -3,10 +3,10 @@ import {
   BackendRuntime,
   type BackendRuntimeOptions,
 } from "@/../../backend/src/core/backend-runtime";
-import type { CommandContext } from "@/../../backend/src/core/commands-context";
+import type { CommandContext } from "@/../../backend/src/core/commands/index.js";
 
 /**
- * `PrMonitorRuntime` observes a merged PR; `commands-servers` owns the cleanup
+ * `PrMonitorRuntime` observes a merged PR; `commands/servers.ts` owns the cleanup
  * that follows. The backend passes that scheduler to `BackendRuntime` as
  * `prMonitor.scheduleMergeCleanup` (`index.ts`, `tests/command-fixtures.ts`)
  * rather than the monitor importing it, so the two modules stay acyclic (lint's

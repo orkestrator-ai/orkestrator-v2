@@ -2,7 +2,7 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import { pack } from "tar-stream";
 import path from "node:path";
 import { DEFAULT_ENV_FILE_PATTERNS } from "@orkestrator/protocol/app-config-defaults";
-import { isPathInsideRoot } from "../commands-project-files.js";
+import { isPathInsideRoot } from "../commands/index.js";
 import { DOCKER_LABEL_PROJECT_SEED_REFUSED } from "../constants.js";
 import { copyIntoContainer } from "./copy-refusal.js";
 import {

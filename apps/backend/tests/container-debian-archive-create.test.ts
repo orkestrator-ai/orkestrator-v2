@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "../src/core/agent-credential-files";
-import { createDockerContainer } from "../src/core/commands-containers";
+import { createDockerContainer } from "../src/core/commands/containers";
 import { resetBackendHostPortReservations } from "../src/core/containers/host-ports";
 import { resetNetworkOwnerCache } from "../src/core/containers/network-owner";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";

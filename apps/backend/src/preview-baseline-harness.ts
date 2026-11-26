@@ -1,5 +1,10 @@
 import { unknownCommand } from "@orkestrator/protocol/contract/errors";
-import { registrarFrom } from "./core/commands-registry-contracts.js";
+import {
+  type CommandContext,
+  type CommandHandler,
+  registerPreviewCommands,
+  registrarFrom,
+} from "./core/commands/index.js";
 import { configureLogger } from "@orkestrator/protocol/logger";
 /**
  * Test-only isolated backend for the preview latency baseline self-test
@@ -26,8 +31,6 @@ import {
   startPreviewFixture,
   type PreviewFixture,
 } from "../../../test-fixtures/preview-app/server.ts";
-import type { CommandContext, CommandHandler } from "./core/commands-context.js";
-import { registerPreviewCommands } from "./core/commands-registry-previews.js";
 import { createPreviewHarness, type PreviewHarness } from "./core/previews/test-support.js";
 import { OrkestratorGateway } from "./gateway.js";
 import { PreviewPublicationManager } from "./preview-publication.js";

@@ -1207,7 +1207,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // but shares the host IPC namespace, so the mount size is what is asserted.
     // Without a memory budget the mount is the default below; under a budget
     // it is capped at half the limit, because shared memory is charged to it.
-    const containers = read("apps/backend/src/core/commands-containers.ts");
+    const containers = read("apps/backend/src/core/commands/containers.ts");
     expect(containers).toMatch(/"--shm-size",\s*`\$\{sharedMemoryMiB\(/);
     const resources = read("apps/backend/src/core/containers/resources.ts");
     const size = resources.match(/DEFAULT_SHARED_MEMORY_MIB = (\d+);/);

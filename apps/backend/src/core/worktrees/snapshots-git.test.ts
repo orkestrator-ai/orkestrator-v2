@@ -4,7 +4,7 @@ import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../../tests/default-test-timeo
 import { promises as fs, watch } from "node:fs";
 import path from "node:path";
 import { WORKTREE_SNAPSHOT_CHANGED_EVENT } from "@orkestrator/protocol/worktree-snapshots";
-import { getLocalGitStatusDetailed } from "../commands-files.js";
+import { getLocalGitStatusDetailed } from "../commands/files.js";
 import { DiffStatsService, LOCAL_SCAN_MIN_GAP_MS } from "../diff-stats-service.js";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
 import { RecurringWorkMetrics } from "../recurring/work-metrics.js";

@@ -134,7 +134,7 @@ echo "ok   npm install -g works for node"
 echo "== root processes"
 root_exec() { docker exec --env PATH="$ROOT_PATH" --user root "$RUN" "$@"; }
 
-# Root terminal: the backend's exact launch (commands-registry-terminal.ts,
+# Root terminal: the backend's exact launch (apps/backend/src/core/commands/registry-terminal.ts,
 # CONTAINER_INTERACTIVE_SHELL_COMMAND) behind a pseudo-terminal, so zsh runs
 # its rc files and renders its prompt in /workspace before reading commands.
 TERMINAL_COMMAND='source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
@@ -248,8 +248,8 @@ harness test ! -e "/tmp/orkestrator-terminals-0/$TERMINAL_TOKEN.pid" \
     || fail "the root terminal close left its record"
 echo "ran  root terminal close (orkroot)"
 
-# The other root shells the backend runs (commands-environment.ts host
-# repair, commands-files.ts project-files access, portable-input-status.ts
+# The other root shells the backend runs (apps/backend/src/core/commands/environment.ts host
+# repair, apps/backend/src/core/commands/files.ts project-files access, portable-input-status.ts
 # provider stop), with the commands they resolve.
 root_exec bash -lc "awk '\$2 != \"x\"' /etc/hosts >/dev/null; cat /etc/hosts >/dev/null; getent hosts localhost >/dev/null || true" \
     && echo "ran  host repair shell"

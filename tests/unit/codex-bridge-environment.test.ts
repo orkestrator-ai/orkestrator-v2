@@ -11,9 +11,9 @@ function read(rel: string): string {
 
 function readBackendCommandSources(): string {
   return [
-    "apps/backend/src/core/commands.ts",
-    "apps/backend/src/core/commands-registry-servers.ts",
-    "apps/backend/src/core/commands-servers.ts",
+    "apps/backend/src/core/commands/index.ts",
+    "apps/backend/src/core/commands/registry-servers.ts",
+    "apps/backend/src/core/commands/servers.ts",
   ]
     .map(read)
     .join("\n");

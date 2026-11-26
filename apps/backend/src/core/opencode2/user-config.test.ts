@@ -13,7 +13,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import {
   OPENCODE2_CONTAINER_BUN,
   OPENCODE2_USER_CONFIG_MIRROR_FILE,

@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import {
   PUSHED_LOGIN_PROVIDERS,
   pushedLoginHostFile,

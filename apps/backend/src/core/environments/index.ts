@@ -15,8 +15,8 @@
 // directories (`state-paths.ts`), process usage (`process-usage.ts`), the
 // in-environment agent-skills scanner (`agent-skills.ts`), generated names
 // (`name.ts`) and start failure remedies (`start-remedy.ts`). The environment
-// command handlers (`commands-environment*.ts`,
-// `commands-registry-environments.ts`), `project-home-environment.ts` and the
+// command handlers (`commands/environment*.ts`,
+// `commands/registry-environments.ts`), `project-home-environment.ts` and the
 // storage layer's `storage/environment-*.ts` stay with their own groups.
 //
 // Five modules are named exceptions in the `apps/backend/src/**` pattern of
@@ -26,17 +26,17 @@
 // them directly:
 //
 // - through the command layer: `cleanup.ts`, `cleanup-reconciler.ts`,
-//   `delete.ts` and `move.ts` import `commands-environment.ts`, which takes
+//   `delete.ts` and `move.ts` import `commands/environment.ts`, which takes
 //   `isolation.ts` and `start-remedy.ts` from this file;
 // - through `tmux/`: `process-usage.ts` imports `local-server-reaper.ts`,
 //   which reaches `tmux/session-manager.ts` through `tmux/index.ts`, and that
 //   takes `isolation.ts` from this file.
 //
-// Keeping `commands-environment.ts`, `tmux/session-manager.ts` or
-// `commands-agent-support.ts` deep instead does not shrink the set: the five
+// Keeping `commands/environment.ts`, `tmux/session-manager.ts` or
+// `commands/agent-support.ts` deep instead does not shrink the set: the five
 // still reach other importers of this file, and every module the deep file
 // imports becomes an exception too.
-// `commands-helpers.ts`, which re-exports `operations.ts` for `commands.ts`,
+// `commands/helpers.ts`, which re-exports `operations.ts` for the command modules,
 // lists its exports by name through this file.
 //
 // The `tests/unit/**` pattern has no exceptions: `disk-report.test.ts` and

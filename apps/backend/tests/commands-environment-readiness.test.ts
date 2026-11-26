@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { startAssignedContainerRuntimeTask } from "../src/core/commands-environment";
+import { startAssignedContainerRuntimeTask } from "../src/core/commands/environment";
 import { resetContainerOwnershipCache } from "../src/core/containers/lifecycle-service";
 import { resetImageManifestCache } from "../src/core/containers/image";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import {
   applyRootChanges,
   buildRootChangesPatch,

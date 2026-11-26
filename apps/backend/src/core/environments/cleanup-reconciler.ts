@@ -7,12 +7,14 @@ import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import {
   environmentBranchNamespace,
   parseEnvironmentBranchNamespace,
-} from "../commands-agent-support.js";
-import type { CommandContext } from "../commands-context.js";
+} from "../commands/agent-support.js";
+import type { CommandContext } from "../commands/index.js";
+import { enqueueEnvironmentLifecycleOperation } from "../commands/environment.js";
 import {
-  enqueueEnvironmentLifecycleOperation,
+  configuredWorktreeLocations,
   getWorktreeBaseDir,
-} from "../commands-environment.js";
+  validateWorktreeLocation,
+} from "../worktrees/index.js";
 import {
   ENVIRONMENT_CLEANUP_STEPS,
   environmentCleanupLedger,
@@ -39,7 +41,6 @@ import type { Project } from "../models.js";
 import { removeConfinedDirectory } from "../path-safety.js";
 import { sweepOrphanedProjectGitMirrors } from "../project-git-mirror.js";
 import { pathExists, runCommand } from "../shell.js";
-import { configuredWorktreeLocations, validateWorktreeLocation } from "../worktrees/index.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
 import { classifyCommandFailure } from "@orkestrator/protocol/node/command-failure-reason";
 

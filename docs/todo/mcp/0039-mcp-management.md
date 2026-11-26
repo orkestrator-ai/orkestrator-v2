@@ -742,7 +742,7 @@ collects the live evidence the shipped behaviour has never had.
 
 - Shipped in #838. Backend `apps/backend/src/core/mcp-management/` (`service.ts`,
   `catalog.ts`, `codecs.ts`, `providers.ts`, `apply.ts`, `evidence.ts`,
-  `rollout.ts`), commands in `apps/backend/src/core/commands-registry-mcp.ts`,
+  `rollout.ts`), commands in `apps/backend/src/core/commands/registry-mcp.ts`,
   contract in `packages/protocol/src/mcp-management.ts`, UI in
   `apps/web/src/components/settings/mcp-servers/`, and the live-panel link
   "Manage saved MCP servers…" in `apps/web/src/components/layout/AgentInfoMcpSection.tsx`.
@@ -893,7 +893,7 @@ collects the live evidence the shipped behaviour has never had.
    `mcp.auth.start` was traced in the pinned binary and never completes; the
    panel now gives the `opencode mcp auth <server>` route instead of a sign-in
    that cannot finish. Evidence: `service-apply.test.ts` (OpenCode cases),
-   `commands-registry-mcp.test.ts` ("OpenCode reload probe"),
+   `commands/registry-mcp.test.ts` ("OpenCode reload probe"),
    `opencode-capabilities.test.ts` ("OpenCode MCP sign-in"), and
    `apps/backend/tests/opencode-mcp-reload-live.test.ts` on the real pinned
    1.19.4 (`verify:opencode:mcp-live`, 2 passed, 3.4 s; both tests and the

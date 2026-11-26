@@ -11,7 +11,7 @@ import {
   type ProjectCopyFileList,
 } from "@orkestrator/protocol/project-copy";
 
-import { isPathInsideRoot, normalizeConfiguredProjectFiles } from "../commands-project-files.js";
+import { isPathInsideRoot, normalizeConfiguredProjectFiles } from "../commands/index.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runCommandBuffer } from "../shell.js";
 import { MAX_NODE_FILE_BYTES } from "./node-files.js";

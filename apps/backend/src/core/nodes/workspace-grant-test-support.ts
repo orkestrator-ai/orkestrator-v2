@@ -4,7 +4,7 @@
  * command (plan item 7012).
  */
 import type { CommandAccess } from "@orkestrator/protocol/contract/command";
-import { createCommandRegistry, type CommandRegistry } from "../commands-registry.js";
+import { createCommandRegistry, type CommandRegistry } from "../commands/registry.js";
 import { isWorkspaceGrantCommand } from "./workspace-grant-scope.js";
 
 let registry: CommandRegistry | undefined;

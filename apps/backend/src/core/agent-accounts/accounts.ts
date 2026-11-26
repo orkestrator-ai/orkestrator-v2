@@ -32,9 +32,10 @@ import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 
 import type { AutoSwitchSnapshot } from "./auto-switch.js";
-import type { CommandContext } from "../commands-context.js";
-import { resolveClaudeBinary, resolveCodexBinary } from "../commands-agent-support.js";
-import { getClaudeOAuthAccessToken, readRuntimeHostClaudeCredentials } from "../commands-files.js";
+import type { CommandContext } from "../commands/index.js";
+import { resolveClaudeBinary, resolveCodexBinary } from "../commands/agent-support.js";
+import { getClaudeOAuthAccessToken } from "../claude-host-credentials.js";
+import { readRuntimeHostClaudeCredentials } from "../commands/files.js";
 import { runCommand } from "../shell.js";
 import {
   isStoredAgentAccountId,

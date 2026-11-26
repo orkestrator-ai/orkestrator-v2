@@ -9,10 +9,10 @@ import {
   RECORD_DOMAIN_ADAPTER_USAGE_COMMAND,
   recordDomainAdapterUsageCommand,
 } from "@orkestrator/protocol/contract/client-usage";
-import { createCommandRegistry } from "./commands-registry.js";
-import type { CommandContext, CommandHandler } from "./commands-context.js";
-import { CommandRegistry, createRegistryRegistrar } from "./commands-registry-contracts.js";
-import { registerSystemCommands } from "./commands-registry-system.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext, CommandHandler } from "./commands/context.js";
+import { CommandRegistry, createRegistryRegistrar } from "./commands/registry-contracts.js";
+import { registerSystemCommands } from "./commands/registry-system.js";
 import {
   CompatibilityPathUsage,
   compatibilityPathUsage,

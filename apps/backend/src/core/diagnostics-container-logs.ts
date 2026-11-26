@@ -4,8 +4,8 @@ import {
   type DiagnosticsManifestAbsent,
 } from "@orkestrator/protocol/backend-diagnostics";
 import { acpContainerUnavailableReason, isAcpLocalServerKind } from "./acp-provider-launch.js";
-import { dockerExec, isContainerRunning } from "./commands-container-exec.js";
-import { containerServerLogFile } from "./commands-containers.js";
+import { dockerExec, isContainerRunning } from "./commands/index.js";
+import { containerServerLogFile } from "./commands/containers.js";
 import {
   boundDiagnosticTail,
   DIAGNOSTIC_TAIL_MAX_BYTES,

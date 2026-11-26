@@ -13,12 +13,12 @@ import {
   acpModelFetchTimeoutMs,
   fetchAcpNormalizedModelsAtResult,
   HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
-} from "./commands-servers.js";
+} from "./commands/servers.js";
 import { BackendRuntime } from "./backend-runtime.js";
 import { terminateProcessTree } from "./process-tree.js";
 import { spawnCommand } from "./shell.js";
-import type { CommandContext } from "./commands-context.js";
-import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "./commands-server-health.js";
+import type { CommandContext } from "./commands/context.js";
+import { LOCAL_SERVER_POLL_OVERRIDE_ENV } from "./commands/server-health.js";
 
 /**
  * The catalogue probe is the one path that spawns a bridge with no environment

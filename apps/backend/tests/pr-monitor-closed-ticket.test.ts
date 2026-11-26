@@ -9,7 +9,7 @@ import {
   PR_URL,
   type LifecycleMachine,
 } from "../src/core/build-pipeline/kanban-transitions-test-support.js";
-import { findKanbanTaskForEnvironment } from "../src/core/commands-pr-monitor.js";
+import { findKanbanTaskForEnvironment } from "../src/core/commands/pr-monitor.js";
 import { PR_CLOSED_COMMENT, PrMonitorService, type PrDetection } from "../src/core/git/pr-monitor";
 import { StorageService } from "../src/core/storage/service.js";
 

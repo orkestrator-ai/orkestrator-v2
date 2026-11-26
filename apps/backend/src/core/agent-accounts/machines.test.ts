@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { listMachineAgentAccounts, setPreferredAgentIdentity } from "./machines.js";
 import { NodeUnavailableError } from "../nodes/node-link.js";
 import { StorageService } from "../storage/service.js";

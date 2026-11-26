@@ -1,0 +1,1294 @@
+import { readActiveAgentAccountUsage } from "../agent-accounts/accounts.js";
+import { boundSummaryIcons } from "../nodes/index.js";
+import nodePath from "node:path";
+import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
+import { isGitRemoteUrl } from "@orkestrator/protocol/git-remote-url";
+import { parseProjectArrangementIntent } from "@orkestrator/protocol/project-arrangement";
+import {
+  getScopedResourceRevisionManifestCommand,
+  getScopedResourceSnapshotsCommand,
+  greetCommand,
+} from "@orkestrator/protocol/contract/domains/system";
+import {
+  isResourceChange,
+  type ResourceChange,
+  type ResourceManifestKind,
+  type ScopedResourceSnapshotBatchEntry,
+  isResourceGeneration,
+  isResourceManifestKind,
+  isResourceSnapshotRevision,
+  type ResourceRevisionMap,
+} from "@orkestrator/protocol/resource-events";
+import {
+  cursorSdkLoginCancelCommand,
+  cursorSdkLoginStartCommand,
+  cursorSdkLoginStatusCommand,
+  cursorSdkLogoutCommand,
+  getPlanUsageCommand,
+} from "@orkestrator/protocol/contract/domains/accounts";
+import { ASYNC_HANDLER, asyncHandlerCheckingFirst } from "./registry-async-decode.js";
+import type { CommandRegistrar, RegistryDependencies } from "./registry-types.js";
+import {
+  addProjectCommand,
+  arrangeProjectsByIntentCommand,
+  arrangeProjectsCommand,
+  createProjectFromScratchCommand,
+  getGitRemoteUrlCommand,
+  getProjectCommand,
+  getProjectSetupRequirementsCommand,
+  getProjectsCommand,
+  listGitHubCloneAccountsCommand,
+  listGitHubCloneRepositoriesCommand,
+  removeProjectCommand,
+  reorderProjectsCommand,
+  updateProjectCommand,
+  useHttpsGitRemoteCommand,
+  validateGitUrlCommand,
+} from "@orkestrator/protocol/contract/domains/projects";
+import { switchOriginToHttps } from "../git/index.js";
+import {
+  listGitHubCloneAccounts,
+  listGitHubCloneRepositories,
+} from "../git/github-clone-browser.js";
+import { readProjectSetupRequirements } from "../project-setup-requirements.js";
+import {
+  getConfigCommand,
+  getDesktopConnectionsCommand,
+  getRepositoryConfigCommand,
+  patchGlobalConfigCommand,
+  getGlobalSettingSourcesCommand,
+  resetGlobalSettingsCommand,
+  patchRepositorySettingsCommand,
+  saveDesktopConnectionsCommand,
+  setAnthropicApiKeyCommand,
+  setCursorApiKeyCommand,
+  setGitHubCliReminderDismissedCommand,
+  setGitHubTokenCommand,
+  setOpenCodeZenApiKeyCommand,
+  updateGlobalConfigCommand,
+  updateNotificationSoundSettingsCommand,
+  updateRepositoryConfigCommand,
+} from "@orkestrator/protocol/contract/domains/config";
+import type { CommandContext } from "./context.js";
+import { parseStoredDesktopConnections } from "@orkestrator/protocol/connections";
+import { parseResetSettingsRequest } from "@orkestrator/protocol/setting-sources";
+import { parseUpdateObject } from "../storage/index.js";
+import { runCommand } from "../shell.js";
+import {
+  fallbackReasoningId,
+  isSelectableOpenCodeModelId,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+  openCodeModelDisplayLabel,
+  openCodeModelProviderId,
+  reasoningOptionLabel,
+  synthesizedOpenCodeAgentModel,
+} from "@orkestrator/protocol/native-agent";
+import type {
+  AppConfig,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  OpenCodeModelCatalogEntry,
+  Project,
+} from "../models.js";
+import type { AgentModel, AgentReasoningOption } from "@orkestrator/protocol/native-agent";
+import { discoverHostPiModelCatalog } from "../pi-model-catalog-seeding.js";
+import { removeProjectGitMirror } from "../project-git-mirror.js";
+import {
+  claudeModelParameters,
+  claudeModelReasoningIds,
+} from "@orkestrator/protocol/claude-model-catalog";
+import { nativeAgentSessionStorageKey } from "../native-agent/service.js";
+import { localServerStopCommandName } from "../local-server-runtime.js";
+import { prepareBridgePath } from "./servers.js";
+import { resolveBunBinary } from "./agent-support.js";
+import {
+  cancelCursorSdkLogin,
+  cursorSdkAuthStatus,
+  cursorSdkLoginProgress,
+  cursorSdkLogout,
+  startCursorSdkLogin,
+} from "../cursor-sdk-bridge.js";
+import {
+  coordinatorProviderAllowed,
+  coordinatorRuntimeUnavailableMessage,
+  resolveCoordinatorRuntime,
+} from "../coordinator/index.js";
+import { bugReportIdFromRuntimeId, isBugReportAgent } from "@orkestrator/protocol/bug-report";
+import { coordinatorIdFromRuntimeId } from "@orkestrator/protocol/coordinator";
+import { normalizeAgentPlatforms, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  asString,
+  asRecord,
+  redactAppConfig,
+  stripRendererCredentials,
+  asOptionalString,
+  asStringArray,
+  asNonBlankString,
+  asRequiredBoolean,
+  fetchAcpNormalizedModelsResult,
+  readOriginUrl,
+  addExistingProject,
+  createProjectFromScratch,
+} from "./helpers.js";
+import {
+  persistHostCatalog,
+  persistCodexHostCatalog,
+  seedEnabledHostModelCatalogs,
+  HOST_OPENCODE_CATALOG_SCOPE,
+  seedHostModelCatalogIfMissing,
+  refreshStaleHostModelCatalogs,
+  refreshStaleHostModelCatalogsInBackground,
+} from "../host-model-catalog-seed.js";
+import {
+  CODEX_LIVE_MODEL_FETCH_TIMEOUT_MS,
+  fetchCodexBridgeModels,
+} from "../codex-live-model-catalog.js";
+import { openCode2EnvironmentServer } from "../opencode2/container-server-lifecycle.js";
+import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import {
+  ensureHostPiModelCatalogCommand,
+  getAgentModelCatalogCacheCommand,
+  getNativeAgentModelCatalogCommand,
+  refreshHostAgentModelCatalogCommand,
+} from "@orkestrator/protocol/contract/domains/agent-servers";
+
+const log = createLogger("models");
+
+/**
+ * Total extra time a first-use catalogue read may spend starting a bridge and
+ * reading its live list before it answers from the durable cache instead.
+ */
+export const FIRST_USE_CATALOG_BUDGET_MS = 45_000;
+
+/** The share of that budget allowed for the bridge to become ready. */
+export const FIRST_USE_BRIDGE_READY_TIMEOUT_MS = 30_000;
+
+/** The fetch receives only the budget left after bridge readiness work. */
+export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()): number {
+  return Math.max(1_000, deadline - now);
+}
+
+/** Wait for discovery only while the picker still has budget. */
+async function waitForCatalog<T>(discovery: Promise<T>, deadline: number): Promise<T | undefined> {
+  const remaining = Math.max(0, deadline - Date.now());
+  if (remaining === 0) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      discovery,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), remaining);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Bounds the `unset` list of a settings patch: a few dozen top-level keys at most. */
+const MAX_CONFIG_UNSET_KEYS = 128;
+
+/** The keys a settings patch removes; absent means none. */
+export function parseConfigUnsetKeys(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_CONFIG_UNSET_KEYS) {
+    throw new Error(`unset must be an array of at most ${MAX_CONFIG_UNSET_KEYS} keys`);
+  }
+  return value.map((key) => {
+    if (typeof key !== "string" || !key || key.length > 128) {
+      throw new Error("unset must contain setting names");
+    }
+    return key;
+  });
+}
+
+function reasoningOptions(ids: readonly string[]): AgentReasoningOption[] {
+  return ids.map((effort) => ({ id: effort, label: reasoningOptionLabel(effort) }));
+}
+
+function normalizedClaudeModels(models: readonly ClaudeModelCatalogEntry[]): AgentModel[] {
+  return models.map((model): AgentModel => {
+    const efforts = model.supportedEffortLevels ?? ["low", "medium", "high"];
+    return {
+      platform: "claude",
+      id: model.id,
+      resolvedModel: model.resolvedModel,
+      label: model.name,
+      providerLabel: "Claude",
+      reasoning: reasoningOptions(claudeModelReasoningIds(model, efforts)),
+      defaultReasoningId: fallbackReasoningId(efforts) ?? "high",
+      parameters: claudeModelParameters(model),
+      supportsSpeed: model.supportsFastMode !== false,
+      supportsMode: true,
+    };
+  });
+}
+
+/** Mark a model whose provider a persisted, possibly stale, report omits. */
+function markOpenCodeConnectivity(
+  model: AgentModel,
+  connectedProviderIds: readonly string[] | undefined,
+): AgentModel {
+  return connectedProviderIds && !connectedProviderIds.includes(openCodeModelProviderId(model.id))
+    ? { ...model, connected: false }
+    : model;
+}
+
+function normalizedOpenCodeModels(models: readonly OpenCodeModelCatalogEntry[]): AgentModel[] {
+  return models.map((model): AgentModel => {
+    const modelReasoningOptions = [
+      { id: "default", label: "Default" },
+      ...reasoningOptions(model.variants ?? []),
+    ];
+    return {
+      platform: "opencode",
+      id: model.id,
+      label: openCodeModelDisplayLabel(model.id, model.name),
+      providerLabel: model.provider,
+      reasoning: modelReasoningOptions,
+      defaultReasoningId: fallbackReasoningId(modelReasoningOptions) ?? "default",
+      supportsSpeed: false,
+      // OpenCode has primary agents, not a Build/Plan permission mode.
+      supportsMode: false,
+      ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      ...(typeof model.supportsImageInput === "boolean"
+        ? { supportsImageInput: model.supportsImageInput }
+        : {}),
+    };
+  });
+}
+
+function normalizedCodexModels(models: readonly CodexModelCatalogEntry[]): AgentModel[] {
+  return models.map((model): AgentModel => {
+    const reasoning =
+      model.reasoningOptions?.map((option) => ({
+        id: option.effort,
+        label: option.label,
+      })) ?? reasoningOptions(model.reasoningEfforts ?? ["medium", "high"]);
+    return {
+      platform: "codex",
+      id: model.id,
+      label: model.name,
+      providerLabel: "Codex",
+      reasoning,
+      defaultReasoningId:
+        fallbackReasoningId(reasoning, model.defaultReasoningEffort) ??
+        model.defaultReasoningEffort,
+      // No `parameters`: the Codex bridge honours no provider-only axis.
+      // `model/list` cannot say where a reasoning summary is supported, so
+      // none is offered; adding one means a descriptor the bridge applies.
+      supportsSpeed: true,
+      supportsMode: true,
+    };
+  });
+}
+
+/**
+ * Projects with their configured default branch, for a command node's
+ * summary of this node (`includeDefaultBranch`). Additive: a project without
+ * a configured branch is returned unchanged, as an older node returns all.
+ */
+export function withDefaultBranches(
+  projects: readonly Project[],
+  config: Pick<AppConfig, "repositories">,
+): Array<Project & { defaultBranch?: string }> {
+  return projects.map((project) => {
+    const defaultBranch = config.repositories?.[project.id]?.defaultBranch?.trim();
+    return defaultBranch ? { ...project, defaultBranch } : project;
+  });
+}
+
+export function registerProjectCommands(
+  register: CommandRegistrar,
+  dependencies: RegistryDependencies,
+): void {
+  const {
+    commands,
+    conditionalManifestSnapshot,
+    runProjectCreationCommand,
+    refreshHostModelCatalog,
+    planUsageReader,
+  } = dependencies;
+  register(
+    greetCommand,
+    ({ name }) => `Hello, ${name}! You've been greeted from the Orkestrator backend!`,
+  );
+  register(
+    getScopedResourceRevisionManifestCommand,
+    ({ knownGeneration, cursor, highWater, knownRevisions }, { storage }) => {
+      const parsed: Partial<ResourceRevisionMap> = {};
+      if (knownRevisions !== undefined) {
+        const revisions = asRecord(knownRevisions, "knownRevisions");
+        for (const [resource, revision] of Object.entries(revisions)) {
+          if (!isResourceManifestKind(resource) || !isResourceSnapshotRevision(revision)) {
+            throw new Error(`Invalid scoped manifest revision for ${resource}`);
+          }
+          parsed[resource] = revision;
+        }
+      }
+      if (knownGeneration !== undefined && !isResourceGeneration(knownGeneration)) {
+        throw new Error("knownGeneration must be an opaque resource generation");
+      }
+      const parsedCursor = cursor === undefined ? 0 : Number(cursor);
+      const parsedHighWater = highWater === undefined ? undefined : Number(highWater);
+      if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0) {
+        throw new Error("cursor must be a non-negative safe integer");
+      }
+      if (
+        parsedHighWater !== undefined &&
+        (!Number.isSafeInteger(parsedHighWater) || parsedHighWater < parsedCursor)
+      ) {
+        throw new Error("highWater must be a safe integer at or after cursor");
+      }
+      return storage.getScopedResourceRevisionManifest(
+        knownGeneration,
+        parsedCursor,
+        parsed,
+        parsedHighWater,
+      );
+    },
+  );
+
+  register(getScopedResourceSnapshotsCommand, async ({ changes }, context) => {
+    if (
+      !Array.isArray(changes) ||
+      changes.length > 32 ||
+      Buffer.byteLength(JSON.stringify(changes)) > 64 * 1024 ||
+      !changes.every(isResourceChange)
+    ) {
+      throw new Error("Scoped snapshot changes must contain at most 32 valid scopes");
+    }
+    const commandFor = (
+      change: ResourceChange,
+    ): { command: string; args: Record<string, unknown> } | null => {
+      switch (change.resource) {
+        case "project":
+          return { command: "get_projects", args: {} };
+        case "environment":
+          return change.projectId
+            ? { command: "get_environment_snapshots", args: { projectId: change.projectId } }
+            : null;
+        case "session":
+          return { command: "get_sessions_by_environment", args: { environmentId: change.id } };
+        case "prompt-queue":
+          return { command: "list_prompt_queues", args: { environmentId: change.id } };
+        case "pane-layout":
+          return { command: "get_pane_layout", args: { environmentId: change.id } };
+        case "build-pipeline":
+          return { command: "get_build_pipeline", args: { pipelineId: change.id } };
+        case "multi-review":
+          return { command: "get_multi_review_workflow", args: { workflowId: change.id } };
+        case "kanban":
+          return { command: "get_kanban_tasks", args: { projectId: change.id } };
+        case "project-notes":
+          return { command: "get_project_notes", args: { projectId: change.id } };
+        case "feature-plan":
+          return { command: "get_feature_plans", args: { projectId: change.id } };
+        case "config":
+          return { command: "get_config", args: {} };
+        case "agent-mail-summary":
+          return { command: "get_agent_mail_summary", args: {} };
+        default:
+          return null;
+      }
+    };
+    const unique = new Map<string, ResourceChange>();
+    for (const change of changes as ResourceChange[]) {
+      // Agent and logical session are part of the scope for native-agent
+      // changes, exactly as they are in the client's own coalescing key.
+      // Collapsing on `resource\0id` alone would silently drop a second agent
+      // or tab in the same environment from the batch.
+      unique.set(
+        `${change.resource}\0${change.id}\0${change.agent ?? ""}\0${change.logicalSessionKey ?? ""}`,
+        change,
+      );
+    }
+    const scopes = Array.from(unique.values());
+    const loaded = Array.from(
+      { length: scopes.length },
+      () => null as ScopedResourceSnapshotBatchEntry | null,
+    );
+    let nextIndex = 0;
+    const worker = async (): Promise<void> => {
+      while (nextIndex < scopes.length) {
+        const index = nextIndex++;
+        const change = scopes[index]!;
+        const mapped = commandFor(change);
+        if (!mapped) {
+          loaded[index] = { resource: change.resource, id: change.id, status: "deferred" };
+          continue;
+        }
+        const handler = commands.get(mapped.command);
+        if (!handler) {
+          loaded[index] = { resource: change.resource, id: change.id, status: "failed" };
+          continue;
+        }
+        try {
+          const before = await context.storage.readConditionalResourceSnapshot(
+            change.resource as ResourceManifestKind,
+            context.storage.getResourceGeneration(),
+            "0".repeat(32),
+            () => handler(mapped.args, context),
+          );
+          if (before.status !== "changed") {
+            loaded[index] = { resource: change.resource, id: change.id, status: "failed" };
+            continue;
+          }
+          const after = await context.storage.readConditionalResourceSnapshot(
+            change.resource as ResourceManifestKind,
+            before.generation,
+            before.revision,
+            () => null,
+          );
+          if (after.status !== "unchanged") {
+            loaded[index] = { resource: change.resource, id: change.id, status: "deferred" };
+            continue;
+          }
+          const candidate: ScopedResourceSnapshotBatchEntry = {
+            resource: change.resource,
+            id: change.id,
+            status: "ok",
+            command: mapped.command,
+            args: mapped.args,
+            generation: before.generation,
+            revision: before.revision,
+            snapshot: before.snapshot,
+          };
+          loaded[index] =
+            Buffer.byteLength(JSON.stringify(candidate)) <= 2 * 1024 * 1024
+              ? candidate
+              : { resource: change.resource, id: change.id, status: "deferred" };
+        } catch {
+          loaded[index] = { resource: change.resource, id: change.id, status: "failed" };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, scopes.length) }, () => worker()));
+    const entries: ScopedResourceSnapshotBatchEntry[] = [];
+    let responseBytes = 64;
+    for (const entry of loaded) {
+      if (!entry) continue;
+      const bytes = Buffer.byteLength(JSON.stringify(entry));
+      if (entry.status === "ok" && responseBytes + bytes > 2 * 1024 * 1024) {
+        entries.push({ resource: entry.resource, id: entry.id, status: "deferred" });
+        continue;
+      }
+      entries.push(entry);
+      responseBytes += bytes;
+    }
+    return { entries };
+  });
+
+  register(getProjectsCommand, async (args, { storage }) => {
+    // Periodic node-summary reads have a shared icon budget; ordinary project reads stay full.
+    const summaryIcons = args.summaryIcons ?? false;
+    const includeDefaultBranch = args.includeDefaultBranch ?? false;
+    if (!includeDefaultBranch && !summaryIcons) {
+      return conditionalManifestSnapshot(args, storage, "project", () => storage.loadProjects());
+    }
+    // Each project's default branch lives in the app config, whose changes
+    // do not move the project manifest revision, so this form is never conditional.
+    if (args.knownManifestGeneration !== undefined || args.knownResourceRevision !== undefined) {
+      throw new Error("Summary enrichment cannot be combined with a conditional read");
+    }
+    const stored = await storage.loadProjects();
+    const projects = summaryIcons ? boundSummaryIcons(stored) : stored;
+    if (!includeDefaultBranch) return projects;
+    try {
+      return withDefaultBranches(projects, await storage.loadConfig());
+    } catch {
+      // Search enrichment is optional; an unreadable config must not hide projects.
+      return projects;
+    }
+  });
+  register(addProjectCommand, async ({ gitUrl, localPath, cloneOnly }, { storage }) => {
+    const requestedLocalPath = asOptionalString(localPath);
+    return addExistingProject(
+      gitUrl,
+      requestedLocalPath,
+      storage,
+      runProjectCreationCommand,
+      undefined,
+      cloneOnly ?? false,
+    );
+  });
+  register(createProjectFromScratchCommand, (args, { storage, runtime }) => {
+    return createProjectFromScratch(
+      asNonBlankString(args.localPath, "localPath"),
+      storage,
+      runtime.gitHubCli,
+      runProjectCreationCommand,
+    );
+  });
+  // Read-only listings for the "From GitHub" add-project picker. The clone
+  // itself goes through `add_project`, which owns locking and rollback.
+  register(listGitHubCloneAccountsCommand, (_args, context) => {
+    return listGitHubCloneAccounts(
+      context.storage,
+      context.runtime.gitHubCli,
+      runProjectCreationCommand,
+    );
+  });
+  register(listGitHubCloneRepositoriesCommand, (args, context) => {
+    return listGitHubCloneRepositories(
+      context.storage,
+      context.runtime.gitHubCli,
+      asNonBlankString(args.owner, "owner").trim(),
+      runProjectCreationCommand,
+      args.cursor === undefined ? undefined : asNonBlankString(args.cursor, "cursor"),
+    );
+  });
+  register(removeProjectCommand, async ({ projectId: id }, context) => {
+    await cleanupProjectForRemoval(id, context, commands);
+    return context.storage.removeProject(id);
+  });
+  register(getProjectCommand, ({ projectId }, { storage }) => storage.getProject(projectId));
+  register(updateProjectCommand, async ({ projectId, updates }, { storage }) => {
+    const parsedUpdates = parseUpdateObject(updates);
+    if (
+      parsedUpdates.gitUrl !== undefined &&
+      !isGitRemoteUrl(asString(parsedUpdates.gitUrl, "updates.gitUrl"))
+    ) {
+      // Existing projects can use local-path remotes. An unrelated settings
+      // change must not force the user to replace a previously accepted URL.
+      const existing = await storage.getProject(projectId);
+      if (existing?.gitUrl !== String(parsedUpdates.gitUrl).trim()) {
+        throw new Error("Git URL must be an HTTPS, SSH, or git@ remote URL");
+      }
+    }
+    return storage.updateProject(projectId, parsedUpdates);
+  });
+  register(reorderProjectsCommand, ({ projectIds }, { storage }) =>
+    storage.reorderProjects(asStringArray(projectIds)),
+  );
+  // The gesture rather than its result: resolved against the current projects
+  // under the store lock, so a client's stale copy cannot undo another's work.
+  register(arrangeProjectsByIntentCommand, async (args, { storage }) => {
+    return storage.arrangeProjectsByIntent(parseProjectArrangementIntent(args.intent));
+  });
+  // Kept for older clients and nodes; current clients send the intent above.
+  // One command rather than a reorder plus N updates: the sidebar derives a
+  // folder's position from its first member, so a half-applied arrangement is
+  // a visibly wrong tree rather than a slightly stale one.
+  register(arrangeProjectsCommand, (args, { storage }) => {
+    const folders: Record<string, string | null> = {};
+    if (args.folders !== undefined) {
+      for (const [projectId, folder] of Object.entries(asRecord(args.folders, "folders"))) {
+        if (folder !== null && typeof folder !== "string") {
+          throw new Error(`folders.${projectId} must be a string or null`);
+        }
+        folders[projectId] = folder;
+      }
+    }
+    return storage.arrangeProjects(asStringArray(args.projectIds), folders);
+  });
+  register(validateGitUrlCommand, ({ url }) => isGitRemoteUrl(url));
+  register(getGitRemoteUrlCommand, async ({ path: repoPath }) => {
+    // Reads the raw config value rather than `remote get-url`, which applies
+    // `insteadOf` rewrites and can therefore hand back an embedded credential.
+    return (await readOriginUrl(repoPath, runCommand)) || null;
+  });
+
+  register(useHttpsGitRemoteCommand, async ({ projectId }, { storage }) => {
+    const project = await storage.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    if (!project.localPath) {
+      throw new Error("This project has no local checkout on this machine.");
+    }
+    return switchOriginToHttps(project.localPath);
+  });
+  register(getProjectSetupRequirementsCommand, ({ projectId }, context) =>
+    readProjectSetupRequirements(projectId, context),
+  );
+
+  register(getConfigCommand, (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "config", async () =>
+      redactAppConfig(await storage.loadConfig()),
+    ),
+  );
+  register(ensureHostPiModelCatalogCommand, async (_args, context) => {
+    const cached = (await context.storage.getAgentModelCatalogCache()).pi?.models;
+    if (cached?.length) return cached;
+    const models = await discoverHostPiModelCatalog(context);
+    if (models.length > 0) await context.storage.cacheAgentModelCatalog("pi", models);
+    return models;
+  });
+  register(refreshHostAgentModelCatalogCommand, async (args, context) => {
+    const agent = asNonBlankString(args.agent, "agent");
+    if (!isAgentPlatform(agent)) throw new Error(`Unknown agent platform: ${agent}`);
+    const projectId =
+      agent === "opencode" ? asNonBlankString(args.projectId, "projectId") : undefined;
+    if (projectId && !(await context.storage.getProject(projectId))) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    const catalog = await refreshHostModelCatalog(context, agent);
+    await persistHostCatalog(context, catalog, projectId);
+
+    return { agent: catalog.agent, modelCount: catalog.models.length };
+  });
+  register(getAgentModelCatalogCacheCommand, async (args, context) => {
+    // `seed: true` is asked only by the application's own startup, in the
+    // background after the first render, so a first launch downloads every
+    // enabled platform's list. `seed: false` is startup's read before that
+    // render: the cache exactly as stored, with no download and no Pi probe,
+    // so nothing can hold the first paint on a bridge. An omitted `seed` (the
+    // control surface, the pickers) keeps the Pi first-use probe below.
+    if (args.seed === true) {
+      await seedEnabledHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
+      // Startup's background read is the one that may wait for a download, so
+      // a window opened after a day away shows the provider's current list.
+      await refreshStaleHostModelCatalogs(context, refreshHostModelCatalog).catch(() => undefined);
+    }
+    let cache = await context.storage.getAgentModelCatalogCache();
+    if (args.seed === false) return cache;
+    // Every other read (a launcher opening, often on another machine's node)
+    // answers from the cache and lets the next read see a refreshed list.
+    if (args.seed === undefined) {
+      refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
+    }
+    if (!cache.pi?.models.length) {
+      const config = await context.storage.loadConfig();
+      if (config.global.enabledAgentPlatforms?.includes("pi")) {
+        const ensure = commands.get("ensure_host_pi_model_catalog");
+        if (ensure) {
+          try {
+            await ensure({}, context);
+            cache = await context.storage.getAgentModelCatalogCache();
+          } catch (error) {
+            // Keep startup non-fatal and return every last-known-good catalogue.
+            // The next application launch can retry a transient provider error.
+            log.warn("seed.pi-failed", { error: formatLogError(error) });
+          }
+        }
+      }
+    }
+    return cache;
+  });
+  register(getNativeAgentModelCatalogCommand, async (args, context) => {
+    const { storage } = context;
+    const id = asNonBlankString(args.environmentId, "environmentId");
+    const ensureAgent = args.ensureAgent;
+    if (
+      ensureAgent !== undefined &&
+      ensureAgent !== "claude" &&
+      ensureAgent !== "codex" &&
+      ensureAgent !== "opencode" &&
+      ensureAgent !== "cursor" &&
+      ensureAgent !== "grok" &&
+      ensureAgent !== "pi" &&
+      ensureAgent !== "antigravity"
+    ) {
+      throw new Error(
+        "ensureAgent must be one of: claude, codex, opencode, cursor, grok, pi, antigravity",
+      );
+    }
+    const environment = await storage.getEnvironment(id);
+    let cache = await storage.getAgentModelCatalogCache();
+    if (!environment) {
+      refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
+      // A bug report, like a coordinator, has no environment row; it belongs
+      // to no project and offers only the bug-report agents.
+      const bugReportId = bugReportIdFromRuntimeId(id);
+      if (bugReportId && !(await storage.bugReports.getBugReport(bugReportId))) {
+        throw new Error("This bug report was discarded");
+      }
+      const coordinator = bugReportId ? null : await resolveCoordinatorRuntime(storage, id);
+      if (coordinator?.status === "not-coordinator") {
+        throw new Error(`Environment not found: ${id}`);
+      }
+      // An unassigned conversation is exactly when this catalogue matters
+      // most: the composer is asking what the user may choose from. Resolve
+      // the workspace directly rather than through the runtime, which
+      // deliberately refuses a conversation with no provider yet.
+      const coordinatorId = coordinatorIdFromRuntimeId(id);
+      const workspace = coordinatorId
+        ? await storage.coordinators.getCoordinatorWorkspaceById(coordinatorId)
+        : null;
+      if (
+        coordinator?.status === "unavailable" &&
+        (!workspace ||
+          (coordinator.reason !== "unassigned" && coordinator.reason !== "startup-failed"))
+      ) {
+        throw new Error(coordinatorRuntimeUnavailableMessage(coordinator));
+      }
+      const projectId = !coordinator
+        ? undefined
+        : coordinator.status === "ready"
+          ? coordinator.workspace.projectId
+          : workspace!.projectId;
+      const openCodeScope = projectId ?? HOST_OPENCODE_CATALOG_SCOPE;
+      const config = await storage.loadConfig();
+      const enabledPlatforms = normalizeAgentPlatforms(config.global.enabledAgentPlatforms);
+      const qualified = new Set(
+        enabledPlatforms.filter((platform) =>
+          bugReportId
+            ? isBugReportAgent(platform)
+            : coordinatorProviderAllowed(platform, {
+                tierSetting: config.global.coordinatorProviderTiers,
+                enabledPlatforms,
+              }),
+        ),
+      );
+      const openCodeModelProviders = normalizeOpenCodeModelProviders(
+        config.global.openCodeModelProviders,
+      );
+      let openCodeSnapshot = qualified.has("opencode")
+        ? await storage.getOpenCodeModelCatalog(openCodeScope)
+        : null;
+      let coordinatorSeedFailed = false;
+      const hostSeeded =
+        ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
+      const alreadyCatalogued =
+        ensureAgent === "opencode"
+          ? Boolean(openCodeSnapshot?.models.length)
+          : ensureAgent === "claude" || ensureAgent === "codex"
+            ? Boolean(cache[ensureAgent]?.models.length)
+            : false;
+      if (hostSeeded && qualified.has(ensureAgent) && !alreadyCatalogued) {
+        const deadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+        const seeded = await waitForCatalog(
+          seedHostModelCatalogIfMissing(
+            context,
+            ensureAgent,
+            refreshHostModelCatalog,
+            projectId ? { projectId } : {},
+          ),
+          deadline,
+        );
+        coordinatorSeedFailed = seeded !== true;
+        cache = await storage.getAgentModelCatalogCache();
+        if (ensureAgent === "opencode") {
+          openCodeSnapshot = await storage.getOpenCodeModelCatalog(openCodeScope);
+        }
+      }
+      const openCodeModels = (openCodeSnapshot?.models ?? []).filter((model) =>
+        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders),
+      );
+      // Durable caches only. A coordinator has no bridge until a provider is
+      // assigned, so there is nothing live to ask, and starting one to answer a
+      // picker would materialize the very session the choice is meant to
+      // precede.
+      const coordinatorModels = [
+        ...normalizedClaudeModels(cache.claude?.models ?? []),
+        ...normalizedCodexModels(cache.codex?.models ?? []),
+        ...normalizedOpenCodeModels(openCodeModels).map((model) =>
+          markOpenCodeConnectivity(model, openCodeSnapshot?.connectedProviderIds),
+        ),
+        ...(cache.cursor?.models ?? []),
+        ...(cache.grok?.models ?? []),
+        ...(cache.pi?.models ?? []),
+        ...(cache.antigravity?.models ?? []),
+      ].filter((model) => qualified.has(model.platform));
+      if (!ensureAgent) return coordinatorModels;
+      return {
+        models: coordinatorModels,
+        status: coordinatorModels.some((model) => model.platform === ensureAgent)
+          ? ("ready" as const)
+          : coordinatorSeedFailed
+            ? ("failed" as const)
+            : ("empty" as const),
+      };
+    }
+    // Bounds the extra work a first-use read may add, so the model picker
+    // cannot be left waiting on a cold bridge for an open-ended time. Only the
+    // first-use branch consumes it; a read served from the durable cache is
+    // unaffected.
+    let firstUseDeadline: number | null =
+      ensureAgent === "codex" && !cache.codex?.models.length
+        ? Date.now() + FIRST_USE_CATALOG_BUDGET_MS
+        : null;
+    const codexDiscovery = waitForCatalog(
+      fetchCodexBridgeModels(environment, context),
+      Date.now() + CODEX_LIVE_MODEL_FETCH_TIMEOUT_MS,
+    );
+    const config = await storage.loadConfig();
+    const openCodeModelProviders = normalizeOpenCodeModelProviders(
+      config.global.openCodeModelProviders,
+    );
+    let openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
+    // The environment's running OpenCode 2.x server (host or in-container), never started here.
+    const runningOpenCodeBridge = await openCode2EnvironmentServer(context, environment.id, {
+      start: false,
+    }).catch(() => undefined);
+    const openCodeCatalogInput = {
+      environmentId: id,
+      agent: "opencode" as const,
+      logicalSessionKey: `model-catalog:${id}`,
+    };
+    const liveOpenCodeModels =
+      context.nativeAgents && runningOpenCodeBridge
+        ? await context.nativeAgents.listModelCatalogForCache(openCodeCatalogInput).catch(() => [])
+        : [];
+    // Read after the raw catalogue, whose read reports connectivity too.
+    const liveConnectedProviderIds =
+      context.nativeAgents && liveOpenCodeModels.length > 0
+        ? await context.nativeAgents
+            .connectedModelProviders(openCodeCatalogInput)
+            .catch(() => undefined)
+        : undefined;
+    // A running Codex bridge can satisfy the picker before a cold host probe.
+    const codexOnFirstUse = firstUseDeadline !== null ? await codexDiscovery : undefined;
+    // The short-lived host probe supplies the first catalogue when no cached
+    // or running source has models for these platforms.
+    let seedFailed = false;
+    const hostSeeded =
+      ensureAgent === "claude" || ensureAgent === "codex" || ensureAgent === "opencode";
+    const hostModelsAlreadyAvailable =
+      ensureAgent === "claude"
+        ? Boolean(environment.claudeModelCatalog?.models.length || cache.claude?.models.length)
+        : ensureAgent === "codex"
+          ? Boolean(cache.codex?.models.length || codexOnFirstUse?.status === "ok")
+          : ensureAgent === "opencode"
+            ? Boolean(openCodeSnapshot?.models.length || liveOpenCodeModels.length)
+            : false;
+    if (hostSeeded && !hostModelsAlreadyAvailable) {
+      firstUseDeadline ??= Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+      const seeded = await waitForCatalog(
+        seedHostModelCatalogIfMissing(context, ensureAgent, refreshHostModelCatalog, {
+          projectId: environment.projectId,
+        }),
+        firstUseDeadline,
+      );
+      seedFailed = seeded !== true;
+      cache = await storage.getAgentModelCatalogCache();
+      if (ensureAgent === "opencode") {
+        openCodeSnapshot = await storage.getOpenCodeModelCatalog(environment.projectId);
+      }
+    } else if (
+      !hostSeeded &&
+      ensureAgent &&
+      (ensureAgent === "antigravity" || !cache[ensureAgent]?.models.length)
+    ) {
+      // The empty-tab picker is the first consumer on a fresh installation, so
+      // there may be neither a live bridge nor a durable last-known-good list.
+      // Start only the platform the user is trying to select; eagerly starting
+      // every enabled bridge would create unused processes in every environment.
+      firstUseDeadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+      const awaitBridgeReady = commands.get("await_bridge_ready");
+      if (awaitBridgeReady) {
+        try {
+          // The bridge's own health budget is what actually bounds a cold
+          // start; waiting longer here only extends the case where the
+          // environment is still being created, which a picker must not block
+          // on.
+          const ready = (await awaitBridgeReady(
+            {
+              environmentId: id,
+              agent: ensureAgent,
+              timeoutMs: FIRST_USE_BRIDGE_READY_TIMEOUT_MS,
+            },
+            context,
+          )) as { status?: unknown; error?: { message?: unknown } } | undefined;
+          // `await_bridge_ready` reports failure by returning, not throwing. It
+          // is the launch here, so there are no other launch diagnostics to
+          // inherit: without this the user sees an empty picker and nothing
+          // anywhere records why.
+          if (ready && ready.status !== "ready") {
+            log.warn("bridge.not-ready", {
+              agent: ensureAgent,
+              status: typeof ready.status === "string" ? ready.status : "unknown",
+              error: formatLogError(ready.error, { stack: false }),
+            });
+          }
+        } catch (error) {
+          log.warn("bridge.start-failed", { agent: ensureAgent, error: formatLogError(error) });
+        }
+      }
+    }
+    // Only the platform this read is trying to seed is held to the remaining
+    // budget. The others are already answering from local bridge state.
+    const firstUseFetchTimeoutMs = (
+      kind: "cursor" | "grok" | "pi" | "antigravity",
+    ): number | undefined =>
+      firstUseDeadline !== null && kind === ensureAgent
+        ? firstUseCatalogFetchTimeoutMs(firstUseDeadline)
+        : undefined;
+    const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
+    let codexModels = cache.codex?.models ?? [];
+    // The live catalogue is already filtered by the provider, but a cache
+    // written before the allowlist changed is not. Filter here too so the
+    // renderer never receives a provider the user excluded.
+    // A live report is authoritative, so a provider it omits is not offered
+    // at all. Without one, the report persisted with the durable catalogue may
+    // be stale — the user can have signed in since — so its disconnected
+    // providers are marked rather than hidden.
+    const isConnectedOpenCodeModel = (modelId: string): boolean =>
+      !liveConnectedProviderIds ||
+      liveConnectedProviderIds.includes(openCodeModelProviderId(modelId));
+    const persistedConnectedProviderIds = liveConnectedProviderIds
+      ? undefined
+      : openCodeSnapshot?.connectedProviderIds;
+    const openCodeModels = (openCodeSnapshot?.models ?? []).filter(
+      (model) =>
+        isSelectableOpenCodeProvider(model.provider, openCodeModelProviders) &&
+        isConnectedOpenCodeModel(model.id),
+    );
+    // Only the reads narrow. Persisting the filtered list instead would make the
+    // allowlist durable, so widening it later would leave the launch dialogs —
+    // which read this cache before any OpenCode server is ready — narrow until
+    // an environment happened to run and re-list.
+    if (liveOpenCodeModels.length > 0) {
+      await storage
+        .cacheOpenCodeModelCatalog(
+          environment.projectId,
+          liveOpenCodeModels.map((model) => ({
+            id: model.id,
+            name: model.label,
+            provider: model.id.split("/")[0] || "opencode",
+            variants: model.reasoning?.map((option) => option.id).filter((id) => id !== "default"),
+            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+            ...(typeof model.supportsImageInput === "boolean"
+              ? { supportsImageInput: model.supportsImageInput }
+              : {}),
+          })),
+          liveConnectedProviderIds,
+        )
+        .catch(() => undefined);
+    }
+    const selectableLiveOpenCodeModels = liveOpenCodeModels.filter(
+      (model) =>
+        isSelectableOpenCodeModelId(model.id, openCodeModelProviders) &&
+        isConnectedOpenCodeModel(model.id),
+    );
+    const [cursorFetch, grokFetch, piFetch, antigravityFetch, codexFetch] = await Promise.all([
+      fetchAcpNormalizedModelsResult(
+        environment,
+        context,
+        "cursor",
+        firstUseFetchTimeoutMs("cursor"),
+      ),
+      fetchAcpNormalizedModelsResult(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
+      fetchAcpNormalizedModelsResult(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
+      fetchAcpNormalizedModelsResult(
+        environment,
+        context,
+        "antigravity",
+        firstUseFetchTimeoutMs("antigravity"),
+      ),
+      codexDiscovery,
+    ]);
+    if (codexFetch?.status === "ok") {
+      codexModels = codexFetch.models;
+      if (codexFetch.accountLoginKey) {
+        try {
+          cache =
+            (await persistCodexHostCatalog(context, codexModels, codexFetch.accountLoginKey)) ??
+            cache;
+        } catch (error) {
+          log.warn("cache.write-failed", { agent: "codex", error: formatLogError(error) });
+        }
+      }
+    }
+    refreshStaleHostModelCatalogsInBackground(context, refreshHostModelCatalog, cache);
+    const cursorModels = cursorFetch.models;
+    const grokModels = grokFetch.models;
+    const piModels = piFetch.models;
+    const antigravityModels = antigravityFetch.models;
+    for (const [agent, models] of [
+      ["cursor", cursorModels],
+      ["grok", grokModels],
+      ["pi", piModels],
+      ["antigravity", antigravityModels],
+    ] as const) {
+      if (models.length === 0) continue;
+      try {
+        await storage.cacheAgentModelCatalog(agent, models);
+      } catch (error) {
+        log.warn("cache.write-failed", { agent, error: formatLogError(error) });
+      }
+    }
+    const cataloguedOpenCodeModels =
+      selectableLiveOpenCodeModels.length > 0
+        ? selectableLiveOpenCodeModels
+        : normalizedOpenCodeModels(openCodeModels).map((model) =>
+            markOpenCodeConnectivity(model, persistedConnectedProviderIds),
+          );
+    const cataloguedOpenCodeIds = new Set(cataloguedOpenCodeModels.map((model) => model.id));
+    // Favourites (and TUI-chosen ids stored as favourites) have to appear in
+    // the empty-tab picker before an OpenCode server has listed models.
+    // Otherwise they render as disabled placeholders labelled with the raw id.
+    const favoriteOpenCodeModels = (config.global.favoriteModels ?? []).flatMap((favorite) => {
+      if (favorite.platform !== "opencode") return [];
+      if (cataloguedOpenCodeIds.has(favorite.modelId)) return [];
+      if (!isSelectableOpenCodeModelId(favorite.modelId, openCodeModelProviders)) return [];
+      if (!isConnectedOpenCodeModel(favorite.modelId)) return [];
+      const synthesized = synthesizedOpenCodeAgentModel(favorite.modelId);
+      if (!synthesized) return [];
+      cataloguedOpenCodeIds.add(favorite.modelId);
+      return [markOpenCodeConnectivity(synthesized, persistedConnectedProviderIds)];
+    });
+    const result: AgentModel[] = [
+      ...normalizedClaudeModels(claudeModels),
+      ...normalizedCodexModels(codexModels),
+      ...cataloguedOpenCodeModels,
+      ...favoriteOpenCodeModels,
+      ...(cursorModels.length > 0 ? cursorModels : (cache.cursor?.models ?? [])),
+      ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
+      ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
+      // Only a live probe can qualify these account-scoped model IDs.
+      ...antigravityModels,
+    ];
+    if (!ensureAgent) return result;
+    const ensuredStatus = hostSeeded
+      ? seedFailed
+        ? "failed"
+        : "ok"
+      : { cursor: cursorFetch, grok: grokFetch, pi: piFetch, antigravity: antigravityFetch }[
+          ensureAgent
+        ].status;
+    return {
+      models: result,
+      status: result.some((model) => model.platform === ensureAgent)
+        ? ("ready" as const)
+        : ensuredStatus === "ok"
+          ? ("empty" as const)
+          : ("failed" as const),
+    };
+  });
+  register(getDesktopConnectionsCommand, (_args, { storage }) => storage.getDesktopConnections());
+  register(saveDesktopConnectionsCommand, ({ desktopConnections }, { storage }) => {
+    return storage.saveDesktopConnections(parseStoredDesktopConnections(desktopConnections));
+  });
+  // The platform is checked before the decode, so an unknown platform with a
+  // wrong `force` still reports the platform (plan item 7008).
+  const planUsagePlatform = (value: unknown) => {
+    const platform = asNonBlankString(value, "platform");
+    if (!isAgentPlatform(platform)) throw new Error(`Unknown agent platform: ${platform}`);
+    return platform;
+  };
+  register(
+    getPlanUsageCommand,
+    async (args, context) => {
+      const platform = planUsagePlatform(args.platform);
+      const force = args.force === undefined ? false : asRequiredBoolean(args.force, "force");
+      if (platform === "claude" || platform === "codex") {
+        return readActiveAgentAccountUsage(context, platform, {
+          force,
+          cacheOnly: args.cacheOnly === true,
+          reader: planUsageReader,
+        });
+      }
+      return planUsageReader(context, platform, { force });
+    },
+    asyncHandlerCheckingFirst((args) => {
+      planUsagePlatform(args.platform);
+    }),
+  );
+  const afterGlobalConfigSaved = async (updated: AppConfig, context: CommandContext) => {
+    context.runtime.terminals.history.configureRetention({
+      enabled: updated.global.terminalHistoryEnabled,
+      sessionMb: updated.global.terminalHistoryRetentionMb,
+      globalMb: updated.global.terminalHistoryGlobalRetentionMb,
+      days: updated.global.terminalHistoryRetentionDays,
+    });
+    await context.runtime.terminals.history.pruneStorage(context.storage.getDataDir());
+    context.scheduledJobs?.wake();
+    return redactAppConfig(updated);
+  };
+  // Whole-object replace: kept for older clients. Current clients send only
+  // the fields they changed through `patch_global_config`.
+  register(updateGlobalConfigCommand, async ({ global, preserveInheritedSettings }, context) => {
+    const { storage } = context;
+    const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      storage.updateGlobalConfig(stripRendererCredentials(asRecord(global, "global")), {
+        preserveCredentials: true,
+        ...(preserveInheritedSettings === undefined ? {} : { preserveInheritedSettings }),
+      }),
+    );
+    return afterGlobalConfigSaved(updated, context);
+  });
+  // Merge the supplied top-level keys onto the stored global under the config
+  // lock, so a save cannot replace what another client changed meanwhile.
+  register(patchGlobalConfigCommand, async (args, context) => {
+    const patch = stripRendererCredentials(asRecord(args.patch, "patch"));
+    const unset = parseConfigUnsetKeys(args.unset);
+    const updated = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      context.storage.patchGlobalConfig(patch, { unset, preserveCredentials: true }),
+    );
+    return afterGlobalConfigSaved(updated, context);
+  });
+  register(getGlobalSettingSourcesCommand, async (_args, { storage }) =>
+    storage.globalSettingSources(),
+  );
+  // Removes stored settings so the machine follows their defaults, only while
+  // each still holds the value the user previewed. Credentials never qualify.
+  register(resetGlobalSettingsCommand, async (args, context) => {
+    const request = parseResetSettingsRequest(args.keys, args.expect);
+    const result = await context.runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+      context.storage.resetGlobalSettings(request.keys, request.expect),
+    );
+    if (result.status === "conflict") {
+      return {
+        status: "conflict" as const,
+        conflicts: result.conflicts,
+        config: redactAppConfig(result.config),
+      };
+    }
+    return {
+      status: "reset" as const,
+      conflicts: [],
+      config: await afterGlobalConfigSaved(result.config, context),
+    };
+  });
+  register(updateNotificationSoundSettingsCommand, async ({ settings }, { storage }) =>
+    redactAppConfig(await storage.updateNotificationSoundSettings(settings)),
+  );
+  register(setGitHubCliReminderDismissedCommand, async ({ dismissed }, { storage }) =>
+    redactAppConfig(await storage.setGitHubCliReminderDismissed(dismissed)),
+  );
+  register(setGitHubTokenCommand, async ({ token }, { storage, runtime }) => {
+    const nextToken = token === null ? null : asString(token, "token").trim();
+    if (nextToken !== null && !nextToken) {
+      throw new Error("GitHub token cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(
+      await runtime.prMonitor.viewerPermissions.rotateScope("local-gh", () =>
+        storage.setGitHubToken(nextToken),
+      ),
+    );
+  });
+  register(setCursorApiKeyCommand, async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("Cursor API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setCursorApiKey(nextApiKey));
+  });
+  /**
+   * Experimental Cursor SDK sign-in.
+   *
+   * Split into start and poll rather than one awaited call: the browser flow is
+   * human-paced and can take minutes, which is far longer than a request should
+   * be held open. Every decision — spawning the bridge, parsing its output,
+   * storing the credential, cancelling — stays here; the settings pane only
+   * opens the returned URL and polls.
+   */
+  register(
+    cursorSdkLoginStartCommand,
+    async (payload, context) => {
+      return startCursorSdkLogin(context, {
+        bridgeEntrypoint: async () =>
+          nodePath.join(await prepareBridgePath(context, "cursor-bridge"), "dist", "index.js"),
+        runtime: resolveBunBinary(context),
+        // A client opens the link in its own browser, which may be on another
+        // machine. Without the flag (an older client) this machine's desktop
+        // opens it, as before.
+        openBrowser: payload.openBrowser !== false,
+      });
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLoginStatusCommand,
+    async (_payload, context) => {
+      const config = await context.storage.loadConfig();
+      // The stored key is read only to report *which* credential is in play; it
+      // is never returned.
+      return cursorSdkLoginProgress(context, config.global.cursorApiKey);
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLoginCancelCommand,
+    async (_payload, context) => {
+      cancelCursorSdkLogin(context);
+      return { cancelled: true };
+    },
+    ASYNC_HANDLER,
+  );
+  register(
+    cursorSdkLogoutCommand,
+    async (_payload, context) => {
+      cancelCursorSdkLogin(context);
+      await cursorSdkLogout(context);
+      const config = await context.storage.loadConfig();
+      return cursorSdkAuthStatus(context, config.global.cursorApiKey);
+    },
+    ASYNC_HANDLER,
+  );
+  register(setAnthropicApiKeyCommand, async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("Anthropic API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setAnthropicApiKey(nextApiKey));
+  });
+  register(setOpenCodeZenApiKeyCommand, async ({ apiKey }, { storage }) => {
+    const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();
+    if (nextApiKey !== null && !nextApiKey) {
+      throw new Error("OpenCode Zen API key cannot be empty. Use null to clear it.");
+    }
+    return redactAppConfig(await storage.setOpenCodeZenApiKey(nextApiKey));
+  });
+  register(getRepositoryConfigCommand, ({ projectId }, { storage }) =>
+    storage.getRepositoryConfig(projectId),
+  );
+  register(updateRepositoryConfigCommand, async ({ projectId, repoConfig }, context) => {
+    const updated = await context.storage.updateRepositorySettings(projectId, repoConfig as never);
+    // The PR base branch is the baseline the counts are measured against, so an
+    // edit here retargets every environment in the project. Reconciling now
+    // rather than waiting for the next environment poll means the badge follows
+    // the setting the user just changed.
+    void context.runtime.diffStats.sync(context).catch(() => undefined);
+    return redactAppConfig(updated);
+  });
+  register(patchRepositorySettingsCommand, async (args, context) => {
+    const updated = await context.storage.patchRepositorySettings(
+      args.projectId,
+      asRecord(args.updates ?? {}, "updates") as never,
+      parseConfigUnsetKeys(args.unset),
+    );
+    // Same as `update_repository_config`: the PR base branch may have moved.
+    void context.runtime.diffStats.sync(context).catch(() => undefined);
+    return redactAppConfig(updated);
+  });
+}
+
+/**
+ * Everything a project registration owns outside projects.json: coordinator
+ * credentials and conversation servers, their native sessions, agent mail, the
+ * coordinator workspace and the Git mirror. Shared by `remove_project` and the public
+ * `project.remove` action so both clean up identically.
+ */
+export async function cleanupProjectForRemoval(
+  id: string,
+  context: CommandContext,
+  commands: RegistryDependencies["commands"],
+): Promise<void> {
+  const { storage } = context;
+  // The coordinator's schedules go with the project; others aimed at it pause.
+  context.scheduledJobs?.projectRemoved(id);
+  const coordinator =
+    typeof storage.coordinators?.getCoordinatorWorkspace === "function"
+      ? await storage.coordinators.getCoordinatorWorkspace(id)
+      : undefined;
+  if (coordinator) {
+    context.controlMcp?.revokeCoordinatorCredentials(coordinator.id);
+    for (const conversation of coordinator.conversations) {
+      if (!conversation.agent) continue;
+      const runtimeId = coordinatorRuntimeId(coordinator.id, conversation.id);
+      await Promise.resolve(
+        commands.get(localServerStopCommandName(conversation.agent))?.(
+          { environmentId: runtimeId },
+          context,
+        ),
+      ).catch(() => undefined);
+      const key = nativeAgentSessionStorageKey(
+        runtimeId,
+        conversation.agent,
+        conversation.logicalSessionKey,
+      );
+      const session = await storage.getNativeAgentSession(key);
+      if (session) {
+        await storage.invalidateNativeAgentSession(key, session.providerSessionId);
+      }
+    }
+  }
+  if (typeof storage.deleteAgentMailByProject === "function") {
+    await storage.deleteAgentMailByProject(id);
+  }
+  await context.coordinators?.removeProject(id);
+  await removeProjectGitMirror(context, id);
+}

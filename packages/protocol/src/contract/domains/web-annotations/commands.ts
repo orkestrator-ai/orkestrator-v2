@@ -5,7 +5,7 @@
  * `WebAnnotationCommandResults`).
  *
  * The argument schemas are the former Zod schema map of
- * `commands-registry-web-annotations.ts`, converted to Effect Schema with the
+ * `apps/backend/src/core/commands/registry-web-annotations.ts`, converted to Effect Schema with the
  * same bounds. Every one was `.strict()`; they decode tolerantly now (unknown
  * keys are dropped, §11.4), except that the commands whose handler refused a
  * declared `provenance` keep refusing it (`provenance` is declared and never

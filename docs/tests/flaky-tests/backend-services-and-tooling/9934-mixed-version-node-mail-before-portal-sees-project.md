@@ -39,7 +39,7 @@ times out of three (`--scenarios node-mail,ticket-sync`, both topologies).
   creates the leaf's project and worker (`fixtures.worker(leaf)`) and sends at
   once. `send_coordinator_node_mail` checks for the leaf's copy in the command
   node's portal summaries (`coordinatorNodeTarget`,
-  `apps/backend/src/core/commands-registry-coordinator-nodes.ts`), which the
+  `apps/backend/src/core/commands/registry-coordinator-nodes.ts`), which the
   read model fills from the leaf's resource events and a 60-second reconcile
   (`node-read-model.ts`). On the slower CI runner the send came before the
   read model had re-read the leaf's projects.

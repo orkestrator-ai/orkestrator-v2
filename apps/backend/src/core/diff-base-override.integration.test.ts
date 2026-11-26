@@ -10,7 +10,7 @@ import {
 import { createEnvironment } from "./storage/service.js";
 import { createPublicApiHarness, headCommit } from "./public-api/test-support.js";
 import { environmentBaselineCommit } from "@orkestrator/protocol/diff-stats";
-import { discardedRuntimeSetupUpdates } from "./commands-environment.js";
+import { discardedRuntimeSetupUpdates } from "./commands/environment.js";
 
 /** Steps kept per test (the oldest go first) and characters kept per step name. */
 const MAX_TIMED_STEPS = 64;

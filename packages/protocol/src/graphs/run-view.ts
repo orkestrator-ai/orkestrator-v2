@@ -10,7 +10,7 @@
  * than the one it holds; `knownRevision` makes the refetch cheap when nothing
  * moved. Closing a view never cancels anything.
  *
- * Commands (backend `commands-registry-graph-runs.ts`):
+ * Commands (backend `apps/backend/src/core/commands/registry-graph-runs.ts`):
  *
  * | Command | Arguments | Result |
  * | --- | --- | --- |

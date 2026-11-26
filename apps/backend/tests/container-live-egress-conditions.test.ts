@@ -123,7 +123,7 @@ async function createRestricted(
   gateway: string;
   context: ReturnType<typeof conditionsContext>["context"];
 }> {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({ id: `${id}-${RUN}`, allowedDomains });
   const { context } = conditionsContext([environment]);

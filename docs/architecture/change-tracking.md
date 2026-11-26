@@ -104,7 +104,7 @@ stored as a full SHA, so it stays put when the branch moves, and
 panel list and file revert. The typical use is to merge the target branch, then
 pick its tip so only this branch's own work shows. Commands:
 `list_environment_diff_base_branches`, `list_environment_diff_base_commits`,
-`set_environment_diff_base` (`commands-registry-diff-base.ts`,
+`set_environment_diff_base` (`commands/registry-diff-base.ts`,
 `diff-base-override.ts`); null `ref` and `commit` restore the automatic base.
 
 ## Module map
@@ -114,7 +114,7 @@ pick its tip so only this branch's own work shows. Commands:
 | Portable contracts | `packages/protocol/src/change-evidence.ts`, `change-measurements.ts`, `change-resources.ts` |
 | Shared Node algorithms | `packages/protocol/src/node/change-tracking/` (`raw-line-diff`, `unified-patch`, `evidence-measure`, `evidence-selection`, `count-policy`, `evidence-spool`, `evidence-builders`, `evidence-routes`) |
 | Backend domain | `apps/backend/src/core/change-tracking/` |
-| Commands | `apps/backend/src/core/commands-registry-changes.ts` |
+| Commands | `apps/backend/src/core/commands/registry-changes.ts` |
 | Bridge transport | `apps/backend/src/core/http-bridge/change-evidence.ts` (pull/ack client) |
 | Bridge adapters | `bridges/<bridge>/src/**/change-evidence.ts` (Claude, Codex, Cursor, Pi, ACP/Grok) |
 | OpenCode adapter | None since 2026-11-11: the backend's OpenCode 1.x adapter was retired with 1.x (`git show 5f4e27b1c:apps/backend/src/core/opencode-change-evidence.ts`), and the OpenCode 2 provider has no `changeEvidenceSource`, so OpenCode sessions record no change evidence. The 1.x command-change journals still left on disk are imported once (`change-tracking/legacy-import.ts`) |
@@ -410,7 +410,7 @@ settlement.
 
 ## Client contract
 
-Commands (`commands-registry-changes.ts`):
+Commands (`commands/registry-changes.ts`):
 
 | Command | Purpose |
 | --- | --- |
@@ -1293,7 +1293,7 @@ Recorded so no capability is advertised beyond what is implemented:
 - Managed-terminal windows are modelled by the owner (`openWindow` with a
   terminal kind) but no terminal session opens them yet; terminal writes are
   attributed as workspace observations.
-- The environment scan (`commands-files.ts`) compares in Git's own
+- The environment scan (`commands/files.ts`) compares in Git's own
   representation (`git-representation-v1`), so a configured clean filter
   runs there exactly as it does for `git status`. Snapshot capture and the
   staged/unstaged/uncommitted scopes never run filters and mark filtered

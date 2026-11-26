@@ -5,7 +5,7 @@
 // modules import dispatch.js, exec-control.js and operation-ledger.js
 // directly: the storage layer's layout upgrade
 // (storage/public-operation-rows.ts, which storage/stores.ts imports), the
-// environment commands (commands-environment.ts, commands-servers.ts,
+// environment commands (commands/environment.ts, commands/servers.ts,
 // containers/replacement.ts) and the control MCP and scheduled-job callers
 // (control-mcp/caller.ts, scheduled-jobs/executor.ts).
 // storage/public-operations.ts imports this file: only storage/service.ts

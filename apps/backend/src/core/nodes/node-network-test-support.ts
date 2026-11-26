@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { withRelayController } from "../public-api/relay-context.js";
 import type { BackendProfile } from "@orkestrator/protocol/backend-profile";
 import { BACKEND_HELLO_PATH, CLIENT_API_VERSION } from "@orkestrator/protocol/backend-profile";
@@ -21,8 +21,8 @@ import {
   unknownCommand,
 } from "@orkestrator/protocol/contract/errors";
 
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerNodeCommands } from "../commands-registry-nodes.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerNodeCommands } from "../commands/registry-nodes.js";
 import { NodePortal } from "./node-portal.js";
 import { NodeService, type NodeServiceOptions, type NodeServiceStorage } from "./node-service.js";
 import type { NodeLinkTimers } from "./node-link.js";

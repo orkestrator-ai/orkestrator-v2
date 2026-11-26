@@ -1,11 +1,11 @@
 import type { ImageCapability } from "@orkestrator/protocol/image-manifest";
 import type { StateSignalCredential } from "./agent-tools.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
-} from "./commands-environment.js";
-import { findEnvironmentByContainerId } from "./commands-review.js";
+} from "./commands/environment.js";
+import { findEnvironmentByContainerId } from "./commands/review.js";
 import { readImageManifest } from "./containers/index.js";
 import { currentRuntimeIdentity } from "./containers/lifecycle-service.js";
 import { runCommand } from "./shell.js";

@@ -4,7 +4,7 @@ import {
   PERMISSION_RULE_LIMITS,
   workspaceRelativePath,
 } from "@orkestrator/protocol/permission-rules";
-import { dockerExec } from "../commands-container-exec.js";
+import { dockerExec } from "../commands/index.js";
 import type { Environment } from "../models.js";
 
 /** Reject links rather than letting a lexical rule authorize their targets.

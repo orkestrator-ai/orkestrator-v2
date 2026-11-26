@@ -25,8 +25,8 @@ import {
   COORDINATOR_WORKFLOW_REPLAY_WINDOW_MS,
 } from "./workflow-retention.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
 import {
   COORDINATOR_ENVIRONMENT_ACTIONS,
   COORDINATOR_ENVIRONMENT_CHECKED_BY_COMMAND,

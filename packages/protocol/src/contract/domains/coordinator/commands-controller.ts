@@ -6,9 +6,9 @@
  * `get_coordinator_worker_changes`, run on the command node by its Control
  * MCP tools) and the controller-facing commands that run that work on the
  * node (`*_controller_*`, called over the node link). Registered by the
- * backend's `commands-registry-control.ts`,
- * `commands-registry-controller-workflows.ts`,
- * `commands-registry-coordinator-nodes.ts`, `coordinator/fork-worker.ts`
+ * backend's `apps/backend/src/core/commands/registry-control.ts`,
+ * `apps/backend/src/core/commands/registry-controller-workflows.ts`,
+ * `apps/backend/src/core/commands/registry-coordinator-nodes.ts`, `coordinator/fork-worker.ts`
  * and `coordinator/worker-changes.ts`.
  *
  * Arguments: every key a handler reads is declared, because a defined

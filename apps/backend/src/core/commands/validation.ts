@@ -1,0 +1,868 @@
+import { isValidTimeZone } from "@orkestrator/protocol/schedule-time";
+import { parseNativeAgentCommandIntent } from "@orkestrator/protocol/agent-command-catalogue";
+import { createHash } from "node:crypto";
+import {
+  AGENT_INTERACTION_ORIGINS,
+  isAgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
+import { isAgentSkillProvider } from "../agent-skills.js";
+import {
+  resolveCursorCredential,
+  type CursorApiKeySource,
+} from "../agent-test-cursor-credential.js";
+import {
+  gitHubCredentialSource,
+  type GitHubIssueStatus,
+  type GitHubRepositoryRef,
+  resolveGitHubRepository,
+  resolveGitHubToken,
+} from "../git/index.js";
+import { isStartFeaturePlanningInput } from "@orkestrator/protocol/feature-planning";
+import { COMPACT_INSTRUCTIONS_MAX_LENGTH } from "@orkestrator/protocol/native-agent";
+import { assertValidPromptAttachments, assertValidPromptImages } from "../prompt-attachments.js";
+import type {
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+} from "@orkestrator/protocol/agent-interactions";
+import type {
+  AppConfig,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  EnvironmentType,
+  PortMapping,
+} from "../models.js";
+import type { AgentSkillProvider } from "../agent-skills.js";
+import type { JsonRecord, KanbanStorage } from "../storage/index.js";
+import type {
+  NativeAgentControlUpdate,
+  NativeAgentSessionAction,
+} from "@orkestrator/protocol/native-agent";
+import type { DispatchNativeAgentPromptInput } from "../native-agent/service.js";
+import type { FeaturePlanningService } from "../features/index.js";
+import type {
+  FeaturePlanningKind,
+  StartFeaturePlanningInput,
+} from "@orkestrator/protocol/feature-planning";
+import type { CommandContext } from "./context.js";
+
+export const UNTRACKED_SCAN_CONCURRENCY = 8;
+/**
+ * Untracked files line-counted per scan before the result is marked truncated.
+ *
+ * Generous enough that an ordinary worktree never reaches it, low enough that a
+ * directory of build output cannot turn one change signal into tens of
+ * thousands of file reads.
+ */
+export const UNTRACKED_SCAN_MAX_FILES = 2_000;
+/** Read window for line counting; matches the container scanner's buffer. */
+export const FILE_LINE_COUNT_CHUNK_BYTES = 64 * 1024;
+
+export function asString(value: unknown, name: string): string {
+  if (typeof value !== "string") throw new Error(`Expected ${name} to be a string`);
+  return value;
+}
+
+export function asRecord(value: unknown, name: string): JsonRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`Expected ${name} to be an object`);
+  }
+  return value as JsonRecord;
+}
+
+export function asOptionalAgentInteractionOrigin(
+  value: unknown,
+): AgentInteractionOrigin | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== "string" ||
+    !AGENT_INTERACTION_ORIGINS.includes(value as AgentInteractionOrigin)
+  ) {
+    throw new Error("Expected origin to be a supported agent interaction origin");
+  }
+  return value as AgentInteractionOrigin;
+}
+
+export function asOptionalAgentInteractionPolicy(
+  value: unknown,
+): AgentInteractionPolicy | undefined {
+  if (value === undefined) return undefined;
+  if (!isAgentInteractionPolicy(value)) {
+    throw new Error("Expected interactionPolicy to be a valid agent interaction policy");
+  }
+  return value;
+}
+
+export function asAgentSkillProvider(value: unknown): AgentSkillProvider {
+  if (!isAgentSkillProvider(value)) {
+    throw new Error("Expected provider to be claude, codex, cursor, grok or opencode");
+  }
+  return value;
+}
+
+export function assertOnlyKeys(value: JsonRecord, allowed: readonly string[], name: string): void {
+  const allowedSet = new Set(allowed);
+  const unexpected = Object.keys(value).find((key) => !allowedSet.has(key));
+  if (unexpected) throw new Error(`Unexpected ${name} field: ${unexpected}`);
+}
+
+export async function requireLinearApiKey(context: CommandContext): Promise<string> {
+  const auth = await context.storage.kanban.getLinearAuth();
+  if (!auth?.apiKey) throw new Error("Linear is not connected");
+  return auth.apiKey;
+}
+
+async function gitHubTokenFromConfig(
+  context: CommandContext,
+  globalConfig: AppConfig["global"],
+): Promise<string> {
+  const token = await resolveGitHubToken(globalConfig, context.runtime.gitHubCli);
+  if (!token) {
+    throw new Error(
+      gitHubCredentialSource(globalConfig) === "host-cli"
+        ? "GitHub is not configured. Sign in with `gh auth login` (or from Settings) and try again."
+        : "GitHub is not configured. Add a GitHub personal access token in Settings and try again.",
+    );
+  }
+  return token;
+}
+
+/** The GitHub credential selected in Settings, for commands not tied to a project. */
+export async function requireGitHubToken(context: CommandContext): Promise<string> {
+  const config = await context.storage.loadConfig();
+  return gitHubTokenFromConfig(context, config.global);
+}
+
+export async function requireGitHubProject(
+  context: CommandContext,
+  projectId: string,
+): Promise<{ token: string; repository: GitHubRepositoryRef }> {
+  const [project, config] = await Promise.all([
+    context.storage.getProject(projectId),
+    context.storage.loadConfig(),
+  ]);
+  if (!project) throw new Error(`Project not found: ${projectId}`);
+  const token = await gitHubTokenFromConfig(context, config.global);
+  return { token, repository: resolveGitHubRepository(project.gitUrl) };
+}
+
+export type RendererGlobalConfig = Omit<
+  AppConfig["global"],
+  "githubToken" | "anthropicApiKey" | "cursorApiKey" | "openCodeZenApiKey"
+> & {
+  githubTokenConfigured: boolean;
+  anthropicApiKeyConfigured: boolean;
+  anthropicApiKeySource: ApiKeySource;
+  cursorApiKeyConfigured: boolean;
+  cursorApiKeySource: CursorApiKeySource;
+  openCodeZenApiKeyConfigured: boolean;
+  openCodeZenApiKeySource: ApiKeySource;
+};
+
+export type RendererAppConfig = Omit<AppConfig, "global"> & {
+  global: RendererGlobalConfig;
+};
+
+/**
+ * Where the key a new container would receive actually comes from. The stored
+ * key is write-only, so `cursorApiKeyConfigured` alone cannot tell the settings
+ * pane that a container is being handed a key inherited from this process's own
+ * environment — and clearing the stored key does not stop that one.
+ */
+export type ApiKeySource = "config" | "host-env" | "none";
+
+export function resolveStoredOrInheritedApiKey(
+  configuredValue: string | undefined,
+  inheritedValue: string | undefined,
+): { apiKey?: string; source: ApiKeySource } {
+  const configured = configuredValue?.trim();
+  if (configured) return { apiKey: configured, source: "config" };
+  const inherited = inheritedValue?.trim();
+  if (inherited) return { apiKey: inherited, source: "host-env" };
+  return { source: "none" };
+}
+
+export function resolveAnthropicApiKey(global: AppConfig["global"]): {
+  apiKey?: string;
+  source: ApiKeySource;
+} {
+  return resolveStoredOrInheritedApiKey(global.anthropicApiKey, process.env.ANTHROPIC_API_KEY);
+}
+
+/**
+ * Single source of truth for the Cursor key. The credential sync hands `apiKey`
+ * to a running container; the renderer is told only `source`, never the value.
+ */
+export function resolveCursorApiKey(global: AppConfig["global"]): {
+  apiKey?: string;
+  source: CursorApiKeySource;
+} {
+  return resolveCursorCredential(global.cursorApiKey);
+}
+
+/**
+ * The OpenCode Zen plan key, used to read plan usage in Settings.
+ *
+ * A stored key wins over `OPENCODE_GO_API_KEY` inherited from the backend
+ * process, matching the Cursor/Anthropic resolution order so the settings pane
+ * can report which one is actually in play.
+ */
+export function resolveOpenCodeZenApiKey(global: AppConfig["global"]): {
+  apiKey?: string;
+  source: ApiKeySource;
+} {
+  return resolveStoredOrInheritedApiKey(global.openCodeZenApiKey, process.env.OPENCODE_GO_API_KEY);
+}
+
+export function cursorApiKeyFingerprint(apiKey: string | undefined): string {
+  return createHash("sha256")
+    .update(apiKey ?? "")
+    .digest("hex");
+}
+
+export function redactGlobalConfig(global: AppConfig["global"]): RendererGlobalConfig {
+  const { source: anthropicApiKeySource } = resolveAnthropicApiKey(global);
+  const { source: cursorApiKeySource } = resolveCursorApiKey(global);
+  const { source: openCodeZenApiKeySource } = resolveOpenCodeZenApiKey(global);
+  const { githubToken, anthropicApiKey, cursorApiKey, openCodeZenApiKey, ...safeGlobal } = global;
+  return {
+    ...safeGlobal,
+    githubTokenConfigured: Boolean(githubToken?.trim()),
+    anthropicApiKeyConfigured: Boolean(anthropicApiKey?.trim()),
+    anthropicApiKeySource,
+    cursorApiKeyConfigured: Boolean(cursorApiKey?.trim()),
+    cursorApiKeySource,
+    openCodeZenApiKeyConfigured: Boolean(openCodeZenApiKey?.trim()),
+    openCodeZenApiKeySource,
+  };
+}
+
+export function redactAppConfig(config: AppConfig): RendererAppConfig {
+  return {
+    ...config,
+    global: redactGlobalConfig(config.global),
+  };
+}
+
+export function stripRendererCredentials(global: Record<string, unknown>): AppConfig["global"] {
+  const {
+    githubToken: _ignoredToken,
+    githubTokenConfigured: _ignoredConfigured,
+    anthropicApiKey: _ignoredAnthropicApiKey,
+    anthropicApiKeyConfigured: _ignoredAnthropicConfigured,
+    anthropicApiKeySource: _ignoredAnthropicSource,
+    cursorApiKey: _ignoredCursorApiKey,
+    cursorApiKeyConfigured: _ignoredCursorConfigured,
+    cursorApiKeySource: _ignoredCursorSource,
+    openCodeZenApiKey: _ignoredOpenCodeZenApiKey,
+    openCodeZenApiKeyConfigured: _ignoredOpenCodeZenConfigured,
+    openCodeZenApiKeySource: _ignoredOpenCodeZenSource,
+    ...safeGlobal
+  } = global;
+  return safeGlobal as AppConfig["global"];
+}
+
+export function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
+  if (value === "backlog" || value === "todo" || value === "inprogress" || value === "review") {
+    return value;
+  }
+  throw new Error("Expected status to be backlog, todo, inprogress, or review");
+}
+
+export function asOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+export function asBoolean(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+/**
+ * Boolean argument that must be supplied. Use this instead of `asBoolean` when
+ * the fallback would silently destroy state — a malformed call should fail, not
+ * be read as `false`.
+ */
+export function asRequiredBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Expected ${name} to be a boolean`);
+  return value;
+}
+
+export function asNumber(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new Error(`Expected ${name} to be a number`);
+  return value;
+}
+
+export function asPositiveInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+    throw new Error(`Expected ${name} to be a positive integer`);
+  }
+  return value as number;
+}
+
+export function asTerminalDimension(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.min(1_000, Math.floor(value))
+    : fallback;
+}
+
+export function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+export function asNonBlankString(value: unknown, name: string): string {
+  const normalized = asString(value, name).trim();
+  if (!normalized) throw new Error(`Expected ${name} to be a non-blank string`);
+  return normalized;
+}
+
+/**
+ * Longest execution-profile / subagent id accepted from a client.
+ *
+ * These are provider agent names (`build`, `plan`, a user's own primary agent),
+ * and the renderer already refuses anything longer. The bound matters because
+ * the id is persisted to `native-agent-sessions.json` and forwarded verbatim as
+ * the provider's `agent` name, and it is not always checked against a listing:
+ * an update that arrives before the listing does is accepted on the fallback
+ * ids alone.
+ */
+export const MAX_EXECUTION_PROFILE_ID_LENGTH = 256;
+const MAX_APPROVAL_MODE_ID_LENGTH = 64;
+
+export function asBoundedNonBlankString(value: unknown, name: string, maxLength: number): string {
+  const normalized = asNonBlankString(value, name);
+  if (normalized.length > maxLength) {
+    throw new Error(`Expected ${name} to be at most ${maxLength} characters`);
+  }
+  return normalized;
+}
+
+export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNativeAgentPromptInput {
+  const agent = asString(args.agent, "agent") as import("../models.js").NativeAgentProvider;
+  const command =
+    args.command === undefined ? undefined : parseNativeAgentCommandIntent(args.command);
+  if (args.command !== undefined && !command) {
+    throw new Error("Native agent command intent is invalid");
+  }
+  // A command's argument suffix is kept byte-for-byte, trailing whitespace
+  // included; ordinary prompts keep their historical trimming.
+  const commandPrompt =
+    command && command.kind !== "literal" ? asString(args.prompt, "prompt") : undefined;
+  if (commandPrompt !== undefined && !commandPrompt.trim()) {
+    throw new Error("Expected prompt to be a non-blank string");
+  }
+  return {
+    ...(command ? { command } : {}),
+    environmentId: asNonBlankString(args.environmentId, "environmentId"),
+    agent,
+    logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
+    origin: asOptionalAgentInteractionOrigin(args.origin),
+    interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
+    title: typeof args.title === "string" ? args.title : undefined,
+    model: typeof args.model === "string" ? args.model : undefined,
+    ...(args.modelSource === "default" ? { modelSource: "default" as const } : {}),
+    reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
+    phase:
+      typeof args.phase === "string"
+        ? (args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase)
+        : undefined,
+    prompt: commandPrompt?.trimStart() ?? asNonBlankString(args.prompt, "prompt"),
+    requestId: asNonBlankString(args.requestId, "requestId"),
+    ...(args.failureSessionId === undefined
+      ? {}
+      : {
+          failureSessionId: asBoundedNonBlankString(args.failureSessionId, "failureSessionId", 512),
+        }),
+    sessionMode:
+      args.sessionMode === "plan" || args.sessionMode === "build" ? args.sessionMode : undefined,
+    executionProfileId:
+      args.executionProfileId === undefined
+        ? undefined
+        : asBoundedNonBlankString(
+            args.executionProfileId,
+            "executionProfileId",
+            MAX_EXECUTION_PROFILE_ID_LENGTH,
+          ),
+    ...(args.approvalMode === undefined
+      ? {}
+      : {
+          approvalMode: asBoundedNonBlankString(
+            args.approvalMode,
+            "approvalMode",
+            MAX_APPROVAL_MODE_ID_LENGTH,
+          ),
+        }),
+    images: Array.isArray(args.images) ? assertValidPromptImages(args.images) : undefined,
+    attachments: Array.isArray(args.attachments)
+      ? assertValidPromptAttachments(args.attachments)
+      : undefined,
+    schema:
+      args.schema && typeof args.schema === "object" && !Array.isArray(args.schema)
+        ? (args.schema as import("@orkestrator/protocol/structured-output").JsonSchema)
+        : undefined,
+    // Cursor and the ACP agents (Grok, Antigravity) preserve their session's
+    // current mode unless explicit, and Pi has no mode at all. Everything else
+    // defaults to read-only mode.
+    mode:
+      args.mode === "build"
+        ? "build"
+        : args.mode === "plan"
+          ? "plan"
+          : agent === "cursor" || agent === "grok" || agent === "pi" || agent === "antigravity"
+            ? undefined
+            : "plan",
+    fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
+    parameterValues:
+      args.parameterValues === undefined
+        ? undefined
+        : asNativeAgentParameterValues(args.parameterValues),
+    subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
+    executionAgent: typeof args.executionAgent === "string" ? args.executionAgent : undefined,
+    includeLocalSettings:
+      typeof args.includeLocalSettings === "boolean" ? args.includeLocalSettings : undefined,
+    promptSuggestions:
+      typeof args.promptSuggestions === "boolean" ? args.promptSuggestions : undefined,
+    // Advisory: a zone this runtime cannot name is dropped, never a refusal.
+    ...(isValidTimeZone(args.clientTimeZone) ? { clientTimeZone: args.clientTimeZone } : {}),
+  };
+}
+
+export function asNativeAgentControlUpdate(
+  value: unknown,
+  name = "update",
+): NativeAgentControlUpdate {
+  const raw = asRecord(value, name);
+  const allowed = new Set([
+    "modelId",
+    "reasoningId",
+    "fastMode",
+    "mode",
+    "executionProfileId",
+    "includeLocalSettings",
+    "promptSuggestions",
+    "parameterValues",
+    "persistDefaults",
+    "approvalMode",
+  ]);
+  if (Object.keys(raw).some((key) => !allowed.has(key))) {
+    throw new Error("Native agent control update has unknown fields");
+  }
+  let mode: NativeAgentControlUpdate["mode"];
+  if (raw.mode !== undefined) {
+    if (raw.mode !== "build" && raw.mode !== "plan") {
+      throw new Error("Expected mode to be build or plan");
+    }
+    mode = raw.mode;
+  }
+  const update: NativeAgentControlUpdate = {
+    ...(raw.modelId === undefined ? {} : { modelId: asNonBlankString(raw.modelId, "modelId") }),
+    ...(raw.reasoningId === undefined
+      ? {}
+      : { reasoningId: asNonBlankString(raw.reasoningId, "reasoningId") }),
+    ...(raw.fastMode === undefined
+      ? {}
+      : { fastMode: asRequiredBoolean(raw.fastMode, "fastMode") }),
+    ...(mode === undefined ? {} : { mode }),
+    ...(raw.executionProfileId === undefined
+      ? {}
+      : {
+          executionProfileId:
+            raw.executionProfileId === null
+              ? null
+              : asBoundedNonBlankString(
+                  raw.executionProfileId,
+                  "executionProfileId",
+                  MAX_EXECUTION_PROFILE_ID_LENGTH,
+                ),
+        }),
+    ...(raw.includeLocalSettings === undefined
+      ? {}
+      : {
+          includeLocalSettings: asRequiredBoolean(raw.includeLocalSettings, "includeLocalSettings"),
+        }),
+    ...(raw.promptSuggestions === undefined
+      ? {}
+      : { promptSuggestions: asRequiredBoolean(raw.promptSuggestions, "promptSuggestions") }),
+    ...(raw.parameterValues === undefined
+      ? {}
+      : { parameterValues: asNativeAgentParameterValues(raw.parameterValues) }),
+    ...(raw.approvalMode === undefined
+      ? {}
+      : {
+          approvalMode: asBoundedNonBlankString(
+            raw.approvalMode,
+            "approvalMode",
+            MAX_APPROVAL_MODE_ID_LENGTH,
+          ),
+        }),
+    ...(raw.persistDefaults === undefined
+      ? {}
+      : { persistDefaults: asRequiredBoolean(raw.persistDefaults, "persistDefaults") }),
+  };
+  if (Object.keys(update).length === 0) {
+    throw new Error("Native agent control update must not be empty");
+  }
+  return update;
+}
+
+export function asNativeAgentParameterValues(value: unknown): Record<string, string | boolean> {
+  const raw = asRecord(value, "parameterValues");
+  const entries = Object.entries(raw);
+  if (entries.length > 64) throw new Error("parameterValues has too many entries");
+  const values: Record<string, string | boolean> = {};
+  for (const [id, candidate] of entries) {
+    if (!id.trim() || id.length > 128) throw new Error("parameterValues has an invalid id");
+    if (typeof candidate === "boolean") {
+      values[id] = candidate;
+      continue;
+    }
+    if (typeof candidate !== "string" || candidate.length > 512) {
+      throw new Error("parameterValues values must be bounded strings or booleans");
+    }
+    values[id] = candidate;
+  }
+  return values;
+}
+
+export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAction {
+  const raw = asRecord(value, "action");
+  const kind = asNonBlankString(raw.kind, "action.kind");
+  switch (kind) {
+    case "compact": {
+      // Blank instructions are the same as none: `/compact ` compacts plainly.
+      const instructions =
+        raw.instructions === undefined
+          ? ""
+          : asString(raw.instructions, "action.instructions").trim();
+      if (instructions.length > COMPACT_INSTRUCTIONS_MAX_LENGTH) {
+        throw new Error(
+          `Expected action.instructions to be at most ${COMPACT_INSTRUCTIONS_MAX_LENGTH} characters`,
+        );
+      }
+      return {
+        kind,
+        ...(raw.modelId === undefined
+          ? {}
+          : { modelId: asNonBlankString(raw.modelId, "action.modelId") }),
+        ...(instructions ? { instructions } : {}),
+      };
+    }
+    case "rewind-files":
+      return {
+        kind,
+        messageId: asNonBlankString(raw.messageId, "action.messageId"),
+        ...(raw.dryRun === undefined
+          ? {}
+          : { dryRun: asRequiredBoolean(raw.dryRun, "action.dryRun") }),
+      };
+    case "rewind-messages":
+      return {
+        kind,
+        messageId: asNonBlankString(raw.messageId, "action.messageId"),
+      };
+    case "switch-branch":
+      return {
+        kind,
+        entryId: asNonBlankString(raw.entryId, "action.entryId"),
+        ...(raw.summarize === undefined
+          ? {}
+          : { summarize: asRequiredBoolean(raw.summarize, "action.summarize") }),
+      };
+    case "undo":
+      return {
+        kind,
+        ...(raw.messageId === undefined
+          ? {}
+          : { messageId: asNonBlankString(raw.messageId, "action.messageId") }),
+      };
+    case "redo":
+    case "share":
+    case "unshare":
+    case "review":
+      return { kind };
+    case "steer": {
+      const onMissedTurn = raw.onMissedTurn;
+      if (onMissedTurn !== undefined && onMissedTurn !== "new-turn" && onMissedTurn !== "refuse") {
+        throw new Error("Expected action.onMissedTurn to be new-turn or refuse");
+      }
+      const turnRequestId =
+        raw.turnRequestId === undefined
+          ? undefined
+          : asNonBlankString(raw.turnRequestId, "action.turnRequestId");
+      if (turnRequestId !== undefined && Buffer.byteLength(turnRequestId, "utf8") > 512) {
+        throw new Error("Expected action.turnRequestId to be at most 512 bytes");
+      }
+      const expectedRunId =
+        raw.expectedRunId === undefined
+          ? undefined
+          : asNonBlankString(raw.expectedRunId, "action.expectedRunId");
+      if (expectedRunId !== undefined && Buffer.byteLength(expectedRunId, "utf8") > 512) {
+        throw new Error("Expected action.expectedRunId to be at most 512 bytes");
+      }
+      return {
+        kind,
+        text: asNonBlankString(raw.text, "action.text"),
+        ...(onMissedTurn ? { onMissedTurn } : {}),
+        ...(turnRequestId ? { turnRequestId } : {}),
+        ...(expectedRunId ? { expectedRunId } : {}),
+      };
+    }
+    default:
+      throw new Error("Native agent session action is invalid");
+  }
+}
+
+export const CODEX_MODEL_REASONING_EFFORTS = new Set<CodexReasoningEffort>([
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+
+export function asCodexReasoningEffort(value: unknown, name: string): CodexReasoningEffort {
+  const effort = asNonBlankString(value, name) as CodexReasoningEffort;
+  if (!CODEX_MODEL_REASONING_EFFORTS.has(effort)) {
+    throw new Error(`Expected ${name} to be a supported reasoning effort`);
+  }
+  return effort;
+}
+
+export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("Codex model catalogue must contain at least one model.");
+  }
+  return value.map((candidate, index) => {
+    const name = `models[${index}]`;
+    const model = asRecord(candidate, name);
+    assertOnlyKeys(
+      model,
+      [
+        "id",
+        "name",
+        "description",
+        "reasoningEfforts",
+        "reasoningOptions",
+        "defaultReasoningEffort",
+      ],
+      name,
+    );
+    const reasoningEfforts =
+      model.reasoningEfforts === undefined
+        ? undefined
+        : Array.isArray(model.reasoningEfforts)
+          ? model.reasoningEfforts.map((effort, effortIndex) =>
+              asCodexReasoningEffort(effort, `${name}.reasoningEfforts[${effortIndex}]`),
+            )
+          : (() => {
+              throw new Error(`Expected ${name}.reasoningEfforts to be an array`);
+            })();
+    const description =
+      model.description === undefined
+        ? undefined
+        : asString(model.description, `${name}.description`).trim();
+    const reasoningOptions =
+      model.reasoningOptions === undefined
+        ? undefined
+        : Array.isArray(model.reasoningOptions)
+          ? model.reasoningOptions.map((candidateOption, optionIndex) => {
+              const optionName = `${name}.reasoningOptions[${optionIndex}]`;
+              const option = asRecord(candidateOption, optionName);
+              assertOnlyKeys(option, ["effort", "label", "description"], optionName);
+              const description =
+                option.description === undefined
+                  ? undefined
+                  : asString(option.description, `${optionName}.description`).trim();
+              return {
+                effort: asCodexReasoningEffort(option.effort, `${optionName}.effort`),
+                label: asNonBlankString(option.label, `${optionName}.label`),
+                ...(description ? { description } : {}),
+              };
+            })
+          : (() => {
+              throw new Error(`Expected ${name}.reasoningOptions to be an array`);
+            })();
+    return {
+      id: asNonBlankString(model.id, `${name}.id`),
+      name: asNonBlankString(model.name, `${name}.name`),
+      ...(description ? { description } : {}),
+      ...(reasoningEfforts ? { reasoningEfforts } : {}),
+      ...(reasoningOptions ? { reasoningOptions } : {}),
+      ...(model.defaultReasoningEffort === undefined
+        ? {}
+        : {
+            defaultReasoningEffort: asCodexReasoningEffort(
+              model.defaultReasoningEffort,
+              `${name}.defaultReasoningEffort`,
+            ),
+          }),
+    };
+  });
+}
+
+export function asFeaturePlanRole(value: unknown): "user" | "assistant" | "system" {
+  if (value === "user" || value === "assistant" || value === "system") return value;
+  throw new Error("Expected role to be user, assistant, or system");
+}
+
+export function asFeaturePlanningKind(value: unknown): FeaturePlanningKind {
+  if (value === "feature" || value === "story") return value;
+  throw new Error("Expected kind to be feature or story");
+}
+
+export function requireFeaturePlanning(context: CommandContext): FeaturePlanningService {
+  if (!context.featurePlanning) {
+    throw new Error("Feature planning supervisor is unavailable");
+  }
+  return context.featurePlanning;
+}
+
+export const FEATURE_PLAN_UPDATE_FIELDS = [
+  "title",
+  "status",
+  "summary",
+  "messages",
+  "stories",
+  "codexEnvironmentId",
+  "codexSessionId",
+  "buildTaskId",
+  "buildPipelineId",
+] as const;
+
+export function asOptionalNonBlankFeaturePlanId(value: unknown, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  return asNonBlankString(value, name);
+}
+
+export function asFeaturePlanMessage(value: unknown, name: string): JsonRecord {
+  const message = asRecord(value, name);
+  assertOnlyKeys(
+    message,
+    ["id", "role", "content", "createdAt", "modelId", "stateApplication"],
+    name,
+  );
+  const role = asFeaturePlanRole(message.role);
+  const stateApplication = asFeaturePlanStateApplication(message.stateApplication);
+  return {
+    id: asNonBlankString(message.id, `${name}.id`),
+    role,
+    content: asString(message.content, `${name}.content`),
+    createdAt: asNonBlankString(message.createdAt, `${name}.createdAt`),
+    ...(message.modelId === undefined ? {} : { modelId: asFeaturePlanModelId(message.modelId) }),
+    ...(stateApplication === undefined ? {} : { stateApplication }),
+  };
+}
+
+export function asFeaturePlanMessages(value: unknown, name: string): JsonRecord[] {
+  if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
+  return value.map((message, index) => asFeaturePlanMessage(message, `${name}[${index}]`));
+}
+
+export function asFeaturePlanStories(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) throw new Error("Expected updates.stories to be an array");
+  return value.map((candidate, index) => {
+    const name = `updates.stories[${index}]`;
+    const story = asRecord(candidate, name);
+    assertOnlyKeys(
+      story,
+      ["id", "title", "description", "acceptanceCriteria", "messages", "createdAt", "updatedAt"],
+      name,
+    );
+    if (!Array.isArray(story.acceptanceCriteria)) {
+      throw new Error(`Expected ${name}.acceptanceCriteria to be an array`);
+    }
+    return {
+      id: asNonBlankString(story.id, `${name}.id`),
+      title: asString(story.title, `${name}.title`),
+      description: asString(story.description, `${name}.description`),
+      acceptanceCriteria: story.acceptanceCriteria.map((criterion, criterionIndex) =>
+        asString(criterion, `${name}.acceptanceCriteria[${criterionIndex}]`),
+      ),
+      messages: asFeaturePlanMessages(story.messages, `${name}.messages`),
+      createdAt: asNonBlankString(story.createdAt, `${name}.createdAt`),
+      updatedAt: asNonBlankString(story.updatedAt, `${name}.updatedAt`),
+    };
+  });
+}
+
+export function asFeaturePlanUpdates(
+  value: unknown,
+): Parameters<KanbanStorage["updateFeaturePlan"]>[1] {
+  const updates = asRecord(value, "updates");
+  assertOnlyKeys(updates, FEATURE_PLAN_UPDATE_FIELDS, "updates");
+  const parsed: Record<string, unknown> = {};
+  if (updates.title !== undefined) parsed.title = asString(updates.title, "updates.title");
+  if (updates.summary !== undefined) parsed.summary = asString(updates.summary, "updates.summary");
+  if (updates.status !== undefined) {
+    if (
+      updates.status !== "collecting" &&
+      updates.status !== "confirming" &&
+      updates.status !== "stories" &&
+      updates.status !== "building" &&
+      updates.status !== "built"
+    ) {
+      throw new Error("Expected updates.status to be a valid feature plan status");
+    }
+    parsed.status = updates.status;
+  }
+  if (updates.messages !== undefined) {
+    parsed.messages = asFeaturePlanMessages(updates.messages, "updates.messages");
+  }
+  if (updates.stories !== undefined) {
+    parsed.stories = asFeaturePlanStories(updates.stories);
+  }
+  for (const field of [
+    "codexEnvironmentId",
+    "codexSessionId",
+    "buildTaskId",
+    "buildPipelineId",
+  ] as const) {
+    if (Object.hasOwn(updates, field)) {
+      parsed[field] = asOptionalNonBlankFeaturePlanId(updates[field], `updates.${field}`);
+    }
+  }
+  return parsed as Parameters<KanbanStorage["updateFeaturePlan"]>[1];
+}
+
+export function asStartFeaturePlanningInput(args: JsonRecord): StartFeaturePlanningInput {
+  const input: StartFeaturePlanningInput = {
+    ...(args.operationId === undefined
+      ? {}
+      : { operationId: asNonBlankString(args.operationId, "operationId") }),
+    featureId: asNonBlankString(args.featureId, "featureId"),
+    kind: asFeaturePlanningKind(args.kind),
+    ...(args.storyId === undefined ? {} : { storyId: asNonBlankString(args.storyId, "storyId") }),
+    userMessage: asNonBlankString(args.userMessage, "userMessage"),
+  };
+  if (!isStartFeaturePlanningInput(input)) {
+    throw new Error("Expected a valid bounded feature planning request");
+  }
+  return input;
+}
+
+export function asFeaturePlanStateApplication(
+  value: unknown,
+): "pending" | "applied" | "superseded" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "pending" || value === "applied" || value === "superseded") {
+    return value;
+  }
+  throw new Error("Expected stateApplication to be pending, applied, or superseded");
+}
+
+export function asFeaturePlanModelId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  throw new Error("Expected modelId to be a non-empty string");
+}
+
+export function asPortMappings(value: unknown): PortMapping[] | undefined {
+  return Array.isArray(value) ? (value as PortMapping[]) : undefined;
+}
+
+export function asEnvironmentType(value: unknown): EnvironmentType {
+  return value === "local" ? "local" : "containerized";
+}

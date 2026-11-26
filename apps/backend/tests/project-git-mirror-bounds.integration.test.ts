@@ -13,8 +13,8 @@ import { syncRuntimeGitHubCredential } from "../src/core/containers/github-crede
 import type { Environment } from "../src/core/models";
 import { withDockerScript } from "./container-lifecycle-fixtures";
 import { configureLogger, resetLogger } from "@orkestrator/protocol/logger";
-import { cleanupProjectForRemoval } from "../src/core/commands-registry-projects";
-import type { CommandContext } from "../src/core/commands-context";
+import { cleanupProjectForRemoval } from "../src/core/commands/registry-projects";
+import type { CommandContext } from "../src/core/commands/context";
 import {
   CONTAINER_GIT_MIRROR_MOUNT,
   CONTAINER_GIT_MIRROR_PATH,

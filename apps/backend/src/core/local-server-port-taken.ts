@@ -1,5 +1,5 @@
 import type { Readable } from "node:stream";
-import { isHealthyHttpResponse } from "./commands-server-health.js";
+import { isHealthyHttpResponse } from "./commands/index.js";
 
 /**
  * A local server lost its port between allocation and bind.

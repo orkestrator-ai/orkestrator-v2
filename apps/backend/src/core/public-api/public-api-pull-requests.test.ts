@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import type { MergeEnvironmentPrResult } from "../commands-review.js";
+import type { MergeEnvironmentPrResult } from "../commands/review.js";
 import { requestKey } from "./operation-ledger.js";
 import { reconcileOperation } from "./reconciler.js";
 import { cleanupSessionHarnesses, setup } from "./test-provider.js";

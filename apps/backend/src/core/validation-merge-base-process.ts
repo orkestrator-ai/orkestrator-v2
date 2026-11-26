@@ -1,4 +1,4 @@
-import type { EnvironmentCommandRunner } from "./commands-review.js";
+import type { EnvironmentCommandRunner } from "./commands/index.js";
 import { CommandFailedError } from "./shell.js";
 
 export interface MergeBaseRerunResult {

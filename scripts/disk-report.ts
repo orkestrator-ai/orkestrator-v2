@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { parseEnvironmentBranchNamespace } from "../apps/backend/src/core/commands-agent-support";
+import { parseEnvironmentBranchNamespace } from "../apps/backend/src/core/commands/agent-support";
 import {
   ENVIRONMENT_CLEANUP_LEDGER_STORE,
   ENVIRONMENT_CLEANUP_STEPS,

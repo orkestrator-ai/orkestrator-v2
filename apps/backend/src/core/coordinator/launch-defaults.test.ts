@@ -4,7 +4,7 @@ import {
   isStartBuildPipelineInput,
   type BuildStepConfig,
 } from "@orkestrator/protocol/build-pipeline";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { describe, expect, test } from "bun:test";
 import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";

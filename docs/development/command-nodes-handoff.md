@@ -105,7 +105,7 @@ matrix with evidence for every row are in
     `request_project_on_node`, which the user reviews in the project copy
     dialog.
 - **Copying a project between machines** (`nodes/node-project-copy.ts`,
-  `commands-registry-project-copy.ts`): clone plus the untracked and
+  `commands/registry-project-copy.ts`): clone plus the untracked and
   ignored files the user picks, in any direction.
 
   Every one of them refuses in leaf mode. Each node's copy of the project

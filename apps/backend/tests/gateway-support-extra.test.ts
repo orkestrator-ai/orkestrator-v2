@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import { compatibilityPathUsage } from "../src/core/compatibility-path-usage.js";
-import { createCommandRegistry } from "../src/core/commands";
+import { createCommandRegistry } from "../src/core/commands/registry";
 import {
   BoundedMetricMap,
   canStartStaticFallbackCompression,

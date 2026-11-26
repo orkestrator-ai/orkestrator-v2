@@ -267,7 +267,7 @@ exit 0
           );
           // The setup shell is marked with a per-PTY session token and runs
           // under bash, which records its PID and execs a login zsh in place
-          // (`commands-environment.ts`, `containerSetupShellCommand`).
+          // (`apps/backend/src/core/commands/environment.ts`, `containerSetupShellCommand`).
           expect(ptySpawn).toHaveBeenCalledWith(
             "docker",
             expect.arrayContaining([

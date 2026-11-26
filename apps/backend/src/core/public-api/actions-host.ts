@@ -8,7 +8,7 @@ import {
   type HostUpdateDrain,
   type HostUpdateJob,
 } from "@orkestrator/protocol/host-maintenance";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { HostMaintenanceError, type HostMaintenanceService } from "../host-maintenance.js";
 import {
   startGhUpdate,

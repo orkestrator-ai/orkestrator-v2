@@ -9,8 +9,8 @@ import type {
   MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { CoordinatorService } from "./service.js";
 import { EnvironmentMutationFence } from "../environments/replacement-fence.js";
 import { CoordinatorRequestFlights } from "./request-flights.js";

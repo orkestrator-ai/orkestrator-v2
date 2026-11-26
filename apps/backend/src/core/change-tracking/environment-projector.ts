@@ -24,7 +24,7 @@ import {
   gitNumstatAlgorithmId,
 } from "@orkestrator/protocol/node/change-tracking/count-policy";
 import type { DiffScanEvent, DiffStatsTarget } from "../diff-stats-service.js";
-import type { GitFileChange } from "../commands-files.js";
+import type { GitFileChange } from "../git/index.js";
 import { encodePath } from "./capture.js";
 import type { WorktreeActivity } from "./inert-hints.js";
 import type { MeasurementFileRecord } from "./change-ledger.js";

@@ -1,0 +1,74 @@
+import { parseGraphLaunchRequest } from "@orkestrator/protocol/graphs/launch";
+import { parseGraphTemplateRef } from "@orkestrator/protocol/graphs/library";
+import {
+  graphLaunchOptionsCommand,
+  graphRunLaunchCommand,
+} from "@orkestrator/protocol/contract/domains/graphs";
+import type { CommandContext } from "./context.js";
+import type { CommandRegistrar } from "./registry-types.js";
+import { GraphLaunchError, type GraphRunLaunchService } from "../graph-run-launch.js";
+
+/**
+ * Graph launches from the app (item 214; shapes in
+ * `@orkestrator/protocol/graphs/launch`):
+ *
+ * - `graph_launch_options {ref, projectId, environmentId?, create?}` →
+ *   `GraphLaunchOptions`, what the launch dialog shows;
+ * - `graph_run_launch {ref, projectId, environment, roles?, params?, inputs?,
+ *   ticket?, saveDefaults?, requestId?}` → `GraphLaunchResult`, launched as
+ *   the user (`requestedBy: "user"`).
+ *
+ * A refusal throws a `GraphLaunchError` whose `code` the gateway forwards
+ * (`GRAPH_LAUNCH_ERROR_CODES`). The CLI, the coordinator and schedules reach
+ * the same service through their own surfaces. Both are defined in the
+ * `graphs` contract domain (plan item 7007): unknown argument keys are
+ * dropped, and `requestId` is critical on the launch.
+ */
+
+function launches(context: CommandContext): GraphRunLaunchService {
+  if (!context.graphLaunches)
+    throw new GraphLaunchError("disabled", "Graph launches are unavailable");
+  return context.graphLaunches;
+}
+
+function invalid(message: string): never {
+  throw new GraphLaunchError("invalid-request", message);
+}
+
+export function registerGraphLaunchCommands(register: CommandRegistrar): void {
+  register(graphLaunchOptionsCommand, async (args, context) => {
+    const ref = parseGraphTemplateRef(args.ref);
+    if ("error" in ref) invalid(ref.error);
+    if (typeof args.projectId !== "string" || !args.projectId || args.projectId.length > 200) {
+      invalid("projectId must be a project id");
+    }
+    if (
+      args.environmentId !== undefined &&
+      args.environmentId !== null &&
+      (typeof args.environmentId !== "string" || args.environmentId.length > 200)
+    ) {
+      invalid("environmentId must be an environment id");
+    }
+    if (args.create !== undefined && args.create !== "worktree" && args.create !== "container") {
+      invalid("create must be worktree or container");
+    }
+    return launches(context).options({
+      ref,
+      projectId: args.projectId,
+      ...(typeof args.environmentId === "string" && args.environmentId
+        ? { environmentId: args.environmentId }
+        : {}),
+      ...(args.create ? { create: args.create as "worktree" | "container" } : {}),
+    });
+  });
+
+  register(graphRunLaunchCommand, async (args, context) => {
+    let request;
+    try {
+      request = parseGraphLaunchRequest(args);
+    } catch (error) {
+      invalid(error instanceof Error ? error.message : "Invalid launch request");
+    }
+    return launches(context).launch(request, { requestedBy: "user" });
+  });
+}

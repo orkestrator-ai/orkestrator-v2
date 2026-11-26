@@ -12,7 +12,7 @@ import path from "node:path";
 import {
   createDockerContainer,
   type CreateContainerIdentity,
-} from "../src/core/commands-containers";
+} from "../src/core/commands/containers";
 import { resetResourceCaches } from "../src/core/containers/resources";
 import { resetDockerTopologyCache, resetImageManifestCache } from "../src/core/containers/image";
 import { formatGithubRangesSeed } from "../src/core/git/github-ranges-cache";

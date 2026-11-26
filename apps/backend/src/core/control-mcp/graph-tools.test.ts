@@ -7,7 +7,7 @@
  * authoring tool, and a scheduled coordinator graph launch runs through the
  * coordinator's own `launch_graph`.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ import type {
 } from "@orkestrator/protocol/graphs/launch";
 import type { GraphRun } from "@orkestrator/protocol/graphs/run";
 import { COORDINATOR_CONTROL_TOOL_NAMES } from "@orkestrator/protocol/coordinator";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { registerCoordinatorGraphActions } from "../coordinator/graph-actions.js";
 import { CoordinatorService } from "../coordinator/service.js";
 import { rpc } from "./test-support.js";
@@ -30,7 +30,7 @@ import { GraphLaunchError, graphLaunchRunId } from "../graph-run-launch.js";
 import { graphRunFixture } from "../graph-run-test-support.js";
 import { ScheduledJobExecutor } from "../scheduled-jobs/executor.js";
 import { ScheduledJobService } from "../scheduled-jobs/service.js";
-import { registerScheduledJobCommands } from "../commands-registry-scheduled-jobs.js";
+import { registerScheduledJobCommands } from "../commands/registry-scheduled-jobs.js";
 import { runCommand } from "../shell.js";
 import { StorageService, createEnvironment, createProject } from "../storage/service.js";
 

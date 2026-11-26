@@ -11,8 +11,7 @@ import {
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { isTmuxModeEnabled } from "@orkestrator/protocol/agent-settings";
 import { isTabTeardownKind, type TabTeardownKind } from "@orkestrator/protocol/tab-teardown";
-import type { CommandContext } from "./commands-context.js";
-import { asNonBlankString } from "./commands-helpers.js";
+import { asNonBlankString, type CommandContext } from "./commands/index.js";
 import type { Environment, NativeAgentProvider } from "./models.js";
 import { isProjectHomeEnvironment } from "./project-home-environment.js";
 import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
@@ -22,7 +21,7 @@ import { editWorkerTab, openWorkerBrowserTab } from "./worker-tab-actions.js";
  * terminal launch, a browser preview, a tab edit. A coordinator on this node
  * reaches them through `coordinator/surface-actions.ts`; a command node's
  * coordinator through the `*_controller_*` commands in
- * `commands-registry-controller-workflows.ts`. Each caller checks its own
+ * `commands/registry-controller-workflows.ts`. Each caller checks its own
  * scope and owns the receipt; these validate the input, refuse the project
  * home, and derive every ID from the key they are given, so a retry with the
  * same key finds what the first attempt made.

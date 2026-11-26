@@ -25,7 +25,7 @@ import {
   shareAndMergeUsage,
 } from "../agent-accounts/usage-sharing.js";
 import { eventSink } from "../backend-emit.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import type { ContractEnvelope } from "./node-link.js";
 import { NodeUsageSync, type UsageSyncLink } from "./node-usage-sync.js";
 
@@ -463,8 +463,8 @@ describe("shared usage readings", () => {
   });
 
   test("a leaf refuses a command node that is not attached to it", async () => {
-    const { registerAgentAccountCommands } = await import("../commands-registry-accounts.js");
-    const { registrarFrom } = await import("../commands-registry-contracts.js");
+    const { registerAgentAccountCommands } = await import("../commands/registry-accounts.js");
+    const { registrarFrom } = await import("../commands/registry-contracts.js");
     const handlers = new Map<string, (args: unknown, context: CommandContext) => unknown>();
     registerAgentAccountCommands(
       registrarFrom((name, handler) =>

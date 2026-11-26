@@ -22,7 +22,7 @@ Done 2026-10-31 on `main` at `931e5541`; see "Assumptions and decisions". The an
 
 **Context.** Decided in 0034: the support-window floor is v2.21.0 and every v2.21.0 bridge has the close route (#853). The register row is `docs/architecture/version-compatibility.md:112`, which already says "The window allows it now". Only unpublished source builds predate the route.
 
-**Investigation.** Unchanged since the file was checked (only #1207 touched it). The fallback is `apps/backend/src/core/bridge-session-close.ts:113-131`: on 404/405 it either throws `BridgeCloseUnsupportedError` for Claude (counter `bridge-close.upgrade-required`, :115-121) or sends `DELETE` (counter `bridge-close.legacy-delete`, :122-130). `LEGACY_DELETE_RETAINS_HISTORY` is at :33. Counters are read through `get_compatibility_path_usage` (`apps/backend/src/core/commands-registry-system.ts:66`). Callers and tests to update: `http-bridge-provider-close.test.ts`, `commands-registry-teardown.test.ts`, `apps/web/src/lib/tab-teardown-notice.ts`, `apps/web/src/stores/paneLayoutStore.teardown-notice.test.ts`, `packages/protocol/src/tab-teardown.ts:78-88`, and the browser test "closing a Claude tab on a bridge from before the close route keeps the conversation and asks for a restart" (`e2e/CloseRetention.spec.ts:641`, fixture `e2e/fixtures/close-retention-host.ts:29,205`). The file's item has a tension: it says remove "the `bridge-upgrade-required` path" but also that a 404/405 must still be reported as an old bridge needing a restart, which is exactly what that path does today for Claude.
+**Investigation.** Unchanged since the file was checked (only #1207 touched it). The fallback is `apps/backend/src/core/bridge-session-close.ts:113-131`: on 404/405 it either throws `BridgeCloseUnsupportedError` for Claude (counter `bridge-close.upgrade-required`, :115-121) or sends `DELETE` (counter `bridge-close.legacy-delete`, :122-130). `LEGACY_DELETE_RETAINS_HISTORY` is at :33. Counters are read through `get_compatibility_path_usage` (`apps/backend/src/core/commands/registry-system.ts:66`). Callers and tests to update: `http-bridge-provider-close.test.ts`, `commands/registry-teardown.test.ts`, `apps/web/src/lib/tab-teardown-notice.ts`, `apps/web/src/stores/paneLayoutStore.teardown-notice.test.ts`, `packages/protocol/src/tab-teardown.ts:78-88`, and the browser test "closing a Claude tab on a bridge from before the close route keeps the conversation and asks for a restart" (`e2e/CloseRetention.spec.ts:641`, fixture `e2e/fixtures/close-retention-host.ts:29,205`). The file's item has a tension: it says remove "the `bridge-upgrade-required` path" but also that a 404/405 must still be reported as an old bridge needing a restart, which is exactly what that path does today for Claude.
 
 **Decisions.**
 
@@ -112,7 +112,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
   [`agent-engines.md`](../../architecture/agent-engines.md#closing-a-tab-retains-the-conversation).
 - **Close path.**
   - Every managed bridge serves `POST /session/:id/close`. Backend teardown
-    (`commands-registry-teardown.ts`) and `HttpBridgeProvider.closeSession`
+    (`commands/registry-teardown.ts`) and `HttpBridgeProvider.closeSession`
     both call `closeBridgeSessionRetaining`
     (`apps/backend/src/core/bridge-session-close.ts`).
   - A 404 or 405 from the close route is an unconfirmed close like any other
@@ -246,7 +246,7 @@ left is the live Cursor run (whose resumed transcript lost the first prompt on
     replays it under the same lock and last-owner rules, without the tab
     mapping checks and without revoking a tab credential, and `teardown_tab`
     refuses the prefix. Tests: `native-agent/service-resume-close.test.ts`,
-    `commands-registry-teardown.test.ts` ("replaying the close of a session a
+    `commands/registry-teardown.test.ts` ("replaying the close of a session a
     resume replaced").
   - **Untitled resume rows** read `Session <8 chars of the provider's own
     id>`: the ACP token's encoded Grok id, or Pi's session id from its file

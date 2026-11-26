@@ -11,11 +11,14 @@ import {
   createCoordinatorDelegatedPrompt,
 } from "@orkestrator/protocol/review-evidence-frames";
 import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
-import type { CommandContext } from "../commands-context.js";
-import { coordinatorCallerTurnOrigin } from "./turn-origin.js";
-import { forkEnvironmentRecord } from "../commands-environment-fork.js";
-import { asNonBlankString } from "../commands-helpers.js";
-import { localReportInstruction } from "../commands-registry-coordinator.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type RegistryDependencies,
+} from "../commands/index.js";
+import { forkEnvironmentRecord } from "../commands/environment-fork.js";
+import { localReportInstruction } from "../commands/registry-coordinator.js";
 import {
   coordinatorNodeTarget,
   recordOrigin,
@@ -23,8 +26,8 @@ import {
   RETRY_SAME_REQUEST,
   startRemoteRequest,
   withRetryAdvice,
-} from "../commands-registry-coordinator-nodes.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+} from "../commands/registry-coordinator-nodes.js";
+import { coordinatorCallerTurnOrigin } from "./turn-origin.js";
 import {
   actionHash,
   coordinatorCaller,

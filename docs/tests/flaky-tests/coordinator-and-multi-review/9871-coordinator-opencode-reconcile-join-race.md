@@ -4,11 +4,11 @@
 - **Status:** resolved
 - **Date observed:** 2026-10-22
 - **Test:** `Coordinator OpenCode server > starts only once its Control MCP is connected, and keeps it on every later reconcile`
-- **File:** `apps/backend/src/core/commands-servers-coordinator-opencode.test.ts`
+- **File:** `apps/backend/src/core/commands/servers-coordinator-opencode.test.ts`
 - **Original command:** CI `main` run 39701903157 (`c66604e2`), job "Unit and integration tests", `mise run test` on `ubuntu-latest` (four cores; one Bun worker per package).
 - **Failure:** `expect(urls.length).toBeGreaterThanOrEqual(3)` received 2, after 2,392 ms (the test polled 200 × 10 ms for a third MCP POST).
 - **Isolated rerun:** not a load flake. The unchanged case failed alone on macOS:
-  `bun test --preload ../../tests/setup-node.ts src/core/commands-servers-coordinator-opencode.test.ts -t "starts only once its Control MCP" --rerun-each 15`
+  `bun test --preload ../../tests/setup-node.ts src/core/commands/servers-coordinator-opencode.test.ts -t "starts only once its Control MCP" --rerun-each 15`
   (from `apps/backend`) failed 3 of 15, each after the full 2 s poll with 2 POSTs.
 - **Root cause:** with the memo windows set to 0, both the healthy-reuse path of
   `startLocalServerUnlocked` and `readLocalServerStatus` schedule

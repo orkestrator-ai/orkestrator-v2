@@ -9,13 +9,13 @@ import {
   activeAgentAccountShellEnvironment,
   stripInheritedAgentCredentials,
 } from "./agent-accounts/index.js";
-import { envWithManagedBinaries } from "./commands-agent-support.js";
-import type { CommandContext } from "./commands-context.js";
+import { envWithManagedBinaries } from "./commands/agent-support.js";
 import {
   assertEnvironmentDeletionNotRequested,
+  type CommandContext,
   resolveLocalShellPath,
   terminalEnv,
-} from "./commands-terminal.js";
+} from "./commands/index.js";
 import type {
   CredentialHost,
   CredentialLaunch,
@@ -35,7 +35,7 @@ import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "./enviro
  * never from the agent.
  *
  * Commands run where the tab's own agent runs, exactly as a `!` command
- * would (`commands-registry-user-commands.ts`): the worktree with the user's
+ * would (`commands/registry-user-commands.ts`): the worktree with the user's
  * login shell, managed binaries and isolation variables, or the container as
  * the `node` user in `/workspace`. A coordinator conversation never runs one.
  */

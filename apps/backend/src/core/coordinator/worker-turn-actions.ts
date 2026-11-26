@@ -8,15 +8,18 @@ import {
 } from "@orkestrator/protocol/contract/domains/coordinator";
 import { createHash } from "node:crypto";
 import type { CoordinatorWorkflowAssociation } from "@orkestrator/protocol/coordinator";
-import type { CommandContext } from "../commands-context.js";
-import { asNonBlankString } from "../commands-helpers.js";
+import {
+  asNonBlankString,
+  type CommandContext,
+  type CommandRegistrar,
+  type CoordinatorNodeTarget,
+  type RegistryDependencies,
+} from "../commands/index.js";
 import {
   coordinatorNodeTarget,
   RETRY_SAME_REQUEST,
   withRetryAdvice,
-  type CoordinatorNodeTarget,
-} from "../commands-registry-coordinator-nodes.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+} from "../commands/registry-coordinator-nodes.js";
 import {
   coordinatorCaller,
   withCoordinatorReceipt,

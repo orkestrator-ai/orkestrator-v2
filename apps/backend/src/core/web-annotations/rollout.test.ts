@@ -1,4 +1,4 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   WEB_ANNOTATION_COMMANDS,
@@ -8,8 +8,8 @@ import {
   type WebAnnotationRolloutMode,
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerWebAnnotationCommands } from "../commands-registry-web-annotations.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerWebAnnotationCommands } from "../commands/registry-web-annotations.js";
 import { WebAnnotationRollout } from "./rollout.js";
 import { ENV_A, createAnnotation, createHarness, type ServiceHarness } from "./test-support.js";
 import { sendRequest } from "./test-helpers.js";

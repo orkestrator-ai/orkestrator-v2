@@ -97,7 +97,7 @@ The following checks passed:
 - `tmux-and-cleanup-owners`: the complete existing `tests/tmux-poll.test.ts`,
   `tests/tmux-poll-signal.test.ts`, `tests/tmux-interactive.test.ts`,
   `tests/tmux-commands-interactive.test.ts`, `src/core/backend-runtime.test.ts`
-  and `src/core/commands-environment-cleanup.test.ts`; same backend command
+  and `src/core/commands/environment-cleanup.test.ts`; same backend command
   shape with `--parallel=2`, 12.7 seconds.
 - A workspace-specific image built with `mise run docker:build:dev --profile
   backend-state-review`. The real `tests/claude-state-signal-docker.test.ts`

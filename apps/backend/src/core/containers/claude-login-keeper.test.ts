@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, test, spyOn } from "bun:test";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   CLAUDE_HOST_REFRESH_LEAD_MS,
   CLAUDE_HOST_REFRESH_RETRY_MS,
   CLAUDE_LOGIN_KEEPER_INTERVAL_MS,
   ContainerClaudeLoginKeeper,
 } from "./claude-login-keeper.js";
-import * as credentialFiles from "../commands-files.js";
+import * as credentialFiles from "../commands/files.js";
 import type { ClaudeLoginHandover, ClaudeLoginPassSnapshot } from "../agent-accounts/containers.js";
 import { BackendRuntime } from "../backend-runtime.js";
 

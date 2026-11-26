@@ -10,7 +10,7 @@ import {
 import {
   ORKESTRATOR_BRIDGE_ATTACHMENT_ROOT_ENV,
   ORKESTRATOR_BRIDGE_EXECUTION_POLICY_ENV,
-} from "../commands-servers.js";
+} from "../commands/servers.js";
 import {
   OPENCODE2_ATTACHMENT_ROOT_ENV,
   OPENCODE2_COORDINATOR_READ_REFUSAL,

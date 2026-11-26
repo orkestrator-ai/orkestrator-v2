@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { createCredentialHost } from "./credentials-host.js";
 import { interactivePolicy } from "./credentials/service-test-support.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";

@@ -1,5 +1,5 @@
 import type { CoordinatorSurfaceAction } from "@orkestrator/protocol/coordinator-surfaces";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import { withCoordinatorReceipt } from "./coordinator/index.js";
 
 /** Owning-node results must replay before mutable worker admission checks.

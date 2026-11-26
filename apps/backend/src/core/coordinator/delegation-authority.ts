@@ -1,5 +1,5 @@
 import type { TrustedUserPromptPresentation } from "@orkestrator/protocol/review-evidence-frames";
-import type { CommandHandler, CommandInvocation } from "../commands-context.js";
+import type { CommandHandler, CommandInvocation } from "../commands/index.js";
 
 const coordinatorDelegationPresentationAuthority = Symbol(
   "coordinatorDelegationPresentationAuthority",

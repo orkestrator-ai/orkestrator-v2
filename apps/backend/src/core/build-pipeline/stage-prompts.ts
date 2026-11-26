@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import {
   createGitEnvironmentCommandRunner,
   writeEnvironmentReviewArtifact,
-} from "../commands-review.js";
+} from "../commands/review.js";
 /**
  * What each Build Pipeline stage is told when its session opens.
  *

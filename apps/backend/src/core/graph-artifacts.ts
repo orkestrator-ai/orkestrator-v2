@@ -45,14 +45,14 @@ import {
   type GraphTypeDefinition,
   type GraphTypeValidationContext,
 } from "@orkestrator/protocol/graphs/types";
-import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands-files.js";
+import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands/files.js";
 import {
   createGitEnvironmentCommandRunner,
-  readEnvironmentWorkspaceFile,
   ensureWorkspaceArtifactIsGitExcluded,
+  readEnvironmentWorkspaceFile,
   writeContainerReviewPackage,
-  type EnvironmentCommandRunner,
-} from "./commands-review.js";
+} from "./commands/review.js";
+import type { EnvironmentCommandRunner } from "./commands/index.js";
 import type { EnvironmentMutationFence } from "./environments/index.js";
 import { GraphStorageError } from "./graph-run-errors.js";
 import type { Environment } from "./models.js";

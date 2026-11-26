@@ -1,4 +1,4 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -10,9 +10,9 @@ import {
   memoryLifecycleContext,
   withDockerScript,
 } from "../../../tests/container-lifecycle-fixtures.js";
-import { registerDockerCommands } from "../commands-registry-docker.js";
-import type { CommandHandler } from "../commands-context.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
+import { registerDockerCommands } from "../commands/registry-docker.js";
+import type { CommandHandler } from "../commands/context.js";
+import type { RegistryDependencies } from "../commands/registry-types.js";
 import { dockerOwnerNamespace } from "../containers/ownership.js";
 import { resetImageManifestCache } from "../containers/image.js";
 import { revokeProviderCredentials } from "../portable-input-status.js";
@@ -44,7 +44,7 @@ const sha256 = (value: string) => createHash("sha256").update(value).digest("hex
 function claudeLogin(stdin: string | undefined): Record<string, any> {
   return (JSON.parse(stdin!) as { login: Record<string, any> }).login;
 }
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "../agent-credential-files.js";
 import type { Environment } from "../models.js";
 import {

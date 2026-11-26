@@ -14,7 +14,7 @@
  * checkout of the merge base (`failed-on-merge-base`), never of the reviewed
  * worktree.
  *
- * The package generator (`commands-review.ts`) writes it into the sealed
+ * The package generator (`apps/backend/src/core/commands/review.ts`) writes it into the sealed
  * review package; the reference persisted on a workflow carries the compact
  * {@link ValidationFailureSummary}. Browser-safe.
  */

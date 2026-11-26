@@ -29,7 +29,7 @@ import { isDockerDaemonUnreachable } from "./cli-errors.js";
 import { dockerOwnerNamespace } from "./ownership.js";
 import { runCommand } from "../shell.js";
 import { removeRuntimeContainer } from "../egress-gateway.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { Environment } from "../models.js";
 import { removeStorageVolumes } from "./storage.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

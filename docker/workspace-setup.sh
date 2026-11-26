@@ -10,7 +10,7 @@ set -e
 # the repository-controlled orkestrator-ai.json commands, before the backend ever
 # reads HEAD. Refusing up front is what stops a polluted creation commit being
 # recorded on an image that predates this contract. Keep the literal text in sync
-# with CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER in apps/backend/src/core/commands.ts.
+# with CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER in apps/backend/src/core/containers/scripts.ts.
 ORKESTRATOR_SETUP_CAPABILITIES=prepare-only
 export ORKESTRATOR_SETUP_CAPABILITIES
 # Image manifest contract (docker/image-manifest.ts):

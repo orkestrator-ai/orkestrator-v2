@@ -7,9 +7,8 @@ import type {
   PublicOperationState,
   PublicReceipt,
 } from "@orkestrator/protocol/public-api";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext, RegistryDependencies } from "../commands/index.js";
 import type { CommandInvoker } from "../control-shared-actions.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
 import type { PublicAuthority, PublicOperationRecord } from "./operation-ledger.js";
 
 export interface PublicActionContext {

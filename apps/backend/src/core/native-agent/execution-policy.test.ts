@@ -222,7 +222,7 @@ describe("resolveNativeAgentExecutionPolicy", () => {
   });
 
   test("a container reports the network its firewall gives, not the override's", () => {
-    // The firewall follows the environment (`commands-containers.ts`), so an
+    // The firewall follows the environment (`commands/containers.ts`), so an
     // override cannot widen the network beyond the firewall.
     expect(
       resolveNativeAgentExecutionPolicy(container, "interactive-native", { networkAccess: "full" }),

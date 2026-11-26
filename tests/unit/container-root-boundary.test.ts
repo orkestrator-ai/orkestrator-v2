@@ -67,7 +67,7 @@ describe("root execs", () => {
   });
 
   test("terminal launches and closes pass their user through the root-aware helper", () => {
-    const terminal = read("apps/backend/src/core/commands-registry-terminal.ts");
+    const terminal = read("apps/backend/src/core/commands/registry-terminal.ts");
     expect(terminal).not.toContain('dockerArgs.push("--user", config.user)');
     // Every container terminal starts through spawnContainerTerminal.
     expect(terminal.match(/containerTerminalUserArgs\(config\.user\)/g)).toHaveLength(1);

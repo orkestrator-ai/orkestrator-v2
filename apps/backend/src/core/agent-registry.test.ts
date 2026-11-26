@@ -1,6 +1,6 @@
-import { registrarFrom } from "./commands-registry-contracts.js";
-import { registerAgentMailCommands } from "./commands-registry-mail.js";
-import type { CommandContext, CommandHandler } from "./commands-context.js";
+import { registrarFrom } from "./commands/registry-contracts.js";
+import { registerAgentMailCommands } from "./commands/registry-mail.js";
+import type { CommandContext, CommandHandler } from "./commands/context.js";
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";

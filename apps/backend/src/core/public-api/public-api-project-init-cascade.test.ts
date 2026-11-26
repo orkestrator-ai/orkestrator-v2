@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { PublicProjectSummary } from "@orkestrator/protocol/public-api-resources";
-import { resolveRemoteWorktreeStartPoint } from "../commands-files.js";
+import { resolveRemoteWorktreeStartPoint } from "../commands/files.js";
 import { runCommand } from "../shell.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./test-support.js";
 import { createPublicActionContext, dispatchPublicAction } from "./dispatch.js";

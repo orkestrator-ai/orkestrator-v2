@@ -6,7 +6,7 @@
 Observed: 2026-10-07 on macOS with Bun 1.4.2.
 
 - Test: `toolbar and external switches clear home PR identity before selection, refresh and merge`
-- File: `apps/backend/src/core/commands-registry-project-home.test.ts:242`
+- File: `apps/backend/src/core/commands/registry-project-home.test.ts:242`
 - Failure: Git could not create the fixture checkout's `.git/index.lock`
   because it already existed; reported duration 167.69 ms.
 - Backend counts: 5761 passed, 1 failed, 15 skipped across 322 files.
@@ -29,7 +29,7 @@ The owning file passed alone, exit 0, in 2.4 seconds with the same GNU-tool PATH
 ```bash
 mise run test:logged -- --name project-home-alone -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+  ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: `/tmp/orkestrator-test-run.8uQSSt/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`
@@ -53,7 +53,7 @@ The owning file passed alone in 2.2 seconds:
 ```bash
 mise run test:logged -- --name project-home-rerun -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+  ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures
 ```
 
 Evidence: `/var/folders/y3/xxg06qlx09d2x3mjf0cv3wjc0000gn/T/orkestrator-test-run.XzVEFK/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
@@ -63,7 +63,7 @@ No assertion, timeout or skip was changed.
 
 `mise run test:logged -- --name full-tests-final -- mise run test` encountered the same fixture `.git/index.lock` conflict at 169.25 ms (workspace packages used one Bun worker each). The aggregate ran beside isolated browser validation and was later interrupted after its superseding validation began.
 
-The owning file passed alone (exit 0, 3.0 seconds): `mise run test:logged -- --name project-home-isolation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures`.
+The owning file passed alone (exit 0, 3.0 seconds): `mise run test:logged -- --name project-home-isolation -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures`.
 
 Evidence: `/tmp/orkestrator-test-run.DjXKcv/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`. No assertion or timeout was changed.
 
@@ -78,7 +78,7 @@ The owning file passed alone (exit 0) in 9.5 seconds:
 ```bash
 mise run test:logged -- --name project-home-alone -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+  ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures
 ```
 
 Failure evidence: `orkestrator-test-run.wS9yy3/backend-package-tests.log.gz`
@@ -101,7 +101,7 @@ in 2.1 seconds:
 ```bash
 mise run test:logged -- --name project-home-isolated -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+  ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures
 ```
 
 Failure evidence:
@@ -122,7 +122,7 @@ Backend totals were 5,875 passed, 15 skipped and 27 failed across 329 files in
 host and are separate from the index-lock flake.
 
 The unchanged owning file passed alone (exit 0) in 6.2 seconds with the same PATH:
-`mise run test:logged -- --name project-home-rerun -- bun --cwd=apps/backend test ./src/core/commands-registry-project-home.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
+`mise run test:logged -- --name project-home-rerun -- bun --cwd=apps/backend test ./src/core/commands/registry-project-home.test.ts --preload ../../tests/setup-node.ts --parallel=1 --only-failures`.
 
 Evidence: `/tmp/orkestrator-test-run.TrudTm/workspace-web-backend-desktop-web-public-cli-protocol-toolchain.log.gz`.
 The isolated pass supports the existing fixture-contention hypothesis; the lock
@@ -146,7 +146,7 @@ alone (exit 0) in 2.7 seconds:
 ```bash
 mise run test:logged -- --name project-home-isolated -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+  ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures
 ```
 
 Failure evidence: `/tmp/orkestrator-test-run.LNo8MZ/summary.json` and
@@ -180,7 +180,7 @@ The unchanged owner also failed alone in 2.2 seconds (89.17 ms for this test):
 ```bash
 mise run test:logged -- --name project-home-isolated -- \
   bun test --cwd apps/backend --preload ../../tests/setup-node.ts \
-  ./src/core/commands-registry-project-home.test.ts --parallel=1 --only-failures
+  ./src/core/commands/registry-project-home.test.ts --parallel=1 --only-failures
 ```
 
 That isolated failure is preserved in `orkestrator-test-run.TutH0T/project-home-isolated.log.gz`.
@@ -196,5 +196,5 @@ That isolated failure is preserved in `orkestrator-test-run.TutH0T/project-home-
   and the branch/PR assertions are unchanged; watcher behavior has separate
   integration coverage.
 - **Fix commit:** `993b2df8`.
-- **Verification:** `mise run test:logged -- --name project-home-stress -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-registry-project-home.test.ts --parallel=1 --rerun-each=10 --only-failures`
+- **Verification:** `mise run test:logged -- --name project-home-stress -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/registry-project-home.test.ts --parallel=1 --rerun-each=10 --only-failures`
   passed in 20.8 seconds (exit 0).

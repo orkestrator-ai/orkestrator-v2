@@ -99,7 +99,7 @@ async function createLegacyEnvironment(
   overrides: Partial<Environment> = {},
   options: StagedProviders & { populate?: (containerId: string) => Promise<void> } = {},
 ) {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}-${name}`,
@@ -333,7 +333,7 @@ describe("C14 restricted rebuild behind an egress gateway", () => {
       const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { egressGatewayOf, removeRuntimeContainer } =
         await import("../src/core/egress-gateway");
-      const { getHostPort } = await import("../src/core/commands-container-exec");
+      const { getHostPort } = await import("../src/core/commands/container-exec");
       const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
       const fixedPort = probe.port;
       probe.stop(true);

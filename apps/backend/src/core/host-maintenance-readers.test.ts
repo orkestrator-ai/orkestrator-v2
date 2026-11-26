@@ -6,7 +6,7 @@ import path from "node:path";
 import { PINNED_TOOL_VERSIONS } from "@orkestrator/toolchain/manifest";
 import { isHostIdle } from "@orkestrator/protocol/host-maintenance";
 import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import type { PtyProcess } from "./pty.js";
 import { GitHubCliSelection } from "./git/index.js";
 import {

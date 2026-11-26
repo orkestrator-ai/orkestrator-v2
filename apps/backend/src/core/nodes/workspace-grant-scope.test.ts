@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createCommandRegistry } from "../commands.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { isNodeRoutingExcludedCommand } from "./node-routing.js";
 import {
   admitsWorkspaceCommand,

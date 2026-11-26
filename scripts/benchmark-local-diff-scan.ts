@@ -37,7 +37,7 @@ const settleMs = Number(arg("settle-ms", "2500"));
 const asJson = process.argv.includes("--json");
 const core = path.resolve(arg("core", path.join(import.meta.dir, "../apps/backend/src/core")));
 
-const { getLocalGitStatusDetailed } = await import(path.join(core, "commands-files.ts"));
+const { getLocalGitStatusDetailed } = await import(path.join(core, "commands/files.ts"));
 const { observeCommandInvocations } = await import(path.join(core, "shell.ts"));
 const { recurringWorkMetrics } = await import(path.join(core, "recurring/work-metrics.ts"));
 

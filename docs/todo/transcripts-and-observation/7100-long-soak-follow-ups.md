@@ -18,7 +18,7 @@ at `281de1a17`), from the long soak of
 
 **Problem.** In the pre-fix soak the native projection's `projections`, `projectionRevisions`, `projectedMessageSessions` and `projectionEpochs` gauges rose by one for every environment the soak created and deleted, and never fell (from 3 to 62 over 60 cycles; after the fix they stayed at the two open sessions for 74 minutes). A deleted environment's views stayed in memory until LRU churn pushed them out.
 
-**Context.** The projection cache is bounded by count only (`NATIVE_PROJECTION_CACHE_LIMIT`, 1,024 entries of up to `NATIVE_PROJECTION_MAX_BYTES`, 16 MiB), revision counters by `NATIVE_PROJECTION_REVISION_LIMIT` (4,096). Environment deletion (`deleteEnvironment`, `commands-servers.ts`) deleted the session records and dropped command catalogues (`forgetEnvironmentCommandCatalogues`), but nothing told the projection.
+**Context.** The projection cache is bounded by count only (`NATIVE_PROJECTION_CACHE_LIMIT`, 1,024 entries of up to `NATIVE_PROJECTION_MAX_BYTES`, 16 MiB), revision counters by `NATIVE_PROJECTION_REVISION_LIMIT` (4,096). Environment deletion (`deleteEnvironment`, `commands/servers.ts`) deleted the session records and dropped command catalogues (`forgetEnvironmentCommandCatalogues`), but nothing told the projection.
 
 **Investigation.** Session keys are hashes (`nativeAgentSessionStorageKey`), so a deleted environment's keys cannot be found by prefix. The cached projections keep their own `input`, which names the environment, agent and logical session. `invalidateProjection` already clears every per-session map (sync revisions, history, tool details, projected rows, direct pages, progressive caches) and bumps the epoch to fence a read in flight; `pruneProjectionEpoch` reclaims an epoch only once no read relies on it.
 
@@ -115,7 +115,7 @@ flight still needs. Why: deletion is the only point where no reader can
 come back to those sessions, and the existing invalidation already clears
 every per-session map; a byte bound would still hold dead views. Tests:
 `native-agent/projection-cache-gauges.test.ts` (releases only the deleted
-environment's caches) and `commands-environment-cleanup.test.ts` (called
+environment's caches) and `commands/environment-cleanup.test.ts` (called
 after the session records go). Live: see 0048's
 [Long soak](0048-recurring-work-qualification.md#long-soak-2026-11-06-linux).
 

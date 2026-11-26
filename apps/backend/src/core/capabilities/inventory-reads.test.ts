@@ -25,10 +25,12 @@ import {
   skillFile,
   type CapabilityNode,
 } from "./capability-network-test-support.js";
+import { INVENTORY_PLUGIN_TTL_MS } from "./inventory-cache.js";
 import {
   createClaudeInventoryPluginSource,
   inventoryPluginLister,
   inventoryPluginTimeoutMessage,
+  LAUNCH_PLUGIN_LISTING_MAX_AGE_MS,
 } from "./inventory-plugins.js";
 
 import type { CapabilityHomes } from "./native-ownership.js";
@@ -260,6 +262,7 @@ test("remote Test verifies the managed file without starting cold plugin discove
 function managedClaude() {
   let hangs = false;
   let listings = 0;
+  let clock = 1_000_000;
   return {
     deps(homes: CapabilityHomes) {
       const fake = new FakeClaudeCli(homes.claudeConfigDir);
@@ -274,11 +277,16 @@ function managedClaude() {
           },
           includeUnmanaged: true,
           timeoutMs: LIST_TIMEOUT_MS,
+          now: () => clock,
         }),
       };
     },
     hang() {
       hangs = true;
+    },
+    /** Moves the listing cache's clock on. */
+    advance(ms: number) {
+      clock += ms;
     },
     listings: () => listings,
   };
@@ -335,12 +343,23 @@ test("managed Claude uses one bounded listing and launches read it only for a se
       expect.objectContaining({ ownership: "managed", componentId: plugin.id }),
     ]);
     expect(cli.listings() - before).toBe(1);
+    // Later full reads within the cache window share that listing, managed plugin included.
+    cli.advance(INVENTORY_PLUGIN_TTL_MS - 1_000);
+    const again = await node.cap.getInventory({});
+    expect(again.items.filter((item) => item.qualifiedId?.startsWith("review-plugin@"))).toEqual([
+      expect.objectContaining({ ownership: "managed", componentId: plugin.id }),
+    ]);
+    expect(cli.listings() - before).toBe(1);
+    // A launch accepts only a younger listing, and lists once even on a leaf,
+    // whose command node's observation and own recheck share it.
     const beforeLaunch = cli.listings();
     expect((await node.cap.preflightSession(launch("verified")))?.resolvedPackages).toContainEqual(
       expect.objectContaining({ id: inspected.packageId }),
     );
-    // The leaf rechecks the required plugin after receiving its command node's answer.
-    expect(cli.listings() - beforeLaunch).toBe(node === leaf ? 2 : 1);
+    expect(cli.listings() - beforeLaunch).toBe(1);
+    await node.cap.getInventory({});
+    expect(cli.listings() - beforeLaunch).toBe(1);
+    cli.advance(LAUNCH_PLUGIN_LISTING_MAX_AGE_MS);
     cli.hang();
   }
 

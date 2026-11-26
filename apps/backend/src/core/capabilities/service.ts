@@ -395,9 +395,10 @@ export class CapabilityService {
   }
 
   /**
-   * This machine's inventory. Files, MCP configuration and managed plugins
-   * are read live; the provider CLIs' plugin listings come from the shared
-   * cache, and a launch read leaves them out: they are never launch evidence
+   * This machine's inventory. Files, MCP configuration and managed plugin
+   * bytes are read live; the provider CLIs' plugin listings come from the
+   * shared cache (a launch accepts only a recent Claude listing), and a
+   * launch read leaves the unmanaged ones out: they are never launch evidence
    * (`isLaunchInventoryEvidence`) and one CLI can hang.
    */
   async observeSelf(options: InventoryReadOptions = {}): Promise<CapabilityInventory> {

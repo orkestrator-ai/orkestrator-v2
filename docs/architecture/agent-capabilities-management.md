@@ -218,7 +218,10 @@ installed. A full read also asks provider CLIs to list native plugins. Codex
 0.167 and 0.169 can hold a connection to a remote service and never exit on
 some hosts.
 
-- **Unmanaged discovery shares a 60-second cache.** Each executor write, a
+- **Plugin listings share a 60-second cache.** Concurrent readers join one
+  listing in flight, and later readers within the window reuse it, Claude's
+  managed plugin evidence included, so each provider CLI runs at most once
+  per window. Each executor write, a
   saved or detected edit to backend-user MCP configuration, and a committed
   Codex plugin switch invalidate the cache. Applying a saved MCP change or
   reporting its progress uses the existing listing. An explicit
@@ -233,8 +236,10 @@ some hosts.
   count against that evidence.
 - **Launch evidence and the Test action read files and MCP configuration
   live.** They skip unmanaged listings on both local and remote hosts. A host
-  Claude launch asks for a live, bounded listing only when the resolved
-  selection uses a managed plugin. Managed Claude checks verify the package
+  Claude launch asks for a bounded listing only when the resolved selection
+  uses a managed plugin, and accepts a cached one only when it is under
+  `LAUNCH_PLUGIN_LISTING_MAX_AGE_MS` (15 seconds) old, so a leaf's two reads
+  of one launch share one listing. Managed Claude checks verify the package
   directories live, and full inventory shares the same CLI result with
   unmanaged Claude discovery.
 - **An empty library skips launch observation.** The command node checks the

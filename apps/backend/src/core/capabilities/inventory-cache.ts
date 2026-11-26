@@ -8,8 +8,11 @@
  * for `INVENTORY_PLUGIN_TTL_MS`. Every change this machine applies (a
  * capability write, an MCP change, a plugin switch) calls `invalidate`, which
  * advances the generation: a listing started before it is never served after
- * it. Managed Claude reads skip settled listings and verify the installed
- * bytes live. Other delivery evidence is read directly from files and MCP configuration.
+ * it. A reader may ask for a younger listing than the window (`maxAgeMs`):
+ * launch evidence does, so a required managed Claude plugin is judged from a
+ * listing a few seconds old at most, while the installed bytes are still
+ * verified live. Other delivery evidence is read directly from files and MCP
+ * configuration.
  */
 import type { InventoryPluginListing } from "./inventory.js";
 
@@ -44,13 +47,15 @@ export class InventoryPluginCache<T = InventoryPluginListing> {
 
   /**
    * The current listing. `refresh` skips a settled listing but still joins
-   * one in flight.
+   * one in flight; `maxAgeMs` narrows the window a settled listing serves
+   * this reader (it never widens it).
    */
-  read(options: { refresh?: boolean } = {}): Promise<T> {
+  read(options: { refresh?: boolean; maxAgeMs?: number } = {}): Promise<T> {
     const current = this.entry;
     if (current && current.generation === this.generationValue) {
       if (!current.settled) return current.listing;
-      if (!options.refresh && this.now() - current.startedAt < this.ttlMs) return current.listing;
+      const window = Math.min(this.ttlMs, options.maxAgeMs ?? this.ttlMs);
+      if (!options.refresh && this.now() - current.startedAt < window) return current.listing;
     }
     const entry: Entry<T> = {
       generation: this.generationValue,

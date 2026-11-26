@@ -1039,9 +1039,16 @@ by `scripts/qa-capabilities-two-machine.ts` (2026-11-22, macOS and Linux:
 isolated backends of one commit linked through an SSH forward; delivery,
 offline convergence to the latest revision, handover with epoch 2 and the
 old controller refused). The check observes the copies on disk after reconnect.
-It does not measure intermediate installations. Not proven on real machines: a leaf launch, a third
-machine moving with the handover (the forward is a loopback route, which does
-not move), and an unknown outcome from a write cut off mid-flight. Capability authority moves with the handover as a whole:
+It does not measure intermediate installations. A leaf launch across two
+backends running as separate processes is proven by
+`scripts/qa-capabilities-leaf-launch.ts` (2026-11-26, Linux: a native Pi
+session on the leaf with a fake OpenAI-compatible model, a session-scoped
+required skill resolved by the command node, staged on the leaf, loaded by
+that session alone and graded `load-confirmed` by Test on the command node).
+Not proven on real machines: a leaf launch between two machines, a third
+machine moving with the handover (only HTTPS routes to a non-loopback name and
+SSH routes move, `remoteRoutes` in `nodes/node-service.ts`; the forward and
+loopback routes do not), and an unknown outcome from a write cut off mid-flight. Capability authority moves with the handover as a whole:
 machines the user leaves behind with the old command node keep what they last
 applied but get no new plans until they join the new one, and a node that
 handed over does not take the authority back unless command is handed back to

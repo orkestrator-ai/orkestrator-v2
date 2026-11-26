@@ -81,6 +81,7 @@ export function createFixture(
   options: {
     environmentType?: "local" | "containerized";
     env?: NodeJS.ProcessEnv;
+    onHostConfigChange?: () => void;
     /** Added Claude accounts' directories (`claude-account-copies.ts`). */
     claudeAccountHomes?: () => Promise<string[]>;
   } = {},
@@ -185,6 +186,7 @@ export function createFixture(
         },
       },
       emit: eventSink((event, payload) => events.push([event, payload])),
+      onHostConfigChange: options.onHostConfigChange,
       probe,
       loadRollout: async () => rollout.value,
       claudeAccountHomes: options.claudeAccountHomes,

@@ -154,6 +154,8 @@ export interface McpManagementServiceOptions {
   dataDir: string;
   storage: McpServiceStorage;
   emit: BackendEmit;
+  /** A saved or newly observed edit to a backend user configuration file. */
+  onHostConfigChange?: () => void;
   probe: RuntimeProbe;
   env?: NodeJS.ProcessEnv;
   home?: string;
@@ -219,6 +221,7 @@ function backendUserContainerNote(provider: AgentPlatform): string {
 }
 
 const EVENT_TARGETS_MAX = 256;
+const HOST_SOURCE_REVISIONS_MAX = 128;
 
 function nowIso(now: () => number): string {
   return new Date(now()).toISOString();
@@ -230,6 +233,7 @@ export class McpManagementService {
   private readonly now: () => number;
   private readonly homes: ProviderHomes;
   private readonly gate: McpRolloutGate;
+  private readonly hostSourceRevisions = new Map<string, string>();
   private catalogRevision = 0;
   private eventRevision = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -423,6 +427,7 @@ export class McpManagementService {
     specs: SourceSpec[],
   ): Promise<{ catalog: LoadedCatalog; overlays: Map<string, McpEnvironmentOverlayState> }> {
     const catalog = await loadCatalog(this.store, specs, this.options.readContainerFile);
+    for (const source of catalog.sources) this.observeHostSource(source);
     const overlays = new Map<string, McpEnvironmentOverlayState>();
     if (target.info.location === "container" && target.info.containerId) {
       for (const source of catalog.sources) {
@@ -433,6 +438,27 @@ export class McpManagementService {
       }
     }
     return { catalog, overlays };
+  }
+
+  private observeHostSource(source: LoadedSource, savedRevision?: string): void {
+    if (
+      !this.options.onHostConfigChange ||
+      source.spec.scope !== "backend-user" ||
+      source.spec.container
+    )
+      return;
+    const revision = savedRevision ?? source.file?.revision;
+    if (!revision) return;
+    const file = source.spec.path;
+    const previous = this.hostSourceRevisions.get(file);
+    if (previous === undefined && this.hostSourceRevisions.size >= HOST_SOURCE_REVISIONS_MAX) {
+      const oldest = this.hostSourceRevisions.keys().next().value;
+      if (oldest !== undefined) this.hostSourceRevisions.delete(oldest);
+    }
+    this.hostSourceRevisions.set(file, revision);
+    if (savedRevision !== undefined || (previous !== undefined && previous !== revision)) {
+      this.options.onHostConfigChange();
+    }
   }
 
   private overlayContext(target: ResolvedTarget, source: LoadedSource): OverlaySourceContext {
@@ -723,6 +749,7 @@ export class McpManagementService {
                   maxBytes: spec.maxBytes,
                 })
               ).revision;
+        if (!unchanged && savedRevision) this.observeHostSource(source, savedRevision);
         // The exact bytes now in the file, in the format bridges report.
         const savedDigest = unchanged
           ? source.file!.contentDigest
@@ -1719,6 +1746,7 @@ export class McpManagementService {
     );
     if (!spec || spec.format === "runtime") return undefined;
     const source = (await loadCatalog(this.store, [spec])).sources[0];
+    if (source) this.observeHostSource(source);
     const absent = source?.state === "absent";
     // No bridge reports `absent` as evidence, so it never proves a save.
     const digest = absent ? ABSENT_REVISION : source?.file?.contentDigest;

@@ -40,7 +40,12 @@ import type { McpManagementService } from "../mcp-management/index.js";
 import { CapabilityEnvironmentAuthority } from "./environment-authority.js";
 import type { McpInstaller } from "./executor.js";
 import type { InventoryMcpServer } from "./inventory.js";
-import { INVENTORY_PLUGIN_LIST_TIMEOUT_MS, inventoryPluginLister } from "./inventory-plugins.js";
+import {
+  createClaudeInventoryPluginSource,
+  INVENTORY_PLUGIN_LIST_TIMEOUT_MS,
+  INVENTORY_PLUGIN_PROVIDERS,
+  inventoryPluginLister,
+} from "./inventory-plugins.js";
 import { agentTestCapabilityHomes, defaultCapabilityHomes } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { ClaudePluginAdapter } from "./provider-adapters/claude-plugins.js";
@@ -309,13 +314,16 @@ export function capabilityHomes(context: {
 }
 
 /** A provider CLI run from this machine's home; the isolated profile's sees only its own home. */
-function capabilityProviderCli(context: CommandContext, provider: "claude" | "codex" | "grok") {
+function capabilityProviderCli(
+  context: CommandContext,
+  provider: "claude" | "codex" | "grok",
+  timeoutMs = provider === "grok" ? 30_000 : undefined,
+) {
   const isolated = context.runtimeFlavor === "agent-test";
   const homes = () => capabilityHomes(context);
   return providerCli({
     label: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : "Grok Build",
-    // Discovery listings answer quickly; a hung one must not hold a Test click.
-    ...(provider === "grok" ? { timeoutMs: 30_000 } : {}),
+    timeoutMs,
     binary: () => resolveAgentBinary(context, provider),
     cwd: () => homes().home,
     env: () => {
@@ -359,6 +367,7 @@ export async function setCapabilityPluginEnabled(
       codexHome,
       isolationRoot,
       cli: capabilityProviderCli(context, "codex"),
+      afterWrite: () => context.capabilities?.invalidateInventory(),
       ...(context.mcpManagement
         ? {
             withSourceLock: (file, work) => context.mcpManagement!.withSourceLock(file, work),
@@ -368,8 +377,6 @@ export async function setCapabilityPluginEnabled(
     qualifiedId,
     enabled,
   );
-  // The plugin listing the inventory keeps no longer holds.
-  context.capabilities?.invalidateInventory();
   return {
     provider,
     qualifiedId: result.pluginId,
@@ -431,8 +438,12 @@ export function createCapabilityService(
     ...(nodes.controllerReachable ? { controllerReachable: nodes.controllerReachable } : {}),
     ...(nodes.remoteEnvironments ? { remoteEnvironments: nodes.remoteEnvironments } : {}),
     homes,
+    claudeInventory: createClaudeInventoryPluginSource({
+      adapter: claudePlugins,
+      cli: capabilityProviderCli(context, "claude", INVENTORY_PLUGIN_LIST_TIMEOUT_MS),
+      includeUnmanaged: !isolated,
+    }),
     inventory: {
-      managedPlugins: () => claudePlugins.observe(),
       providers: async () =>
         Promise.all(
           AGENT_PLATFORMS.map(async (provider) => {
@@ -453,6 +464,7 @@ export function createCapabilityService(
                 timeoutMs: INVENTORY_PLUGIN_LIST_TIMEOUT_MS,
               }),
               timeoutMs: INVENTORY_PLUGIN_LIST_TIMEOUT_MS,
+              providers: INVENTORY_PLUGIN_PROVIDERS.filter((provider) => provider !== "claude"),
             }),
             mcpServers: async (): Promise<InventoryMcpServer[]> => {
               const mcp = context.mcpManagement;

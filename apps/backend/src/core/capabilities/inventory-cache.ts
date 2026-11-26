@@ -8,29 +8,29 @@
  * for `INVENTORY_PLUGIN_TTL_MS`. Every change this machine applies (a
  * capability write, an MCP change, a plugin switch) calls `invalidate`, which
  * advances the generation: a listing started before it is never served after
- * it. The rest of the inventory (files, MCP configuration, managed plugins)
- * stays a live read, so launch evidence is never older than the read.
+ * it. Managed Claude reads skip settled listings and verify the installed
+ * bytes live. Other delivery evidence is read directly from files and MCP configuration.
  */
 import type { InventoryPluginListing } from "./inventory.js";
 
 /** How long a settled plugin listing serves readers; matches `EXTENSION_DISCOVERY_TTL_MS`. */
 export const INVENTORY_PLUGIN_TTL_MS = 60_000;
 
-interface Entry {
+interface Entry<T> {
   generation: number;
   startedAt: number;
   settled: boolean;
-  listing: Promise<InventoryPluginListing>;
+  listing: Promise<T>;
 }
 
-export class InventoryPluginCache {
+export class InventoryPluginCache<T = InventoryPluginListing> {
   private generationValue = 0;
-  private entry: Entry | null = null;
+  private entry: Entry<T> | null = null;
   private readonly ttlMs: number;
   private readonly now: () => number;
 
   constructor(
-    private readonly load: () => Promise<InventoryPluginListing>,
+    private readonly load: () => Promise<T>,
     options: { ttlMs?: number; now?: () => number } = {},
   ) {
     this.ttlMs = options.ttlMs ?? INVENTORY_PLUGIN_TTL_MS;
@@ -44,15 +44,15 @@ export class InventoryPluginCache {
 
   /**
    * The current listing. `refresh` skips a settled listing but still joins
-   * one in flight, which is no older than the request.
+   * one in flight.
    */
-  read(options: { refresh?: boolean } = {}): Promise<InventoryPluginListing> {
+  read(options: { refresh?: boolean } = {}): Promise<T> {
     const current = this.entry;
     if (current && current.generation === this.generationValue) {
       if (!current.settled) return current.listing;
       if (!options.refresh && this.now() - current.startedAt < this.ttlMs) return current.listing;
     }
-    const entry: Entry = {
+    const entry: Entry<T> = {
       generation: this.generationValue,
       startedAt: this.now(),
       settled: false,

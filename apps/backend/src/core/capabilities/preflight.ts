@@ -29,6 +29,7 @@ import {
   verifyLaunchDeliveries,
   withBlockers,
 } from "./launch-authority.js";
+import { launchManagedClaudeComponents, managedClaudeComponents } from "./resolution.js";
 import { revisionComponent, scopedRequiredDelivery } from "./scoped-delivery.js";
 import {
   pruneSessionPlugins,
@@ -106,7 +107,16 @@ export class CapabilityPreflight {
     const local = target.nodeId === selfId;
     const inventory =
       target.environmentIncarnation === undefined
-        ? await this.ctx.observeNode(target.nodeId, { launch: true }).catch(() => undefined)
+        ? await this.ctx
+            .observeNode(target.nodeId, {
+              launch: true,
+              managedPluginComponents: managedClaudeComponents(
+                state,
+                target,
+                componentIds.map((id) => state.components[id] ?? { id, dependencies: [] }),
+              ),
+            })
+            .catch(() => undefined)
         : undefined;
     const remoteProofs = new Map(remote?.checks.map((check) => [check.componentId, check]));
     // What the provider itself reported: never inferred from what was sent.
@@ -478,13 +488,16 @@ export class CapabilityPreflight {
       ...(input.graphNode ? { graphNode: input.graphNode } : {}),
       ceiling: input.ceiling,
     };
-    // Launch evidence only, and none when the library is empty: nothing can resolve to verify.
-    const libraryEmpty =
+    const observe = (managedPluginComponents?: string[]) =>
+      this.ctx
+        .observeNode(input.target.nodeId, { launch: true, managedPluginComponents })
+        .catch(() => undefined);
+    // Isolated worktree staging also resolves a target and needs live provider facts.
+    const observedForStaging =
+      input.relativeWorktree &&
       Object.keys((await this.ctx.deps.storage.capabilities.loadCapabilityState()).packages)
-        .length === 0;
-    const launchInventory = libraryEmpty
-      ? undefined
-      : await this.ctx.observeNode(input.target.nodeId, { launch: true }).catch(() => undefined);
+        .length > 0;
+    let launchInventory = observedForStaging ? await observe() : undefined;
     const scopedEvidence = await this.ctx.scoped
       .launchEvidence(input.target, input.relativeWorktree, (state) =>
         this.ctx.resolveFor(state, {
@@ -493,7 +506,19 @@ export class CapabilityPreflight {
         }),
       )
       .catch(() => undefined);
+    // Scoped delivery can admit the first package while it runs. Use the same
+    // snapshot for the empty-library decision and final resolution.
     const state = await this.ctx.deps.storage.capabilities.loadCapabilityState();
+    if (!observedForStaging && Object.keys(state.packages).length > 0) {
+      launchInventory = await observe();
+    }
+    if (input.target.provider === "claude" && input.target.environmentIncarnation === undefined) {
+      const selected = this.ctx.resolveFor(state, { ...resolveInput, launchInventory });
+      const pluginComponents = launchManagedClaudeComponents(state, selected);
+      if (pluginComponents.length > 0) {
+        launchInventory = (await observe(pluginComponents)) ?? launchInventory;
+      }
+    }
     let required: ReadonlySet<string> = new Set();
     // Only this machine's own launches: the plugin is staged from this node's artifacts.
     const privateItems: SessionPrivateItem[] = [];

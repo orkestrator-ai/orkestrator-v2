@@ -246,8 +246,12 @@ export class CapabilityService {
     });
     this.leafLaunch = new LeafLaunchAuthority({
       storage: deps.storage,
-      // Launch evidence only: no provider CLI's plugin listing on the launch path.
-      observeSelf: () => this.observeSelf({ launch: true }),
+      observeSelf: (managedPluginComponents) =>
+        this.observeSelf({ launch: true, managedPluginComponents }),
+      managedPluginComponents: async () => {
+        const index = await deps.claudePlugins?.readIndex();
+        return Object.values(index?.plugins ?? {}).map((plugin) => plugin.componentId);
+      },
       admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
       controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
       ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
@@ -387,6 +391,7 @@ export class CapabilityService {
    */
   invalidateInventory(): void {
     this.pluginListing?.invalidate();
+    this.deps.claudeInventory?.invalidate();
   }
 
   /**
@@ -398,12 +403,31 @@ export class CapabilityService {
   async observeSelf(options: InventoryReadOptions = {}): Promise<CapabilityInventory> {
     const selfId = await this.deps.selfId();
     const sources: InventorySources = { ...this.deps.inventory, homes: this.deps.homes() };
-    const pluginListing = this.pluginListing;
-    if (pluginListing && !options.launch) {
-      sources.plugins = () => pluginListing.read(options.refresh === true ? { refresh: true } : {});
-    } else {
-      delete sources.plugins;
-    }
+    const claude = this.deps.claudeInventory?.read(options);
+    sources.managedPlugins =
+      claude?.managedPlugins ??
+      (!options.launch || options.managedPluginComponents?.length
+        ? sources.managedPlugins
+        : undefined);
+    const pluginListing = options.launch
+      ? undefined
+      : this.pluginListing
+          ?.read({ refresh: options.refresh })
+          .catch(() => ({ plugins: [], errors: [{ message: "Could not list native plugins." }] }));
+    const listClaude = claude?.plugins;
+    sources.plugins =
+      pluginListing || listClaude
+        ? async () => {
+            const [otherListing, claudeListing] = await Promise.all([
+              pluginListing,
+              listClaude?.(),
+            ]);
+            return {
+              plugins: [...(otherListing?.plugins ?? []), ...(claudeListing?.plugins ?? [])],
+              errors: [...(otherListing?.errors ?? []), ...(claudeListing?.errors ?? [])],
+            };
+          }
+        : undefined;
     const inventory = await collectCapabilityInventory(selfId, sources, () => this.now());
     if (this.deps.busyProviders) {
       // An unreadable activity record holds every provider: err towards not changing running work.
@@ -478,7 +502,7 @@ export class CapabilityService {
       selfId: this.deps.selfId,
       link: this.deps.link,
       artifacts: this.artifacts,
-    }).observe(nodeId, state.epoch);
+    }).observe(nodeId, state.epoch, options);
   }
 
   // --- Reads (`library-reads.ts`) ----------------------------------------------
@@ -809,6 +833,11 @@ export class CapabilityService {
 
   /** Command node: a leaf asked to resolve a launch (`node-capability-launch-requested`). */
   answerLeafLaunch(nodeId: string, payload: unknown): Promise<{ answered: boolean }> {
+    const transport = remoteTransport({
+      selfId: this.deps.selfId,
+      link: this.deps.link,
+      artifacts: this.artifacts,
+    });
     return answerLeafLaunch(
       {
         storage: this.deps.storage,
@@ -817,12 +846,8 @@ export class CapabilityService {
         link: this.deps.link,
         resolve: (state, input) => this.resolveFor(state, input),
         artifacts: this.artifacts,
-        stageArtifact: (target, epoch, digest) =>
-          remoteTransport({
-            selfId: this.deps.selfId,
-            link: this.deps.link,
-            artifacts: this.artifacts,
-          }).stage(target, epoch, digest),
+        observeNode: transport.observe,
+        stageArtifact: transport.stage,
         now: () => this.now(),
       },
       nodeId,

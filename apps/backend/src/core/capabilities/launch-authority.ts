@@ -49,6 +49,9 @@ import { installName } from "./native-ownership.js";
 import type { CapabilityLink } from "./node-transport.js";
 import { sha256 } from "./planning.js";
 import { isLaunchInventoryEvidence } from "./inventory.js";
+import { INVENTORY_PLUGIN_LIST_TIMEOUT_MS } from "./inventory-plugins.js";
+import { launchManagedClaudeComponents } from "./resolution.js";
+import type { InventoryReadOptions } from "./service-context.js";
 import {
   parseContainerCapabilityRecord,
   type ContainerCapabilityRecord,
@@ -160,36 +163,44 @@ export function verifyLaunchDeliveries(input: {
         scoped.kind === "verified" &&
         !scoped.exclusive &&
         input.scopedEvidence?.account?.entries["claude-user-skills"] !== "private" &&
-        inventory?.items.some((item) => {
-          if (item.locationId !== "claude-user-skills") return false;
-          const receipt = Object.values(state.receipts).find(
-            (entry) =>
-              entry.nodeId === target.nodeId &&
-              entry.locationId === item.locationId &&
-              entry.componentId === item.componentId &&
-              entry.environmentId === undefined &&
-              entry.accountHomeId === undefined,
-          );
-          const observedComponent =
-            receipt &&
-            revisionComponent(state, receipt.packageId, receipt.componentId, receipt.packageDigest);
-          const observedName =
-            item.name ||
-            (observedComponent
-              ? installName(observedComponent.name, observedComponent.pathOrKey, "directory")
-              : "");
-          return (
-            (item.componentId === componentId ||
-              observedName === installName(component.name, component.pathOrKey, "directory")) &&
-            (receipt?.packageDigest !== pkg.artifactDigest ||
-              item.drifted ||
-              item.digest !== receipt?.digest)
-          );
-        })
+        (!inventory ||
+          inventory.items.some((item) => {
+            if (item.locationId !== "claude-user-skills") return false;
+            const receipt = Object.values(state.receipts).find(
+              (entry) =>
+                entry.nodeId === target.nodeId &&
+                entry.locationId === item.locationId &&
+                entry.componentId === item.componentId &&
+                entry.environmentId === undefined &&
+                entry.accountHomeId === undefined,
+            );
+            const observedComponent =
+              receipt &&
+              revisionComponent(
+                state,
+                receipt.packageId,
+                receipt.componentId,
+                receipt.packageDigest,
+              );
+            const observedName =
+              item.name ||
+              (observedComponent
+                ? installName(observedComponent.name, observedComponent.pathOrKey, "directory")
+                : "");
+            return (
+              (item.componentId === componentId ||
+                observedName === installName(component.name, component.pathOrKey, "directory")) &&
+              (receipt?.packageDigest !== pkg.artifactDigest ||
+                item.drifted ||
+                item.digest !== receipt?.digest)
+            );
+          }))
       ) {
         blockers.push({
           componentId,
-          reason: `A personal copy of ${component.name} shadows the required project revision.`,
+          reason: inventory
+            ? `A personal copy of ${component.name} shadows the required project revision.`
+            : `The personal skill location could not be checked for ${component.name}.`,
         });
       }
       if (scoped.kind === "verified") {
@@ -699,6 +710,7 @@ function parseAnswer(value: unknown, target: CapabilityTarget): LeafAnswer | nul
     deliveries,
     required,
     requiredOnNode: record.requiredOnNode === true,
+    scopedManagedPlugins: record.scopedManagedPlugins === true,
     ...(worktreeTargets.length > 0 ? { worktreeTargets } : {}),
     ...(privateItems.length > 0 ? { privateItems, privateRequired } : {}),
   };
@@ -709,6 +721,7 @@ interface LeafAnswer {
   deliveries: CapabilityLaunchDelivery[];
   required: string[];
   requiredOnNode: boolean;
+  scopedManagedPlugins?: boolean;
   worktreeTargets?: NodePlanTarget[];
   /**
    * Components to deliver to this session alone (`session-delivery.ts`).
@@ -719,12 +732,23 @@ interface LeafAnswer {
   privateRequired?: string[];
 }
 
+function requiredManagedPlugins(answer: Pick<LeafAnswer, "required" | "deliveries">): string[] {
+  const required = new Set(answer.required);
+  return answer.deliveries
+    .filter(
+      (delivery) => delivery.locationId === "plugin:claude" && required.has(delivery.componentId),
+    )
+    .map((delivery) => delivery.componentId);
+}
+
 // --- Leaf side -------------------------------------------------------------------
 
 export interface LeafLaunchAuthorityDeps {
   storage: { capabilities: CapabilitiesStorage };
-  /** This machine's launch evidence (`InventoryReadOptions.launch`): no provider plugin listing. */
-  observeSelf(): Promise<CapabilityInventory>;
+  /** This machine's launch evidence, plus any requested managed Claude components. */
+  observeSelf(managedPluginComponents?: readonly string[]): Promise<CapabilityInventory>;
+  /** Indexed components to report to a command node that predates scoped plugin observations. */
+  managedPluginComponents?(): Promise<string[]>;
   admitEpoch(controllerId: string, epoch: number): void;
   stageWorktree?(
     request: LaunchRequest,
@@ -747,6 +771,7 @@ export interface LeafLaunchAuthorityDeps {
 interface PendingRequest {
   key: string;
   target: CapabilityTarget;
+  extendForManagedEvidence?: () => void;
   settle(answer: { answer: LeafAnswer; controllerId: string; epoch: number } | null): void;
 }
 
@@ -774,10 +799,24 @@ export class LeafLaunchAuthority {
       .scopedReport?.(request.target, request.relativeWorktree)
       .catch(() => undefined);
     const key = launchCacheKey(request);
-    const answered =
+    let answered =
       this.deps.request && (await this.deps.controllerReachable().catch(() => false))
         ? await this.ask(request, key, inventory, report)
         : null;
+    if (
+      answered &&
+      !answered.answer.scopedManagedPlugins &&
+      request.target.provider === "claude" &&
+      request.target.environmentIncarnation === undefined
+    ) {
+      const components = await this.deps.managedPluginComponents?.().catch(() => []);
+      if (components?.length) {
+        const legacyInventory = await this.deps.observeSelf(components).catch(() => undefined);
+        if (legacyInventory) {
+          answered = (await this.ask(request, key, legacyInventory, report, false)) ?? answered;
+        }
+      }
+    }
     let staged: NonNullable<ScopedEvidence["isolated"]> = [];
     const targets = answered?.answer.worktreeTargets;
     if (targets?.length && answered && answered.answer.effective.launchBlockers.length === 0) {
@@ -793,9 +832,10 @@ export class LeafLaunchAuthority {
     }
     // Only a required component is checked against this machine again
     // (`localDeliveryCheck`); an answer requiring none reuses the first read.
-    const recheck = !answered || answered.answer.required.length > 0;
     const [latestInventory, latestReport] = await Promise.all([
-      recheck ? this.deps.observeSelf().catch(() => undefined) : inventory,
+      answered?.answer.required.length
+        ? this.deps.observeSelf(requiredManagedPlugins(answered.answer)).catch(() => undefined)
+        : inventory,
       this.deps.scopedReport?.(request.target, request.relativeWorktree).catch(() => undefined),
     ]);
     if (answered) {
@@ -831,7 +871,7 @@ export class LeafLaunchAuthority {
         ...privateFields(answered.answer),
       };
     }
-    return this.fromCache(request, key, latestInventory, latestReport);
+    return this.fromCache(request, key, latestReport);
   }
 
   private ask(
@@ -839,20 +879,41 @@ export class LeafLaunchAuthority {
     key: string,
     inventory: CapabilityInventory | undefined,
     report: LeafScopedReport | undefined,
+    scopedManagedPlugins = true,
   ): Promise<{ answer: LeafAnswer; controllerId: string; epoch: number } | null> {
     const requestId = `cap_launch_${randomBytes(12).toString("hex")}`;
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const startedAt = performance.now();
+      const onTimeout = () => {
         // A late answer is still cached by `receiveAnswer` for the next launch.
         const entry = this.pending.get(requestId);
-        if (entry) entry.settle = () => this.pending.delete(requestId);
+        if (entry) {
+          delete entry.extendForManagedEvidence;
+          entry.settle = () => this.pending.delete(requestId);
+        }
         setTimeout(() => this.pending.delete(requestId), 60_000).unref?.();
         resolve(null);
-      }, this.answerTimeoutMs);
+      };
+      let timer = setTimeout(onTimeout, this.answerTimeoutMs);
       timer.unref?.();
       this.pending.set(requestId, {
         key,
         target: request.target,
+        ...(scopedManagedPlugins &&
+        request.target.provider === "claude" &&
+        request.target.environmentIncarnation === undefined
+          ? {
+              extendForManagedEvidence: () => {
+                clearTimeout(timer);
+                const elapsed = performance.now() - startedAt;
+                timer = setTimeout(
+                  onTimeout,
+                  this.answerTimeoutMs + INVENTORY_PLUGIN_LIST_TIMEOUT_MS - elapsed,
+                );
+                timer.unref?.();
+              },
+            }
+          : {}),
         settle: (answer) => {
           clearTimeout(timer);
           this.pending.delete(requestId);
@@ -871,6 +932,7 @@ export class LeafLaunchAuthority {
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),
             ...(request.relativeWorktree ? { relativeWorktree: request.relativeWorktree } : {}),
             inventory: compactInventory(inventory),
+            ...(scopedManagedPlugins ? { scopedManagedPlugins: true } : {}),
             ...(report ? { scoped: report } : {}),
           },
         });
@@ -879,6 +941,14 @@ export class LeafLaunchAuthority {
         this.pending.get(requestId)?.settle(null);
       }
     });
+  }
+
+  /** A fenced observation requested the plugin evidence for this pending launch. */
+  expectManagedPluginEvidence(requestId: string): void {
+    const pending = this.pending.get(requestId);
+    if (!pending?.extendForManagedEvidence) return;
+    pending.extendForManagedEvidence();
+    delete pending.extendForManagedEvidence;
   }
 
   /** `answer_capability_node_launch`: only this machine's current authority is heard. */
@@ -1003,7 +1073,6 @@ export class LeafLaunchAuthority {
   private async fromCache(
     request: LaunchRequest,
     key: string,
-    inventory: CapabilityInventory | undefined,
     report: LeafScopedReport | undefined,
   ): Promise<LeafLaunchResult> {
     const state = await this.deps.storage.capabilities.loadCapabilityState();
@@ -1017,7 +1086,10 @@ export class LeafLaunchAuthority {
       cached.epoch === executor.epoch &&
       cached.appliedDigest === appliedDigest(executor);
     if (cached && fresh) {
-      const local = this.localDeliveryCheck(cached, inventory, report, request.target);
+      const liveInventory = cached.required.length
+        ? await this.deps.observeSelf(requiredManagedPlugins(cached)).catch(() => undefined)
+        : undefined;
+      const local = this.localDeliveryCheck(cached, liveInventory, report, request.target);
       const effective: EffectiveAgentResources = {
         ...cached.effective,
         target: request.target,
@@ -1096,6 +1168,11 @@ export interface LeafLaunchAnswerDeps {
       };
     },
   ): EffectiveAgentResources;
+  observeNode?(
+    nodeId: string,
+    epoch: number,
+    options: InventoryReadOptions,
+  ): Promise<CapabilityInventory>;
   artifacts?: CapabilityArtifactStore;
   /** Sends one artifact to the leaf (`CapabilityNodeTransport.stage`). */
   stageArtifact?(nodeId: string, epoch: number, digest: string): Promise<void>;
@@ -1164,6 +1241,35 @@ export async function answerLeafLaunch(
       target,
       isolated && report ? { ...report, project: undefined } : report,
     ) ?? {};
+  const scopedManagedPlugins = request.scopedManagedPlugins === true && !!deps.observeNode;
+  if (
+    scopedManagedPlugins &&
+    launchInventory &&
+    target.provider === "claude" &&
+    target.environmentIncarnation === undefined
+  ) {
+    const selected = deps.resolve(state, {
+      target,
+      sessionKey,
+      ceiling,
+      templateId,
+      graphNode,
+      launchInventory,
+    });
+    const components = launchManagedClaudeComponents(state, selected);
+    if (components.length > 0) {
+      const observed = await deps.observeNode!(nodeId, state.epoch, {
+        launch: true,
+        managedPluginComponents: components,
+        launchRequestId: requestId,
+      }).catch(() => undefined);
+      launchInventory.items.push(
+        ...(observed?.items ?? []).filter(
+          (item) => item.locationId === "plugin:claude" && isLaunchInventoryEvidence(item),
+        ),
+      );
+    }
+  }
   const worktreeTargets: NodePlanTarget[] = [];
   if (
     isolated &&
@@ -1298,6 +1404,7 @@ export async function answerLeafLaunch(
         deliveries: checked.deliveries,
         required: requiredComponents,
         requiredOnNode: stateHasRequired(state),
+        ...(scopedManagedPlugins ? { scopedManagedPlugins: true } : {}),
         ...(worktreeTargets.length > 0 ? { worktreeTargets } : {}),
         ...(sent.length > 0 && effective.launchBlockers.length === 0
           ? {

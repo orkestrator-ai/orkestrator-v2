@@ -7,8 +7,9 @@
 import type { CapabilityInventory } from "@orkestrator/protocol/capability-resources-api";
 
 import { parseNodePlanTargets } from "./executor.js";
+import { MAX_CAPABILITY_INVENTORY_ITEMS } from "./inventory.js";
 import type { CapabilityPreflight } from "./preflight.js";
-import { asText } from "./service-args.js";
+import { asText, stringList } from "./service-args.js";
 import type { CapabilityServiceContext } from "./service-context.js";
 import { assertDistributableArtifact } from "./source-inspection.js";
 
@@ -31,7 +32,20 @@ export class CapabilityExecutorHandlers {
   /** `get_capability_node_observation`: this machine's inventory. */
   async observe(args: Record<string, unknown>): Promise<CapabilityInventory> {
     this.admit(args);
-    return this.ctx.observeSelf();
+    const launch = args.launch === true;
+    const managedPluginComponents = stringList(
+      args.managedPluginComponents,
+      MAX_CAPABILITY_INVENTORY_ITEMS,
+      (id) => id.length <= 256,
+    );
+    if (launch && managedPluginComponents.length > 0 && typeof args.launchRequestId === "string") {
+      this.ctx.leafLaunch.expectManagedPluginEvidence(args.launchRequestId);
+    }
+    return this.ctx.observeSelf({
+      launch,
+      refresh: args.refresh === true,
+      managedPluginComponents,
+    });
   }
 
   /** `stage_capability_node_artifact`: one chunk of a package artifact. */

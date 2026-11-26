@@ -73,7 +73,11 @@ export class OutcomeUnknownError extends Error {
 
 /** How the reconciler reaches one machine. */
 export interface CapabilityNodeTransport {
-  observe(nodeId: string, epoch: number): Promise<CapabilityInventory>;
+  observe(
+    nodeId: string,
+    epoch: number,
+    options?: import("./service-context.js").InventoryReadOptions,
+  ): Promise<CapabilityInventory>;
   /** Makes sure the machine holds `digest`, sending it in chunks when it does not. */
   stage(nodeId: string, epoch: number, digest: string): Promise<void>;
   apply(
@@ -374,7 +378,9 @@ export class CapabilityReconciler {
             !seen &&
             inventory.truncated === 0 &&
             !inventory.errors.some(
-              (error) => error.provider === undefined || receipt.providers.includes(error.provider),
+              (error) =>
+                error.source !== "plugin-discovery" &&
+                (error.provider === undefined || receipt.providers.includes(error.provider)),
             )
           ) {
             delete current.receipts[receipt.id];

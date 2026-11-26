@@ -15,10 +15,21 @@ import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 import { CommandFailedError } from "../command-capture.js";
 import {
   discoverAgentPlugins,
+  parseClaudePlugins,
   type AgentPluginCatalog,
   type ExtensionCommandRunner,
 } from "../extension-discovery.js";
 import type { InventoryPlugin, InventoryPluginListing } from "./inventory.js";
+import { InventoryPluginCache } from "./inventory-cache.js";
+import {
+  parseClaudePluginList,
+  type ClaudePluginAdapter,
+  type ClaudeInstalledPlugin,
+  type ManagedClaudePluginObservation,
+} from "./provider-adapters/claude-plugins.js";
+import type { ProviderCli } from "./provider-adapters/provider-cli.js";
+import { CapabilityError } from "./security.js";
+import type { InventoryReadOptions } from "./service-context.js";
 
 const log = createLogger("capabilities");
 
@@ -35,6 +46,19 @@ export function inventoryPluginTimeoutMessage(provider: AgentPlatform, timeoutMs
   return `${AGENT_PLATFORM_LABELS[provider]} did not list its plugins within ${seconds} s.`;
 }
 
+/** Log once until the provider answers again. */
+function timeoutReporter(timeoutMs: number) {
+  const reported = new Set<InventoryPluginProvider>();
+  return (provider: InventoryPluginProvider, timedOut: boolean): void => {
+    if (!timedOut) {
+      reported.delete(provider);
+    } else if (!reported.has(provider)) {
+      reported.add(provider);
+      log.warn("inventory.plugin-list-timed-out", { provider, timeoutMs });
+    }
+  };
+}
+
 /**
  * Builds the inventory's `plugins` source over a command runner. The runner
  * should carry the same timeout so a hung CLI is also killed; the deadline
@@ -49,8 +73,7 @@ export function inventoryPluginLister(input: {
   const timeoutMs = input.timeoutMs ?? INVENTORY_PLUGIN_LIST_TIMEOUT_MS;
   const providers = input.providers ?? INVENTORY_PLUGIN_PROVIDERS;
   const discover = input.discover ?? discoverAgentPlugins;
-  /** Agents whose last listing timed out and was already logged. */
-  const reported = new Set<InventoryPluginProvider>();
+  const reportTimeout = timeoutReporter(timeoutMs);
 
   const listOne = async (
     provider: InventoryPluginProvider,
@@ -77,15 +100,11 @@ export function inventoryPluginLister(input: {
     const plugins: InventoryPlugin[] = [];
     const errors: Array<{ message: string }> = [];
     for (const { provider, catalog, timedOut } of results) {
+      reportTimeout(provider, timedOut);
       if (timedOut) {
         errors.push({ message: inventoryPluginTimeoutMessage(provider, timeoutMs) });
-        if (!reported.has(provider)) {
-          reported.add(provider);
-          log.warn("inventory.plugin-list-timed-out", { provider, timeoutMs });
-        }
         continue;
       }
-      reported.delete(provider);
       for (const plugin of catalog?.plugins ?? []) {
         plugins.push({
           provider: catalog!.agent as AgentPlatform,
@@ -97,5 +116,78 @@ export function inventoryPluginLister(input: {
       }
     }
     return { plugins, errors };
+  };
+}
+
+/** Managed and unmanaged Claude inventory share one CLI result per observation. */
+export function createClaudeInventoryPluginSource(input: {
+  adapter: ClaudePluginAdapter;
+  cli: ProviderCli;
+  includeUnmanaged: boolean;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = input.timeoutMs ?? INVENTORY_PLUGIN_LIST_TIMEOUT_MS;
+  const reportTimeout = timeoutReporter(timeoutMs);
+  const cache = new InventoryPluginCache(async () => {
+    const answer = await boundedWait(input.cli(["plugin", "list", "--json"]), timeoutMs).catch(
+      () => undefined,
+    );
+    const timedOut = answer !== undefined && (!answer.settled || answer.value.timedOut === true);
+    reportTimeout("claude", timedOut);
+    const stdout =
+      answer?.settled && !timedOut && answer.value.exitCode === 0 ? answer.value.stdout : undefined;
+    const managed = stdout === undefined ? null : parseClaudePluginList(stdout);
+    const unmanaged =
+      input.includeUnmanaged && stdout !== undefined ? parseClaudePlugins(stdout) : [];
+    return { managed, unmanaged, timedOut };
+  });
+
+  return {
+    invalidate: () => cache.invalidate(),
+    read(
+      options: InventoryReadOptions,
+    ): Pick<import("./inventory.js").InventorySources, "managedPlugins" | "plugins"> {
+      let listing: ReturnType<typeof cache.read> | undefined;
+      const read = (refresh: boolean) => (listing ??= cache.read({ refresh }));
+      return {
+        ...(options.launch && !options.managedPluginComponents?.length
+          ? {}
+          : {
+              managedPlugins: (): Promise<ManagedClaudePluginObservation[]> =>
+                input.adapter.observe(
+                  options.launch ? new Set(options.managedPluginComponents) : undefined,
+                  async (): Promise<ClaudeInstalledPlugin[]> => {
+                    // A managed read must see current enabled state and inventory paths.
+                    const { managed } = await read(true);
+                    if (!managed) {
+                      throw new CapabilityError(
+                        "source-unavailable",
+                        "Claude's plugin list could not be read.",
+                      );
+                    }
+                    return managed;
+                  },
+                ),
+            }),
+        ...(!options.launch && input.includeUnmanaged
+          ? {
+              plugins: async (): Promise<InventoryPluginListing> => {
+                const { unmanaged, timedOut } = await read(options.refresh === true);
+                return {
+                  plugins: unmanaged.map((plugin) => ({
+                    provider: "claude",
+                    qualifiedId: plugin.qualifiedId ?? plugin.name,
+                    name: plugin.name,
+                    enabled: plugin.status !== "disabled",
+                  })),
+                  ...(timedOut
+                    ? { errors: [{ message: inventoryPluginTimeoutMessage("claude", timeoutMs) }] }
+                    : {}),
+                };
+              },
+            }
+          : {}),
+      };
+    },
   };
 }

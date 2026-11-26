@@ -5,7 +5,7 @@
  * detection and launch verification), and added accounts whose directories
  * are linked to the host's or private.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -232,6 +232,52 @@ describe("project setups in a local worktree", () => {
       (await fixture.storage.capabilities.loadCapabilityState()).receipts,
     ).filter((receipt) => receipt.environmentId === "env-a");
     expect(after).toEqual(before);
+  });
+
+  test("the first required project skill introduced during launch still checks for personal shadowing", async () => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    fixture.environments = [
+      { id: "env-a", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    const toolkit = await fixture.service.setSetup({ setup: { name: "Project review" } });
+    const personal = path.join(fixture.home, ".claude", "skills", "review");
+    await fs.mkdir(personal, { recursive: true });
+    await fs.writeFile(path.join(personal, "SKILL.md"), "A different personal skill.");
+    const beforeDelivery = fixture.service.scoped.launchEvidence.bind(fixture.service.scoped);
+    const launchEvidence = spyOn(fixture.service.scoped, "launchEvidence");
+    launchEvidence.mockImplementationOnce(async (...args) => {
+      expect(
+        Object.keys((await fixture.storage.capabilities.loadCapabilityState()).packages),
+      ).toEqual([]);
+      await addToSetup(
+        fixture,
+        { kind: "skill", name: "review", content: "Project skill." },
+        toolkit.id,
+        true,
+      );
+      await fixture.service.assignSetup({
+        scope: "project",
+        scopeId: "proj-1",
+        setupIds: [toolkit.id],
+      });
+      return beforeDelivery(...args);
+    });
+    try {
+      await expect(
+        fixture.service.preflightSession({
+          environmentId: "env-a",
+          projectId: "proj-1",
+          provider: "claude",
+          sessionKey: "first-required",
+        }),
+      ).rejects.toThrow("shadows the required project revision");
+      expect(await exists(path.join(worktree, ".claude", "skills", "review", "SKILL.md"))).toBe(
+        true,
+      );
+    } finally {
+      launchEvidence.mockRestore();
+    }
   });
 
   test("an isolated graph launch stages required project and graph-only skills in its own branch", async () => {

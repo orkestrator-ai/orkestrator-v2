@@ -77,7 +77,7 @@ Backend code is in `apps/backend/src/core/capabilities/`:
 | `executor.ts` | This machine's writer: idempotent per key, epoch-checked, ownership-preserving. |
 | `native-ownership.ts` | Location ids → this machine's directories; ownership markers and the location index. |
 | `inventory.ts` | Managed and external items, plugins (fully qualified ids) and MCP servers. |
-| `inventory-cache.ts` | The provider plugin listings, shared by concurrent readers, kept 60 s and dropped on every change ("Inventory reads"). |
+| `inventory-cache.ts` | Provider plugin listings, shared by concurrent readers, with a 60 s cache for discovery and explicit invalidation on configuration writes. |
 | `inventory-plugins.ts` | One plugin listing per provider CLI, 5 s each; a timeout is an error naming the agent. |
 | `runtime-evidence.ts` | Receipt status. A catalogue name does not establish the identity of the loaded artifact. |
 | `update-checker.ts` | Remote head checks, re-inspection, update proposals. |
@@ -213,38 +213,36 @@ lists exactly the observed digests (`deliveries`, with `container:<location>`,
 
 ### Inventory reads
 
-A machine's inventory has a fast part (the managed and external files in each
-location, MCP configuration, Orkestrator's own Claude plugins, which providers
-are installed) and a slow part: the native plugin listings, one provider CLI
-each (`codex plugin list --json`, `claude plugin list --json`, ...). A listing
-can hang: Codex 0.167 and 0.169 hold a connection to a remote service and
-never exit on some hosts. So:
+A machine's inventory reads files, MCP configuration and which providers are
+installed. A full read also asks provider CLIs to list native plugins. Codex
+0.167 and 0.169 can hold a connection to a remote service and never exit on
+some hosts.
 
-- **The fast part is always read live.** Launch evidence and drift are never
-  older than the read that judged them.
-- **The plugin listings are shared and kept** (`inventory-cache.ts`).
-  Concurrent readers join one listing in flight, and a settled listing serves
-  readers for 60 seconds. Every change this machine applies drops it: each
-  executor write, every `mcp-management-changed` event (saved changes and
-  hand edits alike) and a Codex plugin switch. A listing begun before a change
-  is never served after it. `get_capability_inventory` with `refresh` lists
-  again.
-- **Each agent gets 5 seconds** (`inventory-plugins.ts`). An agent that does
-  not answer in time is an inventory error naming it ("Codex did not list its
-  plugins within 5 s."), the other agents' plugins are still listed, and the
-  backend logs `capabilities inventory.plugin-list-timed-out` with the
-  provider, once until that agent answers again. The error carries no
-  `provider`: unmanaged plugins are never evidence for a managed installation,
-  so a hung listing must not hold back the removals the reconciler confirms
-  for that provider. A CLI that is not installed is not an error.
-- **A launch never reads a plugin listing.** Launch preflight, Test
-  (`verify`) and provider support read the fast part only
-  (`InventoryReadOptions.launch`): a listed plugin is not launch evidence
-  (`isLaunchInventoryEvidence`). A command node whose library is empty
-  observes nothing at launch, since nothing can resolve to verify. A leaf
-  reads once before asking its command node and again after the answer only
-  when the answer requires a component (`localDeliveryCheck`); otherwise it
-  reuses the first read.
+- **Unmanaged discovery shares a 60-second cache.** Each executor write, a
+  saved or detected edit to backend-user MCP configuration, and a committed
+  Codex plugin switch invalidate the cache. Applying a saved MCP change or
+  reporting its progress uses the existing listing. An explicit
+  `get_capability_inventory` refresh bypasses the settled cache on the
+  machine being inspected, including a leaf.
+- **Each provider listing has a 5-second deadline.** On timeout, the inventory
+  names the agent and still returns results from the others. The backend logs
+  `capabilities inventory.plugin-list-timed-out` with the provider and deadline,
+  once until it answers again. Unmanaged errors carry
+  `source: "plugin-discovery"`, so the reconciler can confirm a managed
+  removal when its delivery evidence is complete. Managed read errors still
+  count against that evidence.
+- **Launch evidence and the Test action read files and MCP configuration
+  live.** They skip unmanaged listings on both local and remote hosts. A host
+  Claude launch asks for a live, bounded listing only when the resolved
+  selection uses a managed plugin. Managed Claude checks verify the package
+  directories live, and full inventory shares the same CLI result with
+  unmanaged Claude discovery.
+- **An empty library skips launch observation.** The command node checks the
+  same state snapshot it resolves, after scoped delivery has run. A leaf
+  reports its file evidence first. Where a selected managed Claude plugin
+  needs observation, the command node requests that evidence from the leaf.
+  The leaf rechecks the required copies after the answer and otherwise reuses
+  its first read.
 
 ## Resolution
 

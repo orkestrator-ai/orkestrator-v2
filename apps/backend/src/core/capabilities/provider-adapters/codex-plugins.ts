@@ -98,8 +98,9 @@ export async function setCodexPluginEnabled(input: {
   installed: readonly CodexInstalledPlugin[];
   isolationRoot?: string;
   withSourceLock?: ConfigLock;
+  afterWrite?: () => void;
 }): Promise<CodexPluginToggleResult> {
-  const { pluginId, enabled } = input;
+  const { pluginId } = input;
   if (!PLUGIN_ID.test(pluginId)) {
     throw new CapabilityError("invalid-request", "A Codex plugin is named name@marketplace.");
   }
@@ -111,14 +112,20 @@ export async function setCodexPluginEnabled(input: {
   }
   const file = path.join(input.codexHome, "config.toml");
   const lock = input.withSourceLock ?? sourceLock.withLock.bind(sourceLock);
-  return lock(file, () => editCodexPluginFlag(file, pluginId, enabled, input.isolationRoot));
+  return lock(file, () => editCodexPluginFlag(file, input));
 }
 
 async function editCodexPluginFlag(
   file: string,
-  pluginId: string,
-  enabled: boolean,
-  isolationRoot?: string,
+  {
+    pluginId,
+    enabled,
+    isolationRoot,
+    afterWrite,
+  }: Pick<
+    Parameters<typeof setCodexPluginEnabled>[0],
+    "pluginId" | "enabled" | "isolationRoot" | "afterWrite"
+  >,
 ): Promise<CodexPluginToggleResult> {
   const directory = path.dirname(file);
   assertCapabilityDirectory(directory, isolationRoot);
@@ -177,6 +184,7 @@ async function editCodexPluginFlag(
     );
   }
   await writeFileAtomically(file, next, stat.mode & 0o777, isolationRoot);
+  afterWrite?.();
 
   assertCapabilityDirectory(directory, isolationRoot);
   const after = pluginEntry(parseToml(await fs.readFile(file, "utf8")), pluginId);
@@ -196,6 +204,7 @@ export async function toggleCodexPlugin(
     cli: ProviderCli;
     isolationRoot?: string;
     withSourceLock?: ConfigLock;
+    afterWrite?: () => void;
   },
   pluginId: string,
   enabled: boolean,
@@ -215,6 +224,7 @@ export async function toggleCodexPlugin(
     enabled,
     installed: await list(),
     isolationRoot: deps.isolationRoot,
+    afterWrite: deps.afterWrite,
     ...(deps.withSourceLock ? { withSourceLock: deps.withSourceLock } : {}),
   });
   const confirmed = (await list()).find((entry) => entry.pluginId === pluginId);

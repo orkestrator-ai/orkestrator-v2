@@ -39,10 +39,14 @@ import type { MachineFact } from "./views.js";
 /** How a read of this machine's inventory treats the provider CLIs' plugin listings. */
 export interface InventoryReadOptions {
   /**
-   * Launch evidence only: leaves the plugin listings out. They are never
-   * launch evidence (`isLaunchInventoryEvidence`), and one CLI can hang.
+   * Launch evidence only: skips unmanaged listings and checks only the
+   * managed Claude components explicitly requested.
    */
   launch?: boolean;
+  /** Managed Claude component IDs needed for a launch-evidence read. */
+  managedPluginComponents?: readonly string[];
+  /** Pending leaf launch whose proof is being read by its command node. */
+  launchRequestId?: string;
   /** List the plugins again rather than use a recent listing. */
   refresh?: boolean;
 }
@@ -72,6 +76,9 @@ export interface CapabilityServiceDeps {
   }): void;
   homes(): CapabilityHomes;
   inventory: Omit<InventorySources, "homes">;
+  claudeInventory?: ReturnType<
+    typeof import("./inventory-plugins.js").createClaudeInventoryPluginSource
+  >;
   mcp?: McpInstaller;
   claudePlugins?: ExecutorClaudePlugins;
   gitRun?: GitFetchOptions["run"];

@@ -123,7 +123,6 @@ import { AGENT_ACCOUNT_PLATFORMS } from "@orkestrator/protocol/agent-accounts";
 import {
   agentAccountsChangedEvent,
   controlMcpStateChangedEvent,
-  mcpManagementChangedEvent,
   nativeAgentAsyncQuestionEvent,
   nativeAgentSessionActivityEvent,
 } from "@orkestrator/protocol/contract/domains/events";
@@ -1600,12 +1599,8 @@ export class OrkestratorBackend {
     context.mcpManagement = new McpManagementService({
       dataDir: options.dataDir,
       storage,
-      // An MCP change (saved here or edited by hand) drops the capability inventory's cached listings.
-      emit: (def, payload) => {
-        if (def.name === mcpManagementChangedEvent.name)
-          context.capabilities?.invalidateInventory();
-        emit(def, payload);
-      },
+      emit,
+      onHostConfigChange: () => context.capabilities?.invalidateInventory(),
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),

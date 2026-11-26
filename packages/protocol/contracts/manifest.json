@@ -3101,7 +3101,7 @@
       "access": "internal",
       "read": true,
       "critical": [],
-      "argsDigest": "sha256:25c9a2e5518bc2d0378cc7de2e50522066c9577dd78f4b7358b317167dcb9226",
+      "argsDigest": "sha256:577dd6d3d40ff6ba9f0575a31a7876b3cd392562e5c3413509f5ff9e0ed2b88b",
       "resultDigest": "sha256:c157da2da4414f64e6d262692b4bab67e1dd1365ec316807bb42a88a3e2ca4b2"
     },
     "get_capability_operation": {

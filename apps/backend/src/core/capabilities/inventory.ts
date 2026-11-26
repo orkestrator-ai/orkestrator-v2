@@ -20,7 +20,7 @@ import { CAPABILITY_LOCATIONS } from "@orkestrator/protocol/capability-resources
 import { listLocation, type CapabilityHomes } from "./native-ownership.js";
 import type { ManagedClaudePluginObservation } from "./provider-adapters/claude-plugins.js";
 
-const MAX_ITEMS = 3_000;
+export const MAX_CAPABILITY_INVENTORY_ITEMS = 3_000;
 
 export interface InventoryPlugin {
   provider: AgentPlatform;
@@ -38,9 +38,8 @@ export interface InventoryMcpServer {
 
 /**
  * The native plugins the provider CLIs list. An agent whose listing could not
- * be read is named in `errors`; those errors carry no `provider`, because
- * unmanaged plugins are never evidence for a managed installation, so they
- * must not hold back what the reconciler confirms for that provider.
+ * be read is named in `errors`. The collector scopes these warnings to
+ * plugin discovery so they cannot invalidate managed removal evidence.
  */
 export interface InventoryPluginListing {
   plugins: InventoryPlugin[];
@@ -137,7 +136,9 @@ export async function collectCapabilityInventory(
   if (sources.plugins) {
     try {
       const listing = await sources.plugins();
-      errors.push(...(listing.errors ?? []).map((error) => ({ message: error.message })));
+      for (const { message } of listing.errors ?? []) {
+        errors.push({ source: "plugin-discovery", message });
+      }
       for (const plugin of listing.plugins) {
         if (managedPluginIds.has(`${plugin.provider}:${plugin.qualifiedId}`)) continue;
         items.push({
@@ -154,7 +155,7 @@ export async function collectCapabilityInventory(
         });
       }
     } catch {
-      errors.push({ message: "Could not list native plugins." });
+      errors.push({ source: "plugin-discovery", message: "Could not list native plugins." });
     }
   }
   if (sources.mcpServers) {
@@ -184,13 +185,13 @@ export async function collectCapabilityInventory(
     providers = AGENT_PLATFORMS.map((provider) => ({ provider, available: false }));
     errors.push({ message: "Could not check which agents are installed." });
   }
-  const truncated = Math.max(0, items.length - MAX_ITEMS);
+  const truncated = Math.max(0, items.length - MAX_CAPABILITY_INVENTORY_ITEMS);
   return {
     nodeId,
     observedAt: now(),
     os: `${os.platform()}-${os.arch()}`,
     providers,
-    items: items.slice(0, MAX_ITEMS),
+    items: items.slice(0, MAX_CAPABILITY_INVENTORY_ITEMS),
     truncated,
     errors,
   };

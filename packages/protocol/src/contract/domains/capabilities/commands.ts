@@ -546,7 +546,7 @@ export const getCapabilityEnvironmentDeliveryCommand = capabilityCommand(
 export const getCapabilityNodeObservationCommand = capabilityCommand(
   "get_capability_node_observation",
   "internal",
-  ["controllerId", "epoch"],
+  ["controllerId", "epoch", "launch", "refresh", "managedPluginComponents", "launchRequestId"],
   CapabilityInventorySchema,
 );
 export const stageCapabilityNodeArtifactCommand = capabilityCommand(

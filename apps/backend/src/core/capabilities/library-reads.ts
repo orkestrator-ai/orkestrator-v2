@@ -158,7 +158,7 @@ export class CapabilityLibraryReads {
     const nodeId = typeof args.nodeId === "string" && args.nodeId ? args.nodeId : selfId;
     if (nodeId === selfId)
       return this.ctx.observeSelf(args.refresh === true ? { refresh: true } : {});
-    if (args.refresh === true) return this.ctx.observeNode(nodeId);
+    if (args.refresh === true) return this.ctx.observeNode(nodeId, { refresh: true });
     const state = await this.loadState();
     const inventory = state.machines[nodeId]?.inventory;
     if (!inventory)

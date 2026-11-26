@@ -453,11 +453,16 @@ export class ClaudePluginAdapter {
   }
 
   /** Managed plugins as the inventory reports them. */
-  async observe(): Promise<ManagedClaudePluginObservation[]> {
+  async observe(
+    componentIds?: ReadonlySet<string>,
+    listPlugins = () => this.listPlugins(),
+  ): Promise<ManagedClaudePluginObservation[]> {
     const index = await this.readIndex();
-    const names = Object.keys(index.plugins);
+    const names = Object.keys(index.plugins).filter(
+      (name) => componentIds === undefined || componentIds.has(index.plugins[name]!.componentId),
+    );
     if (names.length === 0) return [];
-    const listed = await this.listPlugins();
+    const listed = await listPlugins();
     const result: ManagedClaudePluginObservation[] = [];
     for (const name of names.sort()) {
       const managed = index.plugins[name]!;

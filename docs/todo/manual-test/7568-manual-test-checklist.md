@@ -125,8 +125,7 @@ day, and 7080 and 0020 were retired.
 Updated 2026-11-26: with the user's one-off go-ahead, an agent ran the
 probe-network sweep on omarchy-hp (0241 (retired) task 1). It removed the 29
 pre-fix probe networks and nothing else, and a container fixture then got a
-default-pool network. The item stays ticked under Containers and environments
-with its result, and is no longer counted as open. The evidence is in
+default-pool network. The item left the decisions section. The evidence is in
 [container qualification](../../development/container-qualification.md#probe-network-sweep-on-omarchy-hps-pre-fix-backlog-2026-11-26).
 It unblocks the reference-host runs of 0729 task 5 and 0870 task 3.
 
@@ -134,14 +133,13 @@ Updated 2026-11-26: with the user's one-off go-ahead, an agent then ran the
 same sweep on beelink (3320 (retired) task 2). The 29 networks the item
 described were already gone; it removed the 20 probe networks that had built
 up since (2026-11-06 to 2026-11-20) and nothing else, and a container fixture
-then got a default-pool network. The item stays ticked under Containers and
-environments with its result, and is no longer counted as open. The evidence
-is in
+then got a default-pool network. The item left the decisions section. The
+evidence is in
 [container qualification](../../development/container-qualification.md#probe-network-sweep-on-beelinks-backlog-2026-11-26).
 
 ### Tasks
 
-1. **Manual tests and live checks** (368 items): run each check under
+1. **Manual tests and live checks** (371 items): run each check under
 
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
@@ -320,16 +318,16 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 71 | 3 |
+| Agent engines and provider SDKs | 74 | 3 |
 | CLI and slash commands | 6 | 0 |
-| Containers and environments | 34 | 3 |
+| Containers and environments | 34 | 2 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 102 | 9 |
+| Cross-cutting | 106 | 9 |
 | Design canvas | 5 | 0 |
 | MCP | 10 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 364 | 22 |
+| **Total** | 371 | 21 |
 
 
 
@@ -990,20 +988,6 @@ None open (both answered on 2026-11-14).
 #### Containers and environments
 
 - [ ] **0796 (retired) task 3: live GitHub evidence for the "ready to merge" `mergeStateStatus` mapping (see [github-pull-requests.md](../../architecture/github-pull-requests.md#ready-to-merge)).** Decide whether to approve a GitHub write: a throwaway private repository whose ruleset requires one review and one status check, plus a second account that can review. If you approve, open four PRs in it: clean and mergeable; required review outstanding; a failing non-required check; a draft. Read each with the monitor's exact lookup, `gh pr view <url> --json url,state,mergeable,mergeStateStatus,isDraft,baseRefName`, on the host and inside a container of the current workspace image with `gh` authenticated. Then delete the repository. Record: the approval (or refusal), the four `mergeStateStatus`/`isDraft` values (expected `CLEAN`, `BLOCKED`, `UNSTABLE`, draft), the image's `gh` version, and whether its lookup exited 0, in github-pull-requests.md's "Ready to merge" section (or reply to the coordinator). Any mismatch with the mapping is a new to-do.
-- [x] **3320 (retired) task 2: clear the leaked probe networks on beelink (see [disk-usage.md](../../development/disk-usage.md#what-you-clean-yourself)).** This removes Docker networks other runs created on a shared daemon, so it is your call. On beelink, record `docker network ls --filter label=orkestrator-resource-role=host-reachability-probe --format '{{.ID}} {{.Name}} {{.CreatedAt}}'` and `docker network ls | wc -l`. Run `mise run disk:report` (its `probe networks` row), then `mise run disk:report -- --fix probe-networks`, and repeat the listing. Then start a throwaway `dev:test` profile with `--fixture-environments local,container`, confirm the container fixture creates its environment network, and `dev:stop` and `dev:reset` it. Record: the before and after counts, any network the sweep kept and why (newer than a day, or a container attached), and the fixture result, in [container-qualification.md](../../development/container-qualification.md#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06) (or reply to the coordinator).
-
-  Done 2026-11-26 by an agent, with your one-off go-ahead: the 29 networks of 2026-10-31 to 2026-11-02 were already gone (what removed them was not observed). Instead there were 20 probe networks (created 2026-11-06 to 2026-11-20, all unattached; 19 `unlabelled`, 1 `agent-test/temporary`), and `docker network ls | wc -l` was 24. The dry run counted 20 of 20 unattached and over a day old. The sweep removed all 20 and kept none: none was attached, newer than a day, or undescribable. Afterwards there were 0 probe networks and 4 lines; a full-id diff showed nothing else changed. A `dev:test` container fixture (reachability check off) then created its environment network on `172.18.0.0/16`, a default-pool range, and its `dev:stop` and `dev:reset` left nothing behind. Recorded in [container-qualification.md](../../development/container-qualification.md#probe-network-sweep-on-beelinks-backlog-2026-11-26).
-
-- [x] **0241 (retired) task 1: run the probe-network sweep on omarchy-hp's pre-fix backlog (see [disk-usage.md](../../development/disk-usage.md#what-you-clean-yourself)).** This is the sweep's first unguarded run on a real backlog, and it removes other owners' networks, so it is your call (run it yourself, or tell an agent to go ahead). The backlog is 29 unattached `ork-<owner>-reach-probe-net` networks created on 2026-10-28, which fill all 31 default address pools. On omarchy-hp:
-  1. Record `docker network ls --filter label=orkestrator-resource-role=host-reachability-probe --format '{{.ID}} {{.Name}} {{.CreatedAt}}'` and `docker network ls | wc -l`.
-  2. Run `mise run disk:report` and check that its `probe networks` row counts the backlog and how many are unattached and over a day old.
-  3. Run `mise run disk:report -- --fix probe-networks`, then repeat step 1. Every pre-fix network should be gone, and any newer than a day, or with a container attached, should remain.
-  4. Start a throwaway `dev:test` profile with `--fixture-environments local,container` (never the production instance), confirm the container fixture creates its environment network, then `dev:stop` and `dev:reset` it.
-
-  Record: the counts from each step and the fixture result in [container-qualification.md](../../development/container-qualification.md) (or reply to the coordinator). This unblocks [0729](../containers-and-environments/0729-container-benchmark-target-misses.md) task 5 and [0870](../containers-and-environments/0870-container-start-poll-quantisation.md) task 3.
-
-  Done 2026-11-26 by an agent, with your one-off go-ahead: 29 probe networks before (all 2026-10-28, unattached, `unlabelled`), `docker network ls | wc -l` 33. The dry run counted 29 of 29 unattached and over a day old. The sweep removed all 29 and kept none: none was attached, newer than a day, or undescribable. Afterwards there were 0 probe networks and 4 lines; nothing else changed. A `dev:test` container fixture then created its environment network on a default-pool range, and its `dev:stop` and `dev:reset` left nothing behind. Recorded in [container-qualification.md](../../development/container-qualification.md#probe-network-sweep-on-omarchy-hps-pre-fix-backlog-2026-11-26).
-
 - [ ] **[7420](../containers-and-environments/7420-telemetry-hosts-grok-and-cursor-turns.md) task 3: release-note line for the removed telemetry hosts.** When cutting the next release, add: "New installs no longer allow `sentry.io`, `statsig.anthropic.com` and `statsig.com` in restricted containers; Claude Code, Codex, OpenCode, Pi, Grok and Cursor completed fake-provider turns without them. Existing allowlists keep them; remove them in Settings to close the channel." Record: the release version that carried the line, in 7420.
 
 #### Coordinator and Multi Review

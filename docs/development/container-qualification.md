@@ -318,10 +318,9 @@ unreachable outer daemon.
 
 ## Probe-network sweep on omarchy-hp's pre-fix backlog (2026-11-26)
 
-The manual-test checklist item for 0241 (retired) task 1: the first run of
-`mise run disk:report -- --fix probe-networks` against a real backlog. The
-user approved this one sweep on omarchy-hp. Nothing else was removed and no
-other prune ran.
+This completes 0241 (retired) task 1. The user approved the first run of
+`mise run disk:report -- --fix probe-networks` against a real backlog on
+omarchy-hp. Nothing else was removed and no other prune ran.
 
 - **Host:** omarchy-hp (Omarchy Linux, kernel 7.2.8, x86_64), rootful Docker
   Engine 29.9.1, `default` context; branch at `main` `76cd71b58`.
@@ -364,14 +363,13 @@ This unblocks the reference-host runs of
 [0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
 task 5 and
 [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md)
-task 3. beelink's separate backlog (3320 (retired) task 2 in the checklist)
-was swept the same day; see the next section.
+task 3. The Beelink sweep ran the same day and is recorded below.
 
 ## Probe-network sweep on beelink's backlog (2026-11-26)
 
-The manual-test checklist item for 3320 (retired) task 2: the same sweep on
-beelink, run after omarchy-hp's above. The user approved this one sweep on
-beelink. Nothing else was removed and no other prune ran.
+This completes 3320 (retired) task 2. The user approved one sweep on
+beelink, which ran after the omarchy-hp sweep. Nothing else was removed and
+no other prune ran.
 
 - **Host:** beelink (Omarchy Linux, kernel 7.1.8, x86_64), rootful Docker
   Engine 29.9.2, `default` context; branch at `main` `76cd71b58` plus

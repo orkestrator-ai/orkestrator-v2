@@ -212,18 +212,18 @@ describe("LinearTicketsView right-click menu", () => {
     const dialog = await openDelete("Alpha ticket");
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete ticket" }));
     await waitFor(() => {
-      expect(screen.queryByText("Alpha ticket")).toBeNull();
-      expect(screen.queryByText(child.title)).toBeNull();
+      expect(screen.queryByText("Alpha ticket") === null).toBe(true);
+      expect(screen.queryByText(child.title) === null).toBe(true);
       expect(readLinearBoardSnapshot(appCommandScope(), "project-1")?.issues).toEqual([issues[1]!]);
     });
     await act(async () => stale.resolve(original));
     expect(screen.getByText("Bravo ticket")).toBeTruthy();
-    expect(screen.queryByText("Alpha ticket")).toBeNull();
-    expect(screen.queryByText(child.title)).toBeNull();
+    expect(screen.queryByText("Alpha ticket") === null).toBe(true);
+    expect(screen.queryByText(child.title) === null).toBe(true);
     expect(readLinearBoardSnapshot(appCommandScope(), "project-1")?.issues).toEqual([issues[1]!]);
     expect(
-      screen.getByRole("button", { name: "Refresh" }).querySelector(".animate-spin"),
-    ).toBeNull();
+      screen.getByRole("button", { name: "Refresh" }).querySelector(".animate-spin") === null,
+    ).toBe(true);
   });
 
   test("deletes the open detail and keeps confirmation modal while the request settles", async () => {
@@ -246,9 +246,9 @@ describe("LinearTicketsView right-click menu", () => {
     getLinearIssuesMock.mockResolvedValue([issues[1]!]);
     await act(async () => pending.resolve(undefined));
     await screen.findByText("Bravo ticket");
-    expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Back to Linear tickets" })).toBeNull();
-    expect(screen.queryByText("Alpha ticket")).toBeNull();
+    expect(screen.queryByRole("alertdialog") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Back to Linear tickets" }) === null).toBe(true);
+    expect(screen.queryByText("Alpha ticket") === null).toBe(true);
   });
 
   test("a delete Linear refuses keeps the ticket and says why", async () => {
@@ -317,7 +317,7 @@ describe("LinearTicketsView right-click menu", () => {
         else pending.reject(new Error("stale load"));
       });
       fireEvent.click(back);
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(screen.queryByRole("dialog") === null).toBe(true);
       expect(toastErrorMock).not.toHaveBeenCalled();
       const fresh = await openMenu("Alpha ticket");
       fireEvent.click(within(fresh).getByRole("menuitem", { name: "Build…" }));
@@ -342,7 +342,7 @@ describe("LinearTicketsView right-click menu", () => {
       description: "Detail unavailable",
     });
     expect(build.hasAttribute("data-disabled")).toBe(false);
-    expect(screen.queryByText("Loading ticket for build…")).toBeNull();
+    expect(screen.queryByText("Loading ticket for build…") === null).toBe(true);
   });
 
   test("reports another build is starting only while the launch is pending", async () => {

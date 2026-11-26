@@ -447,7 +447,7 @@ describe("KanbanBoard card right-click menu", () => {
     const first = await screen.findByRole("alertdialog", { name: "Environment already exists" });
     expect(launch).not.toHaveBeenCalled();
     fireEvent.click(within(first).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
     expect(launch).not.toHaveBeenCalled();
 
     const retry = await openBuild(task.title);
@@ -469,7 +469,7 @@ describe("KanbanBoard card right-click menu", () => {
     renderInAppCommandScope(<KanbanBoard projectId="project-1" />);
     await openBuild("Build me");
     act(() => store.setState({ tasks: [] }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
     expect(mockToastError).toHaveBeenCalledWith("This ticket was removed from the board");
     expect(launch).not.toHaveBeenCalled();
   });

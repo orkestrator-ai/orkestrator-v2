@@ -9,7 +9,7 @@ import {
   type WorktreeSignalReason,
 } from "./agent-tools.js";
 import { OrkestratorBackend } from "./index.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { StorageService } from "./storage/service.js";
 
 describe("Claude state signal route", () => {

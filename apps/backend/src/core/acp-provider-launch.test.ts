@@ -8,7 +8,7 @@ import {
   acpProviderLaunchRecord,
   isAcpLocalServerKind,
 } from "./acp-provider-launch.js";
-import { localServerFields } from "./commands-local-server-lifecycle.js";
+import { localServerFields } from "./commands/local-server-lifecycle.js";
 import { LOCAL_SERVER_KINDS } from "./local-server-runtime.js";
 import { commandMatchesRecordedServer } from "./local-server-reaper.js";
 

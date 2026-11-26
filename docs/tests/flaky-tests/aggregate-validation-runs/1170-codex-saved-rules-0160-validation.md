@@ -35,7 +35,7 @@ changes no dependency), then switched back.
 | `apps/backend/src/core/environments/move.test.ts` | 29 `move_environment`, `interrupted move recovery` and `move failure boundaries` cases | 14 failed, 614.4 s | Failed, 191.2 s | 1101, 0692, 0790 (open) |
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | Two hook timeouts (`(unnamed)`) | 0 passed, 2 failed | Failed | 0957, 0180 (open) |
 | `apps/backend/tests/worktree-watcher.test.ts` | `startWorktreeWatcher > observes a real file write` | Failed (no change seen) | Failed | 0091 (open) |
-| `apps/backend/src/core/commands-environment-worktree-location.test.ts` | Two location cases | 1 failed (`retargeting an accepted alias…`) | Failed | 1101 |
+| `apps/backend/src/core/commands/environment-worktree-location.test.ts` | Two location cases | 1 failed (`retargeting an accepted alias…`) | Failed | 1101 |
 | `apps/backend/tests/docker-image.test.ts` | `pinned image identity > a restricted runtime on a gateway image joins its egress gateway…`, `… a rootless daemon names the host address…` | 2 failed, deterministic | Failed | Recorded here |
 | `apps/backend/tests/staged-input-relay.test.ts` | Four `staged input relay` cases (owner-only copy mode, relay removal) | 4 failed, deterministic | Failed | Recorded here; the mode checks cannot hold on an owners-disabled volume |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | Two `pruneProfiles` cases | 2 failed | Failed | [1100](../electron-and-desktop/1100-profile-cleanup-macos-keychain-warning.md) |

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { REVIEW_PACKAGE_SESSION_LABEL } from "@orkestrator/protocol/build-pipeline";
-import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { newReviewValidationRun } from "@orkestrator/protocol/review-workflow";
 import { mutateStored, pipeline, startBuilding, withService } from "./service-test-support.js";
 

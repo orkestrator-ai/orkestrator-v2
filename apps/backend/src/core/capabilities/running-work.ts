@@ -20,7 +20,7 @@
  */
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 
 export interface RunningWorkEnvironment {
   id: string;

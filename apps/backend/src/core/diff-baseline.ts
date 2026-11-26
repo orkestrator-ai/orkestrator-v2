@@ -1,6 +1,6 @@
 import type { EnvironmentDiffBaseline } from "@orkestrator/protocol/diff-stats";
-import { validateGitRefName } from "./commands-agent-support.js";
-import { isImmutableCommitRef } from "./commands-files.js";
+import { validateGitRefName } from "./commands/agent-support.js";
+import { isImmutableCommitRef } from "./commands/files.js";
 import { runCommand } from "./shell.js";
 import type { Environment } from "./models.js";
 

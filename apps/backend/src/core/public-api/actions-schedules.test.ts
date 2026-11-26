@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import type { RegistryWriterState } from "../registry-writer-lease.js";
 import { SCHEDULE_HANDLERS } from "./actions-schedules.js";
 import type { PublicActionContext, ReadActionHandler } from "./types.js";

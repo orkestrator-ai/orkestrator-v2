@@ -17,17 +17,20 @@ import {
   coordinatorIdFromRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 
-import type { CommandContext } from "../commands-context.js";
-import { ASYNC_HANDLER } from "../commands-registry-async-decode.js";
+import {
+  ASYNC_HANDLER,
+  type CommandContext,
+  type CommandRegistrar,
+  type RegistryDependencies,
+} from "../commands/index.js";
 import {
   CONTAINER_PINNED_ATTACHMENT_WRITE,
   writeConfinedLocalArtifact,
-} from "../commands-files.js";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+} from "../commands/files.js";
 import {
   createEnvironmentCommandRunner,
   ensureWorkspaceArtifactIsGitExcluded,
-} from "../commands-review.js";
+} from "../commands/review.js";
 import {
   mailAttachmentBatchId,
   mailAttachmentFiles,

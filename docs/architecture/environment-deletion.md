@@ -18,12 +18,12 @@ Paths below are relative to `apps/backend/src/core/`.
 
 | File | Purpose |
 | --- | --- |
-| `commands-servers.ts` | `deleteEnvironment` and `deleteEnvironmentTask` (the queued entry point, also used by merge cleanup) |
+| `commands/servers.ts` | `deleteEnvironment` and `deleteEnvironmentTask` (the queued entry point, also used by merge cleanup) |
 | `environments/cleanup-ledger.ts` | `EnvironmentCleanupLedger`, `ENVIRONMENT_CLEANUP_STEPS`, sweep state |
 | `environments/cleanup.ts` | `buildEnvironmentCleanupEntry`, step runners, `cleanupEnvironmentBranch`, error redaction |
 | `environments/cleanup-reconciler.ts` | Reconciler, retry scheduling and every orphan sweep |
 | `environments/state-paths.ts` | The per-environment data-directory roots and their key scheme |
-| `commands-terminal.ts`, `pty.ts` | `terminateTerminalSessionsForEnvironment` and the PTY handle's `terminate()` |
+| `commands/terminal.ts`, `pty.ts` | `terminateTerminalSessionsForEnvironment` and the PTY handle's `terminate()` |
 | `watch-host.ts` | Directory watches on macOS, held in a helper process so they cannot block the event loop |
 
 Container removal, recovery copies, storage volumes and the environment
@@ -432,7 +432,7 @@ What the ticket's leads came to:
   not say why those reads failed, and that was not established here.
 - **Later deletes waiting before their bridges stopped.** The lifecycle and
   local-server queues are per environment, and a stuck delete holds up only its
-  own (`commands-environment-cleanup.test.ts`). The wait was the stalled loop:
+  own (`commands/environment-cleanup.test.ts`). The wait was the stalled loop:
   before the fix three of six concurrent deletes took 72.1 s against 32.0 s;
   after it all six took 15.9 s.
 

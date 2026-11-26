@@ -35,7 +35,7 @@ at the start of this batch and 3.6 near its end.
 | `apps/backend/src/core/shell-process-state.test.ts` (1) | Expected `false`, got `true`, at 403.40 ms | Pass, 1.0 s |
 | `apps/desktop/scripts/dev/fixture.test.ts` (6) | Timed out at 5 s | Pass, 4.3 s |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` (2) | Timed out at 5 s | Pass, 0.9 s |
-| `apps/backend/src/core/commands-files-local-scan.test.ts` (1) | Timed out at 5 s | Pass, 2.4 s |
+| `apps/backend/src/core/commands/files-local-scan.test.ts` (1) | Timed out at 5 s | Pass, 2.4 s |
 | `apps/backend/src/core/coordinator/mail-attachments.test.ts` (1) | Timed out at 5 s | Pass, 2.6 s |
 | `apps/backend/src/core/change-tracking/measurement-file-cap.test.ts` (1) | Timed out at 5 s | Pass, 2.2 s |
 | `apps/web/src/components/chat/NativeResumeSessionDialog.test.tsx` (1) | Timed out at 5 s | Pass, 3.4 s |

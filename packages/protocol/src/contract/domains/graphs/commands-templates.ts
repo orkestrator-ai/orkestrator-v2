@@ -1,7 +1,7 @@
 /**
  * `graphs` commands of the template library (item 109) and template sharing
- * (item 405). Registered by the backend's `commands-registry-graphs.ts` and
- * `commands-registry-graph-sharing.ts`.
+ * (item 405). Registered by the backend's `apps/backend/src/core/commands/registry-graphs.ts` and
+ * `apps/backend/src/core/commands/registry-graph-sharing.ts`.
  *
  * Argument rules: every key a handler reads is declared, since a defined
  * command drops undeclared keys before the handler runs. The handlers keep

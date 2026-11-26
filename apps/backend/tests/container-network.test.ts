@@ -28,7 +28,7 @@ import {
 } from "../src/core/registry-writer-lease";
 import { environmentSnapshot } from "../src/core/public-api/actions-settings";
 import { defaultConfig } from "../src/core/storage/shared";
-import { containerNetworkView } from "../src/core/commands-registry-mcp";
+import { containerNetworkView } from "../src/core/commands/registry-mcp";
 import { urlReachabilityWarning } from "../src/core/mcp-management/network-hints";
 import {
   lifecycleEnvironment,
@@ -887,7 +887,7 @@ describe("recorded host-service ports", () => {
     ["", 42345, false],
     ["3\n41234\n", null, false],
   ])("record %s with service port %s updates: %s", async (record, port, updates) => {
-    const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+    const { ensureContainerHostServicePorts } = await import("../src/core/commands/environment");
     await withDockerScript(
       `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
@@ -907,7 +907,7 @@ case "$*" in *'cat /etc/orkestrator/network-policy'*) printf '%s' '${record}' ;;
   });
 
   test("a failed host-port update rejects before callers can use a stale tools URL", async () => {
-    const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+    const { ensureContainerHostServicePorts } = await import("../src/core/commands/environment");
     await withDockerScript(
       `#!/bin/sh
 case "$*" in *--host-ports*) exit 1 ;; *) printf '3\\n41234\\n' ;; esac

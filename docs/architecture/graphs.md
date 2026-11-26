@@ -39,15 +39,15 @@ logic is in `apps/backend/src/core/graph-*.ts`; the UI in
 | Capabilities (106, 209, 404) | `capability-profiles.ts`, `capability-enforcement.ts`, `agent-enforcement.ts` | `graph-agent-policy.ts`, `graph-agent-guards.ts` | |
 | Compiler (107) | `compile.ts`, `compile-*.ts`, `plan.ts`, `cost.ts`, `lint.ts` | | |
 | Built-ins (108) | `builtins/`, `builtin-registry.ts`, `examples.ts` | `graph-builtin-templates.test.ts` | |
-| Library, trust, sharing (109, 405) | `library.ts`, `sharing.ts` | `graph-template-service.ts`, `storage/graph-templates.ts`, `graph-project-templates.ts`, `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands-registry-graphs.ts`, `commands-registry-graph-sharing.ts` | `lib/backend/graph-templates.ts`, `lib/backend/graph-template-sharing.ts` |
+| Library, trust, sharing (109, 405) | `library.ts`, `sharing.ts` | `graph-template-service.ts`, `storage/graph-templates.ts`, `graph-project-templates.ts`, `graph-template-sharing.ts`, `graph-template-signing.ts`, `commands/registry-graphs.ts`, `commands/registry-graph-sharing.ts` | `lib/backend/graph-templates.ts`, `lib/backend/graph-template-sharing.ts` |
 | Run record (201) | `run.ts`, `run-model.ts`, `run-identity.ts`, `run-guards.ts`, `run-lineage.ts`, `run-items.ts` | `storage/graph-runs.ts`, `graph-artifacts.ts`, `storage/graph-effects.ts` | |
 | Runtime (202–207) | `run-branches.ts`, `run-fanout.ts`, `system-actions.ts`, `run-agent-session.ts` | `graph-run-service.ts`, `graph-run-supervisor.ts`, `graph-run-pass.ts`, `graph-run-scheduling.ts`, `graph-run-ready-set.ts`, `graph-run-loops.ts`, `graph-run-executors.ts`, `graph-node-*.ts`, `graph-agent-*.ts`, `graph-system-*.ts`, `graph-edge-transforms.ts`, `agent-branch-runner.ts` | |
 | Human nodes (208) | `run-human.ts` | `graph-node-human.ts`, `graph-run-attention.ts`, `graph-run-coordinator-status.ts` | `components/graph-run/GraphHumanNodePanel.tsx` |
 | Restart and rewind (210) | `run-rewind.ts` | `graph-run-rewind.ts` | `lib/backend/graph-run-rewind.ts` |
-| Run view (211) | `run-view.ts` | `commands-registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts` | `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` |
+| Run view (211) | `run-view.ts` | `commands/registry-graph-runs.ts`, `graph-run-user-actions.ts`, `graph-run-transcripts.ts` | `components/graph-run/`, `stores/graphRunStore.ts`, `lib/backend/graph-runs.ts` |
 | Designer (110, 212) | | | `components/graph-designer/`, `stores/graphDesignerStore.ts` |
-| Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands-registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
-| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands-registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator/graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
+| Mock runs (213) | `mock.ts`, `mock-pins.ts`, `mock-values.ts`, `schema-sample.ts` | `graph-mock-*.ts`, `commands/registry-graph-mock.ts` | `lib/backend/graph-mock.ts`, `lib/graph-run-navigation.ts`, `GraphMockPinsEditor.tsx` |
+| Launch (214) | `launch.ts` | `graph-run-launch.ts`, `commands/registry-graph-launch.ts`, `control-mcp/graph-tools.ts`, `coordinator/graph-actions.ts`, `public-api/actions-graphs.ts` | `components/graph-launch/`, `lib/backend/graph-launch.ts` |
 | Describe a graph (215) | `describe.ts`, `describe-prompt.ts` | `graph-describe-service.ts`, `graph-describe-host.ts`, `workflows/result-graph-template.ts`, `storage/graph-describe.ts` | `GraphDescribeControl.tsx`, `GraphDescribeDialog.tsx`, `stores/graphDescribeStore.ts` |
 | Items fan-out (401) | `run-fanout.ts` | `graph-run-fanout.ts` | |
 | Sub-graphs (402) | `compile-subgraphs.ts`, `subgraphs.ts` | `GraphTemplateService.subgraphResolution` | `graph-designer-subgraphs.ts`, `GraphSubgraphEditor.tsx` |
@@ -601,7 +601,7 @@ again) as soon as its digest differs from the approved one
 compiled and duplicated at the digest shown, but not launched, used as a
 sub-graph or signed.
 
-**Commands** (`commands-registry-graphs.ts`): `graph_templates_list`,
+**Commands** (`commands/registry-graphs.ts`): `graph_templates_list`,
 `graph_template_get`, `graph_template_save`, `graph_template_delete`,
 `graph_template_duplicate`, `graph_template_compile {ref | template,
 forLaunch?, includePlan?}` (with `forLaunch`: `blockedBy` and
@@ -1795,7 +1795,7 @@ Every bound below is enforced by a guard or the runtime, not only documented
 | `GRAPH_SHARING_BOUNDS` bundle, author, trusted keys, approved text per template/project, diff lines | 2 MiB, 120, 64, 256 KiB/4 MiB, 400 | P`sharing.ts` |
 | `GRAPH_LAUNCH_BOUNDS` saved defaults, request id, input bytes, environment-less runs, retention, finished runs per environment | 64, 128, 256 KiB, 20, 7 days, 100 | P`launch.ts` |
 | `GRAPH_MOCK_PIN_BOUNDS` nodes, pins per node, pin bytes, all pins, `maxStepMs` | 100, 20, 64 KiB, 256 KiB, 10 s | P`mock-pins.ts` |
-| `GRAPH_MOCK_RUNS_RETAINED`, `GRAPH_MOCK_DEFAULT_PANEL`, `GRAPH_RUN_EFFECTS_LIMIT` | 20, 2, 500 | B`graph-mock-launch.ts`, `commands-registry-graph-mock.ts` |
+| `GRAPH_MOCK_RUNS_RETAINED`, `GRAPH_MOCK_DEFAULT_PANEL`, `GRAPH_RUN_EFFECTS_LIMIT` | 20, 2, 500 | B`graph-mock-launch.ts`, `commands/registry-graph-mock.ts` |
 | `GRAPH_DESCRIBE_BOUNDS` description, base draft, examples, issues | 8,000 chars, 64 KiB, 16 KiB, 32 | P`describe.ts` |
 | `GRAPH_DESCRIBE_POLL_MS`, `MAX_PASS_FAILURES` | 3 s, 20 | B`graph-describe-service.ts` |
 | `GRAPH_RUN_VIEW_BOUNDS` listed runs, inline artifact, transcript window default/max | 200, 512 KiB, 2/4 MiB | P`run-view.ts` |

@@ -1,7 +1,7 @@
 # Docker base image
 
 These rules apply to `docker/` and to container lifecycle code such as
-`apps/backend/src/core/commands-containers.ts`. The root
+`apps/backend/src/core/commands/containers.ts`. The root
 [`AGENTS.md`](../AGENTS.md) still applies.
 
 | File                    | Purpose                                                  |
@@ -241,7 +241,7 @@ Three constraints apply:
   user namespaces, so enabling Chromium's own sandbox fails with "Chromium
   sandboxing failed!". The container is the isolation boundary.
 - Containers are created with `--shm-size=1g`
-  (`apps/backend/src/core/commands-containers.ts`), because Chromium keeps
+  (`apps/backend/src/core/commands/containers.ts`), because Chromium keeps
   renderer shared memory in `/dev/shm` and Docker's 64MB default is far below
   what a real page needs. That failure surfaces as a renderer crash part-way
   through a run ("Target page, context or browser has been closed"), not as a

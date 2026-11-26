@@ -1,11 +1,11 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import * as shell from "../shell.js";
-import { detectEnvironmentPullRequest, PR_DETECTION_TIMEOUT_MS } from "../commands-pr-monitor.js";
+import { detectEnvironmentPullRequest, PR_DETECTION_TIMEOUT_MS } from "../commands/pr-monitor.js";
 import { withContainerRuntimeCredential } from "../containers/scripts.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import { runStoredEnvironmentMerge } from "../commands-review.js";
+import { runStoredEnvironmentMerge } from "../commands/review.js";
 import { createEnvironment } from "../storage/service.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   PrViewerPermissionCache,
   PR_VIEWER_PERMISSION_TIMEOUT_MS,

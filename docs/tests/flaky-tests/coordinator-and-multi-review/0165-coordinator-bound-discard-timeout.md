@@ -798,7 +798,7 @@ assertion, timeout or skip was changed for validation.
   `mise run flaky:recurrence -- 0165 --base 0007f0e669b0f9ac0c1abc215ff466c17c3bfc07 --registry-ref origin/main`
   confirmed the recurrence.
 - The four-file targeted backend run used
-  `mise run test:logged -- --name address-backend -- bun --cwd=apps/backend test ./src/core/commands-local-worktree.test.ts ./src/core/coordinator-service.test.ts ./src/core/commands-registry-coordinator-contract.test.ts ./tests/commands-registry-environments-create.test.ts --parallel=2 --only-failures`.
+  `mise run test:logged -- --name address-backend -- bun --cwd=apps/backend test ./src/core/commands/local-worktree.test.ts ./src/core/coordinator-service.test.ts ./src/core/commands/registry-coordinator-contract.test.ts ./tests/commands-registry-environments-create.test.ts --parallel=2 --only-failures`.
   It reported 152 passes and one failure in 200.22 seconds. In
   `apps/backend/src/core/coordinator/service.test.ts`,
   `project coordinator > bound discard confirmations refuse stale and reused tokens`

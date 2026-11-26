@@ -1,6 +1,6 @@
 /**
  * The `coordinator` domain's project part (plan item 7009): every command
- * registered from `commands-registry-coordinator.ts` and the registrars it
+ * registered from `apps/backend/src/core/commands/registry-coordinator.ts` and the registrars it
  * calls is defined once, classifies reads as the routing classifier does,
  * names its access and critical keys as the item's Notes record, keeps model
  * records open, and the domain client sends typed, enveloped calls to a node

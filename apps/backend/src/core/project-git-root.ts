@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { conciseError } from "./commands-error-text.js";
+import { conciseError } from "./commands/index.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import type { StorageService } from "./storage/index.js";
 

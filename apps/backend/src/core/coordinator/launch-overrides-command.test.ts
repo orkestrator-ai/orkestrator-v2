@@ -7,8 +7,8 @@ import {
   COORDINATOR_LAUNCH_OVERRIDES_COMMAND,
   type CoordinatorLaunchOverridesSnapshot,
 } from "@orkestrator/protocol/coordinator-launch-overrides";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { launchDelegationRequest } from "./delegation-request.js";
 import { ControlMcpServer } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";

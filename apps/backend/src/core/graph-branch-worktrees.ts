@@ -53,12 +53,12 @@ import {
   type GraphRun,
   type NodeActivation,
 } from "@orkestrator/protocol/graphs/run";
-import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands-files.js";
+import { CONTAINER_PINNED_ATTACHMENT_REMOVE } from "./commands/files.js";
 import {
   createGitEnvironmentCommandRunner,
   ensureWorkspaceArtifactIsGitExcluded,
-  type EnvironmentCommandRunner,
-} from "./commands-review.js";
+} from "./commands/review.js";
+import type { EnvironmentCommandRunner } from "./commands/index.js";
 import type { EnvironmentMutationFence } from "./environments/index.js";
 import { graphCommandErrorLine } from "./graph-system-environment.js";
 import type { Environment } from "./models.js";

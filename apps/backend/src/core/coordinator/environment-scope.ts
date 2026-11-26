@@ -1,5 +1,5 @@
 import { COORDINATOR_ENVIRONMENT_ORIGIN_REFUSAL } from "@orkestrator/protocol/coordinator";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import {
   coordinatorEnvironmentRefusals,
   type CoordinatorRefusalSurface,

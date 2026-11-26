@@ -15,7 +15,7 @@
  * counts, with a notice saying the check may not be required.
  */
 
-import { parseGitHubPullRequestUrl, prCheckOutcome } from "../commands-review.js";
+import { parseGitHubPullRequestUrl, prCheckOutcome } from "../commands/review.js";
 import { prViewerRepository } from "./pr-viewer-permission.js";
 
 /** A known answer holds this long; a branch-protection change waits at most this. */

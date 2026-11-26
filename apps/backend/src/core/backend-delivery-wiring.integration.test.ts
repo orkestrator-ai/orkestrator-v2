@@ -5,7 +5,7 @@ import path from "node:path";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import { BUILD_PIPELINE_VERSION } from "@orkestrator/protocol/build-pipeline";
 import { OrkestratorBackend } from "./index.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import type { BuildPipelineService } from "./build-pipeline/service.js";
 import type { BuildPipelineServiceOptions } from "./build-pipeline/context.js";
 import type { Environment } from "./models.js";

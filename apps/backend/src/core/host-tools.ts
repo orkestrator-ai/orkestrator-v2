@@ -1,5 +1,5 @@
-import type { CommandContext } from "./commands-context.js";
-import { resolveManagedBinary } from "./commands-agent-support.js";
+import type { CommandContext } from "./commands/index.js";
+import { resolveManagedBinary } from "./commands/agent-support.js";
 import { commandExists } from "./shell.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 

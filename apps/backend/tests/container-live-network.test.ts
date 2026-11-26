@@ -169,9 +169,9 @@ describe("C22 environment networks and narrow host access", () => {
   live(
     "a restricted runtime reaches only the backend service port and not its siblings",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
-      const { ensureContainerHostServicePorts } = await import("../src/core/commands-environment");
+      const { ensureContainerHostServicePorts } = await import("../src/core/commands/environment");
       const { environmentNetworkPolicy, removeEnvironmentNetwork, environmentNetworkName } =
         await import("../src/core/containers/network");
       const signLoopbackProbe = createAgentToolsLoopbackSigner();
@@ -370,7 +370,7 @@ describe("C24 resource budgets are enforced and reported as applied", () => {
   live(
     "limits are applied, pressure stays inside the container, and a live update is read back",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const {
         environmentResourcePolicy,
@@ -460,7 +460,7 @@ describe("C24 one environment at its CPU limit leaves another usable", () => {
   live(
     "a CPU-saturated environment stays inside its budget while a sibling answers promptly",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { sampleContainerUsage, resetResourceCaches } =
         await import("../src/core/containers/resources");
@@ -533,7 +533,7 @@ describe("C26 bounded logs", () => {
   live(
     "new runtimes use the bounded local driver, bridge output rotates and followers stop",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { ContainerLogService } = await import("../src/core/containers/log-service");
       const { boundedBackgroundLaunch } = await import("../src/core/containers/log-bounds");

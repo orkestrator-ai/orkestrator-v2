@@ -5,7 +5,7 @@ Status: Living — `apps/backend/src/core/git/github-pull-requests.ts`,
 `apps/backend/src/core/git/github-pull-request-timeline.ts`,
 `apps/backend/src/core/git/github-pull-request-actions.ts`,
 `apps/backend/src/core/git/github-graphql.ts`,
-`apps/backend/src/core/commands-registry-github-pull-requests.ts`,
+`apps/backend/src/core/commands/registry-github-pull-requests.ts`,
 `packages/protocol/src/github-pull-requests.ts`.
 
 The in-app pull request viewer reads and changes pull requests through the
@@ -18,7 +18,7 @@ and container environments, and for pull requests outside the current project.
 Every command uses the backend's GitHub credential from Settings
 (`resolveGitHubToken` in `git/github-credentials.ts`): the host `gh auth login`
 token by default, or the stored personal access token when host credentials
-are off. What containers receive is a [separate setting](github-cli.md#container-credential). `requireGitHubToken` (in `commands-validation.ts`) and
+are off. What containers receive is a [separate setting](github-cli.md#container-credential). `requireGitHubToken` (in `commands/validation.ts`) and
 `requireGitHubProject` share the "GitHub is not configured" message. Errors
 pass through `sanitizeGitHubError` with the token, and nothing logs tokens,
 PR bodies, comments or file contents.
@@ -354,7 +354,7 @@ Every `gh` call the monitor makes draws on the GitHub user's budget (5,000
 GraphQL points an hour, shared by every token, app, agent and machine signed
 in as that user), so a busy account can run it dry. The monitor batches open
 local PRs into one query per credential and polls quiet PRs every two minutes
-to spend less (`commands-pr-monitor-batch.ts`). When GitHub still refuses:
+to spend less (`commands/pr-monitor-batch.ts`). When GitHub still refuses:
 
 - The refused scope (the host's local `gh` credential, or one container)
   cools down. With no retry timing from `gh` the cooldown is two minutes,

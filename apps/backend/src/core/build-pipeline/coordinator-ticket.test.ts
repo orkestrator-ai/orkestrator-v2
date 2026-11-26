@@ -4,7 +4,7 @@
  * per-criterion results, the status and PR moves and the delivery policy's
  * "too late" comment all reach the ticket.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
@@ -18,8 +18,8 @@ import {
   type FakeProvider,
 } from "./service-test-support.js";
 import { TEST_REVIEW_PREPARATION } from "./test-fixtures.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerControllerWorkflowCommands } from "../commands-registry-controller-workflows.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerControllerWorkflowCommands } from "../commands/registry-controller-workflows.js";
 import type { StorageService } from "../storage/service.js";
 
 const HEAD = "a".repeat(40);

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createGitBranchCollisionChecker } from "../commands-agent-support.js";
-import { assertForkCommitUsable } from "../commands-environment-fork.js";
+import { createGitBranchCollisionChecker } from "../commands/agent-support.js";
+import { assertForkCommitUsable } from "../commands/environment-fork.js";
 import { runCommand } from "../shell.js";
 
 /**

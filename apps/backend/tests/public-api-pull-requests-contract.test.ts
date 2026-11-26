@@ -4,7 +4,7 @@ import { resetGitHubPullRequestCache } from "../src/core/git/github-pull-request
 import {
   getPrMonitorDetectionRequest,
   parsePrMonitorDetectionResponse,
-} from "../src/core/commands-pr-monitor.js";
+} from "../src/core/commands/pr-monitor.js";
 import { cleanupSessionHarnesses, setup } from "../src/core/public-api/test-provider.js";
 import {
   apiUser,

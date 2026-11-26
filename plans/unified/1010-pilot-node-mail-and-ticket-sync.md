@@ -26,7 +26,7 @@ Prove the whole contract end to end on small domains that are already strict. Th
 
 ## Current state (verified 2026-11-07)
 
-Commands in `apps/backend/src/core/commands-registry-nodes.ts` (67 commands; 66 use `assertOnlyKeys`) that belong to the pilot:
+Commands in `apps/backend/src/core/commands/registry-nodes.ts` (67 commands; 66 use `assertOnlyKeys`) that belong to the pilot:
 
 - `deliver_node_mail` (:241; keys include `steer`, `turnOrigin`, `projectId`, `attachments`)
 - `get_node_project_coordinator` (:293), `get_worker_request_state` (:299), `record_node_environment_origin` (:320)

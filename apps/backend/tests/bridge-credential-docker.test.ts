@@ -45,7 +45,7 @@ import {
 } from "../src/core/containers/bridge-credential";
 import { CODEX_MAX_CONCURRENT_THREADS_ENV, OPENCODE2_SERVER_PORT } from "../src/core/constants";
 import { chooseBackendHostPorts } from "../src/core/containers/host-ports";
-import type { CommandContext } from "../src/core/commands-context";
+import type { CommandContext } from "../src/core/commands/context";
 import { startContainerOpenCode2Server } from "../src/core/opencode2/container-server-lifecycle";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { waitForContainerBoot } from "../src/core/containers/readiness";

@@ -16,7 +16,7 @@ import {
   expectNothingSecretLogged,
 } from "../../../../tests/helpers/auth-secret-canaries.js";
 import { createBridgeOutputForwarder, redactBridgeOutput } from "./bridge-output-redaction.js";
-import { forwardBridgeOutput } from "./commands-servers.js";
+import { forwardBridgeOutput } from "./commands/servers.js";
 
 /**
  * Every planted credential that has a recognisable shape. The bare OAuth code

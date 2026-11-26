@@ -4,8 +4,8 @@ import { prMonitorChangedEvent } from "@orkestrator/protocol/contract/domains/ev
 import type { PrMonitorEnvironmentState } from "@orkestrator/protocol/pr-monitor";
 import type { PrMonitorEffects } from "./pr-monitor.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
-import { environmentToPrMonitorTarget } from "../commands-pr-monitor.js";
+import type { CommandContext } from "../commands/context.js";
+import { environmentToPrMonitorTarget } from "../commands/pr-monitor.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { recurringDiagnosticsRegistry } from "../recurring/diagnostics.js";
 import { createEnvironment, type StorageService } from "../storage/service.js";

@@ -1,4 +1,4 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,8 +10,8 @@ import {
   type MachineLoadReport,
 } from "@orkestrator/protocol/machine-load";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerSystemCommands } from "../commands-registry-system.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerSystemCommands } from "../commands/registry-system.js";
 import { readNodeMachineLoad } from "./machine-load.js";
 import { registerNodeTools } from "./nodes.js";
 import { ControlMcpServer } from "./server.js";

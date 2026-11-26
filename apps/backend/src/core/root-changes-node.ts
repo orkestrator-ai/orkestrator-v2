@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { incompatibility } from "@orkestrator/protocol/contract/errors";
 import { isBackendId } from "@orkestrator/protocol/federation";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import { NodeOutcomeUnknownError, NodeUnavailableError } from "./nodes/index.js";
 import {
   applyPatchInWorker,

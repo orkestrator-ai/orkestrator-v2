@@ -351,10 +351,10 @@ fix, the run waits for the next release before judging it.
 | Thing | Where |
 | --- | --- |
 | Settings and status shapes, models and limits | `packages/protocol/src/self-improvement.ts` |
-| Commands `get_self_improvement_status`, `run_self_improvement` | `system` domain (`access: admin`), `packages/protocol/src/contract/domains/system/commands.ts`; handlers in `apps/backend/src/core/commands-registry-self-improvement.ts` |
+| Commands `get_self_improvement_status`, `run_self_improvement` | `system` domain (`access: admin`), `packages/protocol/src/contract/domains/system/commands.ts`; handlers in `apps/backend/src/core/commands/registry-self-improvement.ts` |
 | Public actions `self-improvement.status`, `self-improvement.run` | `apps/backend/src/core/public-api/actions-self-improvement.ts`; CLI in `packages/cli/src/client/commands/self-improvement.ts` |
 | Service and run | `apps/backend/src/core/self-improvement/` (`service.ts`, `loop.ts`, `signals.ts`, `ledger.ts`, `bundle.ts`, `report.ts`, `insights/`) |
-| Leaf nodes | `leaves.ts` (both sides' answers and parsing) and `fleet.ts` (merging signals); the commands `collect_self_improvement_diagnostics` and `collect_self_improvement_conversations` (`system` domain, `access: internal`), and the command node's list of leaves (`selfImprovementFleet`) in `commands-registry-self-improvement.ts` |
+| Leaf nodes | `leaves.ts` (both sides' answers and parsing) and `fleet.ts` (merging signals); the commands `collect_self_improvement_diagnostics` and `collect_self_improvement_conversations` (`system` domain, `access: internal`), and the command node's list of leaves (`selfImprovementFleet`) in `commands/registry-self-improvement.ts` |
 | Settings page | `apps/web/src/components/settings/SelfImprovementSettings.tsx`, `SelfImprovementLists.tsx` |
 | Run progress | `apps/backend/src/core/self-improvement/progress.ts`; the stage list and its window in `apps/web/src/components/settings/SelfImprovementProgress.tsx`, with the wording and liveness rules in `apps/web/src/lib/self-improvement-progress.ts` |
 | Config | `global.experimentalSelfImprovement`, `global.selfImprovement` (`projectId`, `conversationReview`, `dailyRun`) |
@@ -421,7 +421,7 @@ fix, the run waits for the next release before judging it.
   fake board (`testing/fake-board.ts`, which can fail a chosen call) and a
   fake model. `service.test.ts` covers the gate, the writer lease, the
   background run, the daily run and stop.
-  `commands-registry-self-improvement.test.ts` covers the board over real
+  `commands/registry-self-improvement.test.ts` covers the board over real
   Kanban storage, `public-api/public-api-self-improvement.test.ts` the public
   actions and `packages/cli/tests/self-improvement-command.test.ts` the CLI's
   `--wait`. `fleet.test.ts` covers merging machines' signals and whole runs

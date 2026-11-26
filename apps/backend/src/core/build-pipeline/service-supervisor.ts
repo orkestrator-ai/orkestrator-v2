@@ -124,7 +124,7 @@ import type { BuildPipelineContext } from "./context.js";
 import type { BuildPipelineAgents } from "./service-agents.js";
 import type { BuildPipelineRecovery } from "./service-recovery.js";
 import type { BuildPipelineInteractions } from "./service-interactions.js";
-import type { ReviewPackageVerification } from "../commands-review.js";
+import type { ReviewPackageVerification } from "../commands/index.js";
 import { sessionWorkspaceBaselineFields } from "./validation-worktree.js";
 import { BuildPipelineReadOnlyGuard } from "./read-only-guard.js";
 import { PIPELINE_ADDRESS_FINDINGS_REPORT_KIND } from "@orkestrator/protocol/build-pipeline-address-findings-report";

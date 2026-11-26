@@ -6,7 +6,7 @@ import {
   PR_DETECTION_TIMEOUT_MS,
   detectEnvironmentPullRequest,
   prMonitorCooldownScope,
-} from "../commands-pr-monitor.js";
+} from "../commands/pr-monitor.js";
 import type { PrMonitorTarget } from "./pr-monitor.js";
 import { classifyPrDetectionFailure } from "./pr-monitor-policy.js";
 import { PrViewerPermissionCache } from "./pr-viewer-permission.js";

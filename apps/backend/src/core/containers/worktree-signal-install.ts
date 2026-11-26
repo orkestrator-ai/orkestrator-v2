@@ -6,7 +6,7 @@ import {
 import {
   ensureContainerAgentToolsHost,
   ensureContainerHostServicePorts,
-} from "../commands-environment.js";
+} from "../commands/environment.js";
 import type { ContainerWorktreeSignalInstaller } from "./worktree-signal.js";
 import { runCommand } from "../shell.js";
 

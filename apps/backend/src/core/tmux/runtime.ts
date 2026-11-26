@@ -1,4 +1,4 @@
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { recurringDiagnosticsRegistry } from "../recurring/index.js";
 import {
   InteractiveTmuxTerminalManager,
@@ -26,7 +26,7 @@ export type TmuxRuntimeOptions = {
   /**
    * The Claude configuration directory a local tmux launch exports. The
    * backend passes the active account's (`tmuxLocalClaudeConfigDirectory` in
-   * `commands-servers.ts`): tmux cannot import the account modules, whose
+   * `commands/servers.ts`): tmux cannot import the account modules, whose
    * imports lead back here. Without one, a launch uses Claude's default.
    */
   localClaudeConfigDirectory?: (context: CommandContext) => Promise<string | undefined>;

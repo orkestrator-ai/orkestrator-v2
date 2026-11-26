@@ -24,7 +24,7 @@ import { createInterface } from "node:readline";
 
 import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
 
-import { waitForLocalServerHealth } from "../src/core/commands-server-health.js";
+import { waitForLocalServerHealth } from "../src/core/commands/server-health.js";
 import { HttpBridgeProvider } from "../src/core/http-bridge/index.js";
 import { NativeAgentService } from "../src/core/native-agent/service.js";
 import { StorageService } from "../src/core/storage/service.js";

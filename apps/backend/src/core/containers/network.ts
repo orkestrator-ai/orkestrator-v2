@@ -3,7 +3,7 @@ import { dockerOwnerNamespace } from "./ownership.js";
 import { runCommand } from "../shell.js";
 import { reportDockerNetworkChange } from "./network-changes.js";
 import { networkOwnerContainer } from "./network-owner.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { EnvironmentNetworkPolicy } from "@orkestrator/protocol/container-recovery";
 import { allowlistForNetworkPolicy } from "@orkestrator/protocol/network-allowlist";
 import { DEBIAN_ARCHIVE_DOMAINS } from "@orkestrator/protocol/apt-packages";

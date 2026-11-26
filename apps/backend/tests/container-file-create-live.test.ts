@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { MAX_WORKSPACE_FILE_NAME_BYTES } from "@orkestrator/protocol/contract/domains/files";
-import { createContainerFile } from "../src/core/commands-file-create";
+import { createContainerFile } from "../src/core/commands/file-create";
 import { runCommand } from "../src/core/shell";
 
 const image = process.env.ORKESTRATOR_QUALIFICATION_IMAGE?.trim();

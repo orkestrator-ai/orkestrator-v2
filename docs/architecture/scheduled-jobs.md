@@ -21,7 +21,7 @@ stalled workers" in one durable tool call and end its turn.
 | `apps/backend/src/core/scheduled-jobs/tools.ts` | `create_schedule`, `list_schedules`, `cancel_schedule` for agents and coordinators; `pause_schedule`, `resume_schedule`, `update_schedule` for coordinators |
 | `apps/backend/src/core/mcp-in-process.ts` | Calls one MCP tool of a scoped server in-process |
 | `apps/backend/src/core/public-api/actions-schedules.ts` | The `schedule.*` public actions (CLI, Control MCP operator credentials) |
-| `apps/backend/src/core/commands-registry-scheduled-jobs.ts` | Registry commands the UI and the coordinator tools call |
+| `apps/backend/src/core/commands/registry-scheduled-jobs.ts` | Registry commands the UI and the coordinator tools call |
 | `apps/web/src/components/settings/SchedulesSettings.tsx` | Settings → Schedules |
 | `apps/web/src/components/settings/ScheduleManager.tsx`, `ScheduleDialog.tsx`, `schedule-api.ts` | The schedule list and create/edit dialog shared by Settings → Schedules and a project's Scheduling tab |
 | `apps/web/src/components/projects/ProjectSchedulesView.tsx` | A project's Scheduling tab |

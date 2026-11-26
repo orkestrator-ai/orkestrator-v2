@@ -1,5 +1,5 @@
 import { bugReportImageRoots } from "./bug-report-scratch.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import type { ReadableHostRoot } from "./path-safety.js";
 import { coordinatorAttachmentsRoot } from "./storage/coordinators.js";
 import { getWorktreeBaseDir } from "./worktrees/index.js";

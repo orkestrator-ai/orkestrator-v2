@@ -5,7 +5,7 @@
  * shell and command runner over the same state. Test-only.
  */
 import type { Environment } from "./models.js";
-import type { EnvironmentCommandRunner } from "./commands-review.js";
+import type { EnvironmentCommandRunner } from "./commands/review.js";
 import { FakeGraphRepo } from "./graph-agent-test-support.js";
 import { GraphBranchWorktrees } from "./graph-branch-worktrees.js";
 import type { GraphEnvironmentShell } from "./graph-system-environment.js";

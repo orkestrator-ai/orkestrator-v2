@@ -1,0 +1,1998 @@
+import { describe, expect, jest, mock, spyOn, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  addExistingProject,
+  canonicalProjectPath,
+  comparableProjectPath,
+  PROJECT_CLONE_TIMEOUT_MS,
+  PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS,
+  PROJECT_CREATION_URL_LOCK_TIMEOUT_MS,
+} from "./projects.js";
+import { createLocalWorktree } from "./environment.js";
+import { createCommandRegistry } from "./registry.js";
+import type { CommandContext } from "./context.js";
+import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
+import type { Project } from "../models.js";
+import { CommandFailedError, runCommand as shellRunCommand } from "../shell.js";
+import { createProject, StorageService } from "../storage/service.js";
+import { BackendRuntime } from "../backend-runtime.js";
+
+const processCannotEnforceDirectoryModes =
+  process.platform === "win32" || process.getuid?.() === 0 || process.geteuid?.() === 0;
+
+type Run = typeof shellRunCommand;
+
+// These cases create real Git repositories and can cross Bun's generic
+// five-second deadline when the aggregate suite is spawning other processes.
+jest.setTimeout(30_000);
+
+async function withProjectCreation<T>(
+  runCommand: Run,
+  run: (
+    invoke: (localPath: string) => Promise<unknown>,
+    storage: StorageService,
+    root: string,
+    invokeArgs: (args: Record<string, unknown>) => Promise<unknown>,
+    invokeCommand: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+  ) => Promise<T>,
+): Promise<T> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "ork-project-create-"));
+  const storage = new StorageService(path.join(root, "data"));
+  await storage.init();
+  const commands = createCommandRegistry({ projectCreation: { runCommand } });
+  const context = {
+    storage,
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+    runtime: new BackendRuntime({ emit: () => undefined }),
+  } as CommandContext;
+  const handler = commands.get("create_project_from_scratch");
+  if (!handler) throw new Error("create_project_from_scratch is not registered");
+  const invokeArgs = async (args: Record<string, unknown>) => handler(args, context);
+  const invokeCommand = async (name: string, args: Record<string, unknown>) => {
+    const command = commands.get(name);
+    if (!command) throw new Error(`${name} is not registered`);
+    return command(args, context);
+  };
+
+  try {
+    return await run(
+      (localPath) => invokeArgs({ localPath }),
+      storage,
+      root,
+      invokeArgs,
+      invokeCommand,
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+function successfulRunner(
+  calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [],
+): Run {
+  return mock(async (command: string, args: string[] = [], options = {}) => {
+    const timeoutMs = (options as { timeoutMs?: number }).timeoutMs;
+    calls.push({ command, args, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    if (command === "gh" && args[1] === "create") {
+      const source = args.find((arg) => arg.startsWith("--source="))?.slice(9);
+      if (!source) throw new Error("missing source path");
+      await shellRunCommand("git", [
+        "-C",
+        source,
+        "remote",
+        "add",
+        "origin",
+        `https://github.com/test/${path.basename(source)}.git`,
+      ]);
+      return { stdout: "", stderr: "" };
+    }
+    if (command === "git" && args[2] === "push") return { stdout: "", stderr: "" };
+    return shellRunCommand(command, args, options);
+  });
+}
+
+async function remainsPending(promise: Promise<unknown>, timeoutMs = 50): Promise<boolean> {
+  return Promise.race([
+    promise.then(
+      () => false,
+      () => false,
+    ),
+    new Promise<true>((resolve) => setTimeout(() => resolve(true), timeoutMs)),
+  ]);
+}
+
+async function createCloneSource(repositoryPath: string): Promise<void> {
+  await fs.mkdir(repositoryPath, { recursive: true });
+  await shellRunCommand("git", ["-C", repositoryPath, "init", "-b", "main"]);
+  await fs.writeFile(path.join(repositoryPath, "README.md"), "cloned content\n");
+  await shellRunCommand("git", ["-C", repositoryPath, "add", "README.md"]);
+  await shellRunCommand("git", [
+    "-C",
+    repositoryPath,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "--no-gpg-sign",
+    "-m",
+    "Initial commit",
+  ]);
+}
+
+test("clone and initial push receive the non-interactive SSH environment", async () => {
+  const previous = process.env.GIT_SSH_COMMAND;
+  process.env.GIT_SSH_COMMAND = "ssh -o BatchMode=no -i /keys/deploy";
+  const remoteEnvironments: NodeJS.ProcessEnv[] = [];
+  const run = successfulRunner();
+  const capture: Run = async (command, args = [], options) => {
+    if (command === "git" && (args.includes("clone") || args.includes("push"))) {
+      remoteEnvironments.push(options?.env ?? {});
+    }
+    return run(command, args, options);
+  };
+  try {
+    await withProjectCreation(capture, async (invoke, _storage, root, _args, invokeCommand) => {
+      const source = path.join(root, "source");
+      await createCloneSource(source);
+      await invokeCommand("add_project", { gitUrl: source, localPath: path.join(root, "clone") });
+      await invoke(path.join(root, "scratch"));
+    });
+    expect(remoteEnvironments).toHaveLength(2);
+    for (const env of remoteEnvironments) {
+      expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+      expect(env.GIT_SSH_COMMAND).toBe("ssh -o BatchMode=yes -o BatchMode=no -i /keys/deploy");
+      expect(env.PATH).toBe(process.env.PATH);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.GIT_SSH_COMMAND;
+    else process.env.GIT_SSH_COMMAND = previous;
+  }
+});
+
+describe("create_project_from_scratch", () => {
+  test("creates, verifies, pushes, and persists a private repository in separate phases", async () => {
+    const calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
+    const runCommand = successfulRunner(calls);
+
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const projectPath = path.join(root, "blank-canvas");
+      const project = (await invoke(projectPath)) as {
+        name: string;
+        gitUrl: string;
+        localPath: string;
+      };
+
+      expect(project).toMatchObject({
+        name: "blank-canvas",
+        gitUrl: "https://github.com/test/blank-canvas.git",
+        localPath: projectPath,
+      });
+      expect(calls).toEqual([
+        { command: "git", args: ["-C", projectPath, "init", "-b", "main"], timeoutMs: 30_000 },
+        {
+          command: "git",
+          args: [
+            "-C",
+            projectPath,
+            "-c",
+            "user.name=Orkestrator",
+            "-c",
+            "user.email=projects@orkestrator.local",
+            "-c",
+            "maintenance.auto=false",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            "Initial commit",
+          ],
+          timeoutMs: 30_000,
+        },
+        {
+          command: "gh",
+          args: [
+            "repo",
+            "create",
+            "blank-canvas",
+            "--private",
+            `--source=${projectPath}`,
+            "--remote=origin",
+          ],
+          timeoutMs: 120_000,
+        },
+        {
+          command: "git",
+          args: ["-C", projectPath, "config", "--get", "remote.origin.url"],
+          timeoutMs: 10_000,
+        },
+        {
+          command: "git",
+          args: ["-C", projectPath, "push", "--set-upstream", "origin", "main"],
+          timeoutMs: 120_000,
+        },
+      ]);
+      await expect(
+        shellRunCommand("git", ["-C", projectPath, "rev-parse", "--verify", "main^{commit}"]),
+      ).resolves.toMatchObject({ stdout: expect.stringMatching(/^[0-9a-f]{40}\n$/) });
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("rejects blank, unknown, relative, root, file, symlink, and non-empty targets", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (invoke, _storage, root, invokeArgs) => {
+      await expect(invokeArgs({ localPath: " " })).rejects.toThrow(/non-blank string/);
+      // An unknown key is dropped (7005, tolerant arguments): the handler's own
+      // checks still refuse the target, and nothing reaches a CLI.
+      await expect(invokeArgs({ localPath: "relative/project", extra: true })).rejects.toThrow(
+        "absolute path",
+      );
+      await expect(invoke("relative/project")).rejects.toThrow("absolute path");
+      await expect(invoke(path.parse(root).root)).rejects.toThrow("filesystem root");
+
+      const filePath = path.join(root, "file");
+      await fs.writeFile(filePath, "data");
+      await expect(invoke(filePath)).rejects.toThrow("must be a directory");
+
+      const target = path.join(root, "target");
+      const symlink = path.join(root, "symlink");
+      await fs.mkdir(target);
+      await fs.symlink(target, symlink, "dir");
+      await expect(invoke(symlink)).rejects.toThrow("cannot be a symbolic link");
+
+      const occupied = path.join(root, "occupied");
+      await fs.mkdir(occupied);
+      await fs.writeFile(path.join(occupied, "keep.txt"), "mine");
+      await expect(invoke(occupied)).rejects.toThrow("new or an empty directory");
+      await expect(fs.readFile(path.join(occupied, "keep.txt"), "utf8")).resolves.toBe("mine");
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  test.each([
+    ["double dash", "--public"],
+    ["single dash", "-x"],
+  ])("rejects a leading-dash repository name (%s) before invoking a CLI", async (_name, folder) => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      await expect(invoke(path.join(root, folder))).rejects.toThrow("cannot begin with a dash");
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  test("add_project rejects a local path an existing project already uses", async () => {
+    const runCommand = successfulRunner();
+    await withProjectCreation(runCommand, async (invoke, storage, root, _args, invokeCommand) => {
+      const projectPath = path.join(root, "shared-path");
+      await invoke(projectPath);
+
+      await expect(
+        invokeCommand("add_project", {
+          gitUrl: "https://example.invalid/other.git",
+          localPath: projectPath,
+        }),
+      ).rejects.toThrow("A project already uses this local path");
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("add_project still accepts a project without a local path", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (_invoke, storage, _root, _args, invokeCommand) => {
+      await invokeCommand("add_project", { gitUrl: "https://example.invalid/a.git" });
+      await invokeCommand("add_project", { gitUrl: "https://example.invalid/b.git" });
+      expect(await storage.loadProjects()).toHaveLength(2);
+    });
+  });
+
+  test("add_project refuses a Git URL git would read as an option", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      for (const args of [
+        { gitUrl: "--upload-pack=touch pwned" },
+        { gitUrl: "  -oProxyCommand=evil" },
+        { gitUrl: "--upload-pack=touch pwned", localPath: path.join(root, "clone") },
+      ]) {
+        await expect(invokeCommand("add_project", args)).rejects.toThrow(
+          "Git URL must not start with '-'",
+        );
+      }
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(await storage.loadProjects()).toEqual([]);
+      await expect(fs.stat(path.join(root, "clone"))).rejects.toThrow();
+    });
+  });
+
+  test("add_project clones an existing remote when the local path does not exist", async () => {
+    const cloneCalls: Array<{
+      args: string[];
+      cwd?: string;
+      timeoutMs?: number;
+      redactValues?: ReadonlyArray<string | null | undefined>;
+    }> = [];
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[0] === "clone") {
+        const typedOptions = options as {
+          cwd?: string;
+          timeoutMs?: number;
+          redactValues?: ReadonlyArray<string | null | undefined>;
+        };
+        cloneCalls.push({
+          args,
+          cwd: typedOptions.cwd,
+          timeoutMs: typedOptions.timeoutMs,
+          redactValues: typedOptions.redactValues,
+        });
+      }
+      return shellRunCommand(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "new", "local-copy");
+      await createCloneSource(remotePath);
+
+      const project = (await invokeCommand("add_project", {
+        gitUrl: remotePath,
+        localPath: projectPath,
+      })) as Project;
+
+      expect(project).toMatchObject({ gitUrl: remotePath, localPath: projectPath });
+      await expect(fs.readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+      await expect(
+        shellRunCommand("git", ["-C", projectPath, "rev-parse", "--is-inside-work-tree"]),
+      ).resolves.toMatchObject({ stdout: "true\n" });
+      expect(cloneCalls).toHaveLength(1);
+      expect(cloneCalls[0]).toMatchObject({
+        args: ["clone", "--", remotePath, "."],
+        cwd: expect.stringContaining(`${path.sep}.orkestrator-clone-`),
+        timeoutMs: PROJECT_CLONE_TIMEOUT_MS,
+        redactValues: [remotePath],
+      });
+      expect(await storage.loadProjects()).toHaveLength(1);
+      expect((await fs.readdir(path.dirname(projectPath))).sort()).toEqual(["local-copy"]);
+    });
+  });
+
+  test("add_project sizes the Git-URL lock for a nested path wait plus clone", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      shellRunCommand(command, args, options),
+    );
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "lock-budget-copy");
+      await createCloneSource(remotePath);
+      const lockCalls: Array<{ key: string; acquireTimeoutMs?: number }> = [];
+      const originalLock = storage.withProjectCreationLock.bind(storage);
+      storage.withProjectCreationLock = ((
+        key: string,
+        operation: () => Promise<unknown>,
+        options?: { acquireTimeoutMs?: number },
+      ) => {
+        lockCalls.push({ key, acquireTimeoutMs: options?.acquireTimeoutMs });
+        return originalLock(key, operation, options);
+      }) as StorageService["withProjectCreationLock"];
+
+      await invokeCommand("add_project", { gitUrl: remotePath, localPath: projectPath });
+
+      expect(lockCalls).toEqual([
+        {
+          key: `git-url:${remotePath}`,
+          acquireTimeoutMs: PROJECT_CREATION_URL_LOCK_TIMEOUT_MS,
+        },
+        {
+          key: comparableProjectPath(await canonicalProjectPath(projectPath)),
+          acquireTimeoutMs: PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS,
+        },
+      ]);
+      expect(PROJECT_CREATION_URL_LOCK_TIMEOUT_MS).toBe(
+        PROJECT_CREATION_PATH_LOCK_TIMEOUT_MS + PROJECT_CLONE_TIMEOUT_MS + 60_000,
+      );
+    });
+  });
+
+  test("add_project clone can create a local environment worktree", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      shellRunCommand(command, args, options),
+    );
+
+    await withProjectCreation(runCommand, async (_invoke, _storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "cloned-for-env");
+      await createCloneSource(remotePath);
+      const project = (await invokeCommand("add_project", {
+        gitUrl: remotePath,
+        localPath: projectPath,
+      })) as Project;
+
+      const environment = (await invokeCommand("create_environment", {
+        projectId: project.id,
+        name: "local-from-clone",
+        environmentType: "local",
+      })) as { id: string; branch: string; localPath?: string };
+
+      expect(environment.branch).toBeTruthy();
+      const worktreeParent = path.join(root, "worktrees");
+      const worktree = await createLocalWorktree(
+        projectPath,
+        project.name,
+        environment.branch,
+        "main",
+        undefined,
+        worktreeParent,
+      );
+      await expect(fs.readFile(path.join(worktree.path, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+      await expect(
+        shellRunCommand("git", ["-C", worktree.path, "rev-parse", "--is-inside-work-tree"]),
+      ).resolves.toMatchObject({ stdout: "true\n" });
+    });
+  });
+
+  test("add_project does not clone when the local path already has contents", async () => {
+    const runCommand = mock(async () => {
+      throw new Error("should not run");
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const projectPath = path.join(root, "existing-copy");
+      await fs.mkdir(projectPath);
+      await fs.writeFile(path.join(projectPath, "keep.txt"), "already here");
+
+      await expect(
+        invokeCommand("add_project", {
+          gitUrl: "https://example.invalid/existing.git",
+          localPath: projectPath,
+        }),
+      ).resolves.toMatchObject({ localPath: projectPath });
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(await storage.loadProjects()).toHaveLength(1);
+      await expect(fs.readFile(path.join(projectPath, "keep.txt"), "utf8")).resolves.toBe(
+        "already here",
+      );
+    });
+  });
+
+  test("add_project clones into an existing empty directory", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      shellRunCommand(command, args, options),
+    );
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "empty-destination");
+      await createCloneSource(remotePath);
+      await fs.mkdir(projectPath);
+
+      const project = (await invokeCommand("add_project", {
+        gitUrl: remotePath,
+        localPath: projectPath,
+      })) as Project;
+
+      expect(project).toMatchObject({ gitUrl: remotePath, localPath: projectPath });
+      await expect(fs.readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+      await expect(
+        shellRunCommand("git", ["-C", projectPath, "rev-parse", "--is-inside-work-tree"]),
+      ).resolves.toMatchObject({ stdout: "true\n" });
+      await fs.access(path.join(projectPath, ".git"));
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("add_project removes temporary directories and does not persist after a clone failure", async () => {
+    const runCommand = mock(async () => {
+      throw new CommandFailedError("authentication failed", { exitCode: 128 });
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const projectPath = path.join(root, "missing-parent", "local-copy");
+
+      await expect(
+        invokeCommand("add_project", {
+          gitUrl: "https://example.invalid/private.git",
+          localPath: projectPath,
+        }),
+      ).rejects.toThrow("Could not clone the Git repository: authentication failed");
+      await expect(fs.access(path.join(root, "missing-parent"))).rejects.toThrow();
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test("add_project rejects a duplicate remote before cloning it", async () => {
+    const runCommand = mock(async () => {
+      throw new Error("should not run");
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const gitUrl = "https://example.invalid/already-added.git";
+      await storage.addProject(createProject(gitUrl));
+
+      await expect(
+        invokeCommand("add_project", {
+          gitUrl,
+          localPath: path.join(root, "new-local-copy"),
+        }),
+      ).rejects.toThrow(`Duplicate project URL: ${gitUrl}`);
+      expect(runCommand).not.toHaveBeenCalled();
+      await expect(fs.access(path.join(root, "new-local-copy"))).rejects.toThrow();
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("add_project preserves a completed clone when project persistence fails", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      shellRunCommand(command, args, options),
+    );
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "local-copy");
+      await createCloneSource(remotePath);
+      storage.addProject = mock(async () => {
+        throw new Error("disk is read-only");
+      });
+
+      await expect(
+        invokeCommand("add_project", { gitUrl: remotePath, localPath: projectPath }),
+      ).rejects.toThrow(
+        "The repository was cloned, but Orkestrator could not finish adding the project",
+      );
+      await fs.access(path.join(projectPath, ".git"));
+      await expect(fs.readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+    });
+  });
+
+  test.each([
+    [
+      "missing Git",
+      new CommandFailedError("spawn git ENOENT", { executableMissing: true }),
+      "Git is not installed or available on PATH",
+    ],
+    ["a timed-out clone", new CommandFailedError("", { timedOut: true }), "the clone timed out"],
+  ])(
+    "add_project reports %s instead of a generic clone failure",
+    async (_name, failure, expected) => {
+      const runCommand = mock(async () => {
+        throw failure;
+      });
+
+      await withProjectCreation(
+        runCommand,
+        async (_invoke, storage, root, _args, invokeCommand) => {
+          const projectPath = path.join(root, "clone-classified");
+          const error = await invokeCommand("add_project", {
+            gitUrl: "https://example.invalid/private.git",
+            localPath: projectPath,
+          }).catch((thrown: Error) => thrown);
+
+          expect((error as Error).message).toBe(`Could not clone the Git repository: ${expected}`);
+          await expect(fs.access(projectPath)).rejects.toThrow();
+          expect(await storage.loadProjects()).toEqual([]);
+        },
+      );
+    },
+  );
+
+  test.each([
+    ["git@github.com:acme/private.git", true, "publickey"],
+    ["git@github.com:acme/private.git", true, "publickey,password"],
+    ["git@example.invalid:acme/private.git", false, "password,publickey,keyboard-interactive"],
+  ])(
+    "add_project explains a refused SSH key instead of relaying Git's output (%s)",
+    async (gitUrl, offersHttps, methods) => {
+      const hostname = "host-" + "x".repeat(58);
+      const hostnameSpy = spyOn(os, "hostname").mockReturnValue(hostname);
+      const runCommand = mock(async () => {
+        throw new CommandFailedError(
+          `Command failed: git clone\ngit@github.com: Permission denied (${methods}).\nfatal: Could not read from remote repository.`,
+          { exitCode: 128 },
+        );
+      });
+
+      try {
+        await withProjectCreation(
+          runCommand,
+          async (_invoke, storage, root, _args, invokeCommand) => {
+            const error = await invokeCommand("add_project", {
+              gitUrl,
+              localPath: path.join(root, "clone-refused"),
+            }).catch((thrown: Error) => thrown);
+
+            const { message } = error as Error;
+            expect(message).toContain(
+              `Could not clone the Git repository: SSH authentication failed on ${hostname.slice(0, 47)}….`,
+            );
+            expect(message).toContain("can't enter a key passphrase");
+            expect(message).toContain("authorized key must be loaded in an SSH agent it can reach");
+            expect(message.includes("https:// URL.")).toBe(offersHttps);
+            expect(message).not.toContain("Command failed");
+            expect(message.includes("gh auth setup-git")).toBe(offersHttps);
+            // A project copy relays only this much of the clone's error.
+            expect(message.length).toBeLessThanOrEqual(300);
+            expect(await storage.loadProjects()).toEqual([]);
+          },
+        );
+      } finally {
+        hostnameSpy.mockRestore();
+      }
+    },
+  );
+
+  test("add_project redacts a credential-bearing Git URL from clone failures", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      shellRunCommand(command, args, options),
+    );
+
+    await withProjectCreation(runCommand, async (_invoke, _storage, root, _args, invokeCommand) => {
+      const gitUrl = "https://user:SUPERSECRET@127.0.0.1:1/private.git";
+      const projectPath = path.join(root, "redacted-clone");
+      const error = await invokeCommand("add_project", {
+        gitUrl,
+        localPath: projectPath,
+      }).catch((thrown: Error) => thrown);
+
+      expect((error as Error).message).toContain("Could not clone the Git repository");
+      expect((error as Error).message).not.toContain("SUPERSECRET");
+      expect((error as Error).message).not.toContain(gitUrl);
+    });
+  });
+
+  test("add_project wraps a rename failure after a successful clone", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      const result = await shellRunCommand(command, args, options);
+      if (command === "git" && args[0] === "clone") {
+        await fs.mkdir(projectPath);
+        await fs.writeFile(path.join(projectPath, "blocker"), "occupied");
+      }
+      return result;
+    });
+    let projectPath = "";
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      projectPath = path.join(root, "blocked-destination");
+      await createCloneSource(remotePath);
+
+      const error = await invokeCommand("add_project", {
+        gitUrl: remotePath,
+        localPath: projectPath,
+      }).catch((thrown: Error) => thrown);
+
+      expect((error as Error).message).toContain("Could not create the local repository path");
+      await expect(fs.readFile(path.join(projectPath, "blocker"), "utf8")).resolves.toBe(
+        "occupied",
+      );
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test.skipIf(processCannotEnforceDirectoryModes)(
+    "add_project wraps mkdir and mkdtemp failures as a create-path error",
+    async () => {
+      const runCommand = mock(async () => {
+        throw new Error("should not run");
+      });
+
+      await withProjectCreation(
+        runCommand,
+        async (_invoke, storage, root, _args, invokeCommand) => {
+          const locked = path.join(root, "locked");
+          await fs.mkdir(locked);
+          await fs.chmod(locked, 0o555);
+          const projectPath = path.join(locked, "missing-parent", "local-copy");
+          try {
+            const error = await invokeCommand("add_project", {
+              gitUrl: "https://example.invalid/private.git",
+              localPath: projectPath,
+            }).catch((thrown: Error) => thrown);
+
+            expect((error as Error).message).toContain(
+              "Could not create the local repository path",
+            );
+            expect(runCommand).not.toHaveBeenCalled();
+            expect(await storage.loadProjects()).toEqual([]);
+          } finally {
+            await fs.chmod(locked, 0o755);
+          }
+        },
+      );
+    },
+  );
+
+  test("add_project reports an ancestor that is a regular file as a directory problem", async () => {
+    const runCommand = mock(async () => {
+      throw new Error("should not run");
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, _storage, root, _args, invokeCommand) => {
+      const blocker = path.join(root, "blocker");
+      await fs.writeFile(blocker, "data");
+      const error = await invokeCommand("add_project", {
+        gitUrl: "https://example.invalid/private.git",
+        localPath: path.join(blocker, "project"),
+      }).catch((thrown: Error) => thrown);
+
+      expect((error as Error).message).toBe(
+        "Project path must be a directory and cannot be a symbolic link",
+      );
+      expect((error as Error).message).not.toContain("ENOTDIR");
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  test("add_project rejects a destination that is a regular file", async () => {
+    const runCommand = mock(async () => {
+      throw new Error("should not run");
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const filePath = path.join(root, "not-a-directory");
+      await fs.writeFile(filePath, "data");
+      const error = await invokeCommand("add_project", {
+        gitUrl: "https://example.invalid/private.git",
+        localPath: filePath,
+      }).catch((thrown: Error) => thrown);
+
+      expect((error as Error).message).toBe(
+        "Project path must be a directory and cannot be a symbolic link",
+      );
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test("add_project rejects a destination that is a symbolic link", async () => {
+    const runCommand = mock(async () => {
+      throw new Error("should not run");
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const target = path.join(root, "real-checkout");
+      const symlink = path.join(root, "linked-checkout");
+      await fs.mkdir(target);
+      await fs.writeFile(path.join(target, "keep.txt"), "mine");
+      await fs.symlink(target, symlink, "dir");
+      const error = await invokeCommand("add_project", {
+        gitUrl: "https://example.invalid/private.git",
+        localPath: symlink,
+      }).catch((thrown: Error) => thrown);
+
+      expect((error as Error).message).toBe(
+        "Project path must be a directory and cannot be a symbolic link",
+      );
+      expect(runCommand).not.toHaveBeenCalled();
+      await expect(fs.readFile(path.join(target, "keep.txt"), "utf8")).resolves.toBe("mine");
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test.skipIf(processCannotEnforceDirectoryModes)(
+    "add_project wraps an inaccessible destination as an inspect error",
+    async () => {
+      const runCommand = mock(async () => {
+        throw new Error("should not run");
+      });
+
+      await withProjectCreation(
+        runCommand,
+        async (_invoke, storage, root, _args, invokeCommand) => {
+          const hidden = path.join(root, "hidden");
+          await fs.mkdir(hidden);
+          await fs.chmod(hidden, 0o000);
+          try {
+            const error = await invokeCommand("add_project", {
+              gitUrl: "https://example.invalid/private.git",
+              localPath: path.join(hidden, "local-copy"),
+            }).catch((thrown: Error) => thrown);
+
+            expect((error as Error).message).toContain("Could not inspect the project path");
+            expect(runCommand).not.toHaveBeenCalled();
+            expect(await storage.loadProjects()).toEqual([]);
+          } finally {
+            await fs.chmod(hidden, 0o755);
+          }
+        },
+      );
+    },
+  );
+
+  test("add_project serializes two clones of the same missing local path", async () => {
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstCloneEntered!: () => void;
+    const firstCloneEntered = new Promise<void>((resolve) => {
+      markFirstCloneEntered = resolve;
+    });
+    let markSecondCloneEntered!: () => void;
+    const secondCloneEntered = new Promise<void>((resolve) => {
+      markSecondCloneEntered = resolve;
+    });
+    let cloneCalls = 0;
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[0] === "clone") {
+        cloneCalls += 1;
+        if (cloneCalls === 1) markFirstCloneEntered();
+        if (cloneCalls === 2) markSecondCloneEntered();
+        await gate;
+      }
+      return shellRunCommand(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "shared-destination");
+      await createCloneSource(remotePath);
+
+      const first = invokeCommand("add_project", { gitUrl: remotePath, localPath: projectPath });
+      await firstCloneEntered;
+      const second = invokeCommand("add_project", {
+        gitUrl: "https://example.invalid/other.git",
+        localPath: projectPath,
+      });
+      // The waiter can reject as soon as the holder releases the path lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const pathWasProtected = await remainsPending(secondCloneEntered);
+      releaseFirst();
+      expect(pathWasProtected).toBe(true);
+
+      await expect(first).resolves.toMatchObject({ localPath: projectPath });
+      expect(await secondError).toMatchObject({
+        message: expect.stringContaining("A project already uses this local path"),
+      });
+      expect(cloneCalls).toBe(1);
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("add_project rejects a second clone of the same remote to a different path", async () => {
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstCloneEntered!: () => void;
+    const firstCloneEntered = new Promise<void>((resolve) => {
+      markFirstCloneEntered = resolve;
+    });
+    let markSecondCloneEntered!: () => void;
+    const secondCloneEntered = new Promise<void>((resolve) => {
+      markSecondCloneEntered = resolve;
+    });
+    let cloneCalls = 0;
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[0] === "clone") {
+        cloneCalls += 1;
+        if (cloneCalls === 1) markFirstCloneEntered();
+        if (cloneCalls === 2) markSecondCloneEntered();
+        await gate;
+      }
+      return shellRunCommand(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const firstPath = path.join(root, "first-copy");
+      const secondPath = path.join(root, "second-copy");
+      await createCloneSource(remotePath);
+
+      const first = invokeCommand("add_project", { gitUrl: remotePath, localPath: firstPath });
+      await firstCloneEntered;
+      const second = invokeCommand("add_project", { gitUrl: remotePath, localPath: secondPath });
+      // The waiter can reject as soon as the holder releases the URL lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const urlWasProtected = await remainsPending(secondCloneEntered);
+      releaseFirst();
+      expect(urlWasProtected).toBe(true);
+
+      await expect(first).resolves.toMatchObject({ localPath: firstPath });
+      expect(await secondError).toMatchObject({
+        message: `Duplicate project URL: ${remotePath}`,
+      });
+      expect(cloneCalls).toBe(1);
+      await expect(fs.access(secondPath)).rejects.toThrow();
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("a same-URL waiter outlasts a holder that waits on a path lock and then clones", async () => {
+    const pathLockTimeoutMs = 200;
+    const urlLockTimeoutMs = 500;
+    let releaseClone!: () => void;
+    const cloneGate = new Promise<void>((resolve) => {
+      releaseClone = resolve;
+    });
+    let markCloneEntered!: () => void;
+    const cloneEntered = new Promise<void>((resolve) => {
+      markCloneEntered = resolve;
+    });
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[0] === "clone") {
+        markCloneEntered();
+        await cloneGate;
+      }
+      return shellRunCommand(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root) => {
+      const remotePath = path.join(root, "remote-source");
+      const firstPath = path.join(root, "first-copy");
+      const secondPath = path.join(root, "second-copy");
+      await createCloneSource(remotePath);
+      const pathKey = comparableProjectPath(await canonicalProjectPath(firstPath));
+
+      let releasePath!: () => void;
+      const pathGate = new Promise<void>((resolve) => {
+        releasePath = resolve;
+      });
+      let markPathHeld!: () => void;
+      const pathHeld = new Promise<void>((resolve) => {
+        markPathHeld = resolve;
+      });
+      const blockingPath = storage.withProjectCreationLock(pathKey, async () => {
+        markPathHeld();
+        await pathGate;
+      });
+      await pathHeld;
+
+      const first = addExistingProject(remotePath, firstPath, storage, runCommand, {
+        urlLockTimeoutMs,
+        pathLockTimeoutMs,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const second = addExistingProject(remotePath, secondPath, storage, runCommand, {
+        urlLockTimeoutMs,
+        pathLockTimeoutMs,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      releasePath();
+      await blockingPath;
+      await cloneEntered;
+      const secondSurvivedNestedHold = await remainsPending(second, 200);
+      releaseClone();
+
+      expect(secondSurvivedNestedHold).toBe(true);
+      await expect(first).resolves.toMatchObject({ localPath: firstPath });
+      await expect(second).rejects.toThrow("Duplicate project URL");
+    });
+  });
+
+  test("add_project keeps a completed clone when persistence reports a duplicate URL", async () => {
+    let insertDuplicate!: () => Promise<void>;
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      const result = await shellRunCommand(command, args, options);
+      if (command === "git" && args[0] === "clone") await insertDuplicate();
+      return result;
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "losing-copy");
+      await createCloneSource(remotePath);
+      insertDuplicate = async () => {
+        await storage.addProject(createProject(remotePath));
+      };
+
+      const error = await invokeCommand("add_project", {
+        gitUrl: remotePath,
+        localPath: projectPath,
+      }).catch((thrown: Error) => thrown);
+      expect((error as Error).message).toContain(
+        "The repository was cloned, but Orkestrator could not finish adding the project",
+      );
+      expect((error as Error).message).toContain(`Duplicate project URL: ${remotePath}`);
+      await fs.access(path.join(projectPath, ".git"));
+      await expect(fs.readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("add_project keeps post-clone files when a duplicate-URL persist fails", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      shellRunCommand(command, args, options),
+    );
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "sentinel-copy");
+      await createCloneSource(remotePath);
+      storage.addProject = mock(async () => {
+        await fs.writeFile(path.join(projectPath, "sentinel.txt"), "keep me");
+        throw new Error(`Duplicate project URL: ${remotePath}`);
+      });
+
+      const error = await invokeCommand("add_project", {
+        gitUrl: remotePath,
+        localPath: projectPath,
+      }).catch((thrown: Error) => thrown);
+      expect((error as Error).message).toContain("Retry using the existing local path");
+      expect((error as Error).message).toContain(`Duplicate project URL: ${remotePath}`);
+      await expect(fs.readFile(path.join(projectPath, "sentinel.txt"), "utf8")).resolves.toBe(
+        "keep me",
+      );
+      await fs.access(path.join(projectPath, ".git"));
+      await expect(fs.readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+    });
+  });
+
+  test("add_project keeps a clone that replaced an empty destination after a duplicate-URL persist failure", async () => {
+    let insertDuplicate!: () => Promise<void>;
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      const result = await shellRunCommand(command, args, options);
+      if (command === "git" && args[0] === "clone") await insertDuplicate();
+      return result;
+    });
+
+    await withProjectCreation(runCommand, async (_invoke, storage, root, _args, invokeCommand) => {
+      const remotePath = path.join(root, "remote-source");
+      const projectPath = path.join(root, "prepared-empty");
+      await createCloneSource(remotePath);
+      await fs.mkdir(projectPath);
+      insertDuplicate = async () => {
+        await storage.addProject(createProject(remotePath));
+      };
+
+      await expect(
+        invokeCommand("add_project", { gitUrl: remotePath, localPath: projectPath }),
+      ).rejects.toThrow("Retry using the existing local path");
+      await fs.access(path.join(projectPath, ".git"));
+      await expect(fs.readFile(path.join(projectPath, "README.md"), "utf8")).resolves.toBe(
+        "cloned content\n",
+      );
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("detects a duplicate canonical path through a symlinked parent", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const realParent = path.join(root, "real-parent");
+      const aliasParent = path.join(root, "alias-parent");
+      await fs.mkdir(realParent);
+      await fs.symlink(realParent, aliasParent, "dir");
+      await storage.addProject({
+        id: "existing",
+        name: "existing",
+        gitUrl: "https://example.invalid/existing.git",
+        localPath: path.join(realParent, "new"),
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      } satisfies Project);
+
+      await expect(invoke(path.join(aliasParent, "new"))).rejects.toThrow(
+        "A project already uses this local path",
+      );
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  test.each([
+    [
+      "missing Git",
+      new CommandFailedError("spawn git ENOENT", { executableMissing: true }),
+      "Git is not installed",
+    ],
+    [
+      "Git init timeout",
+      new CommandFailedError("init timed out", { timedOut: true }),
+      "init timed out",
+    ],
+  ])("rolls back a new directory after %s", async (_name, failure, expected) => {
+    const runCommand = mock(async () => {
+      throw failure;
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const projectPath = path.join(root, "failed-init");
+      await expect(invoke(projectPath)).rejects.toThrow(expected);
+      await expect(fs.access(projectPath)).rejects.toThrow();
+    });
+  });
+
+  test("rolls back Git metadata after an initial commit failure without deleting user content", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init") {
+        const result = await shellRunCommand(command, args, options);
+        await fs.writeFile(path.join(args[1]!, "appeared.txt"), "keep");
+        return result;
+      }
+      throw new CommandFailedError("commit timed out", { timedOut: true });
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const projectPath = path.join(root, "failed-commit");
+      await expect(invoke(projectPath)).rejects.toThrow(
+        "Could not create the initial Git commit: commit timed out",
+      );
+      await expect(fs.readFile(path.join(projectPath, "appeared.txt"), "utf8")).resolves.toBe(
+        "keep",
+      );
+      await expect(fs.access(path.join(projectPath, ".git"))).rejects.toThrow();
+    });
+  });
+
+  test("rolls back when GitHub CLI is definitely missing", async () => {
+    let sawCommittedRepository = false;
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "gh") {
+        const source = args.find((arg) => arg.startsWith("--source="))?.slice(9);
+        if (!source) throw new Error("missing source path");
+        expect(await fs.readdir(source)).toEqual([".git"]);
+        await expect(
+          shellRunCommand("git", ["-C", source, "log", "-1", "--format=%an%n%s"]),
+        ).resolves.toMatchObject({ stdout: "Orkestrator\nInitial commit\n" });
+        sawCommittedRepository = true;
+        throw new CommandFailedError("spawn gh ENOENT", { executableMissing: true });
+      }
+      return shellRunCommand(command, args, options);
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const projectPath = path.join(root, "missing-gh");
+      await expect(invoke(projectPath)).rejects.toThrow("GitHub CLI is not available");
+      const retainedEntries = await fs
+        .readdir(projectPath)
+        .catch((error: NodeJS.ErrnoException) =>
+          error.code === "ENOENT" ? null : Promise.reject(error),
+        );
+      expect(retainedEntries === null ? null : retainedEntries.slice(0, 32)).toBeNull();
+      expect(sawCommittedRepository).toBe(true);
+    });
+  });
+
+  test.each([
+    ["non-zero failure", new Error("not authenticated")],
+    ["timeout", new CommandFailedError("gh timed out", { timedOut: true })],
+  ])(
+    "preserves the local repository after an ambiguous GitHub creation %s",
+    async (_name, failure) => {
+      const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+        if (command === "gh") throw failure;
+        return shellRunCommand(command, args, options);
+      });
+      await withProjectCreation(runCommand, async (invoke, storage, root) => {
+        const projectPath = path.join(root, "ambiguous-gh");
+        const error = await invoke(projectPath).catch((thrown: Error) => thrown);
+        expect((error as Error).message).toContain("GitHub may have created");
+        expect((error as Error).message).toContain(failure.message);
+        await fs.access(path.join(projectPath, ".git"));
+        // The preserved repository must still hold the commit that makes it
+        // resumable, not just an empty .git directory.
+        await expect(
+          shellRunCommand("git", ["-C", projectPath, "log", "-1", "--format=%an%n%s"]),
+        ).resolves.toMatchObject({ stdout: "Orkestrator\nInitial commit\n" });
+        expect(await storage.loadProjects()).toEqual([]);
+      });
+    },
+  );
+
+  test.each([
+    ["missing origin", "origin", "Could not verify the origin remote"],
+    ["unreadable origin", "origin-throws", "no such key"],
+    ["push failure", "push", "push rejected"],
+  ])("preserves both repositories after %s", async (_name, failurePhase, expectedDetail) => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "gh" && args[1] === "create") {
+        if (failurePhase === "push") {
+          const source = args.find((arg) => arg.startsWith("--source="))!.slice(9);
+          await shellRunCommand("git", [
+            "-C",
+            source,
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/owner/project.git",
+          ]);
+        }
+        return { stdout: "", stderr: "" };
+      }
+      if (command === "git" && args[2] === "config") {
+        if (failurePhase === "origin") return { stdout: "", stderr: "" };
+        if (failurePhase === "origin-throws") throw new Error("no such key");
+      }
+      if (command === "git" && args[2] === "push") {
+        if (failurePhase === "push") throw new Error("push rejected");
+        return { stdout: "", stderr: "" };
+      }
+      return shellRunCommand(command, args, options);
+    });
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const projectPath = path.join(root, "project");
+      const failure = await invoke(projectPath).catch((error: Error) => error);
+      // Both the wrapper and the underlying reason must survive: the wrapper
+      // alone would hide which phase failed.
+      expect((failure as Error).message).toContain("Add the existing repository instead");
+      expect((failure as Error).message).toContain(expectedDetail);
+      await fs.access(path.join(projectPath, ".git"));
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test("preserves the repositories when project persistence fails", async () => {
+    const runCommand = successfulRunner();
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      storage.addProject = mock(async () => {
+        throw new Error("disk is read-only");
+      });
+      const projectPath = path.join(root, "persist-failure");
+      const failure = await invoke(projectPath).catch((error: Error) => error);
+      expect((failure as Error).message).toContain("Add the existing repository instead");
+      expect((failure as Error).message).toContain("disk is read-only");
+      await fs.access(path.join(projectPath, ".git"));
+    });
+  });
+
+  test("reads the configured origin rather than the insteadOf-rewritten URL", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      calls.push({ command, args });
+      if (command === "gh") return { stdout: "", stderr: "" };
+      if (command === "git" && args[2] === "config") {
+        return { stdout: "https://github.com/test/plain.git\n", stderr: "" };
+      }
+      if (command === "git" && args[2] === "push") return { stdout: "", stderr: "" };
+      return shellRunCommand(command, args, options);
+    });
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      await invoke(path.join(root, "plain"));
+      expect(calls.some(({ args }) => args.includes("get-url"))).toBe(false);
+      expect(await storage.loadProjects()).toMatchObject([
+        { gitUrl: "https://github.com/test/plain.git" },
+      ]);
+    });
+  });
+
+  test.each([
+    [
+      "password userinfo",
+      "https://x-token:SECRET@github.com/test/x.git",
+      "https://github.com/test/x.git",
+    ],
+    [
+      "bare token userinfo",
+      "https://SECRET@github.com/test/x.git",
+      "https://github.com/test/x.git",
+    ],
+    ["scp syntax is untouched", "git@github.com:test/x.git", "git@github.com:test/x.git"],
+    ["ssh url userinfo", "ssh://git:SECRET@github.com/test/x.git", "ssh://github.com/test/x.git"],
+  ])(
+    "strips credentials from the persisted origin URL (%s)",
+    async (_name, configured, expected) => {
+      const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+        if (command === "gh") return { stdout: "", stderr: "" };
+        if (command === "git" && args[2] === "config")
+          return { stdout: `${configured}\n`, stderr: "" };
+        if (command === "git" && args[2] === "push") return { stdout: "", stderr: "" };
+        return shellRunCommand(command, args, options);
+      });
+      await withProjectCreation(runCommand, async (invoke, storage, root) => {
+        await invoke(path.join(root, "credential"));
+        const [project] = await storage.loadProjects();
+        expect(project!.gitUrl).toBe(expected);
+        expect(project!.gitUrl).not.toContain("SECRET");
+      });
+    },
+  );
+
+  test("reports an ancestor that is a regular file as a directory problem", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const blocker = path.join(root, "blocker");
+      await fs.writeFile(blocker, "data");
+      // lstat answers ENOTDIR here, not ENOENT; the user must not see an errno.
+      const failure = await invoke(path.join(blocker, "project")).catch((error: Error) => error);
+      expect((failure as Error).message).toBe(
+        "Project path must be a directory and cannot be a symbolic link",
+      );
+      expect((failure as Error).message).not.toContain("ENOTDIR");
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  test("removes intermediate directories it created when rolling back", async () => {
+    const runCommand = mock(async () => {
+      throw new CommandFailedError("init timed out", { timedOut: true });
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const createdRoot = path.join(root, "made");
+      const projectPath = path.join(createdRoot, "nested", "deep", "project");
+      await expect(invoke(projectPath)).rejects.toThrow("init timed out");
+      // mkdir reports the topmost directory it created, so rollback has to walk
+      // back up rather than removing the leaf alone.
+      await expect(fs.access(createdRoot)).rejects.toThrow();
+      await fs.access(root);
+    });
+  });
+
+  test("keeps intermediate directories that were not empty", async () => {
+    let initialized = false;
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init" && !initialized) {
+        initialized = true;
+        const result = await shellRunCommand(command, args, options);
+        await fs.writeFile(path.join(path.dirname(args[1]!), "sibling.txt"), "keep");
+        return result;
+      }
+      throw new CommandFailedError("commit timed out", { timedOut: true });
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const createdRoot = path.join(root, "made");
+      const projectPath = path.join(createdRoot, "project");
+      await expect(invoke(projectPath)).rejects.toThrow("commit timed out");
+      await expect(fs.access(projectPath)).rejects.toThrow();
+      await expect(fs.readFile(path.join(createdRoot, "sibling.txt"), "utf8")).resolves.toBe(
+        "keep",
+      );
+    });
+  });
+
+  test("keeps a pre-existing empty directory and removes only its Git metadata", async () => {
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init") return shellRunCommand(command, args, options);
+      throw new CommandFailedError("commit timed out", { timedOut: true });
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const projectPath = path.join(root, "user-folder");
+      await fs.mkdir(projectPath);
+      await expect(invoke(projectPath)).rejects.toThrow("commit timed out");
+      // The user made this folder; rollback owns only what it created inside it.
+      await fs.access(projectPath);
+      expect(await fs.readdir(projectPath)).toEqual([]);
+    });
+  });
+
+  test("creates a project inside a pre-existing empty directory", async () => {
+    const runCommand = successfulRunner();
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const projectPath = path.join(root, "prepared");
+      await fs.mkdir(projectPath);
+      await expect(invoke(projectPath)).resolves.toMatchObject({ localPath: projectPath });
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("declines to roll back through an ancestor swapped for a symlink", async () => {
+    let sharedParent = "";
+    let victim = "";
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init") {
+        const result = await shellRunCommand(command, args, options);
+        // The leaf is still a real directory afterwards, so the leaf-only
+        // symlink check cannot see this; only the recorded identity can.
+        await fs.rm(sharedParent, { recursive: true, force: true });
+        await fs.symlink(victim, sharedParent, "dir");
+        return result;
+      }
+      throw new CommandFailedError("commit timed out", { timedOut: true });
+    });
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      sharedParent = path.join(root, "shared");
+      victim = path.join(root, "victim");
+      await fs.mkdir(path.join(victim, "proj"), { recursive: true });
+      await fs.mkdir(path.join(victim, "proj", ".git"));
+      await fs.writeFile(path.join(victim, "proj", ".git", "precious"), "mine");
+
+      await expect(invoke(path.join(sharedParent, "proj"))).rejects.toThrow("commit timed out");
+      await expect(
+        fs.readFile(path.join(victim, "proj", ".git", "precious"), "utf8"),
+      ).resolves.toBe("mine");
+    });
+  });
+
+  test("resumes a preserved scratch repository after an ambiguous GitHub failure", async () => {
+    let failGh = true;
+    const base = successfulRunner();
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "gh" && failGh) throw new Error("not authenticated");
+      return base(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const projectPath = path.join(root, "resumable");
+      await expect(invoke(projectPath)).rejects.toThrow("retry the same path to resume");
+      await fs.access(path.join(projectPath, ".git"));
+
+      failGh = false;
+      await expect(invoke(projectPath)).resolves.toMatchObject({ localPath: projectPath });
+      expect(await storage.loadProjects()).toHaveLength(1);
+      // Resuming must not re-init or re-commit on top of the preserved repo.
+      await expect(
+        shellRunCommand("git", ["-C", projectPath, "rev-list", "--count", "HEAD"]),
+      ).resolves.toMatchObject({ stdout: "1\n" });
+    });
+  });
+
+  test.each([
+    [
+      "a foreign repository",
+      async (projectPath: string) => {
+        await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
+        await shellRunCommand("git", [
+          "-C",
+          projectPath,
+          "-c",
+          "user.name=Someone",
+          "-c",
+          "user.email=someone@example.invalid",
+          "commit",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "Their work",
+        ]);
+      },
+    ],
+    [
+      "a repository that already has a remote",
+      async (projectPath: string) => {
+        await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
+        await shellRunCommand("git", [
+          "-C",
+          projectPath,
+          "-c",
+          "user.name=Orkestrator",
+          "-c",
+          "user.email=projects@orkestrator.local",
+          "commit",
+          "--allow-empty",
+          "--no-gpg-sign",
+          "-m",
+          "Initial commit",
+        ]);
+        await shellRunCommand("git", [
+          "-C",
+          projectPath,
+          "remote",
+          "add",
+          "origin",
+          "https://example.invalid/x.git",
+        ]);
+      },
+    ],
+    [
+      "a repository with extra commits",
+      async (projectPath: string) => {
+        await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
+        for (const message of ["Initial commit", "More work"]) {
+          await shellRunCommand("git", [
+            "-C",
+            projectPath,
+            "-c",
+            "user.name=Orkestrator",
+            "-c",
+            "user.email=projects@orkestrator.local",
+            "commit",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            message,
+          ]);
+        }
+      },
+    ],
+  ])("refuses to resume %s", async (_name, prepare) => {
+    const base = successfulRunner();
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) =>
+      base(command, args, options),
+    );
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const projectPath = path.join(root, "occupied-repo");
+      await fs.mkdir(projectPath);
+      await prepare(projectPath);
+
+      await expect(invoke(projectPath)).rejects.toThrow("new or an empty directory");
+      // A refusal must never delete the repository it declined to adopt.
+      await fs.access(path.join(projectPath, ".git"));
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test("refuses to resume a scratch repository with working-tree content", async () => {
+    const runCommand = successfulRunner();
+    await withProjectCreation(runCommand, async (invoke, _storage, root) => {
+      const projectPath = path.join(root, "dirty-repo");
+      await fs.mkdir(projectPath);
+      await shellRunCommand("git", ["-C", projectPath, "init", "-b", "main"]);
+      await shellRunCommand("git", [
+        "-C",
+        projectPath,
+        "-c",
+        "user.name=Orkestrator",
+        "-c",
+        "user.email=projects@orkestrator.local",
+        "commit",
+        "--allow-empty",
+        "--no-gpg-sign",
+        "-m",
+        "Initial commit",
+      ]);
+      await fs.writeFile(path.join(projectPath, "draft.txt"), "mine");
+
+      await expect(invoke(projectPath)).rejects.toThrow("new or an empty directory");
+      await expect(fs.readFile(path.join(projectPath, "draft.txt"), "utf8")).resolves.toBe("mine");
+    });
+  });
+
+  test("detects a duplicate canonical path when the stored project used the alias", async () => {
+    const runCommand = mock(async () => ({ stdout: "", stderr: "" }));
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const realParent = path.join(root, "real-parent");
+      const aliasParent = path.join(root, "alias-parent");
+      await fs.mkdir(realParent);
+      await fs.symlink(realParent, aliasParent, "dir");
+      await storage.addProject({
+        id: "existing",
+        name: "existing",
+        gitUrl: "https://example.invalid/existing.git",
+        localPath: path.join(aliasParent, "new"),
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      } satisfies Project);
+
+      await expect(invoke(path.join(realParent, "new"))).rejects.toThrow(
+        "A project already uses this local path",
+      );
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  test("ignores an existing project whose local path can no longer be resolved", async () => {
+    const runCommand = successfulRunner();
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      await storage.addProject({
+        id: "stale",
+        name: "stale",
+        gitUrl: "https://example.invalid/stale.git",
+        localPath: path.join(root, "moved-away", "project"),
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      } satisfies Project);
+
+      await expect(invoke(path.join(root, "fresh"))).resolves.toBeDefined();
+      expect(await storage.loadProjects()).toHaveLength(2);
+    });
+  });
+
+  test("rejects a duplicate local path inserted while the CLI work was running", async () => {
+    let releaseGh!: () => void;
+    const ghGate = new Promise<void>((resolve) => {
+      releaseGh = resolve;
+    });
+    let markGhEntered!: () => void;
+    const ghEntered = new Promise<void>((resolve) => {
+      markGhEntered = resolve;
+    });
+    const base = successfulRunner();
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "gh") {
+        markGhEntered();
+        await ghGate;
+      }
+      return base(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const projectPath = path.join(root, "contested");
+      const creation = invoke(projectPath);
+      await ghEntered;
+      // The early scan already passed; only the guard inside addProject's
+      // critical section can still catch this.
+      await storage.addProject({
+        id: "sneaked-in",
+        name: "sneaked-in",
+        gitUrl: "https://example.invalid/sneaked-in.git",
+        localPath: projectPath,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      } satisfies Project);
+      releaseGh();
+
+      await expect(creation).rejects.toThrow("A project already uses this local path");
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("serializes two requests for the same canonical path", async () => {
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstInitEntered!: () => void;
+    const firstInitEntered = new Promise<void>((resolve) => {
+      markFirstInitEntered = resolve;
+    });
+    let markSecondInitEntered!: () => void;
+    const secondInitEntered = new Promise<void>((resolve) => {
+      markSecondInitEntered = resolve;
+    });
+    let initCalls = 0;
+    const base = successfulRunner();
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init") {
+        initCalls += 1;
+        if (initCalls === 1) markFirstInitEntered();
+        if (initCalls === 2) markSecondInitEntered();
+        await gate;
+      }
+      return base(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const realParent = path.join(root, "real");
+      const aliasParent = path.join(root, "alias");
+      await fs.mkdir(realParent);
+      await fs.symlink(realParent, aliasParent, "dir");
+      const first = invoke(path.join(realParent, "shared"));
+      await firstInitEntered;
+      const second = invoke(path.join(aliasParent, "shared"));
+      // The waiter can reject as soon as the holder releases the path lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const pathWasProtected = await remainsPending(secondInitEntered);
+      releaseFirst();
+      expect(pathWasProtected).toBe(true);
+      expect(initCalls).toBe(1);
+
+      await expect(first).resolves.toBeDefined();
+      expect(await secondError).toMatchObject({
+        message: expect.stringContaining("A project already uses this local path"),
+      });
+      expect(initCalls).toBe(1);
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("serializes two requests whose paths differ only in case", async () => {
+    const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ork-case-probe-"));
+    let caseInsensitive = false;
+    try {
+      await fs.mkdir(path.join(probeRoot, "Probe"));
+      caseInsensitive = await fs.access(path.join(probeRoot, "probe")).then(
+        () => true,
+        () => false,
+      );
+    } finally {
+      await fs.rm(probeRoot, { recursive: true, force: true });
+    }
+    if (!caseInsensitive) return;
+
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstInitEntered!: () => void;
+    const firstInitEntered = new Promise<void>((resolve) => {
+      markFirstInitEntered = resolve;
+    });
+    let markSecondInitEntered!: () => void;
+    const secondInitEntered = new Promise<void>((resolve) => {
+      markSecondInitEntered = resolve;
+    });
+    let initCalls = 0;
+    const base = successfulRunner();
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init") {
+        initCalls += 1;
+        if (initCalls === 1) markFirstInitEntered();
+        if (initCalls === 2) markSecondInitEntered();
+        await gate;
+      }
+      return base(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const first = invoke(path.join(root, "CasedProject"));
+      await firstInitEntered;
+      // The same physical directory on a case-insensitive volume, so a
+      // case-preserving lock key would let both calls init at once and the
+      // loser's rollback would delete the winner's .git.
+      const second = invoke(path.join(root, "casedproject"));
+      // The waiter can reject as soon as the holder releases the path lease,
+      // before `first` settles; observe it now so that is not unhandled.
+      const secondError = second.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const pathWasProtected = await remainsPending(secondInitEntered);
+      releaseFirst();
+      expect(pathWasProtected).toBe(true);
+
+      await expect(first).resolves.toBeDefined();
+      expect(await secondError).toMatchObject({
+        message: expect.stringContaining("A project already uses this local path"),
+      });
+      expect(initCalls).toBe(1);
+      expect(await storage.loadProjects()).toHaveLength(1);
+    });
+  });
+
+  test("allows different paths to initialize concurrently and persists both", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let bothStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
+    let activeInits = 0;
+    let maxActiveInits = 0;
+    let initCalls = 0;
+    const base = successfulRunner();
+    const runCommand = mock(async (command: string, args: string[] = [], options = {}) => {
+      if (command === "git" && args[2] === "init") {
+        initCalls += 1;
+        activeInits += 1;
+        maxActiveInits = Math.max(maxActiveInits, activeInits);
+        if (initCalls === 2) bothStarted();
+        await gate;
+        activeInits -= 1;
+      }
+      return base(command, args, options);
+    });
+
+    await withProjectCreation(runCommand, async (invoke, storage, root) => {
+      const first = invoke(path.join(root, "first"));
+      const second = invoke(path.join(root, "second"));
+      // A regression that serialized distinct paths would leave `started`
+      // pending forever, so bound the wait and assert rather than hang.
+      const bothEntered = await Promise.race([
+        started.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      ]);
+      release();
+      expect(bothEntered).toBe(true);
+      expect(maxActiveInits).toBe(2);
+      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+      expect(await storage.loadProjects()).toHaveLength(2);
+    });
+  });
+});
+
+describe("GitHub clone command boundaries", () => {
+  test("registers listings, drops extra keys and rejects blank owners before invoking gh", async () => {
+    const calls: string[][] = [];
+    const run: Run = mock(async (_command, args = []) => {
+      calls.push(args);
+      return {
+        stdout: args.includes("user")
+          ? "octocat_acme"
+          : args.includes("graphql")
+            ? JSON.stringify({
+                data: {
+                  repositoryOwner: {
+                    repositories: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+                  },
+                },
+              })
+            : "",
+        stderr: "",
+      };
+    });
+    await withProjectCreation(run, async (_invoke, _storage, _root, _args, command) => {
+      await expect(command("list_github_clone_accounts", {})).resolves.toEqual([
+        { login: "octocat_acme", kind: "user" },
+      ]);
+      await expect(
+        command("list_github_clone_repositories", { owner: "  octocat_acme  " }),
+      ).resolves.toEqual({ repositories: [], truncated: false });
+      expect(calls.find((args) => args.includes("graphql"))).toContain("owner=octocat_acme");
+      // An unknown key is dropped (7005, tolerant arguments): the call is the
+      // same as without it.
+      await expect(command("list_github_clone_accounts", { extra: true })).resolves.toEqual([
+        { login: "octocat_acme", kind: "user" },
+      ]);
+      await expect(
+        command("list_github_clone_repositories", { owner: "acme", extra: true }),
+      ).resolves.toEqual({ repositories: [], truncated: false });
+      expect(calls.at(-1)).toContain("owner=acme");
+      expect(calls.at(-1)?.some((arg) => arg.includes("extra"))).toBe(false);
+      const count = calls.length;
+      for (const [name, args] of [
+        ["list_github_clone_repositories", { owner: "" }],
+        ["list_github_clone_repositories", { owner: "   " }],
+        ["list_github_clone_repositories", { owner: "--help" }],
+        ["list_github_clone_repositories", {}],
+      ] as const)
+        await expect(command(name, args)).rejects.toThrow();
+      expect(calls).toHaveLength(count);
+      await expect(
+        command("add_project", { gitUrl: "https://github.com/acme/api.git", cloneOnly: "true" }),
+      ).rejects.toThrow();
+      await expect(
+        command("add_project", { gitUrl: "https://github.com/acme/api.git", cloneOnly: true }),
+      ).rejects.toThrow("Clone destination is required");
+    });
+  });
+
+  test("clone-only rejects unrelated files and a different origin without registering", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const selected = "https://github.com/acme/api.git";
+      const plain = path.join(root, "plain");
+      await fs.mkdir(plain);
+      await fs.writeFile(path.join(plain, "keep.txt"), "keep");
+      const checkout = path.join(root, "other");
+      await createCloneSource(checkout);
+      await shellRunCommand("git", [
+        "-C",
+        checkout,
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/acme/other.git",
+      ]);
+      const nested = path.join(checkout, "nested");
+      await fs.mkdir(nested);
+      await fs.writeFile(path.join(nested, "keep.txt"), "keep");
+      for (const localPath of [plain, checkout, nested]) {
+        await expect(
+          command("add_project", { gitUrl: selected, localPath, cloneOnly: true }),
+        ).rejects.toThrow("Clone destination is not empty");
+      }
+      expect(await storage.loadProjects()).toEqual([]);
+      expect(await fs.readFile(path.join(plain, "keep.txt"), "utf8")).toBe("keep");
+    });
+  });
+
+  test("clone-only rejects a subdirectory even when its checkout origin matches", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const checkout = path.join(root, "matching");
+      await createCloneSource(checkout);
+      const selected = "https://github.com/acme/api.git";
+      await shellRunCommand("git", ["-C", checkout, "remote", "add", "origin", selected]);
+      const nested = path.join(checkout, "nested");
+      await fs.mkdir(nested);
+      await fs.writeFile(path.join(nested, "keep.txt"), "keep");
+      await expect(
+        command("add_project", { gitUrl: selected, localPath: nested, cloneOnly: true }),
+      ).rejects.toThrow("Clone destination is not empty");
+      expect(await storage.loadProjects()).toEqual([]);
+      expect(await fs.readFile(path.join(nested, "keep.txt"), "utf8")).toBe("keep");
+    });
+  });
+
+  for (const stage of ["root", "origin"] as const) {
+    for (const [failure, message] of [
+      [
+        new CommandFailedError("spawn git ENOENT", { executableMissing: true }),
+        "Git is not installed or available on PATH",
+      ],
+      [new CommandFailedError("", { timedOut: true }), "Git inspection timed out"],
+      [new CommandFailedError("permission denied", { exitCode: 128 }), "permission denied"],
+      [new CommandFailedError("unable to read config", { exitCode: 1 }), "unable to read config"],
+    ] as const) {
+      test(`preserves ${message} during ${stage} inspection`, async () => {
+        const run: Run = mock(async (_command, args = []) => {
+          if (stage === "root" || args.includes("config")) throw failure;
+          return { stdout: args[1]!, stderr: "" };
+        });
+        await withProjectCreation(run, async (_invoke, storage, root, _args, command) => {
+          const localPath = path.join(root, "occupied");
+          await fs.mkdir(localPath);
+          await fs.writeFile(path.join(localPath, "keep.txt"), "keep");
+          await expect(
+            command("add_project", {
+              gitUrl: "https://github.com/acme/api.git",
+              localPath,
+              cloneOnly: true,
+            }),
+          ).rejects.toThrow(message);
+          expect(await storage.loadProjects()).toEqual([]);
+          expect(await fs.readFile(path.join(localPath, "keep.txt"), "utf8")).toBe("keep");
+        });
+      });
+    }
+  }
+
+  test("clone-only rejects a checkout without an origin as a mismatch", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const localPath = path.join(root, "no-origin");
+      await createCloneSource(localPath);
+      await expect(
+        command("add_project", {
+          gitUrl: "https://github.com/acme/api.git",
+          localPath,
+          cloneOnly: true,
+        }),
+      ).rejects.toThrow("Clone destination is not empty");
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test("clone-only checks occupied destinations after waiting for the path lock", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const localPath = path.join(root, "waiting");
+      const key = comparableProjectPath(await canonicalProjectPath(localPath));
+      let release!: () => void;
+      let entered!: () => void;
+      const enteredPromise = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = storage.withProjectCreationLock(key, async () => {
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      });
+      await enteredPromise;
+      const adding = command("add_project", {
+        gitUrl: "https://github.com/acme/api.git",
+        localPath,
+        cloneOnly: true,
+      });
+      // Handle rejection immediately, then assert after the lock is released.
+      const rejected = adding.catch((error: Error) => error);
+      try {
+        expect(await remainsPending(adding)).toBe(true);
+        await fs.mkdir(localPath);
+        await fs.writeFile(path.join(localPath, "keep.txt"), "keep");
+      } finally {
+        release();
+      }
+      await held;
+      expect(((await rejected) as Error).message).toContain("Clone destination is not empty");
+      expect(await storage.loadProjects()).toEqual([]);
+    });
+  });
+
+  test("clone-only retries registration of a matching checkout across SSH and HTTPS", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const localPath = path.join(root, "retry");
+      await createCloneSource(localPath);
+      await shellRunCommand("git", [
+        "-C",
+        localPath,
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:Acme/API.git",
+      ]);
+      const project = (await command("add_project", {
+        gitUrl: "https://github.com/acme/api.git",
+        localPath,
+        cloneOnly: true,
+      })) as Project;
+      expect(project.localPath).toBe(localPath);
+      expect(await storage.loadProjects()).toHaveLength(1);
+      expect(await fs.readFile(path.join(localPath, "README.md"), "utf8")).toBe("cloned content\n");
+    });
+  });
+
+  test("clone-only clones a missing destination and registers the checkout", async () => {
+    await withProjectCreation(shellRunCommand, async (_invoke, storage, root, _args, command) => {
+      const source = path.join(root, "source");
+      await createCloneSource(source);
+      const localPath = path.join(root, "clone-only");
+      await command("add_project", { gitUrl: source, localPath, cloneOnly: true });
+      expect(await storage.loadProjects()).toHaveLength(1);
+      expect(await fs.readFile(path.join(localPath, "README.md"), "utf8")).toBe("cloned content\n");
+    });
+  });
+});

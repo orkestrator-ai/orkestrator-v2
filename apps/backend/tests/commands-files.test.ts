@@ -1,6 +1,6 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 
-import { parseContainerGitStatusEnvelope } from "../src/core/commands-files.js";
+import { parseContainerGitStatusEnvelope } from "../src/core/commands/files.js";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

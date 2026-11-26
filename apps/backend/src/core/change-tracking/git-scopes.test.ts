@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { createHarness, git, type Harness } from "./service-test-support.js";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
 import { createGitFetchScheduler } from "../diff-stats-tracking.js";
-import { getLocalGitStatusDetailed } from "../commands-files.js";
+import { getLocalGitStatusDetailed } from "../commands/files.js";
 import { observeCommandInvocations } from "../shell.js";
-import { UNTRACKED_SCAN_CONCURRENCY } from "../commands-validation.js";
+import { UNTRACKED_SCAN_CONCURRENCY } from "../commands/validation.js";
 import { committedHead, gitScopeResourceKey } from "./git-scopes.js";
 
 const harnesses: Harness[] = [];

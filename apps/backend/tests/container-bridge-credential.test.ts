@@ -25,7 +25,7 @@ import {
   readContainerBridgeToken,
   removeContainerBridgeCredential,
 } from "../src/core/containers/bridge-credential";
-import { startContainerClaudeServer, startContainerServer } from "../src/core/commands-containers";
+import { startContainerClaudeServer, startContainerServer } from "../src/core/commands/containers";
 import { createCommandFixtures } from "./command-fixtures";
 
 const { fs, reserveFreePort, withFakeDocker } = await createCommandFixtures();

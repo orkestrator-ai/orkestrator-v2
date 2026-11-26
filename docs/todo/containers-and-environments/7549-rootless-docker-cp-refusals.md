@@ -51,7 +51,7 @@ directory on such a filesystem (a separately mounted `/home` with
 `nosuid,nodev`, or a tmpfs) breaks every `docker cp` the backend runs
 against its runtimes: the exited-boot record (`readExitedBootFailure` in
 `containers/readiness.ts`, which then reports `container-exited` instead of
-the recorded code), project files (`commands-project-files.ts`), project
+the recorded code), project files (`commands/project-files.ts`), project
 seed files (`containers/project-seed-files.ts`), the rebuild copy
 (`pipeContainerPath` in `containers/replacement.ts`) and the GitHub seed
 (`copyGithubRangesSeed`). None of these errors is classified as a topology
@@ -141,7 +141,7 @@ container: project seed files (`copyProjectSeedFilesIntoContainer`),
 configured project files (`stageConfiguredProjectFilesForContainer`) and
 the GitHub ranges seed (`copyGithubRangesSeed`, for runtimes and egress
 gateways). The first two remove the container and fail the creation when
-the copy fails (`commands-containers.ts`, around the
+the copy fails (`commands/containers.ts`, around the
 `copyProjectSeedFilesIntoContainer` call), so on such a daemon a project
 with a `.env` seed file or configured project files cannot get a container.
 The seed copy is best effort and only logs `github-ranges.seed-not-copied`
@@ -363,7 +363,7 @@ Steps:
    the next automatic ports.
 
 What was built (see "Assumptions and decisions"): when the daemon is
-rootless, container creation (`commands-containers.ts`) passes every
+rootless, container creation (`commands/containers.ts`) passes every
 automatic loopback mapping through `chooseBackendHostPorts`
 (`containers/host-ports.ts`), which binds `127.0.0.1:0` on the host for each,
 keeps them all bound until every port is chosen, releases them and

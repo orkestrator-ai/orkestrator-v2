@@ -15,7 +15,7 @@
 // worker identity (`worker-mail.ts`, `pipeline-worker-identity.ts`) and the
 // workflow summary a coordinator reads (`control-workflow-summary.ts`). The
 // build-pipeline store (`storage/build-pipelines.ts`), the build commands
-// (`commands-registry-build.ts`), Auto-pipeline (`auto-pipeline*.ts`) and the
+// (`commands/registry-build.ts`), Auto-pipeline (`auto-pipeline*.ts`) and the
 // coordinator's status line (`coordinator/build-pipeline-status.ts`) stay
 // with their own groups.
 //

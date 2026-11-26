@@ -1,6 +1,6 @@
 /**
  * The host OpenCode server's launch, for the local-server supervisor
- * (`startLocalServerAttempt` in `commands-servers.ts`, kind `opencode`).
+ * (`startLocalServerAttempt` in `commands/servers.ts`, kind `opencode`).
  *
  * The supervisor owns the process (spawn, ownership, health, the recorded
  * port and pid, the coordinator's Control MCP credential and its revocation
@@ -43,8 +43,8 @@ import {
 import { ProviderUnavailableError } from "../agent-provider-contract.js";
 import { ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV } from "../agent-tools.js";
 import { pushedLoginHostFile } from "../agent-accounts/index.js";
-import { resolveOpenCode2Binary } from "../commands-agent-support.js";
-import type { CommandContext } from "../commands-context.js";
+import { resolveOpenCode2Binary } from "../commands/agent-support.js";
+import type { CommandContext } from "../commands/index.js";
 import { loadCoordinatorResearch } from "../coordinator/index.js";
 import { OpenCode2Client } from "./client.js";
 import {

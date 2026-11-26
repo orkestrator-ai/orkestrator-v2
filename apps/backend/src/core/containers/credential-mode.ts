@@ -1,4 +1,4 @@
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { ContainerCredentialMode } from "./bridge-credential.js";
 import { containerImageCapabilitySupport } from "../claude-state-signal.js";
 

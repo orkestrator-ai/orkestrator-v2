@@ -10,7 +10,7 @@ import {
 } from "@orkestrator/protocol/graphs/library";
 import { graphTemplateDigest } from "@orkestrator/protocol/graphs/compile";
 import { parseGraphTemplate, type GraphTemplateV1 } from "@orkestrator/protocol/graphs/template";
-import { isPathInsideRoot } from "./commands-project-files.js";
+import { isPathInsideRoot } from "./commands/index.js";
 import { GraphTemplateError } from "./graph-template-errors.js";
 import { watchDirectory } from "./watch-host.js";
 

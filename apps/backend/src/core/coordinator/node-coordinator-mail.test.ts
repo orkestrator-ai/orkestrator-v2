@@ -17,10 +17,10 @@ import { COMMAND_NODE_COORDINATOR_MAIL_ADDRESS } from "@orkestrator/protocol/coo
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerCoordinatorNodeCommands } from "../commands-registry-coordinator-nodes.js";
-import { registerNodeCommands } from "../commands-registry-nodes.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerCoordinatorNodeCommands } from "../commands/registry-coordinator-nodes.js";
+import { registerNodeCommands } from "../commands/registry-nodes.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { registerCoordinatorCommandNodeMail } from "./node-coordinator-mail.js";
 import { nodeMailReplyTarget } from "../node-mail-reply-target.js";
 import { NodeCoordination } from "../nodes/node-coordination.js";

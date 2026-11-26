@@ -23,7 +23,7 @@ import {
   GRAPH_FAILING_CHECK_CONCLUSIONS,
   type GraphCheckSummaryState,
 } from "@orkestrator/protocol/graphs/types";
-import { parsePrCheckSummary } from "./commands-review.js";
+import { parsePrCheckSummary } from "./commands/review.js";
 import { resolveGitHubRepository } from "./git/index.js";
 import {
   GraphSystemActionError,

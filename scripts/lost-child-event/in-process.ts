@@ -35,7 +35,7 @@ import { expect, mock, onTestFinished, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { environmentBaselineCommit } from "@orkestrator/protocol/diff-stats";
-import { discardedRuntimeSetupUpdates } from "../../apps/backend/src/core/commands-environment";
+import { discardedRuntimeSetupUpdates } from "../../apps/backend/src/core/commands/environment";
 import {
   diffBaseGitForEnvironment,
   listDiffBaseBranches,

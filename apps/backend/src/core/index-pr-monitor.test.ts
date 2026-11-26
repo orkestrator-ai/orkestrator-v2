@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { OrkestratorBackend } from "./index.js";
 import { createEnvironment } from "./storage/service.js";
 import { seedStore, storageDatabase } from "./storage/test-support.js";

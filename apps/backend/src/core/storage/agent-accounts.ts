@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { parseAgentAccountStore, type AgentAccountStore } from "../agent-accounts/store.js";
+import { type AgentAccountStore, parseAgentAccountStore } from "../agent-accounts/index.js";
 import type { StorageContext } from "./context.js";
 
 /** The registry of provider accounts (`agent-accounts.json`). */

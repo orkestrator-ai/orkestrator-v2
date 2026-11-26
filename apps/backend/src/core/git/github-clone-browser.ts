@@ -10,7 +10,7 @@ import {
   type GitHubCloneRepositoryList,
 } from "@orkestrator/protocol/github-clone";
 import { CommandFailedError, type runCommand } from "../shell.js";
-import { conciseError } from "../commands-error-text.js";
+import { conciseError } from "../commands/index.js";
 
 const GITHUB_HOST = "github.com";
 const GITHUB_API_TIMEOUT_MS = 30_000;

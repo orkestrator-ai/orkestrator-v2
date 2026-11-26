@@ -11,8 +11,8 @@
 // `parse-scheduler.ts` and the control-sequence scanners in
 // `history-scanners.ts`; `size-ownership.ts` decides which client owns a
 // shared terminal's size. `history-test-support.ts` is the history tests'
-// harness. The terminal command handlers (`commands-terminal*.ts`,
-// `commands-registry-terminal.ts`), the PTY wrapper (`pty.ts`), the container
+// harness. The terminal command handlers (`commands/terminal*.ts`,
+// `commands/registry-terminal.ts`), the PTY wrapper (`pty.ts`), the container
 // shell (`containers/terminal-shell.ts`) and the setup terminal
 // (`setup-terminal-attempt.ts`) stay with their own groups, and the claude-tmux
 // pane terminal is in `tmux/`.

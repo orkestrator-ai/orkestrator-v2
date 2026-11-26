@@ -37,8 +37,7 @@ import {
   type ArtifactError,
   type ArtifactErrorCode,
 } from "@orkestrator/protocol/transcript-artifacts";
-import type { CommandContext } from "../commands-context.js";
-import type { CommandRegistrar } from "../commands-registry-types.js";
+import type { CommandContext, CommandRegistrar } from "../commands/index.js";
 import type { TranscriptArtifactService } from "./service.js";
 import path from "node:path";
 import { TranscriptMediaStreams, type MediaStreamServer } from "./media-stream.js";

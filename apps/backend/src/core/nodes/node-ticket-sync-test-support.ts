@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,8 +7,8 @@ import path from "node:path";
 import { repositoryHint } from "@orkestrator/protocol/node-summaries";
 import { TICKET_SYNC_OUTBOX_READY_EVENT } from "@orkestrator/protocol/ticket-sync";
 
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerTicketSyncCommands } from "../commands/registry-ticket-sync.js";
 import { createProject, StorageService } from "../storage/service.js";
 import type { ContractEnvelope } from "./node-link.js";
 import { LeafTicketImageWants } from "./node-ticket-images.js";

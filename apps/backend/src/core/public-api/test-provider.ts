@@ -3,7 +3,7 @@ import type { AgentInteractionRequest } from "@orkestrator/protocol/agent-intera
 import type { BuildPipelineAgent } from "@orkestrator/protocol/build-pipeline";
 import { nativeTabLogicalSessionKey } from "@orkestrator/protocol/public-api-resources";
 import { AgentRegistry } from "../agent-registry.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { NativeAgentServiceOptions } from "../native-agent/service-shared.js";
 import type { NativeAgentRuntimeProvider } from "../native-agent/provider.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "../native-agent/service.js";

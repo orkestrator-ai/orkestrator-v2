@@ -48,8 +48,8 @@ export const HOST_STATE_ROOT = "cursor-bridge-state";
  * Where the probe beside this bridge runs, from the launcher's own contract.
  *
  * The bridge is told nothing else about where it runs: the container launcher
- * (`commands-registry-servers.ts`) sets {@link CONTAINER_STATE_DIRECTORY}, the
- * host launcher (`commands-servers.ts`) sets `<dataDir>/cursor-bridge-state/<env>`.
+ * (`apps/backend/src/core/commands/registry-servers.ts`) sets {@link CONTAINER_STATE_DIRECTORY}, the
+ * host launcher (`apps/backend/src/core/commands/servers.ts`) sets `<dataDir>/cursor-bridge-state/<env>`.
  * Anything else — a hand-started bridge, a stateless one — is `unknown`, and
  * then no observation is reported rather than one labelled with a guess.
  */

@@ -13,7 +13,7 @@ import {
   generateClaudeAgentVoiceChatReply,
   generateCodexAgentVoiceChatReply,
 } from "./agent-voice-chat-replies.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import type { SessionTitleRunInput } from "./session-title-runners.js";
 
 /** The one-shot reply runs, with a scripted process in place of the CLI. */

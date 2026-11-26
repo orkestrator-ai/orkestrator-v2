@@ -26,7 +26,7 @@ interchangeable. What *is* shared is the shape around them.
 Read `AGENTS.md` first — the background-reliability and transport invariants it
 lists are the reason these engines are built the way they are. In short:
 
-1. **The backend owns the process, not the renderer.** `apps/backend/src/core/commands.ts`
+1. **The backend owns the process, not the renderer.** `apps/backend/src/core/commands/`
    spawns every bridge and server, keyed by environment id, and keeps them alive
    across tab switches and component unmounts. A React tree unmounting means
    "not currently visible", never "cancel the work".
@@ -88,7 +88,7 @@ Tab close is `POST /session/:id/close` on every bridge. It answers 200
 `{closed:true,retained:true}`, or 200 `{closed:true,missing:true}` for an id it
 does not hold (never 404), or 503 `{closed:false,pending:true,error}` when it
 cannot prove the work stopped — in which case the session stays registered.
-The backend (`commands-registry-teardown.ts`, `bridge-session-close.ts`) keeps
+The backend (`commands/registry-teardown.ts`, `bridge-session-close.ts`) keeps
 its durable teardown intent until a 2xx arrives. A 404/405 from the route is
 an unconfirmed close like any other failure: the close stays pending on every
 platform and never falls back to `DELETE /session/:id`, which no current bridge
@@ -840,7 +840,7 @@ Codex's reasoning summary (`summary`) and `personality` are not offered.
 `model/list` reports no summary support, and upstream deprecated
 `personality` (`supportsPersonality` is always false). Codex's own
 `config.toml` still applies to both. The backend's Codex catalogue rows carry
-no `parameters` (`normalizedCodexModels` in `commands-registry-projects.ts`),
+no `parameters` (`normalizedCodexModels` in `commands/registry-projects.ts`),
 so the composer has no Codex parameter control and Codex has no entry in
 `SUPPRESSED_COMPOSER_PARAMETERS`. A `summary` value an older session record
 still holds is retired for Codex only (`native-agent/retired-parameters.ts`):
@@ -939,7 +939,7 @@ its SDK were retired on 2026-11-11: there is no 1.x server, no
 **Where the server runs.**
 
 - *Local environments and coordinators:* the environment's `opencode` local
-  server. The generic supervisor (`startLocalServer` in `commands-servers.ts`)
+  server. The generic supervisor (`startLocalServer` in `commands/servers.ts`)
   owns the process under `opencode:<environmentId>`, so it is stopped with the
   environment, on backend shutdown and on a worktree move, reaped after a
   backend crash (`local-server-reaper.ts`, at the next backend's start; on
@@ -1760,9 +1760,9 @@ in one environment at once without sharing anything.
 
 All three launch paths build the bridge's launcher record from one place,
 `apps/backend/src/core/acp-provider-launch.ts`: the host bridge
-(`commands-servers.ts`), the cold model-catalogue probe
+(`commands/servers.ts`), the cold model-catalogue probe
 (`host-model-catalog-refresh.ts`) and the container launch
-(`commands-registry-servers.ts`). Each bridge is started with a
+(`commands/registry-servers.ts`). Each bridge is started with a
 `--provider=<kind>` argument the bridge ignores, so the orphan reaper can tell
 a Grok bridge from an Antigravity one (`commandMatchesRecordedServer`); the
 process-field routing (`localServerFields`) is exhaustive, so a new kind

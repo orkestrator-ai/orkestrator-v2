@@ -35,7 +35,7 @@ Code loads them automatically when it reads a file there, other agents may not.
 | Rich interactions (`rich-interactions/`, `components/chat/interactions/`, `rich_interaction_*` commands, the interaction agent tools, frame `result-candidate`) | [`docs/architecture/rich-interactions.md`](docs/architecture/rich-interactions.md) |
 | Rendered UI or browser-visible behavior | [`docs/development/agent-testing.md`](docs/development/agent-testing.md) |
 | The renderer's Content Security Policy, the preload sandbox, renderer permissions | [`docs/architecture/renderer-security.md`](docs/architecture/renderer-security.md) |
-| Backend commands (`commands-registry*.ts`, `packages/protocol/src/contract/**`): adding, converting or changing a command or domain | [`docs/architecture/version-compatibility.md`](docs/architecture/version-compatibility.md#domain-contracts) |
+| Backend commands (`commands/registry*.ts`, `packages/protocol/src/contract/**`): adding, converting or changing a command or domain | [`docs/architecture/version-compatibility.md`](docs/architecture/version-compatibility.md#domain-contracts) |
 | Logging, `createLogger`, log areas and events, the Electron relay, live logging settings | [`docs/architecture/logging.md`](docs/architecture/logging.md) |
 | Writing or debugging tests, `mock.module()` | [`docs/development/testing-guide.md`](docs/development/testing-guide.md) |
 | Lint findings and disable directives | [`docs/development/linting.md`](docs/development/linting.md) |
@@ -236,8 +236,8 @@ the container image in `docker/`.
 - **Zustand** for global state (`apps/web/src/stores/`), React Context for
   component-tree state (`apps/web/src/contexts/`). Stores use the
   `Map<string, T>` pattern for per-environment/per-session state.
-- Register backend commands in `apps/backend/src/core/commands.ts` through
-  `createCommandRegistry()`, using the existing `CommandContext` and
+- Register backend commands in `apps/backend/src/core/commands/` through
+  `createCommandRegistry()` (`registry.ts`), using the existing `CommandContext` and
   `StorageService` patterns rather than renderer-only state.
 - Desktop windows and views with a preload run `sandbox: true`, so preloads are
   bundled as CommonJS and may require only `electron`; see
@@ -1149,7 +1149,7 @@ names at all. Three invariants keep it honest:
 
 | File                                   | Purpose                                                  |
 | -------------------------------------- | -------------------------------------------------------- |
-| `apps/backend/src/core/commands.ts`    | Backend command registry and Docker/local env management |
+| `apps/backend/src/core/commands/`      | Backend command registry and Docker/local env management |
 | `apps/backend/src/core/tmux/`          | Claude tmux mode backend                                 |
 | `apps/backend/src/core/storage/service.ts`     | `StorageService` (SQLite-backed; see `docs/architecture/storage.md`) |
 | `apps/desktop/electron/ipc.ts`         | Main-process IPC handlers                                |
@@ -1287,7 +1287,7 @@ Three constraints apply:
   user namespaces, so enabling Chromium's own sandbox fails with "Chromium
   sandboxing failed!". The container is the isolation boundary.
 - Containers are created with `--shm-size=1g`
-  (`apps/backend/src/core/commands-containers.ts`), because Chromium keeps
+  (`apps/backend/src/core/commands/containers.ts`), because Chromium keeps
   renderer shared memory in `/dev/shm` and Docker's 64MB default is far below
   what a real page needs. That failure surfaces as a renderer crash part-way
   through a run ("Target page, context or browser has been closed"), not as a

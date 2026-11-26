@@ -24,7 +24,8 @@ import {
   resolveCoordinatorRuntime,
 } from "../coordinator/runtime.js";
 import { seedLegacyPromptQueueClaim } from "../storage/test-support.js";
-import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { extractMarkedAttachmentReferences } from "@orkestrator/protocol/initial-prompt-attachments";
 
 const identity = {

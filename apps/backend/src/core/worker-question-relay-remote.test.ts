@@ -6,8 +6,8 @@ import { coordinatorRoleCapabilities, type CoordinatorControlScope } from "./con
 import { ControlMcpServer } from "./control-mcp/server.js";
 import { MailWorld } from "./agent-mail-world-test-support.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import { createCommandRegistry } from "./commands-registry.js";
-import type { CommandContext, CommandHandler } from "./commands-context.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext, CommandHandler } from "./commands/context.js";
 import { NodeCoordination } from "./nodes/node-coordination.js";
 import { createEnvironment, createProject, StorageService } from "./storage/service.js";
 

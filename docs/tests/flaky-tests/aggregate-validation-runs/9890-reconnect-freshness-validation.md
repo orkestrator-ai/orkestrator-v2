@@ -24,7 +24,7 @@ Current path for the relocated file: `apps/backend/src/core/native-agent/command
   Browser and Electron scenario suites were not selected for these test-only
   renderer changes.
 - **Failures:**
-  - `apps/backend/src/core/commands-state-sync.test.ts:3186`,
+  - `apps/backend/src/core/commands/state-sync.test.ts:3186`,
     `durable tab teardown commands > times out a hanging provider delete without blocking other intents`:
     the reconcile result was correct, but the elapsed bound expected less than
     250 ms and received 336.97 ms (376.15 ms test duration). Recurrence of
@@ -39,12 +39,12 @@ Current path for the relocated file: `apps/backend/src/core/native-agent/command
   - `apps/backend/src/core/native-agent-command-catalogue-scale.test.ts`,
     `command catalogue under load > 256 maximal inventories stay within the byte budget with exact accounting and LRU eviction`:
     exceeded the unchanged 5000 ms timeout (5838.18 ms).
-  - `apps/backend/src/core/commands-registry-teardown.test.ts:263`,
+  - `apps/backend/src/core/commands/registry-teardown.test.ts:263`,
     `tab close retains conversation history > a bridge close can finish after the legacy request budget`:
     expected `teardown_tab` to resolve `{ completed: true }`, but the promise
     rejected (408.08 ms).
 - **Complete owning-file rerun:**
-  `mise run test:logged -- --name backend-failure-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts ./tests/recurring-baseline.test.ts ./src/core/agent-accounts-active.test.ts --parallel=1 --only-failures`.
+  `mise run test:logged -- --name backend-failure-owners -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/state-sync.test.ts ./tests/recurring-baseline.test.ts ./src/core/agent-accounts-active.test.ts --parallel=1 --only-failures`.
   Bun isolated the files and ran one worker. Result: 199 passed, one failed,
   868 expectations across three files (71.5 s logged). The complete teardown
   and account-login owners passed unchanged. The baseline owner again
@@ -55,7 +55,7 @@ Current path for the relocated file: `apps/backend/src/core/native-agent/command
   across nine tests (10.0 s logged). This owner remains unresolved under the
   same host load; it is not established as a new flake by this rerun.
 - **Complete bridge-close owner rerun:**
-  `mise run test:logged -- --name teardown-registry-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-registry-teardown.test.ts --parallel=1 --only-failures`
+  `mise run test:logged -- --name teardown-registry-owner -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/registry-teardown.test.ts --parallel=1 --only-failures`
   passed unchanged (8.6 s logged). This establishes intermittence for the
   bridge-close failure; no owner assertion or timeout was changed.
 - **Earlier full run:** `mise run test:logged -- --name reconnect-repository -- mise run test`

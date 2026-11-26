@@ -7,10 +7,9 @@ import {
   captureWorktreePathIdentity,
 } from "@orkestrator/protocol/node/worktree-paths";
 
-import type { CommandContext } from "../commands-context.js";
-import { stopLocalServersForEnvironmentUnlocked } from "../commands-local-server-lifecycle.js";
-import { assertEnvironmentDeletionNotRequested } from "../commands-terminal.js";
-import { enqueueEnvironmentLifecycleOperation } from "../commands-environment.js";
+import { assertEnvironmentDeletionNotRequested, type CommandContext } from "../commands/index.js";
+import { stopLocalServersForEnvironmentUnlocked } from "../commands/local-server-lifecycle.js";
+import { enqueueEnvironmentLifecycleOperation } from "../commands/environment.js";
 import type { EnvironmentMutationFence } from "./replacement-fence.js";
 import { stopGitFsmonitorDaemon } from "../git/index.js";
 import {

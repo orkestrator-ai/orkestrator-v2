@@ -3,7 +3,7 @@ import path from "node:path";
 import { dockerContainerRuntimeName, dockerOwnerNamespace } from "../src/core/containers/ownership";
 
 const { countPrunedDockerResources, dockerOwnerMatches, parseDockerByteSize } = (
-  await import("../src/core/commands")
+  await import("../src/core/commands/testing")
 ).__testing;
 
 describe("Docker registry ownership", () => {

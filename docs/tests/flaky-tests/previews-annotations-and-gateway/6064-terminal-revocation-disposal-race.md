@@ -22,6 +22,6 @@ waits for the server socket count to reach zero before asserting the complete
 zero-gauge snapshot. It still requires queued input and resize to be refused;
 no assertion or timeout was removed or relaxed.
 
-`mise run test:logged -- --name fixes-backend-owner -- bash -c 'cd apps/backend && NODE_ENV=test bun test ./src/core/commands-registry-coordinator-nodes.test.ts ./tests/gateway-events.test.ts --parallel=2 --only-failures'`
+`mise run test:logged -- --name fixes-backend-owner -- bash -c 'cd apps/backend && NODE_ENV=test bun test ./src/core/commands/registry-coordinator-nodes.test.ts ./tests/gateway-events.test.ts --parallel=2 --only-failures'`
 passed in 3.5 seconds after the fix. The aggregate rerun is recorded in the
 Address Findings result.

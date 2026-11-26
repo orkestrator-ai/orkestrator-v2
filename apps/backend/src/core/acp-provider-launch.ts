@@ -4,9 +4,9 @@
  * Grok and Antigravity both run on `bridges/acp-bridge`, as separate
  * processes with separate state. The bridge's behaviour for each comes from
  * a launcher record (`ACP_PROVIDER_CONFIG`) the backend builds. The host
- * bridge (`commands-servers.ts`), the cold catalogue probe
+ * bridge (`commands/servers.ts`), the cold catalogue probe
  * (`host-model-catalog-refresh.ts`) and the container launch
- * (`commands-registry-servers.ts`) all take it from here, so no launch path
+ * (`commands/registry-servers.ts`) all take it from here, so no launch path
  * can start Grok's flags for an Antigravity selection, or the other way round.
  *
  * Provider quirks that must hold whatever a record says stay in the bridge,

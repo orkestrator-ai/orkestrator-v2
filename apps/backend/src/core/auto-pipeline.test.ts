@@ -13,7 +13,7 @@ import {
 } from "./auto-pipeline.js";
 import { withService, pipeline } from "./build-pipeline/service-test-support.js";
 import { seedStore } from "./storage/test-support.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import type { StorageService } from "./storage/service.js";
 
 const result = {

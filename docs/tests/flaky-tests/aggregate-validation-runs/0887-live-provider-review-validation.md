@@ -35,7 +35,7 @@ isolated Bun worker. Exact commands:
 
 ```sh
 mise run test:logged -- --name review-worker-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/review-validation-worker.test.ts --parallel=1 --only-failures
-mise run test:logged -- --name state-sync-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-state-sync.test.ts --parallel=1 --only-failures
+mise run test:logged -- --name state-sync-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/state-sync.test.ts --parallel=1 --only-failures
 mise run test:logged -- --name terminal-history-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/terminal-history.test.ts --parallel=1 --only-failures
 mise run test:logged -- --name kanban-concurrency-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/storage/kanban-concurrency.test.ts --parallel=1 --only-failures
 mise run test:logged -- --name summary-transcripts-isolated -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/native-agent-service-summary-transcripts.test.ts --parallel=1 --only-failures

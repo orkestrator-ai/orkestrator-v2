@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands-files.js";
+import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands/files.js";
 
 const STAGED = "LINEAR_FILE_STAGED\n";
 

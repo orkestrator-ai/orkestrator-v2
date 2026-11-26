@@ -4,7 +4,7 @@ import {
   type BuildPipeline,
   type PipelineSession,
 } from "@orkestrator/protocol/build-pipeline";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import type { PersistedBuildPipeline } from "../models.js";
 import {
   adoptPipelineResolveSessionIntoTab,

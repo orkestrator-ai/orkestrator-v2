@@ -16,7 +16,7 @@ web counterpart of `orkestrator --fix AGENT`
 | Host facts (versions, logs, backend descriptor; never contents) | [`packages/protocol/src/node/bug-report-facts.ts`](../../packages/protocol/src/node/bug-report-facts.ts) |
 | Report records (`bug-reports.json`) | [`storage/bug-reports.ts`](../../apps/backend/src/core/storage/bug-reports.ts) |
 | Synthetic runtime `bug-report:<id>` | [`bug-report-runtime.ts`](../../apps/backend/src/core/bug-report-runtime.ts) |
-| Create, assign, draft, screenshot, file, discard | [`bug-report-service.ts`](../../apps/backend/src/core/bug-report-service.ts), commands in [`commands-registry-bug-reports.ts`](../../apps/backend/src/core/commands-registry-bug-reports.ts) |
+| Create, assign, draft, screenshot, file, discard | [`bug-report-service.ts`](../../apps/backend/src/core/bug-report-service.ts), commands in [`commands/registry-bug-reports.ts`](../../apps/backend/src/core/commands/registry-bug-reports.ts) |
 | Sheet | [`BugReportSheet.tsx`](../../apps/web/src/components/bug-report/BugReportSheet.tsx), hosted once per window by `AppShell` (`BugReportSheetHost`) |
 | Machine routing | [`open-bug-report.ts`](../../apps/web/src/lib/bug-report/open-bug-report.ts) |
 | App context and renderer errors | [`client-context.ts`](../../apps/web/src/lib/bug-report/client-context.ts), [`renderer-errors.ts`](../../apps/web/src/lib/bug-report/renderer-errors.ts) |

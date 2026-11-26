@@ -1,5 +1,5 @@
 import { eventSink } from "../backend-emit.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -24,8 +24,8 @@ import {
 import type { PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { SCHEDULED_JOB_LIMITS } from "@orkestrator/protocol/scheduled-jobs";
 import { readProjectUsageLimits } from "../agent-usage-limits.js";
-import type { CommandContext } from "../commands-context.js";
-import { registerScheduledJobCommands } from "../commands-registry-scheduled-jobs.js";
+import type { CommandContext } from "../commands/context.js";
+import { registerScheduledJobCommands } from "../commands/registry-scheduled-jobs.js";
 import { rpc } from "../control-mcp/test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "../control-mcp/server.js";
 import { coordinatorRoleCapabilities } from "../control-mcp/tools.js";
@@ -119,7 +119,7 @@ function snapshotOf(machine: string): AgentAccountsSnapshot {
   };
 }
 
-/** The machine-local account commands, as `commands-registry-accounts.ts` serves them. */
+/** The machine-local account commands, as `commands/registry-accounts.ts` serves them. */
 function accountCommand(machine: string, command: string, args: Record<string, unknown>): unknown {
   switch (command) {
     case "list_agent_accounts":

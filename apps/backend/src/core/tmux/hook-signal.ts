@@ -1,5 +1,5 @@
 import type { StateSignalCredential } from "../agent-tools.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import {
   armedSignalHealth,
   emptySignalHealthStates,

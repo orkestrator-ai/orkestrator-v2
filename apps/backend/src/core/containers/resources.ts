@@ -20,7 +20,7 @@ import {
 } from "../constants.js";
 import { dockerOwnerNamespace } from "./ownership.js";
 import { runCommand } from "../shell.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { AppConfig, Environment } from "../models.js";
 import {
   ContainerLifecycleError,

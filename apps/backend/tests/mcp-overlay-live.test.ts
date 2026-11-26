@@ -21,7 +21,7 @@ import {
   readContainerBootId,
   readContainerMcpFile,
   writeContainerMcpFile,
-} from "../src/core/commands-registry-mcp";
+} from "../src/core/commands/registry-mcp";
 import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { DOCKER_LABEL_INPUTS_REVISION } from "../src/core/constants";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
@@ -433,7 +433,7 @@ describe("a real rebuild re-stages the backend user's inputs", () => {
   live(
     "a rebuild creates its candidate from freshly staged inputs; in-container edits do not survive",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { replaceRuntimePreservingState } = await import("../src/core/containers/replacement");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const codexHome = path.join(root, "host-codex");
@@ -583,7 +583,7 @@ describe("a real rebuild re-stages the backend user's inputs", () => {
         expect(await label(rebuilt!.containerId)).not.toBe(firstRevision);
         // The real start path: boot, then this environment's overlay on top.
         const { startAssignedContainerRuntimeTask } =
-          await import("../src/core/commands-environment");
+          await import("../src/core/commands/environment");
         await startAssignedContainerRuntimeTask(environment.id, fixture.context);
         const text = (await containerText(rebuilt!.containerId, CODEX))!;
         // Current host defaults plus the recorded server; the unrecorded edit is gone.

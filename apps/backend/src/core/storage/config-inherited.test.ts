@@ -9,8 +9,8 @@ import {
 } from "@orkestrator/protocol/controller-settings";
 
 import { BackendRuntime } from "../backend-runtime.js";
-import { createCommandRegistry } from "../commands-registry.js";
-import type { CommandContext } from "../commands-context.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { StorageService } from "./service.js";
 
 async function withStorage(run: (storage: StorageService) => Promise<void>): Promise<void> {

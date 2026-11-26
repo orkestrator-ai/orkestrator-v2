@@ -25,7 +25,7 @@ import {
   type HostUpdaterReport,
   type HostUpdaterReportedJobState,
 } from "@orkestrator/protocol/host-maintenance";
-import type { BackendEmit } from "./commands-context.js";
+import type { BackendEmit } from "./backend-emit.js";
 import type { StorageDatabase } from "./storage/index.js";
 import { openBackendDatabase } from "./storage/stores.js";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";

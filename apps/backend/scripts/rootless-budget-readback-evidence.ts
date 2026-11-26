@@ -10,7 +10,7 @@ import {
   resolveResourceLimits,
   resourceArguments,
 } from "../src/core/containers/resources.js";
-import type { CommandContext } from "../src/core/commands-context.js";
+import type { CommandContext } from "../src/core/commands/context.js";
 import type { Environment } from "../src/core/models.js";
 import { runCommand } from "../src/core/shell.js";
 

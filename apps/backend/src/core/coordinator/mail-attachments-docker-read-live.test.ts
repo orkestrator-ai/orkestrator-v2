@@ -27,8 +27,8 @@ import path from "node:path";
 import type { AgentMailAttachment } from "@orkestrator/protocol/agent-mail";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import type { ModelRecord } from "./mail-attachments-container-model-test-support.js";
 import { realPng } from "../mail-attachment-png-test-support.js";
 import type { Environment } from "../models.js";

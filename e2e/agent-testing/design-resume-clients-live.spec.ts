@@ -20,7 +20,7 @@
  *    keep its user turns: nothing is sent.
  *
  * The deterministic halves (backend lane, two simulated clients) are in
- * `session-links.test.ts`, `commands-registry-design.test.ts` and
+ * `session-links.test.ts`, `apps/backend/src/core/commands/registry-design.test.ts` and
  * `design-session-links.test.ts`
  * (docs/architecture/design-canvas.md, "Agent context").
  *

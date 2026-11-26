@@ -7,34 +7,37 @@ import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import {
+  agentAccountLoginKey,
   applyActiveAgentAccountEnvironment,
   resolveActiveAgentAccount,
   type ResolvedAgentAccount,
 } from "./agent-accounts/index.js";
-import { agentAccountLoginKey } from "./agent-accounts/store.js";
-import type { CommandContext } from "./commands-context.js";
+import {
+  bearerBridgeHeaders,
+  type BridgeName,
+  claudeBridgeAuthHeaders,
+  type CommandContext,
+} from "./commands/index.js";
 import {
   resolveBunBinary,
   resolveClaudeBinary,
   resolveCodexBinary,
   resolveManagedAcpBinary,
-} from "./commands-agent-support.js";
+} from "./commands/agent-support.js";
 import {
   allocateLocalPort,
   fetchAcpNormalizedModelsAt,
-  type BridgeName,
   HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
   prepareBridgePath,
   waitForLocalServerStartup,
-} from "./commands-servers.js";
-import { bearerBridgeHeaders, claudeBridgeAuthHeaders } from "./commands-server-health.js";
+} from "./commands/servers.js";
+import { fetchClaudeBridgeModelCatalog } from "./commands/containers.js";
 import type {
   AcpLocalServerKind,
   LocalServerKind,
   LocalServerRuntime,
 } from "./local-server-runtime.js";
 import { acpBridgeProviderArgument, acpProviderLaunchEnv } from "./acp-provider-launch.js";
-import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { readOpenCode2ModelCatalogue } from "./opencode2/index.js";

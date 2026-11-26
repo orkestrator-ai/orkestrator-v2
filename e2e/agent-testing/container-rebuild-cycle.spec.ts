@@ -87,7 +87,7 @@ async function reviewDockerCleanup(page: Page) {
  * show the loaded or unavailable state. The tab waits on `get_docker_system_stats`,
  * whose slowest chain of bounded Docker reads is `docker info` (15 s) then
  * `docker system df` (60 s), then `docker images` (10 s): 85 s
- * (`commands-registry-docker.ts`, `containers/resources.ts`). On a Mac that
+ * (`apps/backend/src/core/commands/registry-docker.ts`, `containers/resources.ts`). On a Mac that
  * chain took 1.0 s with Docker idle and 3.0 s beside nine concurrent
  * `docker system df -v` reads (2026-11-14), and more than 5 s while Docker
  * served nine builds (to-do 8015 (retired)), so a fixed 5 s failed there.

@@ -21,8 +21,8 @@ import {
   type SessionTitleGenerationPolicy,
 } from "@orkestrator/protocol/session-title-generation";
 import { CLAUDE_PINNED_RUNTIME_ENV } from "@orkestrator/protocol/terminal-agent-launch";
-import type { CommandContext } from "./commands-context.js";
-import { resolveClaudeBinary, resolveCodexBinary } from "./commands-agent-support.js";
+import type { CommandContext } from "./commands/index.js";
+import { resolveClaudeBinary, resolveCodexBinary } from "./commands/agent-support.js";
 import { applyActiveAgentAccountEnvironment } from "./agent-accounts/index.js";
 import { applyClaudeHostCredentialEnvironment } from "./host-agent-credentials.js";
 import { runCommand } from "./shell.js";

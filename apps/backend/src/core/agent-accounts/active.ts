@@ -9,13 +9,10 @@ import {
 import { COORDINATOR_CLAUDE_USER_SKILLS_DIR_ENV } from "@orkestrator/protocol/coordinator";
 import { jwtExpiryMs, restrictCodexAuthSnapshot } from "@orkestrator/protocol/login-snapshots";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
+import { getClaudeOAuthAccessToken } from "../claude-host-credentials.js";
+import { getHostClaudeCredentials, readRuntimeHostClaudeCredentials } from "../commands/files.js";
 import type { AgentAccountsRuntime } from "./runtime.js";
-import {
-  getClaudeOAuthAccessToken,
-  getHostClaudeCredentials,
-  readRuntimeHostClaudeCredentials,
-} from "../commands-files.js";
 import {
   agentAccountHome,
   claudeKeychainService,

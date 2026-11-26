@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { PrMonitorEvent } from "@orkestrator/protocol/pr-monitor";
 import { PrAutoMergeController } from "./pr-auto-merge.js";
 import { PrMonitorService } from "./pr-monitor.js";
-import { environmentToPrMonitorTarget } from "../commands-pr-monitor.js";
+import { environmentToPrMonitorTarget } from "../commands/pr-monitor.js";
 import type { Environment } from "../models.js";
 import { createEnvironment } from "../storage/service.js";
 

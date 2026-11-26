@@ -6,29 +6,30 @@
 // pull-request watches, delegation, worker turns, mail and changes, account
 // routing, node and remote coordination, and workflow retention. The
 // coordinator's MCP tools stay in `control-mcp/`, and its command registry
-// (`commands-registry-coordinator*.ts`) and storage (`storage/coordinator*.ts`)
+// (`commands/registry-coordinator*.ts`) and storage (`storage/coordinator*.ts`)
 // stay with their own prefix groups.
 //
-// Fourteen modules are named exceptions in `.oxlintrc.json`, not part of this
+// Eleven modules are named exceptions in `.oxlintrc.json`, not part of this
 // surface, because each reaches back into code that imports this file, so
 // re-exporting it here would close a runtime import cycle. Each is imported
 // directly by the files listed:
 // - command handlers the command registry installs, which reach the command
-//   layer (`commands-servers.ts`, the `control-mcp/` tools): `fork-worker.ts`
-//   and `worker-changes.ts` for `commands-registry.ts`; `node-tickets.ts`
-//   for it and `commands-registry-coordinator-nodes.ts`; `goal-actions.ts`,
-//   `pipeline-step-actions.ts`, `subork-actions.ts`, `surface-actions.ts`,
-//   `worker-mail.ts` and `worker-turn-actions.ts` for
-//   `commands-registry-coordinator.ts`; and `review-actions.ts` for it and
-//   `commands-registry-controller-workflows.ts`;
+//   layer (`commands/servers.ts`, the `control-mcp/` tools): `fork-worker.ts`
+//   and `worker-changes.ts` for `commands/registry.ts`; `goal-actions.ts`,
+//   `pipeline-step-actions.ts`, `surface-actions.ts`, `worker-mail.ts` and
+//   `worker-turn-actions.ts` for `commands/registry-coordinator.ts`;
 // - `mail-attachments.ts` and `node-coordinator-mail.ts` (reach
 //   `storage/config.ts` and `storage/coordinators.ts`), for
-//   `commands-registry.ts` and `commands-registry-coordinator-nodes.ts`, and
+//   `commands/registry.ts` and `commands/registry-coordinator-nodes.ts`, and
 //   a type of the first for `nodes/node-coordination.ts`;
 // - `pr.ts` (reaches `worker-action-receipts.ts`), for
-//   `commands-registry-controller-workflows.ts`;
-// - `usage-limit-account-routing.ts` (reaches `commands-servers.ts`), for the
+//   `commands/registry-controller-workflows.ts`;
+// - `usage-limit-account-routing.ts` (reaches `commands/servers.ts`), for the
 //   composition root `core/index.ts`.
+// `node-tickets.ts`, `review-actions.ts` and `subork-actions.ts` were
+// exceptions too until the commands domain moved into `commands/`: their
+// importers there now reach only the light `commands/index.ts`, so
+// re-exporting them closes no cycle and they are re-exported below.
 export {
   actionHash,
   coordinatorCaller,
@@ -72,6 +73,7 @@ export {
   connectCoordinatorNodeWakes,
   type CoordinatorNodeAttempt,
 } from "./node-reconnect-wakes.js";
+export { prepareRemoteBuildTicket, registerCoordinatorNodeTicketCommands } from "./node-tickets.js";
 export {
   coordinatorPrFields,
   nodePrHealth,
@@ -97,6 +99,12 @@ export { coordinatorRepairJob } from "./repair-job.js";
 export { CoordinatorRequestFlights } from "./request-flights.js";
 export { coordinatorResearchLine, loadCoordinatorResearch } from "./research-context.js";
 export {
+  multiReviewButtonStart,
+  registerCoordinatorReviewActions,
+  runMultiReviewSurface,
+  startMultiReviewAt,
+} from "./review-actions.js";
+export {
   coordinatorPlatformAllowed,
   coordinatorRuntimeEnvironment,
   coordinatorRuntimeUnavailableMessage,
@@ -112,6 +120,7 @@ export {
   lastAssistantText,
   waitingBlocker,
 } from "./status-wakes.js";
+export { registerCoordinatorSuborkActions } from "./subork-actions.js";
 export { coordinatorCallerTurnOrigin } from "./turn-origin.js";
 export { CoordinatorUsageLimitNotices } from "./usage-limit-notices.js";
 export { CoordinatorViewRevisions } from "./view-revisions.js";

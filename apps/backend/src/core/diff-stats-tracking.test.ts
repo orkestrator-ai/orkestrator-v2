@@ -8,7 +8,7 @@ import { runCommand } from "./shell.js";
 import { countUntrackedFileLines, localGitScanCacheStats } from "./local-git-scan-caches.js";
 import * as baselineGit from "./diff-baseline.js";
 import * as remoteGit from "./git/noninteractive-env.js";
-import * as containerExec from "./commands-container-exec.js";
+import * as containerExec from "./commands/container-exec.js";
 import { createPublicApiHarness, type PublicApiHarness } from "./public-api/test-support.js";
 
 // This slow-tier file creates real repositories and worktrees. It sets no
@@ -39,8 +39,8 @@ function deferred<T>() {
 
 test("git-status scanners stay statically imported without a dynamic import cycle workaround", async () => {
   const source = await fs.readFile(new URL("./diff-stats-tracking.ts", import.meta.url), "utf8");
-  expect(source).toMatch(/^\s*import\s[^;]*from\s+["']\.\/commands-files\.js["'];/m);
-  expect(source).not.toMatch(/\bimport\s*\(\s*["']\.\/commands-files(?:\.js)?["']/);
+  expect(source).toMatch(/^\s*import\s[^;]*from\s+["']\.\/commands\/files\.js["'];/m);
+  expect(source).not.toMatch(/\bimport\s*\(\s*["']\.\/commands\/files(?:\.js)?["']/);
 });
 
 test("runtimes isolate snapshots, revisions, emitters, fetch state and reconciliation queues for the same environment", async () => {

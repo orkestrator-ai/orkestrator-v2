@@ -1,7 +1,7 @@
 import { askCoordinatorSuborksCommand } from "@orkestrator/protocol/contract/domains/coordinator";
 import { coordinatorRuntimeId } from "@orkestrator/protocol/coordinator";
 import { SUBORK_LIMITS, type SuborkTargetRequest } from "@orkestrator/protocol/suborks";
-import type { CommandRegistrar, RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandRegistrar, RegistryDependencies } from "../commands/index.js";
 import { coordinatorCaller } from "./action-scope.js";
 import { surfaceRecord as record } from "../worker-surface-runs.js";
 

@@ -1,4 +1,4 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
@@ -20,7 +20,7 @@ import { TRANSCRIPT_ARTIFACT_COMMANDS } from "@orkestrator/protocol/transcript-a
 import { ArtifactFailure } from "@orkestrator/protocol/transcript-artifacts";
 
 import { CONTAINER_SAFE_BASE64_READER } from "../containers/scripts.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
 import { registerTranscriptArtifactCommands } from "./commands.js";
 import { LoopbackArtifactContentServer } from "./content-server.js";
 import { syntheticWav } from "./fixtures/synthetic-wav.js";

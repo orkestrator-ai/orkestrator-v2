@@ -11,9 +11,9 @@ import { renderAgentMailCarrier } from "@orkestrator/protocol/agent-mail";
 import { pipelineWorkerTabId } from "@orkestrator/protocol/pipeline-worker-mail";
 
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
-import type { CommandContext } from "../commands-context.js";
-import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands-files.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands/files.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import type { Environment } from "../models.js";
 import {
   addPipelineEnvironment,

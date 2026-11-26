@@ -566,7 +566,7 @@ describe("Pi, Cursor and Grok", () => {
       entrypoint.indexOf('log_progress "Grok configuration ready"'),
     );
     const startup = await readFile(
-      path.resolve(import.meta.dir, "../../../apps/backend/src/core/commands-registry-servers.ts"),
+      path.resolve(import.meta.dir, "../../../apps/backend/src/core/commands/registry-servers.ts"),
       "utf8",
     );
     const loadKey = startup

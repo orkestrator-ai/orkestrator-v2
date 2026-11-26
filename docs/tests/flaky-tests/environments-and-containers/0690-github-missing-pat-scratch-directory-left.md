@@ -44,7 +44,7 @@
 
 - **Root cause:** a product race between the scratch repository's first
   commit and the failed creation's rollback. `createProjectFromScratch` and
-  `initLocalProject` (`apps/backend/src/core/commands-projects.ts`) run
+  `initLocalProject` (`apps/backend/src/core/commands/projects.ts`) run
   `git commit --allow-empty`; current Git (2.56 on this host) then starts
   `git maintenance run --auto --quiet --detach` (seen in a `GIT_TRACE2_EVENT`
   trace), which daemonizes and keeps touching `.git` after `git commit` has
@@ -60,13 +60,13 @@
   which adds `-c maintenance.auto=false` to that single command, so no
   detached child outlives it. The project's later Git use keeps auto
   maintenance. The argv expectation in
-  `apps/backend/src/core/commands-project-creation.test.ts` gains the two
+  `apps/backend/src/core/commands/project-creation.test.ts` gains the two
   arguments; no other assertion changed.
 - **Reproduced:** yes — a probe (`/tmp` script, not committed) that ran
   `git init` + `git commit --allow-empty` and then the same `fs.rm(.git)` +
   `rmdir` left the folder behind in 6 of 150 runs, and in 0 of 150 with
   `-c maintenance.auto=false`. The unchanged owners failed under
-  `mise run test:logged -- --name repro-0008 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands-project-creation.test.ts ./src/core/git/github-project-credentials.integration.test.ts -t "definitely missing|missing PAT" --rerun-each=40`:
+  `mise run test:logged -- --name repro-0008 -- bun scripts/test-under-contention.ts -- bun test --cwd apps/backend --preload ../../tests/setup-node.ts ./src/core/commands/project-creation.test.ts ./src/core/git/github-project-credentials.integration.test.ts -t "definitely missing|missing PAT" --rerun-each=40`:
   7 of 160 (two `rolls back when GitHub CLI is definitely missing`, five
   `missing PAT … not.toContain("scratch")`).
 - **Stress:** the same command with the fix (`repro-0008-fixed`) passed 160

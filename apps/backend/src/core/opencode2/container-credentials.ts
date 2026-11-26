@@ -5,7 +5,7 @@ import {
   OPENCODE2_LEGACY_DB_PATH,
 } from "../containers/index.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import { openCode2CredentialFromLegacy } from "./credentials.js";
 
 export function openCode2ContainerCredentialPayload(payload: string): string {

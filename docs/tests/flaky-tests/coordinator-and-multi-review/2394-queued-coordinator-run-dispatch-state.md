@@ -14,7 +14,7 @@
 
 - **Status:** resolved.
 - **Root cause:** a real race in the product close path, not in the test.
-  `close_coordinator_conversation` (`apps/backend/src/core/commands-registry-coordinator.ts`)
+  `close_coordinator_conversation` (`apps/backend/src/core/commands/registry-coordinator.ts`)
   stopped the session first and deleted the conversation's prompt queues only
   at the end. Enqueueing the prompt starts a drain
   (`notifyPromptQueueChanged`). Under load that drain was still on its way to

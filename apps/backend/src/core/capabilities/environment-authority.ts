@@ -108,7 +108,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 export type LeafRequestKind = "container-staging" | "environment-delivery";
 
-/** What a container is created with (`commands-containers.ts`). */
+/** What a container is created with (`commands/containers.ts`). */
 export interface ContainerStagingInput {
   environmentId: string;
   projectId?: string;

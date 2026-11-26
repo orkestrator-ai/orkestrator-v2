@@ -1,0 +1,482 @@
+import type { CommandContext } from "./context.js";
+import type { AutoPipelineService } from "../auto-pipeline.js";
+import { createAutoPipelineService } from "../auto-pipeline-wiring.js";
+import {
+  autoPipelineSourcesCommand,
+  draftAutoPipelineCommand,
+  cancelAutoPipelineDraftCommand,
+  confirmAutoPipelineCommand,
+  getAutoPipelineStateCommand,
+  saveAutoPipelineEditsCommand,
+} from "@orkestrator/protocol/contract/domains/pipelines";
+import type { CommandRegistrar, RegistryDependencies } from "./registry-types.js";
+import {
+  cancelBuildPipelineCommand,
+  clearTaskBuildStatusCommand,
+  createDebugBuildCommand,
+  createFeatureBuildCommand,
+  deleteBuildPipelineCommand,
+  getBuildPipelineCommand,
+  getBuildPipelineSessionProjectionCommand,
+  getBuildPipelineWorkerTranscriptCommand,
+  launchBuildPipelineCommand,
+  listBuildPipelinesCommand,
+  pauseBuildPipelineCommand,
+  previewBuildPipelineCodeRewindCommand,
+  removeQueuedBuildPipelineMessageCommand,
+  restartBuildPipelineCurrentStepCommand,
+  restartBuildPipelineReviewerCommand,
+  restartBuildPipelineStepCommand,
+  resumeBuildPipelineCommand,
+  retryBuildPipelineCompletionCommentCommand,
+  retryBuildPipelineInteractionFailureCommand,
+  retryBuildPipelineReviewCommand,
+  retryBuildPipelineReviewerCommand,
+  retryBuildPipelineStageCommand,
+  rewindBuildPipelineCodeCommand,
+  saveBuildPipelineCommand,
+  sendBuildPipelineMessageCommand,
+  setEnvironmentUnreadCommand,
+  skipBuildPipelineStepCommand,
+  startBuildPipelineCommand,
+  startFeaturePlanBuildCommand,
+  steerBuildPipelineCommand,
+  steerQueuedBuildPipelineMessageCommand,
+  stopBuildPipelineReviewerCommand,
+  type PipelineWorkerTranscript,
+} from "@orkestrator/protocol/contract/domains/pipelines";
+import { isBuildPipeline, isStartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
+import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
+import { isBuildPipelineRestartSelection } from "@orkestrator/protocol/build-pipeline-restart-selection";
+import {
+  asString,
+  asBoolean,
+  asNonBlankString,
+  asRequiredBoolean,
+  toClientEnvironment,
+} from "./helpers.js";
+import {
+  createDebugBuild,
+  createFeatureBuild,
+  debugSourceTabs,
+  readDebugTabTranscript,
+  startFeaturePlanBuild,
+} from "../features/index.js";
+import { createPublicActionContext } from "../public-api/dispatch.js";
+import { launchBuildPipeline } from "../build-pipeline/launch.js";
+import {
+  conditionalBuildPipelineRead,
+  detailResponseFields,
+  projectRendererRecord,
+  withoutTranscriptBodies,
+  type DetailReadInput,
+} from "../build-pipeline/transcript-projection.js";
+import { readPipelineWorkerTranscript } from "../build-pipeline/index.js";
+import type { PersistedBuildPipeline } from "../models.js";
+
+export function registerBuildPipelineCommands(
+  register: CommandRegistrar,
+  dependencies: RegistryDependencies,
+): void {
+  const { conditionalManifestSnapshot } = dependencies;
+  const autoServices = new WeakMap<CommandContext, AutoPipelineService>();
+  const auto = (context: CommandContext) => {
+    let service = autoServices.get(context);
+    if (!service) {
+      service = createAutoPipelineService(context, async (name, args) => {
+        const command = dependencies.commands.get(name);
+        if (!command) throw new Error("Bridge command unavailable");
+        return (await command(args ?? {}, context)) as never;
+      });
+      autoServices.set(context, service);
+    }
+    return service;
+  };
+  register(autoPipelineSourcesCommand, ({ environmentId }, context) =>
+    auto(context).sources(environmentId),
+  );
+  register(draftAutoPipelineCommand, ({ environmentId, tabId }, context) =>
+    auto(context).draft(environmentId, tabId),
+  );
+  register(cancelAutoPipelineDraftCommand, ({ environmentId, tabId }, context) =>
+    auto(context).cancelDraft(environmentId, tabId),
+  );
+  register(getAutoPipelineStateCommand, ({ environmentId, tabId }, context) =>
+    auto(context).state(environmentId, tabId),
+  );
+  register(saveAutoPipelineEditsCommand, ({ draftId, edits }, context) =>
+    auto(context).saveEdits(draftId, edits),
+  );
+  register(
+    confirmAutoPipelineCommand,
+    ({ draftId, ticket }, context) => auto(context).confirm(draftId, ticket) as never,
+  );
+  register(startBuildPipelineCommand, (args, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    const input: unknown = args;
+    if (!isStartBuildPipelineInput(input)) {
+      throw new Error("Invalid build pipeline start request");
+    }
+    return context.buildPipelines.start(input as StartBuildPipelineInput);
+  });
+  /**
+   * Creates the ticket and the build for it in one backend-owned step, so a
+   * renderer that navigates away mid-flight cannot leave one without the other.
+   */
+  register(createFeatureBuildCommand, (args, context) => createFeatureBuild(args, context));
+  /**
+   * The debug button: a ticket from the user's text plus the source
+   * environment's details, transcript and screenshot, and one pipeline
+   * environment on the saved Build defaults. Transcripts are read through the
+   * public CLI's bounded reader.
+   */
+  register(createDebugBuildCommand, (args, context) =>
+    createDebugBuild(args, context, {
+      sourceTabs: (environmentId) => debugSourceTabs(context.storage, environmentId),
+      readTranscript: (environmentId, tabId, stopAfterChars) =>
+        readDebugTabTranscript(
+          createPublicActionContext(context, dependencies, { installationId: "", generation: "" }),
+          environmentId,
+          tabId,
+          stopAfterChars,
+        ),
+    }),
+  );
+  /**
+   * The Build button: a ticket plus only the choices the user made; every
+   * omitted step, reviewer and model comes from the saved Build defaults here,
+   * the same way the coordinator and the public `build.launch` fill them.
+   * `start_build_pipeline` stays for callers that send a complete request.
+   */
+  register(launchBuildPipelineCommand, (args, context) => launchBuildPipeline(args, context));
+  /** The Features view's Build: claim, ticket, pipeline and link, compensated here. */
+  register(startFeaturePlanBuildCommand, (args, context) => startFeaturePlanBuild(args, context));
+  register(pauseBuildPipelineCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.pause(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register(resumeBuildPipelineCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.resume(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register(cancelBuildPipelineCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.cancel(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register(sendBuildPipelineMessageCommand, ({ pipelineId, text }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.sendMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asString(text, "text"),
+    );
+  });
+  // Unlike a message, this reaches the turn the agent is running now instead of
+  // waiting for it to go idle — which, in a pipeline, means after the stage ends.
+  register(steerBuildPipelineCommand, ({ pipelineId, text }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.steerMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asString(text, "text"),
+    );
+  });
+  // The queue's Steer button: moves one queued message into the running turn.
+  register(steerQueuedBuildPipelineMessageCommand, ({ pipelineId, messageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.steerQueuedMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(messageId, "messageId"),
+    );
+  });
+  register(removeQueuedBuildPipelineMessageCommand, ({ pipelineId, messageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.removeQueuedMessage(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(messageId, "messageId"),
+    );
+  });
+  // Retained for existing command clients that explicitly re-review a working
+  // tree, including from a failed pipeline. The header uses current-step restart.
+  register(retryBuildPipelineReviewCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryReview(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register(retryBuildPipelineStageCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryStage(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register(retryBuildPipelineReviewerCommand, ({ pipelineId, reviewerId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryReviewer(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(reviewerId, "reviewerId"),
+    );
+  });
+  register(restartBuildPipelineReviewerCommand, ({ pipelineId, reviewerId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.restartReviewer(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(reviewerId, "reviewerId"),
+    );
+  });
+  register(stopBuildPipelineReviewerCommand, ({ pipelineId, reviewerId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.stopReviewer(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(reviewerId, "reviewerId"),
+    );
+  });
+  // `selection` is "Restart in…": the step reruns on another agent or model.
+  register(restartBuildPipelineStepCommand, ({ pipelineId, stageId, selection }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    if (selection !== undefined && !isBuildPipelineRestartSelection(selection)) {
+      throw new Error("Invalid build pipeline restart selection");
+    }
+    return context.buildPipelines.restartStep(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+      selection,
+    );
+  });
+  // "Rewind code to here": the preview names the commits a reset drops; the
+  // confirmed request carries the HEAD that preview read.
+  register(previewBuildPipelineCodeRewindCommand, ({ pipelineId, stageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.previewCodeRewind(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+    );
+  });
+  register(rewindBuildPipelineCodeCommand, ({ pipelineId, stageId, expectedHead }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.rewindCode(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+      asNonBlankString(expectedHead, "expectedHead"),
+    );
+  });
+  register(skipBuildPipelineStepCommand, ({ pipelineId, stageId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.skipStep(
+      asNonBlankString(pipelineId, "pipelineId"),
+      asNonBlankString(stageId, "stageId"),
+    );
+  });
+  register(restartBuildPipelineCurrentStepCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.restartCurrentStep(asNonBlankString(pipelineId, "pipelineId"));
+  });
+  register(retryBuildPipelineInteractionFailureCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryInteractionFailure(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
+  register(retryBuildPipelineCompletionCommentCommand, ({ pipelineId }, context) => {
+    if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
+    return context.buildPipelines.retryCompletionComment(
+      asNonBlankString(pipelineId, "pipelineId"),
+    );
+  });
+  /**
+   * Control state for one pipeline. Transcript bodies are never embedded:
+   * a caller that names the transcript revision/count it holds per session in
+   * `knownSessions` receives only the windows its stale sessions need, read
+   * from the referenced transcript records (plan step 16).
+   *
+   * A caller that names the detail fingerprint it holds
+   * (`knownDetailFingerprint`, `""` for none) gets the conditional shape (or
+   * `unchanged`), with the record's current `detailFingerprint`; when that matches,
+   * the record leaves its heavy, slow-changing fields out (`detailOmitted`)
+   * and the caller merges its own copy back. Every other caller still gets
+   * the whole record (`@orkestrator/protocol/build-pipeline-detail`).
+   */
+  register(
+    getBuildPipelineCommand,
+    async (
+      { pipelineId, knownRevision, knownSessions, prioritySessionKey, knownDetailFingerprint },
+      context,
+    ) => {
+      const { storage } = context;
+      const id = asNonBlankString(pipelineId, "pipelineId");
+      let record: PersistedBuildPipeline | null;
+      let detail: DetailReadInput | undefined;
+      if (typeof knownDetailFingerprint === "string") {
+        const read = await storage.getBuildPipelineWithDetailFingerprint(id);
+        record = read?.record ?? null;
+        detail = read
+          ? { fingerprint: read.detailFingerprint, known: knownDetailFingerprint }
+          : undefined;
+      } else {
+        record = await storage.getBuildPipeline(id);
+      }
+      if (!record) return null;
+      if (knownSessions && typeof knownSessions === "object" && !Array.isArray(knownSessions)) {
+        // Each stage session's own key owns its artifact publications.
+        const environmentId = record.environmentId;
+        const pipelines = context.buildPipelines;
+        return conditionalBuildPipelineRead(
+          storage,
+          record,
+          {
+            knownRevision,
+            knownSessions: knownSessions as Record<string, unknown>,
+            prioritySessionKey,
+            detail,
+          },
+          undefined,
+          pipelines && environmentId
+            ? (sessionKey, rows) => pipelines.placeStageArtifacts(environmentId, sessionKey, rows)
+            : undefined,
+        );
+      }
+      if (Number.isSafeInteger(knownRevision) && knownRevision === record.revision) {
+        return { unchanged: true as const, revision: record.revision };
+      }
+      if (detail) {
+        // Control state only: no transcript window is asked for.
+        return {
+          unchanged: false as const,
+          record: projectRendererRecord(record, detail),
+          messagePatches: [],
+          ...detailResponseFields(detail),
+        };
+      }
+      return withoutTranscriptBodies(record);
+    },
+  );
+  register(
+    getBuildPipelineSessionProjectionCommand,
+    async ({ pipelineId, sessionKey, refreshUsage }, context) => {
+      if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
+      const id = asNonBlankString(pipelineId, "pipelineId");
+      const key = asNonBlankString(sessionKey, "sessionKey");
+      const shouldRefreshUsage =
+        refreshUsage === undefined ? undefined : asRequiredBoolean(refreshUsage, "refreshUsage");
+      const record = await context.storage.getBuildPipeline(id);
+      const snapshot = record?.snapshot;
+      const pipeline =
+        record && snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+          ? { ...snapshot, controller: "backend" as const, backendRevision: record.revision }
+          : null;
+      if (!pipeline || !isBuildPipeline(pipeline)) {
+        throw new Error("Build pipeline is unavailable");
+      }
+      const session = pipeline.sessions.find((candidate) => candidate.sessionKey === key);
+      if (!session) throw new Error("Build pipeline session is unavailable");
+      const agent = session.agent ?? pipeline.agentType;
+      const identity = {
+        environmentId: pipeline.environmentId,
+        agent,
+        logicalSessionKey: session.sessionKey,
+      };
+      return context.nativeAgents.inspectSession({
+        ...identity,
+        providerSessionId: session.sdkSessionId,
+        origin: session.origin ?? "build-pipeline",
+        interactionPolicy: session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        title: session.label,
+        phase: session.phase,
+        refreshUsage: shouldRefreshUsage,
+      });
+    },
+  );
+  /**
+   * One pipeline worker's own transcript, by its mailbox address: the newest
+   * `limit` messages of the stage session's committed transcript, which the
+   * pipeline checkpoints while the turn runs and keeps after it ends.
+   */
+  register(
+    getBuildPipelineWorkerTranscriptCommand,
+    async ({ environmentId, tabId, limit }, { storage, multiReviews }) => {
+      const input = {
+        environmentId: asNonBlankString(environmentId, "environmentId"),
+        tabId: asNonBlankString(tabId, "tabId"),
+        limit: typeof limit === "number" ? limit : undefined,
+      };
+      // A Multi Review reviewer shares the worker address; its own read serves it.
+      const reviewer = await multiReviews?.workerTranscript(input);
+      // Both reads build the shape `PipelineWorkerTranscript` describes, typed as a record.
+      return (reviewer ??
+        (await readPipelineWorkerTranscript(
+          storage,
+          input,
+        ))) as unknown as PipelineWorkerTranscript;
+    },
+  );
+  register(listBuildPipelinesCommand, async (args, { storage }) =>
+    conditionalManifestSnapshot(args, storage, "build-pipeline", async () => {
+      const { projectId, knownRevisions } = args;
+      // Summaries never reattach transcript bodies; an unmigrated legacy
+      // record is stripped here too.
+      const records = (
+        await storage.listBuildPipelines(asNonBlankString(projectId, "projectId"))
+      ).map(withoutTranscriptBodies);
+      if (!knownRevisions || typeof knownRevisions !== "object" || Array.isArray(knownRevisions)) {
+        return records;
+      }
+      const revisions = knownRevisions as Record<string, unknown>;
+      return {
+        ids: records.map((record) => record.id),
+        records: records.filter((record) => revisions[record.id] !== record.revision),
+      };
+    }),
+  );
+  register(saveBuildPipelineCommand, () => {
+    throw new Error("Build pipeline state is backend-owned");
+  });
+  register(deleteBuildPipelineCommand, ({ pipelineId }, context) => {
+    const id = asNonBlankString(pipelineId, "pipelineId");
+    return context.buildPipelines
+      ? context.buildPipelines.remove(id)
+      : context.storage.deleteBuildPipeline(id);
+  });
+  register(clearTaskBuildStatusCommand, async ({ taskId }, context) => {
+    const id = asNonBlankString(taskId, "taskId");
+    const task = await context.storage.kanban.getKanbanTask(id);
+    if (!task) throw new Error(`Kanban task not found: ${id}`);
+    const records = await context.storage.listBuildPipelines(task.projectId);
+    const pipelineIds = new Set(
+      records
+        .filter((record) => {
+          const snapshot = record.snapshot as { taskId?: unknown };
+          return snapshot.taskId === id;
+        })
+        .map((record) => record.id),
+    );
+    if (task.buildPipelineId) pipelineIds.add(task.buildPipelineId);
+    // Keep the task linked until every pipeline is gone. The link is the
+    // durable retry marker: after any failure the same idempotent command sees
+    // the remaining records and continues, while the UI never claims cleanup
+    // succeeded with live work left behind.
+    for (const pipelineId of pipelineIds) {
+      if (context.buildPipelines) await context.buildPipelines.remove(pipelineId);
+      else await context.storage.deleteBuildPipeline(pipelineId);
+    }
+    const updated = await context.storage.kanban.updateKanbanTask(id, {
+      environmentId: undefined,
+      buildPipelineId: undefined,
+      prUrl: "",
+      prState: undefined,
+    });
+    return {
+      task: updated,
+      removedPipelineIds: [...pipelineIds],
+    };
+  });
+
+  register(
+    setEnvironmentUnreadCommand,
+    async ({ environmentId, unread, expectedLastActivityAt, sessionKeys }, { storage }) =>
+      toClientEnvironment(
+        await storage.setEnvironmentUnread(
+          asString(environmentId, "environmentId"),
+          asBoolean(unread),
+          expectedLastActivityAt === undefined || expectedLastActivityAt === null
+            ? expectedLastActivityAt
+            : asString(expectedLastActivityAt, "expectedLastActivityAt"),
+          sessionKeys,
+        ),
+      ),
+  );
+}

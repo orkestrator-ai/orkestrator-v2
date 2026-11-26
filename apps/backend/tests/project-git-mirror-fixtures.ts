@@ -19,7 +19,7 @@ import { randomBytes } from "node:crypto";
 import { promises as fs, existsSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { CommandContext } from "../src/core/commands-context";
+import type { CommandContext } from "../src/core/commands/context";
 import {
   refreshProjectGitMirror,
   type GitMirrorRefreshOptions,

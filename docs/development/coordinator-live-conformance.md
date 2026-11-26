@@ -718,7 +718,7 @@ is the truth, and the manual-test checklist holds the runs still owed.
 
 - **Agent-test profiles carry the host's Pi and Cursor logins** (2026-10-17).
   Pi was the one `--credential-source` with no seeding: the local Pi bridge
-  deleted `PI_AGENT_DIR` (`commands-servers.ts`), so under the profile's
+  deleted `PI_AGENT_DIR` (`commands/servers.ts`), so under the profile's
   isolated HOME it read an empty `~/.pi/agent`. Cursor's login is Orkestrator's
   own key in the production data directory, which an isolated data directory
   never sees. Decisions, with the alternatives rejected:
@@ -789,7 +789,7 @@ is the truth, and the manual-test checklist holds the runs still owed.
   awaited, so a first turn could reach a session without its tools; startup
   now waits and fails visibly (`retryable`) if it will not connect. Ordinary
   environments keep the unawaited entry, because their ticket tools are
-  optional. Test: `commands-servers-coordinator-opencode.test.ts`.
+  optional. Test: `commands/servers-coordinator-opencode.test.ts`.
 
 ## Assumptions and decisions
 

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { createHostTestScheduler } from "@orkestrator/protocol/node/host-test-scheduler";
 import { withTemporaryStorage } from "./storage/test-support.js";
 import { createEnvironment } from "./storage/shared-core.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import type { Environment } from "./models.js";
 import { CommandFailedError, runCommand } from "./shell.js";
 import {

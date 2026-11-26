@@ -26,7 +26,7 @@ import {
 import type { PlanUsageReadingSource, PlanUsageSnapshot } from "@orkestrator/protocol/plan-usage";
 import { createLogger } from "@orkestrator/protocol/logger";
 
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 
 const log = createLogger("agent-accounts");
 

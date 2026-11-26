@@ -20,11 +20,11 @@ import {
   NATIVE_AGENT_PROVIDER_SESSION_MISSING_MESSAGE,
   NativeAgentProviderSessionMissingError,
 } from "../../backend/src/core/native-agent/service-shared";
-import type { CommandContext } from "../../backend/src/core/commands-context";
+import type { CommandContext } from "../../backend/src/core/commands/context";
 import {
   CommandRegistry,
   createRegistryRegistrar,
-} from "../../backend/src/core/commands-registry-contracts";
+} from "../../backend/src/core/commands/registry-contracts";
 import { OrkestratorGateway } from "../../backend/src/gateway";
 import { BackendHttpClient, invokeEnvelopeFields } from "../electron/backend-process";
 import { ConnectionManager } from "../electron/connection-manager";

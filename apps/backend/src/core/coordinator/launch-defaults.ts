@@ -58,7 +58,7 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { reviewLensField } from "@orkestrator/protocol/review-lens";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
+import type { CommandContext, CommandHandler } from "../commands/index.js";
 
 export interface MultiReviewDefaultRows {
   reviewers: MultiReviewModelSelection[];

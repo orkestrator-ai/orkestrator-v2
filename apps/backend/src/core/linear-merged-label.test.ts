@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { lifecycleMachine } from "./build-pipeline/kanban-transitions-test-support.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 import { EnvironmentLifecycleTaskTracker } from "./environments/lifecycle-tasks.js";
 import { LinearMergedLabels } from "./linear-merged-label.js";
 import {

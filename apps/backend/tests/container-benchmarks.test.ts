@@ -230,7 +230,7 @@ async function writeReport(): Promise<void> {
 }
 
 async function freshRuntime(id: string, mode: "restricted" | "full", attribute = false) {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const { ensureStorageVolumes, initializeStorageSet, planStorageSet } =
     await import("../src/core/containers/storage");
@@ -538,7 +538,7 @@ describe("stop_environment", () => {
   bench(
     "stop_environment through the backend, idle and with a terminal open",
     async () => {
-      const { stopEnvironmentOnce } = await import("../src/core/commands-environment");
+      const { stopEnvironmentOnce } = await import("../src/core/commands/environment");
       const id = `env-${RUN}-stop`;
       const runtime = await freshRuntime(id, "restricted");
       const { containerId, fixture } = runtime;

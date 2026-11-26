@@ -17,7 +17,7 @@ import {
 import { dockerOwnerNamespace } from "./ownership.js";
 import { runCommand } from "../shell.js";
 import { reportDockerNetworkChange } from "./network-changes.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import {
   MAX_CLEANUP_CANDIDATES,
   listContainerCleanupInventory,

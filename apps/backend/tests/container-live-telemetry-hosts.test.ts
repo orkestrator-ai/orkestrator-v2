@@ -343,7 +343,7 @@ async function write(containerId: string, file: string, content: string): Promis
 }
 
 async function createRuntime(allowedDomains: string[]) {
-  const { createDockerContainer } = await import("../src/core/commands-containers");
+  const { createDockerContainer } = await import("../src/core/commands/containers");
   const { resolveDockerImage } = await import("../src/core/containers/image");
   const environment = lifecycleEnvironment({
     id: `env-${RUN}`,

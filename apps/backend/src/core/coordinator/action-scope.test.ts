@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import {
   actionHash,
   coordinatorLaunchIdentity,

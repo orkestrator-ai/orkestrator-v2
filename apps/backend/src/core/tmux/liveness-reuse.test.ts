@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import type { CommandContext } from "../commands.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import type { CommandContext } from "../commands/context.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { TmuxBackend } from "./backend.js";
 import { registerTmuxBackendCommands } from "./commands.js";
 import { TmuxSession } from "./session-manager.js";

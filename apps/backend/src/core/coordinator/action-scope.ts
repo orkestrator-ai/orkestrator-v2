@@ -2,7 +2,7 @@ import type { LaunchMultiReviewActionInput } from "@orkestrator/protocol/multi-r
 import { createHash } from "node:crypto";
 import { coordinatorConversationRunnable } from "@orkestrator/protocol/coordinator";
 import type { CoordinatorSurfaceAction } from "@orkestrator/protocol/coordinator-surfaces";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 
 export function actionHash(value: unknown): string {
   const canonicalize = (item: unknown): unknown => {

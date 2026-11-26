@@ -51,7 +51,7 @@ classified as a load flake.
   bridge never bound its port, which answers the open question above for at
   least one failure.
 - Evidence-backed hypothesis for this failure: `allocateLocalPort()`
-  (`apps/backend/src/core/commands-servers.ts`) binds port 0, reads the
+  (`apps/backend/src/core/commands/servers.ts`) binds port 0, reads the
   port, closes the listener and only then spawns the bridge on it. Another
   process on the host (a parallel test worker's server) can take the port in
   that gap. The same time-of-check race was fixed in the OpenCode 2 live tests
@@ -83,7 +83,7 @@ classified as a load flake.
 The product fix the recurrence above proposed, in
 `apps/backend/src/core/local-server-port-taken.ts` and
 `waitForLocalServerStartup`/`startLocalServerUnlocked`
-(`apps/backend/src/core/commands-servers.ts`):
+(`apps/backend/src/core/commands/servers.ts`):
 
 - A bridge that prints Bun's `Is port N in use?` (or `EADDRINUSE`) fails its
   start with `LocalServerPortTakenError` at once, including when the exit is
@@ -133,7 +133,7 @@ Both recurrences were checked with `mise run flaky:recurrence`, which answered
   answers without waiting for app-server; it answers 503 only when the engine
   state is `failed` or its circuit is open. The backend's budget for a codex
   bridge is `LOCAL_SERVER_HEALTH_ATTEMPTS` (75 polls at 200 ms, about 15 s,
-  `apps/backend/src/core/commands-server-health.ts`), against 120 polls for
+  `apps/backend/src/core/commands/server-health.ts`), against 120 polls for
   Cursor, Grok and Pi and 300 for OpenCode.
 - The scenario output carries no bridge log lines for the failed start, so
   it cannot yet tell a bridge that had not bound its port from one that

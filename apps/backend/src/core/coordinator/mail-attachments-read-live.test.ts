@@ -27,8 +27,8 @@ import {
   type ScriptedBlock,
 } from "../../../../../tests/conformance/execution-policy/scripted-anthropic.js";
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { realPng } from "../mail-attachment-png-test-support.js";
 import { runCommand } from "../shell.js";
 

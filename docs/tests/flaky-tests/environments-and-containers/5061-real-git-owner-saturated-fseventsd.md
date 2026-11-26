@@ -131,3 +131,23 @@ filter assertion's evidence; they do not resolve the broader native delivery cas
   The new symptom is an unexpected hint. Its cause remains unconfirmed.
 - **Evidence:** `orkestrator-test-run.rz5ILn` in the host temporary directory,
   including the workspace log and `rerun-apps-backend-src-core-worktrees-snapshots-git-test-ts.log.gz`.
+
+## Commands domain slow-tier rerun (2026-11-26)
+
+- **Branch base:** `8950e12e2ddf56724839d1fbcace1ffb51211ecd`. The recurrence
+  check against `origin/main` confirmed the case was open.
+- **Original command:** `mise run test:logged -- --name slow-tests -- mise run test:slow`,
+  with two isolated Bun workers in the backend package on macOS.
+- **Failure:** `real Git through the shared owner > a write under the ignored node_modules reaches no hint`
+  in `apps/backend/src/core/worktrees/snapshots-git.test.ts:361` received a
+  `node_modules/pkg` hint after 810.42 ms. Backend reported 3,686 passed,
+  208 skipped and one failed across 252 files (503.85 s). The workspace group
+  reported 4,151 passed, 208 skipped and two failed, including an Electron
+  timeout. Root and bridges passed.
+- **Complete owner rerun:** the runner executed
+  `bun test ./src/core/worktrees/snapshots-git.test.ts --preload ../../tests/setup-node.ts --only-failures --parallel=1`
+  from `apps/backend`. All eight tests passed in 4.43 s. The aggregate exited 1.
+  The hint matches the 2026-11-20 failure. The branch updates the test's import
+  path for the moved commands file. The cause of the extra hint remains open.
+- **Evidence:** `orkestrator-test-run.HXr6eF` in the host temporary directory,
+  including the workspace log and `rerun-apps-backend-src-core-worktrees-snapshots-git-test-ts.log.gz`.

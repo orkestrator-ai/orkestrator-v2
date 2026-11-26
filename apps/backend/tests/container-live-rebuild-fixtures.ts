@@ -1,7 +1,7 @@
 import { eventSink } from "../src/core/backend-emit.js";
 import { rmSync } from "node:fs";
 import net from "node:net";
-import type { CommandContext } from "../src/core/commands-context.js";
+import type { CommandContext } from "../src/core/commands/context.js";
 import { BackendRuntime } from "../src/core/backend-runtime.js";
 import { EnvironmentLifecycleTaskTracker } from "../src/core/environments/lifecycle-tasks.js";
 import type { RegistryWriter } from "../src/core/registry-writer-lease.js";

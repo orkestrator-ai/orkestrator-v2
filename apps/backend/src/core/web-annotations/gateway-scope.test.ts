@@ -15,7 +15,7 @@
  * capture, asset, draft, request) is confined to that environment, so naming
  * a different environment can never reach another environment's records.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,8 +26,8 @@ import {
 } from "@orkestrator/protocol/web-annotations";
 import { fixtureCaptureInput } from "@orkestrator/protocol/testing/web-annotations-fixtures";
 import { OrkestratorGateway } from "../../gateway.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerWebAnnotationCommands } from "../commands-registry-web-annotations.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerWebAnnotationCommands } from "../commands/registry-web-annotations.js";
 import { ENV_A, ENV_B, createHarness, makePng, type ServiceHarness } from "./test-support.js";
 import { sendRequest } from "./test-helpers.js";
 

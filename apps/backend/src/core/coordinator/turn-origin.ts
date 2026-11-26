@@ -5,7 +5,7 @@
  * `coordinatorScopeTurnOrigin`; mail reads it in its own command.
  */
 import { coordinatorCallTurnOrigin } from "@orkestrator/protocol/coordinator";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 
 /**
  * `"mail"` when the call's turn was not started by the user: the scope's own

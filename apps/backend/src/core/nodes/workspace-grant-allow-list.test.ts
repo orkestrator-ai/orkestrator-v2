@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createCommandRegistry } from "../commands-registry.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { workspaceAllowList } from "./workspace-grant-scope.js";
 
 /**

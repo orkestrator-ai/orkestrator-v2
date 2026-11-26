@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { quoteShell } from "../commands-agent-support.js";
+import { quoteShell } from "../commands/agent-support.js";
 import { OPENCODE2_SERVER_PORT } from "../constants.js";
 import { buildOpenCode2ContainerUserConfigScript } from "./user-config.js";
 import { CONTAINER_GITHUB_CREDENTIAL_FILE } from "../agent-credential-files.js";

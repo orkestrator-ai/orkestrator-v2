@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
-import { getWorktreeBaseDir } from "../../apps/backend/src/core/commands-environment";
+import { getWorktreeBaseDir } from "../../apps/backend/src/core/worktrees/index.js";
 import { APP_SLUG } from "../../apps/backend/src/core/constants";
 
 function isInside(child: string, parent: string): boolean {

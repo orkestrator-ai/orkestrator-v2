@@ -26,9 +26,8 @@ import {
   isValidPrUrl,
   parseGitHubPullRequestUrl,
   parseKnownPrDetectionOutput,
-  type GhPrListEntry,
-  type PrDetectionResult,
-} from "./commands-review.js";
+} from "./commands/review.js";
+import type { GhPrListEntry, PrDetectionResult } from "./commands/index.js";
 import { prMergeCheckArgs } from "./pull-request-merge-preflight.js";
 import { resolveGitHubRepository } from "./git/index.js";
 import {

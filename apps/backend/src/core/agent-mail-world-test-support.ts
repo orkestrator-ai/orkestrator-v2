@@ -1,5 +1,5 @@
-import { createCommandRegistry } from "./commands-registry.js";
-import type { CommandContext } from "./commands-context.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext } from "./commands/context.js";
 /**
  * A small, real mail world for multi-actor tests.
  *

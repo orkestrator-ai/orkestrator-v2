@@ -2,10 +2,9 @@ import {
   environmentActivityRecordedEvent,
   terminalOutputEvents,
 } from "@orkestrator/protocol/contract/domains/events";
-import type { BackendEmit, CommandContext } from "../commands-context.js";
-import type { PtyProcess } from "../pty.js";
-import { containerIdMatches } from "../commands-review.js";
+import type { BackendEmit } from "../backend-emit.js";
 import {
+  type CommandContext,
   compactTerminalOutputBuffer,
   createTerminalOutputBuffer,
   isHighSurrogate,
@@ -17,7 +16,9 @@ import {
   setupTerminalSessionId,
   terminalOutputPayload,
   trimOrphanedLowSurrogate,
-} from "../commands-terminal.js";
+} from "../commands/index.js";
+import { containerIdMatches } from "../commands/review.js";
+import type { PtyProcess } from "../pty.js";
 import { TerminalHistory, type TerminalHistoryOptions } from "./history.js";
 import { TerminalSizeOwnership, type TerminalSizeOwnershipOptions } from "./size-ownership.js";
 import type { ContainerTerminalShell } from "../containers/index.js";

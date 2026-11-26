@@ -1,7 +1,7 @@
 /**
  * Every `multi-review` command (plan item 7007; docs/reports/unified-
  * federation.md §11.2, Appendix E): Multi Review workflows and review
- * validation runs, registered by `commands-registry-reviews.ts`.
+ * validation runs, registered by `apps/backend/src/core/commands/registry-reviews.ts`.
  *
  * Argument rules are those of `../pipelines/commands.ts`: every key a handler
  * reads is declared; `asNonBlankString`/`asRequiredBoolean` keys are typed;

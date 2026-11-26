@@ -15,7 +15,7 @@ import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { waitForContainerBoot } from "../src/core/containers/readiness";
 import { networkOwnerContainer } from "../src/core/containers/network-owner";
-import { getHostPort } from "../src/core/commands-container-exec";
+import { getHostPort } from "../src/core/commands/container-exec";
 import { OPENCODE2_SERVER_PORT } from "../src/core/constants";
 import { prepareEgressGatewayForStart, stopRuntimeContainer } from "../src/core/egress-gateway";
 import type { Environment } from "../src/core/models";
@@ -257,7 +257,7 @@ describe("C23 allowlist edits, refresh and revocation", () => {
   (ENABLED && !process.env.ORKESTRATOR_LIVE_GITHUB_RANGES_SEED?.trim() ? test : test.skip)(
     "restricted boot fetches GitHub ranges without a workflow seed",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { environmentNetworkPolicy } = await import("../src/core/containers/network");
       const environment = lifecycleEnvironment({ id: `unseeded-${RUN}` });
@@ -286,7 +286,7 @@ describe("C23 allowlist edits, refresh and revocation", () => {
   live(
     "an edit applies in place, revokes removed addresses, survives a restart and never widens on failure",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { applyEnvironmentAllowedDomains, environmentNetworkPolicy } =
         await import("../src/core/containers/network");
@@ -594,7 +594,7 @@ describe("policy 3 kernel tuple qualification", () => {
   live(
     "TCP and UDP match separately and removing a port revokes only its established connection",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const { applyEnvironmentAllowedDomains, environmentNetworkPolicy } =
         await import("../src/core/containers/network");

@@ -37,7 +37,8 @@ import {
   stopRuntimeContainer,
 } from "../egress-gateway.js";
 import { shutdownClaudeStatePolling } from "../tmux/index.js";
-import type { CommandContext } from "../commands-context.js";
+import { type CommandContext, imageWithoutStagedInputsMessage } from "../commands/index.js";
+import { createDockerContainer } from "../commands/containers.js";
 import type { Environment } from "../models.js";
 import {
   ContainerLifecycleError,
@@ -74,8 +75,6 @@ import {
   imageCapabilities,
   resolveDockerImage,
 } from "./image.js";
-import { createDockerContainer } from "../commands-containers.js";
-import { imageWithoutStagedInputsMessage } from "../commands-error-text.js";
 import { imageDeclaresStagedInputs } from "@orkestrator/protocol/image-manifest";
 import { assertEnvironmentBudgetEnforceable } from "./resources.js";
 import { stopEnvironmentReviewValidation } from "../review/validation-service.js";

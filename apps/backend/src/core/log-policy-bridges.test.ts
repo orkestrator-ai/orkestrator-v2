@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { captureLogs } from "@orkestrator/protocol/testing/log-capture";
 import { listRunningBridgeTargets } from "./log-policy-bridges.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 
 /** Only the storage and runtime surfaces the metadata discovery reads. */
 function context(options: {

@@ -381,7 +381,7 @@ describe("container runtime environment wiring", () => {
   });
 
   test("Grok host state mounts do not replace its writable container home", () => {
-    const backend = read("apps/backend/src/core/commands-containers.ts");
+    const backend = read("apps/backend/src/core/commands/containers.ts");
 
     expect(backend).not.toContain("/grok-home");
     expect(backend).not.toContain("/grok-config");
@@ -2599,10 +2599,10 @@ eval "$opencode_setup"
 
   test("container native launch paths source the captured runtime environment", () => {
     const backend = [
-      read("apps/backend/src/core/commands-registry-servers.ts"),
-      read("apps/backend/src/core/commands-servers.ts"),
+      read("apps/backend/src/core/commands/registry-servers.ts"),
+      read("apps/backend/src/core/commands/servers.ts"),
       read("apps/backend/src/core/containers/scripts.ts"),
-      read("apps/backend/src/core/commands-containers.ts"),
+      read("apps/backend/src/core/commands/containers.ts"),
     ].join("\n");
 
     // Some launch paths inline the start script, others delegate to a shared

@@ -8,12 +8,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registrarFrom } from "../commands-registry-contracts.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import {
   coordinatorNodeTarget,
   registerCoordinatorNodeCommands,
-} from "../commands-registry-coordinator-nodes.js";
+} from "../commands/registry-coordinator-nodes.js";
 import { createNodeTargets } from "../control-mcp/nodes.js";
 import {
   CoordinatorNodeReconnectWakes,

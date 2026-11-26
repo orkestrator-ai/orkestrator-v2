@@ -444,7 +444,7 @@ Recovery fault coverage today:
   turning into one conditional read, and PR transitions toasting once;
 - `apps/web/src/lib/resource-sync.test.ts`: the safety-check cadence;
 - `apps/backend/tests/view-revisions.test.ts` and
-  `apps/backend/src/core/commands-state-sync.test.ts`: backend stamping and
+  `apps/backend/src/core/commands/state-sync.test.ts`: backend stamping and
   compact conditional reads.
 
 ## Freshness in the UI

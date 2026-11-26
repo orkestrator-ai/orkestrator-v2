@@ -16,8 +16,8 @@ import { previewFailure } from "@orkestrator/protocol/preview-services";
 import { WebSocket as WsClient } from "ws";
 import { flushMicrotasks, ManualClock } from "@orkestrator/protocol/testing/manual-clock";
 
-import { createCommandRegistry } from "../../backend/src/core/commands";
-import type { CommandContext } from "../../backend/src/core/commands-context";
+import { createCommandRegistry } from "../../backend/src/core/commands/registry";
+import type { CommandContext } from "../../backend/src/core/commands/context";
 import {
   createPreviewHarness,
   type PreviewHarness,

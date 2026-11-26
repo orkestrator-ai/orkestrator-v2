@@ -27,9 +27,8 @@ import {
   type ValidationFailureTriage,
 } from "@orkestrator/protocol/validation-failure-triage";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import type { CommandContext } from "./commands-context.js";
-import type { EnvironmentCommandRunner } from "./commands-review.js";
-import { quoteShell, resolveBunBinary } from "./commands-agent-support.js";
+import type { CommandContext, EnvironmentCommandRunner } from "./commands/index.js";
+import { quoteShell, resolveBunBinary } from "./commands/agent-support.js";
 import { withContainerRuntimeCredential } from "./containers/index.js";
 import { environmentIsolationVariables, withEnvironmentIsolation } from "./environments/index.js";
 import { gitHubCli, gitHubCliEnv } from "./git/index.js";

@@ -31,8 +31,8 @@ import { registerTmuxBackendCommands } from "../src/core/tmux/commands";
 
 import { BackendRuntime } from "../src/core/backend-runtime";
 import { claudeProjectSlug } from "../src/core/claude-project-slug";
-import { registrarFrom } from "../src/core/commands-registry-contracts";
-import type { CommandContext } from "../src/core/commands";
+import { registrarFrom } from "../src/core/commands/registry-contracts";
+import type { CommandContext } from "../src/core/commands/context";
 import type { Environment } from "../src/core/models";
 
 export const tempDirs: string[] = [];

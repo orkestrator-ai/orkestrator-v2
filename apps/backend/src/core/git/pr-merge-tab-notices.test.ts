@@ -4,7 +4,7 @@ import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import { AgentMailError } from "@orkestrator/protocol/agent-mail";
 import { fixture } from "../agent-mail-storage-test-support.js";
 import { deliverPrMergeTabNotices, renderPrMergeTabNotice } from "./pr-merge-tab-notices.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { PrMonitorRuntime } from "./pr-monitor-runtime.js";
 import { StorageService } from "../storage/service.js";

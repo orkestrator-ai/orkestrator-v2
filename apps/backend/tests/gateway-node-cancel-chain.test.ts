@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
 import type { RouteId } from "@orkestrator/protocol/federation";
-import type { CommandContext } from "../src/core/commands-context.js";
+import type { CommandContext } from "../src/core/commands/context.js";
 import { OrkestratorBackend } from "../src/core/index.js";
 import { NodeOutcomeUnknownError } from "../src/core/nodes/node-link.js";
 import {

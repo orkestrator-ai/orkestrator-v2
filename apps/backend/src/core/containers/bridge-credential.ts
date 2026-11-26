@@ -10,9 +10,8 @@ import {
   mintBridgeToken,
 } from "@orkestrator/protocol/node/bridge-credential";
 import { forgetBridgeAuthorityKey, rememberBridgeAuthorityKey } from "../bridge-authority-keys.js";
-import { quoteShell } from "../commands-agent-support.js";
-import { dockerExec } from "../commands-container-exec.js";
-import { dockerExecDetached } from "../commands-server-health.js";
+import { quoteShell } from "../commands/agent-support.js";
+import { dockerExec, dockerExecDetached } from "../commands/index.js";
 import { compatibilityPathUsage } from "../compatibility-path-usage.js";
 import {
   bridgeListenerScanScript,

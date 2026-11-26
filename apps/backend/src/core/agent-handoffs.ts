@@ -22,7 +22,7 @@ import {
   type AgentHandoffProvider,
 } from "@orkestrator/protocol/agent-handoff";
 import type { ChangeTrackingService } from "./change-tracking/index.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 import type { PersistedAgentHandoff, PersistedPaneLayout } from "./models.js";
 import {
   AGENT_HANDOFF_PRUNE_GRACE_MS,

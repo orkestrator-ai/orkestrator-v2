@@ -16,7 +16,7 @@ import { startFailureRemedy } from "../environments/start-remedy.js";
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   gitSshUnreachableMessage,
-} from "../commands-error-text.js";
+} from "../commands/error-text.js";
 
 const MAC_OUTPUT = `ssh: connect to host github.com port 22: Operation timed out\r
 fatal: Could not read from remote repository.

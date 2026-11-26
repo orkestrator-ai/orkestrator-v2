@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { agentTestTerminalSurvival, TERMINAL_SURVIVAL_FIXTURE_DIR } from "./agent-test-fixtures.js";
-import { setupTerminalSessionId } from "./commands-terminal.js";
+import { setupTerminalSessionId } from "./commands/terminal.js";
 import type { PtyProcess } from "./pty.js";
 import { TerminalRuntime } from "./terminals/runtime.js";
 

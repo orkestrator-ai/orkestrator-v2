@@ -10,7 +10,7 @@ import { DEFAULT_AGENT_ACCOUNT_ID } from "@orkestrator/protocol/agent-accounts";
 import type { NodeSummariesResult } from "@orkestrator/protocol/node-summaries";
 
 import { agentAccountHome } from "../agent-accounts/homes.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import { DOCKER_LABEL_CAPABILITIES_DIGEST, DOCKER_LABEL_INPUTS_REVISION } from "../constants.js";
 import { containerLabel } from "../portable-input-status.js";
 import { readInputsManifest } from "../portable-inputs.js";

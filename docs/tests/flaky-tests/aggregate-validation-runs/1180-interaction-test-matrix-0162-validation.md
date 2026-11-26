@@ -40,7 +40,7 @@ backend code was identical to the base.
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | Real-Git snapshot cases | 0 passed, 2 failed | 1 passed, 3 failed |
 | `apps/backend/tests/staged-input-relay.test.ts` | Four relay cases (mode `448` expected) | 5 passed, 4 failed | 5 passed, 4 failed |
 | `apps/backend/tests/docker-image.test.ts` | Two `--add-host host.docker.internal:…` expectations | 19 passed, 2 failed | 19 passed, 2 failed |
-| `apps/backend/src/core/commands-environment-worktree-location.test.ts` | Two cases | 7 passed, 2 failed | 8 passed, 1 failed |
+| `apps/backend/src/core/commands/environment-worktree-location.test.ts` | Two cases | 7 passed, 2 failed | 8 passed, 1 failed |
 | `apps/backend/src/core/public-api/public-api-project-init-cascade.test.ts` | `project.init` local repository | 10 passed, 1 failed | 11 passed |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | One case | 20 passed, 1 failed | — |
 | `apps/backend/tests/commands-environment-fork.test.ts` | Local fork from the source commit | 23 passed, 1 failed | — |

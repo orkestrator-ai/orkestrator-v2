@@ -11,11 +11,11 @@ import { buildInvokeEnvelope, defineCommand } from "@orkestrator/protocol/contra
 import { defineDomain } from "@orkestrator/protocol/contract/domain";
 import { fromWire, incompatibility, unknownCommand } from "@orkestrator/protocol/contract/errors";
 import { unknownBackendCommandMessage } from "@orkestrator/protocol/unknown-command";
-import type { CommandContext } from "../src/core/commands-context.js";
+import type { CommandContext } from "../src/core/commands/context.js";
 import {
   CommandRegistry,
   createRegistryRegistrar,
-} from "../src/core/commands-registry-contracts.js";
+} from "../src/core/commands/registry-contracts.js";
 import type { BackendHelloIdentity } from "../src/gateway";
 import { requestUrl, startGateway } from "./gateway-test-harness.js";
 

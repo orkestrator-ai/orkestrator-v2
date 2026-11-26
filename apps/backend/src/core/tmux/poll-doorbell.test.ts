@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import type { CommandContext } from "../commands.js";
+import type { CommandContext } from "../commands/context.js";
 import { TmuxBackend } from "./backend.js";
 import type { TmuxHookDoorbell } from "./hook-signal.js";
 import { TMUX_HOOK_DOORBELL_COMMAND, hookScript, workspaceHookPaths } from "./hooks.js";

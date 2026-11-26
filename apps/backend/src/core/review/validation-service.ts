@@ -12,12 +12,12 @@ import {
   type ReviewValidationRun,
 } from "@orkestrator/protocol/review-workflow";
 import { assertDetachedLongCheckPolicy } from "../native-agent/index.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import {
   createEnvironmentCommandRunner,
   ensureReviewPackageIsGitExcluded,
-} from "../commands-review.js";
-import { quoteShell, resolveBunBinary, validateGitRefName } from "../commands-agent-support.js";
+} from "../commands/review.js";
+import { quoteShell, resolveBunBinary, validateGitRefName } from "../commands/agent-support.js";
 import { runCommand } from "../shell.js";
 import { REVIEW_VALIDATION_CONTROL, REVIEW_VALIDATION_WORKER } from "./validation-worker.js";
 import { localEnvironmentIsolationEnv, withEnvironmentIsolation } from "../environments/index.js";

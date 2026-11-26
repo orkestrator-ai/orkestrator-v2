@@ -1,8 +1,8 @@
 /**
  * Every `pipelines` command (plan item 7007; docs/reports/unified-federation.md
  * §11.2, Appendix E): build pipeline launches, controls and reads
- * (`commands-registry-build.ts`) and the workflow result transport's
- * operational surface (`commands-registry-workflow-results.ts`).
+ * (`apps/backend/src/core/commands/registry-build.ts`) and the workflow result transport's
+ * operational surface (`apps/backend/src/core/commands/registry-workflow-results.ts`).
  *
  * Argument rules:
  *

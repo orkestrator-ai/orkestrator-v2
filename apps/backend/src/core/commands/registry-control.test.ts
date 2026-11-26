@@ -1,0 +1,1998 @@
+import { describe, expect, mock, spyOn, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { createCommandRegistry } from "./registry.js";
+import type { CommandContext } from "./context.js";
+import { StorageService } from "../storage/service.js";
+import {
+  COORDINATOR_DELEGATION_PRESENTATION,
+  COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+  createCoordinatorDelegatedPrompt,
+} from "@orkestrator/protocol/review-evidence-frames";
+import { withCoordinatorDelegationPresentation } from "../coordinator/delegation-authority.js";
+import { BackendRuntime } from "../backend-runtime.js";
+import { nativeAgentSessionStorageKey } from "../native-agent/service-shared.js";
+import { NativeAgentService } from "../native-agent/service.js";
+import {
+  AmbiguousPromptDispatchError,
+  type AgentSessionProvider,
+  type ProviderStatus,
+} from "../native-agent/provider.js";
+import { queueInternals } from "../native-agent/service-test-collaborators.js";
+import { resendToOpenJobTab } from "../native-agent/job-tab-reuse.js";
+import { NATIVE_JOB_RECEIPT_LIMIT, NativeJobReceiptCapacityError } from "../storage/prompts.js";
+import { errorCode } from "@orkestrator/protocol/contract/ipc-error";
+import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
+
+describe("launch_control_job command", () => {
+  test("reads and rotates the persistent control MCP credential through backend commands", async () => {
+    const settings = {
+      enabled: true,
+      running: true,
+      url: "http://127.0.0.1:34122/mcp",
+      token: "persistent-token",
+      error: null,
+    };
+    const rotated = { ...settings, token: "rotated-token" };
+    const registry = createCommandRegistry();
+    const getSettings = registry.get("get_control_mcp_settings");
+    const rotateToken = registry.get("rotate_control_mcp_token");
+    if (!getSettings || !rotateToken) throw new Error("Control MCP settings were not registered");
+    const context = {
+      controlMcp: {
+        getSettings: () => settings,
+        rotateToken: async () => rotated,
+      },
+    } as unknown as CommandContext;
+
+    expect(await getSettings({}, context)).toEqual(settings);
+    expect(await rotateToken({}, context)).toEqual(rotated);
+  });
+
+  test("creates a stable native tab and dispatches the requested prompt", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-control-command-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+      agentSettings: { platforms: { codex: { fastMode: true } } },
+    });
+    const ensured: Array<Record<string, unknown>> = [];
+    const dispatched: Array<Record<string, unknown>> = [];
+    const context = {
+      storage,
+      emit: () => undefined,
+      appRoot: "",
+      resourceRoot: "",
+      environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
+      nativeAgents: {
+        ensureSession: async (input: Record<string, unknown>) => {
+          ensured.push(input);
+          return { providerSessionId: "provider-session-1" };
+        },
+        dispatchIntent: async (input: Record<string, unknown>) => {
+          dispatched.push(input);
+          return { outcome: "accepted" };
+        },
+      },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("launch_control_job");
+    if (!command) throw new Error("launch_control_job was not registered");
+
+    try {
+      const delegation = createCoordinatorDelegatedPrompt(
+        {
+          projectId: "project-1",
+          coordinatorId: "coordinator-1",
+          conversationId: "conversation-1",
+          instruction: COORDINATOR_JOB_DELEGATION_INSTRUCTION,
+        },
+        "Fix the failing tests.",
+      );
+      const initialPromptPresentation = {
+        kind: COORDINATOR_DELEGATION_PRESENTATION,
+        frame: delegation.frame,
+      } as const;
+      const input = withCoordinatorDelegationPresentation(
+        {
+          agentDefaulted: true,
+          requestId: "external-request-1",
+          tabId: "untrusted-tab",
+          environmentId: "env-1",
+          agent: "codex",
+          title: "Independent job",
+          prompt: delegation.source,
+        },
+        initialPromptPresentation,
+      );
+      const first = (await command(input, context)) as Record<string, unknown>;
+      const second = (await command(
+        { ...input, agent: "claude", agentDefaulted: true },
+        context,
+      )) as Record<string, unknown>;
+      await command(
+        {
+          requestId: "untrusted-request-2",
+          environmentId: "env-1",
+          agent: "codex",
+          prompt: delegation.source,
+          initialPromptPresentation,
+        },
+        context,
+      );
+
+      expect(first).toMatchObject({
+        environmentId: "env-1",
+        agent: "codex",
+        status: "accepted",
+      });
+      expect(first.tabId).not.toBe("untrusted-tab");
+      expect(second.tabId).toBe(first.tabId);
+      expect(second.agent).toBe("codex");
+      await expect(
+        command({ ...input, agentDefaulted: false, agent: "claude" }, context),
+      ).rejects.toThrow("different agent platform");
+      expect(String(first.tabId)).toStartWith("agent-job-");
+      expect(ensured[0]).toMatchObject({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: `env-env-1:${String(first.tabId)}`,
+        sessionMode: "build",
+        fastMode: true,
+        initialPromptPresentation,
+      });
+      expect(dispatched[0]).toMatchObject({
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: `env-env-1:${String(first.tabId)}`,
+        requestId: "external-request-1",
+        prompt: delegation.source,
+        initialPromptPresentation,
+        mode: "build",
+        fastMode: true,
+      });
+      expect(ensured[2]).not.toHaveProperty("initialPromptPresentation");
+      expect(dispatched[2]).not.toHaveProperty("initialPromptPresentation");
+      const layout = await storage.getPaneLayout("env-1");
+      expect(JSON.stringify(layout?.root).match(/"id":"agent-job-/g)).toHaveLength(2);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a Fast launch alive when the model catalogue cannot be read", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-fast-catalogue-outage-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+      // A configured model is what puts the catalogue on the path at all: a
+      // Fast choice with no model to check needs no catalogue.
+      agentSettings: { platforms: { codex: { fastMode: true, model: "gpt-5.6-codex" } } },
+    });
+    const ensured: Array<Record<string, unknown>> = [];
+    const context = {
+      storage,
+      emit: () => undefined,
+      appRoot: "",
+      resourceRoot: "",
+      environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
+      nativeAgents: {
+        ensureSession: async (input: Record<string, unknown>) => {
+          ensured.push(input);
+          return { providerSessionId: "provider-session-1" };
+        },
+        dispatchIntent: async () => ({ outcome: "accepted" as const }),
+      },
+    } as unknown as CommandContext;
+    const registry = createCommandRegistry();
+    let catalogReads = 0;
+    registry.set("get_native_agent_model_catalog", async () => {
+      catalogReads += 1;
+      throw new Error("bridge is unavailable");
+    });
+    const command = registry.get("launch_native_agent_job");
+    if (!command) throw new Error("launch_native_agent_job was not registered");
+
+    try {
+      const result = (await command(
+        {
+          requestId: "renderer-request-1",
+          tabId: "renderer-chosen-tab",
+          environmentId: "env-1",
+          agent: "codex",
+          title: "Push Changes",
+          prompt: "Push the branch.",
+        },
+        context,
+      )) as Record<string, unknown>;
+
+      // The catalogue can only ever narrow a Fast choice, so losing it must
+      // leave the provider as the authority instead of failing the launch.
+      expect(catalogReads).toBe(1);
+      expect(result).toMatchObject({ status: "accepted", tabId: "renderer-chosen-tab" });
+      await expect(
+        command(
+          {
+            requestId: "too-long",
+            environmentId: "env-1",
+            agent: "codex",
+            prompt: "task",
+            tabId: "x".repeat(257),
+          },
+          context,
+        ),
+      ).rejects.toThrow("tabId must be at most 256 characters");
+      expect(ensured[0]).toMatchObject({ agent: "codex", fastMode: true });
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("drops an inherited reasoning effort the requested model cannot offer", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-inherited-effort-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+      // Configured for whichever model the tier was set up against, which is
+      // not the model this caller pins.
+      agentSettings: { platforms: { codex: { reasoningEffort: "xhigh" } } },
+    });
+    const ensured: Array<Record<string, unknown>> = [];
+    const context = {
+      storage,
+      emit: () => undefined,
+      appRoot: "",
+      resourceRoot: "",
+      environmentLifecycleTasks: {},
+      runtime: new BackendRuntime({ emit: () => undefined }),
+      nativeAgents: {
+        ensureSession: async (input: Record<string, unknown>) => {
+          ensured.push(input);
+          return { providerSessionId: "provider-session-1" };
+        },
+        dispatchIntent: async () => ({ outcome: "accepted" as const }),
+      },
+    } as unknown as CommandContext;
+    const registry = createCommandRegistry();
+    registry.set("get_native_agent_model_catalog", async () => [
+      {
+        id: "gpt-5.6-codex",
+        name: "GPT-5.6 Codex",
+        label: "GPT-5.6 Codex",
+        platform: "codex",
+        reasoning: [{ id: "high", name: "High", label: "High" }],
+      },
+    ]);
+    const command = registry.get("launch_control_job");
+    if (!command) throw new Error("launch_control_job was not registered");
+
+    try {
+      const result = (await command(
+        {
+          requestId: "control-request-1",
+          environmentId: "env-1",
+          agent: "codex",
+          modelId: "gpt-5.6-codex",
+          title: "Independent job",
+          prompt: "Fix the failing tests.",
+        },
+        context,
+      )) as Record<string, unknown>;
+
+      expect(result).toMatchObject({ status: "accepted" });
+      expect(ensured[0]).toMatchObject({ agent: "codex", model: "gpt-5.6-codex" });
+      expect(ensured[0]?.reasoningEffort).toBeUndefined();
+
+      // An effort the caller asked for by name is still a hard error: silently
+      // ignoring it would run a turn the caller did not request.
+      await expect(
+        command(
+          {
+            requestId: "control-request-2",
+            environmentId: "env-1",
+            agent: "codex",
+            modelId: "gpt-5.6-codex",
+            reasoningId: "xhigh",
+            title: "Independent job",
+            prompt: "Fix the failing tests.",
+          },
+          context,
+        ),
+      ).rejects.toThrow("Reasoning option is not available for gpt-5.6-codex: xhigh");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([true, null])(
+    "launches renderer jobs and arms PR refresh before dispatch with merge conflicts %s",
+    async (hasMergeConflicts) => {
+      const dataDir = await mkdtemp(path.join(tmpdir(), "ork-renderer-job-command-"));
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      await storage.addEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        name: "Conflicting PR",
+        branch: "feature/conflicts",
+        containerId: null,
+        status: "running",
+        setupPhase: "ready",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        worktreePath: dataDir,
+      });
+      const context = {
+        storage,
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+        environmentLifecycleTasks: {},
+        runtime: new BackendRuntime({ emit: () => undefined }),
+        nativeAgents: {
+          ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
+          dispatchIntent: async () => {
+            const environment = await storage.getEnvironment("env-1");
+            expect(environment?.prRecheckAfterAgentCompletionArmedAt).toEqual(expect.any(String));
+            const layout = await storage.getPaneLayout("env-1");
+            expect(JSON.stringify(layout?.root)).toContain("provider-session-1");
+            return { outcome: "accepted" as const };
+          },
+        },
+      } as unknown as CommandContext;
+      const command = createCommandRegistry().get("launch_native_agent_job");
+      if (!command) throw new Error("launch_native_agent_job was not registered");
+
+      try {
+        const result = (await command(
+          {
+            requestId: "resolve-request-1",
+            environmentId: "env-1",
+            agent: "codex",
+            modelId: "configured-resolved-model-id",
+            reasoningId: "high",
+            title: "Resolve",
+            prompt: "Resolve the merge conflicts.",
+            completionAction: "refresh-pr-after-agent-completion",
+            activateTab: true,
+          },
+          context,
+        )) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
+          environmentId: "env-1",
+          agent: "codex",
+          status: "accepted",
+          completionActionArmed: true,
+        });
+        expect(result).not.toHaveProperty("warning");
+        const layout = await storage.getPaneLayout("env-1");
+        expect(layout?.root).toMatchObject({
+          kind: "leaf",
+          activeTabId: result.tabId,
+        });
+      } finally {
+        await rm(dataDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("rolls back the Resolve completion arm when backend dispatch is rejected", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-rejected-renderer-job-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Conflicting PR",
+      branch: "feature/conflicts",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: "https://github.com/org/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const context = {
+      storage,
+      nativeAgents: {
+        ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
+        dispatchIntent: async () => ({ outcome: "rejected" as const, error: "refused" }),
+      },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("launch_native_agent_job");
+    if (!command) throw new Error("launch_native_agent_job was not registered");
+
+    try {
+      await expect(
+        command(
+          {
+            requestId: "resolve-request-1",
+            environmentId: "env-1",
+            agent: "codex",
+            title: "Resolve",
+            prompt: "Resolve the merge conflicts.",
+            completionAction: "refresh-pr-after-agent-completion",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ status: "rejected", error: "refused" });
+      expect(
+        (await storage.getEnvironment("env-1"))?.prRecheckAfterAgentCompletionArmedAt,
+      ).toBeUndefined();
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("launches Resolve when automatic PR refresh cannot be armed", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-unarmed-renderer-job-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Stale conflict state",
+      branch: "feature/conflicts",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: "https://github.com/org/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: false,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const dispatchIntent = mock(async () => ({ outcome: "accepted" as const }));
+    const context = {
+      storage,
+      nativeAgents: {
+        ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
+        dispatchIntent,
+      },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("launch_native_agent_job");
+    if (!command) throw new Error("launch_native_agent_job was not registered");
+
+    try {
+      await expect(
+        command(
+          {
+            requestId: "resolve-request-1",
+            environmentId: "env-1",
+            agent: "codex",
+            prompt: "Resolve the merge conflicts.",
+            completionAction: "refresh-pr-after-agent-completion",
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({
+        status: "accepted",
+        completionActionArmed: false,
+        warning: expect.any(String),
+      });
+      expect(dispatchIntent).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  describe("tabReuse", () => {
+    const resolveTabId = "agent-job-existing";
+    const resolveKey = `env-env-1:${resolveTabId}`;
+    const queueKey = `codex\0${resolveKey}`;
+
+    async function withResolveEnvironment(
+      run: (harness: {
+        storage: StorageService;
+        context: CommandContext;
+        dataDir: string;
+        launch: (args?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        promptReadiness: ReturnType<typeof mock>;
+        dispatchIntent: ReturnType<typeof mock>;
+        ensureSession: ReturnType<typeof mock>;
+        notifyPromptQueueChanged: ReturnType<typeof mock>;
+        adoptSession: ReturnType<typeof mock>;
+        openJobTab: (
+          tabId: string,
+          agent?: "codex" | "claude",
+          updatedAt?: string,
+        ) => Promise<void>;
+      }) => Promise<void>,
+    ): Promise<void> {
+      const dataDir = await mkdtemp(path.join(tmpdir(), "ork-resolve-reuse-"));
+      const storage = new StorageService(dataDir);
+      await storage.init();
+      await storage.addEnvironment({
+        id: "env-1",
+        projectId: "project-1",
+        name: "Conflicting PR",
+        branch: "feature/conflicts",
+        containerId: null,
+        status: "running",
+        setupPhase: "ready",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "restricted",
+        order: 0,
+        environmentType: "local",
+        worktreePath: dataDir,
+      });
+      const promptReadiness = mock(async () => "idle");
+      const dispatchIntent = mock(async () => ({ outcome: "accepted" as const }));
+      const ensureSession = mock(async () => ({ providerSessionId: "provider-new" }));
+      const notifyPromptQueueChanged = mock(() => undefined);
+      const adoptSession = mock(async (input: { providerSessionId: string }) => ({
+        providerSessionId: input.providerSessionId,
+      }));
+      const context = {
+        storage,
+        nativeAgents: {
+          promptReadiness,
+          dispatchIntent,
+          ensureSession,
+          notifyPromptQueueChanged,
+          adoptSession,
+        },
+      } as unknown as CommandContext;
+      const command = createCommandRegistry().get("launch_native_agent_job");
+      if (!command) throw new Error("launch_native_agent_job was not registered");
+      const openJobTab = async (
+        tabId: string,
+        agent: "codex" | "claude" = "codex",
+        updatedAt = "2026-08-01T12:00:00.000Z",
+      ) => {
+        await storage.ensureNativeAgentJobTab({
+          environmentId: "env-1",
+          tabId,
+          agent,
+          title: "Resolve",
+          completionAction: "refresh-pr-after-agent-completion",
+        });
+        await storage.adoptNativeAgentSession({
+          key: nativeAgentSessionStorageKey("env-1", agent, `env-env-1:${tabId}`),
+          environmentId: "env-1",
+          agent,
+          logicalSessionKey: `env-env-1:${tabId}`,
+          providerSessionId: `provider-${tabId}`,
+        });
+        recency.set(`env-env-1:${tabId}`, updatedAt);
+      };
+      const recency = new Map<string, string>();
+      const readSession = storage.getNativeAgentSession.bind(storage);
+      storage.getNativeAgentSession = (async (key: string) => {
+        const session = await readSession(key);
+        const updatedAt = session && recency.get(session.logicalSessionKey);
+        return session && updatedAt ? { ...session, updatedAt } : session;
+      }) as typeof storage.getNativeAgentSession;
+      try {
+        await run({
+          storage,
+          context,
+          dataDir,
+          promptReadiness,
+          dispatchIntent,
+          ensureSession,
+          notifyPromptQueueChanged,
+          adoptSession,
+          openJobTab,
+          launch: async (args = {}) =>
+            (await command(
+              {
+                requestId: "resolve-request-2",
+                environmentId: "env-1",
+                agent: "codex",
+                title: "Resolve",
+                prompt: "Resolve the merge conflicts.",
+                completionAction: "refresh-pr-after-agent-completion",
+                tabReuse: "any-agent",
+                activateTab: true,
+                ...args,
+              },
+              context,
+            )) as Record<string, unknown>,
+        });
+      } finally {
+        await rm(dataDir, { recursive: true, force: true });
+      }
+    }
+
+    const tabIds = async (storage: StorageService): Promise<string[]> => {
+      const layout = (await storage.getPaneLayout("env-1")) as {
+        root: { tabs: Array<{ id: string }> };
+      };
+      return layout.root.tabs.map((tab) => tab.id);
+    };
+    const armedAt = async (storage: StorageService) =>
+      (await storage.getEnvironment("env-1"))?.prRecheckAfterAgentCompletionArmedAt;
+
+    test("sends to an idle Resolve tab now and arms the PR refresh", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+
+        const result = await launch();
+
+        expect(result).toMatchObject({
+          tabId: resolveTabId,
+          logicalSessionKey: resolveKey,
+          status: "accepted",
+          reused: true,
+          completionActionArmed: true,
+        });
+        expect(result.queued).toBeUndefined();
+        expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+        expect(fakes.dispatchIntent.mock.calls[0]?.[0]).toMatchObject({
+          logicalSessionKey: resolveKey,
+          requestId: "resolve-request-2",
+          prompt: "Resolve the merge conflicts.",
+          mode: "build",
+        });
+        expect(fakes.ensureSession).not.toHaveBeenCalled();
+        expect(await tabIds(storage)).toEqual([resolveTabId]);
+        expect(await armedAt(storage)).toEqual(expect.any(String));
+      });
+    });
+
+    test("queues behind a busy Resolve tab without interrupting it", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+
+        const result = await launch();
+
+        expect(result).toMatchObject({
+          tabId: resolveTabId,
+          status: "accepted",
+          reused: true,
+          queued: true,
+          completionActionArmed: true,
+        });
+        expect(fakes.dispatchIntent).not.toHaveBeenCalled();
+        expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([
+          expect.objectContaining({
+            id: "resolve-request-2",
+            requestId: "resolve-request-2",
+            text: "Resolve the merge conflicts.",
+            mode: "build",
+          }),
+        ]);
+        expect(fakes.notifyPromptQueueChanged).toHaveBeenCalledWith(queueKey);
+        expect(await tabIds(storage)).toEqual([resolveTabId]);
+        expect(await armedAt(storage)).toEqual(expect.any(String));
+
+        // A second press while the first copy still waits adds nothing.
+        await expect(launch({ requestId: "resolve-request-3" })).resolves.toMatchObject({
+          queued: true,
+        });
+        expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+      });
+    });
+
+    test.each(["idle", "unavailable", "rejected"] as const)(
+      "reopens a finished pipeline's Resolve session without a duplicate when readiness is %s",
+      async (readiness) => {
+        await withResolveEnvironment(async ({ storage, launch, ...fakes }) => {
+          const resolveSession = {
+            phase: "resolve-conflicts",
+            agent: "codex",
+            iteration: 1,
+            sessionKey: "pipeline-1:resolve-conflicts:1:a",
+            sdkSessionId: "provider-pipeline-resolve",
+            status: "idle",
+            startedAt: "2026-11-15T10:00:00.000Z",
+            completedAt: "2026-11-15T10:10:00.000Z",
+            label: "Resolve Conflicts",
+          };
+          storage.listBuildPipelinesForEnvironment = (async () => [
+            {
+              version: 1,
+              id: "pipeline-1",
+              projectId: "project-1",
+              environmentId: "env-1",
+              updatedAt: "2026-11-15T10:10:00.000Z",
+              revision: 1,
+              snapshot: {
+                id: "pipeline-1",
+                taskId: "task-1",
+                projectId: "project-1",
+                environmentId: "env-1",
+                environmentType: "local",
+                agentType: "codex",
+                phase: "complete",
+                sessions: [resolveSession],
+                currentSessionIndex: 0,
+                iteration: 1,
+                maxIterations: 3,
+                createdAt: "2026-11-15T09:00:00.000Z",
+                taskTitle: "Conflicts",
+                taskSnapshot: {
+                  title: "Conflicts",
+                  description: "",
+                  acceptanceCriteria: "",
+                  comments: [],
+                  images: [],
+                },
+                backendRevision: 1,
+                controller: "backend",
+              },
+            },
+          ]) as unknown as typeof storage.listBuildPipelinesForEnvironment;
+
+          if (readiness === "unavailable")
+            fakes.promptReadiness.mockImplementation(async () => "unavailable");
+          if (readiness === "rejected")
+            fakes.dispatchIntent.mockImplementationOnce(async () => ({
+              outcome: "rejected",
+              error: "refused",
+            }));
+          const result = await launch({ activateTab: false });
+
+          expect(fakes.adoptSession).toHaveBeenCalledTimes(1);
+          expect(fakes.adoptSession.mock.calls[0]?.[0]).toMatchObject({
+            agent: "codex",
+            providerSessionId: "provider-pipeline-resolve",
+          });
+          const tabs = await tabIds(storage);
+          expect(tabs).toHaveLength(1);
+          if (readiness !== "idle") {
+            expect(result).toMatchObject({ status: "rejected", tabId: tabs[0] });
+            expect(fakes.ensureSession).not.toHaveBeenCalled();
+            expect(await armedAt(storage)).toBeUndefined();
+            return;
+          }
+          expect(result).toMatchObject({
+            tabId: tabs[0],
+            status: "accepted",
+            reused: true,
+            completionActionArmed: true,
+          });
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+          expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+          expect(fakes.dispatchIntent.mock.calls[0]?.[0]).toMatchObject({
+            logicalSessionKey: `env-env-1:${tabs[0]}`,
+            requestId: "resolve-request-2",
+          });
+        });
+      },
+    );
+
+    test("opens a new tab when the Resolve tab cannot take a prompt", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "unavailable");
+
+        const result = await launch();
+
+        expect(result.reused).toBeUndefined();
+        expect(result.tabId).not.toBe(resolveTabId);
+        expect(result).toMatchObject({ status: "accepted", completionActionArmed: true });
+        expect(fakes.ensureSession).toHaveBeenCalledTimes(1);
+        expect(await tabIds(storage)).toEqual([resolveTabId, result.tabId as string]);
+        expect(await storage.getPromptQueue(queueKey)).toBeNull();
+      });
+    });
+
+    test("opens a new tab when the provider refuses the resend, keeping the arm", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.dispatchIntent.mockImplementationOnce(async () => ({
+          outcome: "rejected",
+          error: "refused",
+        }));
+
+        const result = await launch();
+
+        expect(result.tabId).not.toBe(resolveTabId);
+        expect(result).toMatchObject({ status: "accepted", completionActionArmed: true });
+        expect(fakes.dispatchIntent).toHaveBeenCalledTimes(2);
+        expect(await armedAt(storage)).toEqual(expect.any(String));
+      });
+    });
+
+    test("does not resend elsewhere when the outcome of the resend is unknown", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.dispatchIntent.mockImplementationOnce(async () => ({
+          outcome: "unknown",
+          error: "lost the acknowledgement",
+        }));
+
+        await expect(launch()).resolves.toMatchObject({
+          tabId: resolveTabId,
+          status: "unknown",
+          error: "lost the acknowledgement",
+        });
+        expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+        expect(await tabIds(storage)).toEqual([resolveTabId]);
+      });
+    });
+
+    test("resends with a full tab bar, and only a new tab hits the limit", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab }) => {
+        await openJobTab(resolveTabId);
+        for (let index = 1; index < MAX_TABS_PER_ENVIRONMENT; index += 1) {
+          await storage.ensureNativeAgentJobTab({
+            environmentId: "env-1",
+            tabId: `other-${index}`,
+            agent: "codex",
+          });
+        }
+
+        await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, reused: true });
+        expect(await tabIds(storage)).toHaveLength(MAX_TABS_PER_ENVIRONMENT);
+
+        const previousArm = await armedAt(storage);
+        await expect(
+          launch({ requestId: "resolve-request-3", tabReuse: "same-agent", agent: "claude" }),
+        ).rejects.toThrow("maximum");
+        expect(await armedAt(storage)).toBe(previousArm);
+        const requestRefresh = mock(async () => undefined);
+        const complete = createCommandRegistry().get("pr_monitor_agent_turn_completed")!;
+        await complete({ environmentId: "env-1" }, {
+          storage,
+          runtime: { prMonitor: { requestRefresh } },
+        } as unknown as CommandContext);
+        expect(requestRefresh).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test("binds an unknown retry and later press to the original tab across restart and recency changes", async () => {
+      await withResolveEnvironment(
+        async ({ storage, context, dataDir, launch, openJobTab, ...fakes }) => {
+          await openJobTab(resolveTabId);
+          fakes.dispatchIntent.mockImplementationOnce(async () => ({ outcome: "unknown" }));
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await openJobTab("agent-job-newest", "codex", "2026-09-01T12:00:00.000Z");
+          const restarted = new StorageService(dataDir);
+          await restarted.init();
+          context.storage = restarted;
+          fakes.promptReadiness.mockImplementation(async () => "unavailable");
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await expect(launch({ requestId: "new-press" })).resolves.toMatchObject({
+            tabId: resolveTabId,
+            status: "unknown",
+          });
+          expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(0);
+        },
+      );
+    });
+
+    test.each(["pendingDispatch", "pendingSteer"] as const)(
+      "keeps later presses on a tab with %s",
+      async (field) => {
+        await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+          await openJobTab(resolveTabId);
+          await openJobTab("agent-job-newest", "codex", "2026-09-01T12:00:00.000Z");
+          const original = storage.getNativeAgentSession.bind(storage);
+          storage.getNativeAgentSession = async (key) => {
+            const session = await original(key);
+            return session?.logicalSessionKey === resolveKey
+              ? {
+                  ...session,
+                  [field]: {
+                    requestId: "pending-original",
+                    prompt: "Resolve the merge conflicts.",
+                    text: "Resolve the merge conflicts.",
+                  },
+                }
+              : session;
+          };
+          fakes.promptReadiness.mockImplementation(async () => "unavailable");
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          expect(fakes.dispatchIntent).not.toHaveBeenCalled();
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+        });
+      },
+    );
+
+    test("concurrent plain presses with no existing Resolve tab create one conversation", async () => {
+      await withResolveEnvironment(async ({ storage, launch, ...fakes }) => {
+        const results = await Promise.all([
+          launch({ requestId: "first" }),
+          launch({ requestId: "second" }),
+        ]);
+        expect(results[0]?.tabId).toBe(results[1]?.tabId);
+        expect(await tabIds(storage)).toHaveLength(1);
+        expect(fakes.ensureSession).toHaveBeenCalledTimes(1);
+        expect(fakes.dispatchIntent).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    test.each(["idle", "busy"])(
+      "coalesces concurrent identical plain presses while %s",
+      async (readiness) => {
+        await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+          await openJobTab(resolveTabId);
+          fakes.promptReadiness.mockImplementation(async () => readiness);
+          const results = await Promise.all(
+            Array.from({ length: 4 }, (_, index) => launch({ requestId: `concurrent-${index}` })),
+          );
+          expect(results.every((result) => result.tabId === resolveTabId)).toBe(true);
+          expect(fakes.dispatchIntent).toHaveBeenCalledTimes(readiness === "idle" ? 1 : 0);
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(
+            readiness === "idle" ? 0 : 1,
+          );
+          fakes.promptReadiness.mockImplementation(async () => "busy");
+          await launch({ requestId: "repeat-after-admission" });
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(
+            readiness === "idle" ? 0 : 1,
+          );
+        });
+      },
+    );
+
+    test("coalesces a matching in-flight queue item", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        // A composer-created item has no job receipt of its own.
+        await storage.enqueuePromptQueueMessage(queueKey, "env-1", {
+          id: "original",
+          requestId: "original",
+          text: "Resolve the merge conflicts.",
+          mode: "build",
+        });
+        await storage.reservePromptQueueHeadForDispatch(queueKey);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        await launch();
+        const queue = await storage.getPromptQueue(queueKey);
+        expect(queue?.messages).toHaveLength(0);
+        expect(queue?.inFlight?.requestId).toBe("original");
+        expect(fakes.dispatchIntent).not.toHaveBeenCalled();
+      });
+    });
+
+    test("falls back after a queue publication failure and tolerates a missed wake-up", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        const reserve = spyOn(storage, "reserveNativeAgentJobRequest");
+        reserve.mockRejectedValueOnce(new Error("write failed"));
+        const fallback = await launch();
+        expect(fallback.reused).toBeUndefined();
+        expect(fakes.ensureSession).toHaveBeenCalledTimes(1);
+        fakes.notifyPromptQueueChanged.mockImplementation(() => {
+          throw new Error("wake failed");
+        });
+        await expect(
+          launch({ requestId: "missed-wake", prompt: "Resolve updated conflicts." }),
+        ).resolves.toMatchObject({ queued: true });
+        expect(
+          (await storage.listPromptQueues("env-1")).flatMap((queue) => queue.messages),
+        ).toHaveLength(1);
+        reserve.mockRestore();
+      });
+    });
+
+    test("a receipt capacity refusal is rethrown by its code, never swallowed into the fallback", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        // The real refusal: a full queue keeps its receipts and refuses the next one.
+        for (let index = 0; index < NATIVE_JOB_RECEIPT_LIMIT; index++)
+          await storage.reserveNativeAgentJobRequest(
+            queueKey,
+            "env-1",
+            {
+              requestId: `filled-${index}`,
+              fingerprint: index.toString(16).padStart(64, "0"),
+              status: "accepted",
+              queued: true,
+            },
+            {
+              id: `filled-${index}`,
+              requestId: `filled-${index}`,
+              text: `Job ${index}`,
+              mode: "build",
+            },
+          );
+        expect((await storage.getPromptQueue(queueKey))?.jobReceipts).toHaveLength(
+          NATIVE_JOB_RECEIPT_LIMIT,
+        );
+        const full = await launch({ requestId: "one-too-many" }).catch((error: unknown) => error);
+        expect(errorCode(full)).toBe("native-job-receipt-capacity");
+        expect((full as Error).message).toBe("Native job receipt capacity reached");
+        expect(fakes.ensureSession).not.toHaveBeenCalled();
+
+        // Decided by the code: a reworded refusal is still rethrown.
+        const reserve = spyOn(storage, "reserveNativeAgentJobRequest").mockRejectedValueOnce(
+          new NativeJobReceiptCapacityError({ message: "reworded", limit: 1 }),
+        );
+        try {
+          await expect(launch({ requestId: "reworded" })).rejects.toThrow("reworded");
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+        } finally {
+          reserve.mockRestore();
+        }
+      });
+    });
+
+    test("a committed queue publication cannot fall back after its acknowledgement is lost", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        const original = storage.reserveNativeAgentJobRequest.bind(storage);
+        const reserve = spyOn(storage, "reserveNativeAgentJobRequest").mockImplementationOnce(
+          async (...args) => {
+            await original(...args);
+            throw new Error("lost storage acknowledgement");
+          },
+        );
+        try {
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, queued: true });
+          expect(fakes.ensureSession).not.toHaveBeenCalled();
+          expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+        } finally {
+          reserve.mockRestore();
+        }
+      });
+    });
+
+    test("keeps configured requests distinct and writes Claude's plan flag", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId, "claude");
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+        for (const requestId of ["plan-one", "plan-two"])
+          await launch({
+            requestId,
+            agent: "claude",
+            tabReuse: "same-agent",
+            conversationMode: "plan",
+          });
+        expect((await storage.getPromptQueue(`claude\0${resolveKey}`))?.messages).toEqual([
+          expect.objectContaining({ planModeEnabled: true, mode: "plan" }),
+          expect.objectContaining({ planModeEnabled: true, mode: "plan" }),
+        ]);
+      });
+    });
+
+    test("does not reuse a provider without a speed control for an explicit speed choice", async () => {
+      await withResolveEnvironment(async ({ context, storage }) => {
+        await storage.ensureNativeAgentJobTab({
+          environmentId: "env-1",
+          tabId: "pi-resolve",
+          agent: "pi",
+          completionAction: "refresh-pr-after-agent-completion",
+        });
+        await expect(
+          resendToOpenJobTab(context, {
+            environmentId: "env-1",
+            requestId: "speed",
+            completionAction: "refresh-pr-after-agent-completion",
+            tabReuse: "same-agent",
+            agent: "pi",
+            enabledAgents: ["pi"],
+            prompt: "Resolve",
+            mode: "build",
+            selection: { fastMode: true },
+          }),
+        ).resolves.toBeNull();
+      });
+    });
+
+    test("reconciles a real ambiguous dispatch on its bound tab without another send", async () => {
+      await withResolveEnvironment(async ({ storage, context, launch, openJobTab }) => {
+        await openJobTab(resolveTabId);
+        let journal: "unknown" | "dispatched" = "unknown";
+        let running = false;
+        const send = mock(async () => {
+          running = true;
+          throw new AmbiguousPromptDispatchError("lost response");
+        });
+        const createSession = mock(async () => "unexpected-new-session");
+        const provider = {
+          agent: "codex",
+          createSession,
+          registerSession: () => undefined,
+          send,
+          status: async () => (running ? "running" : "idle"),
+          dispatchStatus: async () => journal,
+          messages: async () => [],
+          structured: async () => null,
+          abort: async () => undefined,
+        } as unknown as AgentSessionProvider;
+        const service = new NativeAgentService(
+          storage,
+          async () => {
+            throw new Error("unexpected invoke");
+          },
+          { provider: async () => provider },
+        );
+        context.nativeAgents = service;
+        try {
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await openJobTab("agent-job-newest", "codex", "2026-09-01T12:00:00.000Z");
+          await expect(launch()).resolves.toMatchObject({ tabId: resolveTabId, status: "unknown" });
+          await expect(launch({ requestId: "later-press" })).resolves.toMatchObject({
+            tabId: resolveTabId,
+            status: "unknown",
+          });
+          journal = "dispatched";
+          await expect(launch()).resolves.toMatchObject({
+            tabId: resolveTabId,
+            status: "accepted",
+          });
+          expect(send).toHaveBeenCalledTimes(1);
+          expect(createSession).not.toHaveBeenCalled();
+          expect(
+            (
+              await storage.getNativeAgentSession(
+                nativeAgentSessionStorageKey("env-1", "codex", resolveKey),
+              )
+            )?.pendingDispatch,
+          ).toBeUndefined();
+        } finally {
+          await service.shutdown();
+        }
+      });
+    });
+
+    test.each(["any-agent", "same-agent"])(
+      "drains a %s resend through the real dispatcher with its controls and PR refresh",
+      async (tabReuse) => {
+        await withResolveEnvironment(async ({ storage, context, launch, openJobTab }) => {
+          await openJobTab(resolveTabId);
+          await storage.updateNativeAgentSessionControls(
+            nativeAgentSessionStorageKey("env-1", "codex", resolveKey),
+            `provider-${resolveTabId}`,
+            { modelId: "original-model", reasoningId: "medium" },
+          );
+          let status: ProviderStatus = "running";
+          const send = mock(
+            async (_id: string, _prompt: string, _options: Record<string, unknown>) => {
+              status = "running";
+            },
+          );
+          const provider = {
+            agent: "codex",
+            registerSession: () => undefined,
+            send,
+            status: async () => status,
+            activity: async () => (status === "running" ? "working" : "idle"),
+            messages: async () => [],
+            structured: async () => null,
+            abort: async () => undefined,
+          } as unknown as AgentSessionProvider;
+          const requestRefresh = mock(async () => undefined);
+          context.runtime = { prMonitor: { requestRefresh } } as unknown as BackendRuntime;
+          const service = new NativeAgentService(
+            storage,
+            async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+              if (command !== "pr_monitor_agent_turn_completed")
+                throw new Error(`unexpected invoke: ${command}`);
+              return (await createCommandRegistry().get(command)!(args ?? {}, context)) as T;
+            },
+            { provider: async () => provider },
+          );
+          context.nativeAgents = service;
+          // Drive the real drainer explicitly so there is no timer race in the test.
+          const wake = spyOn(service, "notifyPromptQueueChanged").mockImplementation(
+            () => undefined,
+          );
+          try {
+            await Promise.all(
+              Array.from({ length: tabReuse === "any-agent" ? 4 : 1 }, (_, index) =>
+                launch({
+                  requestId: `drain-${index}`,
+                  tabReuse,
+                  modelId: "picked-model",
+                  reasoningId: "high",
+                  conversationMode: "plan",
+                }),
+              ),
+            );
+            expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(1);
+            status = "idle";
+            await queueInternals(service).drainPromptQueues();
+            expect(send).toHaveBeenCalledTimes(1);
+            expect(send.mock.calls[0]?.[2]).toMatchObject({
+              model: tabReuse === "same-agent" ? "picked-model" : "original-model",
+              effort: tabReuse === "same-agent" ? "high" : "medium",
+              mode: "plan",
+            });
+            expect((await storage.getPromptQueue(queueKey))?.messages).toHaveLength(0);
+            expect(requestRefresh).not.toHaveBeenCalled();
+            status = "idle";
+            await service.reconcileAgentActivity();
+            expect(requestRefresh).toHaveBeenCalledTimes(1);
+          } finally {
+            wake.mockRestore();
+            await service.shutdown();
+          }
+        });
+      },
+    );
+
+    test("reuses the most recently used of several Resolve tabs", async () => {
+      await withResolveEnvironment(async ({ launch, openJobTab }) => {
+        await openJobTab("agent-job-newest", "codex", "2026-08-03T12:00:00.000Z");
+        await openJobTab("agent-job-oldest", "codex", "2026-08-01T12:00:00.000Z");
+
+        await expect(launch()).resolves.toMatchObject({ tabId: "agent-job-newest", reused: true });
+      });
+    });
+
+    test("identifies the tab by its marker, so a renamed or lookalike tab does not change it", async () => {
+      await withResolveEnvironment(async ({ storage, launch, ...fakes }) => {
+        await storage.ensureNativeAgentJobTab({
+          environmentId: "env-1",
+          tabId: "agent-job-named-resolve",
+          agent: "codex",
+          title: "Resolve",
+        });
+
+        const result = await launch();
+
+        expect(result.reused).toBeUndefined();
+        expect(fakes.promptReadiness).not.toHaveBeenCalled();
+        expect(result.tabId).not.toBe("agent-job-named-resolve");
+      });
+    });
+
+    test("a plain press keeps the tab's own agent and model", async () => {
+      await withResolveEnvironment(async ({ launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId, "claude");
+
+        await expect(
+          launch({ agent: "codex", modelId: "action-default", reasoningId: "high" }),
+        ).resolves.toMatchObject({ tabId: resolveTabId, agent: "claude", reused: true });
+
+        const sent = fakes.dispatchIntent.mock.calls[0]?.[0] as Record<string, unknown>;
+        expect(sent.agent).toBe("claude");
+        expect(sent.model).toBeUndefined();
+        expect(sent.reasoningEffort).toBeUndefined();
+      });
+    });
+
+    test("the dialog's model switches a tab on the same agent", async () => {
+      await withResolveEnvironment(async ({ launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId, "codex");
+
+        await expect(
+          launch({ tabReuse: "same-agent", modelId: "gpt-picked", reasoningId: "high" }),
+        ).resolves.toMatchObject({ tabId: resolveTabId, reused: true });
+
+        expect(fakes.dispatchIntent.mock.calls[0]?.[0]).toMatchObject({
+          model: "gpt-picked",
+          modelSource: "explicit",
+          reasoningEffort: "high",
+        });
+      });
+    });
+
+    test("the dialog's model reaches a queued resend", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId, "codex");
+        fakes.promptReadiness.mockImplementation(async () => "busy");
+
+        await launch({ tabReuse: "same-agent", modelId: "gpt-picked", reasoningId: "high" });
+
+        expect((await storage.getPromptQueue(queueKey))?.messages).toEqual([
+          expect.objectContaining({ model: "gpt-picked", reasoningEffort: "high" }),
+        ]);
+      });
+    });
+
+    test("the dialog's different agent opens a new tab", async () => {
+      await withResolveEnvironment(async ({ launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId, "claude");
+
+        const result = await launch({ agent: "codex", tabReuse: "same-agent" });
+
+        expect(result.reused).toBeUndefined();
+        expect(result.tabId).not.toBe(resolveTabId);
+        expect(fakes.promptReadiness).not.toHaveBeenCalled();
+      });
+    });
+
+    test("a launch that does not ask for reuse always opens its own tab, and is marked", async () => {
+      await withResolveEnvironment(async ({ storage, launch, openJobTab, ...fakes }) => {
+        await openJobTab(resolveTabId);
+
+        const result = await launch({ tabReuse: undefined });
+
+        expect(result.reused).toBeUndefined();
+        expect(fakes.promptReadiness).not.toHaveBeenCalled();
+        const layout = (await storage.getPaneLayout("env-1")) as {
+          root: { tabs: Array<Record<string, unknown>> };
+        };
+        expect(layout.root.tabs.find((tab) => tab.id === result.tabId)).toMatchObject({
+          jobCompletionAction: "refresh-pr-after-agent-completion",
+        });
+      });
+    });
+
+    test("refuses tabReuse on anything but a plain completion-action launch", async () => {
+      await withResolveEnvironment(async ({ launch }) => {
+        await expect(launch({ tabReuse: "whichever" })).rejects.toThrow("tabReuse is invalid");
+        await expect(launch({ completionAction: undefined })).rejects.toThrow("plain prompt");
+        await expect(launch({ literal: true })).rejects.toThrow("plain prompt");
+      });
+    });
+  });
+
+  test("rejects launches until an environment is running and setup-ready", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-control-command-state-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Stopped environment",
+      branch: "main",
+      containerId: null,
+      status: "stopped",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const command = createCommandRegistry().get("launch_control_job");
+    if (!command) throw new Error("launch_control_job was not registered");
+
+    try {
+      await expect(
+        command(
+          {
+            requestId: "external-request-1",
+            environmentId: "env-1",
+            agent: "codex",
+            prompt: "Do work.",
+          },
+          {
+            storage,
+            nativeAgents: {},
+          } as unknown as CommandContext,
+        ),
+      ).rejects.toThrow("Environment is not running with setup complete");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("preserves unknown and rejected dispatch outcomes for safe retries", async () => {
+    const outcomes: Array<{
+      outcome: "unknown" | "rejected";
+      error: string;
+    }> = [
+      { outcome: "unknown", error: "Dispatch result could not be reconciled" },
+      { outcome: "rejected", error: "Dispatch was refused" },
+    ];
+    const context = {
+      storage: {
+        getEnvironment: async () => ({
+          id: "env-1",
+          projectId: "project-1",
+          status: "running",
+          setupPhase: "ready",
+        }),
+        loadConfig: async () => ({ global: { enabledAgentPlatforms: ["codex"] } }),
+        ensureNativeAgentJobTab: async () => ({}),
+      },
+      nativeAgents: {
+        ensureSession: async () => ({ providerSessionId: "provider-session-1" }),
+        dispatchIntent: async () => outcomes.shift()!,
+      },
+    } as unknown as CommandContext;
+    const command = createCommandRegistry().get("launch_control_job");
+    if (!command) throw new Error("launch_control_job was not registered");
+
+    await expect(
+      command(
+        {
+          requestId: "unknown-request",
+          environmentId: "env-1",
+          agent: "codex",
+          prompt: "Do work.",
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({
+      status: "unknown",
+      error: "Dispatch result could not be reconciled",
+    });
+    await expect(
+      command(
+        {
+          requestId: "rejected-request",
+          environmentId: "env-1",
+          agent: "codex",
+          prompt: "Do work.",
+        },
+        context,
+      ),
+    ).resolves.toMatchObject({ status: "rejected", error: "Dispatch was refused" });
+  });
+});
+
+describe("launch_terminal_job command", () => {
+  test("publishes and starts a stable local terminal job without a renderer", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-job-command-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const registry = createCommandRegistry();
+    const launch = registry.get("launch_terminal_job");
+    if (!launch) throw new Error("launch_terminal_job was not registered");
+    const createSession = mock(async () => ({
+      sessionId: "local-session-1",
+      created: true,
+      bootstrapped: false,
+    }));
+    const startSession = mock(async () => undefined);
+    const bootstrap = mock(async () => ({
+      bootstrapped: true,
+      delivered: true,
+      duplicate: false,
+    }));
+    registry.set("create_local_terminal_session", createSession);
+    registry.set("start_local_terminal_session", startSession);
+    registry.set("bootstrap_terminal_session", bootstrap);
+    const ensureTerminalJobTab = spyOn(storage, "ensureTerminalJobTab");
+    const context = { storage } as unknown as CommandContext;
+
+    try {
+      const input = {
+        requestId: "run-command-1",
+        environmentId: "env-1",
+        tabType: "plain",
+        title: "Run Commands",
+        data: "bun test\n",
+        activateTab: true,
+      };
+      const first = (await launch(input, context)) as Record<string, unknown>;
+      expect(ensureTerminalJobTab).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          activate: false,
+          existingOnly: true,
+          terminalSessionId: "local-session-1",
+        }),
+      );
+      const layoutAfterFirstLaunch = await storage.getPaneLayout("env-1");
+      const second = (await launch(input, context)) as Record<string, unknown>;
+
+      expect(first).toMatchObject({
+        environmentId: "env-1",
+        tabType: "plain",
+        sessionId: "local-session-1",
+        status: "started",
+      });
+      expect(second.tabId).toBe(first.tabId);
+      expect(createSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          terminalKey: first.tabId,
+          trackEnvironmentActivity: false,
+        }),
+        context,
+      );
+      expect(startSession).toHaveBeenCalledWith({ sessionId: "local-session-1" }, context);
+      expect(bootstrap).toHaveBeenCalledWith(
+        { sessionId: "local-session-1", data: "bun test\n" },
+        context,
+      );
+      const layout = await storage.getPaneLayout("env-1");
+      expect(layout?.root).toEqual(layoutAfterFirstLaunch?.root);
+      expect(layout?.activePaneId).toBe(layoutAfterFirstLaunch?.activePaneId);
+      expect(layout?.containerId).toBe(layoutAfterFirstLaunch?.containerId);
+      expect(layout?.revision).toBe(layoutAfterFirstLaunch?.revision);
+      expect(layout?.root).toMatchObject({
+        kind: "leaf",
+        activeTabId: first.tabId,
+        tabs: [
+          {
+            id: first.tabId,
+            type: "plain",
+            displayTitle: "Run Commands",
+            backendManagedTerminal: true,
+            backendTerminalSessionId: "local-session-1",
+          },
+        ],
+      });
+      expect(JSON.stringify(layout?.root).match(/"id":"terminal-job-/g)).toHaveLength(1);
+      expect(JSON.stringify(layout?.root)).not.toContain("initialCommands");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reactivate the job tab when bootstrap finishes after the user moves focus", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-job-focus-race-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const registry = createCommandRegistry();
+    const launch = registry.get("launch_terminal_job");
+    if (!launch) throw new Error("launch_terminal_job was not registered");
+    let releaseBootstrap!: () => void;
+    let signalBootstrap!: () => void;
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const bootstrapEntered = new Promise<void>((resolve) => {
+      signalBootstrap = resolve;
+    });
+    registry.set("create_local_terminal_session", async () => ({
+      sessionId: "local-session-1",
+      created: true,
+      bootstrapped: false,
+    }));
+    registry.set("start_local_terminal_session", async () => undefined);
+    registry.set("bootstrap_terminal_session", async () => {
+      signalBootstrap();
+      await bootstrapGate;
+      return { bootstrapped: true, delivered: true, duplicate: false };
+    });
+    const context = { storage } as unknown as CommandContext;
+
+    try {
+      const launching = launch(
+        {
+          requestId: "focus-race",
+          environmentId: "env-1",
+          tabId: "job-tab",
+          tabType: "plain",
+          data: "bun test\n",
+          activateTab: true,
+        },
+        context,
+      );
+      await bootstrapEntered;
+      const published = await storage.getPaneLayout("env-1");
+      const publishedRoot = published?.root as
+        | {
+            kind: string;
+            id: string;
+            tabs: unknown[];
+            activeTabId: string | null;
+          }
+        | undefined;
+      if (!published || publishedRoot?.kind !== "leaf") throw new Error("Expected leaf layout");
+      await storage.savePaneLayout(
+        "env-1",
+        {
+          version: published.version,
+          containerId: published.containerId,
+          activePaneId: published.activePaneId,
+          root: { ...publishedRoot, activeTabId: "default" },
+        },
+        published.revision,
+      );
+      releaseBootstrap();
+      await launching;
+
+      const completed = await storage.getPaneLayout("env-1");
+      expect(completed?.root).toMatchObject({
+        activeTabId: "default",
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "job-tab",
+            backendTerminalSessionId: "local-session-1",
+          }),
+        ]),
+      });
+    } finally {
+      releaseBootstrap();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a stable session bootstrapped with different launch data", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-job-duplicate-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const registry = createCommandRegistry();
+    const launch = registry.get("launch_terminal_job");
+    if (!launch) throw new Error("launch_terminal_job was not registered");
+    registry.set("create_local_terminal_session", async () => ({
+      sessionId: "renderer-session",
+      created: false,
+      bootstrapped: true,
+    }));
+    registry.set("start_local_terminal_session", async () => undefined);
+    registry.set("bootstrap_terminal_session", async () => ({
+      bootstrapped: true,
+      delivered: false,
+      duplicate: true,
+      matchesExisting: false,
+    }));
+    const context = { storage } as unknown as CommandContext;
+
+    try {
+      await expect(
+        launch(
+          {
+            requestId: "startup-1",
+            environmentId: "env-1",
+            tabId: "startup-agent",
+            tabType: "codex",
+            data: 'codex "Fix it"\n',
+          },
+          context,
+        ),
+      ).rejects.toThrow("already bootstrapped by another owner");
+      expect(JSON.stringify((await storage.getPaneLayout("env-1"))?.root)).toContain(
+        '"backendManagedTerminal":true',
+      );
+      expect(JSON.stringify((await storage.getPaneLayout("env-1"))?.root)).not.toContain(
+        "backendTerminalSessionId",
+      );
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("starts Claude tmux once and preserves its opening options", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-job-tmux-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Ready environment",
+      branch: "main",
+      containerId: null,
+      status: "running",
+      setupPhase: "ready",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      worktreePath: dataDir,
+    });
+    const registry = createCommandRegistry();
+    const launch = registry.get("launch_terminal_job");
+    if (!launch) throw new Error("launch_terminal_job was not registered");
+    const status = mock()
+      .mockResolvedValueOnce({ running: false })
+      .mockResolvedValueOnce({ running: true });
+    const start = mock(async () => undefined);
+    registry.set("claude_tmux_status", status);
+    registry.set("claude_tmux_start", start);
+    const context = { storage } as unknown as CommandContext;
+
+    try {
+      await launch(
+        {
+          requestId: "tmux-1",
+          environmentId: "env-1",
+          tabId: "startup-agent",
+          tabType: "claude-tmux",
+          initialPrompt: "Fix it",
+          model: "opus",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+        context,
+      );
+      await launch(
+        {
+          requestId: "tmux-1",
+          environmentId: "env-1",
+          tabId: "startup-agent",
+          tabType: "claude-tmux",
+          initialPrompt: "Fix it",
+          model: "opus",
+          reasoningEffort: "high",
+          fastMode: true,
+        },
+        context,
+      );
+      expect(status).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledWith(
+        {
+          tabId: "startup-agent",
+          environmentId: "env-1",
+          initialPrompt: "Fix it",
+          model: "opus",
+          effort: "high",
+          fastMode: true,
+        },
+        context,
+      );
+      expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
+        kind: "leaf",
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            id: "startup-agent",
+            type: "claude-tmux",
+            backendManagedTerminal: true,
+          }),
+        ]),
+      });
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test("validates terminal job type, lifecycle, and container availability", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "ork-terminal-job-validation-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    await storage.addEnvironment({
+      id: "env-1",
+      projectId: "project-1",
+      name: "Stopped environment",
+      branch: "main",
+      containerId: null,
+      status: "stopped",
+      setupPhase: "pending",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "containerized",
+    });
+    const registry = createCommandRegistry();
+    const launch = registry.get("launch_terminal_job");
+    if (!launch) throw new Error("launch_terminal_job was not registered");
+    const context = { storage } as unknown as CommandContext;
+
+    try {
+      await expect(
+        launch(
+          {
+            requestId: "invalid-type",
+            environmentId: "env-1",
+            tabType: "cursor",
+            data: "cursor\n",
+          },
+          context,
+        ),
+      ).rejects.toThrow("tab type is invalid");
+      await expect(
+        launch(
+          {
+            requestId: "stopped",
+            environmentId: "env-1",
+            tabType: "plain",
+            data: "bun test\n",
+          },
+          context,
+        ),
+      ).rejects.toThrow("setup complete");
+
+      await storage.updateEnvironment("env-1", { status: "running", setupPhase: "ready" });
+      await expect(
+        launch(
+          {
+            requestId: "missing-container",
+            environmentId: "env-1",
+            tabType: "plain",
+            data: "bun test\n",
+          },
+          context,
+        ),
+      ).rejects.toThrow("container is unavailable");
+      expect(await storage.getPaneLayout("env-1")).toBeNull();
+
+      await storage.updateEnvironment("env-1", { containerId: "container-1" });
+      const createContainerSession = mock(async () => ({
+        sessionId: "container-session-1",
+        created: true,
+        bootstrapped: false,
+      }));
+      registry.set("create_terminal_session", createContainerSession);
+      registry.set("start_terminal_session", async () => undefined);
+      registry.set("bootstrap_terminal_session", async () => ({
+        bootstrapped: true,
+        delivered: true,
+        duplicate: false,
+      }));
+      await expect(
+        launch(
+          {
+            requestId: "container-success",
+            environmentId: "env-1",
+            tabType: "codex",
+            data: 'codex "Fix it"\n',
+          },
+          context,
+        ),
+      ).resolves.toMatchObject({ sessionId: "container-session-1", status: "started" });
+      expect(createContainerSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          containerId: "container-1",
+          environmentId: "env-1",
+          trackEnvironmentActivity: true,
+        }),
+        context,
+      );
+
+      registry.set("bootstrap_terminal_session", async () => ({
+        bootstrapped: false,
+        delivered: false,
+        duplicate: false,
+      }));
+      await expect(
+        launch(
+          {
+            requestId: "bootstrap-failure",
+            environmentId: "env-1",
+            tabType: "codex",
+            data: 'codex "Fix it"\n',
+          },
+          context,
+        ),
+      ).rejects.toThrow("could not be started");
+
+      await storage.updateEnvironment("env-1", { lifecycleOperation: "deleting" });
+      await expect(
+        launch(
+          {
+            requestId: "deleting",
+            environmentId: "env-1",
+            tabType: "plain",
+            data: "bun test\n",
+          },
+          context,
+        ),
+      ).rejects.toThrow("being deleted");
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bootstrap_terminal_session command", () => {
+  test("distinguishes an idempotent replay from different launch data", async () => {
+    const registry = createCommandRegistry();
+    const bootstrap = registry.get("bootstrap_terminal_session");
+    if (!bootstrap) throw new Error("bootstrap_terminal_session was not registered");
+    const sessionId = `bootstrap-test-${randomUUID()}`;
+    const write = mock((_data: string) => undefined);
+    const runtime = new BackendRuntime({ emit: () => undefined });
+    const context = { runtime } as CommandContext;
+    runtime.terminals.registerProcess(sessionId, { write, kill: () => undefined } as never);
+    runtime.terminals.rememberSession(sessionId, {
+      kind: "local",
+      environmentId: "env-1",
+      cols: 80,
+      rows: 24,
+      trackEnvironmentActivity: false,
+    });
+
+    try {
+      expect(bootstrap({ sessionId, data: 'codex "Fix it"\n' }, context)).toMatchObject({
+        delivered: true,
+        duplicate: false,
+      });
+      expect(bootstrap({ sessionId, data: 'codex "Fix it"\n' }, context)).toMatchObject({
+        duplicate: true,
+        matchesExisting: true,
+      });
+      expect(bootstrap({ sessionId, data: "codex\n" }, context)).toMatchObject({
+        duplicate: true,
+        matchesExisting: false,
+      });
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      runtime.terminals.explicitlyCloseSession(sessionId);
+      runtime.shutdown();
+    }
+  });
+});

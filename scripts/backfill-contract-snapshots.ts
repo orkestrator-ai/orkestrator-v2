@@ -424,16 +424,29 @@ export function parseRegistryListing(text: string): RegistryListing {
 }
 
 /**
+ * Where a release's tree keeps the command registry, newest layout first:
+ * `core/commands/` since the commands domain moved into its folder, the
+ * `core/` root before that (every release published until then).
+ */
+export const RELEASE_REGISTRY_MODULES = [
+  "apps/backend/src/core/commands/registry.ts",
+  "apps/backend/src/core/commands-registry.ts",
+] as const;
+
+/**
  * The child: imports a release's registry and classifier from `tree` and
  * writes their listing. Old releases return a `Map` from
  * `createCommandRegistry()`, newer ones a registry with `keys()`.
  */
 export async function listReleaseRegistry(tree: string): Promise<RegistryListing> {
-  const registryModule = (await import(
-    path.join(tree, "apps/backend/src/core/commands-registry.ts")
-  )) as { createCommandRegistry?: () => { keys(): Iterable<string> } };
+  const registryFile =
+    RELEASE_REGISTRY_MODULES.find((file) => existsSync(path.join(tree, file))) ??
+    RELEASE_REGISTRY_MODULES[0];
+  const registryModule = (await import(path.join(tree, registryFile))) as {
+    createCommandRegistry?: () => { keys(): Iterable<string> };
+  };
   if (typeof registryModule.createCommandRegistry !== "function") {
-    throw new Error(`${tree} has no createCommandRegistry in commands-registry.ts`);
+    throw new Error(`${tree} has no createCommandRegistry in ${registryFile}`);
   }
   const names = [...new Set(registryModule.createCommandRegistry().keys())].sort();
   const classifierPath = path.join(tree, "packages/protocol/src/command-nodes.ts");

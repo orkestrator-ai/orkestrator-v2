@@ -72,7 +72,7 @@ is fast enough to move back.
 | `codex-bridge/src/app-server-http.test.ts` (slow) | 6.6 s median | 5 s handshake-timeout test | The timeout env knob exists; use 500 ms and update the regex | ~4.5 s |
 | `root/tests/unit/design-qualification-processes.test.ts` (slow) | 7.1 s median | SIGTERM-ignoring server waits the 5 s `stopProcessGroup` grace | Make the grace injectable | ~4.8 s |
 | `cli/tests/launcher.test.ts` | 9.6 s / 0.5 s | Hard-coded 500 ms ready poll (`orkestrator-launcher.js:149`) plus 1 s unready timeouts | Injectable poll interval | 4-5 s |
-| `backend/src/core/commands-state-sync.test.ts` | 7.9 s / 3.4 s | About 4.5 s of real `await_bridge_ready` waits | Fake timers (medium confidence) | ~4 s |
+| `backend/src/core/commands/state-sync.test.ts` | 7.9 s / 3.4 s | About 4.5 s of real `await_bridge_ready` waits | Fake timers (medium confidence) | ~4 s |
 | `backend/src/preview-publication.test.ts` | 5.3 s / 4.0 s | Two RSA-2048 keygens in every `beforeEach`, a 1.1 s sleep | Generate the PKI once or use EC keys (`preview-test-pki.ts`); use `-days` instead of the sleep | ~3.5 s wall, ~3 s CPU |
 | ACP bridge files (`acp-transcript`, `acp-context`, `acp-http`, `acp-session`, `acp-prompt`, `acp-reconciliation`, all slow tier) | 6-13 s each, ~1 core | A cold `bun` bridge plus a cold fake-agent `bun` per test (about 0.2 CPU-s per spawn, ~225 spawns) | Use the existing `sharedBridge()` (`acp-test-harness.ts:380`, already used by `acp-fork` and `acp-policy-narrowing`) for the 110-135 spawns that need no restart or seeding. Replace fixed clocks with file gates (`whenFileExists` exists) | 60-70 s aggregate wall and 40-50% of acp CPU |
 | Shared `waitFor`/`findBy` polling in the UI suites (about 3,150 call sites in ~22 files) | n/a | `@testing-library/dom` 10.4.2 polls at a fixed 50 ms (`wait-for.js:19`, a `waitFor` option, not in `configure`). A condition that changes no DOM waits for the next tick | A `bun patch` reading `getConfig().asyncUtilInterval`, set to 10 ms. About 3,150 call sites; the idle share is estimated at 10-20% and **not measured**. Section 5 of `web-root-desktop-cli.md` has a 10-line instrument to measure it first | unmeasured |
@@ -80,7 +80,7 @@ is fast enough to move back.
 Two shared-fixture items from the backend sweep: `LOCAL_PROJECT_FOR_CREATE` in
 `apps/backend/tests/command-fixtures.ts:734` does five git spawns at import for
 each of 41 files and only one reads it (make it lazy); and the local-bridge
-`waitForHealth` poll is a fixed 200 ms (`commands-server-health.ts:7`) paid by
+`waitForHealth` poll is a fixed 200 ms (`commands/server-health.ts:7`) paid by
 79 `start_local_*` call sites. A ramped interval would help production latency
 too, but the total was not measured.
 
@@ -233,7 +233,7 @@ unverified. The default suite was not re-timed per file.
 | `backend/tests/container-replacement.test.ts` | 17.4 | 4.0 | Optional probe timeout on `replacementCopyFailure`; independent attempts run with `Promise.all` |
 | `backend/src/core/storage/backups-release.integration.test.ts` | 13.5 | 4.5 | Slow step simulated with a skewed `performance.now` instead of `Bun.sleepSync` |
 | `backend/src/core/native-agent/service-progressive.test.ts` | 16.4 | 4.2 | `installControlledTimeout(2_000)`; asserts the production deadline is still 2000 ms |
-| `backend/src/core/commands-state-sync.test.ts` | 9.3 | ~3 | Fake clock |
+| `backend/src/core/commands/state-sync.test.ts` | 9.3 | ~3 | Fake clock |
 | `backend/src/preview-publication.test.ts` | 5.5 | 1.6 | PKI generated once per process; `days` option replaces a 1.1 s sleep |
 | `backend/tests/commands-local-bridge-reuse.test.ts` | 17.9 | 2.3 | `ORKESTRATOR_TEST_LOCAL_SERVER_POLL_MS` caps `waitForHealth` and the exit/unhealthy pollers; the fixtures set it to 20 ms. Most of the time was the 500 ms reuse-retry delay |
 | `backend/src/core/containers/worktree-signal-install.test.ts` | 69.3 | 16.5 | `ORKESTRATOR_WORKTREE_SIGNAL_MIN_GAP_US` in `docker/orkestrator-worktree-signal.sh` (default unchanged); the soak runs 4x compressed with times stretched back. A real-time test pins the one-second default gap |

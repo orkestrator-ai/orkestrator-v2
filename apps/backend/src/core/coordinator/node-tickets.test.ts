@@ -5,19 +5,19 @@
  * between them goes over in-process links that run the leaf's real commands.
  * No leaf-local ticket id and no relay through the leaf's coordinator.
  */
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { MailWorld } from "../agent-mail-world-test-support.js";
-import type { CommandContext, CommandHandler } from "../commands-context.js";
-import { registerControllerWorkflowCommands } from "../commands-registry-controller-workflows.js";
-import { registerCoordinatorNodeCommands } from "../commands-registry-coordinator-nodes.js";
-import { registerKanbanCommands } from "../commands-registry-kanban.js";
-import { registerTicketSyncCommands } from "../commands-registry-ticket-sync.js";
-import type { RegistryDependencies } from "../commands-registry-types.js";
+import type { CommandContext, CommandHandler } from "../commands/context.js";
+import { registerControllerWorkflowCommands } from "../commands/registry-controller-workflows.js";
+import { registerCoordinatorNodeCommands } from "../commands/registry-coordinator-nodes.js";
+import { registerKanbanCommands } from "../commands/registry-kanban.js";
+import { registerTicketSyncCommands } from "../commands/registry-ticket-sync.js";
+import type { RegistryDependencies } from "../commands/registry-types.js";
 import { registerCoordinatorNodeTicketCommands } from "./node-tickets.js";
 import { NodeTicketSync } from "../nodes/node-ticket-sync.js";
 import { createProject, StorageService } from "../storage/service.js";

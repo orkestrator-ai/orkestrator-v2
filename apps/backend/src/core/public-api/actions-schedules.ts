@@ -2,13 +2,13 @@ import { PUBLIC_API_LIMITS } from "@orkestrator/protocol/public-api";
 import { decodePublicSessionId } from "@orkestrator/protocol/public-api-resources";
 import { ScheduleInputError, type ScheduleOwner } from "@orkestrator/protocol/scheduled-jobs";
 import {
-  SCHEDULING_DISABLED_MESSAGE,
   scheduleListFilter,
   schedulerStatus,
-  schedulingEnabled,
   scheduleTimingArgs,
+  SCHEDULING_DISABLED_MESSAGE,
+  schedulingEnabled,
   withProjectEnvironments,
-} from "../commands-registry-scheduled-jobs.js";
+} from "../commands/index.js";
 import {
   normalizeAction,
   ScheduleAuthorityError,

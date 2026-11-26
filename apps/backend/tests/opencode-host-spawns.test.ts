@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { buildTerminalAgentLaunchCommand } from "@orkestrator/protocol/terminal-agent-launch";
 import { SETUP_DONE_OSC_SEQUENCE } from "../src/core/containers/scripts";
-import { spawnSetupTerminal } from "../src/core/commands-environment";
-import { startLocalServerUnlocked } from "../src/core/commands-servers";
+import { spawnSetupTerminal } from "../src/core/commands/environment";
+import { startLocalServerUnlocked } from "../src/core/commands/servers";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

@@ -2,7 +2,8 @@ import { expect, mock, test } from "bun:test";
 import { bridgeTranscriptUpdate } from "@orkestrator/protocol/node/progressive-transcript";
 import { httpProvider } from "./agent-provider-test-support.js";
 import type { NativeAgentRuntimeProvider } from "./agent-provider-contract.js";
-import { createCommandRegistry, type CommandContext } from "./commands.js";
+import { createCommandRegistry } from "./commands/registry.js";
+import type { CommandContext } from "./commands/context.js";
 import { compatibilityPathUsage } from "./compatibility-path-usage.js";
 
 test("a transcript read never falls back to /messages, so it counts no compatibility use", async () => {

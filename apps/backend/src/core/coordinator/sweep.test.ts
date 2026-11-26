@@ -15,8 +15,8 @@ import {
   type CoordinatorConversation,
 } from "@orkestrator/protocol/coordinator";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { MailWorld, type MailActor } from "../agent-mail-world-test-support.js";
 import { runCommand } from "../shell.js";
 import { createEnvironment, createProject } from "../storage/service.js";

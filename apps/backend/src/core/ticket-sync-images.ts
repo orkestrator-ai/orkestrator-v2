@@ -1,6 +1,6 @@
 import { ticketImageUnavailableMessage } from "@orkestrator/protocol/ticket-sync";
 
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
 
 /**
  * An image's bytes for the board (docs/architecture/tickets.md, "Sync across

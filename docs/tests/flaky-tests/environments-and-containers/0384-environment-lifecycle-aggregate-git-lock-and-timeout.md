@@ -50,7 +50,7 @@
   677 ms / 764 ms.
 - **Git lock:** the `index.lock` collision is a separate product race. Starting
   a local environment tracks it for diff statistics, and the scan
-  (`getLocalGitStatusDetailed` in `apps/backend/src/core/commands-files.ts`) ran
+  (`getLocalGitStatusDetailed` in `apps/backend/src/core/commands/files.ts`) ran
   `git status` without `--no-optional-locks`. That status opportunistically
   refreshes and rewrites the linked worktree's index under `index.lock`, and the
   rewrite is itself a watcher hint that schedules another scan, so a background

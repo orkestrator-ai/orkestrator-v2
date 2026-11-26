@@ -18,7 +18,7 @@ import {
 } from "./containers/index.js";
 import { hasLegacyHostMounts, inspectRuntimeShape } from "./legacy-runtime-shape.js";
 import { runCommand } from "./shell.js";
-import type { CommandContext } from "./commands-context.js";
+import { type CommandContext, dockerExec } from "./commands/index.js";
 import type { EnvironmentInputStatus } from "@orkestrator/protocol/container-recovery";
 import {
   pruneInputRevisions,
@@ -29,7 +29,6 @@ import {
 } from "./portable-inputs.js";
 import { CONTAINER_CURSOR_API_KEY_FILE } from "./agent-credential-files.js";
 import { CONTAINER_CURSOR_SDK_AUTH_FILE } from "./cursor-sdk-bridge.js";
-import { dockerExec } from "./commands-container-exec.js";
 import { parseContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import { imageRelaysStagedInputs } from "@orkestrator/protocol/image-manifest";
 

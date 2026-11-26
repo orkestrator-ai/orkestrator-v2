@@ -5,15 +5,15 @@
  * through the command node, as the portal does it. Opt in with
  * ORKESTRATOR_SSH_INTEGRATION=1.
  */
-import { registrarFrom } from "../src/core/commands-registry-contracts.js";
+import { registrarFrom } from "../src/core/commands/registry-contracts.js";
 import { afterAll, beforeAll, describe, expect } from "bun:test";
 import { createServer, type Server } from "node:http";
 
 import { BACKEND_HELLO_PATH, CLIENT_API_VERSION } from "@orkestrator/protocol/backend-profile";
 import { CONTROLLER_HEADER } from "@orkestrator/protocol/command-nodes";
 
-import type { CommandContext, CommandHandler } from "../src/core/commands-context.js";
-import { registerNodeCommands } from "../src/core/commands-registry-nodes.js";
+import type { CommandContext, CommandHandler } from "../src/core/commands/context.js";
+import { registerNodeCommands } from "../src/core/commands/registry-nodes.js";
 import { MemoryNodeStorage } from "../src/core/nodes/node-network-test-support.js";
 import { NodeService } from "../src/core/nodes/node-service.js";
 import {

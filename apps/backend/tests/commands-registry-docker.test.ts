@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { emptyContainerLifecycle } from "@orkestrator/protocol/container-lifecycle";
 import type { ImageManifest } from "@orkestrator/protocol/image-manifest";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { CONTAINER_GIT_CREDENTIAL_HELPER } from "../src/core/commands-files";
+import { CONTAINER_GIT_CREDENTIAL_HELPER } from "../src/core/commands/files";
 import { syncRuntimeGitHubCredential } from "../src/core/containers/github-credential";
 import type { readImageManifest } from "../src/core/containers/image";
 import type { AppConfig } from "../src/core/models";

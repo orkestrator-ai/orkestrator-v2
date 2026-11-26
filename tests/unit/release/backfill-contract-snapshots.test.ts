@@ -18,6 +18,7 @@ import {
   listRegistryInWorktree,
   parseArguments,
   parseRegistryListing,
+  RELEASE_REGISTRY_MODULES,
   type BackfillRuntime,
   type RegistryListing,
 } from "../../../scripts/backfill-contract-snapshots";
@@ -319,7 +320,8 @@ describe("registry listing in a worktree", () => {
     return result.stdout.trim();
   }
   /** A repository whose one commit looks like a pre-contract release. */
-  function releaseRepository(options: { classifier: boolean }) {
+  function releaseRepository(options: { classifier: boolean; registryModule?: string }) {
+    const registryModule = options.registryModule ?? RELEASE_REGISTRY_MODULES[0];
     const repo = tempDir("contract-backfill-repo-");
     const write = (file: string, text: string) => {
       mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
@@ -329,7 +331,7 @@ describe("registry listing in a worktree", () => {
     write("mise.toml", '[tools]\nbun = "1.4.4"\n');
     // The registry reports whether it saw the sandbox or this host's HOME and variables.
     write(
-      "apps/backend/src/core/commands-registry.ts",
+      registryModule,
       `export function createCommandRegistry() {
   const sandboxed = process.env.HOME?.includes("sandbox") && process.env.PATH?.includes("sandbox");
   const inherited = Object.keys(process.env).some((key) => key.startsWith("ORKESTRATOR_"));
@@ -350,13 +352,21 @@ describe("registry listing in a worktree", () => {
     git(repo, "init", "-q");
     git(repo, "add", ".");
     git(repo, "commit", "-q", "-m", "release");
-    return { repo, commit: git(repo, "rev-parse", "HEAD") };
+    return { repo, commit: git(repo, "rev-parse", "HEAD"), registryModule };
   }
 
-  test.each([true, false])(
-    "lists the release's own registry in a sandbox and removes its worktree (classifier %s)",
-    async (classifier) => {
-      const { repo, commit } = releaseRepository({ classifier });
+  // Releases published before the commands domain moved keep the registry at
+  // the `core/` root; newer ones in `core/commands/`.
+  test.each([
+    { classifier: true, registryModule: RELEASE_REGISTRY_MODULES[1] },
+    { classifier: false, registryModule: RELEASE_REGISTRY_MODULES[0] },
+  ])(
+    "lists the release's own registry in a sandbox and removes its worktree (classifier $classifier, $registryModule)",
+    async ({ classifier, registryModule: layout }) => {
+      const { repo, commit, registryModule } = releaseRepository({
+        classifier,
+        registryModule: layout,
+      });
       const workDirectory = path.join(repo, BACKFILL_WORK_DIRECTORY);
       const installs: string[] = [];
       const listing = await listRegistryInWorktree(published("2.21.0", 16), commit, {
@@ -365,9 +375,7 @@ describe("registry listing in a worktree", () => {
         resolveBun: () => process.execPath,
         install: (_bun, tree) => {
           installs.push(tree);
-          expect(existsSync(path.join(tree, "apps/backend/src/core/commands-registry.ts"))).toBe(
-            true,
-          );
+          expect(existsSync(path.join(tree, registryModule))).toBe(true);
         },
       });
       expect(listing).toEqual({

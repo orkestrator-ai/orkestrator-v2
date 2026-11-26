@@ -45,7 +45,7 @@ import {
 import { ORKESTRATOR_AGENT_MCP_SERVER_NAME } from "../agent-tools.js";
 
 /**
- * The launcher's process-authority variables (`commands-servers.ts`), spelled
+ * The launcher's process-authority variables (`commands/servers.ts`), spelled
  * here so this module does not import the launcher; a test pins them equal.
  */
 export const OPENCODE2_EXECUTION_POLICY_ENV = "ORKESTRATOR_BRIDGE_EXECUTION_POLICY";

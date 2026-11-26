@@ -12,7 +12,7 @@ Project-home environments never run setup.
 
 ## When setup runs without asking
 
-`startEnvironmentSetupAfterPreparation` (`commands-environment.ts`) asks
+`startEnvironmentSetupAfterPreparation` (`commands/environment.ts`) asks
 `evaluateEnvironmentSetupTrust` (`setup-approval.ts`) before spawning a local
 setup terminal. The commands run unasked when their list is exactly one of:
 

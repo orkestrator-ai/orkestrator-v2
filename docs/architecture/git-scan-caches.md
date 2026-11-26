@@ -8,7 +8,7 @@ are relative to `apps/backend/src/core/`.
 
 | File | Purpose |
 | --- | --- |
-| `commands-files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats), `buildContainerGitStatusScript` |
+| `commands/files.ts` | `enableGitScanCaches` (new worktrees), `getLocalGitStatusDetailed` (diff stats), `buildContainerGitStatusScript` |
 | `git/diff-summary.ts` | The `git diff --raw --numstat -z` parser every scan uses |
 | `local-git-scan-caches.ts` | Per-worktree untracked line counts and the exclude-file memo |
 | `worktrees/watcher.ts`, `worktrees/watch-plan.ts` | The hints that start a scan, and which subtrees they leave out |
@@ -610,7 +610,7 @@ These reads already had timeouts; on a timeout each now retries once with
 `-c core.fsmonitor=false` instead of failing:
 
 - the project home's status (`project-git-service.ts`, 10 s);
-- the review package's worktree status (`commands-review.ts`, 30 s);
+- the review package's worktree status (`commands/review.ts`, 30 s);
 - the validation worker's drift check (10 s, `spawnSync` `ETIMEDOUT`);
 - the worktree fingerprint probe's status read (10 s inside the probe; once it
   has fallen back, the rest of the probe skips the daemon too). The probe owns
@@ -629,8 +629,8 @@ These reads already had timeouts; on a timeout each now retries once with
   `build-pipeline/service-lifecycle.ts`), a graph agent's branch worktree
   (`graph-agent-guards.ts`) and a graph select's branch move
   (`graph-system-select.ts`);
-- the scratch-repository resume check (`commands-projects.ts`, 10 s);
-- the delegated container's cleanliness check (`commands-environment.ts`,
+- the scratch-repository resume check (`commands/projects.ts`, 10 s);
+- the delegated container's cleanliness check (`commands/environment.ts`,
   `reconcileContainerDelegationBase`, 30 s).
 
 Index operations and reads that scan the working tree can consult the daemon,
@@ -648,7 +648,7 @@ status probe is excluded: each nested Git call would need its own `-c`
 inside the script.
 
 Other deliberate exclusions from this status-read change are
-`commands-files.ts` `findLocalRenamePair` (an explicit rename lookup, bounded
+`commands/files.ts` `findLocalRenamePair` (an explicit rename lookup, bounded
 at 60 s), `nodes/node-project-copy-files.ts` `gitPaths` (explicit file-copy
 inventory, bounded at 30 s), and the fingerprint probe's streaming `diff`
 (its own process/capture bounds apply, and it inherits disabled fsmonitor

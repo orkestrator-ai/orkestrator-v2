@@ -42,8 +42,9 @@ import {
 
 import { StorageService } from "../storage/service.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import { failEnvironmentSetup } from "../commands-environment.js";
-import { createCommandRegistry, type CommandContext } from "../commands.js";
+import { failEnvironmentSetup } from "../commands/environment.js";
+import { createCommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/context.js";
 import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
 import { AgentMailService } from "../agent-mail-service.js";
 import { httpProvider } from "../agent-provider-test-support.js";

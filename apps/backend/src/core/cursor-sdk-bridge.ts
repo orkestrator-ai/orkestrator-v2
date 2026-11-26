@@ -13,8 +13,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveCursorCredential } from "./agent-test-cursor-credential.js";
-import type { CommandContext } from "./commands-context.js";
-import { dockerExec } from "./commands-container-exec.js";
+import { type CommandContext, dockerExec } from "./commands/index.js";
 import { runCommand } from "./shell.js";
 
 /**

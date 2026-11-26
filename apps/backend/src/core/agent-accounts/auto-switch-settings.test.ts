@@ -17,7 +17,7 @@ import {
 } from "./accounts.js";
 import { AgentAccountAutoSwitcher } from "./auto-switch.js";
 import { BackendRuntime } from "../backend-runtime.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import { StorageService } from "../storage/service.js";
 
 let root: string;

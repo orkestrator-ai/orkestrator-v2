@@ -1,10 +1,10 @@
-import { registrarFrom } from "./commands-registry-contracts.js";
+import { registrarFrom } from "./commands/registry-contracts.js";
 import { describe, expect, test } from "bun:test";
 import type { CpuInfo } from "node:os";
 import { parseMachineLoadReport } from "@orkestrator/protocol/machine-load";
-import type { CommandContext, CommandHandler } from "./commands-context.js";
-import { registerSystemCommands } from "./commands-registry-system.js";
-import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext, CommandHandler } from "./commands/context.js";
+import { registerSystemCommands } from "./commands/registry-system.js";
+import { createCommandRegistry } from "./commands/registry.js";
 import {
   describeOs,
   MACHINE_LOAD_FIRST_SAMPLE_MS,

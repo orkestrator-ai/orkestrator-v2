@@ -1,0 +1,144 @@
+import { afterEach, expect, test } from "bun:test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { configureLogger, resetLogger, type LogOutput } from "@orkestrator/protocol/logger";
+import { BackendRuntime } from "../backend-runtime.js";
+import { scheduleMergeCleanupRecovery } from "./servers.js";
+import type { CommandContext } from "./context.js";
+import { EnvironmentLifecycleTaskTracker } from "../environments/lifecycle-tasks.js";
+import { closeEnvironmentCleanupStorage } from "../environments/cleanup-ledger.js";
+import type { Environment } from "../models.js";
+import { StorageService } from "../storage/service.js";
+
+const directories: string[] = [];
+
+afterEach(async () => {
+  resetLogger();
+  closeEnvironmentCleanupStorage();
+  for (const directory of directories.splice(0)) {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function fixture(overrides: Partial<Environment> = {}) {
+  const dataDir = await fs.realpath(
+    await fs.mkdtemp(path.join(tmpdir(), "orkestrator-merge-cleanup-recovery-")),
+  );
+  directories.push(dataDir);
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    id: "e1",
+    projectId: "p1",
+    name: "Environment",
+    branch: "main",
+    containerId: null,
+    status: "stopped",
+    prUrl: null,
+    prState: "merged",
+    hasMergeConflicts: null,
+    createdAt: new Date(0).toISOString(),
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "local",
+    cleanupAfterMergeRequestedAt: "2026-11-05T12:00:00.000Z",
+    ...overrides,
+  });
+  const logged: string[] = [];
+  configureLogger({
+    sink: (output: LogOutput) => {
+      logged.push(output.line);
+    },
+  });
+  const contextOn = (runtime: BackendRuntime) =>
+    ({
+      storage,
+      appRoot: "",
+      resourceRoot: "",
+      toolchainBinDir: "",
+      worktreeDir: path.join(dataDir, "workspaces"),
+      environmentLifecycleTasks: new EnvironmentLifecycleTaskTracker(),
+      runtime,
+      emit: () => undefined,
+    }) as CommandContext;
+  return { storage, contextOn, logged };
+}
+
+/** Waits for the recovery `scheduleMergeCleanupRecovery` started; fails when it started none. */
+async function recovered(runtime: BackendRuntime): Promise<void> {
+  const recovery = runtime.environments.mergeCleanupRecovery("e1");
+  expect(recovery).toBeDefined();
+  await recovery;
+}
+
+test("recovery stands aside while Merge and Cleanup holds the environment", async () => {
+  const { storage, contextOn, logged } = await fixture();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const context = contextOn(runtime);
+  expect(runtime.environments.beginMerge("e1")).toBe(true);
+  for (let poll = 0; poll < 3; poll += 1) {
+    scheduleMergeCleanupRecovery("e1", context);
+    // Standing aside starts no recovery at all, so nothing can follow later.
+    expect(runtime.environments.mergeCleanupRecovery("e1")).toBeUndefined();
+  }
+  expect(logged.filter((line) => line.includes("merge-cleanup.resume-failed"))).toEqual([]);
+  expect(await storage.getEnvironment("e1")).toMatchObject({
+    cleanupAfterMergeRequestedAt: "2026-11-05T12:00:00.000Z",
+  });
+  expect((await storage.getEnvironment("e1"))?.deletionRequestedAt).toBeUndefined();
+});
+
+test("recovery stands aside while that environment's delete is running", async () => {
+  const { storage, contextOn, logged } = await fixture();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const context = contextOn(runtime);
+  expect(runtime.environments.beginDelete("e1")).toBe(true);
+  scheduleMergeCleanupRecovery("e1", context);
+  expect(runtime.environments.mergeCleanupRecovery("e1")).toBeUndefined();
+  expect(logged.filter((line) => line.includes("merge-cleanup.resume-failed"))).toEqual([]);
+  expect((await storage.getEnvironment("e1"))?.deletionRequestedAt).toBeUndefined();
+  runtime.environments.endDelete("e1");
+});
+
+test("a guard taken while recovery reads storage still stops it", async () => {
+  const { storage, contextOn, logged } = await fixture();
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  const context = contextOn(runtime);
+  const read = storage.getEnvironment.bind(storage);
+  storage.getEnvironment = (async (id: string) => {
+    const environment = await read(id);
+    runtime.environments.beginMerge("e1");
+    return environment;
+  }) as typeof storage.getEnvironment;
+  scheduleMergeCleanupRecovery("e1", context);
+  await recovered(runtime);
+  storage.getEnvironment = read;
+  expect(logged.filter((line) => line.includes("merge-cleanup.resume-failed"))).toEqual([]);
+  expect((await storage.getEnvironment("e1"))?.deletionRequestedAt).toBeUndefined();
+});
+
+test("after a real restart the guards are gone and recovery finishes the delete", async () => {
+  const { storage, contextOn } = await fixture();
+  const beforeRestart = new BackendRuntime({ emit: () => undefined });
+  expect(beforeRestart.environments.beginMerge("e1")).toBe(true);
+  scheduleMergeCleanupRecovery("e1", contextOn(beforeRestart));
+  expect(beforeRestart.environments.mergeCleanupRecovery("e1")).toBeUndefined();
+  expect(await storage.getEnvironment("e1")).not.toBeNull();
+
+  // Only the persisted intent crosses a restart; the running-work guards do not.
+  const afterRestart = new BackendRuntime({ emit: () => undefined });
+  scheduleMergeCleanupRecovery("e1", contextOn(afterRestart));
+  await recovered(afterRestart);
+  expect(await storage.getEnvironment("e1")).toBeNull();
+});
+
+test("a recorded failure still waits for a manual retry", async () => {
+  const { storage, contextOn } = await fixture({ cleanupAfterMergeError: "failed earlier" });
+  const runtime = new BackendRuntime({ emit: () => undefined });
+  scheduleMergeCleanupRecovery("e1", contextOn(runtime));
+  await recovered(runtime);
+  const environment = await storage.getEnvironment("e1");
+  expect(environment).toMatchObject({ cleanupAfterMergeError: "failed earlier" });
+  expect(environment?.deletionRequestedAt).toBeUndefined();
+});

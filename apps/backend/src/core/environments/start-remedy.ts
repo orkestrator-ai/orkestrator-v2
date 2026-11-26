@@ -2,7 +2,7 @@ import type { EnvironmentLifecycleRemedy } from "@orkestrator/protocol/contract/
 import {
   ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES,
   isGitSshUnreachableMessage,
-} from "../commands-error-text.js";
+} from "../commands/index.js";
 import { detectHttpsRemedy } from "../git/index.js";
 import type { Environment, Project } from "../models.js";
 import type { runCommand } from "../shell.js";

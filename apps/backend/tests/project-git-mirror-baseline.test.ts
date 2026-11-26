@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { establishCreatedFromCommit } from "../src/core/commands-local-server-lifecycle";
+import { establishCreatedFromCommit } from "../src/core/commands/local-server-lifecycle";
 import {
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,

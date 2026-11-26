@@ -22,7 +22,7 @@ import {
   PUBLIC_PR_REVIEWERS_MAX,
   PUBLIC_PR_SIDES,
 } from "@orkestrator/protocol/public-api-inputs-pr";
-import type { MergeEnvironmentPrResult } from "../commands-review.js";
+import type { MergeEnvironmentPrResult } from "../commands/index.js";
 import { sanitizeGitHubError } from "../git/index.js";
 import type { Environment } from "../models.js";
 import {

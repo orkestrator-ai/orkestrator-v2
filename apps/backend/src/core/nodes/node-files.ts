@@ -3,7 +3,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
 
-import { normalizeConfiguredProjectFiles, isPathInsideRoot } from "../commands-project-files.js";
+import { isPathInsideRoot, normalizeConfiguredProjectFiles } from "../commands/index.js";
 import { validateRelativeFilePath } from "../path-safety.js";
 import { runGitWithFsmonitorFallback } from "../git/index.js";
 import {

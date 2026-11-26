@@ -14,12 +14,14 @@ import {
   type PublicActionResponse,
   type PublicReceipt,
 } from "@orkestrator/protocol/public-api";
-import type { CommandContext, CommandHandler, CommandInvocation } from "../commands-context.js";
 import type {
+  CommandContext,
+  CommandHandler,
+  CommandInvocation,
   CommandRegistrar,
   DefinedCommandOptions,
   RegistryDependencies,
-} from "../commands-registry-types.js";
+} from "../commands/index.js";
 import { boundedMessage, isPublicActionError, PublicActionError } from "./errors.js";
 import {
   intentFingerprint,

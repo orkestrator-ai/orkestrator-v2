@@ -13,7 +13,7 @@ import {
 } from "../constants.js";
 import { dockerOwnerNamespace } from "./ownership.js";
 import { runCommand } from "../shell.js";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/index.js";
 import type { DockerTopology } from "@orkestrator/protocol/image-manifest";
 import { PROVIDER_STATE_LAYOUT } from "./state-layout.js";
 import { CONTAINER_ROOT_USER_ARGS } from "./scripts.js";

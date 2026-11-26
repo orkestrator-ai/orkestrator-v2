@@ -5,13 +5,13 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import type { CommandContext } from "../src/core/commands";
+import type { CommandContext } from "../src/core/commands/context";
 import type { Environment } from "../src/core/models";
 import { runCommand } from "../src/core/shell";
 import { dockerOwnerNamespace } from "../src/core/containers/ownership";
 import { resetContainerOwnershipCache } from "../src/core/containers/lifecycle-service";
 
-const { createCommandRegistry } = await import("../src/core/commands");
+const { createCommandRegistry } = await import("../src/core/commands/registry");
 const { BackendRuntime } = await import("../src/core/backend-runtime");
 const runtimes: Array<InstanceType<typeof BackendRuntime>> = [];
 

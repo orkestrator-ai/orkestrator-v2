@@ -1,11 +1,11 @@
-import { registrarFrom } from "../commands-registry-contracts.js";
+import { registrarFrom } from "../commands/registry-contracts.js";
 import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CoordinatorWorkspace } from "@orkestrator/protocol/coordinator";
-import type { CommandContext } from "../commands-context.js";
-import { registerScheduledJobCommands } from "../commands-registry-scheduled-jobs.js";
+import type { CommandContext } from "../commands/context.js";
+import { registerScheduledJobCommands } from "../commands/registry-scheduled-jobs.js";
 import { rpc } from "../control-mcp/test-support.js";
 import { ControlMcpServer, type ControlMcpInvoker } from "../control-mcp/server.js";
 import { StorageService } from "../storage/service.js";

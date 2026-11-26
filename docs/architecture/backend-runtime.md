@@ -84,7 +84,7 @@ whether lifecycle work may be admitted and drains it on shutdown, while
   `prMonitor: { scheduleMergeCleanup: scheduleMergeCleanupRecovery }` and
   `tmux: { localClaudeConfigDirectory: tmuxLocalClaudeConfigDirectory }`, so
   neither `git/pr-monitor-runtime.ts` nor the tmux modules import
-  `commands-servers.ts`. `index.ts` also passes the Claude state doorbell
+  `commands/servers.ts`. `index.ts` also passes the Claude state doorbell
   (`tmux.claudeStatePolls.signal`, from `backendClaudeStateSignal()`), the
   tmux hook doorbell (`tmux.hookSignal`, from `backendTmuxHookSignal()`) and its
   login keeper's refreshers (`accounts.localClaudeLoginRefresher`,

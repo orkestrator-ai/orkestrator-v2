@@ -38,9 +38,9 @@ import { quiesceRuntime, rollbackCandidate } from "./containers/replacement.js";
 import { assertEnvironmentBudgetEnforceable, parseMemorySize } from "./containers/resources.js";
 import { runCommand } from "./shell.js";
 import { removeRuntimeContainer } from "./egress-gateway.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/index.js";
+import { createDockerContainer } from "./commands/containers.js";
 import type { Environment } from "./models.js";
-import { createDockerContainer } from "./commands-containers.js";
 import {
   groupRecoveryCopies,
   describeRecoveryCopy,

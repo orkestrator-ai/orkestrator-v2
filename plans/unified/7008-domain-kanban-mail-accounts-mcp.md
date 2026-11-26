@@ -121,7 +121,7 @@ A command node without `node-coordinator-mail` (v2.35.1-beta) collects a current
 
 ### For the orchestrator (2026-11-07)
 
-- The accounts fork's edit script truncated the worktree's `apps/backend/src/core/commands-registry-projects.ts` while 7005 and 7009 had uncommitted hunks in it; it was restored from HEAD plus its own hunks and the owning agent re-applied theirs. Ask 7005 and 7009 to confirm nothing of theirs is missing. (This agent hit the same script bug once on `client-adapters.ts`; it was restored byte-identical, blob `baa47c404`, before anything else ran.)
+- The accounts fork's edit script truncated the worktree's `apps/backend/src/core/commands/registry-projects.ts` while 7005 and 7009 had uncommitted hunks in it; it was restored from HEAD plus its own hunks and the owning agent re-applied theirs. Ask 7005 and 7009 to confirm nothing of theirs is missing. (This agent hit the same script bug once on `client-adapters.ts`; it was restored byte-identical, blob `baa47c404`, before anything else ran.)
 - Assign the five remaining untyped commands (Scope above). *(2026-11-07, orchestrator, completeness check: done by [7009](7009-domain-coordinator-servers-system.md), `09d81f2b3`.)*
 
 ## Work log

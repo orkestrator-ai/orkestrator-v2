@@ -109,7 +109,7 @@ describe("7549 the GitHub ranges seed is bound, not copied", () => {
   live(
     "a restricted boot reads the bound seed, and a restart reads it as last refreshed",
     async () => {
-      const { createDockerContainer } = await import("../src/core/commands-containers");
+      const { createDockerContainer } = await import("../src/core/commands/containers");
       const { resolveDockerImage } = await import("../src/core/containers/image");
       const environment = lifecycleEnvironment({
         id: `seed-${RUN}`,

@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { MAX_FILE_TREE_NODES } from "../src/core/commands-files";
+import { MAX_FILE_TREE_NODES } from "../src/core/commands/files";
 import { createCommandFixtures } from "./command-fixtures";
 
 const {

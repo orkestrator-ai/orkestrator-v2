@@ -451,11 +451,8 @@
                   "!**/coordinator/goal-actions.js",
                   "!**/coordinator/mail-attachments.js",
                   "!**/coordinator/node-coordinator-mail.js",
-                  "!**/coordinator/node-tickets.js",
                   "!**/coordinator/pipeline-step-actions.js",
                   "!**/coordinator/pr.js",
-                  "!**/coordinator/review-actions.js",
-                  "!**/coordinator/subork-actions.js",
                   "!**/coordinator/surface-actions.js",
                   "!**/coordinator/usage-limit-account-routing.js",
                   "!**/coordinator/worker-changes.js",
@@ -470,12 +467,10 @@
                   "**/agent-accounts/*",
                   "!**/agent-accounts/index.js",
                   "!**/agent-accounts/accounts.js",
-                  "!**/agent-accounts/auto-switch-notices.js",
                   "!**/agent-accounts/homes.js",
                   "!**/agent-accounts/machines.js",
                   "!**/agent-accounts/runtime.js",
-                  "!**/agent-accounts/session.js",
-                  "!**/agent-accounts/store.js"
+                  "!**/agent-accounts/session.js"
                 ],
                 "message": "Import the agent-accounts domain through agent-accounts/index.js."
               },
@@ -599,6 +594,32 @@
                   "!**/storage/stores.js"
                 ],
                 "message": "Import the storage domain through storage/index.js."
+              },
+              {
+                "group": [
+                  "**/commands/*",
+                  "!**/commands/index.js",
+                  "!**/commands/agent-support.js",
+                  "!**/commands/containers.js",
+                  "!**/commands/environment-fork.js",
+                  "!**/commands/environment.js",
+                  "!**/commands/files.js",
+                  "!**/commands/local-server-lifecycle.js",
+                  "!**/commands/pr-monitor-batch.js",
+                  "!**/commands/pr-monitor.js",
+                  "!**/commands/projects.js",
+                  "!**/commands/registry-coordinator-nodes.js",
+                  "!**/commands/registry-coordinator.js",
+                  "!**/commands/registry-docker.js",
+                  "!**/commands/registry-mcp.js",
+                  "!**/commands/registry-projects.js",
+                  "!**/commands/registry-self-improvement.js",
+                  "!**/commands/registry-user-commands.js",
+                  "!**/commands/registry.js",
+                  "!**/commands/review.js",
+                  "!**/commands/servers.js"
+                ],
+                "message": "Import the commands domain through commands/index.js."
               }
             ]
           }
@@ -837,6 +858,15 @@
                   "!**/backend/src/core/storage/test-support.js"
                 ],
                 "message": "Import the storage domain through storage/index.js."
+              },
+              {
+                "group": [
+                  "**/backend/src/core/commands/*",
+                  "!**/backend/src/core/commands/index.js",
+                  "!**/backend/src/core/commands/registry.js",
+                  "!**/backend/src/core/commands/testing.js"
+                ],
+                "message": "Import the commands domain through commands/index.js."
               }
             ]
           }

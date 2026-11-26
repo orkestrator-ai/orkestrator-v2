@@ -481,7 +481,7 @@ describe("bounded bridge output", () => {
 describe("bounded log tails", () => {
   test("keeps the end within the byte bound and marks the cut", async () => {
     const { boundContainerLogTail, CONTAINER_LOG_TRUNCATED_MARKER } =
-      await import("../src/core/commands-registry-docker");
+      await import("../src/core/commands/registry-docker");
     expect(boundContainerLogTail("short\n", 64)).toBe("short\n");
     const long = "€".repeat(100) + "tail\n";
     const bounded = boundContainerLogTail(long, 64);

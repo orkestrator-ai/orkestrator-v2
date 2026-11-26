@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { CommandContext } from "../commands-context.js";
+import type { CommandContext } from "../commands/context.js";
 import type { Environment } from "../models.js";
 import type { PtyProcess } from "../pty.js";
 import { ContainerLifecycleReactor } from "../containers/lifecycle-events.js";

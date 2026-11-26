@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { UNTRACKED_SCAN_MAX_FILES } from "../../apps/backend/src/core/commands-validation";
+import { UNTRACKED_SCAN_MAX_FILES } from "../../apps/backend/src/core/commands/index.js";
 import { __testing, parseOptions } from "../../scripts/recurring-live-ab";
 import {
   BUSY_ROWS,

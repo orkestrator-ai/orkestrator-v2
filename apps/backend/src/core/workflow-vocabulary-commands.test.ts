@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { CommandContext } from "./commands-context.js";
-import { createCommandRegistry } from "./commands-registry.js";
+import type { CommandContext } from "./commands/context.js";
+import { createCommandRegistry } from "./commands/registry.js";
 
 const row = { agent: "codex", model: "review-model" };
 const addressRow = { agent: "claude", model: "address-model" };

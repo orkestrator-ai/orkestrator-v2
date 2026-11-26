@@ -5,7 +5,7 @@ import { RecurringScheduler } from "./recurring/scheduler.js";
 import { RecurringWorkMetrics } from "./recurring/work-metrics.js";
 import { flushMicrotasks, ManualTime } from "./recurring/test-support.js";
 import { TmuxRuntime } from "./tmux/runtime.js";
-import type { CommandContext } from "./commands-context.js";
+import type { CommandContext } from "./commands/context.js";
 
 function manualIntervals() {
   let callback: (() => void) | null = null;

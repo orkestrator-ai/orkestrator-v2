@@ -132,7 +132,7 @@ links into the build worktree; removed afterwards):
 | `apps/backend/src/core/worktrees/snapshots-git.test.ts` | passed | not needed |
 | `apps/backend/src/core/diff-stats-tracking.test.ts` | one retarget timeout; then passed once, failed once | passed |
 | `apps/backend/tests/commands-registry-environments.test.ts` | three timeouts; then passed twice | passed |
-| `apps/backend/src/core/commands-environment-worktree-location.test.ts` | two failed | one failed (alias retargeting) |
+| `apps/backend/src/core/commands/environment-worktree-location.test.ts` | two failed | one failed (alias retargeting) |
 | `apps/backend/tests/commands-integration.test.ts` | one failed (git excludes, 5 s) | one failed (scan caches, 5 s) |
 | `apps/backend/src/core/environments/move.test.ts` | three failed | four failed |
 | `apps/desktop/scripts/dev/profile-cleanup.test.ts` | two failed (1100) | two failed |

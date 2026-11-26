@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 
 import os from "node:os";
 import path from "node:path";
 import { BUILD_PIPELINE_VERSION, type BuildPipeline } from "@orkestrator/protocol/build-pipeline";
-import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands-files.js";
+import { CONTAINER_PINNED_ATTACHMENT_WRITE } from "../commands/files.js";
 import { runCommand } from "../command-capture.js";
 import { callToolInProcess, listToolsInProcess } from "../mcp-in-process.js";
 import { linearFileName, safeFileName } from "./issue-files.js";

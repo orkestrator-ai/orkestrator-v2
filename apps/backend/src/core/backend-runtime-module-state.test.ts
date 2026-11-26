@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentsMdPrResult } from "./agents-md-pr.js";
 import { BackendRuntime } from "./backend-runtime.js";
-import type { CommandContext } from "./commands-context.js";
-import { startEnvironmentSetupOnce } from "./commands-environment.js";
+import type { CommandContext } from "./commands/context.js";
+import { startEnvironmentSetupOnce } from "./commands/environment.js";
 import {
   assertContainerNotDraining,
   assertEnvironmentNotDraining,

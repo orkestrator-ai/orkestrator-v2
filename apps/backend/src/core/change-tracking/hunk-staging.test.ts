@@ -3,8 +3,8 @@ import { existsSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSyn
 import { join } from "node:path";
 import type { ChangeDiffHunk, DiffIdentity } from "@orkestrator/protocol/change-resources";
 import { environmentChangeResourceKey } from "@orkestrator/protocol/change-resources";
-import type { CommandContext } from "../commands-context.js";
-import { createCommandRegistry } from "../commands-registry.js";
+import type { CommandContext } from "../commands/context.js";
+import { createCommandRegistry } from "../commands/registry.js";
 import { gitScopeResourceKey } from "./git-scopes.js";
 import { spliceHunk } from "./hunk-staging.js";
 import { createHarness, git, type Harness } from "./service-test-support.js";

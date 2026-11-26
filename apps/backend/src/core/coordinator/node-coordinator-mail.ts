@@ -9,10 +9,12 @@ import {
   coordinatorRuntimeId,
 } from "@orkestrator/protocol/coordinator";
 
-import type { CommandContext } from "../commands-context.js";
-import { ASYNC_HANDLER } from "../commands-registry-async-decode.js";
-import type { CoordinatorNodeTarget } from "../commands-registry-coordinator-nodes.js";
-import type { CommandRegistrar } from "../commands-registry-types.js";
+import {
+  ASYNC_HANDLER,
+  type CommandContext,
+  type CommandRegistrar,
+  type CoordinatorNodeTarget,
+} from "../commands/index.js";
 import { coordinatorCaller } from "./action-scope.js";
 import { attachmentReferences, readCallerAttachments } from "./mail-attachments.js";
 import type { MailAttachmentBatch } from "../mail-attachments.js";

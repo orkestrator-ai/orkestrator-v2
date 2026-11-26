@@ -35,9 +35,12 @@ at `14df96544` (pins: Claude 2.1.319, Agent SDK 0.3.319), credential-free;
 the canary flip for task 1 waits on an upstream fix.
 Task 5's real-login Pi rerun and task 6's Cursor cells run on 2026-11-26
 against `main` at `f80c75e10` (pins: Cursor SDK 1.4.1, Pi 1.5.2) with real
-logins and billed turns; Grok (task 4) skipped again for an expired host
-login (see
+logins and billed turns (see
 [Live apply record: Cursor and Pi on real logins](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
+Grok (task 4) ran later that day, after the user signed in, against `main`
+at `76cd71b58` (Grok Build 1.0.88): apply held in both scopes, with the user
+scope's edit cells unproven by a harness gap (see
+[Live apply record: Grok](#live-apply-record-grok-2026-11-26)).
 
 ### Tasks
 
@@ -794,6 +797,9 @@ already uses `retiredMcpTools` to keep historical names visible as `unknown`.
 **Context.** In the [November 26 real-login record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26),
 Cursor tab B's removal was `applied`, the server log contained no nonce-matched
 call, and the saved reply carried the marker after narration on the same line.
+The same day Grok's six "must fail" probes were rejected the same way, each
+reply a one-line preamble and then the marker
+([Grok record](#live-apply-record-grok-2026-11-26)).
 
 **Investigation.** `judgeProbe` in `e2e/agent-testing/mcp-apply-live-support.ts`
 compares the complete trimmed reply with the marker. The saved reply has no
@@ -1075,7 +1081,9 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   probes in the same round, with the tab B user-removal reply rejected by
   the harness
   ([record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
-  The Grok run is still open (host login expired). Claude, Codex and OpenCode have
+  Grok ran on 2026-11-26: `restart-required` → `applied` in both scopes, the
+  user scope's edit cells unproven by a harness gap
+  ([record](#live-apply-record-grok-2026-11-26)). Claude, Codex and OpenCode have
   historical observations, with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
@@ -1410,6 +1418,103 @@ Result: 0 passed, 0 skipped, 1 failed in 258.9 s (exit 1). Evidence:
 The profile was stopped and reset after the run; browser evidence is retained
 under `output/`, outside the disposable profile state.
 
+## Live apply record: Grok (2026-11-26)
+
+Run on mbp3 (macOS, Apple Silicon) by a separate worker after the user
+signed in to Grok on the host (the host login was valid until
+2026-11-27T01:28Z). Grok Build 1.0.88 is the pinned toolchain the profile
+ran; the host CLI is 1.0.92. Profile `grok-mcp-live-4`, from `main` at
+`76cd71b58`, for the 7568 item's live apply spec with
+`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=grok`. The exact commands and the
+profile's clean-up were not relayed to this record.
+
+**Result:** 1 failed (exit 1) in 256 s, with 9 failures, every one traced to
+one of two harness gaps (below), none to apply. Record:
+`output/agent-testing/grok-mcp-live-4/mcp-apply-live/grok.json`, in that
+worker's worktree (`orkestrator-v2-grok-live-mcp-mbp3-df7eeab0e37e`), not in
+this branch's.
+
+### Apply outcome
+
+In both scopes every save (add, edit, rename, remove) reported
+`restart-required`, then `applied` once the bridge process was replaced, as
+Grok's `next-load` strategy says. Before that restart a removed server still
+answered one call, which is what `restart-required` means (recorded, not
+judged).
+
+### Completion matrix (real model)
+
+| Provider · scope | Add | Edit (A, B) | Rename (new / old) | Remove (A, B) | Busy | Restart and restore | Apply outcome |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Grok · user `~/.grok/config.toml` (profile home): **partial** | reached v1 | **not proven**: never saved (gap 1) | new name reached the server, but still v1 because the edit never saved / not offered, no call logged (judged failed, gap 2) | neither tab reached the server (judged failed, gap 2) | **not proven**: no running shell `sleep` recognised (gap 1) | reached, but v1 (follows from gap 1) | `restart-required` → `applied` after the bridge restart |
+| Grok · project `.grok/config.toml`, project resources on (`allowed`): **passed on runtime evidence** | reached v1 | reached v2 both | reached v2 / not offered, no call logged (judged failed, gap 2) | not offered, no call logged on either tab (judged failed, gap 2) | — | — | same |
+
+### The nine failures
+
+- **Gap 1, three failures (user scope).** The busy step waits for a running
+  foreground shell `sleep` before saving, and `hasRunningSleep`
+  (`e2e/agent-testing/mcp-apply-live-support.ts:254`) recognises only
+  `bash|shell|exec_command|run_shell_command|execute|terminal`. Grok's shell
+  tool is `run_terminal_command`, so the step stopped with "busy setup
+  failed: no running foreground shell sleep was observed" and never saved
+  v2. The rename's "expected v2" and the restore's "expected v2" failures
+  follow from that (the server ran v1). So the user scope's edit, and the
+  rename and restore checks after it, are unproven live.
+- **Gap 2, six failures (both scopes).** Every "must fail" probe logged no
+  server call, and Grok's reply ended in `MCPQ-UNAVAILABLE` after a one-line
+  preamble, having used only `search_tool`. `judgeProbe`
+  (`mcp-apply-live-support.ts:130`) requires the reply to equal the marker,
+  so these are false negatives (`diagnosis` `not-offered` or
+  `no-inventory`). This is the same gap as Cursor's tab B removal
+  ([task 16](#16-unavailable-marker-judgement-in-the-mcp-apply-harness)).
+
+### Not exercised
+
+Saved `enabled` and SSE: the Grok target reports both unsupported
+(changing `enabled` and the SSE transport are not verified with the pinned
+release), and the spec's SSE case covers Claude only.
+
+### Untrusted project
+
+In the same profile, a project `.grok/config.toml` server `mqp9_untrusted`,
+project resources off and no `[folders."<path>"] trusted = true` grant. The
+Grok session did **not** start it: the probe server's log was never created,
+the session's live MCP inventory was null, and `grok mcp doctor` reported
+"folder untrusted (repo-local server not started for an untrusted folder)".
+That matches the expectation. Possible UI mismatch: the management
+snapshot listed that definition as `effective`, although Grok does not load
+it. This evidence is as the worker reported it; it is not part of
+`grok.json`.
+
+### Billed turns
+
+17.
+
+### Follow-up findings
+
+For later to-dos; none is opened here.
+
+1. **Grok's shell tool in the busy check (gap 1).** `hasRunningSleep` does
+   not know `run_terminal_command`, so Grok's busy edit never runs. Until it
+   does, the user-scope edit, rename-to-v2 and restore cells cannot be
+   proven.
+2. **The terminal unavailable marker (gap 2).** Already
+   [task 16](#16-unavailable-marker-judgement-in-the-mcp-apply-harness);
+   Grok adds six instances, all a one-line preamble before the marker.
+3. **Cursor's restored observations shown as live.** Already
+   [task 15](#15-cursor-mcp-inventory-after-a-bridge-restart)
+   (`seedObservedMcpTools`).
+4. **Untrusted Grok project rows shown as `effective`.** The management
+   snapshot reports a project server in an untrusted folder as `effective`
+   although Grok does not start it.
+
+### Recommendation for task 10
+
+Keep Grok apply on: every save in both scopes reported `restart-required`
+and then `applied` after the restart, the project scope's runtime evidence
+matches every save, and the untrusted gate held. The decision itself stays
+with the user (task 10).
+
 ## Live apply record: Cursor and Pi on real logins (2026-11-26)
 
 Run on mbp3 (macOS, Apple Silicon) against `main` at `f80c75e10` (pins:
@@ -1440,7 +1545,7 @@ ORKESTRATOR_AGENT_TEST_PROFILE=mcp0039-live-pi ORKESTRATOR_AGENT_TEST_RUN_ID=mcp
 | --- | --- | --- | --- | --- |
 | Cursor | host Cursor SDK login (minted key, valid about 2.5 h at start) | 1 failed: 14 of 15 probes passed; the one failure is the harness's reply judgement (below) | 9.9 min | `output/agent-testing/mcp0039-live-cursor/mcp-apply-live/cursor.json` |
 | Pi | host Pi `openai-codex` ChatGPT OAuth, shared in place; model `openai-codex/gpt-6.1-sol` | 1 passed: every probe | 5.9 min | `output/agent-testing/mcp0039-live-pi/mcp-apply-live/pi.json` |
-| Grok | **skipped**: the host `~/.grok/auth.json` expired on 2026-10-31, so `restrictGrokAuthSnapshot` withholds it; renewing it would rewrite the host's Grok login, which this run was not allowed to do | — | — | — |
+| Grok | **skipped**: the host `~/.grok/auth.json` expired on 2026-10-31, so `restrictGrokAuthSnapshot` withholds it; renewing it would rewrite the host's Grok login, which this run was not allowed to do; run later that day by another worker after the user signed in, see [Live apply record: Grok](#live-apply-record-grok-2026-11-26) | — | — | — |
 
 The Cursor run also ended with an `ArtifactBoundError` in global teardown:
 its Playwright trace exceeded the 64 MiB sanitizer bound (as task 7's note
@@ -1870,6 +1975,11 @@ The host Grok login expired on 2026-10-31, and the profile snapshot refuses
 an expired login. Renewing it means running `grok` against the host's own
 login, which the brief forbade, so neither the apply probes nor the
 untrusted-project check ran. Task 4 stays on 7568.
+
+After the user signed in to Grok, a separate worker ran task 4 the same day
+([Live apply record: Grok](#live-apply-record-grok-2026-11-26)). Its record path points into
+that worker's worktree, and the untrusted-project evidence is recorded as
+that worker reported it, since it is not part of `grok.json`.
 
 #### Task 5: the Pi model
 
@@ -2404,7 +2514,7 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10 (Cursor's cells and task 5's real-login Pi rerun ran and left it on 2026-11-26); task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10 (Cursor's cells and task 5's real-login Pi rerun ran and left it on 2026-11-26; Grok's task 4 ran the same day and stays there for the user-scope edit cells); task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).

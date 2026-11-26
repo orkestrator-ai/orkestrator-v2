@@ -107,6 +107,7 @@ describe("Electron backend command registry", () => {
           version: "1.0.0",
           global: {
             ...requiredGlobal,
+            addressFindingsPreExistingRepairSupported: true,
             githubTokenConfigured: true,
             anthropicApiKeyConfigured: false,
             anthropicApiKeySource: "none",

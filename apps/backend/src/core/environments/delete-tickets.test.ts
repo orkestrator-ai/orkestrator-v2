@@ -138,6 +138,8 @@ describe("delete_environment", () => {
           "issue-7",
           "merged",
           expect.any(AbortSignal),
+          // The drain re-checks its claim and the connection before the mutation.
+          expect.any(Function),
         );
         // Only the Linear-sourced build is queued; the Kanban one is not.
         const records = await storage.linear.listLinearMergedLabels();

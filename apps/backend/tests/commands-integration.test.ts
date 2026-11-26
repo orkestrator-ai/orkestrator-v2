@@ -376,6 +376,7 @@ describe("storage-backed command delegation", () => {
       global: {
         ...REQUIRED_GLOBAL_CONFIG,
         allowedDomains: [],
+        addressFindingsPreExistingRepairSupported: true,
         githubTokenConfigured: true,
         anthropicApiKeyConfigured: true,
         anthropicApiKeySource: "config",
@@ -389,6 +390,7 @@ describe("storage-backed command delegation", () => {
     await expect(readGlobalConfig(commands, context)).resolves.toEqual({
       ...REQUIRED_GLOBAL_CONFIG,
       allowedDomains: [],
+      addressFindingsPreExistingRepairSupported: true,
       githubTokenConfigured: true,
       anthropicApiKeyConfigured: true,
       anthropicApiKeySource: "config",
@@ -421,6 +423,7 @@ describe("storage-backed command delegation", () => {
       global: {
         ...REQUIRED_GLOBAL_CONFIG,
         allowedDomains: ["github.com"],
+        addressFindingsPreExistingRepairSupported: true,
         githubTokenConfigured: true,
         anthropicApiKeyConfigured: true,
         anthropicApiKeySource: "config",

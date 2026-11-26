@@ -9,8 +9,8 @@
  * gets the highest version both sides speak, with the contract envelope
  * (`domain`, `version`, `critical`). If a received hello lacks the domain's
  * range, these domains refuse with `unsupported-version`. Their legacy
- * adapters went with the one-time support floor v2.39.1-beta (to-do 8304,
- * retired). Calls through an adapter below the current version are counted as
+ * adapters went with the one-time support floor v2.39.1-beta,
+ * to-do 8304 (retired). Calls through an adapter below the current version are counted as
  * `domain-adapter.backend.<domain>.v<version>` (`backendDomainAdapterUsage`).
  *
  * Two transports reach a peer: the node link itself (the mail collector and

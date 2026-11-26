@@ -189,7 +189,8 @@ frame (a golden-ratio sequence), so keys land at every phase of the page's
 frame clock as a person's do (8312 task 4, below). The page also records long
 tasks and animation-frame gaps, and splits each key with resource timing: its
 own command request's send time after the keydown (`sent`), the wait before
-Chromium sends it (`queued`), the server's share (`server`) and the request's
+Chromium sends it (`queued`), the browser-observed request-to-first-byte time
+(`server`, calculated as `responseStart - requestStart`) and the request's
 duration. The backend's own event-loop monitor is read from
 `/__orkestrator/metrics` around each run. It counts ticks at least 100 ms late.
 The benchmark reports unavailable counters separately from a measured zero.
@@ -229,8 +230,10 @@ typing session. `keyRequestCounts` reports matched writes, missing writes,
 ambiguous writes and missing resource timings. The probe allows up to two
 seconds after measurement and profile export for pending timing entries.
 
-A cell requires all measured keystrokes, output from each requested producer,
-and fake-model streams covering the typing window through the final echo.
+A cell requires all measured keystrokes to echo, each requested terminal
+producer's output revision to advance in the same generation between the
+snapshots bracketing typing, and fake-model streams covering the typing
+window through the final echo.
 `profileExportMs` reports export time separately. The reveal case checks all
 600 numbered lines in xterm's retained buffer and checks the visible screen
 on reveal, WebSocket reconnect, and reload.
@@ -258,13 +261,14 @@ from the loopback model in `fake-anthropic-model.ts`, one delta every 25 ms.
 Nothing is billed. The heavy check uses six build and three tool terminals
 with the same four agents.
 
-**Variants.** Each runs in its own fixture environment, so only its parts
-mount in the page:
+**Variants.** Idle and backend-only share the terminal-only environment.
+Agent-visible uses a separate environment, and the two hidden-tab variants
+share another.
 
 | Variant | The page shows | The page receives and parses |
 | --- | --- | --- |
 | idle | the typing terminal | nothing else; no load runs |
-| backend-only | the typing terminal | nothing else; the load runs in terminals and agents of other environments |
+| backend-only | the typing terminal | only typing-terminal output. Load terminals have unmounted session keys in the typing environment, and agents run in other environments. |
 | agent-visible | the typing terminal beside a streaming agent | that agent's transcript |
 | hidden-tabs | as agent-visible, with the five load terminals as hidden tabs beside the typing tab | the transcript and all five load terminals |
 | hidden-tabs-direct | hidden-tabs with the measurement switch off (writes straight into xterm.js, as before this change) | the same |
@@ -417,18 +421,36 @@ keys are not phase-locked. The timer was left at 8 ms.
 
 Measured on 2026-11-26 on `beelink2` (Linux x64, 16 threads, load average
 about 1 to 2), against `main` at `8950e12e2`, with a credential-free profile:
-six build and three tool terminals plus four fake-model agents, all in other
-environments, against idle; two runs of three rounds, the second in the
-opposite variant order; 200 measured keys per cell, no timeouts, every cell's
-load verified to cover its typing window.
+six build and three tool terminals with unmounted session keys in the typing
+environment, plus four fake-model agents in other environments. Two runs
+compared backend-only with idle over three rounds each, using opposite
+starting orders and 200 measured keys per cell, with no timeouts. The
+terminal producer checks confirmed output revision advancement in the same
+generation between snapshots bracketing typing. The agent stream checks
+confirmed coverage through the final echo.
+
+Start the [isolated profile above](#in-a-real-browser) with `echo8312h`
+in place of `echo8312`. In a separate shell, wait for
+`mise run dev:status --profile echo8312h --json` to report `ready`, then run
+the commands below in order. Save each run's `evidence-terminal-echo.json`
+before another invocation overwrites it. After both runs, stop and reset
+`echo8312h` using the cleanup commands from the same setup.
 
 ```bash
-ORKESTRATOR_AGENT_TEST_PROFILE=echo8312h ORKESTRATOR_AGENT_TEST_LIVE_TERMINAL_ECHO=1 \
-  ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43312 \
-  ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS=idle,backend-only ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS=3 \
-  ORKESTRATOR_AGENT_TEST_ECHO_BUILD=6 ORKESTRATOR_AGENT_TEST_ECHO_TOOL=3 ORKESTRATOR_AGENT_TEST_ECHO_AGENTS=4 \
-  mise run test:logged -- --name terminal-echo-heavy -- bunx playwright test \
-  --config e2e/agent-testing/playwright.browser.config.ts terminal-echo-latency-live.spec.ts
+run_heavy_echo() {
+  local variant_order=$1
+  ORKESTRATOR_AGENT_TEST_PROFILE=echo8312h ORKESTRATOR_AGENT_TEST_LIVE_TERMINAL_ECHO=1 \
+    ORKESTRATOR_AGENT_TEST_FAKE_MODEL_PORT=43312 \
+    ORKESTRATOR_AGENT_TEST_ECHO_VARIANTS="$variant_order" ORKESTRATOR_AGENT_TEST_ECHO_ROUNDS=3 \
+    ORKESTRATOR_AGENT_TEST_ECHO_KEYS=200 ORKESTRATOR_AGENT_TEST_ECHO_BUILD=6 \
+    ORKESTRATOR_AGENT_TEST_ECHO_TOOL=3 ORKESTRATOR_AGENT_TEST_ECHO_AGENTS=4 \
+    mise run test:logged -- --name "terminal-echo-heavy-${variant_order%%,*}-first" -- bunx playwright test \
+    --config e2e/agent-testing/playwright.browser.config.ts terminal-echo-latency-live.spec.ts
+}
+
+run_heavy_echo idle,backend-only
+# Save the first evidence file before starting the second run.
+run_heavy_echo backend-only,idle
 ```
 
 The rule for a felt backend load was recorded before the first heavy cell:
@@ -439,21 +461,24 @@ backend's monitor records any tick at least 100 ms late in a backend-only
 cell. The reasons for its thresholds are in
 [8312](../todo/cross-cutting/8312-terminal-echo-under-load-follow-ups.md).
 
-| Run | Variant | Means, r1 / r2 / r3 ms | p95, r1 / r2 / r3 ms | p99, r1 / r2 / r3 ms | Late ticks (≥100 ms) | Keystroke server time p99, ms |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | idle | 27.2 / 27.2 / 27.1 | 34.8 / 34.6 / 34.4 | 35.8 / 37.3 / 35.3 | 0 / 0 / 0 | 4.1 / 1.0 / 0.9 |
-| 1 | backend-only | 26.6 / 26.6 / 26.9 | 34.2 / 34.4 / 34.1 | 35.1 / 35.5 / 34.9 | 0 / 0 / 0 | 1.8 / 2.8 / 3.5 |
-| 2 | idle | 27.1 / 27.0 / 27.4 | 34.6 / 34.0 / 34.3 | 35.4 / 34.5 / 35.0 | 0 / 0 / 0 | 1.0 / 1.0 / 1.0 |
-| 2 | backend-only | 26.8 / 27.0 / 26.9 | 34.3 / 34.5 / 34.7 | 35.4 / 35.4 / 35.3 | 0 / 0 / 0 | 4.0 / 3.1 / 3.8 |
+Each row lists rounds 1 through 3 in order.
+
+| Run | Variant | Echo mean, r1 / r2 / r3 ms | Echo p95, ms | Echo p99, ms | Late ticks (≥100 ms) | Request-to-first-byte p95, ms | Request-to-first-byte p99, ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | idle | 27.2 / 27.2 / 27.1 | 34.8 / 34.6 / 34.4 | 35.8 / 37.3 / 35.3 | 0 / 0 / 0 | 0.9 / 0.9 / 0.8 | 4.1 / 1.0 / 0.9 |
+| 1 | backend-only | 26.6 / 26.6 / 26.9 | 34.2 / 34.4 / 34.1 | 35.1 / 35.5 / 34.9 | 0 / 0 / 0 | 1.1 / 1.1 / 1.3 | 1.8 / 2.8 / 3.5 |
+| 2 | idle | 27.1 / 27.0 / 27.4 | 34.6 / 34.0 / 34.3 | 35.4 / 34.5 / 35.0 | 0 / 0 / 0 | 0.9 / 0.9 / 0.9 | 1.0 / 1.0 / 1.0 |
+| 2 | backend-only | 26.8 / 27.0 / 26.9 | 34.3 / 34.5 / 34.7 | 35.4 / 35.4 / 35.3 | 0 / 0 / 0 | 1.3 / 1.4 / 1.6 | 4.0 / 3.1 / 3.8 |
 
 Backend-only was never more than 1 ms worse than idle at p95 or p99 in any
-round, and no cell recorded a late tick or stall: **not felt**. The load does
-register on the backend, as the keystroke request's server time (resource
-timing) shows: p99 about 2 to 4 ms against about 1 ms idle. That is less than
-the wait for the frame that paints the echo, which still lands one or two
-60 Hz frames after its key, so the page sees none of it. No production code
-changed. 8312 task 1 keeps the worker design and the trigger that would
-reopen it.
+round, and no cell recorded a late tick or stall, so the load did not meet
+the felt rule. Browser resource timing measured keystroke request-to-first-byte
+(`responseStart - requestStart`) p99 at 1.8 to 4.0 ms in backend-only cells.
+Five of six idle cells measured 0.9 to 1.0 ms, and the first idle cell
+measured 4.1 ms. The elapsed time includes the request and response transit
+as well as any backend queueing and execution. Frame quantization may explain
+why these timing differences produced little change in measured echo latency.
+8312 task 1 keeps the worker design and the measured threshold for building it.
 
 ## Limitations
 

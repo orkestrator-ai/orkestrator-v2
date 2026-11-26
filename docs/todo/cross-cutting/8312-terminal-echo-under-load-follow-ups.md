@@ -46,9 +46,9 @@ synchronous `serializedState` used by checkpoints, snapshots and the
 graceful-shutdown checkpoint.
 
 On 2026-11-20 the real-browser run (task 3) measured the backend's share as
-the page sees it: with the load running only on the backend (terminals and
-agents in other environments, so the page parses none of it), key-to-echo was
-p50/p95/p99 27.6/40.1/44.1 ms against 37.0/38.3/40.9 ms idle at the `busy`
+the page sees it: with the load running only on the backend (unmounted load
+terminals in the typing environment and agents in other environments),
+key-to-echo was p50/p95/p99 27.6/40.1/44.1 ms against 37.0/38.3/40.9 ms idle at the `busy`
 shape, and 27.0/31.4/42.3 ms against 32.0/35.3/36.2 ms with six build and three
 tool terminals. Those were historical runs. The original harness could
 confuse unavailable event-loop counters with zero stalls and did not verify
@@ -60,12 +60,15 @@ On 2026-11-22 the corrected harness, with keys spread over the frame (task
 27.3 ms against idle 27.1 to 27.3 ms, p95 34 to 35 ms in both, no late
 backend ticks. At the busy level the backend's load is not felt.
 
-On 2026-11-26 the heavy level (six build and three tool terminals, four
-fake-model agents, `idle,backend-only`) was repeated with the corrected harness
+On 2026-11-26 the heavy level (six build and three tool terminals with
+unmounted session keys in the typing environment and four fake-model agents
+in other environments) was repeated against idle with the corrected harness
 on `beelink2` against `main` at `8950e12e2`: two runs of three rounds each, in
-opposite variant order, 200 measured keys per cell, no timeouts, every cell's
-producers and agent streams verified to cover its typing window. The rule for
-"felt" was written down before the first heavy cell ran:
+opposite starting orders, with 200 measured keys per cell and no timeouts.
+For each producer, the output revision advanced in the same generation
+between snapshots bracketing typing. The agent stream checks confirmed
+coverage through the final echo. The rule for "felt" was written down before
+the first heavy cell ran:
 
 > The backend load is felt if (a) the median of backend-only's three per-round
 > p95s, or of its three p99s, is more than 5 ms above idle's matching median
@@ -85,12 +88,13 @@ Medians of the per-round values: run 1 p95 34.6 (idle) against 34.2
 (backend-only), p99 35.8 against 35.1; run 2 p95 34.3 against 34.5, p99 35.0
 against 35.4. No round in either run had backend-only more than 1 ms worse
 than idle at p95 or p99, and the monitor recorded no late tick or stall in any
-cell. By the rule the heavy load is **not felt**. The keystroke request's
-server time shows where the load does register: its p99 was 1.8 to 4.0 ms in
-backend-only cells against 0.9 to 1.0 ms in five of six idle cells (p95 1.1 to
-1.6 ms against 0.8 to 0.9 ms). A millisecond or two on the backend is hidden
-by the frame the echo waits for (the echo still paints one or two 60 Hz
-frames after its key), which is why the page sees no difference.
+cell. The heavy load did not meet the felt rule. Browser resource timing
+measured keystroke request-to-first-byte (`responseStart - requestStart`) p99
+at 1.8 to 4.0 ms in backend-only cells, 0.9 to 1.0 ms in five idle cells and
+4.1 ms in the first idle cell. Request-to-first-byte p95 was 1.1 to 1.6 ms
+under load and 0.8 to 0.9 ms at idle. The [per-round request timings](../../development/terminal-latency.md#heavy-load-backend-only-with-the-corrected-harness-8312-task-1)
+include both percentiles. Frame quantization may explain why these request
+timing differences produced little change in measured echo latency.
 
 **Decisions.**
 
@@ -104,7 +108,7 @@ frames after its key), which is why the page sees no difference.
   - **Leave it until a measurement shows a felt stall (recommended; decided 2026-11-26 after the heavy run).**
     - Pros: no async conversion or packaging risk for no measured gain; the browser spec reruns the check (`backend-only` against `idle`).
     - Cons: a heavier or different load (more terminals, a slower host, a remote client) may still feel it, and nobody has measured those.
-    - Trigger to build the worker: any one of (1) a backend-only run of the browser spec meets the rule above, at any load shape or on any host; (2) a report of typing lag while builds run in other environments that the spec then reproduces by that rule; (3) a change that adds work to the headless path (a larger scrollback, more frequent serialization, a second headless consumer), after which the heavy `idle,backend-only` cells must be rerun before it merges.
+    - Build the worker only when a backend-only browser-spec run meets the felt rule above, at any load shape or on any host. Use the spec to check reports of typing lag while builds run. A change that adds work to the headless path (a larger scrollback, more frequent serialization, a second headless consumer) requires rerunning the heavy `idle,backend-only` cells before it merges. Keep the worker deferred if the rerun falls below the felt threshold.
 - **Serialization cost alone.**
   - **Serialize at most once per checkpoint interval under sustained output (time-only trigger while the parser is behind).**
     - Pros: fewer 10 ms holds.
@@ -328,7 +332,8 @@ The rule (in task 1's investigation) was recorded before the heavy run, so the
 result could not shape it. It compares percentiles rather than means because
 a stall shows in the tail first. The 5 ms margin is above the run-to-run
 spread the corrected harness shows between identical idle cells (about 1 ms at
-p95 and up to 3 ms at p99 with 200 keys, where p99 is the second-slowest key)
+p95 and up to 3 ms at p99 with 200 keys, where nearest-rank p99 is the
+third-slowest key)
 and below a third of a 60 Hz frame. The "two of three rounds" clause stops one
 slow key in one round from deciding it. Late backend ticks count on their own
 because a 100 ms stall is felt whatever the percentiles say.

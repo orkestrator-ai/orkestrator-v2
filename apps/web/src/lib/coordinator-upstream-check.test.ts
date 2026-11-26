@@ -62,7 +62,9 @@ test("deletes the browser's copy of earlier declines without importing it", asyn
   invokeMock.mockImplementation(async () => ({ offer: true, status: behind, automatic: true }));
   await checkUpstreamMergeOffer("p", {});
   expect(readLegacyPersistedState(LEGACY_UPSTREAM_DECLINE_KEY)).toBeNull();
-  expect(callsTo("decline_coordinator_upstream_merge")).toHaveLength(0);
+  expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
+    "check_coordinator_upstream_merge",
+  ]);
 });
 
 test("a transport failure decides nothing", async () => {

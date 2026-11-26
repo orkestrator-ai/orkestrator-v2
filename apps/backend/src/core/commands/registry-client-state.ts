@@ -1,6 +1,5 @@
 import {
   checkCoordinatorUpstreamMergeCommand,
-  declineCoordinatorUpstreamMergeCommand,
   dismissNoticesCommand,
   getCoordinatorPaneLayoutCommand,
   listNoticeDismissalsCommand,
@@ -38,11 +37,6 @@ import type { CommandRegistrar } from "./registry-types.js";
  *   and answers every mergeable checkout `automatic`: it is always merged.
  *   A slow or failed fetch is answered by fast-forwarding to the upstream
  *   commit already fetched (`coordinator/message-upstream.ts`).
- * - `decline_coordinator_upstream_merge {projectId, upstream, upstreamCommit,
- *   onlyIfAbsent?}`: retired, kept for clients that still send it. A decline
- *   no longer changes the check. Which of these the backend owns is folded
- *   into `config` version 1 (`CONFIG_CLIENT_STATE_CAPABILITIES`), which the
- *   domain client answers without asking.
  * - `list_notice_dismissals`, `dismiss_notices {sessions}`,
  *   `reconcile_notice_dismissals {sessionIdentity, activeOccurrenceIds}` →
  *   the dismissal snapshot.
@@ -50,6 +44,9 @@ import type { CommandRegistrar } from "./registry-types.js";
  *   `set_coordinator_action_mark {projectId, conversationId, cardId, done}`
  *   (`coordinator` domain) → the conversation's manual action marks. The
  *   conversation must belong to the project's coordinator, open or closed.
+ *
+ * The config domain client answers which of these the backend owns from the
+ * domain version (`CONFIG_CLIENT_STATE_CAPABILITIES`).
  */
 
 async function existingProjectId(value: unknown, context: CommandContext): Promise<string> {
@@ -108,19 +105,6 @@ export function registerClientStateCommands(register: CommandRegistrar): void {
       return checkUpstreamBeforeMessage(projectGit, await existingProjectId(projectId, context));
     },
   );
-  register(
-    declineCoordinatorUpstreamMergeCommand,
-    async ({ projectId, upstream, upstreamCommit, onlyIfAbsent }, context) =>
-      context.storage.clientState.recordCoordinatorUpstreamDecline(
-        await existingProjectId(projectId, context),
-        {
-          upstream: asNonBlankString(upstream, "upstream"),
-          upstreamCommit: asNonBlankString(upstreamCommit, "upstreamCommit"),
-        },
-        { onlyIfAbsent: onlyIfAbsent === true },
-      ),
-  );
-
   register(getCoordinatorActionMarksCommand, async ({ projectId, conversationId }, context) => {
     const project = await existingProjectId(projectId, context);
     return context.storage.clientState.getCoordinatorActionMarks(

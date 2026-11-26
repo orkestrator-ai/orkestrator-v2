@@ -18,8 +18,9 @@
  * knows ({@link NATIVE_SESSIONS_SYNC_CAPABILITIES}), so neither is asked.
  *
  * Adapters below version 3 went with the one-time support floor v2.39.1-beta
- * (to-do 8304 (retired), 2026-11-26), so a node that advertises no range for the
- * domain is refused with `unsupported-version`. Adapters 3 to 5 stay while a
+ * (to-do 8304 (retired), 2026-11-26). A domains map that omits this domain
+ * yields `unsupported-version`. Without a domains map, calls use the lowest
+ * adapter unnegotiated. Adapters 3 to 5 stay while a
  * release in the 60-day window speaks those versions (version-compatibility.md,
  * Register).
  *

@@ -33,7 +33,6 @@ import {
   CoordinatorPaneLayoutRecordSchema,
   CoordinatorPaneLayoutSaveResultSchema,
   CoordinatorUpstreamMergeCheckSchema,
-  DeclinedUpstreamMergeSchema,
   DesktopConnectionsSchema,
   ExternalPermissionRulesSnapshotSchema,
   GlobalSettingSourcesSchema,
@@ -309,23 +308,6 @@ export const checkCoordinatorUpstreamMergeCommand = defineCommand({
   critical: [],
 });
 
-/** Retired, kept for clients that still send it: a decline changes nothing. */
-export const declineCoordinatorUpstreamMergeCommand = defineCommand({
-  domain: configDomain,
-  name: "decline_coordinator_upstream_merge",
-  since: 1,
-  access: "workspace",
-  read: false,
-  args: Schema.Struct({
-    projectId: optionalUnknown,
-    upstream: optionalUnknown,
-    upstreamCommit: optionalUnknown,
-    onlyIfAbsent: optionalUnknown,
-  }),
-  result: DeclinedUpstreamMergeSchema,
-  critical: [],
-});
-
 export const listNoticeDismissalsCommand = defineCommand({
   domain: configDomain,
   name: "list_notice_dismissals",
@@ -458,7 +440,6 @@ export const CONFIG_COMMANDS = [
   getCoordinatorPaneLayoutCommand,
   saveCoordinatorPaneLayoutCommand,
   checkCoordinatorUpstreamMergeCommand,
-  declineCoordinatorUpstreamMergeCommand,
   listNoticeDismissalsCommand,
   dismissNoticesCommand,
   reconcileNoticeDismissalsCommand,

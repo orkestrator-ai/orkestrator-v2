@@ -218,7 +218,6 @@ mock.module("@/lib/backend", () => ({
     throw new Error("sync failed");
   },
   checkCoordinatorUpstreamMerge: mock(async () => null),
-  declineCoordinatorUpstreamMerge: mock(async () => undefined),
   getCoordinatorUpstreamAutoMerge: mock(async () => ({ enabled: false })),
   setCoordinatorUpstreamAutoMerge: mock(async () => ({ enabled: false })),
   pauseProjectCoordinator: pause,

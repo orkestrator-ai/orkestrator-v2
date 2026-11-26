@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import type { BackendHello } from "@orkestrator/protocol/backend-profile";
-import { nodeMailDomain } from "@orkestrator/protocol/contract/domains/node-mail";
-import { deliverNodeMailCommand } from "@orkestrator/protocol/contract/domains/node-mail";
+import {
+  deliverNodeMailCommand,
+  nodeMailClient,
+  nodeMailDomain,
+} from "@orkestrator/protocol/contract/domains/node-mail";
 import { InvalidCommandResultError } from "@orkestrator/protocol/contract/command";
 import type { BackendId } from "@orkestrator/protocol/federation";
 import type { NegotiatedDomains, NodeClient } from "@orkestrator/protocol/node-client";
@@ -14,6 +17,7 @@ import { createBrowserNodeClient } from "./browser-node-client";
 import { createWindowOrkestratorClient } from "./command-client";
 import { createDesktopNodeClient, snapshotHello } from "./desktop-node-client";
 import { createHelloNegotiation, helloFrom } from "./negotiation";
+import { WindowScope } from "./window-scope";
 
 type Api = NonNullable<Window["orkestrator"]>;
 type StreamState = GatewayEventStreamConnectionState;
@@ -232,6 +236,24 @@ describe("the browser NodeClient's hello", () => {
     await settle();
     expect(client.domains.get()).toBeNull();
     expect(client.capabilities.get()).toBeNull();
+  });
+
+  test("a received hello without a domains map leaves domain calls unnegotiated", async () => {
+    const { client, fake } = open(hello("g1", { capabilities: ["node-mail-steer"] }));
+    const windowScope = new WindowScope();
+    disposers.push(() => windowScope.dispose());
+    const scope = windowScope.open({ role: "leaf", client });
+    await settle();
+    expect(client.capabilities.get()).toEqual(new Set(["node-mail-steer"]));
+    expect(client.domains.get()).toBeNull();
+    const answer = { hasCoordinator: false, extra: 1 };
+    fake.raw.invoke.mockImplementation(async () => answer);
+    const mail = scope.domain(nodeMailClient);
+    expect(mail.version()).toBe(1);
+    expect(await mail.api().projectCoordinator({ projectId: "p" })).toBe(answer);
+    expect(fake.raw.invoke).toHaveBeenLastCalledWith("get_node_project_coordinator", {
+      projectId: "p",
+    });
   });
 
   test("typed invoke sends the envelope beside the arguments and decodes the result", async () => {

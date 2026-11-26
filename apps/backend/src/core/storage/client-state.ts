@@ -7,10 +7,6 @@ import {
   type CoordinatorPaneLayoutSaveResult,
 } from "@orkestrator/protocol/coordinator-pane-layout";
 import {
-  isDeclinedUpstreamMerge,
-  type DeclinedUpstreamMerge,
-} from "@orkestrator/protocol/coordinator-upstream-merge";
-import {
   COORDINATOR_ACTION_MARK_LIMITS,
   isCoordinatorActionCardId,
   normalizeCoordinatorActionCardIds,
@@ -27,11 +23,6 @@ import { isRecord, nowIso } from "./shared.js";
 
 /** The single key of the notice dismissal announcement. */
 export const NOTICE_DISMISSALS_RESOURCE_ID = "notice-dismissals";
-
-interface StoredUpstreamDecline extends DeclinedUpstreamMerge {
-  projectId: string;
-  declinedAt: string;
-}
 
 interface StoredNoticeDismissals {
   revision: number;
@@ -96,8 +87,8 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
  *   `coordinator-pane-layout` with the project id.
  * - `coordinator-upstream-declines`: one row per project, the upstream tip an
  *   older client's user chose not to merge before messaging the coordinator.
- *   Retired: still written for those clients, but no decision reads it now
- *   that every mergeable checkout is merged. Not announced.
+ *   Retired with the one-time support floor. Project removal still deletes
+ *   a stored row.
  * - `coordinator-upstream-auto-merge`: one row per project an older client set
  *   to always merge upstream commits. Retired: nothing writes it since its
  *   commands were deleted with the one-time support floor, and nothing reads
@@ -183,47 +174,6 @@ export class ClientStateRepository {
       this.context.changes.announce("coordinator-pane-layout", projectId, projectId);
     }
     return result;
-  }
-
-  getCoordinatorUpstreamDecline(projectId: string): DeclinedUpstreamMerge | null {
-    const stored = this.context.loadStoreRow(this.declinesFile(), projectId);
-    return isDeclinedUpstreamMerge(stored)
-      ? { upstream: stored.upstream, upstreamCommit: stored.upstreamCommit }
-      : null;
-  }
-
-  /**
-   * Remembers the upstream tip a project's merge question was declined for.
-   * `onlyIfAbsent` (a browser's one-time migration) never replaces a newer
-   * answer another client already gave. Returns the decline now in force.
-   */
-  recordCoordinatorUpstreamDecline(
-    projectId: string,
-    decline: DeclinedUpstreamMerge,
-    options: { onlyIfAbsent?: boolean } = {},
-  ): DeclinedUpstreamMerge {
-    if (!isDeclinedUpstreamMerge(decline)) throw new Error("decline is not a valid upstream tip");
-    return this.context.updateStoreRow<DeclinedUpstreamMerge>(
-      this.declinesFile(),
-      projectId,
-      (current) => {
-        if (options.onlyIfAbsent && isDeclinedUpstreamMerge(current)) {
-          return {
-            result: { upstream: current.upstream, upstreamCommit: current.upstreamCommit },
-          };
-        }
-        const stored: StoredUpstreamDecline = {
-          projectId,
-          upstream: decline.upstream,
-          upstreamCommit: decline.upstreamCommit,
-          declinedAt: nowIso(),
-        };
-        return {
-          result: { upstream: decline.upstream, upstreamCommit: decline.upstreamCommit },
-          value: stored,
-        };
-      },
-    );
   }
 
   /** A coordinator conversation's manual action marks; revision 0 when none are stored. */
@@ -437,8 +387,6 @@ export type ClientStateStorage = Pick<
   ClientStateRepository,
   | "getCoordinatorPaneLayout"
   | "saveCoordinatorPaneLayout"
-  | "getCoordinatorUpstreamDecline"
-  | "recordCoordinatorUpstreamDecline"
   | "listNoticeDismissals"
   | "dismissNotices"
   | "reconcileNoticeDismissals"

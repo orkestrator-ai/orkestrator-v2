@@ -12,11 +12,10 @@
  *   are decoded with the command's schema.
  *
  * Adapters below version 3 went with the one-time support floor v2.39.1-beta
- * (to-do 8304 (retired), 2026-11-26), so a node that advertises no range for the
- * domain is refused with `unsupported-version`; over a transport without
- * negotiation, a destination-guarded merge is refused before it is sent.
- * Adapter 3 stays while a
- * release in the 60-day window speaks version 3: it goes when the support
+ * (to-do 8304 (retired), 2026-11-26). A domains map that omits this domain
+ * yields `unsupported-version`. Without a domains map, calls use the lowest
+ * adapter unnegotiated, which refuses destination-guarded merges. Adapter 3
+ * stays while a release in the 60-day window speaks version 3: it goes when the support
  * floor passes the first Stable release with version 4.
  *
  * Browser-safe.

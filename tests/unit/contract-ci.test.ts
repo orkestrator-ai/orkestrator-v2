@@ -34,6 +34,7 @@ import {
   rowAdapters,
   rowCounterIds,
 } from "../../scripts/contract-ci-register";
+import type { RetirementSchedule } from "../../scripts/contract-ci-retirements";
 import {
   checkSchemaStore,
   documentDigest,
@@ -274,13 +275,20 @@ describe("one-time support floor (to-do 8304 (retired))", () => {
       version: "2.30.0-beta",
       preContract: true,
       source: "registry",
-      commands: [mail("send_mail"), mail("old_only"), mail("above_floor")],
+      commands: [mail("send_mail"), mail("old_only")],
+    });
+    writeReleaseSnapshot(contracts, {
+      version: "2.31.0-beta",
+      preContract: true,
+      source: "registry",
+      commands: [mail("send_mail"), mail("above_floor")],
     });
     writeReleaseIndex(
       contracts,
       index([
         { version: "2.21.0", publishedAt: "2026-10-16T15:32:43Z" },
         { version: "2.30.0-beta", publishedAt: "2026-11-01T00:00:00Z" },
+        { version: "2.31.0-beta", publishedAt: "2026-11-20T00:00:00Z" },
       ]),
     );
     await writeFile(
@@ -334,7 +342,7 @@ describe("one-time support floor (to-do 8304 (retired))", () => {
     expect(dropped.status).toBe(1);
     // Above the floor: still guarded.
     expect(dropped.output).toContain(
-      "above_floor (node-mail) is in 2.30.0-beta but no longer registered",
+      "above_floor (node-mail) is in 2.31.0-beta but no longer registered",
     );
     // Below the floor, or kept only for clients below it: no longer required.
     expect(dropped.output).not.toContain("below_floor");
@@ -350,6 +358,67 @@ describe("one-time support floor (to-do 8304 (retired))", () => {
     const kept = await run();
     expect(kept.output).toContain("Contract CI passed");
     expect(kept.status).toBe(0);
+  });
+
+  test("the retirement report keeps the one-time release dates after the rolling floor passes it", async () => {
+    const dir = await temporaryDir();
+    const contracts = path.join(dir, "packages/protocol/contracts");
+    const docs = path.join(dir, "docs/architecture");
+    const domains = { "node-mail": { version: 1, min: 1 } };
+    await mkdir(docs, { recursive: true });
+    for (const version of ["2.30.0-beta", "2.40.0"]) {
+      writeReleaseSnapshot(contracts, {
+        version,
+        preContract: false,
+        source: "registry",
+        commands: [["send_mail", { domain: "node-mail", entry: { untyped: true, read: false } }]],
+        domains,
+      });
+    }
+    writeReleaseIndex(
+      contracts,
+      index([
+        { version: "2.30.0-beta", publishedAt: "2026-11-16T00:00:00Z" },
+        { version: "2.40.0", publishedAt: "2026-12-01T00:00:00Z" },
+      ]),
+    );
+    await writeFile(path.join(contracts, "manifest.json"), JSON.stringify(manifest({}, domains)));
+    await writeFile(path.join(contracts, "adapters.json"), JSON.stringify(adapterList({})));
+    await writeFile(
+      path.join(contracts, "retirements.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        capabilityCommands: {
+          legacy_probe: {
+            domain: "node-mail",
+            retireAtDomainVersion: 1,
+            why: "The domain version answers the probe locally.",
+            retired: "2026-11-26",
+          },
+        },
+      }),
+    );
+    await writeFile(path.join(docs, "version-compatibility.md"), HEADER.join("\n"));
+
+    const lines: string[] = [];
+    const status = await runContractCi({
+      root: dir,
+      now: new Date("2027-02-15T00:00:00Z"),
+      oneTimeFloor: oneTime,
+      retirements: "json",
+      log: (line) => lines.push(line),
+    });
+    expect(status).toBe(0);
+    const schedule = JSON.parse(lines.join("\n")) as RetirementSchedule;
+    expect(schedule.floor).toBe("2.40.0");
+    expect(schedule.entries).toMatchObject([
+      {
+        command: "legacy_probe",
+        firstRelease: { version: "2.30.0-beta", publishedAt: "2026-11-16T00:00:00Z" },
+        earliest: "2026-11-26T00:00:00.000Z",
+        status: "retired",
+      },
+    ]);
   });
 
   test("an in-window release above the floor still needs its adapter", () => {

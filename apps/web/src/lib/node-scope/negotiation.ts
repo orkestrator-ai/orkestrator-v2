@@ -13,9 +13,10 @@
  *
  * - A node that answers without a hello (it predates the handshake), or with
  *   one that does not parse, is pre-contract: `domains` and `capabilities`
- *   are `null`, and its domain clients use the legacy version-0 adapters.
- * - A hello without `domains` is pre-contract too, but its `capabilities`
- *   still gate the legacy adapters.
+ *   are `null`, so domain clients without a version-0 adapter use the lowest
+ *   adapter unnegotiated.
+ * - A hello without `domains` also leaves calls unnegotiated and still
+ *   publishes its `capabilities`.
  * - A read that cannot tell (unreachable, refused, timed out) changes
  *   nothing: a transient failure is never read as a pre-contract node, and
  *   the next connection reads again.

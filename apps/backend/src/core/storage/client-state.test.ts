@@ -8,7 +8,7 @@ import type { CommandContext } from "../commands/context.js";
 import { createCommandRegistry } from "../commands/registry.js";
 import { COORDINATOR_ACTION_MARKS_FULL_ERROR } from "./client-state.js";
 import { createProject, StorageService } from "./service.js";
-import { withTemporaryStorage } from "./test-support.js";
+import { readStoredValue, seedStore, withTemporaryStorage } from "./test-support.js";
 
 const layout = (conversationIds: string[]): CoordinatorPaneLayout => ({
   root: {
@@ -74,39 +74,17 @@ describe("client state storage", () => {
     });
   });
 
-  test("a decline only-if-absent never replaces a newer answer", async () => {
-    await withTemporaryStorage(async (storage) => {
-      const state = storage.clientState;
-      state.recordCoordinatorUpstreamDecline("p", {
-        upstream: "origin/main",
-        upstreamCommit: "c1",
-      });
-      expect(
-        state.recordCoordinatorUpstreamDecline(
-          "p",
-          { upstream: "origin/main", upstreamCommit: "old" },
-          { onlyIfAbsent: true },
-        ),
-      ).toEqual({ upstream: "origin/main", upstreamCommit: "c1" });
-      state.recordCoordinatorUpstreamDecline("p", {
-        upstream: "origin/main",
-        upstreamCommit: "c2",
-      });
-      expect(state.getCoordinatorUpstreamDecline("p")?.upstreamCommit).toBe("c2");
-    });
-  });
-
-  test("a project's layout and decline are deleted with it", async () => {
-    await withTemporaryStorage(async (storage) => {
+  test("project removal deletes the layout and a stored legacy decline", async () => {
+    await withTemporaryStorage(async (storage, dataDir) => {
       const project = await storage.addProject(createProject("https://example.invalid/r.git"));
       storage.clientState.saveCoordinatorPaneLayout(project.id, layout(["a"]), 0);
-      storage.clientState.recordCoordinatorUpstreamDecline(project.id, {
-        upstream: "origin/main",
-        upstreamCommit: "c1",
-      });
+      const store = "coordinator-upstream-declines.json";
+      const decline = { projectId: project.id, upstream: "origin/main", upstreamCommit: "c1" };
+      seedStore(dataDir, store, { [project.id]: decline });
+      expect(readStoredValue(dataDir, store)).toEqual({ [project.id]: decline });
       await storage.removeProject(project.id);
       expect(storage.clientState.getCoordinatorPaneLayout(project.id)).toBeNull();
-      expect(storage.clientState.getCoordinatorUpstreamDecline(project.id)).toBeNull();
+      expect(readStoredValue(dataDir, store)).toEqual({});
     });
   });
 
@@ -300,22 +278,6 @@ describe("client state commands", () => {
       await expect(
         call("check_coordinator_upstream_merge", { projectId: "missing" }),
       ).rejects.toThrow("Project not found");
-    });
-  });
-
-  test("a decline an older client stores no longer holds a merge back", async () => {
-    const projectGit = { isCheckoutBusy: async () => false, fetch: async () => behind };
-    await withCommands(projectGit, async (call, projectId) => {
-      await call("decline_coordinator_upstream_merge", {
-        projectId,
-        upstream: "origin/main",
-        upstreamCommit: behind.upstreamCommit,
-      });
-      expect(await call("check_coordinator_upstream_merge", { projectId })).toEqual({
-        offer: true,
-        status: behind,
-        automatic: true,
-      });
     });
   });
 

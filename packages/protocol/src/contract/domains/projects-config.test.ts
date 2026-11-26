@@ -113,7 +113,7 @@ describe("projects and config definitions", () => {
     expect(projectsDomain).toMatchObject({ name: "projects", version: 2, min: 1 });
     expect(configDomain).toMatchObject({ name: "config", version: 2, min: 1 });
     expect(PROJECTS_COMMANDS).toHaveLength(26);
-    expect(CONFIG_COMMANDS).toHaveLength(37);
+    expect(CONFIG_COMMANDS).toHaveLength(36);
     for (const [domain, commands] of [
       [projectsDomain, PROJECTS_COMMANDS],
       [configDomain, CONFIG_COMMANDS],

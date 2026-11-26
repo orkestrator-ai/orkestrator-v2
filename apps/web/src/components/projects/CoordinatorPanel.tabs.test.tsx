@@ -215,7 +215,6 @@ mock.module("@/lib/backend", () => ({
   getProjectGitStatus: getGit,
   fetchProjectGit: fetchGit,
   checkCoordinatorUpstreamMerge: mock(async () => null),
-  declineCoordinatorUpstreamMerge: mock(async () => undefined),
   getCoordinatorUpstreamAutoMerge: mock(async () => ({ enabled: false })),
   setCoordinatorUpstreamAutoMerge: mock(async () => ({ enabled: false })),
   pauseProjectCoordinator: pause,

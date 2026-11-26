@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1089,
-    "defined": 1089,
+    "commands": 1088,
+    "defined": 1088,
     "untyped": 0,
     "events": 48
   },
@@ -1868,15 +1868,6 @@
       "critical": [],
       "argsDigest": "sha256:9397dd4c7560923d7b2d93de605926c568dc9df2d047ac07f52acc9ee97e72f5",
       "resultDigest": "sha256:cc47a61207a4a43ea844c8c22f1ccb419dc5f3f5153d498490083f7fce1370fb"
-    },
-    "decline_coordinator_upstream_merge": {
-      "domain": "config",
-      "since": 1,
-      "access": "workspace",
-      "read": false,
-      "critical": [],
-      "argsDigest": "sha256:34daba8ff437717507bc8d1bf9b558ed721c58752c22e1bce9bee8e23167bc4a",
-      "resultDigest": "sha256:3d17582058056198ca6e4fc71800b3b2250f45bc8b29850cdbe749ef42eaaeb3"
     },
     "decline_credential_request": {
       "domain": "config",

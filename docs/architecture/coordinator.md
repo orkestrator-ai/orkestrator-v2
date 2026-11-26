@@ -2000,15 +2000,12 @@ Earlier releases asked *"Merge N upstream commits?"*, remembered declines
 (`decline_coordinator_upstream_merge`, store `coordinator-upstream-declines`)
 and offered an **Always merge** setting
 (`get/set_coordinator_upstream_auto_merge`, store
-`coordinator-upstream-auto-merge`). The backend still answers
-`decline_coordinator_upstream_merge` for older clients, but a decline does not
-change the check. The two auto-merge commands were deleted with the one-time
-support floor on 2026-11-26
-([version-compatibility.md](version-compatibility.md#retired)); nothing writes
-the auto-merge store any more, and project removal still deletes a project's
-row. `coordinatorUpstreamAutoMerge` is no longer advertised, so a client that
-knows it hides its toggle. A browser's own copy of the declines is deleted on
-the first check.
+`coordinator-upstream-auto-merge`). All three commands were deleted with the
+one-time support floor on 2026-11-26
+([version-compatibility.md](version-compatibility.md#retired)). Project removal
+still deletes rows from both stores. `coordinatorUpstreamAutoMerge` is no longer
+advertised, so a client that knows it hides its toggle. A browser's own copy of
+the declines is deleted on the first check.
 
 ### Branch switch and Sync while a turn runs
 

@@ -220,10 +220,9 @@ export interface RetirementScheduleInput {
   readonly register: RegisterDocument;
   readonly windowDays?: number;
   /**
-   * The one-time floor (`ONE_TIME_SUPPORT_FLOOR` in `contract-ci.ts`) while it
-   * is in force: its release counts as a qualifying release from the day the
-   * floor was recorded, so whatever it already advertises is due once the
-   * floor stands there, as if it were a Stable release 60 days old.
+   * The one-time floor (`ONE_TIME_SUPPORT_FLOOR` in `contract-ci.ts`).
+   * Its release qualifies from the day the floor was recorded, including
+   * in schedules generated after the rolling floor takes over.
    */
   readonly oneTimeFloor?: { readonly release: StableRelease; readonly recorded: string };
 }

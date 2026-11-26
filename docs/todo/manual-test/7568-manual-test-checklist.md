@@ -1024,7 +1024,7 @@ None open (both answered on 2026-11-14).
   - keep the 60-day window and let them retire on its schedule;
   - drop the window and the contract CI checks altogether.
 
-  Decided 2026-11-26 by the user: the one-time floor, then delete the paths; later changes keep the 60-day window, so an older-version adapter inside the window is still required (the forward policy). Done the same day: the floor is v2.39.1-beta (published 2026-11-16), the first release whose tag contains the sweep's merge (#2319, `8821695c8`; v2.39.0-beta was tagged before it), recorded as `ONE_TIME_SUPPORT_FLOOR` in `scripts/contract-ci.ts`, and the adapters, the three capability commands and nineteen commands it freed were deleted ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)). What 8304 listed that needs a wire or schema change moved to [8334](../cross-cutting/8334-schema-pinned-compatibility-paths.md), an agent's to-do.
+  Decided 2026-11-26 by the user: the one-time floor, then delete the paths; later changes keep the 60-day window, so an older-version adapter inside the window is still required (the forward policy). Done the same day: the floor is v2.39.1-beta (published 2026-11-16), the first release whose tag contains the sweep's merge (#2319, `8821695c8`; v2.39.0-beta was tagged before it), recorded as `ONE_TIME_SUPPORT_FLOOR` in `scripts/contract-ci.ts`, and the adapters, the three capability commands and twenty commands it freed were deleted ([version-compatibility.md](../../architecture/version-compatibility.md#the-support-window)). What 8304 listed that needs a wire or schema change moved to [8334](../cross-cutting/8334-schema-pinned-compatibility-paths.md), an agent's to-do.
 
 #### Design canvas
 

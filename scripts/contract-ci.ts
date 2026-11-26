@@ -201,6 +201,7 @@ export const ONE_TIME_SUPPORT_FLOOR: OneTimeSupportFloor = Object.freeze({
     // The retired "always merge" setting, asked by renderers before v2.36.0.
     "get_coordinator_upstream_auto_merge",
     "set_coordinator_upstream_auto_merge",
+    "decline_coordinator_upstream_merge",
     // Renderer-built handoffs, before `native-sessions` built them itself.
     "save_agent_handoff",
     "delete_agent_handoff",
@@ -701,7 +702,8 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
   const stable: StableRelease[] = [];
   let oneTimeRelease: StableRelease | null = null;
   for (const entry of index.releases) {
-    if (entry.channel !== "stable") continue;
+    const isOneTimeRelease = entry.version === oneTimeFloor?.version;
+    if (entry.channel !== "stable" && !isOneTimeRelease) continue;
     const snapshot =
       window.find((release) => release.version === entry.version) ??
       (() => {
@@ -711,23 +713,14 @@ export async function runContractCi(options: ContractCiOptions = {}): Promise<nu
           return null; // reported by the index check when the file is missing
         }
       })();
-    if (snapshot !== null) {
-      stable.push({
-        version: entry.version,
-        publishedAt: entry.publishedAt,
-        domains: snapshot.domains,
-      });
-    }
-  }
-  if (oneTimeFloor !== null) {
-    const snapshot = window.find((release) => release.version === oneTimeFloor.version);
-    if (snapshot !== undefined) {
-      oneTimeRelease = {
-        version: snapshot.version,
-        publishedAt: floor.release?.publishedAt ?? null,
-        domains: snapshot.domains,
-      };
-    }
+    if (snapshot === null) continue;
+    const release = {
+      version: entry.version,
+      publishedAt: entry.publishedAt,
+      domains: snapshot.domains,
+    };
+    if (entry.channel === "stable") stable.push(release);
+    if (isOneTimeRelease) oneTimeRelease = release;
   }
   const schedule =
     typeof retirementList === "string"

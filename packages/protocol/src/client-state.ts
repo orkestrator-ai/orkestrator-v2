@@ -9,7 +9,7 @@
 export interface ClientStateCapabilities {
   /** Coordinator tab groups per project (`get/save_coordinator_pane_layout`). */
   coordinatorPaneLayouts: boolean;
-  /** "Merge upstream first?" decision and declines (`check/decline_coordinator_upstream_merge`). */
+  /** Upstream fast-forward decision (`check_coordinator_upstream_merge`). */
   coordinatorUpstreamMerge: boolean;
   /** The retired "always merge" setting; always `false`. */
   coordinatorUpstreamAutoMerge: boolean;

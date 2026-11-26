@@ -176,6 +176,49 @@ describe("KanbanCard", () => {
     expect(onClearStatus).toHaveBeenCalledWith(task);
   });
 
+  test("right-click menu opens, builds and deletes the ticket", () => {
+    const task = makeTask();
+    const onClick = mock(() => {});
+    const onBuild = mock(() => {});
+    const onDelete = mock(() => {});
+    renderCard(task, { onClick, onBuild, onDelete });
+
+    const menu = screen.getByTestId("context-menu-content");
+    const items = within(menu)
+      .getAllByRole("menuitem")
+      .map((item) => item.textContent);
+    expect(items).toEqual(["Open", "Build…", "Delete…"]);
+
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Build…" }));
+    expect(onBuild).toHaveBeenCalledWith(task);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete…" }));
+    expect(onDelete).toHaveBeenCalledWith(task);
+  });
+
+  test("right-click Build… is off, with the reason, while the ticket's build runs", () => {
+    const onBuild = mock(() => {});
+    renderCard(makeTask({ environmentId: "env-1" }), {
+      onBuild,
+      onDelete: () => {},
+      buildPhase: "building",
+    });
+
+    const build = within(screen.getByTestId("context-menu-content")).getByRole("menuitem", {
+      name: /Build…/,
+    });
+    expect(build.getAttribute("aria-disabled")).toBe("true");
+    expect(build.textContent).toContain("A build of this ticket is still running");
+    fireEvent.click(build);
+    expect(onBuild).not.toHaveBeenCalled();
+  });
+
+  test("the drag preview has no right-click menu", () => {
+    renderCard(makeTask(), { isDragOverlay: true, onBuild: () => {}, onDelete: () => {} });
+    expect(screen.queryByTestId("context-menu-content") === null).toBe(true);
+  });
+
   test("does not render clear status menu item for unlinked cards", () => {
     renderCard(makeTask(), { canClearStatus: false });
 

@@ -647,6 +647,15 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     );
   }
 
+  /**
+   * Moves an issue on the project's linked board to Linear's trash, where it
+   * stays restorable for 30 days. The backend refuses an issue that is not on
+   * that board.
+   */
+  async function deleteLinearIssue(projectId: string, issueId: string): Promise<void> {
+    await kanban(client).delete_linear_issue({ projectId, issueId });
+  }
+
   /** The Linear-hosted files an issue refers to, with links that open for a few minutes. */
   async function getLinearIssueFiles(
     projectId: string,
@@ -888,6 +897,7 @@ export function createConfigIntegrationsApi(client: BackendClient) {
     getLinearBoardOptions,
     getLinearIssueFiles,
     updateLinearIssue,
+    deleteLinearIssue,
     getLinearNodeConnections,
     copyLinearConnectionFromNode,
     getGitHubIssues,
@@ -948,6 +958,7 @@ export const {
   getLinearBoardOptions,
   getLinearIssueFiles,
   updateLinearIssue,
+  deleteLinearIssue,
   getLinearNodeConnections,
   copyLinearConnectionFromNode,
   getGitHubIssues,

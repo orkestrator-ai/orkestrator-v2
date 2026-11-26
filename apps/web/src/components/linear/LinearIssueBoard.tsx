@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { LinearIssueLabel, LinearIssueListItem } from "@/types/linear";
+import { TicketContextMenu } from "@/components/kanban/TicketContextMenu";
 import { LinearAssigneeAvatar } from "./LinearAssigneeAvatar";
 import { planLinearDrop, type LinearDropAnchor, type LinearLane } from "./linear-issue-order";
 
@@ -260,6 +261,19 @@ function LinearDragPreview({
   );
 }
 
+/**
+ * A ticket's right-click actions on the board and in the list (Open, Build…,
+ * Delete…). The view owns what each does; the board only places the menu.
+ */
+export interface LinearIssueMenuActions {
+  onBuild?: (issue: LinearIssueListItem) => void;
+  /** Why Build cannot start for this issue now, or undefined when it can. */
+  buildDisabledReason?: (issue: LinearIssueListItem) => string | undefined;
+  loadingBuildIssueId?: string;
+  /** Absent (no linked board) hides Delete. */
+  onDelete?: (issue: LinearIssueListItem) => void;
+}
+
 /** The line showing where a drop lands among a lane's cards. */
 function DropIndicator({ placement }: { placement: "before" | "after" | "end" }) {
   return (
@@ -287,6 +301,8 @@ function LinearBoardCard({
   carried,
   indicator,
   onClick,
+  onOpen,
+  menuActions,
 }: {
   issue: LinearIssueListItem;
   laneStatus: string;
@@ -302,6 +318,9 @@ function LinearBoardCard({
   /** Where a drop beside this card would land, while one is aimed here. */
   indicator?: "before" | "after";
   onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+  /** Open on the right-click menu: what a plain click does. */
+  onOpen: () => void;
+  menuActions?: LinearIssueMenuActions;
 }) {
   const drag = useDraggable({ id: issue.id, disabled: !draggable });
   const drop = useDroppable({
@@ -338,36 +357,49 @@ function LinearBoardCard({
   return (
     <div className="relative">
       {indicator && <DropIndicator placement={indicator} />}
-      <button
-        ref={setNodeRef}
-        type="button"
-        data-testid="linear-board-card"
-        data-issue-id={issue.id}
-        data-selected={selected ? "true" : undefined}
-        {...(draggable ? { ...dragAttributes, ...drag.listeners } : {})}
-        onMouseDown={(event) => {
-          // Shift-click selects cards, not the text between them.
-          if (event.shiftKey) event.preventDefault();
-        }}
-        onClick={(event) => {
-          if (wasDraggingRef.current) {
-            wasDraggingRef.current = false;
-            return;
-          }
-          onClick(event);
-        }}
-        className={cn(
-          CARD_CLASS,
-          draggable && "cursor-grab active:cursor-grabbing",
-          selected && "border-primary bg-primary/10 ring-1 ring-primary hover:border-primary",
-          !selected && !isDragging && !carried && "hover:bg-hover/50",
-          // The preview follows the pointer; the originals stay as dashed placeholders.
-          (isDragging || carried) && "border-dashed border-primary/60 bg-primary/5 opacity-50",
-        )}
+      <TicketContextMenu
+        ticketLabel={`${issue.identifier} ${issue.title}`}
+        onOpen={onOpen}
+        onBuild={menuActions?.onBuild ? () => menuActions.onBuild?.(issue) : undefined}
+        buildDisabledReason={menuActions?.buildDisabledReason?.(issue)}
+        onDelete={menuActions?.onDelete ? () => menuActions.onDelete?.(issue) : undefined}
       >
-        {selected && <span className="sr-only">Selected. </span>}
-        <LinearCardContent issue={issue} type={type} pipelinePhase={pipelinePhase} />
-      </button>
+        <button
+          ref={setNodeRef}
+          type="button"
+          data-testid="linear-board-card"
+          data-issue-id={issue.id}
+          data-selected={selected ? "true" : undefined}
+          {...(draggable ? { ...dragAttributes, ...drag.listeners } : {})}
+          onMouseDown={(event) => {
+            // Shift-click selects cards, not the text between them.
+            if (event.shiftKey) event.preventDefault();
+          }}
+          onClick={(event) => {
+            if (wasDraggingRef.current) {
+              wasDraggingRef.current = false;
+              return;
+            }
+            onClick(event);
+          }}
+          className={cn(
+            CARD_CLASS,
+            draggable && "cursor-grab active:cursor-grabbing",
+            selected && "border-primary bg-primary/10 ring-1 ring-primary hover:border-primary",
+            !selected && !isDragging && !carried && "hover:bg-hover/50",
+            // The preview follows the pointer; the originals stay as dashed placeholders.
+            (isDragging || carried) && "border-dashed border-primary/60 bg-primary/5 opacity-50",
+          )}
+        >
+          {selected && <span className="sr-only">Selected. </span>}
+          <LinearCardContent issue={issue} type={type} pipelinePhase={pipelinePhase} />
+          {menuActions?.loadingBuildIssueId === issue.id && (
+            <span role="status" className="text-xs text-muted-foreground">
+              Loading ticket for build…
+            </span>
+          )}
+        </button>
+      </TicketContextMenu>
     </div>
   );
 }
@@ -382,6 +414,8 @@ function LinearLaneColumn({
   carried,
   dropAnchor,
   onCardClick,
+  onOpenIssue,
+  menuActions,
   pipelinePhase,
 }: {
   lane: LinearLane;
@@ -397,6 +431,8 @@ function LinearLaneColumn({
   /** Where a drop in this lane lands, shown as a line, when the drop places cards. */
   dropAnchor: LinearDropAnchor | undefined;
   onCardClick: (issue: LinearIssueListItem, event: MouseEvent<HTMLButtonElement>) => void;
+  onOpenIssue: (issue: LinearIssueListItem) => void;
+  menuActions?: LinearIssueMenuActions;
   pipelinePhase: (issueId: string) => string | undefined;
 }) {
   // A lane without a state id cannot receive a card: there is nothing to move it to.
@@ -449,6 +485,8 @@ function LinearLaneColumn({
                     : undefined
                 }
                 onClick={(event) => onCardClick(issue, event)}
+                onOpen={() => onOpenIssue(issue)}
+                menuActions={menuActions}
               />
             ))}
             {dropAnchor === null && lane.issues.length > 0 && <DropIndicator placement="end" />}
@@ -503,6 +541,9 @@ export interface LinearBoardMove {
  * Cmd/Ctrl-click toggles a card's selection and Shift-click selects the run
  * of cards from the last one picked; dragging any selected card carries the
  * whole selection. A plain click opens the issue; Escape clears the selection.
+ *
+ * Right-clicking a card opens its menu: Open, and the `menuActions` given
+ * (Build…, Delete…). It acts on that card alone, whatever is selected.
  */
 export function LinearIssueBoard({
   lanes,
@@ -513,6 +554,7 @@ export function LinearIssueBoard({
   onMoveIssues,
   reorderable = false,
   movingIssueIds = NO_ISSUES,
+  menuActions,
 }: {
   lanes: readonly LinearLane[];
   hidden: ReadonlySet<string>;
@@ -524,6 +566,8 @@ export function LinearIssueBoard({
   reorderable?: boolean;
   /** Issues with a move in flight: shown, but not draggable until it settles. */
   movingIssueIds?: ReadonlySet<string>;
+  /** Build… and Delete… on a card's right-click menu (Open is always there). */
+  menuActions?: LinearIssueMenuActions;
 }) {
   const [drag, setDrag] = useState<{ activeId: string; carried: string[] } | null>(null);
   const [dropAt, setDropAt] = useState<{ lane: string; anchor: LinearDropAnchor } | null>(null);
@@ -573,12 +617,16 @@ export function LinearIssueBoard({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selected, drag]);
 
+  const openIssue = (issue: LinearIssueListItem) => {
+    setSelection(NO_ISSUES);
+    anchorRef.current = issue.id;
+    onSelectIssue(issue.id);
+  };
+
   const handleCardClick = (issue: LinearIssueListItem, event: MouseEvent<HTMLButtonElement>) => {
     const toggle = event.metaKey || event.ctrlKey;
     if (!canSelect || (!toggle && !event.shiftKey)) {
-      setSelection(NO_ISSUES);
-      anchorRef.current = issue.id;
-      onSelectIssue(issue.id);
+      openIssue(issue);
       return;
     }
     const lane = laneOf(issue.id);
@@ -771,6 +819,8 @@ export function LinearIssueBoard({
                     : undefined
                 }
                 onCardClick={handleCardClick}
+                onOpenIssue={openIssue}
+                menuActions={menuActions}
                 pipelinePhase={pipelinePhase}
               />
             ))}

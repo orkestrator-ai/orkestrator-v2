@@ -340,6 +340,7 @@ function AptPackagesNote({
 
 interface BuildLaunchDialogProps {
   open: boolean;
+  ticketTitle?: string;
   onOpenChange: (open: boolean) => void;
   catalog: AgentModelCatalog;
   defaultAgent: LaunchAgent;
@@ -814,6 +815,7 @@ function BuildStepCard({
  */
 export function BuildLaunchDialog({
   open,
+  ticketTitle,
   onOpenChange,
   catalog,
   defaultAgent,
@@ -1150,7 +1152,9 @@ export function BuildLaunchDialog({
             <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
               <Hammer className="size-5" />
             </span>
-            Configure build
+            <span className={cn("min-w-0 break-words", ticketTitle && "pr-6")}>
+              {ticketTitle ? `Configure build for ${ticketTitle}` : "Configure build"}
+            </span>
           </DialogTitle>
           <DialogDescription>
             Choose the workspace, then assign a model to every stage of the pipeline. Any stage can

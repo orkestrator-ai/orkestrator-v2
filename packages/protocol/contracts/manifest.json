@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "generatedBy": "scripts/generate-contract-manifest.ts (mise run contract:manifest)",
   "counts": {
-    "commands": 1110,
-    "defined": 1110,
+    "commands": 1111,
+    "defined": 1111,
     "untyped": 0,
     "events": 48
   },
@@ -2084,6 +2084,15 @@
       "critical": [],
       "argsDigest": "sha256:45f27a7d41751decdc3b3369d1de47f632e9e0ecd1d202b69af48ee3b556ce67",
       "resultDigest": "sha256:350fe8623ba846fbdcac2990b3680deb44577b3abb0bcf4ed1e661c5a4ba8889"
+    },
+    "delete_linear_issue": {
+      "domain": "kanban",
+      "since": 2,
+      "access": "workspace",
+      "read": false,
+      "critical": [],
+      "argsDigest": "sha256:8e81258936925908cd9a1f2e4652db025a50d151796b5870050ca46fbbb47534",
+      "resultDigest": "sha256:fa508eeaf9f6cbff2e58a05147061b3c6ae21c9effa326078682e4ff7995e89f"
     },
     "delete_local_file": {
       "domain": "files",

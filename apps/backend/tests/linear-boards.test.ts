@@ -380,6 +380,9 @@ describe("Linear board commands", () => {
         context,
       ),
     ).rejects.toThrow(refusal);
+    await expect(
+      commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "OPS-9" }, context),
+    ).rejects.toThrow(refusal);
     // Nothing was written to Linear.
     expect(requests.every((request) => !request.query.includes("mutation"))).toBe(true);
   });
@@ -581,6 +584,127 @@ describe("Linear board commands", () => {
         context,
       ),
     ).resolves.toMatchObject({ status: "Done", stateId: "state-2" });
+  });
+
+  test("deletes an issue and its verified on-board sub-issues by moving them to Linear's trash", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    const requests = fakeLinear({
+      OrkestratorLinearIssueBoard: () => ({
+        issue: { id: "issue-1", identifier: "ENG-1", team: { id: "team-1" } },
+      }),
+      OrkestratorLinearDeleteChildren: ({ id }) => ({
+        issue: {
+          children: {
+            nodes:
+              id === "issue-1" ? [{ id: "issue-2", archivedAt: null, team: { id: "team-1" } }] : [],
+            pageInfo: { hasNextPage: false },
+          },
+        },
+      }),
+      OrkestratorLinearIssueDelete: (variables) => {
+        // Never `permanentlyDelete`: a trashed issue can be restored for 30 days.
+        expect(variables).toEqual({ id: "issue-1" });
+        return { issueDelete: { success: true } };
+      },
+    });
+    await expect(
+      commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "ENG-1" }, context),
+    ).resolves.toEqual({ deleted: true });
+    expect(operations(requests)).toEqual([
+      "OrkestratorLinearIssueBoard",
+      "OrkestratorLinearDeleteChildren",
+      "OrkestratorLinearDeleteChildren",
+      "OrkestratorLinearIssueDelete",
+    ]);
+    expect(requests.some((request) => request.query.includes("permanentlyDelete"))).toBe(false);
+  });
+
+  test("refuses a parent with a descendant on another Linear project", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1", linearProjectId: "lp-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    const location = { team: { id: "team-1" }, project: { id: "lp-1" } };
+    const requests = fakeLinear({
+      OrkestratorLinearIssueBoard: () => ({ issue: { id: "parent", ...location } }),
+      OrkestratorLinearDeleteChildren: ({ id }) => ({
+        issue: {
+          children: {
+            nodes:
+              id === "parent"
+                ? [{ id: "child", archivedAt: null, ...location }]
+                : [
+                    {
+                      id: "grandchild",
+                      identifier: "ENG-9",
+                      archivedAt: null,
+                      ...location,
+                      project: { id: "lp-other" },
+                    },
+                  ],
+            pageInfo: { hasNextPage: false },
+          },
+        },
+      }),
+    });
+    await expect(
+      commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "parent" }, context),
+    ).rejects.toThrow("Sub-issue ENG-9 is outside this project's Linear board");
+    expect(operations(requests)).toEqual([
+      "OrkestratorLinearIssueBoard",
+      "OrkestratorLinearDeleteChildren",
+      "OrkestratorLinearDeleteChildren",
+    ]);
+  });
+
+  test("refuses to delete when Linear reports more sub-issues than the read can verify", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    const requests = fakeLinear({
+      OrkestratorLinearIssueBoard: () => ({
+        issue: { id: "issue-1", team: { id: "team-1" } },
+      }),
+      OrkestratorLinearDeleteChildren: () => ({
+        issue: { children: { nodes: [], pageInfo: { hasNextPage: true } } },
+      }),
+    });
+    await expect(
+      commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "issue-1" }, context),
+    ).rejects.toThrow("Could not verify all sub-issues");
+    expect(operations(requests)).toEqual([
+      "OrkestratorLinearIssueBoard",
+      "OrkestratorLinearDeleteChildren",
+    ]);
+  });
+
+  test("a delete Linear does not confirm is an error", async () => {
+    const { context, commands, real } = await boardContext();
+    real.linear.saveLinearBoardLink(
+      { key: "repo:github.com/acme/web", teamId: "team-1" },
+      new Set(["repo:github.com/acme/web"]),
+    );
+    fakeLinear({
+      OrkestratorLinearIssueBoard: () => ({
+        issue: { id: "issue-1", identifier: "ENG-1", team: { id: "team-1" } },
+      }),
+      OrkestratorLinearDeleteChildren: () => ({
+        issue: { children: { nodes: [], pageInfo: { hasNextPage: false } } },
+      }),
+      OrkestratorLinearIssueDelete: () => ({ issueDelete: { success: false } }),
+    });
+    await expect(
+      Promise.resolve(
+        commands.get("delete_linear_issue")?.({ projectId: "p1", issueId: "issue-1" }, context),
+      ),
+    ).rejects.toThrow("Linear did not confirm the issue was deleted.");
   });
 
   test("Linear errors never carry the key", async () => {

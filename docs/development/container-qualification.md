@@ -316,6 +316,57 @@ daemon selection, a start, restart and stop with exactly what was made
 removed, the pulled-image rule, root-owned leftovers, a forged marker and an
 unreachable outer daemon.
 
+## Probe-network sweep on omarchy-hp's pre-fix backlog (2026-11-26)
+
+The manual-test checklist item for 0241 (retired) task 1: the first run of
+`mise run disk:report -- --fix probe-networks` against a real backlog. The
+user approved this one sweep on omarchy-hp. Nothing else was removed and no
+other prune ran.
+
+- **Host:** omarchy-hp (Omarchy Linux, kernel 7.2.8, x86_64), rootful Docker
+  Engine 29.9.1, `default` context; branch at `main` `76cd71b58`.
+- **Before** (19:32 UTC): 29 networks with
+  `orkestrator-resource-role=host-reachability-probe`, all named
+  `ork-<16 hex>-reach-probe-net`, one per owner, created on 2026-10-28
+  between 18:22:17 and 20:20:14 UTC. None had a running container attached.
+  `docker network ls | wc -l` was 33: the header, `bridge`, `host`, `none`
+  and the 29.
+- **Dry run** (`mise run disk:report`): the `probe networks` row read
+  `29 of 29 unattached and older than a day (by creator: unlabelled 29)`.
+  `unlabelled` fits the backlog predating the `orkestrator-creator` label.
+- **Sweep** (`mise run disk:report -- --fix probe-networks`): printed one
+  `Removed ork-<owner>-reach-probe-net` line for each of the 29, then
+  `Removed 29 probe networks; kept 0 attached or at most a day old; kept 0
+  with unknown age or attachment (Docker could not describe).` It kept
+  nothing because no probe network was attached, newer than a day, or
+  undescribable. The case that keeps a network did not come up on this host.
+- **After:** 0 probe networks. `docker network ls | wc -l` was 4: the header,
+  `bridge`, `host` and `none`. A full-id diff of `docker network ls` before
+  and after shows exactly the 29 probe networks gone and nothing added or
+  otherwise removed.
+- **Fixture:** a throwaway `mise run dev:test --profile probe-sweep-0241
+  --fixture --fixture-environments local,container --no-agent-credentials
+  --agent-platforms codex --headless` reached `ready` without the
+  qualification Docker shim. `docker events --filter type=network` showed:
+  - its boot reachability check created `ork-<owner>-reach-probe-net`,
+    connected the probe container, then disconnected and destroyed the
+    network within 7 s;
+  - the container fixture created its environment network
+    `ork-<owner>-<hash>-net` (role `network`) on `172.19.0.0/16`, a range
+    from the default pool, so automatic allocation works again;
+  - the fixture runtime and its egress gateway were `Up`, with the gateway
+    attached to that network.
+  `dev:stop` then stopped the profile, and `dev:reset` removed its 2
+  containers, 2 volumes and 1 network. That destroyed the environment
+  network and left no probe network.
+
+This unblocks the reference-host runs of
+[0729](../todo/containers-and-environments/0729-container-benchmark-target-misses.md)
+task 5 and
+[0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md)
+task 3. beelink's separate backlog (3320 (retired) task 2 in the checklist)
+was not touched.
+
 ## VPNKit host loopback in the reachability check (8305) (2026-11-18)
 
 To-do 8305 (retired on 2026-11-18; read it with `git show

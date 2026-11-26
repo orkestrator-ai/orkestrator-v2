@@ -22,7 +22,7 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 1. **Bound the waits inside the container**: one exec waits for the state itself, up to a bounded window, instead of one exec per 250 ms. Status: done 2026-10-30 (`containers/readiness.ts`, `egress-gateway.ts`; deterministic tests, and probe timings in the real image).
 2. **Re-qualify the readiness faults**: the C09 fault cases and the gateway-cannot-apply case pass with the new wait. Status: done on Linux amd64, 2026-10-30. All nine live readiness cases passed in one run, plus four C09 stale-record and active-exec interruption checks. Explicit unused subnets bypassed the exhausted default pools without removing other runs' resources; fixture repairs and host prerequisites are recorded in the qualification evidence below.
-3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: blocked (waits on 7568: 0241 task 1, the probe-network sweep on omarchy-hp, and on the next Container live qualification CI run on both architectures). Task 2 is qualified locally; repeated reference-host and CI measurements are still needed.
+3. **Re-measure the benchmark**: on CI and on the reference host, then tighten the calls target in `container-qualification.md` if the waits stop scaling with boot time. Status: blocked (waits on the next Container live qualification CI run on both architectures). The reference-host half is unblocked: the probe-network sweep freed omarchy-hp's address pools on 2026-11-26 ([container qualification](../../development/container-qualification.md#probe-network-sweep-on-omarchy-hps-pre-fix-backlog-2026-11-26)). Task 2 is qualified locally; repeated reference-host and CI measurements are still needed.
 
 ### 1. Bound the waits inside the container
 
@@ -118,10 +118,10 @@ Analysed 2026-10-28 against `main` at `79f3bc97`.
 
 ### Qualification
 
-The 29 older leaked probe networks remain untouched (to-do 0241, retired
-2026-11-10; clearing them is a
-[manual-test checklist](../manual-test/7568-manual-test-checklist.md) item). They still block
-automatic allocation, but explicit unused subnets allowed the live fault
+The 29 older leaked probe networks (to-do 0241, retired 2026-11-10) were
+removed on 2026-11-26 with the user's go-ahead
+([container qualification](../../development/container-qualification.md#probe-network-sweep-on-omarchy-hps-pre-fix-backlog-2026-11-26)), so automatic allocation works again on
+omarchy-hp. Before that, explicit unused subnets allowed the live fault
 qualification to complete. CI's "Container live qualification" workflow
 also runs those suites on both architectures when the PR touches its paths.
 

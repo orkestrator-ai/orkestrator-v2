@@ -365,7 +365,66 @@ This unblocks the reference-host runs of
 task 5 and
 [0870](../todo/containers-and-environments/0870-container-start-poll-quantisation.md)
 task 3. beelink's separate backlog (3320 (retired) task 2 in the checklist)
-was not touched.
+was swept the same day; see the next section.
+
+## Probe-network sweep on beelink's backlog (2026-11-26)
+
+The manual-test checklist item for 3320 (retired) task 2: the same sweep on
+beelink, run after omarchy-hp's above. The user approved this one sweep on
+beelink. Nothing else was removed and no other prune ran.
+
+- **Host:** beelink (Omarchy Linux, kernel 7.1.8, x86_64), rootful Docker
+  Engine 29.9.2, `default` context; branch at `main` `76cd71b58` plus
+  omarchy-hp's record.
+- **Not the backlog the checklist named.** The 29 networks from 2026-10-31
+  to 2026-11-02 that the
+  [historical trace](#exhausted-docker-pools-and-historical-probe-network-trace-2026-11-06)
+  describes were already gone; what removed them was not observed and is not
+  recorded here. A newer set had built up since.
+- **Before** (19:42 UTC): 20 networks with
+  `orkestrator-resource-role=host-reachability-probe`, all named
+  `ork-<16 hex>-reach-probe-net`, one per owner, created between 2026-11-06
+  17:22 and 2026-11-20 11:35 UTC (5 on 11-06, 1 on 11-09, 1 on 11-10, 2 on
+  11-16, 2 on 11-17, 3 on 11-18, 4 on 11-19, 2 on 11-20). None had a
+  container attached. Between them they held `172.18.0.0/16` to
+  `172.31.0.0/16` and `192.168.16.0/20` to `192.168.96.0/20`: 20 of the
+  daemon's 31 default ranges, with the default bridge on a 21st, so the
+  pools were not yet exhausted. `docker network ls | wc -l`
+  was 24: the header, `bridge`, `host`, `none` and the 20.
+- **Creator labels:** one, created 2026-11-10 02:08 UTC, carried
+  `orkestrator-creator=agent-test/temporary`, a disposable test backend that
+  ran the boot probe. The other 19 had no creator label. 13 of those were
+  created on or after 2026-11-16, after the label landed (#2024, 2026-11-09).
+  Current backends always pass a creator (`probeCreator` in
+  `apps/backend/src/core/index.ts`), so those 13 point at backends built
+  before #2024. Which runs made them was not traced.
+- **Dry run** (`mise run disk:report`): the `probe networks` row read
+  `20 of 20 unattached and older than a day (by creator: unlabelled 19,
+  agent-test/temporary 1)`.
+- **Sweep** (`mise run disk:report -- --fix probe-networks`, 19:42:40 UTC):
+  printed one `Removed ork-<owner>-reach-probe-net` line for each of the 20,
+  then `Removed 20 probe networks; kept 0 attached or at most a day old; kept
+  0 with unknown age or attachment (Docker could not describe).` It kept
+  nothing because no probe network was attached, newer than a day, or
+  undescribable. The newest was six days old.
+- **After:** 0 probe networks. `docker network ls | wc -l` was 4: the header,
+  `bridge`, `host` and `none`. A full-id diff of `docker network ls` before
+  and after shows exactly the 20 probe networks gone, the removed names equal
+  to the before listing, and nothing added or otherwise removed.
+- **Fixture:** a throwaway `mise run dev:test --profile probe-sweep-3320
+  --fixture --fixture-environments local,container --no-agent-credentials
+  --agent-platforms codex --headless`, with
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` and without the qualification
+  Docker shim, reached `ready`. With the check off it created no probe
+  network. `docker events --filter type=network` showed:
+  - the container fixture created its environment network
+    `ork-<owner>-<hash>-net` (role `network`) on `172.18.0.0/16`, a range
+    from the default pool, so automatic allocation works again;
+  - the fixture runtime and its egress gateway were `Up`, with the gateway
+    attached to that network.
+  `dev:stop` then stopped the profile, and `dev:reset` removed its 2
+  containers, 2 volumes and 1 network. That destroyed the environment
+  network; the final `docker network ls` matched the post-sweep one.
 
 ## VPNKit host loopback in the reachability check (8305) (2026-11-18)
 
@@ -2618,7 +2677,9 @@ The candidate causes above remain unproven. A new leak carries an
 
 To-do 3320 (retired 2026-11-10)
 task 1 is closed as a duplicate of this trace. Its task 2, removing the 29
-networks, remains the user's call; this work left them untouched.
+networks, remained the user's call; this work left them untouched. When the
+sweep ran on 2026-11-26 those 29 were already gone, and it removed a newer
+set of 20 instead ([beelink sweep](#probe-network-sweep-on-beelinks-backlog-2026-11-26)).
 
 The manual-profile workaround and its live proof were complete, so no work
 remained in 7041. Its file and index row were removed under the to-do retirement

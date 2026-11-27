@@ -1,5 +1,5 @@
 import { DESIGN_MAX_DOCUMENT_BYTES, type DesignCanvas } from "@orkestrator/protocol/design-canvas";
-import { wrapSystemInstructions } from "@orkestrator/protocol/review-evidence-frames";
+import { designAgentInstructions } from "@/lib/chat/design-opening-context";
 import type {
   DesignCapabilities,
   DesignLibraryPage,
@@ -18,6 +18,10 @@ import {
   getCapabilities,
   type DesignV2Api,
 } from "@/lib/design-client";
+import {
+  normalizeTranscriptAnnotationText,
+  type TranscriptAnnotation,
+} from "@/lib/chat/transcript-annotations";
 import type { NodeScope } from "@/lib/node-scope/node-scope";
 import type { DesignPlacement } from "./design-open";
 
@@ -68,18 +72,55 @@ export const DESIGN_CONTENT_EXPLANATION =
  * frame: the agent receives it, while the transcript shows only the brief.
  */
 export function buildDesignAgentPrompt(canvasId: string, brief: string): string {
-  const guidance = wrapSystemInstructions(
-    [
-      `Use the orkestrator-design MCP server for this design workspace. Canvas ID: ${canvasId}.`,
-      "Start with get_canvas_summary, then get_frame for the frames you need; avoid get_canvas on large designs because it returns every frame's HTML.",
-      "Review the current repository, then build HTML/CSS mockups in this canvas. Designs must be self-contained, with embedded CSS and data-URL images/fonts; authored scripts and remote resources are blocked.",
-      'Pass response:"compact" on mutations so they do not echo HTML. Edit with the frame revision you last read; on a revision conflict, re-read the frame and reapply your change rather than retrying blindly.',
-      "Use capture_frame to review your work visually.",
-      "To save the design into the repository, use save_canvas (not export_canvas plus file tools). Never overwrite an existing file unless you pass the replaceFingerprint reported for it; otherwise choose a new file path.",
-    ].join("\n"),
-  );
-  const request = brief.trim() || "Review this repository and propose an initial design mockup.";
-  return `${guidance}\n\n${request}`;
+  const guidance = designAgentInstructions(canvasId);
+  return `${guidance}\n\n${brief.trim()}`;
+}
+
+/**
+ * The design workspace's identity as a removable composer annotation,
+ * so the user's own first message carries it to the agent.
+ */
+export function buildDesignAgentContextAnnotation(input: {
+  id: string;
+  canvasId: string;
+  canvasName: string;
+}): TranscriptAnnotation {
+  return {
+    id: input.id,
+    source: "design",
+    text: normalizeTranscriptAnnotationText(
+      [
+        "Design workspace",
+        `Canvas: ${JSON.stringify(input.canvasName)}`,
+        `Canvas ID: ${input.canvasId}`,
+      ].join("\n"),
+    ),
+    comment: "",
+  };
+}
+
+/**
+ * How a new design agent starts. A brief is sent as the opening prompt. With
+ * no brief nothing is sent: the canvas identity waits in the composer as
+ * design context until the user writes their first message.
+ */
+export type DesignAgentOpening =
+  { kind: "prompt"; prompt: string } | { kind: "context"; annotation: TranscriptAnnotation };
+
+export function designAgentOpening(
+  canvas: Pick<DesignCanvas, "id" | "name">,
+  brief: string,
+  annotationId: string,
+): DesignAgentOpening {
+  if (brief.trim()) return { kind: "prompt", prompt: buildDesignAgentPrompt(canvas.id, brief) };
+  return {
+    kind: "context",
+    annotation: buildDesignAgentContextAnnotation({
+      id: annotationId,
+      canvasId: canvas.id,
+      canvasName: canvas.name,
+    }),
+  };
 }
 
 function initialFrameHtml(): string {
@@ -130,7 +171,11 @@ export interface DesignLaunchOptions {
     frame: { name: string; width: number; height: number; html: string },
   ) => Promise<{ canvasRevision: number }>;
   openCanvas: (canvasId: string, tabId: string, placement: DesignPlacement) => boolean;
-  createAgentTab: (agent: DesignAgent, tabId: string, initialPrompt: string) => boolean;
+  /**
+   * Opens the agent tab. A `prompt` opening is dispatched by the tab; a
+   * `context` opening is only placed in its composer, so nothing is sent.
+   */
+  createAgentTab: (agent: DesignAgent, tabId: string, opening: DesignAgentOpening) => boolean;
   hasTab: (tabId: string) => boolean;
   removeTab: (tabId: string) => void;
   deleteCanvas: (canvasId: string, revision: number) => Promise<unknown>;
@@ -150,7 +195,8 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 /**
  * Create → allocate layout → create agent tab → link session. The agent tab
  * dispatches the initial prompt itself once mounted, so no prompt is sent
- * before the canvas and its tab exist.
+ * before the canvas and its tab exist. Without a brief no prompt is sent at
+ * all (see `designAgentOpening`).
  *
  * Before the agent tab exists, a failure removes exactly what this attempt
  * created (its canvas tab and canvas). Once the agent tab exists the prompt
@@ -195,7 +241,7 @@ export async function launchDesignWorkspace(
         created = options.createAgentTab(
           options.agent,
           options.agentTabId,
-          buildDesignAgentPrompt(canvas.id, options.brief),
+          designAgentOpening(canvas, options.brief, `${options.agentTabId}-design-context`),
         );
       } finally {
         agentTabCreated = created || options.hasTab(options.agentTabId);

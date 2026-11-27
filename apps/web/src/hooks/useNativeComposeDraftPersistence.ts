@@ -1,5 +1,5 @@
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { toast } from "sonner";
 import {
   composeDraftKey,
@@ -132,7 +132,10 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
   fallbackNamespace?: NativeDraftNamespace,
   /** The node the drafts live on (plan item 3009); the app's command scope when omitted. */
   scope?: NodeScope,
+  /** Seed launch choices after the saved draft has had a chance to restore. */
+  applyDefaults?: () => void,
 ): number {
+  const applyDefaultsAfterHydration = useEffectEvent(() => applyDefaults?.());
   const [restoreGeneration, setRestoreGeneration] = useState(0);
   useEffect(() => {
     const node = scope ?? appCommandScope();
@@ -406,7 +409,10 @@ export function useNativeComposeDraftPersistence<TMention, TAttachment>(
       .finally(() => {
         if (readSucceeded || locallyChanged) {
           hydrated = true;
-          if (!disposed) schedule(store.getState());
+          if (!disposed) {
+            applyDefaultsAfterHydration();
+            schedule(store.getState());
+          }
           // Persistence resumed with a draft that may still hold legacy
           // browser notes typed before migration: reconcile them in memory.
           if (!disposed) void reconcile().catch(() => undefined);

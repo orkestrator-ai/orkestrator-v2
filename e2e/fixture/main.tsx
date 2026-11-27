@@ -67,6 +67,7 @@ import { DesignAgentLinksFixture, installDesignAgentLinksFixture } from "./Desig
 import { MenuPlacementFixture } from "./MenuPlacementFixture";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ComposerIconPickersFixture } from "./ComposerIconPickersFixture";
+import { ComposerNarrowToolsFixture } from "./ComposerNarrowToolsFixture";
 import { FeaturesComposeFixture, TerminalComposeFixture } from "./ComposeFramesFixture";
 import { QueuedPromptEditFixture } from "./QueuedPromptEditFixture";
 import { ReadCoordinatorFixture } from "./ReadCoordinatorFixture";
@@ -2261,6 +2262,7 @@ function fixtureForPath() {
       </Suspense>
     );
   if (window.location.pathname === "/composer-icon-pickers") return <ComposerIconPickersFixture />;
+  if (window.location.pathname === "/composer-narrow-tools") return <ComposerNarrowToolsFixture />;
   if (window.location.pathname === "/features-compose") return <FeaturesComposeFixture />;
   if (window.location.pathname === "/terminal-compose") return <TerminalComposeFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;

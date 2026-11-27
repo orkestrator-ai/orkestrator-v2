@@ -135,6 +135,12 @@ import { useRestorePlaceAfterHistoryDrop } from "@/hooks/useRestorePlaceAfterHis
 import { useAutoLoadEarlier } from "./useAutoLoadEarlier";
 import { readTranscriptTail } from "./transcript-tail";
 import { openInBrowser } from "@/lib/backend";
+import {
+  buildNativeComposerPrompt,
+  DESIGN_OPENING_COMMAND_REFUSAL,
+  hasDesignOpeningContext,
+  hasStandaloneAnnotations,
+} from "@/lib/chat/design-opening-context";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { beginTabInitialPromptFallback, tabInitialPromptRequestId } from "@/lib/tab-initial-prompt";
 import { STARTUP_AGENT_TAB_ID } from "@/lib/startup-agent-handoff";
@@ -235,7 +241,6 @@ import {
 import { webAnnotationQueueOrigin } from "@orkestrator/protocol/web-annotations";
 import { withNativeTerminalMessages } from "@orkestrator/protocol/native-terminal-rows";
 import {
-  buildPromptWithTranscriptAnnotations,
   MAX_TRANSCRIPT_ANNOTATIONS,
   normalizeTranscriptAnnotationComment,
   normalizeTranscriptAnnotationText,
@@ -2190,6 +2195,15 @@ export function SharedNativeAgentController({
         .filter((annotation) => annotation.source === "browser")
         .map((annotation) => annotation.id);
       const literal = submitOptions?.literal === true;
+      if (
+        !literal &&
+        !preparedPrompt &&
+        parseCommandToken(text, ["/", "$"]) &&
+        hasDesignOpeningContext(tabId, draft.annotations)
+      ) {
+        reportSendError(DESIGN_OPENING_COMMAND_REFUSAL);
+        return false;
+      }
       if (literal && draft.commandSelection) {
         updateDraft(sessionKey, { commandSelection: undefined });
       }
@@ -2258,10 +2272,16 @@ export function SharedNativeAgentController({
               serializeForLLM(text.trim(), draft.mentions),
               submittedAttachments.map(({ name, path }) => ({ name, path })),
             );
+      if (
+        !basePrompt.trim() &&
+        submittedAttachments.length === 0 &&
+        !hasStandaloneAnnotations(tabId, draft.annotations)
+      )
+        return false;
       const userPrompt =
         rawCommand || preparedPrompt
           ? basePrompt
-          : buildPromptWithTranscriptAnnotations(basePrompt, draft.annotations);
+          : buildNativeComposerPrompt(basePrompt, tabId, draft.annotations);
       if (!userPrompt.trim()) return false;
       if (
         !rawCommand &&
@@ -4946,8 +4966,7 @@ export function SharedNativeAgentController({
             (isDispatching && !draftRunsGoal) ||
             (!draft.text.trim() &&
               draft.attachments.length === 0 &&
-              // A draft holding only migrated references has nothing to send.
-              sendableTranscriptAnnotations(draft.annotations).length === 0)
+              !hasStandaloneAnnotations(tabId, draft.annotations))
           }
           sendTitle={
             sendingHeldReason

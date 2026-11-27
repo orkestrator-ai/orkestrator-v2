@@ -44,7 +44,7 @@ import { createSessionKey } from "@/lib/utils";
 import { configStore, useConfigStore } from "@/stores";
 import { environmentStore } from "@/stores/environmentStore";
 import type { AppConfig, Environment } from "@/types";
-import { nativeComposeStore } from "@/stores/nativeComposeStore";
+import { nativeComposeDraft, nativeComposeStore } from "@/stores/nativeComposeStore";
 import {
   paneLayoutStore,
   usePaneLayoutStore,
@@ -431,7 +431,7 @@ export function DesignWorkspaceDialog({
             tabId,
             designPlacement: placement,
           }),
-        createAgentTab: (platform, tabId, initialPrompt) => {
+        createAgentTab: (platform, tabId, opening) => {
           // Seed the images before the tab mounts so the initial prompt,
           // which the tab sends from its draft, carries them.
           const sessionKey = createSessionKey(environmentId, tabId);
@@ -439,6 +439,14 @@ export function DesignWorkspaceDialog({
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
+          // Without a brief nothing is sent: the canvas context waits in the
+          // composer and goes with the user's own first message.
+          const initialPrompt = opening.kind === "prompt" ? opening.prompt : undefined;
+          if (opening.kind === "context") {
+            const drafts = composeDrafts.getState();
+            const current = nativeComposeDraft(drafts, sessionKey).annotations;
+            drafts.updateDraft(sessionKey, { annotations: [...current, opening.annotation] });
+          }
           const promptOptions = designInitialPromptOptions(
             environments.getState().getEnvironmentById(environmentId),
             platform,
@@ -454,7 +462,8 @@ export function DesignWorkspaceDialog({
               tabId,
               agentLaunchMode: "native",
               displayTitle: "Design",
-              initialPrompt,
+              lockNativePlatform: true,
+              ...(initialPrompt ? { initialPrompt } : {}),
               initialAgentModel: promptOptions.model,
               initialReasoningEffort: promptOptions.reasoningEffort,
               initialFastMode: promptOptions.fastMode,
@@ -463,7 +472,7 @@ export function DesignWorkspaceDialog({
             // The agent is shown inside the design tab, as its agent panel.
             // Should that fail it stays an ordinary tab, still working.
             if (created) paneLayouts.getState().setTabEmbedding(tabId, canvasTabId, environmentId);
-            if (created)
+            if (created && initialPrompt)
               void handTabInitialPromptToBackend(
                 {
                   environmentId,
@@ -482,7 +491,11 @@ export function DesignWorkspaceDialog({
             return created;
           } finally {
             const store = paneLayouts.getState();
-            if (!created && images.length > 0 && !store.findPaneWithTab(tabId, environmentId))
+            if (
+              !created &&
+              (images.length > 0 || opening.kind === "context") &&
+              !store.findPaneWithTab(tabId, environmentId)
+            )
               composeDrafts.getState().clearDraft(sessionKey);
           }
         },
@@ -730,7 +743,7 @@ export function DesignWorkspaceDialog({
                       <Textarea
                         className="min-h-24"
                         maxLength={DESIGN_BRIEF_MAX}
-                        placeholder="Review this repo and mock up…"
+                        placeholder="Optional. Without a brief, nothing is sent until you write to the agent."
                         value={brief}
                         aria-describedby="design-brief-images-hint"
                         onChange={(event) => setBrief(event.target.value)}
